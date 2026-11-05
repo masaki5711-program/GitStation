@@ -138,7 +138,10 @@ fn every_api_route_is_covered_or_planned() {
 fn no_route_is_left_planned() {
     for (m, p, cov) in API_ROUTES {
         assert!(
-            matches!(cov, Coverage::Command(_) | Coverage::BrowserOnly(_)),
+            matches!(
+                cov,
+                Coverage::Command(_) | Coverage::BrowserOnly(_) | Coverage::NotForCli(_)
+            ),
             "{m} {p} is still planned: {cov:?}"
         );
     }

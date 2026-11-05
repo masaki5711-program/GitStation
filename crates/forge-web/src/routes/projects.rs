@@ -70,8 +70,16 @@ impl Loader<AppState> for ProjectById {
                     .with_context("project_id", id.get())
                     .with_context("loaded_project_id", record.id.get()));
             }
+            // M3 S2: acting for a person, with the service account's facts.
+            let ctx = crate::routes::act_as::project_ctx(
+                state,
+                parts,
+                ProjectCtx::new(loaded(&record)),
+                id,
+            )
+            .await?;
             Ok(Lookup::Found {
-                ctx: ProjectCtx::new(loaded(&record)),
+                ctx,
                 canonical: Some(record.path.clone()), // clone: the record moves on too
                 tombstone: None,
                 project: Some(record),

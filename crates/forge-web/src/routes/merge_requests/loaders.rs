@@ -119,7 +119,43 @@ async fn stored_lookup(
     edit: MergeRequestEdit,
 ) -> Result<Lookup<MergeRequestCtx>, ForgeError> {
     let ids = ids(parts.uri.path(), suffix)?;
-    lookup_ids(state, ids, viewer, edit).await
+    lookup_ids_acting(state, parts, ids, viewer, edit, None).await
+}
+
+/// [`lookup_ids`] for a request that may act for a person (M3 S2): the
+/// context gets the service account's facts and the assertion's subject
+/// (`requested_sha`: the body's `sha` of an approve) when it does.
+pub(super) async fn lookup_ids_acting(
+    state: &AppState,
+    parts: &Parts,
+    (id, iid): (ProjectId, i64),
+    viewer: Option<UserId>,
+    edit: MergeRequestEdit,
+    requested_sha: Option<&str>,
+) -> Result<Lookup<MergeRequestCtx>, ForgeError> {
+    let Some((project, record)) = project_of(state, id, viewer).await? else {
+        return Ok(absent());
+    };
+    let stored = bounded(
+        state,
+        "merge_request_load",
+        review(state)?.merge_request(id, iid),
+    )
+    .await?;
+    let Some(stored) = stored else {
+        return Ok(absent());
+    };
+    let mr = forge_review::loaded_merge_request(&stored);
+    let ctx = crate::routes::act_as::merge_request_ctx(
+        state,
+        parts,
+        MergeRequestCtx::edited(project, mr, edit),
+        &stored,
+        &record,
+        requested_sha,
+    )
+    .await?;
+    Ok(found(ctx, record))
 }
 
 /// [`stored_lookup`] on ids already parsed.
@@ -159,7 +195,16 @@ impl Loader<AppState> for MergeRequestsOf {
         Box::pin(async move {
             let id = collection_id(parts.uri.path())?;
             Ok(match project_of(state, id, viewer).await? {
-                Some((project, record)) => found(ProjectCtx::new(project), record),
+                Some((project, record)) => {
+                    let ctx = crate::routes::act_as::project_ctx(
+                        state,
+                        parts,
+                        ProjectCtx::new(project),
+                        id,
+                    )
+                    .await?;
+                    found(ctx, record)
+                }
                 None => absent(),
             })
         })

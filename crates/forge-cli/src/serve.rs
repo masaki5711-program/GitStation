@@ -65,6 +65,15 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // MR7b): read once, before anything binds — missing or invalid is
     // FG-SYS-0002 config_key=api.cursor_keys_file (runbook config-invalid).
     let cursor_keys = Arc::new(cfg.api.require_cursor_keys()?);
+    // M3 S2 (ADR-0025 §5.2): the act-as keys, when configured. A file that
+    // cannot be read, is malformed or has not exactly one active key stops
+    // the start (FG-SYS-0002 config_key=auth.act_as_hmac_keys_file); no
+    // file: acting for a person is off (act_as_not_configured, doctor
+    // act_as.keys).
+    let act_as_keys = cfg.auth.act_as_keys()?;
+    if act_as_keys.is_none() {
+        tracing::info!("forge.serve.act_as_disabled");
+    }
     // M2 MR3: the origin every state-changing browser request must name,
     // and the session keys (used by the login, MR4) checked now, before
     // anything binds.
@@ -143,6 +152,11 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             .with_feed(forge_integ::Feed::new(
                 db.clone(),               // clone: the pool handle is shared
                 Arc::clone(&cursor_keys), // clone: the keys are shared with the lists
+            ))
+            // M3 S2: acting for a person (kanflow's approvals, ADR-0025).
+            .with_act_as(forge_integ::ActAs::new(
+                db.clone(), // clone: the pool handle is shared
+                act_as_keys,
             ))
             .with_smart_http(smart_http)
             .with_lists(

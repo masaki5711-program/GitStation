@@ -30,7 +30,7 @@ use forge_review::approvals::{ApprovalAnswer, ApprovalState, RuleAsk};
 use forge_review::{ApproveOutcome, ApproverNames, ReviewRequest, RuleOutcome, StoredApprovalRule};
 use serde::{Deserialize, Serialize};
 
-use super::loaders::{found, ids, lookup_ids, project_of};
+use super::loaders::{found, ids, lookup_ids_acting, project_of};
 use super::{repository, respond, review, review_request};
 use crate::app::AppState;
 use crate::body::param_invalid;
@@ -458,7 +458,7 @@ impl Loader<AppState> for StoredMr {
     ) -> LoadFuture<'a, MergeRequestCtx> {
         Box::pin(async move {
             let ids = ids(parts.uri.path(), self.0)?;
-            lookup_ids(state, ids, viewer, MergeRequestEdit::default()).await
+            lookup_ids_acting(state, parts, ids, viewer, MergeRequestEdit::default(), None).await
         })
     }
 }
@@ -469,10 +469,23 @@ impl BodyLoader<AppState, ApproveMergeRequest> for StoredMr {
         &'a self,
         state: &'a AppState,
         parts: &'a Parts,
-        _body: &'a ApproveMergeRequest,
+        body: &'a ApproveMergeRequest,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, MergeRequestCtx> {
-        <Self as Loader<AppState>>::load(self, state, parts, viewer)
+        Box::pin(async move {
+            let ids = ids(parts.uri.path(), self.0)?;
+            // M3 S2: an act-as approve's assertion is compared with the
+            // body's sha too (`sha_mismatch`).
+            lookup_ids_acting(
+                state,
+                parts,
+                ids,
+                viewer,
+                MergeRequestEdit::default(),
+                Some(body.sha.as_str()),
+            )
+            .await
+        })
     }
 }
 
@@ -504,11 +517,12 @@ pub async fn approve(
 
 /// `POST …/unapprove` → `200` what the withdrawal did.
 pub async fn unapprove(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
+    let repo = repository(&request).ok();
     let w = request.into_write();
     let built = async {
         let iid = proof_iid(&w.proof)?;
         let answer = review(&state)?
-            .unapprove(&review_request(&w), &w.proof)
+            .unapprove(&review_request(&w), &w.proof, repo)
             .await?;
         json(answer_body(iid, &answer))
     }

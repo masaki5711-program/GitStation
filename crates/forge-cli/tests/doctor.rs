@@ -85,6 +85,8 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    repositories.integrity",
         "ok    repositories.refs",
         "ok    repositories.stale_locks",
+        // M3 S2: no key file and no act-as token.
+        "ok    act_as.keys not configured",
         "ok    storage",
         "ok    git",
     ] {

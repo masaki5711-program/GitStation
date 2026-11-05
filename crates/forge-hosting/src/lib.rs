@@ -40,10 +40,10 @@ pub use merge_rules::MergeRuleAsk;
 pub use moves::{MoveRequest, Released, MOVE_ATTEMPTS};
 
 use forge_auth::{
-    AccountFacts, Action, Authorized, Credential, GroupCtx, GroupMemberCtx, InstanceCtx,
-    LoadedGroup, LoadedMembership, LoadedParent, LoadedProject, LoadedProtection,
-    LoadedUserNamespace, MembershipChange, ParentCtx, Principal, ProjectCtx, ProjectMemberCtx,
-    RefProtectionCtx, ResourceCtx, VisibilityChangeCtx,
+    AccountFacts, Action, Authorized, GroupCtx, GroupMemberCtx, InstanceCtx, LoadedGroup,
+    LoadedMembership, LoadedParent, LoadedProject, LoadedProtection, LoadedUserNamespace,
+    MembershipChange, ParentCtx, Principal, ProjectCtx, ProjectMemberCtx, RefProtectionCtx,
+    ResourceCtx, VisibilityChangeCtx,
 };
 use forge_core::{
     GroupId, GroupRecord, NamespaceId, ProjectId, ProjectRecord, ProtectedRefId, RefPattern,
@@ -141,10 +141,9 @@ fn caller<R: ResourceCtx>(proof: &Authorized<R>) -> Result<UserId, ForgeError> {
 fn change_context(request: &WriteRequest, principal: &Principal, user: UserId) -> ChangeContext {
     let mut ctx = ChangeContext::new(actor_of(principal, user), request.request_id.clone());
     ctx.credential_id = request.credential_id;
-    ctx.effective_scope = match principal.credential() {
-        Credential::Session => Vec::new(),
-        Credential::Token(scopes) => scopes.iter().map(|s| s.as_str().to_owned()).collect(),
-    };
+    // An act-as principal never reaches these commands (ADR-0025 §4: no
+    // allowed action of theirs); its token's scopes all the same.
+    ctx.effective_scope = principal.scope_names();
     ctx
 }
 

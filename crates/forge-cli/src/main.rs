@@ -155,7 +155,33 @@ enum AdminCommand {
         command: EventsCommand,
     },
     // ── end M3 I1c ──
+    // ── M3 S2 ──
+    /// Acting for a person (ADR-0025): diagnosis only.
+    ActAs {
+        #[command(subcommand)]
+        command: ActAsCommand,
+    },
+    // ── end M3 S2 ──
 }
+
+// ── M3 S2 ──
+#[derive(Subcommand)]
+enum ActAsCommand {
+    /// Print the keyed HMAC an act-as audit row records for a
+    /// `Forge-Act-As` value (`act_as_claimed`, ADR-0025 §5.2), to find the
+    /// rows with SQL. Reads the key file only; writes nothing.
+    ClaimedMac {
+        /// The header's value as kanflow sent it (`user:<id>` or
+        /// `employee:<number>`).
+        #[arg(long)]
+        value: String,
+        /// The key id (default: the active key; an older row names its
+        /// `act_as_key_id`).
+        #[arg(long)]
+        kid: Option<i16>,
+    },
+}
+// ── end M3 S2 ──
 
 // ── M3 I1c ──
 #[derive(Subcommand)]
@@ -414,6 +440,9 @@ fn main() -> ExitCode {
                 }
                 | AdminCommand::Project {
                     command: ProjectCommand::Purge { now: false, .. },
+                }
+                | AdminCommand::ActAs {
+                    command: ActAsCommand::ClaimedMac { .. },
                 },
         }
         | Command::Doctor { .. }
@@ -525,6 +554,12 @@ fn main() -> ExitCode {
                     command: EventsCommand::NewEpoch,
                 },
         } => config().and_then(|cfg| admin_events::new_epoch(&cfg.database, &request_id)),
+        Command::Admin {
+            command:
+                AdminCommand::ActAs {
+                    command: ActAsCommand::ClaimedMac { value, kid },
+                },
+        } => config().and_then(|cfg| admin::act_as_claimed_mac(&cfg, &value, kid)),
         Command::Admin {
             command:
                 AdminCommand::Repo {

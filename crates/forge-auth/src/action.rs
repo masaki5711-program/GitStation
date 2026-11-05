@@ -267,6 +267,25 @@ actions! {
     /// (`prove_visible`): the linked merge requests of the bound projects
     /// it may see.
     IntegrationDevStatusRead,
+    // --- acting for a person (M3 S2, ADR-0025) ---
+    /// `GET /api/v1/projects/{id}/merge-requests/{iid}/act-as-confirmation`
+    /// (`Resource::ActAsConfirm`, ADR-0025 §5, §5.4): what the
+    /// confirmation screen shows before the person presses it. A person's
+    /// web session only; the integration enabled and bound to the project;
+    /// the intent's action allowed for the person's session on the merge
+    /// request (an invisible one is not found).
+    ActAsConfirmView,
+    /// `POST /-/confirm/projects/{id}/merge-requests/{iid}/assertions`
+    /// (`Resource::ActAsConfirm`): the person presses the confirmation and
+    /// forge writes a `pending` assertion (no secret yet). Decided like
+    /// `ActAsConfirmView`.
+    ActAsAssertionIssue,
+    /// `POST /api/v1/integrations/{id}/act-as/claim`
+    /// (`Resource::IntegrationFeed`): the integration's own service account
+    /// claims a pending assertion by its state and receives the secret
+    /// once. A token with `act_as` only (no person, no agent, no act-as
+    /// request, no disabled integration).
+    ActAsAssertionClaim,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -360,6 +379,8 @@ impl Action {
                 | Action::ServiceAccountCreate
                 | Action::ServiceAccountTokenIssue
                 | Action::IntegrationManage
+                | Action::ActAsConfirmView
+                | Action::ActAsAssertionIssue
         )
     }
 
@@ -398,6 +419,8 @@ impl Action {
                 | Action::IntegrationManage
                 | Action::IntegrationRead
                 | Action::IntegrationBindingManage
+                | Action::ActAsConfirmView
+                | Action::ActAsAssertionIssue
         )
     }
 
@@ -428,7 +451,11 @@ impl Action {
             | Action::ServiceAccountCreate
             | Action::ServiceAccountTokenIssue
             | Action::IntegrationManage
+            | Action::ActAsConfirmView
+            | Action::ActAsAssertionIssue
             | Action::OidcBackchannelLogout => None,
+            // M3 S2: the claim needs the act-as scope itself.
+            Action::ActAsAssertionClaim => Some(Scope::ActAs),
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead
@@ -495,6 +522,131 @@ impl Action {
             Action::MergeRequestApprove | Action::MergeRequestUnapprove => {
                 Some(Scope::MergeApprove)
             }
+        }
+    }
+
+    /// How a service account acting for a person may perform the action
+    /// (M3 S2, ADR-0025 §4). Closed by default: every action is listed, so
+    /// a new one does not compile until it is decided here.
+    pub fn act_as_rule(self) -> ActAsRule {
+        use forge_core::act_as::Intent;
+        match self {
+            // Read without an assertion, capped at the smaller of the
+            // service account's and the person's role (§3).
+            Action::ProjectRead | Action::MergeRequestRead | Action::MergeRequestList => {
+                ActAsRule::ReadWithoutAssertion
+            }
+            // F-36: a person approves from kanflow with an assertion they
+            // confirmed in a forge session (§4, §5).
+            Action::MergeRequestApprove => ActAsRule::RequiresAssertion(Intent::Approve),
+            Action::MergeRequestUnapprove => ActAsRule::RequiresAssertion(Intent::Unapprove),
+            // Merging and the merge conditions (M4 at the earliest, by an
+            // amendment), creating and changing merge requests, threads,
+            // work item links, checks, the feed, every session-only and
+            // administration action, git and browsing: never (§4).
+            Action::RepoRead
+            | Action::RepoPush
+            | Action::RepoBrowse
+            | Action::ProjectList
+            | Action::ProjectCreate
+            | Action::ProjectUpdate
+            | Action::ProjectVisibilityChange
+            | Action::ProjectTransfer
+            | Action::ProjectDelete
+            | Action::ProjectRestore
+            | Action::ProtectedRefManage
+            | Action::MemberManage
+            | Action::MemberList
+            | Action::ProtectedRefList
+            | Action::MergeRequestCreate
+            | Action::MergeRequestUpdate
+            | Action::MergeRequestClose
+            | Action::MergeRequestReopen
+            | Action::MergeRequestVersionRefsPurge
+            | Action::MergeRequestComment
+            | Action::DiscussionResolve
+            | Action::MergeRequestMerge
+            | Action::WorkItemLink
+            | Action::ApprovalRuleManage
+            | Action::MergeSettingsManage
+            | Action::CodeownersEnforcementToggle
+            | Action::CheckWrite
+            | Action::CheckRead
+            | Action::CheckNamespaceGrantManage
+            | Action::GroupRead
+            | Action::GroupList
+            | Action::GroupCreateTopLevel
+            | Action::SubgroupCreate
+            | Action::GroupUpdate
+            | Action::GroupTransfer
+            | Action::NamespaceTombstoneRelease
+            | Action::TokenCreate
+            | Action::TokenList
+            | Action::TokenRevoke
+            | Action::UserCreate
+            | Action::UserDisable
+            | Action::UserSearch
+            | Action::UserAdminList
+            | Action::UserRename
+            | Action::ServiceAccountCreate
+            | Action::ServiceAccountList
+            | Action::ServiceAccountRead
+            | Action::ServiceAccountUpdate
+            | Action::ServiceAccountTokenIssue
+            | Action::ServiceAccountTokenList
+            | Action::ServiceAccountTokenRevoke
+            | Action::IntegrationManage
+            | Action::IntegrationRead
+            | Action::IntegrationBindingManage
+            | Action::IntegrationEventRead
+            | Action::IntegrationEventCursorRead
+            | Action::IntegrationDevStatusRead
+            | Action::ActAsConfirmView
+            | Action::ActAsAssertionIssue
+            | Action::ActAsAssertionClaim
+            | Action::AuditRead
+            | Action::UserSelfRead
+            | Action::SessionRead
+            | Action::SessionList
+            | Action::SessionRevoke
+            | Action::AdminSessionList
+            | Action::AdminSessionRevoke
+            | Action::WebLogin
+            | Action::SessionCreate
+            | Action::SessionContinue
+            | Action::SessionLogout
+            | Action::OidcBackchannelLogout
+            | Action::PathResolve
+            | Action::WebShell
+            | Action::Health
+            | Action::Metrics => ActAsRule::Denied,
+        }
+    }
+}
+
+/// How an action may be performed by a service account acting for a
+/// person (ADR-0025 §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActAsRule {
+    /// A read without an assertion: the effective role is the smaller of
+    /// the service account's membership role and the person's, and both
+    /// must see the project.
+    ReadWithoutAssertion,
+    /// A change that needs an assertion of this intent: decided on the
+    /// person's role, the assertion bound to the resource.
+    RequiresAssertion(forge_core::act_as::Intent),
+    /// Never performed acting for a person (`FG-AUTH-0003
+    /// reason=act_as_not_allowed`).
+    Denied,
+}
+
+impl ActAsRule {
+    /// The log `act_as_rule`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadWithoutAssertion => "read_without_assertion",
+            Self::RequiresAssertion(_) => "requires_assertion",
+            Self::Denied => "denied",
         }
     }
 }

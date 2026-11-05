@@ -106,6 +106,16 @@ pub struct AppState {
     pub resolve_limiter: Arc<routes::namespaces::PrefixLimiter>,
     /// The user search's rate limit per caller (M2 MR6, `FG-WEB-0010`).
     pub search_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// Acting for a person (M3 S2, ADR-0025; `forge serve` always sets it,
+    /// with or without `auth.act_as_hmac_keys_file`; without it every
+    /// act-as request is `FG-AUTH-0003 reason=act_as_not_configured`).
+    pub act_as: Option<Arc<forge_integ::ActAs>>,
+    /// Failed resolutions of `Forge-Act-As` per service account (60 a
+    /// minute), confirmations per person (30 in 10 minutes), claims per
+    /// integration's service account (120 a minute): `FG-WEB-0010`.
+    pub act_as_failures: Arc<routes::namespaces::CallerLimiter>,
+    pub act_as_issue_limiter: Arc<routes::namespaces::CallerLimiter>,
+    pub act_as_claim_limiter: Arc<routes::namespaces::CallerLimiter>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -147,7 +157,18 @@ impl AppState {
             callback_limiter: Arc::default(),
             resolve_limiter: Arc::default(),
             search_limiter: Arc::new(routes::directory::search_limiter()),
+            act_as: None,
+            act_as_failures: Arc::new(crate::act_as::failure_limiter()),
+            act_as_issue_limiter: Arc::new(routes::act_as::issue_limiter()),
+            act_as_claim_limiter: Arc::new(routes::act_as::claim_limiter()),
         }
+    }
+
+    /// Acting for a person (M3 S2).
+    #[must_use]
+    pub fn with_act_as(mut self, act_as: forge_integ::ActAs) -> Self {
+        self.act_as = Some(Arc::new(act_as));
+        self
     }
 
     /// The OIDC sign-in (M2 MR4).
@@ -438,12 +459,12 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    check_routes(dev_status_routes(feed_routes(integration_routes(
-        service_account_routes(account_routes(history_routes(browse_routes(git_routes(
-            shell_routes(merge_request_routes(member_routes(move_routes(
-                hosting_routes(fixed),
+    act_as_routes(check_routes(dev_status_routes(feed_routes(
+        integration_routes(service_account_routes(account_routes(history_routes(
+            browse_routes(git_routes(shell_routes(merge_request_routes(
+                member_routes(move_routes(hosting_routes(fixed))),
             )))),
-        ))))),
+        )))),
     ))))
 }
 
@@ -820,6 +841,43 @@ fn dev_status_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<d::DevStatusPageBody>(Verb::Get, d::ALL)
         .queries(Verb::Get, d::ALL, d::ALL_QUERY)
+}
+
+/// Acting for a person (M3 S2, ADR-0025 §5): the confirmation's facts and
+/// the person's press (a web session), and the integration's claim.
+fn act_as_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::act_as as a;
+    registry
+        .route_with(
+            Verb::Get,
+            a::CONFIRMATION,
+            Action::ActAsConfirmView,
+            "What the act-as confirmation screen shows: the merge request, its head and the target's tip, whether sha is the head, the receiving integration (a person's web session; the intent's action allowed for them)",
+            a::ConfirmationOf,
+            a::confirmation,
+        )
+        .responds::<a::ConfirmationBody>(Verb::Get, a::CONFIRMATION)
+        .queries(Verb::Get, a::CONFIRMATION, a::CONFIRMATION_QUERY)
+        .route_with_body(
+            Verb::Post,
+            a::ISSUE,
+            Action::ActAsAssertionIssue,
+            "The person confirms an act-as approve or unapprove: a pending assertion bound to the merge request, its head and target, for the integration to claim (a person's web session; CSRF; 30 per 10 minutes)",
+            a::MAX_BODY,
+            a::ToIssue,
+            a::issue,
+        )
+        .responds_created::<a::IssuedBody>(Verb::Post, a::ISSUE)
+        .route_with_body(
+            Verb::Post,
+            a::CLAIM,
+            Action::ActAsAssertionClaim,
+            "The integration claims a confirmed assertion by its state: the assertion is created and returned once (the integration's own service account; act_as; 120 a minute)",
+            a::MAX_BODY,
+            a::ClaimOf,
+            a::claim,
+        )
+        .responds::<a::ClaimBody>(Verb::Post, a::CLAIM)
 }
 
 /// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015
@@ -1725,6 +1783,10 @@ pub(crate) fn build(
         )))
         .layer(axum::Extension(authenticator))
         .layer(axum::Extension(sessions))
+        .layer(axum::Extension(crate::act_as::ActAsExt {
+            act_as: state.act_as.clone(), // clone: the Arc is shared
+            failures: Arc::clone(&state.act_as_failures),
+        }))
         // ADR-0021 §6 check 1: before any route, whatever the credentials.
         .layer(middleware::from_fn_with_state(
             origin,

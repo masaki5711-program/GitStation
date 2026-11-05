@@ -48,7 +48,10 @@ use forge_db::feed::{self as db_feed, FeedEvent, FeedRead, FeedSnapshot, FeedSta
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
+mod act_as;
 mod dev_status;
+
+pub use act_as::{ActAs, ActAsParts, ClaimAnswer, SWEEP_INTERVAL};
 
 pub use dev_status::{
     checks_state, CheckConclusion, CheckStatus, DevMergeRequest, DevStatus, PageQuery,
@@ -412,6 +415,8 @@ impl Feed {
             // The feed's principal always holds a token (a service account
             // never has a session); a session sees nothing personal.
             Credential::Session => &[],
+            // Refused on the feed (ADR-0025 §4); nothing personal.
+            Credential::ActAs(_) => &[],
         };
         let email = scopes.contains(&Scope::UserEmail);
         let employee = scopes.contains(&Scope::UserEmployeeNumber);

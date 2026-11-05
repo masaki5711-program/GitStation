@@ -13,6 +13,8 @@
 //!
 //! Authentication providers and tokens join this crate in M1 phase 5 (DB).
 
+mod act_as;
+mod act_as_ctx;
 mod action;
 mod authorize;
 mod codeowners_ctx;
@@ -22,6 +24,7 @@ mod integration_ctx;
 pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
+mod matrix_rows_act_as;
 mod matrix_rows_approval;
 mod matrix_rows_checks;
 mod matrix_rows_conditions;
@@ -39,17 +42,20 @@ mod prove;
 mod ref_updates;
 mod viewer;
 
-pub use action::Action;
+pub use act_as::{act_as_admission, act_as_route};
+pub use act_as_ctx::{ActAsConfirmCtx, LoadedConfirmIntegration};
+pub use action::{ActAsRule, Action};
 pub use authorize::authorize;
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
 pub use feed_ctx::{prove_visible, IntegrationFeedCtx, LoadedIntegrationFeed};
 pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
-    AccountKind, AdmissionAccount, CodeownersToggle, Credential, IntegrationFeedView,
-    MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView,
-    Principal, ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope,
-    ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
+    AssertionFacts, CodeownersToggle, Credential, IntegrationFeedView, MembershipChange,
+    MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView, Principal, ProjectView,
+    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, ServiceAccountView,
+    TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
@@ -61,7 +67,9 @@ pub use prove::{
     UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
-pub use viewer::{MergeRequestViewer, MergeSettingsViewer, TRIAL_SUSPENSION_MINUTES};
+pub use viewer::{
+    ActAsTrial, ActAsViewer, MergeRequestViewer, MergeSettingsViewer, TRIAL_SUSPENSION_MINUTES,
+};
 
 #[cfg(test)]
 #[path = "authorize_tests.rs"]
@@ -90,3 +98,6 @@ mod ref_updates_tests;
 #[cfg(test)]
 #[path = "viewer_tests.rs"]
 mod viewer_tests;
+
+#[cfg(test)]
+mod act_as_tests;

@@ -33,6 +33,8 @@ use forge_git::{Git, GitConfig, StorageRoot};
 use crate::runtime::block_on;
 
 // M3 C1: required checks have a reporter.
+// M3 S2: the act-as keys.
+mod act_as;
 mod checks;
 // M3 I1c: the integrations' event feed.
 mod integrations;
@@ -75,7 +77,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 28] = [
+const DB_CHECKS: [&str; 29] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -120,6 +122,8 @@ const DB_CHECKS: [&str; 28] = [
     "repositories.refs",
     // M3 O3 review: FG-GIT-0020 (a packed-refs.lock nobody holds).
     "repositories.stale_locks",
+    // M3 S2: FG-SYS-0002 (the act-as keys).
+    act_as::NAME,
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -257,6 +261,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let [feed_lag, watermark, retention] = integrations::feed_checks(db).await;
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     let stale_locks = maintenance::stale_locks_check(db, root).await;
+    let act_as_keys = act_as::keys_check(db, cfg).await;
     vec![
         bootstrap,
         connections,
@@ -287,6 +292,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         integrity,
         refs,
         stale_locks,
+        act_as_keys,
     ]
 }
 

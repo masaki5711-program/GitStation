@@ -19,6 +19,8 @@
 //! - [`app`] — wiring and middleware; [`server`] — bind and serve
 
 pub mod app;
+// M3 S2: acting for a person at the authentication layer (ADR-0025).
+mod act_as;
 mod auth;
 pub mod body;
 pub mod context;

@@ -3,6 +3,8 @@
 //! `(state, Dispatched<R>)`: it runs only with the registry's admitted
 //! proof.
 
+// M3 S2: the act-as confirmation and claim (ADR-0025 §5).
+pub mod act_as;
 pub mod assets;
 pub mod auth;
 pub mod browse;

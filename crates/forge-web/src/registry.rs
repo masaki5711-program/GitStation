@@ -1042,7 +1042,10 @@ impl<S: DispatchState> Registry<S> {
                     action,
                     crate::guard::require_principal,
                 ))
-                .route_layer(axum::middleware::from_fn(crate::auth::authenticate));
+                .route_layer(axum::middleware::from_fn_with_state(
+                    action,
+                    crate::auth::authenticate,
+                ));
         }
         let merged = match self.routers.remove(path) {
             Some(existing) => existing.merge(one),

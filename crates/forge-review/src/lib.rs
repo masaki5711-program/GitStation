@@ -205,18 +205,84 @@ fn caller(proof: &Authorized<MergeRequestCtx>) -> Result<UserId, ForgeError> {
 /// `service_account` when the caller's account is one (S0 review: a service
 /// account's comment is audited as its own), the request id, the token and
 /// its scopes.
+///
+/// M3 S2 (ADR-0025 §6): a service account acting for a person is audited
+/// as `user_via_service_account` — the person, the service account, its
+/// token, the keyed HMAC of the claimed person and the assertion's public
+/// id; the effective scope is its token's.
 fn change_context(request: &ReviewRequest, principal: &Principal, user: UserId) -> ChangeContext {
-    let actor = match principal.account_kind() {
-        forge_auth::AccountKind::ServiceAccount => Actor::ServiceAccount(user),
-        forge_auth::AccountKind::Human | forge_auth::AccountKind::Bot => Actor::User(user),
+    let actor = match (principal.credential(), principal.account_kind()) {
+        (Credential::ActAs(c), _) => Actor::UserViaServiceAccount {
+            user,
+            via: c.via,
+            credential_id: c.via_token,
+            act_as_claimed: c.claimed_mac.clone(), // clone: the audit row owns it
+            act_as_key_id: c.claimed_key_id,
+            via_assertion_id: c.assertion.as_ref().map(|a| a.public_id.clone()),
+        },
+        (Credential::Session | Credential::Token(_), forge_auth::AccountKind::ServiceAccount) => {
+            Actor::ServiceAccount(user)
+        }
+        (
+            Credential::Session | Credential::Token(_),
+            forge_auth::AccountKind::Human | forge_auth::AccountKind::Bot,
+        ) => Actor::User(user),
     };
     let mut ctx = ChangeContext::new(actor, request.request_id.clone());
-    ctx.credential_id = request.credential_id;
-    ctx.effective_scope = match principal.credential() {
-        Credential::Session => Vec::new(),
-        Credential::Token(scopes) => scopes.iter().map(|s| s.as_str().to_owned()).collect(),
+    ctx.credential_id = match principal.act_as_credential() {
+        Some(c) => Some(c.via_token),
+        None => request.credential_id,
     };
+    ctx.effective_scope = principal.scope_names();
     ctx
+}
+
+/// The assertion an act-as change consumes (`None` otherwise).
+fn act_as_use(principal: &Principal) -> Option<forge_db::act_as::ActAsUse> {
+    let c = principal.act_as_credential()?;
+    let a = c.assertion.as_ref()?;
+    Some(forge_db::act_as::ActAsUse {
+        assertion: a.id,
+        public_id: a.public_id.clone(), // clone: the use owns it
+        integration: c.integration,
+        via: c.via,
+    })
+}
+
+/// The reconfirmation's context under the lock (M3 S2, ADR-0025 §5.3):
+/// the act-as facts read in the transaction (`facts.via`) and the merge
+/// request as locked, with the target's tip read before it and the sha
+/// the request named; the plain context for every other principal.
+fn fresh_ctx(
+    principal: &Principal,
+    facts: &MergeRequestFacts,
+    tip: Option<&ObjectId>,
+    requested: Option<&ObjectId>,
+) -> Result<MergeRequestCtx, ForgeError> {
+    let plain = MergeRequestCtx::new(loaded(&facts.project), locked(facts)?);
+    if principal.act_as_credential().is_none() {
+        return Ok(plain);
+    }
+    let (Some(via), Some(stored)) = (facts.via, facts.merge_request.as_ref()) else {
+        // An act-as proof reconfirmed without the facts: refused by the
+        // act-as arm (`act_as_facts_missing`), never decided as if the
+        // service account were the person.
+        return Ok(plain);
+    };
+    Ok(plain.acting(
+        forge_auth::ViaView {
+            role: via.role,
+            bound: via.bound,
+        },
+        Some(forge_auth::ActAsSubject {
+            project: stored.project_id,
+            merge_request: stored.id,
+            head_sha: stored.head_sha.clone(), // clone: the subject owns its values
+            target_ref: stored.target_branch.clone(),
+            target_sha: tip.map(|t| t.as_str().to_owned()),
+            requested_sha: requested.map(|s| s.as_str().to_owned()),
+        }),
+    ))
 }
 
 fn account(a: Account) -> AccountFacts {

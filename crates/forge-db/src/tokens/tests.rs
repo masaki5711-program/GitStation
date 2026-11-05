@@ -274,6 +274,11 @@ async fn no_token_like_string_reaches_audit_events_or_jobs() {
         .await
         .expect("table text");
         assert!(!all.contains("fgp_"), "{table} holds a token-like string");
+        // M3 S2 (ADR-0025 §5.1): nor an act-as assertion.
+        assert!(
+            !all.contains("fga_"),
+            "{table} holds an assertion-like string"
+        );
         assert!(!all.contains(&secret), "{table} holds the secret");
         assert!(!all.contains(&hash), "{table} holds the hash");
     }
@@ -395,5 +400,62 @@ async fn concurrent_issues_never_exceed_50_active_tokens() {
     }
     assert_eq!((ok, limited), (10, 10));
     assert_eq!(active_count(&mut su, alice).await, 50);
+    t.drop_now().await;
+}
+
+/// M3 S2 (ADR-0025 §2): the `act_as` scope goes to an integration's service
+/// account only, never with `is_agent`; nothing is written otherwise.
+#[tokio::test]
+async fn act_as_scope_is_issued_to_a_service_account_only() {
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice", true).await;
+    let sa = crate::service_accounts::create(
+        &t.db,
+        &ctx("req-sa"),
+        &crate::service_accounts::NewServiceAccount {
+            username: "kanflow-sync".to_owned(),
+            display_name: "kanflow".to_owned(),
+            owner: alice,
+            purpose: "kanflow acts for people who confirmed in forge".to_owned(),
+        },
+        alice,
+    )
+    .await
+    .expect("service account")
+    .user_id;
+    let err = issue(
+        &t.db,
+        &ctx("req-human"),
+        &request(alice, &[Scope::ActAs, Scope::ReadApi]),
+    )
+    .await
+    .expect_err("a person never acts for others");
+    assert_reason(
+        &err,
+        ErrorCode::TokenRequestInvalid,
+        "act_as_requires_service_account",
+    );
+    let mut agent = request(sa, &[Scope::ActAs, Scope::MergeApprove]);
+    agent.is_agent = true;
+    let err = issue_for_service_account(&t.db, &ctx("req-agent"), &agent, alice)
+        .await
+        .expect_err("an agent never acts for others");
+    assert_reason(&err, ErrorCode::TokenRequestInvalid, "act_as_agent_token");
+    let mut su = t.superuser().await;
+    assert_eq!(count(&mut su, "SELECT count(*) FROM forge.tokens").await, 0);
+    let issued = issue_for_service_account(
+        &t.db,
+        &ctx("req-kanflow"),
+        &request(sa, &[Scope::ReadApi, Scope::MergeApprove, Scope::ActAs]),
+        alice,
+    )
+    .await
+    .expect("kanflow's token");
+    let scopes: Vec<String> = sqlx::query_scalar("SELECT scopes FROM forge.tokens WHERE id = $1")
+        .bind(issued.token_id)
+        .fetch_one(&mut su)
+        .await
+        .expect("scopes");
+    assert!(scopes.contains(&"act_as".to_owned()), "{scopes:?}");
     t.drop_now().await;
 }

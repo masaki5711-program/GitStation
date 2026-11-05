@@ -235,4 +235,9 @@ pub const KEYS: &[Key] = &[
     text("auth.oidc.access_role", "FORGE_AUTH_OIDC_ACCESS_ROLE"),
     text("auth.oidc.signing_algs", "FORGE_AUTH_OIDC_SIGNING_ALGS"),
     boolean("auth.oidc.auto_link", "FORGE_AUTH_OIDC_AUTO_LINK"),
+    // M3 S2: the HMAC keys of acting for a person (ADR-0025 §5.2).
+    text(
+        "auth.act_as_hmac_keys_file",
+        "FORGE_AUTH_ACT_AS_HMAC_KEYS_FILE",
+    ),
 ];

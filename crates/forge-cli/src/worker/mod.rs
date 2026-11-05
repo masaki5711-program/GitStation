@@ -23,7 +23,8 @@
 //! re-requested), and the record of expired CODEOWNERS suspensions
 //! (`codeowners_restore`, M3 R6: every 60 s), and the check-run
 //! retention (`check_run_retention`: every hour, check runs past
-//! `review.check_run_retention_days`), and the repository
+//! `review.check_run_retention_days`), the rejection of expired act-as
+//! assertions (`act_as_sweep`, M3 S2: every 60 s), and the repository
 //! maintenance (`maintenance`, M3 O3: its OWN job runner for
 //! `repository.maintain` — the main runner never claims it, so a long gc
 //! never delays another job — and the nightly schedule, every 60 s).
@@ -74,6 +75,7 @@ mod seal;
 mod events_retention;
 // ── end M3 I1c ──
 // ── check run retention (feat/db-check-run-retention) ──
+mod act_as_sweep;
 mod check_run_retention;
 // ── end check run retention ──
 // ── M2 MR6: the session purge ──
@@ -167,6 +169,8 @@ enum Task {
     EventsRetention,
     /// Check runs past `review.check_run_retention_days` (`check_run_retention`).
     CheckRunRetention,
+    /// Expired pending act-as assertions rejected (`act_as_sweep`, M3 S2).
+    ActAsSweep,
     // ── M3 O3 ──
     /// The maintenance's own job runner (`maintenance`).
     MaintenanceRunner,
@@ -210,6 +214,8 @@ fn tasks(
         Task::EventsRetention,
         // Check runs: needs only the database.
         Task::CheckRunRetention,
+        // M3 S2: needs only the database.
+        Task::ActAsSweep,
     ];
     // ── C5: no subscriber, no task (and no LISTEN connection) ──
     if !registry.is_empty() {
@@ -288,6 +294,7 @@ impl Task {
             Self::CodeownersRestore => codeowners_restore::NAME,
             Self::EventsRetention => events_retention::NAME,
             Self::CheckRunRetention => check_run_retention::NAME,
+            Self::ActAsSweep => act_as_sweep::NAME,
             Self::MaintenanceRunner => maintenance::RUNNER_NAME,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
         }
@@ -313,6 +320,7 @@ impl Task {
             Self::CodeownersRestore => codeowners_restore::PERIOD,
             Self::EventsRetention => events_retention::PERIOD,
             Self::CheckRunRetention => check_run_retention::PERIOD,
+            Self::ActAsSweep => act_as_sweep::PERIOD,
             Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
         }
@@ -365,6 +373,7 @@ impl Task {
                 check_run_retention::run_check_run_retention(db, shared.check_run_retention_days)
                     .await
             }
+            Self::ActAsSweep => act_as_sweep::run_act_as_sweep(db).await,
             Self::MaintenanceRunner => match shared.maintenance.as_ref() {
                 Some(m) => {
                     let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver
