@@ -312,3 +312,13 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* A finger needs a bigger target than a mouse (WCAG 2.5.8 is the floor). */
+@media (pointer: coarse) {
+  .touch {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

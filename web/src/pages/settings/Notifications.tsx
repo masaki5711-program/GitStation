@@ -5,6 +5,7 @@
 // (the server refuses an unknown one). Saved with the CSRF header; the result
 // is announced in a live region and a refusal shows its reason and request id.
 import { useState, type SyntheticEvent } from 'react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -18,6 +19,20 @@ import controls from '../../components/controls.module.css';
 import { Denied, Section, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
 
+
+/** A translated name for a kind; one the screen does not know is its code. */
+function kindLabel(t: TFunction, kind: string): string {
+  switch (kind) {
+    case 'mr_approved':
+      return t('notifications.kinds.mr_approved');
+    case 'mr_merged':
+      return t('notifications.kinds.mr_merged');
+    case 'mr_commented':
+      return t('notifications.kinds.mr_commented');
+    default:
+      return kind;
+  }
+}
 
 export function Notifications() {
   const { t } = useTranslation();
@@ -45,6 +60,9 @@ function PreferencesForm({ stored }: { stored: NotificationPreferences }) {
   const save = usePutNotificationPreferences();
   const [mail, setMail] = useState(stored.email_enabled);
   const [language, setLanguage] = useState(stored.language ?? '');
+  // A stored language this screen does not know is kept as it is (offered as
+  // its own option), never sent as null or as another value by accident.
+  const known = stored.language === null || ['ja', 'en', 'id'].includes(stored.language);
   const [muted, setMuted] = useState<string[]>(stored.muted_kinds);
   const [message, setMessage] = useState('');
   const submit = (e: SyntheticEvent) => {
@@ -71,6 +89,7 @@ function PreferencesForm({ stored }: { stored: NotificationPreferences }) {
         <label className={styles.check}>
           <input
             type="checkbox"
+            aria-describedby="notification-mail-help"
             checked={mail}
             onChange={(e) => {
               setMail(e.target.checked);
@@ -78,7 +97,9 @@ function PreferencesForm({ stored }: { stored: NotificationPreferences }) {
           />
           <span>{t('notifications.mail')}</span>
         </label>
-        <p className={controls.help}>{t('notifications.mailHelp')}</p>
+        <p id="notification-mail-help" className={controls.help}>
+          {t('notifications.mailHelp')}
+        </p>
       </div>
       <div className={controls.field}>
         <label htmlFor="notification-language" className={controls.label}>
@@ -96,11 +117,14 @@ function PreferencesForm({ stored }: { stored: NotificationPreferences }) {
           <option value="ja">{t('language.ja')}</option>
           <option value="en">{t('language.en')}</option>
           <option value="id">{t('language.id')}</option>
+          {!known && stored.language !== null && <option value={stored.language}>{stored.language}</option>}
         </select>
       </div>
-      <fieldset className={controls.field}>
+      <fieldset className={controls.field} aria-describedby="notification-muted-help">
         <legend className={controls.label}>{t('notifications.muted')}</legend>
-        <p className={controls.help}>{t('notifications.mutedHelp')}</p>
+        <p id="notification-muted-help" className={controls.help}>
+          {t('notifications.mutedHelp')}
+        </p>
         <div className={styles.checks}>
           {stored.kinds.map((kind) => (
             <label key={kind} className={styles.check}>
@@ -111,7 +135,8 @@ function PreferencesForm({ stored }: { stored: NotificationPreferences }) {
                   setMuted(e.target.checked ? [...muted, kind] : muted.filter((k) => k !== kind));
                 }}
               />
-              <code>{kind}</code>
+              <span>{kindLabel(t, kind)}</span>
+              <code className={styles.muted}>{kind}</code>
             </label>
           ))}
         </div>

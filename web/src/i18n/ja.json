@@ -836,7 +836,8 @@
     "redeliver": "再送",
     "redeliverOf": "{{event}}（#{{id}}）を再送",
     "queued": "再送の順番待ちに入れました。",
-    "older": "古い配信を表示"
+    "older": "古い配信を表示",
+    "olderLoaded": "配信を {{count}} 件さらに読み込みました。"
   },
   "notifications": {
     "title": "通知",
@@ -848,6 +849,11 @@
     "muted": "止める通知",
     "mutedHelp": "チェックした種類はメールで届きません。",
     "save": "通知の設定を保存",
-    "saved": "通知の設定を保存しました。"
+    "saved": "通知の設定を保存しました。",
+    "kinds": {
+      "mr_approved": "マージリクエストが承認された",
+      "mr_merged": "マージリクエストがマージされた",
+      "mr_commented": "マージリクエストにコメントが付いた"
+    }
   }
 }

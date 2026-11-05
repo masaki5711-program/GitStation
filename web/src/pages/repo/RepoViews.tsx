@@ -12,6 +12,7 @@ import { useApi } from '../../api/context';
 import { Loading } from '../../components/Loading';
 import { MovedNotice } from '../../components/MovedNotice';
 import { encodePath } from '../../features/repoUrls';
+import { useSession } from '../../session/session';
 import { rememberProject } from '../../hooks/recent';
 import { NotFound } from '../NotFound';
 import { BlameScreen } from './BlameScreen';
@@ -48,6 +49,7 @@ export function RepoViews({
 }) {
   const { t } = useTranslation();
   const api = useApi();
+  const isAdmin = useSession().user.is_admin;
   const word = view[0] ?? '';
   const tail = view.slice(1);
   const info = useQuery({
@@ -152,7 +154,7 @@ export function RepoViews({
   const base = `/${encodePath(project)}`;
   // Webhooks are for a Maintainer or above; the server decides again.
   const role = info.data.role;
-  const canManageHooks = role !== 'guest' && role !== 'reporter' && role !== 'developer';
+  const canManageHooks = role === 'maintainer' || role === 'owner' || isAdmin;
   const items = [
     { words: ['tree', 'blob', 'blame'], to: `${base}/-/tree`, label: t('repo.files') },
     { words: ['commits', 'commit'], to: `${base}/-/commits`, label: t('repo.commits') },

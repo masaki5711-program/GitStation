@@ -76,6 +76,26 @@ describe('delivery history', () => {
     expect(await screen.findByText('Queued for delivery again.')).toBeTruthy();
   });
 
+  it('refreshes the webhook after a redelivery, and reads the session after a 403', async () => {
+    const { server } = await open({
+      [`POST ${LIST}/2/redeliver`]: () => json(202, { outcome: 'queued' }),
+      [`POST ${LIST}/1/redeliver`]: () => apiError(403, 'Rejected.', 'req-csrf-1'),
+    });
+    const hookReads = () => server.to('GET', `${HOOKS}/3`).length;
+    await screen.findByRole('button', { name: 'Redeliver merge_request.opened (#2)' });
+    const before = hookReads();
+    fireEvent.click(screen.getByRole('button', { name: 'Redeliver merge_request.opened (#2)' }));
+    await waitFor(() => {
+      expect(hookReads()).toBe(before + 1);
+    });
+    const sessions = server.to('GET', '/api/v1/session').length;
+    fireEvent.click(screen.getByRole('button', { name: 'Redeliver merge_request.merged (#1)' }));
+    await screen.findByText('Rejected.');
+    await waitFor(() => {
+      expect(server.to('GET', '/api/v1/session').length).toBe(sessions + 1);
+    });
+  });
+
   it('shows the 429 refusal plainly, with its request id, and queues nothing', async () => {
     await open({
       [`POST ${LIST}/1/redeliver`]: () =>
@@ -97,6 +117,8 @@ describe('delivery history', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Show older deliveries' }));
     expect(await screen.findByRole('row', { name: /review\.requested/ })).toBeTruthy();
     expect(server.to('GET', LIST).map((c) => c.query.get('before'))).toEqual([null, '2']);
+    // The loading is announced, so it is not silent.
+    expect(screen.getAllByRole('status').some((s) => s.textContent === '1 more deliveries loaded.')).toBe(true);
     expect(screen.queryByRole('button', { name: 'Show older deliveries' })).toBeNull();
   });
 

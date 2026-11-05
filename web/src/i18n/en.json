@@ -836,7 +836,8 @@
     "redeliver": "Redeliver",
     "redeliverOf": "Redeliver {{event}} (#{{id}})",
     "queued": "Queued for delivery again.",
-    "older": "Show older deliveries"
+    "older": "Show older deliveries",
+    "olderLoaded": "{{count}} more deliveries loaded."
   },
   "notifications": {
     "title": "Notifications",
@@ -848,6 +849,11 @@
     "muted": "Notifications to stop",
     "mutedHelp": "Checked kinds are not mailed to you.",
     "save": "Save notification settings",
-    "saved": "Notification settings were saved."
+    "saved": "Notification settings were saved.",
+    "kinds": {
+      "mr_approved": "Merge request approved",
+      "mr_merged": "Merge request merged",
+      "mr_commented": "Comment on a merge request"
+    }
   }
 }

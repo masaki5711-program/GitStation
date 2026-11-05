@@ -246,12 +246,70 @@ describe('edit, rotate, delete', () => {
   });
 });
 
+describe('a11y details', () => {
+  it('keeps Cancel focusable while a save is under way (aria-disabled, not disabled)', async () => {
+    let release: () => void = () => undefined;
+    await open({
+      [`PATCH ${HOOKS}/3`]: () =>
+        new Promise<Response>((resolve) => {
+          release = () => {
+            resolve(json(200, { outcome: 'updated', fields: ['event_types'], webhook: webhook(3) }));
+          };
+        }),
+    });
+    await click(`Edit ${ORIGIN}`);
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Event types'), { target: { value: '*' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    const cancel = await within(dialog).findByRole('button', { name: 'Cancel' });
+    await waitFor(() => {
+      expect(cancel.getAttribute('aria-disabled')).toBe('true');
+    });
+    expect((cancel as HTMLButtonElement).disabled).toBe(false);
+    release();
+  });
+
+  it('links the help of the payload URL to its field', async () => {
+    await open();
+    const url = await screen.findByLabelText('Payload URL');
+    expect(document.getElementById(url.getAttribute('aria-describedby') ?? '')?.textContent).toContain('write-only');
+  });
+});
+
 describe('navigation and languages', () => {
   it('the project navigation links the screen for a Maintainer', async () => {
     const server = mockServer(hookRoutes());
     await renderApp({ fetch: server.fetch, path: PATH, lang: 'en' });
     const link = await screen.findByRole('link', { name: 'Webhooks' });
     expect(link.getAttribute('aria-current')).toBe('page');
+  });
+
+  it('shows the link to an administrator without a role, not to a Reporter', async () => {
+    const asRole = (role: string | null) =>
+      hookRoutes({
+        'GET /api/v1/projects/7': () =>
+          json(200, {
+            id: 7,
+            namespace_id: 11,
+            path: 'acme/forge-web',
+            name: 'forge-web',
+            display_name: 'Forge Web',
+            description: '',
+            visibility: 'internal',
+            created_at: '2026-10-01T00:00:00Z',
+            ...(role === null ? {} : { role }),
+          }),
+        'GET /api/v1/session': () => json(200, { ...SESSION, user: { ...SESSION.user, is_admin: role === null } }),
+        'GET /api/v1/projects/7/repository/refs': () => json(200, { default_branch: null, refs: [], truncated: false }),
+      });
+    const admin = mockServer(asRole(null));
+    const view = await renderApp({ fetch: admin.fetch, path: '/acme/forge-web/-/branches', lang: 'en' });
+    expect(await screen.findByRole('link', { name: 'Webhooks' })).toBeTruthy();
+    view.unmount();
+    const reporter = mockServer(asRole('reporter'));
+    await renderApp({ fetch: reporter.fetch, path: '/acme/forge-web/-/branches', lang: 'en' });
+    await screen.findByRole('link', { name: 'Commits' });
+    expect(screen.queryByRole('link', { name: 'Webhooks' })).toBeNull();
   });
 
   it('hides the link from a Developer', async () => {

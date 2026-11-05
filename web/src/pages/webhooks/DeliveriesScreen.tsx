@@ -107,7 +107,14 @@ export function DeliveriesScreen({
                   className={controls.button}
                   aria-disabled={deliveries.isFetchingNextPage ? 'true' : undefined}
                   onClick={() => {
-                    if (!deliveries.isFetchingNextPage) void deliveries.fetchNextPage();
+                    if (deliveries.isFetchingNextPage) return;
+                    // Clear first, so the same count twice is announced again.
+                    setMessage('');
+                    const before = items.length;
+                    void deliveries.fetchNextPage().then((r) => {
+                      const now = r.data?.pages.flatMap((p) => p.items).length ?? before;
+                      if (now > before) setMessage(t('webhooks.olderLoaded', { count: now - before }));
+                    });
                   }}
                 >
                   {deliveries.isFetchingNextPage ? t('common.loading') : t('webhooks.older')}
@@ -180,7 +187,7 @@ function DeliveryTable({
               <td>
                 <button
                   type="button"
-                  className={controls.button}
+                  className={`${controls.button} ${styles.touch}`}
                   aria-label={t('webhooks.redeliverOf', { event: d.event_type, id: d.id })}
                   aria-disabled={busy ? 'true' : undefined}
                   onClick={() => {

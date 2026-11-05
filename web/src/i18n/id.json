@@ -836,7 +836,8 @@
     "redeliver": "Kirim ulang",
     "redeliverOf": "Kirim ulang {{event}} (#{{id}})",
     "queued": "Masuk antrean untuk dikirim ulang.",
-    "older": "Tampilkan pengiriman lebih lama"
+    "older": "Tampilkan pengiriman lebih lama",
+    "olderLoaded": "{{count}} pengiriman lagi dimuat."
   },
   "notifications": {
     "title": "Notifikasi",
@@ -848,6 +849,11 @@
     "muted": "Notifikasi yang dihentikan",
     "mutedHelp": "Jenis yang dicentang tidak dikirim lewat surel.",
     "save": "Simpan pengaturan notifikasi",
-    "saved": "Pengaturan notifikasi disimpan."
+    "saved": "Pengaturan notifikasi disimpan.",
+    "kinds": {
+      "mr_approved": "Merge request disetujui",
+      "mr_merged": "Merge request digabung",
+      "mr_commented": "Komentar pada merge request"
+    }
   }
 }

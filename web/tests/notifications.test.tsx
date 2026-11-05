@@ -38,9 +38,33 @@ describe('notification settings', () => {
     expect((await screen.findByLabelText<HTMLInputElement>('Send me notification mail')).checked).toBe(true);
     expect(screen.getByLabelText<HTMLSelectElement>('Language of the mail').value).toBe('');
     const group = screen.getByRole('group', { name: 'Notifications to stop' });
-    for (const kind of PREFS.kinds) {
-      expect(within(group).getByLabelText<HTMLInputElement>(kind).checked).toBe(kind === 'mention');
-    }
+    // Each kind has a translated name, with its code as secondary text.
+    expect(within(group).getByLabelText<HTMLInputElement>(/Merge request approved/).checked).toBe(false);
+    expect(within(group).getByLabelText<HTMLInputElement>(/Merge request merged/).checked).toBe(false);
+    expect(within(group).getByLabelText<HTMLInputElement>(/Comment on a merge request/).checked).toBe(true);
+    expect(within(group).getByText('mr_commented')).toBeTruthy();
+  });
+
+  it('links the help texts to their controls', async () => {
+    await open();
+    const mail = await screen.findByLabelText('Send me notification mail');
+    expect(document.getElementById(mail.getAttribute('aria-describedby') ?? '')?.textContent).toContain('Turn this off');
+    const group = screen.getByRole('group', { name: 'Notifications to stop' });
+    expect(document.getElementById(group.getAttribute('aria-describedby') ?? '')?.textContent).toContain('Checked kinds');
+  });
+
+  it('keeps a stored language this screen does not know', async () => {
+    const { server } = await open({
+      [`GET ${PREFS_URL}`]: () => json(200, { ...PREFS, language: 'de' }),
+      [`PUT ${PREFS_URL}`]: () => json(200, PREFS),
+    });
+    const select = await screen.findByLabelText<HTMLSelectElement>('Language of the mail');
+    expect(select.value).toBe('de');
+    fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }));
+    await waitFor(() => {
+      expect(server.to('PUT', PREFS_URL)).toHaveLength(1);
+    });
+    expect((server.to('PUT', PREFS_URL)[0]?.body as { language: unknown }).language).toBe('de');
   });
 
   it('saves the changes with the CSRF header and announces it', async () => {
@@ -49,14 +73,14 @@ describe('notification settings', () => {
     });
     fireEvent.click(await screen.findByLabelText('Send me notification mail'));
     fireEvent.change(screen.getByLabelText('Language of the mail'), { target: { value: 'ja' } });
-    fireEvent.click(screen.getByLabelText('review.requested'));
-    fireEvent.click(screen.getByLabelText('mention'));
+    fireEvent.click(screen.getByLabelText(/Merge request approved/));
+    fireEvent.click(screen.getByLabelText(/Comment on a merge request/));
     fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }));
     await waitFor(() => {
       expect(server.to('PUT', PREFS_URL)).toHaveLength(1);
     });
     const call = server.to('PUT', PREFS_URL)[0];
-    expect(call?.body).toEqual({ email_enabled: false, language: 'ja', muted_kinds: ['review.requested'] });
+    expect(call?.body).toEqual({ email_enabled: false, language: 'ja', muted_kinds: ['mr_approved'] });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
     const saved = await screen.findByText('Notification settings were saved.');
     expect(saved.closest('[role="status"]')).not.toBeNull();
@@ -77,11 +101,11 @@ describe('notification settings', () => {
 
   it('shows a refusal with its request id and keeps the choices', async () => {
     await open({ [`PUT ${PREFS_URL}`]: () => apiError(400, 'That language is not offered.', 'req-pref-1') });
-    fireEvent.click(await screen.findByLabelText('mention'));
+    fireEvent.click(await screen.findByLabelText(/Comment on a merge request/));
     fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }));
     expect(await screen.findByText('That language is not offered.')).toBeTruthy();
     expect(screen.getByTestId('request-id').textContent).toBe('req-pref-1');
-    expect(screen.getByLabelText<HTMLInputElement>('mention').checked).toBe(false);
+    expect(screen.getByLabelText<HTMLInputElement>(/Comment on a merge request/).checked).toBe(false);
   });
 
   it('shows the failure to read with a retry', async () => {

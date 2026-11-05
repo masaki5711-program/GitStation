@@ -314,6 +314,7 @@ function HookTable({
                   <td>
                     <div className={styles.inline}>
                       <Link
+                        className={styles.touch}
                         to={`${base}/${hook.id}/deliveries`}
                         aria-label={t('webhooks.deliveriesOf', { origin: hook.origin })}
                       >
@@ -321,7 +322,7 @@ function HookTable({
                       </Link>
                       <button
                         type="button"
-                        className={controls.button}
+                        className={`${controls.button} ${styles.touch}`}
                         aria-label={t('webhooks.editOf', { origin: hook.origin })}
                         onClick={() => {
                           setEditing(hook);
@@ -331,7 +332,7 @@ function HookTable({
                       </button>
                       <button
                         type="button"
-                        className={controls.button}
+                        className={`${controls.button} ${styles.touch}`}
                         aria-label={
                           hook.enabled
                             ? t('webhooks.disableOf', { origin: hook.origin })
@@ -346,7 +347,7 @@ function HookTable({
                       </button>
                       <button
                         type="button"
-                        className={controls.button}
+                        className={`${controls.button} ${styles.touch}`}
                         aria-label={t('webhooks.rotateOf', { origin: hook.origin })}
                         onClick={() => {
                           rotate.reset();
@@ -357,7 +358,7 @@ function HookTable({
                       </button>
                       <button
                         type="button"
-                        className={styles.dangerQuiet}
+                        className={`${styles.dangerQuiet} ${styles.touch}`}
                         aria-label={t('webhooks.deleteOf', { origin: hook.origin })}
                         onClick={() => {
                           remove.reset();
@@ -379,6 +380,9 @@ function HookTable({
         hook={editing}
         onClose={() => {
           setEditing(null);
+        }}
+        onStart={() => {
+          onMessage('');
         }}
         onSaved={(text) => {
           setEditing(null);
@@ -422,6 +426,7 @@ function HookTable({
         onConfirm={() => {
           const hook = deleting.target;
           if (hook === null) return;
+          onMessage('');
           remove.mutate(hook.id, {
             onSuccess: () => {
               deleting.close();
@@ -442,18 +447,20 @@ function EditDialog({
   projectId,
   hook,
   onClose,
+  onStart,
   onSaved,
 }: {
   projectId: number;
   hook: Webhook | null;
   onClose: () => void;
+  onStart: () => void;
   onSaved: (text: string) => void;
 }) {
   const { t } = useTranslation();
   const update = useUpdateWebhook(projectId);
   return (
     <Modal open={hook !== null} onClose={onClose} title={t('webhooks.editTitle')} busy={update.isPending}>
-      {hook !== null && <EditForm hook={hook} update={update} onSaved={onSaved} onCancel={onClose} />}
+      {hook !== null && <EditForm hook={hook} update={update} onStart={onStart} onSaved={onSaved} onCancel={onClose} />}
     </Modal>
   );
 }
@@ -461,11 +468,15 @@ function EditDialog({
 function EditForm({
   hook,
   update,
+  onStart,
   onSaved,
   onCancel,
 }: {
   hook: Webhook;
   update: ReturnType<typeof useUpdateWebhook>;
+  /** Called when a save begins: the last result is cleared, so the same
+   * result twice in a row is announced again. */
+  onStart: () => void;
   onSaved: (text: string) => void;
   onCancel: () => void;
 }) {
@@ -477,6 +488,7 @@ function EditForm({
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
     if (update.isPending) return;
+    onStart();
     const next = parseEventTypes(types);
     const body: { url?: string; event_types?: string[] } = {};
     if (url.trim() !== '') body.url = url.trim();
@@ -512,7 +524,14 @@ function EditForm({
       </p>
       {update.isError && <Denied error={update.error} />}
       <div className={styles.row}>
-        <button type="button" className={controls.button} disabled={update.isPending} onClick={onCancel}>
+        <button
+          type="button"
+          className={controls.button}
+          aria-disabled={update.isPending ? 'true' : undefined}
+          onClick={() => {
+            if (!update.isPending) onCancel();
+          }}
+        >
           {t('common.cancel')}
         </button>
         <button type="submit" className={controls.primary} aria-disabled={update.isPending ? 'true' : undefined}>

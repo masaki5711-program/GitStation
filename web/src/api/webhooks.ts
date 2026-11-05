@@ -6,7 +6,8 @@
 // holds it in component state only (never the query cache).
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { call, callNoContent } from './client';
+import { SESSION_KEY } from '../session/session';
+import { ApiFailure, call, callNoContent } from './client';
 import { useApi } from './context';
 import type { components } from './schema.gen';
 
@@ -20,7 +21,8 @@ export type NotificationPreferencesInput = S['PreferencesInput'];
 
 export const webhookKeys = {
   list: (project: number) => ['webhooks', project] as const,
-  one: (project: number, hook: number) => ['webhook', project, hook] as const,
+  // Nested under the list key, so invalidating the list refreshes it too.
+  one: (project: number, hook: number) => ['webhooks', project, 'one', hook] as const,
   deliveries: (project: number, hook: number) => ['webhook-deliveries', project, hook] as const,
 };
 export const PREFERENCES_KEY = ['notification-preferences'] as const;
@@ -143,7 +145,18 @@ export function useRedeliver(project: number, hook: number) {
           params: { path: { id: project, webhook_id: hook, delivery_id: delivery } },
         }),
       ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: webhookKeys.deliveries(project, hook) }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: webhookKeys.deliveries(project, hook) }),
+        queryClient.invalidateQueries({ queryKey: webhookKeys.list(project) }),
+      ]);
+    },
+    // A 403 is most often a stale CSRF token: read the session again.
+    onError: (error: unknown) => {
+      if (error instanceof ApiFailure && error.failure.kind === 'api' && error.failure.status === 403) {
+        void queryClient.invalidateQueries({ queryKey: SESSION_KEY });
+      }
+    },
   });
 }
 

@@ -754,9 +754,10 @@ async function main() {
     if ((await page.getByTestId('webhook-secret-value').innerText()) !== ROTATED_SECRET) {
       problems.push('webhook secret: the rotated secret is not shown');
     }
-    if ((await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))) !== 'webhook-secret') {
-      problems.push('webhook secret: the panel did not take the focus after a rotation');
-    }
+    // The panel waits for the closing dialog before it takes the focus.
+    await page
+      .waitForFunction(() => document.activeElement?.getAttribute('data-testid') === 'webhook-secret', null, { timeout: 3000 })
+      .catch(() => problems.push('webhook secret: the panel did not take the focus after a rotation'));
     await page.getByRole('button', { name: 'I have saved it' }).click();
 
     await page.getByRole('link', { name: 'Deliveries of https://hooks.example.test:8443' }).click();

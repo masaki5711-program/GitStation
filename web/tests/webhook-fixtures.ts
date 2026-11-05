@@ -63,8 +63,8 @@ export function hookRoutes(over: Record<string, Handler> = {}): Record<string, H
 export const PREFS = {
   email_enabled: true,
   language: null,
-  kinds: ['review.requested', 'merge_request.merged', 'mention'],
-  muted_kinds: ['mention'],
+  kinds: ['mr_approved', 'mr_merged', 'mr_commented'],
+  muted_kinds: ['mr_commented'],
 };
 
 export const PREFS_URL = '/api/v1/user/notification-preferences';
