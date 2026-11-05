@@ -2639,21 +2639,28 @@ impl World {
         let p = self.project.get();
         let i = integration.get();
         let o = self.owner.get();
-        let sql = format!(
-            "BEGIN; \
-             INSERT INTO forge.audit_log (actor_kind, actor_user_id, action, outcome, \
-               resource_type, resource_id, project_id, request_id) \
-             VALUES ('user', {o}, 'integration.unbound', 'succeeded', 'project', {p}, {p}, \
-               'req-unbind'); \
-             UPDATE forge.merge_request_work_items SET unlinked_at = now(), \
-               unlink_source = 'unbound', unlinked_by = {o}, unlinked_by_kind = 'human' \
-             WHERE project_id = {p} AND unlinked_at IS NULL; \
-             DELETE FROM forge.integration_bindings WHERE project_id = {p}; \
-             DELETE FROM forge.project_members WHERE project_id = {p} AND user_id = \
-               (SELECT service_account_id FROM forge.integrations WHERE id = {i}); \
-             COMMIT;"
-        );
-        self.t.exec_superuser(&sql).await;
+        self.t
+            .commit_audited(
+                ("project", p),
+                &[
+                    format!(
+                        "INSERT INTO forge.audit_log (actor_kind, actor_user_id, action, outcome, \
+                         resource_type, resource_id, project_id, request_id) VALUES ('user', {o}, \
+                         'integration.unbound', 'succeeded', 'project', {p}, {p}, 'req-unbind')"
+                    ),
+                    format!(
+                        "UPDATE forge.merge_request_work_items SET unlinked_at = now(), \
+                         unlink_source = 'unbound', unlinked_by = {o}, unlinked_by_kind = 'human' \
+                         WHERE project_id = {p} AND unlinked_at IS NULL"
+                    ),
+                    format!("DELETE FROM forge.integration_bindings WHERE project_id = {p}"),
+                    format!(
+                        "DELETE FROM forge.project_members WHERE project_id = {p} AND user_id = \
+                         (SELECT service_account_id FROM forge.integrations WHERE id = {i})"
+                    ),
+                ],
+            )
+            .await;
     }
 
     /// dave (a Developer) links `raw` by hand.
