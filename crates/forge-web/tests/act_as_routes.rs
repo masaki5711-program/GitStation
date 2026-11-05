@@ -240,21 +240,6 @@ async fn world() -> World {
     )
     .await
     .expect("integration");
-    let (bound, _, ()) = forge_db::integrations::bind_decided(
-        &t.db,
-        &ctx("req-bind"),
-        web.project_id,
-        olga.user_id,
-        integration,
-        "KF-1",
-        |_| Ok(()),
-    )
-    .await
-    .expect("bind");
-    assert!(matches!(
-        bound,
-        forge_db::integrations::BindOutcome::Bound { .. }
-    ));
     let kanflow = issue_sa_token(
         &t,
         sa,
@@ -319,6 +304,20 @@ async fn world() -> World {
     .expect("session")
     .session_id;
     let p = web.project_id.get();
+    // Bound through the route (the decided command is forge-hosting's).
+    let (status, bound) = send(
+        router.clone(),
+        "PUT",
+        &format!(
+            "/api/v1/projects/{p}/integration-bindings/{}",
+            integration.get()
+        ),
+        Who::Person(session_of(olga.user_id), None),
+        Some(json!({"external_project_id": "KF-1"})),
+        &[],
+    )
+    .await;
+    assert!(status.is_success(), "{bound}");
     let (status, opened) = send(
         router.clone(),
         "POST",
