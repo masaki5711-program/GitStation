@@ -87,15 +87,39 @@ Checks API（M3 C1、ADR-0024 §10、`docs/api/checks.md`）で、CI や kanflow
 
 ### E. 保持（量が気になるとき）
 
-実行と注釈はプロジェクトがある間は残る（完全削除で消える）。古い実行を消すジョブは O3（保守）で入るまで無い。量は読み取りで見る:
+実行と注釈は、`forge worker` のタスク `check_run_retention`（1 時間ごと。満杯の批は 0.5 秒おいてすぐ続ける）が消す:
+`updated_at` が `review.check_run_retention_days`（既定 **180**、30〜3650。`FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS` か
+`[review] check_run_retention_days`）より古く、**開いている MR の今の head のコミットでない** 実行を、注釈ごと、1 回に最大 1 000 件、
+古い順に消す。1 回は短い 1 つのトランザクション（バッチをまたいでロックを持たない）。ロックは報告・マージのゲートと同じ向き:
+プロジェクトの行を `FOR SHARE`（報告と同じ強さ。ゲート／完全削除が持つ `FOR UPDATE` のプロジェクトは **待たずに飛ばす**）、
+実行の行を `FOR UPDATE SKIP LOCKED`（報告が書き換え中の行は待たずに飛ばす）。次の周期で拾い直す。
+
+消した批ごとに、プロジェクトごとに 1 行の監査 `check_run.retention`（actor `system`、label `forge-worker`、resource `project`）が残る。
+details は個数だけ: `{"project_id","runs","annotations","older_than_days"}`。何も消さない批は何も書かない。
+
+量と、保持が追いついているかは読み取りで見る:
 
 ```sql
 SELECT project_id, count(*) AS runs, min(updated_at) FROM forge.check_runs GROUP BY project_id ORDER BY runs DESC LIMIT 20;
 SELECT count(*) FROM forge.check_annotations;
+-- 消されるはずのもの（期限切れで、開いている MR の head でない）の数
+SELECT count(*) FROM forge.check_runs r
+ WHERE r.updated_at < now() - interval '180 days'
+   AND NOT EXISTS (SELECT 1 FROM forge.merge_requests m WHERE m.project_id = r.project_id
+                   AND m.state = 'open' AND m.head_sha = r.head_sha);
+-- 直近の保持の記録
+SELECT created_at, resource_id AS project_id, details FROM forge.audit_log
+ WHERE action = 'check_run.retention' ORDER BY id DESC LIMIT 20;
 ```
 
-手で消さない（監査される表で、消すには承認された手順と監査の行が要る）。O3 の方針: `updated_at` が 180 日より古く、開いている MR の
-今の head でないコミットのものを消す。
+`forge doctor` の `checks.retention` は、期限切れで消されるはずの実行が残っていれば WARN（件数と一番古い実行の経過日数）。
+ワーカーが止まっている、ゲートや報告が長く続いてプロジェクトが飛ばされ続けている、のどれか: `forge.worker` のログの
+`task=check_run_retention`（`error_code` つき。DB の失敗は `FG-DB-0001` / `FG-DB-0002`）を `request_id` で追う。
+
+- 期限切れの MR の head の実行が消えた後で、その MR がまたその head になった（古いコミットへブランチを戻した）場合、必須のチェックは
+  「報告なし」（`required_check_missing`）としてマージを止める（安全側）。報告し直せば戻る。
+- 手で消さない（監査される表で、消すには監査の行が要る）。窓を短くしたい／長くしたいときは設定を変えてワーカーを再起動する
+  `[MUTATING — needs approval]`（ロールバック: 値を戻す。消えた実行は戻らない）。
 
 ## Verify
 

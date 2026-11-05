@@ -1772,6 +1772,22 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   報告（プロジェクトの行を `FOR SHARE`）とマージのゲート（`FOR UPDATE`）とのロックの順、「開いている MR の今の head」の判定、
   runbook `checks-reporting` の「保持」の書き換えが要り、git の保守とは別の設計とレビュー（`database-reviewer`）になる。量は 1 コミット
   100 名・注釈 50 個で抑えられているので急がない。O3 の後の小さな MR（`feat/db-check-run-retention`）として計画 11 §5 に残す。
+  → **`feat/db-check-run-retention` で入れた（2026-11-05）**: forge-db `checks::expire_old_runs`、worker のタスク `check_run_retention`（1 時間ごと、
+  満杯の批は 0.5 秒おいて続ける）、設定 `review.check_run_retention_days`（既定 180、30〜3650、`FG-SYS-0002` で検証）。
+  - **対象**: `updated_at` が窓より古く、かつ **開いている MR の今の head（`merge_requests.state='open' AND head_sha = 実行の head_sha`）でない**
+    実行。注釈は実行と一緒（注釈 → 実行の順。外部キー）。1 回に最大 1 000 件、古い順（1 取引 = 1 批、バッチをまたいでロックを持たない）。
+  - **ロックの順（報告・ゲートと同じ向き、待たない）**: ①期限切れの実行があるプロジェクトの行を id 順に `FOR SHARE SKIP LOCKED`
+    （報告と同じ強さ。ゲート／完全削除の `FOR UPDATE` のプロジェクトは待たずに飛ばす）→ ②そのプロジェクトの期限切れの実行を
+    `FOR UPDATE SKIP LOCKED`（報告が書き換え中の行は飛ばす）→ ③注釈 → 実行を DELETE。コミットごとの advisory lock は取らず、行を待たないので
+    報告（プロジェクト `FOR SHARE` → advisory → 実行の行）とも、ゲート（プロジェクト `FOR UPDATE`）とも循環しない。飛ばしたものは次の周期で拾う。
+  - **監査**: 監査される表なので、批ごとにプロジェクトごとの監査の行 `check_run.retention`（actor `system`、label `forge-worker`、
+    details は `{"project_id","runs","annotations","older_than_days"}` の個数だけ。イベントなし）を同じ取引で書く（遅延トリガー
+    `audited_change_present` を満たす）。何も消さない批は何も書かない。
+  - **マイグレーション**: 20261119100000（追記）は `check_runs (updated_at, id)` の索引だけ（古い順の走査が全表走査にならないため）。
+  - **doctor `checks.retention`**: 窓＋1 日を過ぎて残っている対象（開いている MR の head を除く）があれば WARN（FG コードなし。件数、一番古い
+    経過日数）。runbook `checks-reporting` の E。
+  - **既知の割り切り**: 期限切れの実行の後で、MR がその古いコミットをまた head にした（ブランチを古いコミットへ戻した）ときは、実行が消えているので
+    必須のチェックは `required_check_missing` で止まる（安全側）。報告し直せば戻る。
 - **既知の残り**: Windows で、git の `PATH` の `cmd\git.exe` の起動の器を殺しても本物の git が残りうる（README の既知の穴。Job
   Object は子孫ごと殺すので、保守の手順では起きない）。完全削除とリポジトリの保守が重なると、Windows では開いているファイルのため
   ディレクトリの削除が失敗しうる（完全削除は次の回で再試行する）。

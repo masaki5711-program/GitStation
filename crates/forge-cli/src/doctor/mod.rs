@@ -75,7 +75,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 27] = [
+const DB_CHECKS: [&str; 28] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -108,6 +108,8 @@ const DB_CHECKS: [&str; 27] = [
     "service_accounts.ownerless",
     // M3 C1: every required check namespace has a reporter (warn).
     "checks.reporters",
+    // Check run retention: due runs left past the window (warn).
+    "checks.retention",
     // M3 I1c: FG-INT-0009, the feed's bound, retention.
     integrations::NAMES[0],
     integrations::NAMES[1],
@@ -251,6 +253,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let merges = review::merges_check(db).await;
     let [sa_expiring, sa_ownerless] = service_accounts::service_account_checks(db).await;
     let reporters = checks::reporters_check(db).await;
+    let check_retention = checks::retention_check(db, cfg.review.check_run_retention_days).await;
     let [feed_lag, watermark, retention] = integrations::feed_checks(db).await;
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     let stale_locks = maintenance::stale_locks_check(db, root).await;
@@ -275,6 +278,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         sa_expiring,
         sa_ownerless,
         reporters,
+        check_retention,
         feed_lag,
         watermark,
         retention,
