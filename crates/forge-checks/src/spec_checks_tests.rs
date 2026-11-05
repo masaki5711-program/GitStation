@@ -198,3 +198,22 @@ fn nothing_touched_is_a_successful_trace() {
         run.summary
     );
 }
+
+#[test]
+fn an_annotation_on_a_path_the_table_refuses_stays_in_the_summary_only() {
+    let head = indexed(
+        &[("spec/a.md", spec("::: req A-1\nx\n:::\n"))],
+        &[
+            ("C:evil.rs", 2, "// @req A-9"),
+            ("t\\x.rs", 3, "// @req A-8"),
+        ],
+    );
+    let run = assess_lint(&head).expect("run");
+    assert_eq!(run.conclusion, Some(CheckConclusion::Failure));
+    assert!(
+        run.summary.contains("C:evil.rs:2 broken_reference"),
+        "{}",
+        run.summary
+    );
+    assert!(run.annotations.is_empty(), "{:?}", run.annotations);
+}

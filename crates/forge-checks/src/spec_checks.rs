@@ -121,8 +121,12 @@ fn completed(
         conclusion: Some(conclusion),
         summary: clip(lines.join("\n"), MAX_CHECK_SUMMARY_BYTES),
         details_url: None,
+        // A path the table refuses (a file named `C:x`, with a backslash or
+        // a control character: git allows them) is named in the summary
+        // only, never a refused write.
         annotations: annotations
             .into_iter()
+            .filter(|a| crate::validate::relative_path(&a.path))
             .take(MAX_CHECK_ANNOTATIONS)
             .collect(),
     })
