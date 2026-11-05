@@ -2,7 +2,8 @@
 //! §2, §5.3, §6): after the token authenticated, a request carrying
 //! `Forge-Act-As` (or `Forge-Assertion`) becomes an act-as principal or is
 //! refused — **never** served as the token's own owner with the header
-//! ignored. git Smart HTTP does not read the headers (ADR-0025 §4).
+//! ignored — git Smart HTTP and raw / archive included (refused as
+//! `RepoRead`, review of ADR-0025 §4).
 //!
 //! Order (each step before the next): the route's action
 //! (`act_as_rule() == Denied` → `FG-AUTH-0003 reason=act_as_not_allowed`,
@@ -174,15 +175,15 @@ fn refused(
 /// archive, decided like `RepoRead`, which never acts for a person).
 pub(crate) async fn admit(
     req: &mut Request,
-    surface: Surface,
+    _surface: Surface,
     action: Option<Action>,
     request_id: &RequestId,
     lang: Lang,
 ) -> Result<Option<Accepted>, Box<Response>> {
-    if surface == Surface::Git {
-        // git never acts for a person; the headers are not read.
-        return Ok(None);
-    }
+    // Review (authz MEDIUM): git Smart HTTP and raw / archive never act for
+    // a person, and the header is never ignored: they are refused like
+    // every action outside the allowlist (`RepoRead` / `RepoPush` are
+    // `Denied`).
     let action = action.unwrap_or(Action::RepoRead);
     let fail = |err: ForgeError, via: Option<i64>| {
         Err(refused(err, Some(action), via, request_id.clone(), lang))

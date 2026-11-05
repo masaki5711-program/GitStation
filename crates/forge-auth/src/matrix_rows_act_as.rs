@@ -382,6 +382,13 @@ pub(crate) const ACT_AS_ROWS: &[Row] = &[
     row(A::ProjectRead, READER, scene(REPORTER, true, Target::Absent, Drift::None), deny(E::NotFound)),
     row(A::ProjectRead, via(DEV, ViaToken::NoActAs, Assert::None), BOUND_PROJECT, deny(E::InsufficientScope)),
     row(A::ProjectRead, via(DEV, ViaToken::Agent, Assert::None), BOUND_PROJECT, deny(E::Forbidden)),
+    row(A::ProjectRead, W::ActAs(Via { person: DEV, token: ViaToken::Reader, assertion: Assert::None, enabled: false }), BOUND_PROJECT, deny(E::Forbidden)),
+    // Review (authz HIGH): a route whose loader adds no act-as facts
+    // (approval rules, merge settings, integration bindings) is refused:
+    // the plain resource is never decided as the person's.
+    row(A::ProjectRead, READER, F::PrivateProject, deny(E::Forbidden)),
+    row(A::MergeRequestList, READER, F::PrivateProject, deny(E::Forbidden)),
+    row(A::MergeRequestRead, READER, F::Mr(crate::matrix_review::MrFixture::other()), deny(E::Forbidden)),
     // 5. the claim: the integration's own service account, `act_as`.
     row(A::ActAsAssertionClaim, W::ServiceAccountTokenActAs, F::IntegrationFeed { own: true, enabled: true, act_as: false }, Allow),
     row(A::ActAsAssertionClaim, W::ServiceAccountTokenActAs, F::IntegrationFeed { own: false, enabled: true, act_as: false }, deny(E::NotFound)),

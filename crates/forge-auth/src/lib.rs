@@ -68,7 +68,8 @@ pub use prove::{
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 pub use viewer::{
-    ActAsTrial, ActAsViewer, MergeRequestViewer, MergeSettingsViewer, TRIAL_SUSPENSION_MINUTES,
+    ActAsTipGate, ActAsTrial, ActAsViewer, MergeRequestViewer, MergeSettingsViewer,
+    TRIAL_SUSPENSION_MINUTES,
 };
 
 #[cfg(test)]

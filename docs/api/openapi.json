@@ -1260,6 +1260,10 @@
             "description": "The integration's kind (`kanflow`): who receives the assertion.",
             "type": "string"
           },
+          "integration_name": {
+            "description": "The username of the integration's service account (its name in\nforge).",
+            "type": "string"
+          },
           "intent": {
             "description": "`approve` or `unapprove`.",
             "type": "string"
@@ -1310,6 +1314,7 @@
           "intent",
           "integration_id",
           "integration_kind",
+          "integration_name",
           "person_display_name",
           "person_username"
         ],

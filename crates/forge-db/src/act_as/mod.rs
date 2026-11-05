@@ -138,13 +138,41 @@ pub async fn via_facts(
 
 /// [`ViaFacts`] inside a write transaction, the binding and the service
 /// account's memberships locked `FOR SHARE` (an unbind or a role change
-/// waits for the action).
+/// waits for the action). The integration and its service account are
+/// read again `FOR SHARE` first (review LOW): a disabled integration is
+/// `FG-AUTH-0003 reason=integration_disabled`, a disabled (or missing)
+/// service account `FG-AUTH-0004 reason=via_disabled`, and the action
+/// writes nothing.
 pub(crate) async fn via_on(
     conn: &mut PgConnection,
     integration: IntegrationId,
     via: UserId,
     project: ProjectId,
 ) -> Result<ViaFacts, ForgeError> {
+    let enabled: Option<bool> = sqlx::query_scalar(
+        "SELECT enabled FROM forge.integrations WHERE id = $1 AND service_account_id = $2 FOR SHARE",
+    )
+    .bind(integration.get())
+    .bind(via.get())
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| query_error("act_as.via_integration_lock", e))?;
+    if enabled != Some(true) {
+        return Err(ForgeError::new(ErrorCode::Forbidden)
+            .with_context("reason", "integration_disabled")
+            .with_context("integration_id", integration.get()));
+    }
+    let state: Option<String> =
+        sqlx::query_scalar("SELECT state FROM forge.users WHERE id = $1 FOR SHARE")
+            .bind(via.get())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| query_error("act_as.via_account_lock", e))?;
+    if state.as_deref() != Some("active") {
+        return Err(ForgeError::new(ErrorCode::AccountDisabled)
+            .with_context("reason", "via_disabled")
+            .with_context("user", via.get()));
+    }
     let bound: Option<i64> = sqlx::query_scalar(
         "SELECT project_id FROM forge.integration_bindings \
          WHERE integration_id = $1 AND project_id = $2 FOR SHARE",
@@ -277,7 +305,21 @@ pub async fn issue(
                 .bind(request_ref.as_str())
                 .fetch_one(c)
                 .await
-                .map_err(|e| query_error("act_as.issue", e))
+                .map_err(|e| {
+                    let reused = e
+                        .as_database_error()
+                        .and_then(|d| d.constraint())
+                        .is_some_and(|c| c == "act_as_assertions_state_hash");
+                    if reused {
+                        // A state is used once per integration (review LOW).
+                        ForgeError::new(ErrorCode::RequestInvalid)
+                            .with_context("reason", "param_invalid")
+                            .with_context("param", "state")
+                            .with_context("rule", "in_use")
+                    } else {
+                        query_error("act_as.issue", e)
+                    }
+                })
             })
             .await?;
         let details = serde_json::json!({

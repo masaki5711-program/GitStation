@@ -1962,6 +1962,11 @@ export interface components {
             integration_id: number;
             /** @description The integration's kind (`kanflow`): who receives the assertion. */
             integration_kind: string;
+            /**
+             * @description The username of the integration's service account (its name in
+             *     forge).
+             */
+            integration_name: string;
             /** @description `approve` or `unapprove`. */
             intent: string;
             /** @description "<display name> (<username>) として承認します". */

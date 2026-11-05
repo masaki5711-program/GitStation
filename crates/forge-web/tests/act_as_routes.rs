@@ -8,6 +8,7 @@
 //! assertion, and the refusals of the headers and the credential with
 //! their codes. Synthetic data only.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -90,7 +91,27 @@ fn commit_on(repo: &std::path::Path, parent: Option<&str>, files: &[(&str, &str)
     plumb(repo, &args, None)
 }
 
+/// The branch lookups of the review commands, counted (review CRITICAL:
+/// an act-as request reaches git only after the decision).
+struct Counting {
+    inner: Browser,
+    calls: Arc<AtomicUsize>,
+}
+
+impl forge_review::BranchProbe for Counting {
+    fn branch_head<'a>(
+        &'a self,
+        repo: forge_core::RepoId,
+        branch: &'a forge_core::RefName,
+        caller: &'a str,
+    ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::ObjectId> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.branch_head(repo, branch, caller)
+    }
+}
+
 struct World {
+    git_calls: Arc<AtomicUsize>,
     t: FreshDb,
     _home: tempfile::TempDir,
     _root: tempfile::TempDir,
@@ -264,6 +285,7 @@ async fn world() -> World {
     plumb(&path, &["update-ref", "refs/heads/main", &base], None);
     plumb(&path, &["update-ref", "refs/heads/feature", &head], None);
     let browser = Browser::new(git.clone(), storage.clone(), BrowseLimits::default());
+    let git_calls = Arc::new(AtomicUsize::new(0));
     let smart = SmartHttp::new(git.clone(), storage.clone(), GitHttpLimits::default());
     let refs = VersionRefs::new(git.clone(), storage.clone());
     let state = AppState::new(
@@ -278,12 +300,18 @@ async fn world() -> World {
     .with_smart_http(smart)
     .with_hosting(forge_hosting::Hosting::new(t.db.clone()))
     .with_review(
-        Review::new(t.db.clone(), Arc::new(browser.clone()))
-            .with_version_refs(refs.clone())
-            .with_review_git(forge_review::approvals::ReviewGit::new(
-                git.clone(),
-                storage.clone(),
-            )),
+        Review::new(
+            t.db.clone(),
+            Arc::new(Counting {
+                inner: browser.clone(),
+                calls: Arc::clone(&git_calls),
+            }),
+        )
+        .with_version_refs(refs.clone())
+        .with_review_git(forge_review::approvals::ReviewGit::new(
+            git.clone(),
+            storage.clone(),
+        )),
     )
     .with_act_as(forge_integ::ActAs::new(
         t.db.clone(),
@@ -346,6 +374,7 @@ async fn world() -> World {
     .await
     .expect("refresh");
     World {
+        git_calls,
         t,
         _home: home,
         _root: root,
@@ -467,6 +496,7 @@ async fn an_approval_through_kanflow_is_confirmed_claimed_and_used_once() {
     assert_eq!(view["head_sha"], w.head);
     assert_eq!(view["intent"], "approve");
     assert_eq!(view["integration_kind"], "kanflow");
+    assert_eq!(view["integration_name"], "kanflow-sync");
     let assertion = w.confirmed("approve", STATE).await;
     assert!(assertion.starts_with("fga_"));
     // A second claim of the same state returns nothing.
@@ -787,6 +817,122 @@ async fn act_as_merge_is_not_allowed_over_http() {
         &w.mr("/merge"),
         w.kanflow(),
         Some(json!({ "sha": w.head })),
+        &[("forge-act-as", &act_as)],
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    w.t.drop_now().await;
+}
+
+impl World {
+    fn git_calls(&self) -> usize {
+        self.git_calls.load(Ordering::SeqCst)
+    }
+}
+
+/// Review (authz CRITICAL): an act-as read never reads git for the
+/// assertion's tip, and a change reaches git only after everything but the
+/// tip was decided — not for an unbound project, not for another person.
+#[tokio::test]
+async fn act_as_never_reaches_git_before_the_decision() {
+    let w = world().await;
+    let assertion = w.confirmed("approve", STATE).await;
+    let act_as = w.act_as(w.olga);
+    let before = w.git_calls();
+    for uri in [
+        format!("/api/v1/projects/{}", w.project),
+        format!("/api/v1/projects/{}/merge-requests", w.project),
+        w.mr(""),
+    ] {
+        let (status, body) = send(
+            w.router.clone(),
+            "GET",
+            &uri,
+            w.kanflow(),
+            None,
+            &[("forge-act-as", &act_as)],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+    }
+    assert_eq!(w.git_calls(), before, "an act-as read reads no tip");
+    // Another person named with olga's assertion: refused before git.
+    let (status, body) = w.approve_as(w.dave, &assertion, &w.head).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0020"),
+        "{body}"
+    );
+    // Unbound since the confirmation: 404 before git.
+    let assertion = w
+        .confirmed("approve", "kanflow-state-unbound-0123456789")
+        .await;
+    let (status, unbound) = send(
+        w.router.clone(),
+        "DELETE",
+        &format!(
+            "/api/v1/projects/{}/integration-bindings/{}",
+            w.project, w.integration
+        ),
+        Who::Person(session_of(w.olga), None),
+        None,
+        &[],
+    )
+    .await;
+    assert!(status.is_success(), "{unbound}");
+    let before = w.git_calls();
+    let (status, body) = w.approve_as(w.olga, &assertion, &w.head).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        "{body}"
+    );
+    assert_eq!(w.git_calls(), before, "an unbound project reaches no git");
+    w.t.drop_now().await;
+}
+
+/// Review (authz HIGH): the read routes whose loaders add no act-as facts
+/// are refused acting for a person (ADR-0025 §4 does not list them), never
+/// served as the service account or as the person.
+#[tokio::test]
+async fn act_as_on_routes_without_the_facts_is_refused() {
+    let w = world().await;
+    let act_as = w.act_as(w.olga);
+    for tail in ["approval-rules", "merge-settings", "integration-bindings"] {
+        let uri = format!("/api/v1/projects/{}/{tail}", w.project);
+        let (status, body) = send(
+            w.router.clone(),
+            "GET",
+            &uri,
+            w.kanflow(),
+            None,
+            &[("forge-act-as", &act_as)],
+        )
+        .await;
+        assert_eq!(
+            (status, code(&body)),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+            "{uri}: {body}"
+        );
+    }
+    w.t.drop_now().await;
+}
+
+/// Review (authz MEDIUM): git Smart HTTP never ignores Forge-Act-As.
+#[tokio::test]
+async fn act_as_on_smart_http_is_refused() {
+    let w = world().await;
+    let act_as = w.act_as(w.olga);
+    let (status, body) = send(
+        w.router.clone(),
+        "GET",
+        "/olga/web.git/info/refs?service=git-upload-pack",
+        w.kanflow(),
+        None,
         &[("forge-act-as", &act_as)],
     )
     .await;

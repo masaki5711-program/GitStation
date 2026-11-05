@@ -180,8 +180,11 @@ impl MergeRequestCtx {
         let subject = subject.as_ref()?;
         let person = principal.user()?;
         let trial = |intent: forge_core::act_as::Intent, action: Action| -> ActAsTrial {
-            let (Some(head), Some(tip)) = (subject.head_sha.as_ref(), subject.target_sha.as_ref())
-            else {
+            // A trial binds the confirmation to the tip as loaded (reads
+            // never read it: none is assumed then, the same for both).
+            let tip = subject.target_sha.clone().unwrap_or_default();
+            let tip = &tip;
+            let Some(head) = subject.head_sha.as_ref() else {
                 return ActAsTrial {
                     allowed: false,
                     reason: Some("nothing_to_confirm".to_owned()),
@@ -209,6 +212,7 @@ impl MergeRequestCtx {
                     *via,
                     Some(crate::model::ActAsSubject {
                         requested_sha: Some(head.clone()), // clone: as above
+                        target_sha: Some(tip.clone()),
                         ..subject.clone()
                     }),
                 );
@@ -239,5 +243,50 @@ impl MergeRequestCtx {
             ),
             requires_assertion: true,
         })
+    }
+}
+
+/// Whether an act-as request may read the target's tip for its loader
+/// (M3 S2 review, CRITICAL): git is never reached before the decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActAsTipGate {
+    /// Do not read git; decide with this tip (`None` for a read, which is
+    /// never bound to a tip; the assertion's own tip when the request is
+    /// refused for another reason anyway — the decision is the same).
+    Skip(Option<String>),
+    /// Everything but the tip was allowed (the binding, the person's
+    /// visibility and role, the assertion's intent and resource): read it.
+    Fetch,
+}
+
+impl MergeRequestCtx {
+    /// The tip gate of this context (loaded with the act-as facts and no
+    /// tip) for `principal`: `authorize()` on the assertion's intent with
+    /// the assertion's own tip assumed.
+    pub fn act_as_tip_gate(&self, principal: &Principal) -> ActAsTipGate {
+        let assertion = principal
+            .act_as_credential()
+            .and_then(|c| c.assertion.as_ref());
+        let (Some(assertion), Some((via, Some(subject)))) = (assertion, self.act_as()) else {
+            return ActAsTipGate::Skip(None);
+        };
+        let assumed = Some(assertion.target_sha.clone()); // clone: the trial owns its facts
+        let trial = MergeRequestCtx::new(self.loaded_project(), self.merge_request().clone()) // clone: as above
+            .acting(
+                *via,
+                Some(crate::model::ActAsSubject {
+                    target_sha: assumed.clone(),
+                    ..subject.clone()
+                }),
+            );
+        let action = match assertion.intent {
+            forge_core::act_as::Intent::Approve => Action::MergeRequestApprove,
+            forge_core::act_as::Intent::Unapprove => Action::MergeRequestUnapprove,
+        };
+        if authorize(principal, action, &trial.resource()).is_ok() {
+            ActAsTipGate::Fetch
+        } else {
+            ActAsTipGate::Skip(assumed)
+        }
     }
 }

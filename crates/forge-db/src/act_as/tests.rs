@@ -1080,3 +1080,113 @@ async fn an_act_as_approval_audits_both_people_and_consumes_once() {
     assert_eq!(live[0]["n"], 1, "the unapprove rolled back");
     w.t.drop_now().await;
 }
+
+/// Review (security LOW): a state names one confirmation per integration.
+#[tokio::test]
+async fn a_state_is_used_once_per_integration() {
+    let w = world().await;
+    w.issue_for(STATE, LIFETIME).await;
+    let target = w.main();
+    let err = issue(
+        &w.t.db,
+        &as_user(w.bob, "req-issue-again"),
+        &NewAssertion {
+            integration: w.integration,
+            user: w.bob,
+            intent: Intent::Approve,
+            project: w.project,
+            merge_request: w.mr.id,
+            head_sha: oid('a').as_str(),
+            target_ref: &target,
+            target_sha: oid('b').as_str(),
+            state: STATE,
+            lifetime: LIFETIME,
+        },
+    )
+    .await
+    .expect_err("state in use");
+    assert_reason(&err, ErrorCode::RequestInvalid, "param_invalid");
+    assert!(err.to_string().contains("rule=in_use"), "{err}");
+    w.t.drop_now().await;
+}
+
+impl World {
+    async fn approve_with(
+        &self,
+        id: i64,
+        public_id: &str,
+        request: &str,
+    ) -> Result<(), ForgeError> {
+        review::approve_mr_decided(
+            &self.t.db,
+            &self.as_bob_via_kanflow(public_id, request),
+            (self.project, self.mr.iid),
+            self.bob,
+            Some(&ActAsUse {
+                assertion: id,
+                public_id: public_id.to_owned(),
+                integration: self.integration,
+                via: self.sa,
+            }),
+            |_| Ok(()),
+            |_, _, _| (true, None),
+        )
+        .await
+        .map(drop)
+    }
+}
+
+/// Review (security LOW): the approve's transaction reads the integration
+/// and its service account again under the lock; a disable committed after
+/// the request was authenticated refuses it and writes nothing.
+#[tokio::test]
+async fn an_act_as_approval_rechecks_the_integration_and_the_account_under_the_lock() {
+    let w = world().await;
+    let id = w.issue_for(STATE, LIFETIME).await;
+    let claimed = w.claim_it(STATE, "req-claim").await.expect("claim");
+    let public_id = claimed.token.public_id().to_owned();
+    let off = integrations::update(
+        &w.t.db,
+        &system("req-off"),
+        w.integration,
+        &integrations::Changes {
+            enabled: Some(false),
+            event_types: None,
+        },
+    )
+    .await
+    .expect("disable integration");
+    assert!(matches!(off, integrations::UpdateOutcome::Updated(_)));
+    let err = w
+        .approve_with(id, &public_id, "req-approve-off")
+        .await
+        .expect_err("integration disabled");
+    assert_reason(&err, ErrorCode::Forbidden, "integration_disabled");
+    assert_eq!(w.row(id).await["state"], "claimed", "nothing consumed");
+    let on = integrations::update(
+        &w.t.db,
+        &system("req-on"),
+        w.integration,
+        &integrations::Changes {
+            enabled: Some(true),
+            event_types: None,
+        },
+    )
+    .await
+    .expect("enable integration");
+    assert!(matches!(on, integrations::UpdateOutcome::Updated(_)));
+    let gone = users::disable(&w.t.db, &system("req-sa-off"), w.sa)
+        .await
+        .expect("disable sa");
+    assert!(matches!(gone, users::DisableOutcome::Disabled));
+    let err = w
+        .approve_with(id, &public_id, "req-approve-sa-off")
+        .await
+        .expect_err("service account disabled");
+    assert_reason(&err, ErrorCode::AccountDisabled, "via_disabled");
+    let approvals =
+        w.t.json_rows("SELECT count(*) AS n FROM forge.merge_request_approvals")
+            .await;
+    assert_eq!(approvals[0]["n"], 0);
+    w.t.drop_now().await;
+}

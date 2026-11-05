@@ -119,9 +119,10 @@ CREATE TABLE forge.act_as_assertions (
     CONSTRAINT act_as_assertions_rejected
         CHECK ((reject_reason IS NOT NULL) = (state = 'rejected'))
 );
--- The claim looks a pending row up by its state.
-CREATE INDEX act_as_assertions_state_hash ON forge.act_as_assertions (state_hash)
-    WHERE state = 'pending';
+-- One state per integration, whatever the row's state (the claim looks
+-- the row up by it; a repeated state is refused at the issue).
+CREATE UNIQUE INDEX act_as_assertions_state_hash
+    ON forge.act_as_assertions (integration_id, state_hash);
 -- The cleanup of expired pending rows; the audit's per-person review.
 CREATE INDEX act_as_assertions_pending_expiry ON forge.act_as_assertions (expires_at)
     WHERE state = 'pending';

@@ -24,8 +24,8 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use forge_auth::{
-    ActAsConfirmCtx, ActAsSubject, IntegrationFeedCtx, LoadedConfirmIntegration, MergeRequestCtx,
-    Principal, ProjectCtx,
+    ActAsConfirmCtx, ActAsSubject, ActAsTipGate, IntegrationFeedCtx, LoadedConfirmIntegration,
+    MergeRequestCtx, Principal, ProjectCtx,
 };
 use forge_core::act_as::Intent;
 use forge_core::{parse_positive_id, IntegrationId, ProjectId, UserId};
@@ -134,23 +134,29 @@ pub(crate) async fn merge_request_ctx(
     let Some(via) = bounded(state, "act_as_via", act_as(state)?.via(p, project)).await? else {
         return Ok(ctx);
     };
-    let tip = bounded(
-        state,
-        "act_as_target_tip",
-        review(state)?.target_tip(project, record.repository, person, stored),
-    )
-    .await?;
-    Ok(ctx.acting(
-        via,
-        Some(ActAsSubject {
-            project,
-            merge_request: stored.id,
-            head_sha: stored.head_sha.clone(), // clone: the subject owns its values
-            target_ref: stored.target_branch.clone(),
-            target_sha: tip.map(|t| t.as_str().to_owned()),
-            requested_sha: requested_sha.map(str::to_owned),
-        }),
-    ))
+    let subject = |target_sha: Option<String>| ActAsSubject {
+        project,
+        merge_request: stored.id,
+        head_sha: stored.head_sha.clone(), // clone: the subject owns its values
+        target_ref: stored.target_branch.clone(),
+        target_sha,
+        requested_sha: requested_sha.map(str::to_owned),
+    };
+    // Review (authz CRITICAL): git is reached only after everything but the
+    // tip was decided — never for a read, an unbound or invisible project,
+    // or a person without the role.
+    let untipped = ctx.clone().acting(via, Some(subject(None))); // clone: the gate's trial context
+    let target_sha = match untipped.act_as_tip_gate(p) {
+        ActAsTipGate::Skip(assumed) => assumed,
+        ActAsTipGate::Fetch => bounded(
+            state,
+            "act_as_target_tip",
+            review(state)?.target_tip(project, record.repository, person, stored),
+        )
+        .await?
+        .map(|t| t.as_str().to_owned()),
+    };
+    Ok(ctx.acting(via, Some(subject(target_sha))))
 }
 
 /// `{id}`, `{iid}` of a confirmation path (`prefix` before `{id}`,
@@ -316,6 +322,9 @@ pub struct ConfirmationBody {
     pub integration_id: i64,
     /// The integration's kind (`kanflow`): who receives the assertion.
     pub integration_kind: String,
+    /// The username of the integration's service account (its name in
+    /// forge).
+    pub integration_name: String,
     /// "<display name> (<username>) として承認します".
     pub person_display_name: String,
     pub person_username: String,
@@ -357,7 +366,13 @@ pub async fn confirmation(state: AppState, request: Dispatched<ActAsConfirmCtx>)
             review.target_tip(project, record.repository, person, &stored),
         )
         .await?;
-        let kind = forge_core::IntegrationKind::Kanflow.as_str().to_owned();
+        let (kind, name) = bounded(
+            &state,
+            "act_as_integration_label",
+            act_as(&state)?.integration_label(integration),
+        )
+        .await?
+        .ok_or_else(|| ForgeError::new(ErrorCode::NotFound).with_context("reason", "absent"))?;
         json(ConfirmationBody {
             project_id: project.get(),
             iid,
@@ -370,6 +385,7 @@ pub async fn confirmation(state: AppState, request: Dispatched<ActAsConfirmCtx>)
             intent: q.intent.as_str().to_owned(),
             integration_id: integration.get(),
             integration_kind: kind,
+            integration_name: name,
             person_display_name: caller
                 .as_ref()
                 .map(|c| c.display_name.clone())

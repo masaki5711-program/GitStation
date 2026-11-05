@@ -459,3 +459,84 @@ fn the_act_as_viewer_trials_approve_with_a_matching_assertion() {
 fn via_reader() -> Via {
     via(DEV, ViaToken::Reader, Assert::None)
 }
+
+/// Review (authz CRITICAL): a loader reads the target's tip only when
+/// everything but the tip was allowed — never for a read, an unbound or
+/// invisible project, or a person without the role.
+#[test]
+fn the_tip_is_read_only_after_the_pre_gate() {
+    use crate::{ActAsTipGate, LoadedMergeRequest, LoadedProject, MergeRequestCtx, ViaView};
+    use forge_core::{MergeRequestId, MergeRequestState, ProjectId, RefName};
+    let name = |r: &str| RefName::parse(r).expect("ref");
+    let ctx = |role, bound| {
+        MergeRequestCtx::new(
+            LoadedProject {
+                id: ProjectId::new(2),
+                visibility: crate::Visibility::Private,
+                role,
+                pending_deletion: false,
+            },
+            LoadedMergeRequest {
+                iid: Some(1),
+                author: crate::matrix::OTHER,
+                state: MergeRequestState::Open,
+                draft: false,
+                source_branch: name("refs/heads/feature"),
+                target_branch: name("refs/heads/main"),
+            },
+        )
+        .acting(
+            ViaView {
+                role: Some(Role::Reporter),
+                bound,
+            },
+            Some(crate::ActAsSubject {
+                project: ProjectId::new(2),
+                merge_request: MergeRequestId::new(20),
+                head_sha: Some("1".repeat(40)),
+                target_ref: name("refs/heads/main"),
+                target_sha: None,
+                requested_sha: Some("1".repeat(40)),
+            }),
+        )
+    };
+    let tip = Some("2".repeat(40));
+    let p = approver().principal();
+    assert_eq!(ctx(DEV, true).act_as_tip_gate(&p), ActAsTipGate::Fetch);
+    for refused in [
+        ctx(DEV, false),
+        ctx(None, true),
+        ctx(Some(Role::Reporter), true),
+    ] {
+        assert_eq!(refused.act_as_tip_gate(&p), ActAsTipGate::Skip(tip.clone()));
+    }
+    let reader = via(DEV, ViaToken::Reader, Assert::None).principal();
+    assert_eq!(
+        ctx(DEV, true).act_as_tip_gate(&reader),
+        ActAsTipGate::Skip(None)
+    );
+    let session =
+        Principal::authenticated(ME, false, true, Credential::Session, AccountKind::Human);
+    assert_eq!(
+        ctx(DEV, true).act_as_tip_gate(&session),
+        ActAsTipGate::Skip(None)
+    );
+}
+
+/// Review (authz MEDIUM): a read on a resource loaded without the act-as
+/// facts is refused, for each read of the allowlist.
+#[test]
+fn an_unasserted_read_without_the_act_as_facts_is_refused() {
+    let reader = via(DEV, ViaToken::Reader, Assert::None).principal();
+    let project = Fixture::PrivateProject.resource(Actor::Developer);
+    let mr = scene(REPORTER, true, MR, Drift::None).person_resource(DEV);
+    for (action, resource) in [
+        (Action::ProjectRead, &project),
+        (Action::MergeRequestList, &project),
+        (Action::MergeRequestRead, &mr),
+    ] {
+        let err = authorize(&reader, action, resource).expect_err("no facts");
+        assert_eq!(err.code(), ErrorCode::Forbidden, "{action:?}");
+        assert_eq!(reason(&err), "act_as_facts_missing", "{action:?}");
+    }
+}

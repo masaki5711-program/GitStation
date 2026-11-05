@@ -100,10 +100,19 @@ pub(crate) async fn dispatch<S: DispatchState>(
         .unwrap_or(first.def.action);
     // M3 S2: raw / archive never act for a person (refused when asked);
     // git does not read Forge-Act-As (ADR-0025 §4).
-    if let Err(res) =
-        crate::auth::authenticate_request_acting(&mut req, surface_of(route), None).await
-    {
-        return *res;
+    match crate::auth::authenticate_request_acting(&mut req, surface_of(route), None).await {
+        Ok(None) => {}
+        // `admit` refuses every act-as request without a route action;
+        // reaching this is a programming error, never a pass.
+        Ok(Some(_)) => {
+            return fail(
+                &ctx,
+                ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "act_as_accepted_on_dispatcher")
+                    .with_context("route", route.name()),
+            )
+        }
+        Err(res) => return *res,
     }
     let principal = match crate::guard::active_principal(&req, guard_action) {
         Ok(principal) => principal,

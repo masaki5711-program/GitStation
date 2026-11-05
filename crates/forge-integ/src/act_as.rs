@@ -224,6 +224,18 @@ impl ActAs {
         }))
     }
 
+    /// What the confirmation screen names as the receiving integration:
+    /// its kind and its service account's username, as stored (`None`:
+    /// absent).
+    pub async fn integration_label(
+        &self,
+        integration: IntegrationId,
+    ) -> Result<Option<(String, String)>, ForgeError> {
+        Ok(forge_db::integrations::get(&self.db, integration)
+            .await?
+            .map(|i| (i.kind.as_str().to_owned(), i.service_account_username)))
+    }
+
     /// The claim route's loader: the integration of the path.
     pub async fn claim_target(
         &self,
