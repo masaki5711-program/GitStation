@@ -19,6 +19,12 @@
 //!    failure on one row skips it (logged at warn with its code; the next
 //!    run tries again) — it never counts as "still live".
 //!
+//! 4. (M3 X6) ends conflict scans of open merge requests left `pending` /
+//!    `scanning` longer than the scan job's time limit with no live job
+//!    (`forge_db::review::reap_stale_scans`: `failed reason=job_stale`,
+//!    each logged with FG-REVIEW-0022); the next push, retarget or reopen
+//!    scans again.
+//!
 //! A full batch runs again at once. A failed run (the database) is returned
 //! and logged once per failure streak by the supervisor with `error_code`
 //! and `task=mergeability_sweep`.
@@ -27,8 +33,8 @@ use std::time::Duration;
 
 use forge_core::RequestId;
 use forge_db::review::{
-    confirm_live, decided_candidates, reap_stale_checks, request_check, sweep_unchecked,
-    STALE_AFTER, SWEEP_BATCH,
+    confirm_live, decided_candidates, reap_stale_checks, reap_stale_scans, request_check,
+    sweep_unchecked, SCAN_STALE_AFTER, STALE_AFTER, SWEEP_BATCH,
 };
 use forge_db::Db;
 use forge_errors::ForgeError;
@@ -58,6 +64,7 @@ pub(crate) async fn run_mergeability_sweep(
         Some(storage) => verify_decided(db, storage, &request_id).await?,
         None => (0, 0),
     };
+    let scans_reaped = reap_stale_scans(db, SCAN_STALE_AFTER, REAP_BATCH).await?;
     if !swept.is_empty() || moved > 0 {
         tracing::info!(
             target: "forge_cli",
@@ -72,6 +79,7 @@ pub(crate) async fn run_mergeability_sweep(
     Ok(
         if full(swept.len(), SWEEP_BATCH)
             || full(reaped.len(), REAP_BATCH)
+            || full(scans_reaped.len(), REAP_BATCH)
             || full(verified, SWEEP_BATCH)
         {
             Next::Immediately

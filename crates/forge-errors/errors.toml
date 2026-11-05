@@ -1963,3 +1963,19 @@ cause = "A check report named a new check on a commit that already holds 100 che
 diagnosis = "The log event carries `reason=too_many_runs`, `limit`, `project_id` and `head_sha`, with `action=CheckWrite`. The names on the commit: SELECT name, reported_by, updated_at FROM forge.check_runs WHERE project_id = <project_id> AND head_sha = '<head_sha>' ORDER BY name."
 fix = "Report under a stable name per kind of check (for example `ci/gates`, not `ci/gates-<run>`); the details of one run belong in its summary and annotations."
 test = "a_new_name_beyond_the_limit_is_check_run_limit_reached"
+
+# ── M3 X6: conflict prediction between open merge requests (plan 04 C-2,
+# ADR-0024 Amendment X6) ──
+[[error]]
+code = "FG-REVIEW-0022"
+name = "ConflictPredictionIncomplete"
+http_status = 500
+severity = "warn"
+user_message_ja = "ほかのマージリクエストとの衝突の見込みを、すべては確かめられていません。しばらくしてからもう一度確認してください。"
+user_message_en = "Possible conflicts with other merge requests have not all been checked. Check again later."
+user_message_id = "Kemungkinan konflik dengan merge request lain belum semuanya diperiksa. Periksa lagi nanti."
+cause = "The conflict scan of a merge request (M3 X6, plan 04 C-2: the job merge_request.conflict_scan, run after a new head, a retarget or a reopen) did not try every other open merge request on the same target branch. reason=peers_capped: more open merge requests target the branch than the scan considers (50, the most recently updated first). reason=pairs_capped: more pairs change a common path than the scan tries with merge-tree (20). reason=budget_exhausted: the scan's time budget (120 s) ran out before the last candidate. reason=pair_failed: git failed on at least one pair (its own FG-GIT code is logged with the same request_id; the job is retried). reason=job_failed: the job failed for good before it stored a result. reason=job_stale: a scan stayed pending or scanning longer than the job's time limit with no queued or running job (the worker's sweep ended it). The pairs it did try are stored and their predictions stand; the ones left out are not predicted (never shown as \"no conflict\"). Never a user request's failure: logged by the worker; `gstn conflicts` shows the scan as `incomplete` or `failed` with the reason."
+diagnosis = "The event `forge.review.conflict_scan_incomplete` (or `forge.review.conflict_scan_not_finished` for job_failed / job_stale) carries `reason`, `merge_request_id`, `scan_seq`, `peers`, `pairs_tried`, `pairs_skipped` and the job's request_id. For pair_failed, the git failure is logged under its own error_code with the same request_id (`other_merge_request_id`). Read the scan (read-only): SELECT merge_request_id, status, reason, scan_seq, scanned_head_sha, peers, pairs_tried, pairs_skipped, updated_at FROM forge.merge_request_conflict_scans WHERE merge_request_id = <id>; and its pairs: SELECT low_mr_id, high_mr_id, outcome, reason, checked_at FROM forge.merge_request_conflict_pairs WHERE <id> IN (low_mr_id, high_mr_id); and the jobs: SELECT id, state, attempts, last_error_code FROM forge.jobs WHERE kind = 'merge_request.conflict_scan' AND dedup_key LIKE 'mr_conflict_scan:<id>:%' ORDER BY id DESC LIMIT 5."
+fix = "A cap or the budget: expected on a target branch with very many open merge requests — the pairs left out are scanned again when either side gets a new head. pair_failed: fix the cause its FG-GIT code names (its runbook); the job retries. job_failed / job_stale: fix the cause the job's own error code names; the next push, retarget or reopen scans again. Never edit forge.merge_request_conflict_scans or forge.merge_request_conflict_pairs by hand outside an approved runbook step."
+runbook = "merge-request-mergeability"
+test = "a_scan_with_more_candidates_than_the_cap_is_incomplete"

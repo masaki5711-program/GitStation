@@ -63,6 +63,15 @@ fn headline(kind: NotificationKind, lang: Lang) -> &'static str {
         (Lang::Id, NotificationKind::MergeRequestApproved) => "disetujui",
         (Lang::Id, NotificationKind::MergeRequestMerged) => "sudah di-merge",
         (Lang::Id, NotificationKind::MergeRequestCommented) => "memiliki komentar baru",
+        (Lang::Ja, NotificationKind::MergeRequestConflictPredicted) => {
+            "がほかのマージリクエストと衝突する見込みです"
+        }
+        (Lang::En, NotificationKind::MergeRequestConflictPredicted) => {
+            "may conflict with another merge request"
+        }
+        (Lang::Id, NotificationKind::MergeRequestConflictPredicted) => {
+            "kemungkinan berkonflik dengan merge request lain"
+        }
     }
 }
 
@@ -121,6 +130,23 @@ fn sentence(kind: NotificationKind, lang: Lang, actor: Option<&str>, title: &str
         }
         (Lang::Id, NotificationKind::MergeRequestCommented, None) => {
             format!("Permintaan merge Anda \"{title}\" memiliki komentar baru.")
+        }
+        // M3 X6: the scan acts, never a person (no actor); which other
+        // merge request it is shows on the merge request (`gstn conflicts`).
+        (Lang::Ja, NotificationKind::MergeRequestConflictPredicted, _) => {
+            format!(
+                "あなたのマージリクエスト「{title}」は、同じブランチに向けて開いているほかのマージリクエストと衝突する見込みです。マージリクエストの画面か `gstn conflicts` で相手と箇所を確かめてください。"
+            )
+        }
+        (Lang::En, NotificationKind::MergeRequestConflictPredicted, _) => {
+            format!(
+                "Your merge request \"{title}\" is likely to conflict with another open merge request on the same branch. See the merge request or `gstn conflicts` for which one and where."
+            )
+        }
+        (Lang::Id, NotificationKind::MergeRequestConflictPredicted, _) => {
+            format!(
+                "Permintaan merge Anda \"{title}\" kemungkinan berkonflik dengan merge request lain yang terbuka pada branch yang sama. Lihat merge request atau `gstn conflicts` untuk mengetahui yang mana dan di mana."
+            )
         }
     }
 }
@@ -187,7 +213,13 @@ mod tests {
                 );
                 assert!(!subject.contains('\n') && !subject.contains('\r'));
                 assert!(body.contains("Fix rounding"), "{lang:?} {kind:?}: {body}");
-                assert!(body.contains("Bob"), "{lang:?} {kind:?}: {body}");
+                if *kind == NotificationKind::MergeRequestConflictPredicted {
+                    // The scan acted, never a person: no name in the mail.
+                    assert!(!body.contains("Bob"), "{lang:?} {kind:?}: {body}");
+                    assert!(body.contains("gstn conflicts"), "where to look: {body}");
+                } else {
+                    assert!(body.contains("Bob"), "{lang:?} {kind:?}: {body}");
+                }
                 assert!(body.contains("team/web!7"));
                 assert!(body.contains("https://git.example.test/team/web/-/pull/7"));
                 assert!(body.contains("gstn notifications set"), "how to opt out");

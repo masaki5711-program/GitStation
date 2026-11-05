@@ -226,6 +226,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::CheckRunDataInvalid
         | ErrorCode::CheckPayloadInvalid
         | ErrorCode::CheckRunLimitReached
+        // M3 X6: the conflict scan's own code never reaches a merge.
+        | ErrorCode::ConflictPredictionIncomplete
         // M3 O3: the maintenance job's own codes never reach a merge.
         | ErrorCode::RepositoryMaintenanceFailed
         | ErrorCode::RepositoryCorrupt

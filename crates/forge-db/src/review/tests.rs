@@ -396,6 +396,56 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     }
                 );
             }
+            // M3 X6: the conflict scan (actor system) predicts a conflict
+            // with another open merge request on the target: one event per
+            // side (each its own aggregate), checked below.
+            MergeRequestTransition::ConflictPredict => {
+                let oid = |c: char| forge_core::ObjectId::parse(&c.to_string().repeat(40));
+                let peer = open(&t, alice, p, "req-peer", &new_mr("t-peer", "main"))
+                    .await
+                    .expect("peer");
+                let peer_head = oid('f').expect("oid");
+                record_mr_version(&t.db, &system("req-peer-v1"), peer.id, &peer_head, None)
+                    .await
+                    .expect("peer version");
+                let origin = RequestId::parse("req-scan").expect("id");
+                let seq = request_scan(&t.db, drafted.id, origin)
+                    .await
+                    .expect("request")
+                    .expect("open");
+                assert_eq!(
+                    begin_scan(&t.db, drafted.id, seq).await.expect("begin"),
+                    ScanStart::Scan
+                );
+                let result = ScanResult {
+                    status: ScanStatus::Scanned,
+                    reason: None,
+                    head: oid('a').ok(),
+                    target_branch: branch("main"),
+                    peers: 1,
+                    pairs_tried: 1,
+                    pairs_skipped: 0,
+                    pairs: vec![PairResult {
+                        other: peer.id,
+                        other_iid: peer.iid,
+                        other_head: peer_head,
+                        outcome: PairOutcome::Conflict,
+                        reason: None,
+                        conflicts: vec!["README.md".to_owned()],
+                        conflicts_truncated: false,
+                    }],
+                };
+                let done = record_scan(&t.db, &system(&request), drafted.id, seq, &result)
+                    .await
+                    .expect("scan");
+                assert_eq!(
+                    done,
+                    ScanRecorded::Stored {
+                        predicted: vec![peer.id],
+                        skipped: 0
+                    }
+                );
+            }
             // M3 R3: a note (here the first of a general discussion).
             MergeRequestTransition::Comment => {
                 let new = NewDiscussion {
@@ -547,14 +597,23 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
             .map(|e| e.0.as_str())
             .filter(|t| *t != "repository.pushed")
             .collect();
+        // M3 X6: a predicted conflict is about two merge requests: exactly
+        // one event (and audit row) for each of them.
+        let sides = if *transition == MergeRequestTransition::ConflictPredict {
+            let aggregates: BTreeSet<i64> = events.iter().map(|e| e.2).collect();
+            assert_eq!(aggregates.len(), 2, "one event per side: {events:?}");
+            2
+        } else {
+            1
+        };
         assert_eq!(
             types,
-            [transition.event_type().as_str()],
-            "{transition:?} must emit exactly one event"
+            vec![transition.event_type().as_str(); sides],
+            "{transition:?} must emit exactly one event per merge request"
         );
         assert_eq!(
             audit_of(&t, &request).await.len(),
-            1 + usize::from(carries_push),
+            sides + usize::from(carries_push),
             "{transition:?}"
         );
     }

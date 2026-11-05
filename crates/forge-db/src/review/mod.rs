@@ -15,7 +15,9 @@
 //! and the CODEOWNERS switch (`settings.rs`: [`put_merge_settings_mr_decided`],
 //! [`toggle_codeowners_mr_decided`], [`restore_expired_codeowners`]); M3 I1b:
 //! a person's work item links (`work_item_links.rs`:
-//! [`link_work_item_mr_decided`], [`unlink_work_item_mr_decided`]).
+//! [`link_work_item_mr_decided`], [`unlink_work_item_mr_decided`]); M3 X6:
+//! the predicted conflicts between open merge requests and their scan
+//! job's SQL (`conflicts/`).
 //!
 //! The command names carry `_mr_` so they never match the needles of
 //! forge-hosting's `decided_callers.rs` (ADR-0024 §11, review #33); a test
@@ -41,6 +43,7 @@ use crate::{read_query_error, Db};
 
 pub mod approvals;
 mod commands;
+pub mod conflicts;
 pub mod discussions;
 pub mod mergeability;
 pub mod merges;
@@ -57,6 +60,13 @@ pub use approvals::{
     unapprove_mr_decided, ApprovalFacts, ApproveOutcome, ApprovedHead, ApproverFacts,
     ApproverNames, CommitPusher, NamedGroup, NamedUser, NewApprovalRule, Owners, RuleOutcome,
     StoredApproval, StoredApprovalRule, MAX_APPROVALS, MAX_RULES, MAX_RULE_APPROVERS,
+};
+pub use conflicts::{
+    begin_scan, conflict_predictions, conflict_scan, conflict_scan_job, conflict_scan_payload,
+    fail_scan, prediction_incomplete, reap_stale_scans, record_scan, request_scan,
+    request_scan_for_head, scan_peers, ConflictScanRequest, PairOutcome, PairResult, Peer,
+    ScanRecorded, ScanResult, ScanStart, ScanStatus, StoredPrediction, StoredScan,
+    CONFLICT_SCAN_JOB, CONFLICT_SCAN_TIMEOUT, MAX_PREDICTIONS, SCAN_STALE_AFTER,
 };
 pub use discussions::{
     add_note_mr_decided, discussion, discussions, resolve_discussion_mr_decided,

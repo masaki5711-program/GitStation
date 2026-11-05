@@ -77,6 +77,20 @@ merge request in place (ADR-0024 §1).
   `version_refs.rs` holds `VersionRefs` / `plan_ref_changes` (re-exported from `versions`). Tests
   `tests/mergeability_git.rs` (`check_maps_git_timeout_and_no_version_to_check_failed`).
 
+- M3 X6 (conflict prediction, plan 04 C-2, ADR-0024 Amendment X6; `src/conflicts.rs`):
+  `scan(&Db, &ConflictPredictor, ConflictScanRequest, &RequestId) -> ScanReport`, the body of the
+  job `merge_request.conflict_scan`: the other open merge requests on the target (drafts
+  included, at most `ScanLimits::peers_max` = 50) are narrowed by the paths both change since
+  their merge base with the target (`merge-base`, `diff-tree`; no overlap → `no_overlap`, no
+  trial merge), then `merge-tree --write-tree` of the two heads for at most `pairs_max` = 20
+  candidates within a 120 s budget; a conflict in a path both change is `conflict` (a conflict
+  only in one side's paths is that side's C-1 conflict → `clean`). Caps and the budget make the
+  scan `incomplete` (FG-REVIEW-0022 at warn); a git failure is stored on the pair (or the scan)
+  and returned for the retry. `conflicts::fail` ends a job failed for good as `job_failed`. The
+  version job requests a scan unless the stored one answers the head
+  (`RefreshReport::scan_requested`). Read `Review::conflicts(mr)` (never enqueues). Tests
+  `tests/conflicts_git.rs` (real git).
+
 - M3 R3 (discussions, ADR-0024 §6, §12; `src/discussions.rs`, `src/position.rs`):
   `Review::start_discussion(request, proof: &Authorized<MergeRequestCtx>, repo, body,
   position)`, `reply(request, proof, discussion, body)` (`MergeRequestComment`),

@@ -5,7 +5,8 @@
 //!
 //! Handlers are registered in [`handlers`]: `repository.provision` (step
 //! D4 MR3b, `provision`), `merge_request.refresh` (M3 R1b, `review`) and
-//! `merge_request.mergeability` (M3 R2, `review`). The audit seal is a task (`seal`), not a job.
+//! `merge_request.mergeability` (M3 R2, `review`) and
+//! `merge_request.conflict_scan` (M3 X6, `review`). The audit seal is a task (`seal`), not a job.
 //!
 //! Shutdown: a job may run for up to its timeout (≤ 1 h), longer than a
 //! stop should wait. A job in progress gets [`SHUTDOWN_GRACE`]; then its
@@ -29,7 +30,7 @@ use forge_errors::ForgeError;
 use tokio::sync::watch;
 
 use super::provision::{ProvisionHandler, Storage};
-use super::review::{MergeabilityHandler, RefreshHandler};
+use super::review::{ConflictScanHandler, MergeabilityHandler, RefreshHandler};
 use super::supervise::Next;
 
 /// How often an idle runner looks for a ready job.
@@ -41,16 +42,19 @@ pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 /// Every job handler of this build: `repository.provision` (D4 MR3b),
 /// `merge_request.refresh` (M3 R1b: merge request versions) and
-/// `merge_request.mergeability` (M3 R2: the trial merge).
+/// `merge_request.mergeability` (M3 R2: the trial merge) and
+/// `merge_request.conflict_scan` (M3 X6: conflicts between merge requests).
 pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHandler>>, ForgeError> {
     // clone: the handler owns its storage handles (paths and an Arc)
     let provision = ProvisionHandler::new(db, storage.clone())?;
     let refresh = RefreshHandler::new(db, storage)?;
     let mergeability = MergeabilityHandler::new(db, storage)?;
+    let conflicts = ConflictScanHandler::new(db, storage)?;
     Ok(vec![
         Arc::new(provision),
         Arc::new(refresh),
         Arc::new(mergeability),
+        Arc::new(conflicts),
     ])
 }
 

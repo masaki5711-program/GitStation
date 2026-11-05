@@ -73,6 +73,8 @@ pub struct RefreshReport {
     pub refs: Option<SyncReport>,
     /// The mergeability check this run requested (its `check_seq`).
     pub check_requested: Option<i64>,
+    /// The conflict scan this run requested (its `scan_seq`; M3 X6).
+    pub scan_requested: Option<i64>,
 }
 
 fn outcome_name(outcome: &VersionOutcome) -> (&'static str, Option<i64>) {
@@ -120,6 +122,7 @@ async fn refresh_locked(
             version: None,
             refs: None,
             check_requested: None,
+            scan_requested: None,
         });
     };
     if !target.repository_ready {
@@ -184,6 +187,12 @@ async fn refresh_locked(
     } else {
         None
     };
+    // M3 X6: the conflict scan of the (new) head, drafts included.
+    let scan_requested = if stored.state == forge_core::MergeRequestState::Open {
+        crate::conflicts::after_version(db, mr, request_id).await?
+    } else {
+        None
+    };
     tracing::info!(
         target: "forge_review",
         event = "forge.review.version_refreshed",
@@ -195,6 +204,7 @@ async fn refresh_locked(
         version,
         ref_changes = synced.map_or(0, |s| s.changes),
         check_requested,
+        scan_requested,
         duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "merge request versions refreshed"
     );
@@ -203,6 +213,7 @@ async fn refresh_locked(
         version,
         refs: synced,
         check_requested,
+        scan_requested,
     })
 }
 
