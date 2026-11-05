@@ -223,8 +223,50 @@ instance) and `IntegrationBindingCtx` (the project, with the integration id in
 the proof). Rows `src/matrix_rows_integrations.rs` (twins in
 `matrix_rows_people.rs`).
 
+**Act-as (design, ADR-0025; lands with M3 S2 `feat/auth-act-as` — not
+implemented yet)**: a service account acting for a person (kanflow, F-36) is a
+new credential kind decided by the same `authorize()`; there is no second
+decision point.
+- `Credential::ActAs(ActAsCredential { via, integration, via_token, via_scopes,
+  claimed, assertion: Option<VerifiedAssertion> })`, built only by forge-web's
+  authentication layer (`Principal::act_as(human, credential)`; the human is
+  resolved by forge-db from `Forge-Act-As: user:<id>` / `employee:<number>`,
+  `FG-INT-0006` when unknown, disabled or not a person). The principal is the
+  human (`AccountKind::Human`), `admin_rights()` is always false.
+- Range = the service account's range ∩ the human's rights: the project must
+  be bound to the account's integration (`via_bound`, else `FG-REPO-0005
+  act_as_unbound`), the action in the allowlist and in the token's scopes
+  (`act_as` + the action's own scope); the role, visibility and every other
+  rule are the human's, unchanged (self-approval is still FG-REVIEW-0013).
+  The service account's own Reporter role never caps the human's role.
+- Allowlist `Action::act_as_rule() -> ActAsRule { Denied,
+  ReadWithoutAssertion, RequiresAssertion(AssertionIntent) }` (one exhaustive
+  `match`, closed by default): `ProjectRead`, `MergeRequestRead`,
+  `MergeRequestList` read without an assertion; `MergeRequestApprove`
+  (`approve`) and `MergeRequestUnapprove` (`unapprove`) need one; everything
+  else — merge, settings, session-only actions, the feed and dev status — is
+  `Denied` (`FG-AUTH-0003 act_as_not_allowed`). `IntegrationBindingManage`
+  joins in X3 with the rule fixed in ADR-0025 §4. Invariants:
+  `every_people_only_act_as_action_requires_an_assertion`,
+  `no_session_only_action_is_act_as`.
+- Assertion checks in `authorize()` (pure): present when required, absent on
+  reads, intent = action, project / merge request = the proof's resource, the
+  body's and the loaded head / target SHA = the assertion's; otherwise
+  `FG-AUTH-0020` (`missing`, `unexpected`, `wrong_action`, `wrong_resource`,
+  `sha_mismatch`, `head_changed`, `target_changed`). Existence, MAC, expiry,
+  claim and consumption are forge-db's (`VerifiedAssertion` is built there
+  only).
+- New actions `ActAsConfirmView` / `ActAsAssertionIssue` (session only,
+  people only; decided as the intent's action for the session's human plus
+  `via_bound`) and `ActAsAssertionClaim` (the integration's own service
+  account with `act_as`).
+- Rows `src/matrix_rows_act_as.rs`: a generated `act_as_denied_for_<action>`
+  for every `Denied` action, allow rows with their human twins, and the deny
+  rows listed in ADR-0025 "権限の表に S2 が足す行".
+
 **Error codes owned**: FG-AUTH-0001..0004, FG-REPO-0005..0006,
 FG-GIT-0007..0010 (all `info`, no runbook: expected client conditions).
+With S2 (ADR-0025): FG-AUTH-0020 ActAsAssertionInvalid (warn, runbook `act-as`).
 
 **Matrix**: `src/matrix_rows.rs` (rows) and `src/matrix.rs` (types, summary).
 Every action has allowed and denied rows; every row is asserted by
