@@ -52,7 +52,7 @@ mod dev_status;
 mod tests;
 
 pub use dev_status::{
-    DevCheckRun, DevItemStatus, DevMergeRequest, DevWorkItem, MrStateFilter,
+    DevCheckRun, DevItemStatus, DevMergeRequest, DevStatusRead, DevWorkItem, MrStateFilter,
     DEFAULT_DEV_STATUS_LIMIT, MAX_DEV_STATUS_LIMIT, MAX_MERGE_REQUESTS_PER_ITEM,
     MAX_PAGE_MERGE_REQUESTS,
 };

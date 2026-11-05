@@ -172,8 +172,9 @@ impl Feed {
             let ids: Vec<i64> = items.iter().filter_map(|i| i.id).collect();
             let mut statuses = d
                 .snapshot
-                .dev_status_of(&d.visible, &ids, query.state)
-                .await?;
+                .dev_status_of(&d.visible, &ids, query.state, None)
+                .await?
+                .statuses;
             let as_of = d.state.bound();
             let feed_cursor = self.position(&d, integration, as_of).seal(&self.keys)?;
             let work_items = items
@@ -224,27 +225,18 @@ impl Feed {
             let mut has_more = items.len() > query.limit;
             items.truncate(query.limit);
             let ids: Vec<i64> = items.iter().filter_map(|i| i.id).collect();
-            let mut statuses = d
-                .snapshot
-                .dev_status_of(&d.visible, &ids, query.state)
-                .await?;
             // At most MAX_PAGE_MERGE_REQUESTS merge requests (at least one
-            // work item): the rest is the next page's.
-            let mut kept = 0usize;
-            let mut listed = 0usize;
-            for item in &items {
-                let n = item
-                    .id
-                    .and_then(|id| statuses.get(&id))
-                    .map_or(0, |s| s.merge_requests.len());
-                if kept > 0 && listed + n > MAX_PAGE_MERGE_REQUESTS {
-                    has_more = true;
-                    break;
-                }
-                listed += n;
-                kept += 1;
+            // work item), cut inside the read before any check run is
+            // fetched: the rest is the next page's.
+            let read = d
+                .snapshot
+                .dev_status_of(&d.visible, &ids, query.state, Some(MAX_PAGE_MERGE_REQUESTS))
+                .await?;
+            let mut statuses = read.statuses;
+            if let Some(last) = read.cut_after {
+                items.retain(|i| i.id.is_some_and(|id| id <= last));
+                has_more = true;
             }
-            items.truncate(kept);
             let start = self.position(&d, integration, as_of);
             let feed_cursor = start.seal(&self.keys)?;
             let next_cursor = match (has_more, items.last().and_then(|i| i.id)) {

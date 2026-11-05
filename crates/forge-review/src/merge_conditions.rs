@@ -296,7 +296,10 @@ impl Review {
         } else {
             self.checks.runs_on(project, &head).await?
         };
-        // M3 I1d: the link, only when the merge rule requires one.
+        // M3 I1d: the link, only when the merge rule requires one. Read on
+        // the read pool like the rest of the status, so it may trail the
+        // primary by a commit (a link just made can show as missing for a
+        // moment); a merge decides it again under its locks (MergeGate).
         let linked = facts
             .protection
             .merge_rule(&current.target_branch)

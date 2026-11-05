@@ -1646,9 +1646,10 @@ async fn dev_status(
         .expect("work items");
     let ids: Vec<i64> = items.iter().filter_map(|i| i.id).collect();
     let mut statuses = snap
-        .dev_status_of(&visible, &ids, state)
+        .dev_status_of(&visible, &ids, state, None)
         .await
-        .expect("status");
+        .expect("status")
+        .statuses;
     snap.close().await;
     items
         .into_iter()
@@ -1920,7 +1921,7 @@ async fn a_hidden_project_on_the_same_kanflow_project_never_shows() {
             w.sa.get()
         ),
     ] {
-        w.t.commit_audited(("project", api.project_id.get()), &[hide.clone()])
+        w.t.commit_audited(("project", api.project_id.get()), std::slice::from_ref(&hide))
             .await;
         let one = dev_status(&w, "PBI-3", MrStateFilter::All).await;
         assert_eq!(iid_states(&one[0].1), [(seen.iid, "open")], "{hide}");
@@ -1944,9 +1945,10 @@ async fn a_hidden_project_on_the_same_kanflow_project_never_shows() {
             .filter_map(|i| i.id)
             .collect();
         let statuses = snap
-            .dev_status_of(&visible, &ids, MrStateFilter::All)
+            .dev_status_of(&visible, &ids, MrStateFilter::All, None)
             .await
-            .expect("status");
+            .expect("status")
+            .statuses;
         snap.close().await;
         assert_eq!(walked, ["PBI-3"], "{hide}");
         let listed: Vec<ProjectId> = statuses
@@ -1955,5 +1957,65 @@ async fn a_hidden_project_on_the_same_kanflow_project_never_shows() {
             .collect();
         assert_eq!(listed, [w.web.project_id], "{hide}");
     }
+    w.t.drop_now().await;
+}
+
+/// I1d review (database MEDIUM): a page budget cuts the work items inside
+/// the read (at least one kept, even over it) and says where; the check
+/// runs of the merge requests that did not fit are never read.
+#[tokio::test]
+async fn the_page_budget_cuts_before_the_check_runs() {
+    let w = world().await;
+    let p = w.web.project_id;
+    let a1 = open_mr(&w, p, "PBI-1 first", "first").await;
+    let a2 = open_mr(&w, p, "PBI-1 second", "second").await;
+    let b = open_mr(&w, p, "PBI-2 third", "third").await;
+    let c = open_mr(&w, p, "PBI-3 fourth", "fourth").await;
+    for (mr, sha) in [(&a1, "6"), (&a2, "7"), (&b, "8"), (&c, "9")] {
+        head_with_runs(
+            &w,
+            mr,
+            &sha.repeat(40),
+            &[("ci/gates", "completed", Some("success"))],
+        )
+        .await;
+    }
+    drain(&w.t).await;
+    let (mut snap, _, visible) = decided(&w).await;
+    let items: Vec<i64> = snap
+        .work_items_after(&visible, 0, 10)
+        .await
+        .expect("walk")
+        .into_iter()
+        .filter_map(|i| i.id)
+        .collect();
+    assert_eq!(items.len(), 3);
+    // PBI-1 alone has 2 > 1: still kept (one work item at least), cut there.
+    let one = snap
+        .dev_status_of(&visible, &items, MrStateFilter::All, Some(1))
+        .await
+        .expect("budget 1");
+    assert_eq!(one.cut_after, Some(items[0]));
+    assert_eq!(one.statuses.keys().copied().collect::<Vec<_>>(), [items[0]]);
+    // 3 fits PBI-1 and PBI-2; PBI-3's merge request is not read.
+    let three = snap
+        .dev_status_of(&visible, &items, MrStateFilter::All, Some(3))
+        .await
+        .expect("budget 3");
+    assert_eq!(three.cut_after, Some(items[1]));
+    assert!(!three.statuses.contains_key(&items[2]));
+    assert!(three
+        .statuses
+        .values()
+        .flat_map(|s| &s.merge_requests)
+        .all(|m| m.checks.as_ref().is_some_and(|c| c.len() == 1)));
+    // Enough for all: no cut.
+    let all = snap
+        .dev_status_of(&visible, &items, MrStateFilter::All, Some(10))
+        .await
+        .expect("budget 10");
+    assert_eq!(all.cut_after, None);
+    assert_eq!(all.statuses.len(), 3);
+    snap.close().await;
     w.t.drop_now().await;
 }

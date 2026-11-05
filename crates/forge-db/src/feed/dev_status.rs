@@ -136,6 +136,16 @@ pub struct DevMergeRequest {
     pub linked_at: String,
 }
 
+/// What [`FeedSnapshot::dev_status_of`] read: the merge requests by work
+/// item, and — when a page budget cut the work items — the last one kept.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DevStatusRead {
+    pub statuses: BTreeMap<i64, DevItemStatus>,
+    /// `Some(id)`: the work items after `id` did not fit the budget (the
+    /// caller drops them; they start the next page).
+    pub cut_after: Option<i64>,
+}
+
 /// The merge requests of one work item.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DevItemStatus {
@@ -176,9 +186,11 @@ type MrRow = (
 );
 
 impl FeedSnapshot {
-    /// The external projects of the visible bindings (sorted, unique).
+    /// The external projects of the visible bindings (sorted, unique),
+    /// each with the integration's kind.
     fn visible_externals_sql() -> &'static str {
-        "SELECT DISTINCT b.external_project_id FROM forge.integration_bindings b \
+        "SELECT DISTINCT b.external_project_id, i.kind FROM forge.integration_bindings b \
+         JOIN forge.integrations i ON i.id = b.integration_id \
          WHERE b.integration_id = $1 AND b.project_id = ANY($2) \
          ORDER BY b.external_project_id"
     }
@@ -202,46 +214,37 @@ impl FeedSnapshot {
         let db = self.db.clone();
         let conn = self.conn();
         db.within(QUERY, async {
-            let externals: Vec<String> = sqlx::query_scalar(Self::visible_externals_sql())
+            let externals: Vec<(String, String)> = sqlx::query_as(Self::visible_externals_sql())
                 .bind(integration)
                 .bind(&projects)
                 .fetch_all(&mut *conn)
                 .await
                 .map_err(|e| read_query_error(QUERY, e))?;
-            let externals: Vec<String> = externals
+            let externals: Vec<(String, String)> = externals
                 .into_iter()
-                .filter(|e| external.is_none_or(|wanted| wanted == e))
+                .filter(|(e, _)| external.is_none_or(|wanted| wanted == e))
                 .collect();
             if externals.is_empty() {
                 return Ok(Vec::new());
             }
-            let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-                "SELECT w.id, i.kind, w.external_project_id, w.ref FROM forge.work_items w \
-                 JOIN forge.integrations i ON i.id = w.integration_id \
+            let names: Vec<&str> = externals.iter().map(|(e, _)| e.as_str()).collect();
+            let rows: Vec<(i64, String)> = sqlx::query_as(
+                "SELECT w.id, w.external_project_id FROM forge.work_items w \
                  WHERE w.integration_id = $1 AND w.ref = $2 AND w.external_project_id = ANY($3)",
             )
             .bind(integration)
             .bind(reference.as_str())
-            .bind(&externals)
+            .bind(&names)
             .fetch_all(&mut *conn)
             .await
             .map_err(|e| read_query_error(QUERY, e))?;
-            let kind: String =
-                sqlx::query_scalar("SELECT kind FROM forge.integrations WHERE id = $1")
-                    .bind(integration)
-                    .fetch_one(&mut *conn)
-                    .await
-                    .map_err(|e| read_query_error(QUERY, e))?;
             Ok(externals
                 .into_iter()
-                .map(|ext| {
-                    let row = rows.iter().find(|r| r.2 == ext);
-                    DevWorkItem {
-                        id: row.map(|r| r.0),
-                        provider: row.map_or_else(|| kind.clone(), |r| r.1.clone()), // clone: each item owns its names
-                        external_project_id: ext,
-                        reference: reference.as_str().to_owned(),
-                    }
+                .map(|(ext, kind)| DevWorkItem {
+                    id: rows.iter().find(|r| r.1 == ext).map(|r| r.0),
+                    provider: kind,
+                    external_project_id: ext,
+                    reference: reference.as_str().to_owned(),
                 })
                 .collect())
         })
@@ -310,20 +313,26 @@ impl FeedSnapshot {
         .await
     }
 
-    /// The linked merge requests of `items` (work item ids) that `visible`
-    /// shows, `state` narrowing them, by work item. A work item without an
-    /// open link has no entry. Nothing when the set shows no merge request
-    /// (no visible project, or an allowlist without `merge_request.*`).
+    /// The linked merge requests of `items` (work item ids, ascending) that
+    /// `visible` shows, `state` narrowing them, by work item. A work item
+    /// without an open link has no entry. Nothing when the set shows no
+    /// merge request (no visible project, or an allowlist without
+    /// `merge_request.*`). With `budget`, the work items stop once their
+    /// merge requests would exceed it (at least one is kept) — decided
+    /// before the check runs are read, so runs of merge requests that do
+    /// not fit are never fetched (I1d review).
     pub async fn dev_status_of(
         &mut self,
         visible: &VisibleSet,
         items: &[i64],
         state: MrStateFilter,
-    ) -> Result<BTreeMap<i64, DevItemStatus>, ForgeError> {
+        budget: Option<usize>,
+    ) -> Result<DevStatusRead, ForgeError> {
         const QUERY: &str = "feed.dev_status.merge_requests";
         let mut out: BTreeMap<i64, DevItemStatus> = BTreeMap::new();
+        let mut cut_after: Option<i64> = None;
         if items.is_empty() || !visible.shows_merge_requests() {
-            return Ok(out);
+            return Ok(DevStatusRead::default());
         }
         let integration = visible.integration().get();
         let projects = visible.project_ids();
@@ -373,8 +382,40 @@ impl FeedSnapshot {
             .fetch_all(&mut *conn)
             .await
             .map_err(|e| read_query_error(QUERY, e))?;
+            // The budget (pages): the work items whose merge requests fit,
+            // in id order, at least one — decided before any check run.
+            let keep = match budget {
+                None => None,
+                Some(budget) => {
+                    let mut per_item: BTreeMap<i64, usize> = BTreeMap::new();
+                    for row in &rows {
+                        *per_item.entry(row.0).or_default() += 1;
+                    }
+                    let mut listed = 0usize;
+                    let mut last = None;
+                    let mut cut = false;
+                    for id in items {
+                        let n = per_item
+                            .get(id)
+                            .map_or(0, |n| (*n).min(MAX_MERGE_REQUESTS_PER_ITEM));
+                        if last.is_some() && listed + n > budget {
+                            cut = true;
+                            break;
+                        }
+                        listed += n;
+                        last = Some(*id);
+                    }
+                    if cut {
+                        cut_after = last;
+                    }
+                    cut_after
+                }
+            };
             let mut heads: Vec<(i64, String)> = Vec::new();
             for row in rows {
+                if keep.is_some_and(|last| row.0 > last) {
+                    continue;
+                }
                 let (
                     item,
                     id,
@@ -430,7 +471,10 @@ impl FeedSnapshot {
             heads.sort();
             heads.dedup();
             if heads.is_empty() {
-                return Ok(out);
+                return Ok(DevStatusRead {
+                    statuses: out,
+                    cut_after,
+                });
             }
             let (head_projects, head_shas): (Vec<i64>, Vec<String>) = heads.into_iter().unzip();
             let runs: Vec<(i64, String, String, String, Option<String>)> = sqlx::query_as(
@@ -474,7 +518,10 @@ impl FeedSnapshot {
                     }
                 }
             }
-            Ok(out)
+            Ok(DevStatusRead {
+                statuses: out,
+                cut_after,
+            })
         })
         .await
     }
