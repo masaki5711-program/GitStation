@@ -224,6 +224,7 @@ impl Subscriber for SpecDriftRequests {
                 | EventType::MergeRequestReopened
                 | EventType::MergeRequestConflictDetected
                 | EventType::MergeRequestConflictResolved
+                | EventType::MergeRequestConflictPredicted
                 | EventType::MergeRequestCommented
                 | EventType::MergeRequestMerged
                 | EventType::MergeRequestSourceBranchDeleted
