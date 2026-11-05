@@ -717,3 +717,105 @@ async fn a_spec_drift_job_that_dies_records_error() {
     assert_eq!(dead[0]["state"], "dead", "{dead:?}");
     w.t.drop_now().await;
 }
+
+fn missing_head_job(w: &World, attempts: u8, request: &str) -> forge_db::jobs::NewJob {
+    let mut job = forge_db::checks::spec_drift::spec_drift_job(
+        &forge_db::checks::spec_drift::SpecDriftRequest {
+            project: w.project,
+            head: oid(&"d".repeat(40)),
+        },
+        RequestId::parse(request).expect("id"),
+        None,
+    )
+    .expect("job");
+    job.max_attempts = forge_db::jobs::MaxAttempts::new(attempts).expect("attempts");
+    job
+}
+
+async fn drift_runs(w: &World) -> Vec<forge_db::checks::StoredCheckRun> {
+    forge_db::checks::check_runs(&w.t.db, w.project, &oid(&"d".repeat(40)))
+        .await
+        .expect("runs")
+}
+
+/// Review X2 (rust HIGH): an attempt that will be retried writes nothing;
+/// the last one answers `error`.
+#[tokio::test]
+async fn only_the_last_attempt_of_a_failing_drift_job_answers_error() {
+    let w = World::new().await;
+    let job = missing_head_job(&w, 2, "req-drift-two");
+    forge_db::jobs::enqueue(&w.t.db, &job)
+        .await
+        .expect("enqueue");
+    let first = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(
+        matches!(first, forge_db::jobs::Ran::Retrying { .. }),
+        "{first:?}"
+    );
+    assert!(
+        drift_runs(&w).await.is_empty(),
+        "no answer while it is retried"
+    );
+    // Skip the backoff.
+    w.t.exec_superuser("UPDATE forge.jobs SET run_after = now() WHERE kind = 'check.spec_drift'")
+        .await;
+    let second = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(
+        matches!(second, forge_db::jobs::Ran::Dead { .. }),
+        "{second:?}"
+    );
+    let runs = drift_runs(&w).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].conclusion, Some(forge_core::CheckConclusion::Error));
+    w.t.drop_now().await;
+}
+
+/// Review X2 (rust HIGH): a job the handler never finished (its worker
+/// crashed, the runner's timeout cut it) dies through the reaper without
+/// an answer; the sweep answers `error` for it once.
+#[tokio::test]
+async fn the_sweep_answers_a_reaped_drift_job_with_error_once() {
+    let w = World::new().await;
+    let job = missing_head_job(&w, 1, "req-drift-crash");
+    forge_db::jobs::enqueue(&w.t.db, &job)
+        .await
+        .expect("enqueue");
+    let kind = forge_db::jobs::JobKind::parse("check.spec_drift").expect("kind");
+    let worker = forge_db::jobs::WorkerId::generate();
+    let claimed = forge_db::jobs::claim(&w.t.db, &worker, &[kind])
+        .await
+        .expect("claim")
+        .expect("a job");
+    // The worker dies holding it: its lease runs out.
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.jobs SET lease_until = now() - interval '1 second' WHERE id = {}",
+        claimed.lease.job_id.get()
+    ))
+    .await;
+    let reaped = forge_db::jobs::reap(&w.t.db).await.expect("reap");
+    assert_eq!(reaped.len(), 1);
+    assert!(drift_runs(&w).await.is_empty(), "the reaper writes no run");
+    let answered = crate::worker::spec_drift_sweep::run_spec_drift_sweep(&w.t.db)
+        .await
+        .expect("sweep");
+    assert_eq!(answered, crate::worker::supervise::Next::AfterPeriod);
+    let runs = drift_runs(&w).await;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].conclusion, Some(forge_core::CheckConclusion::Error));
+    assert!(
+        runs[0].summary.contains("FG-DB-0007"),
+        "{}",
+        runs[0].summary
+    );
+    assert!(
+        runs[0].summary.contains("req-drift-crash"),
+        "{}",
+        runs[0].summary
+    );
+    // Answered: the next sweep writes nothing more.
+    crate::worker::spec_drift_sweep::run_spec_drift_sweep(&w.t.db)
+        .await
+        .expect("sweep again");
+    assert_eq!(drift_runs(&w).await[0].revision, 1);
+    w.t.drop_now().await;
+}

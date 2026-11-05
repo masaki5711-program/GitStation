@@ -1026,10 +1026,12 @@ async fn more_runs_than_the_cap_is_check_run_data_invalid() {
         &[format!(
             "INSERT INTO forge.check_runs (project_id, head_sha, name, status, reported_by, \
              request_id) SELECT {}, '{}', 'ci/n' || g, 'queued', {}, 'req-fill' \
-             FROM generate_series(1, 101) g",
+             FROM generate_series(1, {}) g",
             w.project().get(),
             head.as_str(),
-            w.alice.get()
+            w.alice.get(),
+            // Review X2: reads hold the reporters' cap plus forge's names.
+            forge_core::checks::MAX_STORED_CHECK_RUNS_PER_COMMIT + 1
         )],
     )
     .await;

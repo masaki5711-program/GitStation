@@ -222,7 +222,7 @@ async fn a_pin_behind_the_latest_version_is_neutral_with_spec_version_behind() {
     assert_eq!(run.reported_by, None, "forge's own worker");
     let s = &run.summary;
     for needle in [
-        "line 2: alice/specs version v1.0 — behind: v1.1 is published (1 later version(s)) [FG-REPO-0027]",
+        "line 2: alice/specs version v1.0 — behind: a later version is published [FG-REPO-0027]",
         "line 4: alice/api track main — follows the branch",
         "line 6: alice/secret version v1.0 — not found, or not readable by every signed-in person",
         "line 8: alice/docs version v9.9 — the pinned version does not exist [FG-REPO-0025]",
@@ -232,8 +232,13 @@ async fn a_pin_behind_the_latest_version_is_neutral_with_spec_version_behind() {
         assert!(s.contains(needle), "{needle}\nin\n{s}");
     }
     // A private repository Alice may read is still not disclosed to every
-    // reader of `web`: nothing of its tags appears.
-    assert!(!s.contains("v1.7"), "{s}");
+    // reader of `web`: nothing of its tags appears. Review X2 (MEDIUM): no
+    // referenced repository's tag names or counts are stored at all (a
+    // service account reads the run without reading `alice/specs`).
+    for leaked in ["v1.7", "v1.1", "later version(s)"] {
+        assert!(!s.contains(leaked), "{leaked} in {s}");
+    }
+    assert!(run.annotations.iter().all(|a| !a.message.contains("v1.1")));
     let notes: Vec<(u32, CheckAnnotationLevel)> = run
         .annotations
         .iter()
@@ -359,5 +364,42 @@ async fn a_project_that_is_gone_records_nothing() {
     w.drift
         .fail(&request, &RequestId::parse("req-gone").expect("id"), &e)
         .await;
+    w.t.drop_now().await;
+}
+
+/// Review X2 (rust HIGH): the evaluation has its own deadline, well inside
+/// the job's time limit, so the handler (not the runner's timeout) ends a
+/// slow run and answers. Nothing is written when it runs out.
+#[tokio::test]
+async fn an_evaluation_past_its_deadline_is_request_timeout_and_writes_nothing() {
+    let w = world().await;
+    let head = w.head(Some(DRIFTED)).await;
+    let slow = w
+        .drift
+        .clone()
+        .with_budget(std::time::Duration::from_nanos(1));
+    let err = slow
+        .run(
+            &w.request(&head),
+            &RequestId::parse("req-slow").expect("id"),
+        )
+        .await
+        .expect_err("past the deadline");
+    assert_eq!(err.code(), ErrorCode::RequestTimeout);
+    assert!(
+        err.context()
+            .iter()
+            .any(|(k, v)| *k == "operation" && v == "spec_drift"),
+        "{err:?}"
+    );
+    let runs = check_runs(&w.t.db, w.web.project_id, &head)
+        .await
+        .expect("list");
+    assert!(runs.is_empty());
+    // The budgets fit the job's time limit with room for the answer.
+    assert!(
+        forge_checks::spec_drift::EVALUATION_BUDGET + 2 * forge_checks::spec_drift::WRITE_TIMEOUT
+            < forge_db::checks::spec_drift::SPEC_DRIFT_TIMEOUT
+    );
     w.t.drop_now().await;
 }

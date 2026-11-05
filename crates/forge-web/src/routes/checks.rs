@@ -153,7 +153,7 @@ pub struct CheckRunBody {
 pub struct CheckRunList {
     pub schema_version: u32,
     pub head_sha: String,
-    /// By name; at most 100.
+    /// By name; at most 100 reported, plus forge's own (`forge/spec-drift`).
     pub check_runs: Vec<CheckRunBody>,
 }
 

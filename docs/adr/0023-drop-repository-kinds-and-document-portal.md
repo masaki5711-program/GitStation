@@ -210,3 +210,20 @@
    **forge-checks の `spec_refs`** へ移し、ルートと `SpecDrift` が共有する（`Reader::Proof` = 読む人、`Reader::EveryPerson` = 全員）。
    新しいクレートは作らない（run を書くのが forge-checks で、機能クレート同士の辺を増やさない）。ログの `forge.spec_refs.unresolved` は
    target が `forge_checks` になり、`reader`（`caller` / `every_person`）が増えた。ルートの振る舞いは変わらない（X1 のルートのテストがそのまま通る）。
+10. **X2 の独立レビュー（2026-11-06、security・rust。HIGH 2 件）で直したこと**:
+    - **答えのない head を残さない（rust HIGH）**: 評価全体に内部の締め切り（`EVALUATION_BUDGET` 30 秒。超えたら `FG-WEB-0002 operation=spec_drift`、
+      やり直せる）と、書き込みの締め切り（`WRITE_TIMEOUT` 10 秒、`error` の書き込みにも）を置いた。30 + 10 + 10 < ジョブの 60 秒なので、
+      最後の試みはジョブの runner の時間切れより前に handler 自身が `error` を書ける。それでも答えられずに死んだジョブ（worker の落ち、
+      リースの期限切れでの reaper）は、`forge worker` の新しいタスク `spec_drift_sweep`（60 秒ごと、50 件まで）が、7 日以内に死んで
+      head に run が無い `check.spec_drift` を探し（forge-db `unanswered_dead_jobs`、部分索引 `jobs_dead_kind`、マイグレーション 20261124100100）、
+      ジョブの最後のコード（reaper なら FG-DB-0007）と request id で `error` を書く。
+    - **他の報告者が forge の run を締め出せない（security HIGH）**: 1 コミット 100 名の上限（FG-REVIEW-0021）は報告者（`ci/`・`kanflow/`・`ext/`）の
+      名前だけを数え、forge が書く名前（`FORGE_REPORTED_CHECKS`）は数えず、上限にも当たらない。読み取りの上限は
+      `MAX_STORED_CHECK_RUNS_PER_COMMIT`（100 + forge の名前の数 = 101）。CI が 100 件書いても `forge/spec-drift` とその `error` は書ける。
+    - **参照先のタグを保存しない（security MEDIUM、簡単な方を選んだ）**: 保存する要約と注釈には、参照先の **タグの名前と新しい版の数を入れない**
+      （`behind: a later version is published` とパスと固定だけ）。run はサービスアカウント（内部公開のプロジェクトを所属なしでは読めない）にも
+      Checks API で見えるため。最新の版は、読める人が `gstn browse refs --project <参照先> --type tag` / `gstn browse spec-refs` で自分の権限で見る。
+      読み取り時に描き直す案は、run の保存の形と API を変えるので採らなかった。そのため「後から非公開にされた参照先のタグが古い run に残る」問題（LOW）も起きない
+      （残るのは「behind だった」という 1 ビットとパスだけで、パスは参照する側のファイル自身の文字）。
+    - **LOW**: 参照先のタグの一覧の git の失敗は、その項目の `undecided` にせず、run の失敗として返す（busy・時間切れはやり直し、最後は `error`）。
+      `undecided` は一覧が上限で切れたときだけ。版の形でない固定（`stable`、`v1.2.3.4.5`、`v2.0-rc1`）は `success` のまま、notice の注釈で知らせる。

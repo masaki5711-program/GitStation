@@ -15,6 +15,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::jobs::{self, enqueue_on, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::subscribers::{DerivedTx, HandleFuture, Ordering, SourceEvent, Subscriber};
+use crate::{read_query_error, Db};
 
 /// The kind of the job.
 pub const SPEC_DRIFT_JOB: &str = "check.spec_drift";
@@ -79,6 +80,64 @@ pub fn spec_drift_payload(payload: &serde_json::Value) -> Result<SpecDriftReques
         project: ProjectId::new(project),
         head,
     })
+}
+
+/// A dead `check.spec_drift` job whose head has no `forge/spec-drift` run
+/// (review X2: the reaper ended it — a crashed worker, the runner's own
+/// timeout — so its handler never answered).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnansweredJob {
+    pub job_id: i64,
+    pub request: SpecDriftRequest,
+    /// The job's request (the answer and its logs carry it).
+    pub origin_request_id: String,
+    /// The code the job died with.
+    pub last_error_code: String,
+}
+
+/// How far back the sweep looks for dead jobs.
+pub const UNANSWERED_WINDOW_DAYS: i32 = 7;
+
+/// At most `limit` [`UnansweredJob`]s, the oldest first: dead within
+/// [`UNANSWERED_WINDOW_DAYS`], of a project that still exists, with no
+/// `forge/spec-drift` run on their head. A payload this build cannot read
+/// is passed over (logged at warn: forge wrote it).
+pub async fn unanswered_dead_jobs(db: &Db, limit: i64) -> Result<Vec<UnansweredJob>, ForgeError> {
+    const QUERY: &str = "checks.spec_drift_unanswered";
+    let rows: Vec<(i64, serde_json::Value, String, Option<String>)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT j.id, j.payload, j.origin_request_id, j.last_error_code                  FROM forge.jobs j JOIN forge.projects p ON p.id = CASE                  WHEN j.payload->>'project_id' ~ '^[0-9]{1,18}$'                  THEN (j.payload->>'project_id')::bigint END                  WHERE j.kind = $1 AND j.state = 'dead'                  AND j.finished_at > now() - make_interval(days => $2)                  AND NOT EXISTS (SELECT 1 FROM forge.check_runs r WHERE r.project_id = p.id                  AND r.head_sha = j.payload->>'head_sha' AND r.name = $3)                  ORDER BY j.finished_at, j.id LIMIT $4",
+            )
+            .bind(SPEC_DRIFT_JOB)
+            .bind(UNANSWERED_WINDOW_DAYS)
+            .bind(forge_core::checks::SPEC_DRIFT_CHECK)
+            .bind(limit)
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (job_id, payload, origin_request_id, code) in rows {
+        match spec_drift_payload(&payload) {
+            Ok(request) => out.push(UnansweredJob {
+                job_id,
+                request,
+                origin_request_id,
+                // `jobs_dead_has_error`: a dead job always has one.
+                last_error_code: code.unwrap_or_else(|| ErrorCode::JobDeadLettered.id().to_owned()),
+            }),
+            Err(e) => tracing::warn!(
+                target: "forge_db",
+                event = "forge.spec_drift.unanswered_unreadable",
+                error_code = e.code().id(),
+                job_id,
+                "a dead spec drift job's payload cannot be read; passed over"
+            ),
+        }
+    }
+    Ok(out)
 }
 
 /// The `spec-drift` subscriber (`independent`: an event it cannot read is

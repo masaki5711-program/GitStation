@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 
 use forge_core::checks::{
     CheckAnnotationLevel, CheckConclusion, CheckRun, CheckRunChange, CheckRunsOnHead, CheckStatus,
-    MAX_CHECK_RUNS_PER_COMMIT,
+    MAX_CHECK_RUNS_PER_COMMIT, MAX_STORED_CHECK_RUNS_PER_COMMIT,
 };
 use forge_core::{
     AuditDetails, CheckName, CheckNamespace, DedupKey, DedupPart, ObjectId, ProjectId, UserId,
@@ -137,7 +137,7 @@ pub(crate) const RUNS_SQL: &str = "SELECT id, name, status, conclusion FROM forg
      WHERE project_id = $1 AND head_sha = $2 ORDER BY name LIMIT $3";
 
 fn row_limit() -> i64 {
-    i64::try_from(MAX_CHECK_RUNS_PER_COMMIT)
+    i64::try_from(MAX_STORED_CHECK_RUNS_PER_COMMIT)
         .unwrap_or(i64::MAX)
         .saturating_add(1)
 }
@@ -180,9 +180,9 @@ fn snapshot(
     head: &ObjectId,
     rows: Vec<RunRow>,
 ) -> Result<CheckRunsOnHead, ForgeError> {
-    if rows.len() > MAX_CHECK_RUNS_PER_COMMIT {
+    if rows.len() > MAX_STORED_CHECK_RUNS_PER_COMMIT {
         return Err(data_invalid("too_many_stored_runs", project, head.as_str())
-            .with_context("limit", MAX_CHECK_RUNS_PER_COMMIT));
+            .with_context("limit", MAX_STORED_CHECK_RUNS_PER_COMMIT));
     }
     let mut runs = Vec::with_capacity(rows.len());
     for (id, name, status, conclusion) in rows {
@@ -374,9 +374,9 @@ pub async fn check_runs(
             Ok((rows, notes))
         })
         .await?;
-    if rows.len() > MAX_CHECK_RUNS_PER_COMMIT {
+    if rows.len() > MAX_STORED_CHECK_RUNS_PER_COMMIT {
         return Err(data_invalid("too_many_stored_runs", project, head.as_str())
-            .with_context("limit", MAX_CHECK_RUNS_PER_COMMIT));
+            .with_context("limit", MAX_STORED_CHECK_RUNS_PER_COMMIT));
     }
     let mut annotations = parse_annotations(project, head, notes)?;
     rows.into_iter()
@@ -552,16 +552,22 @@ async fn write_run(
                 .step(|c| async move {
                     sqlx::query_scalar(
                         "SELECT count(*) FROM forge.check_runs WHERE project_id = $1 \
-                 AND head_sha = $2",
+                         AND head_sha = $2 AND name <> ALL($3)",
                     )
                     .bind(project.get())
                     .bind(s)
+                    .bind(forge_core::checks::FORGE_REPORTED_CHECKS)
                     .fetch_one(c)
                     .await
                     .map_err(|e| query_error("checks.run_count", e))
                 })
                 .await?;
-            if usize::try_from(count).unwrap_or(usize::MAX) >= MAX_CHECK_RUNS_PER_COMMIT {
+            // Review X2: forge's own names (one run each, the list is fixed)
+            // are outside the reporters' cap and never counted in it.
+            let forge_name = forge_core::checks::forge_reports(&new.name);
+            if !forge_name
+                && usize::try_from(count).unwrap_or(usize::MAX) >= MAX_CHECK_RUNS_PER_COMMIT
+            {
                 return Err(limit_reached(project, head));
             }
             let (s, n) = (sha.clone(), name.clone()); // clone: the step owns its binds

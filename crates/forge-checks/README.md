@@ -44,7 +44,9 @@ enqueued by forge-db's `spec-drift` subscriber and run by `forge worker`): it re
 (`forge_auth::prove_spec_ref_for_every_person`), compares `version:` pins with the referenced
 repository's tags (`forge_core::spec_version`) and records the run with
 `forge_db::checks::record_forge_check_run` (no reporter). `success` / `neutral` (FG-REPO-0024,
-0025, 0026, 0027) / `error` (`SpecDrift::fail`, the job's last failure). `spec_refs` holds the
+0025, 0026, 0027; no referenced tag names or counts are stored — review X2) / `error`
+(`SpecDrift::fail` on the job's last failure, `record_error` for `forge worker`'s
+`spec_drift_sweep` of jobs the reaper ended). The evaluation has its own 30 s deadline. `spec_refs` holds the
 reading and following shared with forge-web's `GET …/repository/spec-refs` (M3 X1, moved here
 by X2: `Reader::Proof` for the route's reader, `Reader::EveryPerson` for the job).
 

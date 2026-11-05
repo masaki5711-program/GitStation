@@ -1936,7 +1936,7 @@ export interface components {
         };
         /** @description `GET …/commits/{sha}/checks` (docs/api/checks.md, schema_version 1). */
         CheckRunList: {
-            /** @description By name; at most 100. */
+            /** @description By name; at most 100 reported, plus forge's own (`forge/spec-drift`). */
             check_runs: components["schemas"]["CheckRunBody"][];
             head_sha: string;
             /** Format: int32 */

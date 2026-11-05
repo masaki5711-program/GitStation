@@ -39,6 +39,14 @@ pub const SPEC_DRIFT_CHECK: &str = "forge/spec-drift";
 /// required `forge/` name outside this list has no reporter.
 pub const FORGE_REPORTED_CHECKS: &[&str] = &[SPEC_DRIFT_CHECK];
 
+/// The most runs one commit holds in all: the reporters' cap
+/// ([`MAX_CHECK_RUNS_PER_COMMIT`], which counts no `forge/` name) plus one
+/// per name forge reports itself (review X2: other reporters can never
+/// crowd forge's own run out). Every read of a commit's runs is bounded by
+/// it.
+pub const MAX_STORED_CHECK_RUNS_PER_COMMIT: usize =
+    MAX_CHECK_RUNS_PER_COMMIT + FORGE_REPORTED_CHECKS.len();
+
 /// Whether forge's own worker reports `name` ([`FORGE_REPORTED_CHECKS`]).
 pub fn forge_reports(name: &CheckName) -> bool {
     FORGE_REPORTED_CHECKS.contains(&name.as_str())

@@ -56,7 +56,7 @@ fn a_refused_repo_yml_is_neutral_at_its_line() {
 }
 
 #[test]
-fn current_tracking_local_and_unversioned_entries_are_success() {
+fn current_tracking_local_and_unversioned_entries_are_success_with_a_notice_for_odd_pins() {
     let run = assess(&Assessed::Entries(vec![
         entry(
             2,
@@ -80,7 +80,13 @@ fn current_tracking_local_and_unversioned_entries_are_success() {
     ]))
     .expect("run");
     assert_eq!(run.conclusion, Some(CheckConclusion::Success));
-    assert!(run.annotations.is_empty());
+    // Review X2 (LOW): a pin that is no version is said, at notice level.
+    let notes: Vec<(u32, CheckAnnotationLevel)> = run
+        .annotations
+        .iter()
+        .map(|a| (a.start_line, a.level))
+        .collect();
+    assert_eq!(notes, [(8, CheckAnnotationLevel::Notice)]);
     assert!(run.summary.contains("(3 pinned)"), "{}", run.summary);
     assert!(
         run.summary
@@ -97,10 +103,7 @@ fn each_notable_entry_makes_the_run_neutral_and_is_annotated() {
             2,
             "platform/specs",
             Some(("version", "v1.2")),
-            EntryState::Behind {
-                latest: "v1.4".to_owned(),
-                newer: 2,
-            },
+            EntryState::Behind,
         ),
         entry(
             5,
@@ -131,7 +134,7 @@ fn each_notable_entry_makes_the_run_neutral_and_is_annotated() {
     assert_eq!(run.conclusion, Some(CheckConclusion::Neutral));
     assert!(run.summary.starts_with("4 of 5 pinned"), "{}", run.summary);
     for needle in [
-        "line 2: platform/specs version v1.2 — behind: v1.4 is published (2 later version(s)) [FG-REPO-0027]",
+        "line 2: platform/specs version v1.2 — behind: a later version is published [FG-REPO-0027]",
         "[FG-REPO-0026]",
         "[FG-REPO-0025]",
     ] {
@@ -159,17 +162,7 @@ fn each_notable_entry_makes_the_run_neutral_and_is_annotated() {
 fn the_largest_file_fits_the_run_limits() {
     let long = "p/".repeat(forge_core::repo_config::MAX_SPEC_PATH_LEN / 2);
     let entries = (0..forge_core::repo_config::MAX_SPEC_REFS)
-        .map(|i| {
-            entry(
-                i + 1,
-                &long,
-                Some(("version", "v1")),
-                EntryState::Behind {
-                    latest: "v2".repeat(100),
-                    newer: 1,
-                },
-            )
-        })
+        .map(|i| entry(i + 1, &long, Some(("version", "v1")), EntryState::Behind))
         .collect();
     let run = assess(&Assessed::Entries(entries)).expect("run");
     assert!(run.annotations.len() <= forge_core::checks::MAX_CHECK_ANNOTATIONS);

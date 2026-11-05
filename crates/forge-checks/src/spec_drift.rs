@@ -43,6 +43,12 @@ use crate::spec_refs::{follow, read_repo_config, FollowCtx, Followed, Reader, Re
 
 /// One lookup of a referenced path.
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// The whole evaluation (the project, the file, every reference and its
+/// tags) before the write (review X2: the handler ends a slow run itself,
+/// well inside the job's 60 s, and answers `error` on its last attempt).
+pub const EVALUATION_BUDGET: Duration = Duration::from_secs(30);
+/// One write of the run (the evaluation's, or `error`'s).
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How one entry of `.forge/repo.yml` stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,8 +57,10 @@ pub enum EntryState {
     Local,
     /// The pin is the latest version of its series.
     Current,
-    /// `newer` later versions are published; `latest` is the greatest.
-    Behind { latest: String, newer: usize },
+    /// A later version of its series is published. Which one, and how
+    /// many, are never stored (review X2: a service account reads the run
+    /// without reading the referenced project).
+    Behind,
     /// `track:` — follows a branch: never behind.
     Tracking,
     /// The pin is no version (`stable`, `v2.0-rc1`): nothing to compare.
@@ -72,7 +80,7 @@ impl EntryState {
         match self {
             Self::Local => "local",
             Self::Current => "current",
-            Self::Behind { .. } => "behind",
+            Self::Behind => "behind",
             Self::Tracking => "tracking",
             Self::Unversioned => "unversioned",
             Self::Undecided => "undecided",
@@ -85,15 +93,19 @@ impl EntryState {
     fn notable(&self) -> bool {
         match self {
             Self::Local | Self::Current | Self::Tracking | Self::Unversioned => false,
-            Self::Behind { .. } | Self::Undecided | Self::VersionNotFound | Self::Unavailable => {
-                true
-            }
+            Self::Behind | Self::Undecided | Self::VersionNotFound | Self::Unavailable => true,
         }
+    }
+
+    /// Whether this entry is annotated: the notable ones, and a pin that
+    /// is no version (review X2 LOW: never a silent pass).
+    fn annotated(&self) -> bool {
+        self.notable() || *self == Self::Unversioned
     }
 
     fn code(&self) -> Option<ErrorCode> {
         match self {
-            Self::Behind { .. } => Some(ErrorCode::SpecVersionBehind),
+            Self::Behind => Some(ErrorCode::SpecVersionBehind),
             Self::VersionNotFound => Some(ErrorCode::SpecVersionNotFound),
             Self::Unavailable => Some(ErrorCode::SpecRepositoryUnavailable),
             Self::Local | Self::Current | Self::Tracking | Self::Unversioned | Self::Undecided => {
@@ -163,11 +175,12 @@ fn describe(e: &EntryResult) -> String {
     let state = match &e.state {
         EntryState::Local => "this repository's own specification".to_owned(),
         EntryState::Current => "the latest published version".to_owned(),
-        EntryState::Behind { latest, newer } => {
-            format!("behind: {latest} is published ({newer} later version(s))")
-        }
+        EntryState::Behind => "behind: a later version is published".to_owned(),
         EntryState::Tracking => "follows the branch".to_owned(),
-        EntryState::Unversioned => "the pin is no version; nothing to compare".to_owned(),
+        EntryState::Unversioned => {
+            "the pin is no version (a prefix and up to four numbers, no suffix); nothing to compare"
+                .to_owned()
+        }
         EntryState::Undecided => {
             "the repository has too many refs to tell its latest version".to_owned()
         }
@@ -226,11 +239,12 @@ pub fn assess(assessed: &Assessed) -> Result<NewCheckRun, ForgeError> {
             };
             let mut lines = vec![head];
             lines.extend(entries.iter().map(describe));
-            let annotations = notable
+            let annotations = entries
                 .iter()
+                .filter(|e| e.state.annotated())
                 .map(|e| {
                     let level = match e.state {
-                        EntryState::Behind { .. } | EntryState::VersionNotFound => {
+                        EntryState::Behind | EntryState::VersionNotFound => {
                             CheckAnnotationLevel::Warning
                         }
                         EntryState::Local
@@ -268,6 +282,7 @@ pub struct SpecDrift {
     browse: Browser,
     resolver: Arc<dyn NamespaceResolver>,
     projects: Arc<dyn ProjectAccessLoader>,
+    budget: Duration,
 }
 
 impl std::fmt::Debug for SpecDrift {
@@ -288,6 +303,24 @@ fn context(request_id: &RequestId) -> ChangeContext {
     ChangeContext::new(Actor::System, request_id.clone()) // clone: the change owns its id
 }
 
+/// Write the run within [`WRITE_TIMEOUT`] (`FG-WEB-0002
+/// operation=spec_drift_record` past it: nothing is committed).
+async fn record(
+    db: &Db,
+    request: &SpecDriftRequest,
+    request_id: &RequestId,
+    new: &NewCheckRun,
+) -> Result<Reported, ForgeError> {
+    let ctx = context(request_id);
+    let write = record_forge_check_run(db, &ctx, (request.project, &request.head), new);
+    match tokio::time::timeout(WRITE_TIMEOUT, write).await {
+        Ok(written) => written,
+        Err(_) => Err(ForgeError::new(ErrorCode::RequestTimeout)
+            .with_context("operation", "spec_drift_record")
+            .with_context("timeout_ms", WRITE_TIMEOUT.as_millis())),
+    }
+}
+
 impl SpecDrift {
     /// `resolver` and `projects` are forge-db's (`Db` implements both);
     /// tests inject others.
@@ -302,7 +335,15 @@ impl SpecDrift {
             browse,
             resolver,
             projects,
+            budget: EVALUATION_BUDGET,
         }
+    }
+
+    /// The same, with another evaluation budget (tests).
+    #[must_use]
+    pub fn with_budget(mut self, budget: Duration) -> Self {
+        self.budget = budget;
+        self
     }
 
     /// Evaluate `request`'s head and record the run. Errors (nothing
@@ -316,6 +357,42 @@ impl SpecDrift {
         request_id: &RequestId,
     ) -> Result<Ran, ForgeError> {
         let project = request.project;
+        let evaluated = tokio::time::timeout(self.budget, self.evaluate(request, request_id)).await;
+        let assessed = match evaluated {
+            Ok(assessed) => assessed?,
+            // Dropping the evaluation stops its git work (killed and
+            // reaped by forge-git) and its lookups.
+            Err(_) => {
+                return Err(ForgeError::new(ErrorCode::RequestTimeout)
+                    .with_context("operation", "spec_drift")
+                    .with_context("timeout_ms", self.budget.as_millis()))
+            }
+        };
+        let Some(assessed) = assessed else {
+            return Ok(Ran::ProjectGone);
+        };
+        let new = assess(&assessed)?;
+        let reported = record(&self.db, request, request_id, &new).await?;
+        tracing::info!(
+            target: "forge_checks",
+            event = "forge.spec_drift.recorded",
+            request_id = %request_id,
+            project_id = project.get(),
+            head_sha = request.head.as_str(),
+            conclusion = new.conclusion.map(CheckConclusion::as_str),
+            check_run_id = reported.run.id,
+            "spec drift evaluated"
+        );
+        Ok(Ran::Recorded(Box::new(reported)))
+    }
+
+    /// Everything before the write (`None`: the project is gone).
+    async fn evaluate(
+        &self,
+        request: &SpecDriftRequest,
+        request_id: &RequestId,
+    ) -> Result<Option<Assessed>, ForgeError> {
+        let project = request.project;
         let Some(record) = self.load(request).await? else {
             tracing::info!(
                 target: "forge_checks",
@@ -325,7 +402,7 @@ impl SpecDrift {
                 head_sha = request.head.as_str(),
                 "the project is gone; no spec drift run recorded"
             );
-            return Ok(Ran::ProjectGone);
+            return Ok(None);
         };
         let repo = record.repository;
         if repo.state != RepositoryState::Ready {
@@ -365,25 +442,7 @@ impl SpecDrift {
                 Assessed::Entries(entries)
             }
         };
-        let new = assess(&assessed)?;
-        let reported = record_forge_check_run(
-            &self.db,
-            &context(request_id),
-            (project, &request.head),
-            &new,
-        )
-        .await?;
-        tracing::info!(
-            target: "forge_checks",
-            event = "forge.spec_drift.recorded",
-            request_id = %request_id,
-            project_id = project.get(),
-            head_sha = request.head.as_str(),
-            conclusion = new.conclusion.map(CheckConclusion::as_str),
-            check_run_id = reported.run.id,
-            "spec drift evaluated"
-        );
-        Ok(Ran::Recorded(Box::new(reported)))
+        Ok(Some(assessed))
     }
 
     async fn load(
@@ -420,26 +479,14 @@ impl SpecDrift {
         let SpecPin::Version(_) = pin else {
             return Ok(EntryState::Tracking);
         };
-        let list = match self.browse.refs(repository).await {
-            Ok(list) => list,
-            // As for the pin's own lookup: a referenced repository's git
-            // failure is this entry's answer (logged at warn with its code),
-            // never this run's.
-            Err(e) => {
-                tracing::warn!(
-                    target: "forge_checks",
-                    event = "forge.spec_drift.tags_unread",
-                    error_code = e.code().id(),
-                    error = %e,
-                    request_id = %ctx.request_id,
-                    project_id = ctx.project.get(),
-                    referenced_repo_id = repository.get(),
-                    line,
-                    "the referenced repository's tags could not be listed"
-                );
-                return Ok(EntryState::Undecided);
-            }
-        };
+        // Review X2 (LOW): a git failure listing the tags fails the run
+        // (busy, timeout: the job retries; its last attempt answers
+        // `error`), never a final `undecided`. The run is forge's own: its
+        // status is no reader's existence oracle.
+        let list = self.browse.refs(repository).await.map_err(|e| {
+            e.with_context("referenced_repo_id", repository.get())
+                .with_context("line", line)
+        })?;
         if list.truncated {
             return Ok(EntryState::Undecided);
         }
@@ -450,7 +497,7 @@ impl SpecDrift {
             .map(|r| r.short());
         Ok(match drift(pin.name(), tags) {
             Drift::Current => EntryState::Current,
-            Drift::Behind { latest, newer } => EntryState::Behind { latest, newer },
+            Drift::Behind { .. } => EntryState::Behind,
             Drift::Unversioned => EntryState::Unversioned,
         })
     }
@@ -465,44 +512,55 @@ impl SpecDrift {
         request_id: &RequestId,
         error: &ForgeError,
     ) {
-        let recorded = match CheckName::parse(SPEC_DRIFT_CHECK) {
-            Ok(name) => {
-                let new = NewCheckRun {
-                    name,
-                    status: CheckStatus::Completed,
-                    conclusion: Some(CheckConclusion::Error),
-                    summary: format!(
-                        "forge/spec-drift could not be evaluated [{}] (request {request_id}). \
-                         An operator can find the cause in the worker's log by this request id.",
-                        error.code().id()
-                    ),
-                    details_url: None,
-                    annotations: Vec::new(),
-                };
-                record_forge_check_run(
-                    &self.db,
-                    &context(request_id),
-                    (request.project, &request.head),
-                    &new,
-                )
-                .await
-                .map(drop)
-            }
-            Err(_) => Err(ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "spec_drift_name_invalid")),
-        };
-        if let Err(e) = recorded {
+        record_error(&self.db, request, request_id, error.code().id()).await;
+    }
+}
+
+/// Record `error` on `request`'s head (the job's last failure: `code`) so
+/// the check is never left without an answer: [`SpecDrift::fail`], and the
+/// worker's sweep for a job that died without one (reaped). Bounded by
+/// [`WRITE_TIMEOUT`]. A failure to record it is logged here (`error`).
+/// Whether it was recorded.
+pub async fn record_error(
+    db: &Db,
+    request: &SpecDriftRequest,
+    request_id: &RequestId,
+    code: &str,
+) -> bool {
+    let recorded = match CheckName::parse(SPEC_DRIFT_CHECK) {
+        Ok(name) => {
+            let new = NewCheckRun {
+                name,
+                status: CheckStatus::Completed,
+                conclusion: Some(CheckConclusion::Error),
+                summary: format!(
+                    "forge/spec-drift could not be evaluated [{code}] (request {request_id}).                      An operator can find the cause in the worker's log by this request id."
+                ),
+                details_url: None,
+                annotations: Vec::new(),
+            };
+            record(db, request, request_id, &new).await.map(drop)
+        }
+        Err(_) => {
+            Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "spec_drift_name_invalid"))
+        }
+    };
+    match recorded {
+        Ok(()) => true,
+        Err(e) => {
             tracing::error!(
                 target: "forge_checks",
                 event = "forge.spec_drift.error_unrecorded",
                 error_code = e.code().id(),
                 error = %e,
-                job_error_code = error.code().id(),
+                job_error_code = code,
                 request_id = %request_id,
                 project_id = request.project.get(),
                 head_sha = request.head.as_str(),
                 "the failed spec drift evaluation could not be recorded as error"
             );
+            false
         }
     }
 }

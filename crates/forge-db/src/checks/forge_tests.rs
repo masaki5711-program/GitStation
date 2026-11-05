@@ -294,3 +294,56 @@ fn the_payload_round_trips_and_refuses_anything_else() {
         assert_reason(&err, ErrorCode::Internal, "invalid_job_payload");
     }
 }
+
+/// Review X2 (security HIGH): other reporters cannot crowd forge's own run
+/// out. 100 `ci/` runs fill the reporters' cap; forge's run is still
+/// recorded, every read sees all 101, and a 101st reporter name is still
+/// refused.
+#[tokio::test]
+async fn forge_runs_never_count_against_the_reporters_cap() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let head = sha('f');
+    t.commit_audited(
+        ("project", p.get()),
+        &[format!(
+            "INSERT INTO forge.check_runs (project_id, head_sha, name, status, reported_by,              request_id) SELECT {}, '{}', 'ci/n' || g, 'queued', {}, 'req-fill'              FROM generate_series(1, 100) g",
+            p.get(),
+            head.as_str(),
+            alice.get()
+        )],
+    )
+    .await;
+    let recorded = record_forge_check_run(
+        &t.db,
+        &system("req-drift-full"),
+        (p, &head),
+        &drift(CheckConclusion::Error, Vec::new()),
+    )
+    .await
+    .expect("forge's run is recorded on a full commit");
+    assert!(recorded.created);
+    assert_eq!(check_runs(&t.db, p, &head).await.expect("list").len(), 101);
+    let snapshot = runs_for(&t.db, p, &head).await.expect("merge status");
+    assert_eq!(snapshot.len(), 101);
+    let err = report_check_run_decided(
+        &t.db,
+        &ChangeContext::new(
+            Actor::User(alice),
+            RequestId::parse("req-over").expect("id"),
+        ),
+        (p, &head),
+        alice,
+        ReportCredential(None),
+        &NewCheckRun {
+            name: CheckName::parse("ci/one-more").expect("name"),
+            ..drift(CheckConclusion::Success, Vec::new())
+        },
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("the reporters' cap still holds");
+    assert_reason(&err, ErrorCode::CheckRunLimitReached, "too_many_runs");
+    t.drop_now().await;
+}
