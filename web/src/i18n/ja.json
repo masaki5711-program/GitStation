@@ -768,7 +768,7 @@
     "none": "Webhook はまだありません。下から追加してください。",
     "origin": "宛先（オリジン）",
     "eventTypes": "イベントの種類",
-    "eventTypesHelp": "カンマか空白で区切ります。* はすべて、merge_request.* のような家族、または正確な名前。空なら * です。",
+    "eventTypesHelp": "送るイベントを選びます。「すべてのイベント」は連携用のイベントすべてです。メンテナ用のイベントは一つずつ選びます。",
     "state": "状態",
     "enabled": "有効",
     "disabled": "無効",
@@ -837,7 +837,21 @@
     "redeliverOf": "{{event}}（#{{id}}）を再送",
     "queued": "再送の順番待ちに入れました。",
     "older": "古い配信を表示",
-    "olderLoaded": "配信を {{count}} 件さらに読み込みました。"
+    "olderLoaded": "配信を {{count}} 件さらに読み込みました。",
+    "allEvents": "すべてのイベント (*)",
+    "allEventsHelp": "連携用のイベントすべて（あとから増えるものも含みます）。",
+    "eventTypesRequired": "イベントの種類を一つ以上選んでください。",
+    "classLocked": "このイベントを選べるのは、メンテナ権限を持つ人だけです。このログインでは選べません。",
+    "class": {
+      "integration": "連携用のイベント",
+      "integrationHelp": "マージリクエスト、プッシュ、チェック、作業項目。プロジェクトを追う外部ツール向けです。",
+      "maintainer": "メンテナ用のイベント",
+      "maintainerHelp": "メンバー、保護ブランチ、公開範囲、Webhook の変更。一つずつ選びます。",
+      "deployment": "デプロイ用のイベント",
+      "deploymentHelp": "デプロイ。一つずつ選びます。",
+      "other": "保存済みのその他の指定",
+      "otherHelp": "この Webhook に保存されている指定（merge_request.* のような家族など）。外すと取り除かれます。"
+    }
   },
   "notifications": {
     "title": "通知",
