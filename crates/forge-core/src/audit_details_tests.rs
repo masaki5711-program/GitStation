@@ -827,3 +827,20 @@ fn the_session_purge_row_is_audit_only_with_a_count() {
         json!({"user_id": 4, "purged_sessions": 3})
     );
 }
+
+/// The check run retention's per-project row is audit-only, counts only.
+#[test]
+fn the_check_run_retention_row_is_audit_only_with_counts() {
+    let expired = AuditDetails::CheckRunsExpired {
+        project: crate::ids::ProjectId::new(7),
+        runs: 5,
+        annotations: 12,
+        older_than_days: 180,
+    };
+    assert_eq!(expired.action(), "check_run.retention");
+    assert_eq!(expired.event_type(), None);
+    assert_eq!(
+        expired.to_value(),
+        json!({"project_id": 7, "runs": 5, "annotations": 12, "older_than_days": 180})
+    );
+}

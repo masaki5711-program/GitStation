@@ -353,6 +353,17 @@ pub enum AuditDetails {
     /// integration class) only when the report changed the conclusion.
     /// Shapes: [`CheckRunChange::to_value`].
     CheckRun(CheckRunChange),
+    /// `check_run.retention` (feat/db-check-run-retention), audit only, on
+    /// the project: one retention batch deleted `runs` check runs (last
+    /// updated more than `older_than_days` days ago, not the current head of
+    /// an open merge request) and their `annotations`. Counts only:
+    /// `{"project_id","runs","annotations","older_than_days"}`.
+    CheckRunsExpired {
+        project: ProjectId,
+        runs: i64,
+        annotations: i64,
+        older_than_days: u32,
+    },
     /// `check_namespace.granted` / `.revoked` (M3 C1), audit only, on the
     /// project the grant is for: `{"user_id","project_id","namespace"}`.
     CheckNamespaceGrant {
@@ -526,6 +537,7 @@ impl AuditDetails {
             Self::MergeSettings { change, .. } => change.action(),
             Self::ProtectedRefMergeRule(change) => change.action(),
             Self::CheckRun(change) => change.action(),
+            Self::CheckRunsExpired { .. } => "check_run.retention",
             Self::CheckNamespaceGrant { granted: true, .. } => "check_namespace.granted",
             Self::CheckNamespaceGrant { granted: false, .. } => "check_namespace.revoked",
             Self::Integration(change) => change.action(),
@@ -583,6 +595,7 @@ impl AuditDetails {
             | Self::ApprovalRule(_)
             | Self::ProtectedRefMergeRule(_)
             | Self::CheckNamespaceGrant { .. }
+            | Self::CheckRunsExpired { .. }
             | Self::Integration(_) => None,
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
@@ -978,6 +991,17 @@ impl AuditDetails {
             Self::MergeSettings { project, change } => change.to_value(*project),
             Self::ProtectedRefMergeRule(change) => change.to_value(),
             Self::CheckRun(change) => change.to_value(),
+            Self::CheckRunsExpired {
+                project,
+                runs,
+                annotations,
+                older_than_days,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "runs": runs,
+                "annotations": annotations,
+                "older_than_days": older_than_days,
+            }),
             Self::CheckNamespaceGrant {
                 user,
                 project,
@@ -1065,6 +1089,7 @@ impl AuditDetails {
             | Self::MergeSettings { .. }
             | Self::ProtectedRefMergeRule(_)
             | Self::CheckRun(_)
+            | Self::CheckRunsExpired { .. }
             | Self::CheckNamespaceGrant { .. }
             | Self::Integration(_)
             | Self::WorkItem(_) => self.to_value(),

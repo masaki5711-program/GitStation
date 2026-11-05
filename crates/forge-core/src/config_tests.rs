@@ -1314,6 +1314,42 @@ fn web_session_purge_interval_has_a_default_env_and_a_range() {
     }
 }
 
+/// `review.check_run_retention_days` (feat/db-check-run-retention, ADR-0024
+/// O3 note): default 180, env, and the 30..=3650 range (FG-SYS-0002 naming
+/// the key).
+#[test]
+fn review_check_run_retention_has_a_default_env_and_a_range() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.review.check_run_retention_days, 180);
+    for (value, n) in [("30", 30), ("3650", 3650), (" 90 ", 90)] {
+        let cfg = load(
+            None,
+            &env(&[("FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS", value)]),
+        )
+        .expect(value);
+        assert_eq!(cfg.review.check_run_retention_days, n);
+    }
+    for (value, reason) in [
+        ("0", "below_min"),
+        ("29", "below_min"),
+        ("3651", "above_max"),
+        ("-1", "invalid"),
+        ("long", "invalid"),
+    ] {
+        let err = load(
+            None,
+            &env(&[("FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS", value)]),
+        )
+        .expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("review.check_run_retention_days") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}
+
 /// `review.mergeability_fanout_max` (M3 R2, ADR-0024 §3): default 50, env,
 /// and the 1..=500 range (FG-SYS-0002 naming the key).
 #[test]

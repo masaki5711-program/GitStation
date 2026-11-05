@@ -55,6 +55,8 @@
        （86400 超）、`invalid`（整数でない）。未設定なら 300 秒。`FORGE_HOSTING_PURGE_INTERVAL_SECS` か設定ファイルの `[hosting] purge_interval_secs`
      - `config_key=review.mergeability_fanout_max`（M3 R2。target の 1 回の前進でマージできるかの確認を積む開いている MR の数の上限）: `below_min`（0）、
        `above_max`（501 以上。500 まで）、`invalid`（整数でない）。未設定なら 50。`FORGE_REVIEW_MERGEABILITY_FANOUT_MAX` か設定ファイルの `[review] mergeability_fanout_max`
+     - `config_key=review.check_run_retention_days`（チェックの実行の保持の日数）: `below_min`（29 以下。30 から）、`above_max`（3651 以上。3650 まで）、
+       `invalid`（整数でない）。未設定なら 180。`FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS` か設定ファイルの `[review] check_run_retention_days`
      - `config_key=maintenance.*`（M3 O3。リポジトリの保守、Runbook `repo-maintenance`。`FORGE_MAINTENANCE_…` か設定ファイルの `[maintenance]`）:
        `interval_days`（1〜90、既定 7）、`window_start` / `window_end`（`HH:MM`、既定 02:00 / 05:00。同じ値は `empty_window`）、
        `window_time_zone`（IANA の名前、既定 `Asia/Tokyo`。形が違えば `invalid`、DB が知らない名前は worker の起動で `unknown`）、

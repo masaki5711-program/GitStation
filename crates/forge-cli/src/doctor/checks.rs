@@ -14,6 +14,7 @@ use forge_db::Db;
 use super::{fail, ok, warn, Check};
 
 const NAME: &str = "checks.reporters";
+const RETENTION: &str = "checks.retention";
 
 /// The doctor line of `unreported` (merge rules per namespace whose project
 /// has no reporter of it) against `reporters` (active grants per
@@ -63,6 +64,41 @@ pub(super) async fn reporters_check(db: &Db) -> Check {
     }
 }
 
+/// The doctor line of the check run retention (feat/db-check-run-retention):
+/// `warn` (no FG code: nothing failed, the worker is late) while due runs
+/// remain past the window plus a day.
+pub(super) fn retention_line(backlog: &forge_db::checks::RetentionBacklog, days: u32) -> Check {
+    if backlog.due == 0 {
+        return ok(
+            RETENTION,
+            &format!("no check run past the {days}-day window is left"),
+        );
+    }
+    let more = if backlog.due >= forge_db::checks::BACKLOG_COUNT_LIMIT {
+        "at least "
+    } else {
+        ""
+    };
+    let oldest = backlog
+        .oldest_age_days
+        .map_or_else(String::new, |d| format!(", the oldest {d} days old"));
+    warn(
+        RETENTION,
+        &format!(
+            "{more}{} check run(s) past the {days}-day window are left{oldest} (is the worker's              check_run_retention task running? runbook checks-reporting, E)",
+            backlog.due
+        ),
+    )
+}
+
+/// `checks.retention`.
+pub(super) async fn retention_check(db: &Db, days: u32) -> Check {
+    match forge_db::checks::retention_backlog(db, days).await {
+        Ok(backlog) => retention_line(&backlog, days),
+        Err(e) => fail(RETENTION, e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly (rust/testing.md)
@@ -96,5 +132,37 @@ mod tests {
         assert!(matches!(c.outcome, Outcome::Ok(_)));
         let c = line(&[], &[]);
         assert!(matches!(c.outcome, Outcome::Ok(_)));
+    }
+
+    #[test]
+    fn a_retention_backlog_warns_and_none_is_ok() {
+        use forge_db::checks::RetentionBacklog;
+        let none = retention_line(&RetentionBacklog::default(), 180);
+        assert!(matches!(none.outcome, Outcome::Ok(_)));
+        let late = retention_line(
+            &RetentionBacklog {
+                due: 3,
+                oldest_age_days: Some(250),
+            },
+            180,
+        );
+        let Outcome::Warn(detail) = &late.outcome else {
+            panic!("a warning");
+        };
+        assert!(
+            detail.contains("3 check run(s)") && detail.contains("250 days"),
+            "{detail}"
+        );
+        let capped = retention_line(
+            &RetentionBacklog {
+                due: forge_db::checks::BACKLOG_COUNT_LIMIT,
+                oldest_age_days: None,
+            },
+            180,
+        );
+        let Outcome::Warn(detail) = &capped.outcome else {
+            panic!("a warning");
+        };
+        assert!(detail.starts_with("at least "), "{detail}");
     }
 }
