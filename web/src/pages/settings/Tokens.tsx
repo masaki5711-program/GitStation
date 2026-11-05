@@ -101,7 +101,7 @@ export function Tokens() {
  * - reload and close are covered by `beforeunload` in the panel.
  * A navigation the app starts by code (`navigate()`) cannot be caught without
  * a data router; none of the screens does that while the secret is shown. */
-function useLeaveGuard(active: boolean, onLeave: () => void) {
+export function useLeaveGuard(active: boolean, onLeave: () => void) {
   const navigate = useNavigate();
   const [target, setTarget] = useState<{ kind: 'link'; to: string } | { kind: 'back' } | null>(null);
   const armed = useRef(false);

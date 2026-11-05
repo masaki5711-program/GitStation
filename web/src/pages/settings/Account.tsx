@@ -21,9 +21,10 @@ import { AdminUsers } from './AdminUsers';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
 import { Notifications } from './Notifications';
+import { ServiceAccounts } from './ServiceAccounts';
 import { Tokens } from './Tokens';
 
-type Tab = 'tokens' | 'sessions' | 'notifications' | 'trash' | 'admin';
+type Tab = 'tokens' | 'sessions' | 'notifications' | 'trash' | 'admin' | 'service-accounts';
 
 export function Account({ path }: { path: string }) {
   const { t } = useTranslation();
@@ -31,7 +32,7 @@ export function Account({ path }: { path: string }) {
   const [params] = useSearchParams();
   const wanted = params.get('tab');
   const tab: Tab =
-    wanted === 'sessions' || wanted === 'notifications' || wanted === 'trash' || (wanted === 'admin' && session.user.is_admin)
+    wanted === 'sessions' || wanted === 'notifications' || wanted === 'trash' || ((wanted === 'admin' || wanted === 'service-accounts') && session.user.is_admin)
       ? wanted
       : 'tokens';
   const base = `/${path}/-/settings`;
@@ -40,7 +41,12 @@ export function Account({ path }: { path: string }) {
     { id: 'sessions', label: t('sessions.title') },
     { id: 'notifications', label: t('notifications.title') },
     { id: 'trash', label: t('trash.title') },
-    ...(session.user.is_admin ? [{ id: 'admin' as const, label: t('admin.title') }] : []),
+    ...(session.user.is_admin
+      ? [
+          { id: 'admin' as const, label: t('admin.title') },
+          { id: 'service-accounts' as const, label: t('sa.title') },
+        ]
+      : []),
   ];
   const current = tabs.find((x) => x.id === tab);
   useDocumentTitle(current === undefined ? t('account.title') : `${current.label} · ${t('account.title')}`);
@@ -67,6 +73,7 @@ export function Account({ path }: { path: string }) {
       {tab === 'notifications' && <Notifications />}
       {tab === 'trash' && <Trash />}
       {tab === 'admin' && <AdminUsers />}
+      {tab === 'service-accounts' && <ServiceAccounts base={base} />}
     </>
   );
 }
