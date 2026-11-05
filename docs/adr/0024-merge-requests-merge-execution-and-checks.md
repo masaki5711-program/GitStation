@@ -1935,3 +1935,36 @@ push のたびに計算する。両方の作成者と kanflow に知らせる」
   離れた箇所は `clean`、target とだけの衝突は数えない、上限で `incomplete`、`merge-tree` の時間切れは組に保存して返す）、
   `review/conflicts/tests.rs`（入ったときだけ両側に 1 回、古い head は読まない、相手が動いた組は書かない、古い seq・動いた head は
   書かない、target の変更と再オープンで要求、`job_failed` / `job_stale`）、`merge_request_version_routes.rs`（読める人・404・401・403）。
+
+### X6 の独立レビューで決めたこと（2026-11-06）
+
+独立レビュー（git-protocol・silent-failure）の HIGH 3 件と MEDIUM / LOW への対応。上の X6 の節と違えたところは **改訂** と書いた。
+
+- **名前の変更で「clean」に誤って下げない（HIGH、改訂）**: `diff-tree --no-renames` のパスの集合は名前の変更の行き先を片側にしか
+  持たないので、「両方が変更するパスの衝突だけを数える」は rename/modify（片側が名前を変えて同じ行を変え、もう片側が元の名前で変える）を
+  `clean` にしていた。規則を逆にした: `merge-tree` が衝突を返したら **衝突のまま** とし、`clean` に下げるのは「報告されたすべてのパスが
+  ちょうど片側だけが変更するパスで、**かつ 2 つの base の間で target が変更したパス**（`diff-tree <自分の base> <相手の base>`）」の
+  ときだけ（それは古い target を基にした側の target との衝突で、C-1 が示す）。base が同じ・差が読めない・集合が不明・一覧が空か切れた
+  ときは下げない。下げたときは `forge.review.conflict_downgraded` を info で 1 回出す。名前の変更の行き先、rename/rename、
+  ディレクトリ/ファイルは target が触れていなければ衝突のまま。**絞り込み**も、パスとそのディレクトリ（`d` と `d/x`）を重なりと数える
+  （ディレクトリ/ファイルの組を `no_overlap` で落とさない）。テストは実際の git で rename/modify、rename/rename、ディレクトリ/ファイル。
+- **見回りがスキャンを要求する（HIGH、改訂）**: worker の `mergeability_sweep` の 5 段目 `sweep_scans` が、head のある開いている MR で
+  スキャンの行が無いもの（この版の前から開いている MR、版のジョブの要求の失敗）と、再試行で答えが変わりうる理由（`git_*`・`job_failed`・
+  `job_stale`・`pair_failed`・`budget_exhausted`・`peer_moved`）で `failed` / `incomplete` に終わった行を、終わってから 5 分後に、行ごとに
+  **3 回まで**（`sweep_attempts`、追記のマイグレーション 20261123100200。見回り以外の要求で 0 に戻る）要求し、1 件ずつ info で出す
+  （`forge.review.conflict_scan_swept`、`why`・`attempt`）。
+- **スキャンの要求の失敗で版のジョブを失敗させない（HIGH）**: 版のジョブはスキャンの要求の失敗を warn（`error_code`・`request_id`、
+  `forge.review.conflict_scan_request_failed`）で出して続け、見回りが拾う。ログの `scan` は `requested` / `answered` / `not_open` /
+  `no_head` / `failed` を区別する。
+- **MEDIUM**: 予算が 0 なら git を起動しない（`budget_exhausted`）。組の git の失敗は組に保存し、ジョブの失敗にしない（再試行するのは
+  M 自身の失敗だけ。組は見回りが再要求する）。書かなかった組（相手が動いた・閉じた）は `incomplete peer_moved` として数える。
+  `failed`（`no_version`・`target_missing`・`unrelated_histories`・`budget_exhausted`）も FG-REVIEW-0022 つきで warn に出す。スキャンは
+  読んだ target の先端（`scanned_target_sha`）を持ち、API の `stale` は head・target のブランチ・target の先端のどれかが違えば true。
+  予測は相手の head（`head_sha`）を返す。**相手の MR のスキャンは積み直さない**（決定）: 組は対称で、M の新しい head のスキャンが
+  (M, P) の組をすべて書き直すので P のスキャンを積み直す必要がない（積み直すと 1 回の push が最大 50 × 20 の trial merge になる）。
+  P の行の `stale` は P 自身の head と target についてのもの。上限（50 件）を超えて M のスキャンが試さなかった P は、P の次の push か
+  見回り（`peers_capped` は再試行の理由にしない: 同じ結果になる）で決まる。
+- **LOW**: head が object id でない相手は、その組だけを飛ばしてスキャンを `incomplete peer_invalid` にする（FG-SYS-0001 で warn）。
+  `begin_scan` は前の理由を結果の保存まで残す。閉じた MR の行は `failed not_open` にし、`scanning` のまま残さない。予測の「入った」は
+  `failed` 以外の最後の結果（`last_decided`）と比べる（conflict → failed → conflict でメールを 2 回出さない）。runbook `repo-maintenance`
+  に、`merge-tree --write-tree` が書く loose オブジェクトの増え方と確かめ方を足した。
