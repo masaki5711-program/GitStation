@@ -1298,6 +1298,11 @@ pub enum WebhookCommand {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
     },
+    /// The event types a webhook may name, by class, and the classes you may subscribe to.
+    EventTypes {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
     /// One webhook: its URL, event types, state and failure count.
     View {
         #[arg(value_parser = parse_id)]

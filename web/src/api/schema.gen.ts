@@ -1326,6 +1326,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/webhooks/event-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The event types a webhook may name, each with its class, and per class whether the caller may subscribe to it (Maintainer) */
+        get: operations["get_api_v1_projects_id_webhooks_event_types"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/webhooks/{webhook_id}": {
         parameters: {
             query?: never;
@@ -2482,6 +2499,35 @@ export interface components {
             error_code: string;
             request_id: string;
             user_message: string;
+        };
+        /** @description One class of event types and whether the caller may subscribe to it. */
+        EventClassBody: {
+            /**
+             * @description `integration` (also what `*` and `<family>.*` name), `maintainer`
+             *     or `deployment` (the last two only by exact type name).
+             */
+            class: string;
+            /**
+             * @description `false` for a credential that may read but not subscribe (an agent's
+             *     token, a service account): create and update would refuse it.
+             */
+            subscribable: boolean;
+        };
+        /** @description One event type a webhook may name. */
+        EventTypeBody: {
+            /**
+             * @description `integration`, `maintainer` or `deployment` (the admin class is never
+             *     listed).
+             */
+            class: string;
+            /** @description The exact name (`merge_request.opened`). */
+            name: string;
+        };
+        /** @description The event types a webhook may name. */
+        EventTypeList: {
+            classes: components["schemas"]["EventClassBody"][];
+            /** @description Sorted by name. */
+            items: components["schemas"]["EventTypeBody"][];
         };
         /** @description The actor of an event. */
         FeedActorBody: {
@@ -7441,6 +7487,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreatedWebhook"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_webhooks_event_types: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventTypeList"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

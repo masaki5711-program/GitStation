@@ -768,7 +768,7 @@
     "none": "No webhooks yet. Add one below.",
     "origin": "Address (origin)",
     "eventTypes": "Event types",
-    "eventTypesHelp": "Separate with commas or spaces: * for every event, a family such as merge_request.*, or an exact name. Empty means *.",
+    "eventTypesHelp": "Choose the events to send. \"All events\" covers every integration event; maintainer events are chosen one by one.",
     "state": "State",
     "enabled": "Enabled",
     "disabled": "Disabled",
@@ -837,7 +837,21 @@
     "redeliverOf": "Redeliver {{event}} (#{{id}})",
     "queued": "Queued for delivery again.",
     "older": "Show older deliveries",
-    "olderLoaded": "{{count}} more deliveries loaded."
+    "olderLoaded": "{{count}} more deliveries loaded.",
+    "allEvents": "All events (*)",
+    "allEventsHelp": "Every integration event, including ones added later.",
+    "eventTypesRequired": "Choose at least one event type.",
+    "classLocked": "Only a person with the Maintainer role can choose these events; this sign-in cannot.",
+    "class": {
+      "integration": "Integration events",
+      "integrationHelp": "Merge requests, pushes, checks and work items. For tools that follow the project.",
+      "maintainer": "Maintainer events",
+      "maintainerHelp": "Members, protected branches, visibility and webhook changes. Chosen one by one.",
+      "deployment": "Deployment events",
+      "deploymentHelp": "Deployments. Chosen one by one.",
+      "other": "Other entries kept",
+      "otherHelp": "Saved with this webhook, such as a family like merge_request.*. Uncheck to remove."
+    }
   },
   "notifications": {
     "title": "Notifications",

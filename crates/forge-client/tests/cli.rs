@@ -962,6 +962,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "checks report",
             "checks list",
             "webhook list",
+            "webhook event-types",
             "webhook view",
             "webhook create",
             "webhook update",

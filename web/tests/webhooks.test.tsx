@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { apiError, mockServer, SESSION, type Handler } from './mock';
 import { json, renderApp } from './render';
-import { HOOKS, SECRET, hookRoutes, webhook } from './webhook-fixtures';
+import { EVENT_TYPES, HOOKS, SECRET, eventTypes, hookRoutes, webhook } from './webhook-fixtures';
 
 const CSRF = SESSION.csrf_token;
 const PATH = '/acme/forge-web/-/webhooks';
@@ -115,15 +115,17 @@ describe('create', () => {
     fireEvent.change(screen.getByLabelText('Payload URL'), {
       target: { value: 'https://hooks.example.test:8443/t/abc' },
     });
-    fireEvent.change(screen.getByLabelText('Event types'), {
-      target: { value: 'merge_request.*, review.requested' },
-    });
+    const group = await screen.findByRole('group', { name: 'Event types' });
+    // Every event is the default; turn it off and pick two events.
+    fireEvent.click(within(group).getByRole('checkbox', { name: /All events/ }));
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'merge_request.opened' }));
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'member.added' }));
     await click('Add webhook');
     const panel = await screen.findByTestId('webhook-secret');
     const call = server.to('POST', HOOKS)[0];
     expect(call?.body).toEqual({
       url: 'https://hooks.example.test:8443/t/abc',
-      event_types: ['merge_request.*', 'review.requested'],
+      event_types: ['member.added', 'merge_request.opened'],
     });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
     expect(within(panel).getByTestId('webhook-secret-value').textContent).toBe(SECRET);
@@ -143,17 +145,63 @@ describe('create', () => {
     expect(document.activeElement?.id).toBe('webhooks-title');
   });
 
-  it('sends * when no event type is typed', async () => {
+  it('sends * by default (all events checked)', async () => {
     const { server } = await open({
       [`POST ${HOOKS}`]: () => json(201, { webhook: webhook(4), secret: SECRET }),
     });
     fireEvent.change(screen.getByLabelText('Payload URL'), { target: { value: 'https://hooks.example.test:8443/' } });
-    fireEvent.change(screen.getByLabelText('Event types'), { target: { value: '' } });
+    const group = await screen.findByRole('group', { name: 'Event types' });
+    expect(within(group).getByRole<HTMLInputElement>('checkbox', { name: /All events/ }).checked).toBe(true);
     await click('Add webhook');
     await waitFor(() => {
       expect(server.to('POST', HOOKS)).toHaveLength(1);
     });
     expect((server.to('POST', HOOKS)[0]?.body as { event_types: string[] }).event_types).toEqual(['*']);
+  });
+
+  it('groups the event types by class; all events covers the integration class only', async () => {
+    await open();
+    const group = await screen.findByRole('group', { name: 'Event types' });
+    const integration = within(group).getByRole('group', { name: 'Integration events' });
+    const maintainer = within(group).getByRole('group', { name: 'Maintainer events' });
+    expect(within(integration).getAllByRole('checkbox')).toHaveLength(3);
+    expect(within(maintainer).getAllByRole('checkbox')).toHaveLength(1);
+    // `*` is on: the integration events show as covered and cannot be toggled.
+    for (const box of within(integration).getAllByRole<HTMLInputElement>('checkbox')) {
+      expect(box.checked).toBe(true);
+      expect(box.disabled).toBe(true);
+    }
+    const member = within(maintainer).getByRole<HTMLInputElement>('checkbox', { name: 'member.added' });
+    expect(member.checked).toBe(false);
+    expect(member.disabled).toBe(false);
+  });
+
+  it('does not send when no event type is chosen, and says why', async () => {
+    const { server } = await open();
+    fireEvent.change(screen.getByLabelText('Payload URL'), { target: { value: 'https://hooks.example.test:8443/' } });
+    const group = await screen.findByRole('group', { name: 'Event types' });
+    fireEvent.click(within(group).getByRole('checkbox', { name: /All events/ }));
+    await click('Add webhook');
+    expect((await screen.findAllByText('Choose at least one event type.')).length).toBeGreaterThan(0);
+    expect(group.getAttribute('aria-describedby')).toContain('error');
+    expect(server.to('POST', HOOKS)).toHaveLength(0);
+  });
+
+  it('disables the classes this sign-in may not subscribe to, with the reason', async () => {
+    await open({ [`GET ${EVENT_TYPES}`]: () => json(200, eventTypes({ integration: false, maintainer: false })) });
+    const group = await screen.findByRole('group', { name: 'Event types' });
+    const all = within(group).getByRole<HTMLInputElement>('checkbox', { name: /All events/ });
+    expect(all.disabled).toBe(true);
+    const maintainer = within(group).getByRole('group', { name: 'Maintainer events' });
+    const box = within(maintainer).getByRole<HTMLInputElement>('checkbox', { name: 'member.added' });
+    expect(box.disabled).toBe(true);
+    const reason = document.getElementById(maintainer.getAttribute('aria-describedby')?.split(' ').at(-1) ?? '');
+    expect(reason?.textContent).toContain('Only a person with the Maintainer role can choose');
+  });
+
+  it('shows the failure to list the event types', async () => {
+    await open({ [`GET ${EVENT_TYPES}`]: () => apiError(500, 'Event types could not be read.', 'req-et-1') });
+    expect(await screen.findByText('Event types could not be read.')).toBeTruthy();
   });
 
   it('asks for the URL before sending anything', async () => {
@@ -186,7 +234,12 @@ describe('edit, rotate, delete', () => {
     const url = within(dialog).getByLabelText('New payload URL (leave empty to keep the current one)');
     expect((url as HTMLInputElement).value).toBe('');
     expect(within(dialog).getByText(/Current origin/).textContent).toContain(ORIGIN);
-    fireEvent.change(within(dialog).getByLabelText('Event types'), { target: { value: '*' } });
+    // The stored `merge_request.*` family stays as its own entry; add `*`.
+    const group = await within(dialog).findByRole('group', { name: 'Event types' });
+    expect(
+      within(group).getByRole<HTMLInputElement>('checkbox', { name: /merge_request\.\*/ }).checked,
+    ).toBe(true);
+    fireEvent.click(within(group).getByRole('checkbox', { name: /All events/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => {
       expect(server.to('PATCH', `${HOOKS}/3`)).toHaveLength(1);
@@ -259,7 +312,8 @@ describe('a11y details', () => {
     });
     await click(`Edit ${ORIGIN}`);
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Event types'), { target: { value: '*' } });
+    const group = await within(dialog).findByRole('group', { name: 'Event types' });
+    fireEvent.click(within(group).getByRole('checkbox', { name: /All events/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     const cancel = await within(dialog).findByRole('button', { name: 'Cancel' });
     await waitFor(() => {

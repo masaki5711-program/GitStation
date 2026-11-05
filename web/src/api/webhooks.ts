@@ -179,3 +179,18 @@ export function usePutNotificationPreferences() {
     },
   });
 }
+
+export type EventTypeCatalog = S['EventTypeList'];
+
+/** The event types a webhook may name, and which classes the caller may
+ * subscribe to (the form's checkboxes). */
+export function useWebhookEventTypes(project: number) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ['webhook-event-types', project] as const,
+    queryFn: ({ signal }) =>
+      call(() =>
+        api.GET('/api/v1/projects/{id}/webhooks/event-types', { signal, params: { path: { id: project } } }),
+      ),
+  });
+}

@@ -193,6 +193,34 @@ fn decide_classes(
     Ok(())
 }
 
+/// One event type a webhook may name, with its class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscribableType {
+    pub name: &'static str,
+    pub class: forge_core::VisibilityClass,
+}
+
+/// One class a webhook may name and whether the caller may subscribe to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubscribableClass {
+    pub class: forge_core::VisibilityClass,
+    pub subscribable: bool,
+}
+
+/// What `GET …/webhooks/event-types` answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventTypeCatalog {
+    pub items: Vec<SubscribableType>,
+    pub classes: Vec<SubscribableClass>,
+}
+
+/// The classes a webhook may name (never admin), in the order of the docs.
+const WEBHOOK_CLASSES: [forge_core::VisibilityClass; 3] = [
+    forge_core::VisibilityClass::Integration,
+    forge_core::VisibilityClass::Maintainer,
+    forge_core::VisibilityClass::Deployment,
+];
+
 fn absent(resource: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::NotFound)
         .with_context("resource", resource)
@@ -225,6 +253,42 @@ impl Webhooks {
     pub async fn list(&self, proof: &Authorized<ProjectCtx>) -> Result<Vec<Webhook>, ForgeError> {
         require(proof.action(), Action::WebhookRead)?;
         db::list(&self.db, *proof.id()).await
+    }
+
+    /// `GET …/webhooks/event-types` (`WebhookRead`): every event type a
+    /// webhook may name (the admin class never), and per class whether the
+    /// caller may subscribe to it — the decision `create` / `update` make
+    /// (`WebhookDeliver` through `authorize()`).
+    pub fn event_types(
+        &self,
+        proof: &Authorized<ProjectCtx>,
+    ) -> Result<EventTypeCatalog, ForgeError> {
+        require(proof.action(), Action::WebhookRead)?;
+        let mut items: Vec<SubscribableType> = forge_core::EventType::ALL
+            .into_iter()
+            .map(|t| SubscribableType {
+                name: t.as_str(),
+                class: t.visibility_class(),
+            })
+            .filter(|t| WEBHOOK_CLASSES.contains(&t.class))
+            .collect();
+        items.sort_by_key(|t| t.name);
+        let classes = WEBHOOK_CLASSES
+            .into_iter()
+            .map(|class| SubscribableClass {
+                class,
+                subscribable: authorize(
+                    proof.principal(),
+                    Action::WebhookDeliver,
+                    &Resource::ProjectEvents {
+                        project: proof.ctx().view(),
+                        class,
+                    },
+                )
+                .is_ok(),
+            })
+            .collect();
+        Ok(EventTypeCatalog { items, classes })
     }
 
     /// `GET …/webhooks/{id}` (`WebhookRead`): another project's or none is
