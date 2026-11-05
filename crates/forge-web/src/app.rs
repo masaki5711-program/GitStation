@@ -1385,6 +1385,17 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::mergeability,
         )
         .responds::<mr::MergeabilityBody>(Verb::Get, mr::MERGEABILITY)
+        // M3 X6 (plan 04 C-2): predicted conflicts with other open merge
+        // requests, read like the merge request itself.
+        .route_with(
+            Verb::Get,
+            mr::CONFLICTS,
+            Action::MergeRequestRead,
+            "A merge request's predicted conflicts with other open merge requests on its target, as last scanned (as the repository browse API)",
+            mr::CONFLICTS_OF,
+            mr::conflicts,
+        )
+        .responds::<mr::ConflictsBody>(Verb::Get, mr::CONFLICTS)
         // M3 R3 (ADR-0024 §6, §12): discussions — read like the merge
         // request, started and answered as `MergeRequestComment`, resolved
         // as `DiscussionResolve` on the thread.

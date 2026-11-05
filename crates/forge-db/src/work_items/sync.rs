@@ -417,6 +417,7 @@ impl Subscriber for WorkItemSync {
                 | EventType::MergeRequestPushed
                 | EventType::MergeRequestConflictDetected
                 | EventType::MergeRequestConflictResolved
+                | EventType::MergeRequestConflictPredicted
                 | EventType::MergeRequestCommented
                 | EventType::MergeRequestMerged
                 | EventType::MergeRequestSourceBranchDeleted

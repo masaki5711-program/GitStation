@@ -15,6 +15,7 @@ pub mod browse;
 pub mod checks;
 pub mod cli;
 pub mod config;
+pub mod conflicts;
 pub mod coverage;
 pub mod credential;
 pub mod error;

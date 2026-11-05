@@ -47,6 +47,7 @@ pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, UserNa
 
 mod after_version;
 pub mod approvals;
+pub mod conflicts;
 pub mod discussions;
 mod fields;
 mod merge_conditions;
@@ -60,11 +61,13 @@ pub mod versions;
 mod versions_carry;
 pub mod work_items;
 
+pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
 pub use forge_db::review::settings::loosens as settings_loosen_approvals;
 pub use forge_db::review::{
     CodeownersEnforcement, PurgeOutcome, RefreshRequest, SettingsOutcome, StoredMergeSettings,
     StoredMergeability, StoredVersion,
 };
+pub use forge_db::review::{StoredPrediction, StoredScan};
 pub use merge_conditions::MergeStatus;
 pub use mergeability::{check, CheckReport, Mergeability};
 pub use merges::{
@@ -359,6 +362,18 @@ impl Review {
         mr: forge_core::MergeRequestId,
     ) -> Result<Option<review::StoredMergeability>, ForgeError> {
         review::mergeability(&self.db, mr).await
+    }
+
+    /// The stored conflict scan of merge request `mr` and its current
+    /// `conflict` / `failed` predictions (M3 X6; both heads current, both
+    /// open, on the same target). Never enqueues a scan.
+    pub async fn conflicts(
+        &self,
+        mr: forge_core::MergeRequestId,
+    ) -> Result<(Option<StoredScan>, Vec<StoredPrediction>), ForgeError> {
+        let scan = review::conflict_scan(&self.db, mr).await?;
+        let predictions = review::conflict_predictions(&self.db, mr).await?;
+        Ok((scan, predictions))
     }
 
     // ── writes, each decided again inside its transaction ──

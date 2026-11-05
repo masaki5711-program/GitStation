@@ -126,6 +126,16 @@ pub enum EventType {
     /// merged". Deduplicated by
     /// `merge_request_conflict_resolved:<merge_request_id>:<check_seq>`.
     MergeRequestConflictResolved,
+    /// `merge_request.conflict_predicted` (M3 X6, plan 04 C-2, ADR-0024
+    /// Amendment X6): the conflict scan predicts that this merge request
+    /// and another open one on the same target branch (drafts included)
+    /// conflict — they change a common path and `merge-tree` of their two
+    /// heads conflicts there. One event per side (the aggregate is each
+    /// merge request, the payload names the other), written by the scan
+    /// job (actor `system`) only when the pair enters "conflict" (not
+    /// while it stays so). Deduplicated by
+    /// `merge_request_conflict_predicted:<merge_request_id>:<other_id>:<prediction_seq>`.
+    MergeRequestConflictPredicted,
     /// `merge_request.commented` (M3 R3, ADR-0024 §6): a note was added to
     /// a discussion, or a discussion was resolved or unresolved
     /// (`data.action` = `note_added` / `thread_resolved` /
@@ -188,7 +198,7 @@ pub enum EventType {
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 37] = [
+    pub const ALL: [EventType; 38] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -215,6 +225,7 @@ impl EventType {
         EventType::MergeRequestPushed,
         EventType::MergeRequestConflictDetected,
         EventType::MergeRequestConflictResolved,
+        EventType::MergeRequestConflictPredicted,
         EventType::MergeRequestCommented,
         EventType::MergeRequestMerged,
         EventType::MergeRequestSourceBranchDeleted,
@@ -257,6 +268,7 @@ impl EventType {
             EventType::MergeRequestPushed => "merge_request.pushed",
             EventType::MergeRequestConflictDetected => "merge_request.conflict_detected",
             EventType::MergeRequestConflictResolved => "merge_request.conflict_resolved",
+            EventType::MergeRequestConflictPredicted => "merge_request.conflict_predicted",
             EventType::MergeRequestCommented => "merge_request.commented",
             EventType::MergeRequestMerged => "merge_request.merged",
             EventType::MergeRequestSourceBranchDeleted => "merge_request.source_branch_deleted",
@@ -297,6 +309,7 @@ impl EventType {
             | EventType::MergeRequestPushed
             | EventType::MergeRequestConflictDetected
             | EventType::MergeRequestConflictResolved
+            | EventType::MergeRequestConflictPredicted
             | EventType::MergeRequestCommented
             | EventType::MergeRequestMerged
             | EventType::MergeRequestSourceBranchDeleted

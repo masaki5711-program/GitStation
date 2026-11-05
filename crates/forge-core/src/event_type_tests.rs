@@ -122,6 +122,7 @@ fn all_lists_every_event_type_once() {
             "merge_request.pushed",
             "merge_request.conflict_detected",
             "merge_request.conflict_resolved",
+            "merge_request.conflict_predicted",
             "merge_request.commented",
             "merge_request.merged",
             "merge_request.source_branch_deleted",

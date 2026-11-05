@@ -33,6 +33,18 @@ git が自分のロックを消しているので、**何も消さない**（そ
 待つので、loose の ref が 100 000 本を超える規模ではこの上限に近い — `repositories.refs` の warn（既定 100 000）がその目安。マージは
 マージのロックで pack-refs と重ならない。push が 10 秒待っても取れなければ、その push は失敗する（利用者がやり直せば通る）。
 
+## 衝突の予測が書く参照されないオブジェクト（M3 X6）
+
+衝突の予測（`merge_request.conflict_scan`）は、重なる組ごとに `git merge-tree --write-tree` を動かし、参照されない木と blob を
+**loose オブジェクトとして** 書く。1 回のスキャンで最大 20 組（MR の新しい head・target の変更・再オープン・見回りの再要求のたびに）。
+MR の判定（C-1）より件数が多いので、開いている MR の多いリポジトリでは loose オブジェクトが速く増える。
+
+- 増え方を見る（読み取りのみ）: `git --git-dir <storage path> count-objects -v`（`count` / `size`）。保守の台帳の前後の値と比べる。
+- 定期の保守（猶予つきの prune、既定 24 時間以上）が消す。保守の間隔より速く増えて、ディスクの空きが減るとき:
+  `[MUTATING — needs approval]` そのリポジトリの保守を前倒しする（下の Mitigate の `forge admin repo maintain`。戻し: 不要）。
+- 予測そのものを止める設定は無い（M3）。増え方が問題になったら、開発者（Claude）に `count-objects -v` の値とスキャンの件数
+  （`forge.review.conflict_scanned` のログ）を渡す。
+
 ## Trigger
 
 - `forge doctor` の `repositories.maintenance` が FG-GIT-0018

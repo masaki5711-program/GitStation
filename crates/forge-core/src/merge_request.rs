@@ -87,6 +87,9 @@ pub enum MergeRequestTransition {
     ConflictDetect,
     /// The mergeability check flipped cannot -> can be merged (M3 R2).
     ConflictResolve,
+    /// The conflict scan predicted a conflict with another open merge
+    /// request (M3 X6, plan 04 C-2): one per side of the pair.
+    ConflictPredict,
     /// A note was added to a discussion, or a discussion was resolved or
     /// unresolved (M3 R3: one event type, `data.action` tells which).
     Comment,
@@ -112,6 +115,7 @@ impl MergeRequestTransition {
         Self::Push,
         Self::ConflictDetect,
         Self::ConflictResolve,
+        Self::ConflictPredict,
         Self::Comment,
         Self::Merge,
         Self::SourceBranchDelete,
@@ -130,6 +134,7 @@ impl MergeRequestTransition {
             Self::Push => EventType::MergeRequestPushed,
             Self::ConflictDetect => EventType::MergeRequestConflictDetected,
             Self::ConflictResolve => EventType::MergeRequestConflictResolved,
+            Self::ConflictPredict => EventType::MergeRequestConflictPredicted,
             Self::Comment => EventType::MergeRequestCommented,
             Self::Merge => EventType::MergeRequestMerged,
             Self::SourceBranchDelete => EventType::MergeRequestSourceBranchDeleted,
@@ -211,6 +216,26 @@ pub enum MergeRequestChange {
         check_seq: i64,
         head_sha: ObjectId,
         target_sha: ObjectId,
+    },
+    /// `merge_request.conflict_predicted` (M3 X6, plan 04 C-2): the scan
+    /// found `head_sha` of this merge request and `other_head_sha` of
+    /// `other_merge_request` (`!other_iid`, same project and
+    /// `target_branch`) conflicting in a path both change. One change per
+    /// side; `prediction_seq` counts how often the pair entered "conflict"
+    /// (the dedup key). `conflict_files`: how many such paths
+    /// (`files_truncated`: more exist); the paths stay in the logs and the
+    /// stored prediction, never in events.
+    ConflictPredicted {
+        merge_request: MergeRequestId,
+        iid: i64,
+        other_merge_request: MergeRequestId,
+        other_iid: i64,
+        head_sha: ObjectId,
+        other_head_sha: ObjectId,
+        target_branch: RefName,
+        prediction_seq: i64,
+        conflict_files: usize,
+        files_truncated: bool,
     },
     /// `merge_request.commented` (M3 R3): `action` on discussion
     /// `discussion` (`note`: the note added, `None` for a resolution;
@@ -296,6 +321,7 @@ impl MergeRequestChange {
             Self::Pushed { .. } => MergeRequestTransition::Push,
             Self::ConflictDetected { .. } => MergeRequestTransition::ConflictDetect,
             Self::ConflictResolved { .. } => MergeRequestTransition::ConflictResolve,
+            Self::ConflictPredicted { .. } => MergeRequestTransition::ConflictPredict,
             Self::Commented { .. } => MergeRequestTransition::Comment,
             Self::Merged { .. } => MergeRequestTransition::Merge,
             Self::SourceBranchDeleted { .. } => MergeRequestTransition::SourceBranchDelete,
@@ -315,6 +341,7 @@ impl MergeRequestChange {
             | Self::Pushed { merge_request, .. }
             | Self::ConflictDetected { merge_request, .. }
             | Self::ConflictResolved { merge_request, .. }
+            | Self::ConflictPredicted { merge_request, .. }
             | Self::Commented { merge_request, .. }
             | Self::Merged { merge_request, .. }
             | Self::SourceBranchDeleted { merge_request, .. }
@@ -332,7 +359,9 @@ impl MergeRequestChange {
     /// (`<prefix>:<merge_request_id>:<revision>`, server ids only;
     /// `merge_request_pushed:<merge_request_id>:<head_sha>` for a push,
     /// ADR-0024 §6; `<prefix>:<merge_request_id>:<check_seq>` for a
-    /// conflict flip, M3 R2; [`CommentAction::dedup_prefix`] for a
+    /// conflict flip, M3 R2;
+    /// `<prefix>:<merge_request_id>:<other_id>:<prediction_seq>` for a
+    /// predicted conflict, M3 X6; [`CommentAction::dedup_prefix`] for a
     /// comment or a resolution, M3 R3).
     pub fn dedup_prefix(&self) -> &'static str {
         match self {
@@ -344,6 +373,7 @@ impl MergeRequestChange {
             Self::Pushed { .. } => "merge_request_pushed",
             Self::ConflictDetected { .. } => "merge_request_conflict_detected",
             Self::ConflictResolved { .. } => "merge_request_conflict_resolved",
+            Self::ConflictPredicted { .. } => "merge_request_conflict_predicted",
             Self::Commented { action, .. } => action.dedup_prefix(),
             Self::Merged { .. } => "merge_request_merged",
             Self::SourceBranchDeleted { .. } => "merge_source_deleted",
@@ -359,7 +389,9 @@ impl MergeRequestChange {
     /// `{"merge_request_id","iid","version","head_sha","previous_head","pushed_by"}`,
     /// ConflictDetected `{"merge_request_id","iid","check_seq","head_sha","target_sha",
     /// "conflict_files","files_truncated"}`, ConflictResolved
-    /// `{"merge_request_id","iid","check_seq","head_sha","target_sha"}`, Commented
+    /// `{"merge_request_id","iid","check_seq","head_sha","target_sha"}`, ConflictPredicted
+    /// `{"merge_request_id","iid","other_merge_request_id","other_iid","head_sha",
+    /// "other_head_sha","target_branch","prediction_seq","conflict_files","files_truncated"}`, Commented
     /// `{"merge_request_id","iid","action","discussion_id","kind","note_id",
     /// "discussion_started"}`, Merged `{"merge_request_id","iid","merge_id","method",
     /// "target_branch","target_sha","merged_sha","head_sha","merged_by"}`,
@@ -457,6 +489,29 @@ impl MergeRequestChange {
                 "check_seq": check_seq,
                 "head_sha": head_sha.as_str(),
                 "target_sha": target_sha.as_str(),
+            }),
+            Self::ConflictPredicted {
+                merge_request,
+                iid,
+                other_merge_request,
+                other_iid,
+                head_sha,
+                other_head_sha,
+                target_branch,
+                prediction_seq,
+                conflict_files,
+                files_truncated,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "other_merge_request_id": other_merge_request.get(),
+                "other_iid": other_iid,
+                "head_sha": head_sha.as_str(),
+                "other_head_sha": other_head_sha.as_str(),
+                "target_branch": target_branch.as_str(),
+                "prediction_seq": prediction_seq,
+                "conflict_files": conflict_files,
+                "files_truncated": files_truncated,
             }),
             Self::Commented {
                 merge_request,

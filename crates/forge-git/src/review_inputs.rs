@@ -94,15 +94,55 @@ impl Git {
         max_paths: usize,
         timeout: Duration,
     ) -> Result<ChangedPaths, ForgeError> {
+        self.diff_tree_paths(storage, id, (base, head), None, max_paths, timeout)
+            .await
+    }
+
+    /// The paths deleted between `base` and `head` (`--diff-filter=D`,
+    /// renames counted as a deletion; M3 X6: the conflict scan's directory
+    /// renames), as [`Git::changed_paths`].
+    pub async fn deleted_paths(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        base: &ObjectId,
+        head: &ObjectId,
+        max_paths: usize,
+        timeout: Duration,
+    ) -> Result<ChangedPaths, ForgeError> {
+        self.diff_tree_paths(
+            storage,
+            id,
+            (base, head),
+            Some("--diff-filter=D"),
+            max_paths,
+            timeout,
+        )
+        .await
+    }
+
+    async fn diff_tree_paths(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        (base, head): (&ObjectId, &ObjectId),
+        filter: Option<&'static str>,
+        max_paths: usize,
+        timeout: Duration,
+    ) -> Result<ChangedPaths, ForgeError> {
         let repo = Self::repo_dir(storage, id)?;
         // 4 KiB per path at most, plus the NUL.
         let cap = max_paths.saturating_mul(4097).max(4096);
-        let (output, truncated) = self
+        let mut command = self
             .command("diff-tree")
             .arg("--no-renames")
             .arg("-r")
             .arg("-z")
-            .arg("--name-only")
+            .arg("--name-only");
+        if let Some(filter) = filter {
+            command = command.arg(filter);
+        }
+        let (output, truncated) = command
             .revision(Revision::object_id(base.as_str())?)
             .revision(Revision::object_id(head.as_str())?)
             .repo(&repo)

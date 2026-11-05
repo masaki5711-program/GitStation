@@ -148,6 +148,24 @@ async fn changed_paths_count_a_rename_as_both_paths() {
     assert_eq!(capped, ChangedPaths::TooMany);
 }
 
+/// M3 X6: the deleted paths only — a rename's old path, not its new one,
+/// nor a modified path.
+#[tokio::test]
+async fn deleted_paths_list_only_what_was_removed() {
+    let f = fixture().await;
+    let base = f.commit(&[("src/a.rs", b"one\n"), ("docs/x.md", b"x\n")], None);
+    let head = f.commit(
+        &[("src/b.rs", b"one\n"), ("docs/x.md", b"y\n")],
+        Some(&base),
+    );
+    let paths = f
+        .git
+        .deleted_paths(&f.root, f.id, &base, &head, 100, T)
+        .await
+        .expect("diff");
+    assert_eq!(paths, ChangedPaths::Complete(vec!["src/a.rs".to_owned()]));
+}
+
 #[tokio::test]
 async fn range_commits_are_capped() {
     let f = fixture().await;

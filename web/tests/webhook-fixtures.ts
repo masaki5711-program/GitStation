@@ -79,7 +79,7 @@ export function hookRoutes(over: Record<string, Handler> = {}): Record<string, H
 export const PREFS = {
   email_enabled: true,
   language: null,
-  kinds: ['mr_approved', 'mr_merged', 'mr_commented'],
+  kinds: ['mr_approved', 'mr_merged', 'mr_commented', 'mr_conflict_predicted'],
   muted_kinds: ['mr_commented'],
 };
 

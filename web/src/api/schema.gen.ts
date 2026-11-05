@@ -774,6 +774,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A merge request's predicted conflicts with other open merge requests on its target, as last scanned (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_conflicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/discussions": {
         parameters: {
             query?: never;
@@ -2006,6 +2023,85 @@ export interface components {
             diff: components["schemas"]["DiffBody"];
             from: components["schemas"]["RevBody"];
             to: components["schemas"]["RevBody"];
+        };
+        /** @description One current prediction. */
+        ConflictPredictionBody: {
+            /** @description UTC, RFC 3339. */
+            checked_at: string;
+            /**
+             * @description The conflicted paths both change (at most 100;
+             *     `conflicts_truncated` beyond).
+             */
+            conflicts: string[];
+            conflicts_truncated: boolean;
+            draft: boolean;
+            /**
+             * @description The other merge request's head the prediction is about (its current
+             *     head).
+             */
+            head_sha: string;
+            /**
+             * Format: int64
+             * @description The other merge request's number in the project.
+             */
+            iid: number;
+            /** @description `conflict` (predicted) or `failed` (could not be decided). */
+            outcome: string;
+            /**
+             * @description `failed`: `unrelated_histories`, `git_timeout`, `git_busy`,
+             *     `git_failed`.
+             */
+            reason: string | null;
+        };
+        /** @description The last scan of the merge request. */
+        ConflictScanBody: {
+            /** Format: int32 */
+            pairs_skipped: number;
+            /** Format: int32 */
+            pairs_tried: number;
+            /**
+             * Format: int32
+             * @description Other open merge requests considered, trial merges run, candidates
+             *     left out by a cap or the time budget.
+             */
+            peers: number;
+            /**
+             * @description `incomplete`: `peers_capped`, `pairs_capped`, `budget_exhausted`,
+             *     `pair_failed`; `failed`: `no_version`, `target_missing`,
+             *     `unrelated_histories`, `git_timeout`, `git_busy`, `git_failed`,
+             *     `job_failed`, `job_stale`.
+             */
+            reason: string | null;
+            /** @description UTC, RFC 3339. */
+            scanned_at: string | null;
+            scanned_head_sha: string | null;
+            /** @description The target tip the finished scan read. */
+            scanned_target_sha: string | null;
+            /**
+             * @description The finished scan looked at another head, target branch or target
+             *     tip than the current ones (its predictions about the head still
+             *     stand; a new head is scanned by the version job, a moved target by
+             *     the next push).
+             */
+            stale: boolean;
+            /**
+             * @description `none` (never scanned), `pending`, `scanning`, `scanned`,
+             *     `incomplete` (some pairs were not tried: see `reason`) or `failed`.
+             */
+            status: string;
+        };
+        /** @description A merge request's predicted conflicts. */
+        ConflictsBody: {
+            /** @description The merge request's current head (`null` before its first version). */
+            head_sha: string | null;
+            /** Format: int64 */
+            iid: number;
+            /**
+             * @description By the other merge request's number; only pairs whose two heads are
+             *     both merge requests' current heads.
+             */
+            predictions: components["schemas"]["ConflictPredictionBody"][];
+            scan: components["schemas"]["ConflictScanBody"];
         };
         /** @description `POST /api/v1/groups` and `…/{id}/subgroups`. */
         CreateGroup: {
@@ -6132,6 +6228,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionCompareBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_conflicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConflictsBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

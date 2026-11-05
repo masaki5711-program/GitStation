@@ -581,6 +581,21 @@ async fn finish_steps(
         "projects.purge.finish.merge_request_mergeability",
     )
     .await?;
+    // M3 X6: the conflict predictions reference the merge requests.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_conflict_pairs WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_conflict_pairs",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_conflict_scans WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_conflict_scans",
+    )
+    .await?;
     // M3 I1b: the work item links reference the merge requests (the work
     // items and the events' work items stay: they name no project row).
     delete_rows(
