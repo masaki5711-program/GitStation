@@ -1885,3 +1885,53 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   この条件では判定しない（計画 02 F-5 は kanflow の checks の提供者 `kanflow/work-item` などの必須のチェックで行う、§10）。
   したがって、完全な自動マージを既定とする構成でも、この条件を **人の承認の代わりに数えてはならない**（人の判断が要るなら承認の
   ルール・保護ブランチの最低の承認数・CODEOWNERS を使う）。
+
+## 実装で決めたこと（X6 `feat/git-conflict-prediction`、2026-11-05）— MR 同士の衝突の予測（計画 04 C-2）
+
+計画 04 C-2・計画 11 §5.7 X6 の推奨（「まず変更ファイルの重なりで絞り、重なる組だけ `merge-tree` で試す。下書きも対象。
+push のたびに計算する。両方の作成者と kanflow に知らせる」）をそのまま採った。決めたことは次のとおり。
+
+- **予測は助言**: マージを止めない。マージを止めるのは C-1（§3）の判定と `evaluate_merge()` のまま。`BlockReason` は足さない。
+- **きっかけ**: 版のジョブが新しい head のあとに（`request_scan_for_head`。`pending` のスキャン、または同じ head と target で
+  やり直しても同じ答えになる理由で終わったスキャンがあれば要求しない）、target の変更（編集のトランザクションの中）、再オープン
+  （同じく）。target が進んだだけでは要求しない（2 つの head は変わらない。変更ファイルの重なりが少し変わるのは次の push で拾う）。
+  読み取りでは積まない（R2 の決定 6 と同じ）。
+- **1 回のスキャン**（ジョブ `merge_request.conflict_scan`、dedup `mr_conflict_scan:<mr_id>:<scan_seq>`、R2 の `check_seq` と同じ守り）:
+  MR M（記録した head H、target T）と、T に向けて開いている他の MR（**下書きを含む**、head のあるもの）を最近更新された順に
+  **50 件**まで。T の先端との merge-base からの変更パス（`merge-base`、`diff-tree --no-renames`、各 10 秒、1 000 件まで）で絞り、
+  重ならない組は `no_overlap`（`merge-tree` を動かさない）。重なる組だけ `merge-tree --write-tree H P` を **20 組**まで、各 30 秒、
+  スキャン全体の git の時間は **120 秒**まで（ジョブの時間切れは 180 秒）。git は forge-git の 1 つの包み（引数のベクタ、
+  `--end-of-options`、検証済みのオブジェクト ID、時間切れ、git の同時実行の枠）だけを使い、新しい git の呼び出しは足していない。
+- **何を衝突とするか**: `merge-tree` の衝突のうち **両方が変更するパス** にあるものだけを予測の衝突にする。片方だけが変更するパスの
+  衝突は、その側が古い target を基にしていて target と衝突しているもの（C-1 が `cannot_be_merged` で示す）なので、2 つの MR の
+  衝突とは数えない（`clean`）。片方の変更パスが上限を超える・UTF-8 でないときは集合が不明なので、組を候補に残し、衝突のパスを
+  すべて数える（黙って「衝突なし」にしない）。衝突の一覧が切れたときも衝突とする。
+- **決まらないこと**: 版なし `no_version`・target なし `target_missing`・M に共通の履歴なし `unrelated_histories` はスキャンの `failed`。
+  相手と共通の履歴が無い組は組の `failed unrelated_histories`。M の git の失敗はスキャンを `failed git_*` で保存してから返す
+  （worker が再試行）。組の git の失敗は組を `failed git_*` で保存し、スキャンは `incomplete pair_failed`、最初の失敗を保存の後に返す。
+  上限・時間の予算で試さなかった組は数え（`pairs_skipped`）、スキャンは `incomplete`（`peers_capped`・`pairs_capped`・
+  `budget_exhausted`）。どれも **新しいコード FG-REVIEW-0022** ConflictPredictionIncomplete（warn、HTTP では返さない、
+  runbook `merge-request-mergeability`）でログに 1 回出す。最後まで失敗したジョブは `failed job_failed`、`pending` / `scanning` のまま
+  生きているジョブの無い行は worker の見回り（`mergeability_sweep` の 4 段目）が `failed job_stale` にする。
+- **状態の置き場**: 派生の表 2 つ（追記のマイグレーション 20261123100000、`tables.toml` の `kind = "derived"`、プロジェクトの purge で消す）。
+  `merge_request_conflict_scans`（MR ごとに 1 行）と `merge_request_conflict_pairs`（順序のない組ごとに 1 行、`low_mr_id < high_mr_id`、
+  見た 2 つの head・target・`outcome` no_overlap / clean / conflict / failed・両方が変更する衝突のパス（100 件・16 KiB まで）・
+  `prediction_seq`）。組の行は、作ってからロックして更新する（2 つのスキャンが同じ組を同時に書いても「初めて」が 2 回にならない）。
+  ロックの順は (low, high)。相手がスキャンの読んだ後に動いた・閉じた組は書かない（相手のスキャンが書く）。
+- **イベント `merge_request.conflict_predicted`**（integration、§6 の表に足す。`MergeRequestTransition::ConflictPredict`）: 組が
+  `conflict` に **入ったとき**だけ、**両側に 1 件ずつ**（集約はそれぞれの MR、ペイロードは相手の ID と番号・両方の head・target・
+  `prediction_seq`・衝突のパスの件数・`files_truncated`。パスはイベントに入れない）、監査の行も側ごとに 1 行（actor `system`）、
+  dedup `merge_request_conflict_predicted:<mr_id>:<other_id>:<prediction_seq>`。衝突のままの再スキャン・新しい head でも衝突のまま、
+  では出さない。`clean` に戻ったことのイベントは作らない（計画に無い。読み取りで分かる）。`every_merge_request_transition_emits_exactly_one_event`
+  は「MR ごとにちょうど 1 件」を確かめる（この遷移だけ 2 つの MR に 1 件ずつ）。
+- **知らせ**: kanflow はイベントの履歴（I1c）と Webhook で受ける（integration の分類）。作成者には通知の種類 **`mr_conflict_predicted`**
+  （追記のマイグレーション 20261123100100 で表の CHECK を足した。止められる種類）でメールする。行為者はシステムなので「自分の操作」
+  の除外は無い。メールには相手の番号もパスも書かない（「ほかの MR と衝突の見込み。`gstn conflicts` で確かめる」）。
+- **読み取り**: `GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts`（`MergeRequestRead`、新しい Action なし。C-1 の表の行と
+  `gstn conflicts --project --iid`）。最後のスキャン（`none` / `pending` / `scanning` / `scanned` / `incomplete` / `failed`、理由、
+  `stale`、数）と、**2 つの head がどちらも今の head で、両方開いていて同じ target の** `conflict` / `failed` の組だけを返す（古い head の
+  予測は見せない）。
+- **テスト**: `tests/conflicts_git.rs`（実際の git: 同じ行の変更は予測・下書きも・両側にイベント、別ファイルは `no_overlap`、同じファイルの
+  離れた箇所は `clean`、target とだけの衝突は数えない、上限で `incomplete`、`merge-tree` の時間切れは組に保存して返す）、
+  `review/conflicts/tests.rs`（入ったときだけ両側に 1 回、古い head は読まない、相手が動いた組は書かない、古い seq・動いた head は
+  書かない、target の変更と再オープンで要求、`job_failed` / `job_stale`）、`merge_request_version_routes.rs`（読める人・404・401・403）。
