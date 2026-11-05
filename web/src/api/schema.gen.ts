@@ -1223,6 +1223,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/repository/spec-refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A revision's .forge/repo.yml and its pinned spec references, each resolved for the reader (unreadable ones are unavailable) */
+        get: operations["get_api_v1_projects_id_repository_spec_refs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/repository/tree": {
         parameters: {
             query?: never;
@@ -3259,6 +3276,15 @@ export interface components {
              */
             username: string;
         };
+        /** @description Why `.forge/repo.yml` cannot be used. */
+        RepoConfigProblemBody: {
+            /** @description `FG-REPO-0024`. */
+            error_code: string;
+            /** @description 1-based; 0 for the whole file. */
+            line: number;
+            /** @description The rule broken (`FG-REPO-0024` lists them). */
+            reason: string;
+        };
         /** @description `POST …/commits/{sha}/checks`. */
         ReportCheckRun: {
             /** @description At most 50; a report replaces the run's annotations. */
@@ -3466,6 +3492,58 @@ export interface components {
         /** @description `PUT /api/v1/projects/{id}/visibility`. */
         SetVisibility: {
             visibility: components["schemas"]["VisibilityName"];
+        };
+        /** @description How a referenced repository's version is fixed. */
+        SpecPinBody: {
+            /** @description The tag or branch name as written. */
+            name: string;
+            /** @description `refs/tags/…` or `refs/heads/…`. */
+            ref_name: string;
+            /** @description `version` (a tag) or `track` (a branch). */
+            type: string;
+        };
+        /** @description One `specs:` entry, resolved for the reader. */
+        SpecRefBody: {
+            /** @description The pinned commit (`resolved`), or the read commit (`local`). */
+            commit: string | null;
+            /**
+             * @description `FG-REPO-0025` (`version_not_found`), `FG-REPO-0026`
+             *     (`unavailable`); `null` otherwise.
+             */
+            error_code: string | null;
+            /** @description The entry's line in `.forge/repo.yml` (1-based). */
+            line: number;
+            /** @description The directory as written (`path` entries). */
+            path: string | null;
+            pin: null | components["schemas"]["SpecPinBody"];
+            /**
+             * Format: int64
+             * @description The referenced project, when the reader may read it.
+             */
+            project_id: number | null;
+            /** @description The repository path as written (`repo` entries). */
+            repo: string | null;
+            /** @description The requirement id patterns this repository covers. */
+            scope: string[];
+            /**
+             * @description `resolved`, `version_not_found`, `unavailable` (`repo` entries) or
+             *     `local` (`path` entries).
+             */
+            status: string;
+            /** @description `repo` (another repository) or `path` (this one's directory). */
+            type: string;
+        };
+        /** @description A revision's `.forge/repo.yml` and its spec references. */
+        SpecRefsBody: {
+            /** @description `absent`, `valid` or `invalid`. */
+            config: string;
+            /** @description `.forge/repo.yml`. */
+            path: string;
+            problem: null | components["schemas"]["RepoConfigProblemBody"];
+            /** @description The revision read. */
+            ref: components["schemas"]["RevBody"];
+            /** @description In file order; empty unless `valid`. */
+            specs: components["schemas"]["SpecRefBody"][];
         };
         /** @description `POST …/discussions`. */
         StartDiscussion: {
@@ -7165,6 +7243,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolveBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_repository_spec_refs: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecRefsBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

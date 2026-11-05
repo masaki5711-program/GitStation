@@ -233,6 +233,8 @@ fn people_only_rows_are_allowed_for_the_human_twin() {
 const INTERNAL_READS: &[Action] = &[
     Action::RepoRead,
     Action::RepoBrowse,
+    // M3 X1: decided in RepoBrowse's arm.
+    Action::SpecRefRead,
     Action::ProjectRead,
     Action::MemberList,
     Action::ProtectedRefList,

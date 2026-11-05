@@ -337,6 +337,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/repository/blame",
         Coverage::Command("browse blame"),
     ),
+    // M3 X1: `.forge/repo.yml` and its spec references.
+    (
+        "GET",
+        "/api/v1/projects/{id}/repository/spec-refs",
+        Coverage::Command("browse spec-refs"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/protected-refs",
