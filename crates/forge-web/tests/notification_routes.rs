@@ -151,7 +151,12 @@ fn token(user: UserId, scopes: &[Scope]) -> Principal {
 }
 
 fn kinds() -> Value {
-    json!(["mr_approved", "mr_merged", "mr_commented"])
+    json!([
+        "mr_approved",
+        "mr_merged",
+        "mr_commented",
+        "mr_conflict_predicted"
+    ])
 }
 
 #[tokio::test]
