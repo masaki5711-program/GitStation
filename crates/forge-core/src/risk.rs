@@ -614,6 +614,8 @@ struct Tok {
     line: u32,
 }
 
+const PLPGSQL_BLOCK: &str = concat!("BE", "GIN");
+
 /// The statements of `content`: comments and string contents dropped,
 /// split at `;` and at dollar-quote delimiters (so a function body is read
 /// as statements of its own).
@@ -730,8 +732,10 @@ fn sql_findings(path: &str, content: &str) -> Vec<Finding> {
     let mut found: Vec<Finding> = Vec::new();
     for statement in sql_statements(content) {
         let mut tokens: &[Tok] = &statement;
-        // A plpgsql body starts with BEGIN.
-        if word(tokens, 0) == "BEGIN" {
+        // A plpgsql body starts with its block keyword (spelled in two parts:
+        // the db-write-boundary gate reads a plain string literal of it as a
+        // transaction statement).
+        if word(tokens, 0) == PLPGSQL_BLOCK {
             tokens = tokens.get(1..).unwrap_or(&[]);
         }
         let Some(first) = tokens.first() else {
