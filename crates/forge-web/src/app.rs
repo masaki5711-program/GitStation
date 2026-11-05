@@ -856,6 +856,15 @@ fn webhook_routes(registry: Registry<AppState>) -> Registry<AppState> {
             h::list,
         )
         .responds::<h::WebhookList>(Verb::Get, h::COLLECTION)
+        .route_with(
+            Verb::Get,
+            h::EVENT_TYPES,
+            Action::WebhookRead,
+            "The event types a webhook may name, each with its class, and per class whether the caller may subscribe to it (Maintainer)",
+            h::EventTypesOf,
+            h::event_types,
+        )
+        .responds::<h::EventTypeList>(Verb::Get, h::EVENT_TYPES)
         .route_with_body(
             Verb::Post,
             h::COLLECTION,

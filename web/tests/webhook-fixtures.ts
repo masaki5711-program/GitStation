@@ -5,6 +5,7 @@ import { json } from './render';
 
 export const API = '/api/v1/projects/7';
 export const HOOKS = `${API}/webhooks`;
+export const EVENT_TYPES = `${HOOKS}/event-types`;
 
 export function webhook(id: number, over: Record<string, unknown> = {}) {
   return {
@@ -49,6 +50,20 @@ export function delivery(id: number, over: Record<string, unknown> = {}) {
   };
 }
 
+/** `GET .../webhooks/event-types` (docs/api/webhooks.md): a few of each class. */
+export function eventTypes(subscribable: Partial<Record<string, boolean>> = {}) {
+  const can = (c: string) => subscribable[c] ?? true;
+  return {
+    items: [
+      { name: 'member.added', class: 'maintainer' },
+      { name: 'merge_request.merged', class: 'integration' },
+      { name: 'merge_request.opened', class: 'integration' },
+      { name: 'repository.pushed', class: 'integration' },
+    ],
+    classes: ['integration', 'maintainer', 'deployment'].map((c) => ({ class: c, subscribable: can(c) })),
+  };
+}
+
 /** The route table of the webhook screens as a Maintainer. */
 export function hookRoutes(over: Record<string, Handler> = {}): Record<string, Handler> {
   return {
@@ -56,6 +71,7 @@ export function hookRoutes(over: Record<string, Handler> = {}): Record<string, H
     'GET /api/v1/namespaces/resolve': () => json(200, RESOLVE_PROJECT),
     [`GET ${API}`]: () => json(200, { ...PROJECT, role: 'maintainer' }),
     [`GET ${HOOKS}`]: () => json(200, { items: [webhook(3)] }),
+    [`GET ${EVENT_TYPES}`]: () => json(200, eventTypes()),
     ...over,
   };
 }

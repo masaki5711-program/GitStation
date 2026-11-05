@@ -882,6 +882,14 @@
   {
     "action": "WebhookRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/webhooks/event-types",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
     "public": false,
     "scope": "fixed",

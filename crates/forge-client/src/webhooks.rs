@@ -67,6 +67,32 @@ fn event_types(events: &[String]) -> Option<Value> {
     (!events.is_empty()).then(|| json!(events))
 }
 
+/// The catalog as text: a heading per class (`no` when not subscribable),
+/// its event types beneath.
+fn event_types_text(out: &Value) -> String {
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("?").to_owned();
+    let classes = out.get("classes").and_then(Value::as_array);
+    let items = out.get("items").and_then(Value::as_array);
+    let mut lines = Vec::new();
+    for class in classes.into_iter().flatten() {
+        let name = text(class, "class");
+        let can = class.get("subscribable").and_then(Value::as_bool) == Some(true);
+        lines.push(format!(
+            "{name} (subscribable: {})",
+            if can { "yes" } else { "no" }
+        ));
+        for item in items.into_iter().flatten() {
+            if text(item, "class") == name {
+                lines.push(format!("  {}", text(item, "name")));
+            }
+        }
+    }
+    lines.join(
+        "
+",
+    )
+}
+
 pub fn webhook(cli: &Cli, cmd: &WebhookCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     match cmd {
         WebhookCommand::List { project } => {
@@ -82,6 +108,13 @@ pub fn webhook(cli: &Cli, cmd: &WebhookCommand, env: EnvFn<'_>, io: &mut Io<'_>)
             } else {
                 items.iter().map(hook_line).collect::<Vec<_>>().join("\n")
             };
+            emit(io, cli, out, &human)
+        }
+        WebhookCommand::EventTypes { project } => {
+            let c = client(cli, env, io)?;
+            let path = format!("{}/event-types", hooks_path(*project));
+            let out = call(&c, Method::Get, &path, &[], None)?;
+            let human = event_types_text(&out);
             emit(io, cli, out, &human)
         }
         WebhookCommand::View { id, project } => {

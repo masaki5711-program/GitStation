@@ -54,6 +54,12 @@ fn webhook_commands_call_their_routes() {
     let updated = format!(r#"{{"outcome":"updated","fields":["enabled"],"webhook":{HOOK}}}"#);
     let cases: Vec<(Vec<&str>, &str, &str, String)> = vec![
         (vec!["webhook", "list", "--project", "7"], "GET", "/api/v1/projects/7/webhooks", list),
+        (
+            vec!["webhook", "event-types", "--project", "7"],
+            "GET",
+            "/api/v1/projects/7/webhooks/event-types",
+            r#"{"items":[{"name":"merge_request.opened","class":"integration"}],"classes":[{"class":"integration","subscribable":true}]}"#.to_owned(),
+        ),
         (vec!["webhook", "view", "3", "--project", "7"], "GET", "/api/v1/projects/7/webhooks/3", HOOK.to_owned()),
         (vec!["webhook", "update", "3", "--project", "7", "--enable"], "PATCH", "/api/v1/projects/7/webhooks/3", updated),
         (

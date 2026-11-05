@@ -1312,6 +1312,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","project_id","owner_id","origin","event_types","enabled","secret_version","consecutive_failures"]}}}}"#,
     },
     CommandSpec {
+        name: "webhook event-types",
+        summary: "The event types a webhook may name, each with its class (integration, maintainer, deployment), and per class whether you may subscribe (Maintainer).",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn webhook event-types --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/webhooks/event-types"],
+        output: r#"{"type":"object","required":["items","classes"],"properties":{"items":{"type":"array","items":{"type":"object","required":["name","class"]}},"classes":{"type":"array","items":{"type":"object","required":["class","subscribable"]}}}}"#,
+    },
+    CommandSpec {
         name: "webhook view",
         summary: "One webhook of a project (Maintainer); disabled_reason says why it is off (manual, failures, failing_24h).",
         args: &[
