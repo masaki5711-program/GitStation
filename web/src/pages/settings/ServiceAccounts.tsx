@@ -25,6 +25,7 @@ import { ErrorSummary } from '../../features/CreateDialogs';
 import { formatDateTime } from '../../features/labels';
 import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
+import { SERVICE_ACCOUNT_SCOPES } from './scopes';
 import styles from './Settings.module.css';
 import { useLeaveGuard } from './Tokens';
 
@@ -32,19 +33,10 @@ type Account = components['schemas']['ServiceAccountBody'];
 type TokenRow = components['schemas']['ServiceAccountTokenBody'];
 type Issued = components['schemas']['IssuedServiceAccountToken'];
 
-/** Never `admin`: the server refuses it for a service account. */
-const SCOPES = [
-  'read_repository',
-  'write_repository',
-  'read_api',
-  'api',
-  'merge_execute',
-  'merge_approve',
-  'user_email',
-  'user_employee_number',
-] as const;
 
 const LIST_KEY = ['service-accounts'] as const;
+/** The admin users list shows service accounts too (disable changes it). */
+const ADMIN_USERS_KEY = ['admin-users'] as const;
 const itemKey = (id: number) => ['service-account', id] as const;
 
 /** The list and the item are both stale after a change. */
@@ -54,6 +46,7 @@ function useRefreshAccount() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: LIST_KEY }),
       queryClient.invalidateQueries({ queryKey: itemKey(id) }),
+      queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY }),
     ]);
   };
 }
@@ -62,7 +55,7 @@ export function ServiceAccounts({ base }: { base: string }) {
   const [params] = useSearchParams();
   const raw = params.get('account');
   const id = raw !== null && /^[1-9][0-9]{0,15}$/.test(raw) ? Number(raw) : null;
-  return id === null ? <AccountList base={base} /> : <AccountDetail id={id} base={base} />;
+  return id === null ? <AccountList base={base} /> : <AccountDetail key={id} id={id} base={base} />;
 }
 
 const back = (base: string) => `${base}?tab=service-accounts`;
@@ -395,6 +388,9 @@ function AccountDetail({ id, base }: { id: number; base: string }) {
     focusHeading('sa-detail-title');
   }, [id, focusHeading]);
   const a = account.data;
+  const onRevoked = (name: string) => {
+    setNotice(t('sa.revokedDone', { name }));
+  };
   return (
     <>
       <p>
@@ -465,7 +461,7 @@ function AccountDetail({ id, base }: { id: number; base: string }) {
         )}
       </Section>
       <Section id="sa-tokens-title" title={t('sa.tokens')}>
-        <TokenList id={id} onRevoked={(name) => { setNotice(t('sa.revokedDone', { name })); }} />
+        <TokenList id={id} onRevoked={onRevoked} />
       </Section>
       {a?.state === 'active' && (
         <Section id="sa-token-new-title" title={t('sa.issue')}>
@@ -704,6 +700,8 @@ function IssueToken({ id, onIssued }: { id: number; onIssued: (c: Issued) => voi
       setAgent(false);
       setAttempt(0);
       onIssued(issued);
+      // The secret now lives in the parent's state only.
+      issue.reset();
       await refreshAccount(id);
     },
     onError: refresh,
@@ -714,11 +712,7 @@ function IssueToken({ id, onIssued }: { id: number; onIssued: (c: Issued) => voi
     if (issue.isPending) return;
     setAttempt((x) => x + 1);
     if (errors.length > 0) return;
-    issue.mutate(undefined, {
-      onSuccess: () => {
-        issue.reset();
-      },
-    });
+    issue.mutate();
   };
   return (
     <form onSubmit={submit} noValidate className={styles.narrow}>
@@ -735,7 +729,7 @@ function IssueToken({ id, onIssued }: { id: number; onIssued: (c: Issued) => voi
       <fieldset className={controls.field} aria-describedby="sa-scopes-help">
         <legend className={controls.label}>{t('tokens.scopes')}</legend>
         <div className={styles.checks}>
-          {SCOPES.map((s) => (
+          {SERVICE_ACCOUNT_SCOPES.map((s) => (
             <label key={s} className={`${styles.check} ${styles.touch}`}>
               <input
                 type="checkbox"

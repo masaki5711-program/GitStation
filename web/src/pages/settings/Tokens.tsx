@@ -20,12 +20,12 @@ import { ErrorSummary } from '../../features/CreateDialogs';
 import { formatDateTime } from '../../features/labels';
 import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
+import { PERSONAL_SCOPES } from './scopes';
 import styles from './Settings.module.css';
 
 type Token = components['schemas']['TokenBody'];
 type Created = components['schemas']['CreatedToken'];
 
-const SCOPES = ['read_repository', 'write_repository', 'read_api', 'api'] as const;
 const KEY = ['tokens'];
 
 export function Tokens() {
@@ -385,7 +385,7 @@ function CreateToken({ onCreated }: { onCreated: (c: Created) => void }) {
       },
     });
   };
-  const all = session.user.is_admin ? [...SCOPES, 'admin'] : [...SCOPES];
+  const all = session.user.is_admin ? [...PERSONAL_SCOPES, 'admin'] : [...PERSONAL_SCOPES];
   return (
     <form onSubmit={submit} noValidate className={styles.narrow}>
       <ErrorSummary errors={errors} attempt={attempt} />
