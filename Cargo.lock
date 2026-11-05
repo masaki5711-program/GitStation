@@ -881,6 +881,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-notify"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "forge-auth",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "forge-notify",
+ "httpdate",
+ "rustls",
+ "rustls-native-certs",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "forge-oidc"
 version = "0.1.0"
 dependencies = [

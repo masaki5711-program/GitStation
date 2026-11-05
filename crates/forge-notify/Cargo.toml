@@ -1,0 +1,42 @@
+[package]
+name = "forge-notify"
+description = "forge notifications: the notify subscriber, the e-mail delivery job and the SMTP client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A feature crate (plan 11 §3.7, §5 N1; ADR-0016 Amendment N1): forge-web /
+# forge-cli → forge-notify → forge-auth / forge-db → forge-core →
+# forge-errors. It runs no SQL of its own (the SQL is `forge_db::notify`) and
+# never depends on another feature crate: it reads only domain events (the
+# outbox) and decides visibility with `forge_auth::prove`.
+[dependencies]
+forge-auth.workspace = true
+forge-core.workspace = true
+forge-db.workspace = true
+forge-errors.workspace = true
+base64.workspace = true
+httpdate.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tracing.workspace = true
+
+[features]
+# `forge_notify::test_support`: an in-process fake SMTP relay (dev-dependency
+# only; no real host is ever contacted).
+test-support = []
+
+[dev-dependencies]
+forge-notify = { workspace = true, features = ["test-support"] }
+forge-db = { workspace = true, features = ["test-support"] }
+sqlx.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

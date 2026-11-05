@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ forge-hosting = { path = "crates/forge-hosting" }
 forge-review = { path = "crates/forge-review" }
 forge-checks = { path = "crates/forge-checks" }
 forge-integ = { path = "crates/forge-integ" }
+forge-notify = { path = "crates/forge-notify" }
 forge-oidc = { path = "crates/forge-oidc" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }
@@ -99,6 +100,14 @@ subtle = "2"
 # (already in the lock through hyper). MIT OR Apache-2.0.
 httpdate = "1"
 # ── end M2 MR4 ──
+# ── M3 N1: the SMTP client's TLS (forge-notify) ──
+# Same rustls / tokio-rustls / ring that reqwest already brings; no
+# aws-lc-rs. Roots: only notify.smtp_ca_file, else the operating system's
+# trust store (rustls-native-certs, Apache-2.0 OR ISC OR MIT).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-native-certs = "0.8"
+# ── end M3 N1 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

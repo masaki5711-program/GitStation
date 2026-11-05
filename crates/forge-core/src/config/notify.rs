@@ -137,7 +137,7 @@ fn valid_host(host: &str) -> bool {
 
 /// A plain `local@domain` address: ASCII, one `@`, a dotted domain, nothing
 /// that could start a new header or command line.
-fn valid_address(address: &str) -> bool {
+pub fn valid_mailbox(address: &str) -> bool {
     const ATEXT: &str = "!#$%&'*+/=?^_`{|}~-";
     let Some((local, domain)) = address.split_once('@') else {
         return false;
@@ -206,7 +206,7 @@ impl NotifyConfig {
             None => None,
         };
         let from_address = match text(get, FROM_KEY)? {
-            Some(a) if valid_address(a) => Some(a.to_owned()),
+            Some(a) if valid_mailbox(a) => Some(a.to_owned()),
             Some(_) => return Err(invalid(FROM_KEY, "invalid")),
             None => None,
         };

@@ -43,7 +43,7 @@ pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
-pub use notify::{NotifyConfig, SmtpConfig, SmtpTls};
+pub use notify::{valid_mailbox, NotifyConfig, SmtpConfig, SmtpTls};
 pub use review::ReviewConfig;
 pub use secret::{DatabaseUrl, Secret};
 pub use server_limits::ServerLimitsConfig;
