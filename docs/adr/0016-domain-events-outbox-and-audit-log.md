@@ -1271,7 +1271,7 @@ forge-client の `coverage.rs` に `Command` の行、ヘルプのスナップ�
    サービスアカウントだけ。人・管理者・ボット・別の連携・存在しない連携は FG-REPO-0005、エージェント・`Forge-Act-As`・無効の連携は
    FG-AUTH-0003）。見える範囲は履歴の `prove_visible` の `VisibleSet` をそのまま使う（同じスナップショット）。権限の表の行は
    `matrix_rows_dev_status.rs`: `IntegrationEventRead` のすべての行の双子（テスト `the_dev_status_routes_mirror_every_feed_row`）。
-   連携の `event_types` が `merge_request.*` を許さないなら MR を出さない（`VisibleSet::shows_merge_requests`。許可リストは連携が
+   連携の `event_types` が `merge_request.*` を許さないなら MR を出さない（`VisibleSet::shows_merge_requests`）。レビューで、承認は `merge_request.approved` / `.unapproved`、チェックは `check.completed` を許すときだけ出す（`shows_approvals` / `shows_checks`、出さないときは `null`。許可リストは連携が
    読むものを狭める）。gstn: `integration dev-status <id> --ref PBI-<n>`・`integration dev-status-list <id>`（I1c と同じく、
    サービスアカウントのトークンで運用者が確かめる読み取りのコマンド。人の経路が無いので `gstn pbi` は作らない）。
 3. **答え**: 作業項目ごとに、**開いたリンク**の MR（新しい順、最大 100、`merge_requests_truncated`）を、MR のプロジェクトがその作業項目の

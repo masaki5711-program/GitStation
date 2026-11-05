@@ -240,3 +240,29 @@ fn merge_requests_are_shown_only_when_the_allowlist_admits_them() {
     let nothing = VisibleSet::from_authorized_decisions(INT, Vec::new(), &all());
     assert!(!nothing.shows_merge_requests());
 }
+
+/// I1d review (security MEDIUM): the allowlist narrows the development
+/// status like the feed — a merge request's checks only with `check.*`
+/// admitted, its approvals only with `merge_request.approved` /
+/// `.unapproved` admitted.
+#[test]
+fn checks_and_approvals_follow_the_allowlist() {
+    let set = |types: &[&str]| {
+        VisibleSet::from_authorized_decisions(
+            INT,
+            vec![project(1, 3)],
+            &types.iter().map(|t| (*t).to_owned()).collect::<Vec<_>>(),
+        )
+    };
+    let every = set(&["*"]);
+    assert!(every.shows_checks() && every.shows_approvals());
+    let mrs = set(&["merge_request.*"]);
+    assert!(mrs.shows_approvals() && !mrs.shows_checks());
+    let opened = set(&["merge_request.opened", "check.completed"]);
+    assert!(opened.shows_checks() && !opened.shows_approvals());
+    let unapproved = set(&["merge_request.opened", "merge_request.unapproved"]);
+    assert!(unapproved.shows_approvals());
+    // Without merge requests there is nothing to hang them on.
+    let checks_only = set(&["check.*"]);
+    assert!(!checks_only.shows_checks() && !checks_only.shows_approvals());
+}

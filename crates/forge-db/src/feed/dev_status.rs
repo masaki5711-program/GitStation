@@ -12,6 +12,9 @@
 //!   merged and closed alike (02 §8.2: a closed merge request is still
 //!   linked) — with the approvals given on the head and target, the head's
 //!   check runs (M3 C1), and the time it merged (the applied attempt).
+//!   The integration's allowlist narrows them like the feed: approvals only
+//!   with `merge_request.approved` / `.unapproved` admitted, check runs
+//!   only with `check.completed` (I1d review).
 //!
 //! Only the set's project ids turn into SQL; nothing here decides. The
 //! caller (forge-integ) proved the set with `forge_auth::prove_visible`.
@@ -122,10 +125,12 @@ pub struct DevMergeRequest {
     pub merged_at: Option<String>,
     pub closed_at: Option<String>,
     /// Live approvals on the current head and target (counted or not: the
-    /// merge status, `GET …/status`, decides what counts).
-    pub approvals_given: u32,
-    /// Every run on the head (empty: none reported, or no head).
-    pub checks: Vec<DevCheckRun>,
+    /// merge status, `GET …/status`, decides what counts). `None`: the
+    /// integration's allowlist admits no approval event (I1d review).
+    pub approvals_given: Option<u32>,
+    /// Every run on the head (empty: none reported, or no head). `None`: the
+    /// allowlist does not admit `check.completed` (I1d review).
+    pub checks: Option<Vec<DevCheckRun>>,
     /// How the open link was made (`auto` / `manual`).
     pub link_source: String,
     pub linked_at: String,
@@ -313,6 +318,8 @@ impl FeedSnapshot {
         }
         let integration = visible.integration().get();
         let projects = visible.project_ids();
+        let show_approvals = visible.shows_approvals();
+        let show_checks = visible.shows_checks();
         let cap = i64::try_from(MAX_MERGE_REQUESTS_PER_ITEM)
             .unwrap_or(i64::MAX)
             .saturating_add(1);
@@ -381,7 +388,7 @@ impl FeedSnapshot {
                     entry.truncated = true;
                     continue;
                 }
-                if let Some(head) = &head {
+                if let (true, Some(head)) = (show_checks, &head) {
                     heads.push((project, head.clone())); // clone: the run lookup owns its keys
                 }
                 entry.merge_requests.push(DevMergeRequest {
@@ -398,9 +405,15 @@ impl FeedSnapshot {
                     updated_at,
                     merged_at,
                     closed_at,
-                    approvals_given: u32::try_from(approvals)
-                        .map_err(|_| invalid("dev_status_approvals_invalid", id))?,
-                    checks: Vec::new(),
+                    approvals_given: if show_approvals {
+                        Some(
+                            u32::try_from(approvals)
+                                .map_err(|_| invalid("dev_status_approvals_invalid", id))?,
+                        )
+                    } else {
+                        None
+                    },
+                    checks: show_checks.then(Vec::new),
                     link_source,
                     linked_at,
                 });
@@ -445,9 +458,9 @@ impl FeedSnapshot {
             }
             for status in out.values_mut() {
                 for mr in &mut status.merge_requests {
-                    if let Some(head) = &mr.head_sha {
+                    if let (Some(checks), Some(head)) = (mr.checks.as_mut(), &mr.head_sha) {
                         if let Some(runs) = by_head.get(&(mr.project_id.get(), head.clone())) {
-                            mr.checks.clone_from(runs);
+                            checks.clone_from(runs);
                         }
                     }
                 }

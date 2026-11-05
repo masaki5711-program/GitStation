@@ -2040,11 +2040,18 @@ export interface components {
         };
         /** @description One merge request linked to the work item. */
         DevStatusMergeRequestBody: {
-            approvals: components["schemas"]["DevStatusApprovalsBody"];
-            /** @description Every check run reported on the head (empty: none — never success). */
-            checks: components["schemas"]["DevStatusCheckBody"][];
-            /** @description `none` (no run), `pending`, `failure`, `neutral` or `success`. */
-            checks_state: string;
+            approvals: null | components["schemas"]["DevStatusApprovalsBody"];
+            /**
+             * @description Every check run reported on the head (empty: none — never success).
+             *     `null`: the integration's `event_types` do not admit
+             *     `check.completed`.
+             */
+            checks: components["schemas"]["DevStatusCheckBody"][] | null;
+            /**
+             * @description `none` (no run), `pending`, `failure`, `neutral` or `success`;
+             *     `null` with `checks`.
+             */
+            checks_state: string | null;
             /** @description When it was closed without merging (`null` otherwise). */
             closed_at: string | null;
             /** @description UTC, RFC 3339. */

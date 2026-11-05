@@ -1772,16 +1772,25 @@ async fn no_checks_is_distinct_from_success() {
             .find(|m| m.iid == iid)
             .expect("listed")
     };
-    assert!(of(bare.iid).checks.is_empty(), "no run reported");
     assert_eq!(
-        of(green.iid).checks,
+        of(bare.iid).checks.as_deref(),
+        Some(&[][..]),
+        "no run reported"
+    );
+    assert_eq!(
+        of(green.iid).checks.as_deref().expect("shown"),
         [DevCheckRun {
             name: "ci/gates".to_owned(),
             status: forge_core::checks::CheckStatus::Completed,
             conclusion: Some(forge_core::checks::CheckConclusion::Success),
         }]
     );
-    let names: Vec<&str> = of(red.iid).checks.iter().map(|c| c.name.as_str()).collect();
+    let names: Vec<&str> = of(red.iid)
+        .checks
+        .iter()
+        .flatten()
+        .map(|c| c.name.as_str())
+        .collect();
     assert_eq!(names, ["ci/gates", "ci/lint"]);
     assert_ne!(of(bare.iid).checks, of(green.iid).checks);
     w.t.drop_now().await;
@@ -1826,5 +1835,55 @@ async fn work_items_are_walked_in_id_order() {
         .expect("none")
         .is_empty());
     snap.close().await;
+    w.t.drop_now().await;
+}
+
+/// I1d review (security MEDIUM): the allowlist narrows the development
+/// status like the feed. `merge_request.*` only: approvals shown, check
+/// runs left out (`None`, not an empty list); `merge_request.opened` +
+/// `check.completed`: the runs, no approvals.
+#[tokio::test]
+async fn the_allowlist_narrows_checks_and_approvals() {
+    let w = world().await;
+    let mr = open_mr(&w, w.web.project_id, "PBI-8 narrowed", "narrowed").await;
+    head_with_runs(
+        &w,
+        &mr,
+        &"5".repeat(40),
+        &[("ci/gates", "completed", Some("success"))],
+    )
+    .await;
+    drain(&w.t).await;
+    let narrow = |types: &str| {
+        format!(
+            "UPDATE forge.integrations SET event_types = ARRAY[{types}]::text[] WHERE id = {}",
+            w.integration.get()
+        )
+    };
+    let every = dev_status(&w, "PBI-8", MrStateFilter::All).await;
+    let shown = &every[0].1.merge_requests[0];
+    assert_eq!(shown.approvals_given, Some(0));
+    assert_eq!(shown.checks.as_ref().map(Vec::len), Some(1));
+    w.t.commit_audited(
+        ("integration", w.integration.get()),
+        &[narrow("'merge_request.*'")],
+    )
+    .await;
+    let mrs_only = dev_status(&w, "PBI-8", MrStateFilter::All).await;
+    let mr_only = &mrs_only[0].1.merge_requests[0];
+    assert_eq!(mr_only.approvals_given, Some(0));
+    assert_eq!(mr_only.checks, None, "check runs are not admitted");
+    w.t.commit_audited(
+        ("integration", w.integration.get()),
+        &[narrow("'merge_request.opened', 'check.completed'")],
+    )
+    .await;
+    let no_approvals = dev_status(&w, "PBI-8", MrStateFilter::All).await;
+    let checks_only = &no_approvals[0].1.merge_requests[0];
+    assert_eq!(
+        checks_only.approvals_given, None,
+        "approvals are not admitted"
+    );
+    assert_eq!(checks_only.checks.as_ref().map(Vec::len), Some(1));
     w.t.drop_now().await;
 }

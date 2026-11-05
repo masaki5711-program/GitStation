@@ -161,11 +161,19 @@ pub struct DevStatusMergeRequestBody {
     /// When it was closed without merging (`null` otherwise).
     #[schema(required = true)]
     pub closed_at: Option<String>,
-    pub approvals: DevStatusApprovalsBody,
+    /// `null`: the integration's `event_types` admit no approval event
+    /// (`merge_request.approved` / `.unapproved`).
+    #[schema(required = true)]
+    pub approvals: Option<DevStatusApprovalsBody>,
     /// Every check run reported on the head (empty: none — never success).
-    pub checks: Vec<DevStatusCheckBody>,
-    /// `none` (no run), `pending`, `failure`, `neutral` or `success`.
-    pub checks_state: String,
+    /// `null`: the integration's `event_types` do not admit
+    /// `check.completed`.
+    #[schema(required = true)]
+    pub checks: Option<Vec<DevStatusCheckBody>>,
+    /// `none` (no run), `pending`, `failure`, `neutral` or `success`;
+    /// `null` with `checks`.
+    #[schema(required = true)]
+    pub checks_state: Option<String>,
     pub link: DevStatusLinkBody,
 }
 
@@ -222,7 +230,7 @@ pub struct DevStatusPageBody {
 }
 
 fn merge_request_body(mr: DevMergeRequest) -> DevStatusMergeRequestBody {
-    let checks_state = checks_state(&mr.checks).to_owned();
+    let checks_state = mr.checks.as_deref().map(|c| checks_state(c).to_owned());
     DevStatusMergeRequestBody {
         project: DevStatusProjectBody {
             id: mr.project_id.get(),
@@ -239,18 +247,18 @@ fn merge_request_body(mr: DevMergeRequest) -> DevStatusMergeRequestBody {
         updated_at: mr.updated_at,
         merged_at: mr.merged_at,
         closed_at: mr.closed_at,
-        approvals: DevStatusApprovalsBody {
-            given: mr.approvals_given,
-        },
-        checks: mr
-            .checks
-            .into_iter()
-            .map(|c| DevStatusCheckBody {
-                name: c.name,
-                status: c.status.as_str().to_owned(),
-                conclusion: c.conclusion.map(|k| k.as_str().to_owned()),
-            })
-            .collect(),
+        approvals: mr
+            .approvals_given
+            .map(|given| DevStatusApprovalsBody { given }),
+        checks: mr.checks.map(|runs| {
+            runs.into_iter()
+                .map(|c| DevStatusCheckBody {
+                    name: c.name,
+                    status: c.status.as_str().to_owned(),
+                    conclusion: c.conclusion.map(|k| k.as_str().to_owned()),
+                })
+                .collect()
+        }),
         checks_state,
         link: DevStatusLinkBody {
             source: mr.link_source,
@@ -570,12 +578,12 @@ mod unit {
             updated_at: "2026-11-04T01:00:00Z".to_owned(),
             merged_at: None,
             closed_at: None,
-            approvals_given: 0,
-            checks: vec![forge_integ::DevCheckRun {
+            approvals_given: Some(0),
+            checks: Some(vec![forge_integ::DevCheckRun {
                 name: "ci/gates".to_owned(),
                 status: forge_integ::CheckStatus::Completed,
                 conclusion: Some(forge_integ::CheckConclusion::Success),
-            }],
+            }]),
             link_source: "auto".to_owned(),
             linked_at: "2026-11-04T01:00:01Z".to_owned(),
         });
@@ -595,6 +603,35 @@ mod unit {
         }
         assert_eq!(keys(&got["checks"][0]), keys(&want["checks"][0]));
         assert_eq!(got["checks_state"], "success");
+    }
+
+    /// I1d review: what the allowlist does not admit is `null` — never an
+    /// empty list (which would read as "no check reported") or zero.
+    #[test]
+    fn what_the_allowlist_leaves_out_is_null() {
+        let body = merge_request_body(DevMergeRequest {
+            project_id: forge_core::ProjectId::new(7),
+            project_path: None,
+            iid: 1,
+            title: "t".to_owned(),
+            state: "open".to_owned(),
+            draft: false,
+            source_branch: "s".to_owned(),
+            target_branch: "main".to_owned(),
+            head_sha: None,
+            created_at: "2026-11-04T01:00:00Z".to_owned(),
+            updated_at: "2026-11-04T01:00:00Z".to_owned(),
+            merged_at: None,
+            closed_at: None,
+            approvals_given: None,
+            checks: None,
+            link_source: "auto".to_owned(),
+            linked_at: "2026-11-04T01:00:01Z".to_owned(),
+        });
+        let got = serde_json::to_value(&body).expect("json");
+        assert!(got["checks"].is_null(), "{got}");
+        assert!(got["checks_state"].is_null(), "{got}");
+        assert!(got["approvals"].is_null(), "{got}");
     }
 
     #[test]

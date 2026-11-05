@@ -149,6 +149,22 @@ impl VisibleSet {
 
     /// M3 I1d: the development status shows merge requests (some visible
     /// project, and the allowlist admits a `merge_request.*` type).
+    /// I1d review: a merge request's check runs (with merge requests, when
+    /// the allowlist admits `check.completed`).
+    pub fn shows_checks(&self) -> bool {
+        self.shows_merge_requests() && self.event_types.contains(&EventType::CheckCompleted)
+    }
+
+    /// I1d review: a merge request's approvals (with merge requests, when
+    /// the allowlist admits `merge_request.approved` or `.unapproved`).
+    pub fn shows_approvals(&self) -> bool {
+        self.shows_merge_requests()
+            && (self.event_types.contains(&EventType::MergeRequestApproved)
+                || self
+                    .event_types
+                    .contains(&EventType::MergeRequestUnapproved))
+    }
+
     pub fn shows_merge_requests(&self) -> bool {
         !self.projects.is_empty()
             && self

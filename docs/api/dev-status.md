@@ -24,7 +24,15 @@ M3 I1d（計画 02 §5.2・§8.2・§11.2、ADR-0016 Amendment I1d、計画 11 �
 イベントの履歴と **同じ**（`docs/api/integration-feed.md` の「誰が読めるか」）: その連携のサービスアカウントのトークンだけ。別の連携・
 存在しない連携・人（管理者のセッションと `admin` のトークンも）・ボットは `FG-REPO-0005`（404）、エージェントのトークン・`Forge-Act-As`・
 無効にした連携は `FG-AUTH-0003`（403）。見える範囲も履歴と同じ判定（`prove_visible`）: 結びつけたプロジェクトのうち、サービスアカウントが
-Reporter 以上のメンバーで削除待ちでないもの。連携の `event_types` が `merge_request.*` を 1 つも許さないなら MR は出ない（作業項目だけ出る）。
+Reporter 以上のメンバーで削除待ちでないもの。
+
+**連携の `event_types`（許可リスト）は開発状況も狭める**（履歴で読めないことを開発状況で読ませない。I1d のレビュー）:
+
+| 許可リストが許す種類 | 開発状況に出るもの |
+|---|---|
+| `merge_request.*` を 1 つも許さない | MR は出ない（作業項目だけ。`merge_requests: []`） |
+| `merge_request.approved` / `merge_request.unapproved` のどちらも許さない | MR ごとの `approvals` は `null` |
+| `check.completed` を許さない | MR ごとの `checks` と `checks_state` は `null`（**空の配列ではない**。空の配列は「報告が無い」の意味） |
 gstn: `gstn integration dev-status <id> --ref PBI-<n>` と `gstn integration dev-status-list <id>`（サービスアカウントのトークンで）。
 
 ## `GET /api/v1/integrations/{id}/work-items/{ref}/dev-status?project_id=…&state=…`
@@ -71,9 +79,9 @@ gstn: `gstn integration dev-status <id> --ref PBI-<n>` と `gstn integration dev
 | `merge_requests[].source_branch`・`target_branch` | `refs/heads/` を除いた名前 |
 | `merge_requests[].head_sha` | 今の head（版が無ければ `null`） |
 | `merge_requests[].created_at`・`updated_at`・`merged_at`・`closed_at` | UTC、RFC 3339。`merged_at` はマージが適用された時刻（マージ済みでなければ `null`）、`closed_at` はマージせずに閉じた時刻 |
-| `merge_requests[].approvals.given` | 今の head と target への生きている承認の数（数えられるかは問わない。マージできるかは `GET …/merge-requests/{iid}/status`） |
-| `merge_requests[].checks[]` | 今の head に報告されたチェックの実行（M3 C1）: `{name, status, conclusion}`。古い head への報告は出ない |
-| `merge_requests[].checks_state` | `none`（報告が無い）・`pending`（完了していない実行がある）・`failure`（`failure` / `error` / `action_required`）・`neutral`・`success` |
+| `merge_requests[].approvals` | `{given}`: 今の head と target への生きている承認の数（数えられるかは問わない。マージできるかは `GET …/merge-requests/{iid}/status`）。許可リストが承認のイベントを許さないとき `null` |
+| `merge_requests[].checks` | 今の head に報告されたチェックの実行（M3 C1）: `[{name, status, conclusion}]`。古い head への報告は出ない。許可リストが `check.completed` を許さないとき `null` |
+| `merge_requests[].checks_state` | `none`（報告が無い）・`pending`（完了していない実行がある）・`failure`（`failure` / `error` / `action_required`）・`neutral`・`success`。`checks` が `null` なら `null` |
 | `merge_requests[].link` | `{source: auto / manual, linked_at}` |
 | `merge_requests_truncated` | 100 件を超えるリンクがある |
 

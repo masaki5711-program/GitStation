@@ -1540,18 +1540,32 @@
         "description": "One merge request linked to the work item.",
         "properties": {
           "approvals": {
-            "$ref": "#/components/schemas/DevStatusApprovalsBody"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DevStatusApprovalsBody",
+                "description": "`null`: the integration's `event_types` admit no approval event\n(`merge_request.approved` / `.unapproved`)."
+              }
+            ]
           },
           "checks": {
-            "description": "Every check run reported on the head (empty: none — never success).",
+            "description": "Every check run reported on the head (empty: none — never success).\n`null`: the integration's `event_types` do not admit\n`check.completed`.",
             "items": {
               "$ref": "#/components/schemas/DevStatusCheckBody"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "checks_state": {
-            "description": "`none` (no run), `pending`, `failure`, `neutral` or `success`.",
-            "type": "string"
+            "description": "`none` (no run), `pending`, `failure`, `neutral` or `success`;\n`null` with `checks`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "closed_at": {
             "description": "When it was closed without merging (`null` otherwise).",
