@@ -23,7 +23,9 @@
 //! re-requested), and the record of expired CODEOWNERS suspensions
 //! (`codeowners_restore`, M3 R6: every 60 s), and the check-run
 //! retention (`check_run_retention`: every hour, check runs past
-//! `review.check_run_retention_days`), and the repository
+//! `review.check_run_retention_days`), and the spec drift sweep
+//! (`spec_drift_sweep`, M3 X2: every 60 s, `error` for dead
+//! `check.spec_drift` jobs left without a run), and the repository
 //! maintenance (`maintenance`, M3 O3: its OWN job runner for
 //! `repository.maintain` — the main runner never claims it, so a long gc
 //! never delays another job — and the nightly schedule, every 60 s), and
@@ -66,6 +68,10 @@ pub(crate) mod purge;
 // ── M3 R1b: merge request versions ──
 mod review;
 // ── end M3 R1b ──
+// ── M3 X2: `forge/spec-drift` (the `check.spec_drift` job) ──
+mod spec_drift;
+mod spec_drift_sweep;
+// ── end M3 X2 ──
 // ── M3 R2: stale and deferred mergeability checks ──
 mod mergeability_sweep;
 // ── end M3 R2 ──
@@ -191,6 +197,8 @@ enum Task {
     EventsRetention,
     /// Check runs past `review.check_run_retention_days` (`check_run_retention`).
     CheckRunRetention,
+    /// Dead `check.spec_drift` jobs answered with `error` (`spec_drift_sweep`, M3 X2).
+    SpecDriftSweep,
     // ── M3 O3 ──
     /// The maintenance's own job runner (`maintenance`).
     MaintenanceRunner,
@@ -274,6 +282,8 @@ fn tasks_with(
         Task::EventsRetention,
         // Check runs: needs only the database.
         Task::CheckRunRetention,
+        // M3 X2: needs only the database.
+        Task::SpecDriftSweep,
         // M3 I2: needs only the database.
         Task::WebhookRetention,
     ];
@@ -310,7 +320,9 @@ fn tasks_with(
 /// enqueues the mergeability checks of a target push, at most
 /// `review.mergeability_fanout_max`) and `work-item-sync` (M3 I1b,
 /// `ordered`: the work item links and the events' work items; it stops and
-/// alerts on an event it cannot process), `notify` (M3 N1, `independent`)
+/// alerts on an event it cannot process), `spec-drift` (M3 X2,
+/// `independent`: the `check.spec_drift` job of each merge request
+/// version), `notify` (M3 N1, `independent`)
 /// and `webhook-dispatch` (M3 I2, `independent`, with the webhook lane
 /// only: it records each event's deliveries).
 #[cfg(test)]
@@ -330,7 +342,10 @@ fn registry_with(
         .with(Arc::new(forge_db::review::MergeRequestRefresh::new(
             review.mergeability_fanout_max,
         )))?
-        .with(Arc::new(forge_db::work_items::WorkItemSync))?;
+        .with(Arc::new(forge_db::work_items::WorkItemSync))?
+        // M3 X2 (`independent`): every merge request version asks for its
+        // `forge/spec-drift` run (the `check.spec_drift` job).
+        .with(Arc::new(forge_db::checks::spec_drift::SpecDriftRequests))?;
     // M3 I2: deliveries are recorded only when the lane can send them.
     let registry = if webhooks {
         registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?
@@ -402,6 +417,7 @@ impl Task {
             Self::CodeownersRestore => codeowners_restore::NAME,
             Self::EventsRetention => events_retention::NAME,
             Self::CheckRunRetention => check_run_retention::NAME,
+            Self::SpecDriftSweep => spec_drift_sweep::NAME,
             Self::MaintenanceRunner => maintenance::RUNNER_NAME,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
             Self::WebhookRunner => webhooks::RUNNER_NAME,
@@ -430,6 +446,7 @@ impl Task {
             Self::CodeownersRestore => codeowners_restore::PERIOD,
             Self::EventsRetention => events_retention::PERIOD,
             Self::CheckRunRetention => check_run_retention::PERIOD,
+            Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
             Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
             Self::WebhookRunner => jobs::JOB_POLL_PERIOD,
@@ -480,6 +497,7 @@ impl Task {
                 mergeability_sweep::run_mergeability_sweep(db, shared.storage.as_ref()).await
             }
             Self::CodeownersRestore => codeowners_restore::run_codeowners_restore(db).await,
+            Self::SpecDriftSweep => spec_drift_sweep::run_spec_drift_sweep(db).await,
             Self::EventsRetention => events_retention::run_events_retention(db).await,
             Self::CheckRunRetention => {
                 check_run_retention::run_check_run_retention(db, shared.check_run_retention_days)

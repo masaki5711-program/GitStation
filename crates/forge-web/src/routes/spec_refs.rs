@@ -29,30 +29,33 @@
 //!    Each `path:` entry is `local` at the read commit.
 //!
 //! A git or lookup failure fails the request with its own code (never an
-//! entry quietly dropped). Problems are logged once here, at info, with
-//! `request_id` and `error_code` (`forge.spec_refs.repo_yml_invalid`,
-//! `forge.spec_refs.unresolved`); never the file's text, a path or a tag.
+//! entry quietly dropped). Problems are logged once, at info, with
+//! `request_id` and `error_code` (`forge.spec_refs.repo_yml_invalid` here,
+//! `forge.spec_refs.unresolved` by forge-checks); never the file's text, a
+//! path or a tag.
+//!
+//! Steps 3 and 4 are `forge_checks::spec_refs` (M3 X2 moved them there:
+//! the `forge/spec-drift` job reads and follows the same way, for every
+//! signed-in person instead of the reader).
 
-use std::sync::LazyLock;
 use std::time::Instant;
 
 use axum::http::header::{CACHE_CONTROL, VARY};
 use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use forge_auth::{prove_spec_ref, Authorized, ProjectCtx};
-use forge_core::repo_config::{
-    parse_repo_config, RepoConfig, RepoConfigProblem, SpecEntry, SpecSource, MAX_REPO_CONFIG_BYTES,
-    REPO_CONFIG_PATH,
+use forge_auth::{Authorized, ProjectCtx};
+use forge_checks::spec_refs::{
+    follow as follow_ref, read_repo_config, FollowCtx, Followed, Reader, RepoConfigRead,
 };
-use forge_core::{RepositoryState, Resolution, ResolvedTarget};
+use forge_core::repo_config::{RepoConfig, SpecEntry, SpecSource, REPO_CONFIG_PATH};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::browse::{RefLookup, RepoPath, ResolvedRev, SmallFile};
+use forge_git::browse::ResolvedRev;
 use serde::Serialize;
 
 use crate::app::AppState;
 use crate::body::param_invalid;
-use crate::dispatch::{loaded_project, resolve_bounded};
+use crate::registry::DispatchState;
 use crate::registry::{Dispatched, QueryParam};
 use crate::routes::browse::{query, rev_body, take, RepositoryOf, RevBody, Target};
 
@@ -80,15 +83,6 @@ pub const SPEC_REFS_QUERY: &[QueryParam] = &[QueryParam {
     description: "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
     integer_range: None,
 }];
-
-/// `.forge/repo.yml` as a tree path, parsed once.
-static REPO_CONFIG_REPO_PATH: LazyLock<Result<RepoPath, &'static str>> =
-    LazyLock::new(|| RepoPath::parse(REPO_CONFIG_PATH));
-
-/// [`REPO_CONFIG_REPO_PATH`] (a constant: its parse is unit-tested).
-pub(crate) fn repo_config_path() -> Result<RepoPath, &'static str> {
-    REPO_CONFIG_REPO_PATH.clone()
-}
 
 // ── the answer ─────────────────────────────────────────────────────────
 
@@ -237,30 +231,10 @@ async fn run(
                 .await?
         }
     };
-    let path = repo_config_path().map_err(|rule| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "repo_config_path_invalid")
-            .with_context("rule", rule)
-    })?;
-    let file = browse
-        .small_file(repo, &rev.commit, &path, MAX_REPO_CONFIG_BYTES as u64)
-        .await
-        .map_err(|e| e.with_context("commit", &rev.commit))?;
-    let parsed = match file {
-        SmallFile::Absent => return Ok(answer(&rev, "absent", None, Vec::new())),
-        SmallFile::NotAFile => Err(RepoConfigProblem {
-            line: 0,
-            reason: "not_a_file",
-        }),
-        SmallFile::TooLarge => Err(RepoConfigProblem {
-            line: 0,
-            reason: "too_large",
-        }),
-        SmallFile::Found(bytes) => parse_repo_config(&bytes),
-    };
-    let config: RepoConfig = match parsed {
-        Ok(c) => c,
-        Err(problem) => {
+    let config: RepoConfig = match read_repo_config(browse, repo, &rev.commit).await? {
+        RepoConfigRead::Absent => return Ok(answer(&rev, "absent", None, Vec::new())),
+        RepoConfigRead::Valid(c) => c,
+        RepoConfigRead::Invalid(problem) => {
             tracing::info!(
                 target: "forge_web",
                 event = "forge.spec_refs.repo_yml_invalid",
@@ -303,13 +277,6 @@ fn answer(
     }
 }
 
-/// What following one entry came to (before it is shown).
-enum Outcome {
-    Resolved { project: i64, commit: String },
-    VersionNotFound { project: i64 },
-    Unavailable,
-}
-
 /// One entry, resolved for the reader (module docs, step 4).
 async fn follow(
     state: &AppState,
@@ -332,37 +299,10 @@ async fn follow(
                 status: "local".to_owned(),
                 error_code: None,
                 project_id: None,
-                commit: Some(rev.commit.clone()), // clone: as above
+                commit: Some(rev.commit.clone()), // clone: the answer owns its strings
             });
         }
         SpecSource::Repo { written, repo, pin } => (written, repo, pin),
-    };
-    let log = |reason: &'static str,
-               code: ErrorCode,
-               decision: Option<ErrorCode>,
-               referenced: Option<i64>| {
-        tracing::info!(
-            target: "forge_web",
-            event = "forge.spec_refs.unresolved",
-            error_code = code.id(),
-            decision_error_code = decision.map(ErrorCode::id),
-            request_id = %request_id,
-            project_id = t.project.get(),
-            referenced_project_id = referenced,
-            line = entry.line,
-            pin = pin.kind(),
-            reason,
-            "a .forge/repo.yml reference was not resolved for the reader"
-        );
-    };
-    let unavailable = |reason, decision, referenced| {
-        log(
-            reason,
-            ErrorCode::SpecRepositoryUnavailable,
-            decision,
-            referenced,
-        );
-        Outcome::Unavailable
     };
     // Every followed reference counts against the caller's limit (a
     // lookup and a ref resolution each).
@@ -374,86 +314,25 @@ async fn follow(
     if let Err(retry) = state.spec_refs_limiter.check(reader, Instant::now()) {
         return Err(state.spec_refs_limiter.refused(retry));
     }
-    let outcome = match resolve_bounded(state, lookup, Some(reader)).await? {
-        Resolution::Absent => unavailable("absent", None, None),
-        Resolution::Deleted { .. } => unavailable("tombstone_deleted", None, None),
-        Resolution::Moved { .. } => unavailable("moved", None, None),
-        Resolution::Live(resolved) => match resolved.target {
-            ResolvedTarget::User(_) | ResolvedTarget::Group { .. } => {
-                unavailable("not_a_project", None, None)
-            }
-            ResolvedTarget::Project {
-                id,
-                access,
-                repository,
-            } => match prove_spec_ref(proof, loaded_project(id, access)) {
-                Err(denied) => unavailable("denied", Some(denied.code()), None),
-                Ok(allowed) if repository.state != RepositoryState::Ready => {
-                    unavailable("not_ready", None, Some(allowed.id().get()))
-                }
-                Ok(allowed) => {
-                    let project = allowed.id().get();
-                    let pinned = t.smart.browse.find_ref(repository.id, pin.ref_name()).await;
-                    match pinned {
-                        Ok(RefLookup::Commit(found)) => Outcome::Resolved {
-                            project,
-                            commit: found.commit,
-                        },
-                        Ok(RefLookup::Missing) => {
-                            log(
-                                "ref_not_found",
-                                ErrorCode::SpecVersionNotFound,
-                                None,
-                                Some(project),
-                            );
-                            Outcome::VersionNotFound { project }
-                        }
-                        Ok(RefLookup::NotACommit) => {
-                            log(
-                                "not_a_commit",
-                                ErrorCode::SpecVersionNotFound,
-                                None,
-                                Some(project),
-                            );
-                            Outcome::VersionNotFound { project }
-                        }
-                        // Review X1: a git failure (busy, timeout, storage)
-                        // on a referenced repository is this entry's
-                        // `unavailable`, never the request's status (an
-                        // existence oracle); the real failure is logged at
-                        // warn with its code.
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "forge_web",
-                                event = "forge.spec_refs.unresolved",
-                                error_code = ErrorCode::SpecRepositoryUnavailable.id(),
-                                git_error_code = e.code().id(),
-                                git_error = %e,
-                                request_id = %request_id,
-                                project_id = t.project.get(),
-                                referenced_project_id = project,
-                                referenced_repo_id = repository.id.get(),
-                                line = entry.line,
-                                pin = pin.kind(),
-                                reason = "git_failed",
-                                "a .forge/repo.yml reference could not be read; shown as unavailable"
-                            );
-                            Outcome::Unavailable
-                        }
-                    }
-                }
-            },
-        },
+    let ctx = FollowCtx {
+        resolver: state.resolver(),
+        lookup_timeout: state.lookup_timeout(),
+        browse: &t.smart.browse,
+        request_id,
+        project: t.project,
     };
-    let (status, error_code, project_id, commit) = match outcome {
-        Outcome::Resolved { project, commit } => ("resolved", None, Some(project), Some(commit)),
-        Outcome::VersionNotFound { project } => (
+    let followed = follow_ref(&ctx, Reader::Proof(proof), entry.line, lookup, pin).await?;
+    let (status, error_code, project_id, commit) = match followed {
+        Followed::Resolved {
+            project, commit, ..
+        } => ("resolved", None, Some(project.get()), Some(commit)),
+        Followed::VersionNotFound { project } => (
             "version_not_found",
             Some(ErrorCode::SpecVersionNotFound),
-            Some(project),
+            Some(project.get()),
             None,
         ),
-        Outcome::Unavailable => (
+        Followed::Unavailable => (
             "unavailable",
             Some(ErrorCode::SpecRepositoryUnavailable),
             None,

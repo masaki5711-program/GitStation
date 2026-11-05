@@ -424,10 +424,16 @@ async fn the_tables_refuse_what_the_api_refuses_by_constraint_name() {
             Some((c, v)) => (format!(", {c}"), format!(", {v}")),
             None => (String::new(), String::new()),
         };
+        // M3 X2: a `forge/` run has no reporter (check_runs_reporter).
+        let reporter = if name.starts_with("'forge/") {
+            "NULL".to_owned()
+        } else {
+            a.to_string()
+        };
         format!(
             "INSERT INTO forge.check_runs (project_id, head_sha, name, status, conclusion, \
              completed_at, reported_by, request_id{column}) VALUES ({p}, repeat('a', 40), \
-             {name}, {status}, {conclusion}, {completed}, {a}, 'req-x'{value})"
+             {name}, {status}, {conclusion}, {completed}, {reporter}, 'req-x'{value})"
         )
     };
     let cases: Vec<(String, &str)> = vec![
@@ -827,9 +833,21 @@ async fn unreported_requirements_and_reporters_are_counted() {
                  required_checks) SELECT id, project_id, ARRAY['ci/gates', 'ci/lint', \
                  'forge/risk']::text[] FROM forge.protected_refs WHERE project_id = {p}"
             ),
+            format!(
+                "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
+                 VALUES ({p}, 'refs/heads/release', 'maintainer')"
+            ),
+            format!(
+                "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
+                 required_checks) SELECT id, project_id, ARRAY['forge/spec-drift']::text[] \
+                 FROM forge.protected_refs WHERE project_id = {p} \
+                 AND pattern = 'refs/heads/release'"
+            ),
         ],
     )
     .await;
+    // M3 X2: `forge/spec-drift` has forge's worker as its reporter; only
+    // `forge/risk` (no reporter yet) counts.
     let unreported = unreported_requirements(&w.t.db).await.expect("required");
     assert_eq!(
         unreported.into_iter().collect::<Vec<_>>(),
@@ -1008,10 +1026,12 @@ async fn more_runs_than_the_cap_is_check_run_data_invalid() {
         &[format!(
             "INSERT INTO forge.check_runs (project_id, head_sha, name, status, reported_by, \
              request_id) SELECT {}, '{}', 'ci/n' || g, 'queued', {}, 'req-fill' \
-             FROM generate_series(1, 101) g",
+             FROM generate_series(1, {}) g",
             w.project().get(),
             head.as_str(),
-            w.alice.get()
+            w.alice.get(),
+            // Review X2: reads hold the reporters' cap plus forge's names.
+            forge_core::checks::MAX_STORED_CHECK_RUNS_PER_COMMIT + 1
         )],
     )
     .await;

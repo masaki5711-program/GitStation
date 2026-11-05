@@ -3,7 +3,8 @@
 //! pass `|_| Ok(())` and skip the in-transaction decision. Only
 //! forge-checks calls them (with `Authorized::reconfirm`); forge-db's own
 //! tests exercise them (M3 C1, the same guard as forge-hosting's and
-//! forge-review's `decided_callers.rs`).
+//! forge-review's `decided_callers.rs`). M3 X2 adds forge's own write,
+//! `record_forge_check_run`, which takes no decision at all.
 
 use std::path::{Path, PathBuf};
 
@@ -25,10 +26,13 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn only_forge_checks_calls_the_check_commands() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     // Assembled so this file does not match itself.
-    let needles: Vec<String> = ["report_check_run", "change_check_namespace_grant"]
+    let mut needles: Vec<String> = ["report_check_run", "change_check_namespace_grant"]
         .iter()
         .map(|c| format!("{c}{}{}", "_decided", "("))
         .collect();
+    // M3 X2: forge's own runs (no decision at all: forge's worker) are
+    // written through forge-checks' `SpecDrift` only.
+    needles.push(format!("{}{}", "record_forge_check_run", "("));
     let mut offenders = Vec::new();
     for entry in std::fs::read_dir(&crates).expect("crates/") {
         let dir = entry.expect("entry").path();

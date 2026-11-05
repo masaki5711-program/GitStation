@@ -57,3 +57,25 @@ fn a_snapshot_answers_only_for_its_own_head() {
     assert!(empty.is_empty());
     assert_eq!(empty.run(&sha('a'), &name("ci/gates")), None);
 }
+
+/// M3 X2: the names forge's own worker reports are valid `forge/` names,
+/// and only they count as reported by forge.
+#[test]
+fn forge_reports_exactly_its_own_checks() {
+    use crate::checks::{forge_reports, FORGE_REPORTED_CHECKS, SPEC_DRIFT_CHECK};
+    use crate::merge_conditions::CheckNamespace;
+    assert_eq!(FORGE_REPORTED_CHECKS, &[SPEC_DRIFT_CHECK]);
+    for raw in FORGE_REPORTED_CHECKS {
+        let n = name(raw);
+        assert_eq!(n.namespace(), CheckNamespace::Forge, "{raw}");
+        assert!(forge_reports(&n), "{raw}");
+    }
+    for raw in [
+        "forge/risk",
+        "forge/spec-trace",
+        "ci/spec-drift",
+        "ext/spec-drift",
+    ] {
+        assert!(!forge_reports(&name(raw)), "{raw}");
+    }
+}

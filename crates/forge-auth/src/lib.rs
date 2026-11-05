@@ -70,7 +70,7 @@ pub use prove::{
     VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
-pub use spec_ref::prove_spec_ref;
+pub use spec_ref::{prove_spec_ref, prove_spec_ref_for_every_person};
 pub use viewer::{MergeRequestViewer, MergeSettingsViewer, TRIAL_SUSPENSION_MINUTES};
 pub use webhook_ctx::{prove_webhook_delivery, WebhookCtx, WebhookDeliveryCtx};
 

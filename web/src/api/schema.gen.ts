@@ -1941,7 +1941,7 @@ export interface components {
             /** Format: int64 */
             id: number;
             name: string;
-            reported_by: components["schemas"]["ReporterBody"];
+            reported_by: null | components["schemas"]["ReporterBody"];
             /**
              * Format: int64
              * @description Counts the run's reports (1 at creation).
@@ -1953,7 +1953,7 @@ export interface components {
         };
         /** @description `GET …/commits/{sha}/checks` (docs/api/checks.md, schema_version 1). */
         CheckRunList: {
-            /** @description By name; at most 100. */
+            /** @description By name; at most 100 reported, plus forge's own (`forge/spec-drift`). */
             check_runs: components["schemas"]["CheckRunBody"][];
             head_sha: string;
             /** Format: int32 */

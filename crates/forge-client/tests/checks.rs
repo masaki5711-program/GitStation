@@ -149,6 +149,36 @@ fn checks_list_reads_the_commit_and_prints_each_run() {
     assert_eq!(j.json()["check_runs"][0]["name"], "ci/gates");
 }
 
+/// M3 X2: forge's own run has no reporter (`reported_by: null`): shown as
+/// reported by forge, and the `--json` answer still matches its schema.
+#[test]
+fn checks_list_shows_forge_as_the_reporter_of_its_own_runs() {
+    let forge_run = RUN
+        .replace(r#""name":"ci/gates""#, r#""name":"forge/spec-drift""#)
+        .replace(r#""conclusion":"success""#, r#""conclusion":"neutral""#)
+        .replace(r#"{"id":42,"username":"ci-runner"}"#, "null");
+    let list = format!(r#"{{"schema_version":1,"head_sha":"{SHA}","check_runs":[{forge_run}]}}"#);
+    let srv = Mock::start(move |_| Resp::json(200, &list));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &["checks", "list", "--project", "7", "--sha", SHA],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        o.stdout.trim(),
+        "forge/spec-drift completed neutral (by forge)"
+    );
+    let j = gstn(
+        &sb,
+        &srv,
+        &["checks", "list", "--project", "7", "--sha", SHA, "--json"],
+    );
+    assert_eq!(j.code, 0, "{}", j.stderr);
+    assert!(j.json()["check_runs"][0]["reported_by"].is_null());
+}
+
 #[test]
 fn the_grant_commands_call_their_routes() {
     let srv = Mock::start(|r| {

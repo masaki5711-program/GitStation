@@ -484,6 +484,19 @@ diagnosis = "The event `forge.spec_refs.unresolved` (info) carries `error_code`,
 fix = "Correct `repo:` in .forge/repo.yml to the repository's current path, or give the readers Reporter on it (an internal project is readable by every signed-in person). A service account must be a member. Nothing to change on the server."
 test = "an_unreadable_spec_repository_is_spec_repository_unavailable"
 
+[[error]]
+code = "FG-REPO-0027"
+name = "SpecVersionBehind"
+http_status = 409
+severity = "info"
+user_message_ja = "このコミットの .forge/repo.yml が固定している仕様の版より新しい版が公開されています。新しい版の変更を確かめ、必要なら version を上げてください。"
+user_message_en = "A later version of a specification this commit's .forge/repo.yml pins has been published. Review its changes and raise version if needed."
+user_message_id = "Versi yang lebih baru dari spesifikasi yang dipatok oleh .forge/repo.yml pada commit ini telah dipublikasikan. Tinjau perubahannya dan naikkan version bila perlu."
+cause = "The check `forge/spec-drift` (M3 X2, plan 03 §5.4, ADR-0023 Amendment X2) evaluated a merge request version's head: an entry `repo: <path>` with `version: <tag>` names a repository every signed-in person may read, and that repository has a later tag of the same series (the same prefix, numbers compared as numbers, a missing part as 0; prerelease tags such as v2.0-rc1 are no versions). A notice, never an HTTP error: the run concludes `neutral` (it never blocks a merge unless a protected branch requires forge/spec-drift, and `neutral` does not satisfy a required check) and its summary and annotation name the line, the pin and the latest version with this code."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/spec-drift; the summary lists every entry with its state). The job's log event `forge.spec_drift.recorded` carries `request_id`, `project_id`, `head_sha`, `conclusion` and `check_run_id`. List the referenced repository's tags: gstn browse refs --project <referenced project> --type tag."
+fix = "Read the later version's changes and raise `version:` in .forge/repo.yml in this merge request, or keep the pin on purpose (the run stays neutral). Nothing to change on the server."
+test = "a_pin_behind_the_latest_version_is_neutral_with_spec_version_behind"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]
@@ -2057,7 +2070,7 @@ severity = "info"
 user_message_ja = "このコミットにはこれ以上の種類のチェックを登録できません（上限 100）。既にある名前で報告してください。"
 user_message_en = "No more kinds of checks can be reported on this commit (the limit is 100). Report under a name it already has."
 user_message_id = "Tidak ada lagi jenis pemeriksaan yang dapat dilaporkan pada commit ini (batasnya 100). Laporkan dengan nama yang sudah ada."
-cause = "A check report named a new check on a commit that already holds 100 check runs in the project (forge_core::MAX_CHECK_RUNS_PER_COMMIT, M3 C1): the cap bounds every read of a commit's runs, the merge gate's included. Reports under a name the commit already has still update their run. Decided under the commit's report lock, so concurrent reports never exceed it. Nothing was written. Not an alert: usually a reporter that puts a run number or a date into the name."
+cause = "A check report named a new check on a commit that already holds 100 check runs of reporters in the project (forge_core::MAX_CHECK_RUNS_PER_COMMIT, M3 C1; the names forge reports itself, `forge/spec-drift`, are neither counted nor capped — M3 X2 review — so reads hold at most MAX_STORED_CHECK_RUNS_PER_COMMIT = 101): the cap bounds every read of a commit's runs, the merge gate's included. Reports under a name the commit already has still update their run. Decided under the commit's report lock, so concurrent reports never exceed it. Nothing was written. Not an alert: usually a reporter that puts a run number or a date into the name."
 diagnosis = "The log event carries `reason=too_many_runs`, `limit`, `project_id` and `head_sha`, with `action=CheckWrite`. The names on the commit: SELECT name, reported_by, updated_at FROM forge.check_runs WHERE project_id = <project_id> AND head_sha = '<head_sha>' ORDER BY name."
 fix = "Report under a stable name per kind of check (for example `ci/gates`, not `ci/gates-<run>`); the details of one run belong in its summary and annotations."
 test = "a_new_name_beyond_the_limit_is_check_run_limit_reached"

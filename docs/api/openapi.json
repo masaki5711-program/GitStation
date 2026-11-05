@@ -876,7 +876,15 @@
             "type": "string"
           },
           "reported_by": {
-            "$ref": "#/components/schemas/ReporterBody"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReporterBody",
+                "description": "The account that reported it last; `null` for a `forge/` run\n(forge's own worker, M3 X2)."
+              }
+            ]
           },
           "revision": {
             "description": "Counts the run's reports (1 at creation).",
@@ -915,7 +923,7 @@
         "description": "`GET …/commits/{sha}/checks` (docs/api/checks.md, schema_version 1).",
         "properties": {
           "check_runs": {
-            "description": "By name; at most 100.",
+            "description": "By name; at most 100 reported, plus forge's own (`forge/spec-drift`).",
             "items": {
               "$ref": "#/components/schemas/CheckRunBody"
             },

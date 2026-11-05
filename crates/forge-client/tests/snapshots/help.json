@@ -6752,7 +6752,10 @@
               "id",
               "username"
             ],
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "revision": {
             "type": "integer"
