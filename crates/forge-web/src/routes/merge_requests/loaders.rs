@@ -334,6 +334,8 @@ pub const VERSIONS_OF: MergeRequestRead = MergeRequestRead(VERSIONS_SUFFIX);
 pub const COMPARE_OF: MergeRequestRead = MergeRequestRead(COMPARE_SUFFIX);
 /// `GET …/mergeability`.
 pub const MERGEABILITY_OF: MergeRequestRead = MergeRequestRead(MERGEABILITY_SUFFIX);
+/// `GET …/conflicts` (M3 X6).
+pub const CONFLICTS_OF: MergeRequestRead = MergeRequestRead(super::CONFLICTS_SUFFIX);
 /// `GET …/discussions` (M3 R3).
 pub const DISCUSSIONS_OF: MergeRequestRead = MergeRequestRead(super::DISCUSSIONS_SUFFIX);
 

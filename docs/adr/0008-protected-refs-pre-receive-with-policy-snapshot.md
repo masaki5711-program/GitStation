@@ -155,3 +155,57 @@ Smart HTTP の push（`POST {path}.git/git-receive-pack`）は、Decision の (c
   既存の規則との衝突なので、クライアント（gstn）が区別できるようにする。
 - 規則の削除と push の判定が同時に起きる場合は扱わない: push は git を動かす前に読んだ 1 つのスナップショットで全 ref を判定する
   （この ADR の方針どおり、スナップショットの後に確定した削除はその push に効かない）。
+
+## Amendment（2026-11-06、M3 X8: push の検査 — pre-receive フックの導入）
+
+計画 01 の「push 時の検査（シークレットの混入、大きいファイル） Should、pre-receive フックで実行する」と、MR4 の追記が M3 に送った
+pre-receive フックを、**push の検査のために**入れた。保護 ref の判定は案 B（事前の検査と `receive.denyNonFastForwards`）のままで、
+フックに移していない（上の「既知の制限」も残る。移すのは別の MR）。
+
+- **フックの置き方**: `-c core.hooksPath=<git home>/push-hooks`（push の検査のある receive-pack だけ。他の git は空のフックの
+  ディレクトリのまま）。中身は forge が書く `pre-receive` 1 つ（3 行の sh: `exec "$FORGE_PUSH_CHECK_EXE" hook pre-receive`、Unix は 0700）。
+  無ければ作り、違う内容・余計なファイルがあれば push を拒否する（FG-GIT-0001 `reason=hooks_dir`、`detail=push_hook_mismatch` /
+  `unexpected_entry`。空のディレクトリと同じ扱い）。
+- **push ごとの run**: serve が `<git home>/push-checks/<nonce>/policy`（0700。nonce、request_id、言語、保存先の根、リポジトリの id、
+  git の実行ファイルと home、blob の上限）を書き、receive-pack の環境に `FORGE_PUSH_CHECK_DIR` と `FORGE_PUSH_CHECK_EXE`（serve 自身の
+  実行ファイル）を足す。フック（`forge hook pre-receive`、隠しコマンド）は DB に接続せず、秘密も持たない（この ADR の Decision のまま）。
+  リポジトリのパスは policy の根と id から `StorageRoot::existing` で作る（ADR-0009）。
+- **何を調べるか**: push が持ち込むオブジェクトだけ — 新しい先端から辿れて、push の前のどの ref からも辿れないもの
+  （フックの中では ref はまだ更新前なので `rev-list --objects --stdin --not --all`）。git が渡す隔離の変数
+  （`GIT_OBJECT_DIRECTORY` は `<repo>/objects/tmp_objdir-incoming-*`、`GIT_ALTERNATE_OBJECT_DIRECTORIES` は `<repo>/objects`）を確かめてから、
+  その git だけに渡す（`GIT_QUARANTINE_PATH` も付け、git 自身が ref の更新を拒む）。すでにリポジトリにある秘密で新しい push は拒まない。
+  - 大きさ: `cat-file --batch-check` で blob の大きさ。`git.http.push_max_blob_bytes`（既定 100 MiB）を超えたら FG-GIT-0021。
+    **レビュー（X8、HIGH）を受けて**: 大きさの検査は秘密の検査の一覧（上限つき）に頼らない。git がこの push で受け取ったオブジェクトを、隔離の
+    オブジェクトのディレクトリだけから（リポジトリを alternates にせず）`cat-file --batch-all-objects --unordered --batch-check` で**流しながら**
+    読み、上限を超えた blob だけを持つ（出力をメモリに溜めない）。**最後まで読めなければ push を拒否する**（FG-GIT-0023 `size_check_failed`、
+    独自の上限 120 秒）。水増しで秘密の検査を上限で止めても、注釈付きタグだけが指す blob でも、大きさは必ず調べられる。隔離が無いのは git が
+    パックを受け取っていないとき（forge が求める git 2.38 以上は、パックを受け取れば必ず隔離する）で、新しく測るものは無い。
+  - 秘密: 1 MiB 以下のテキストの blob（先頭 8000 バイトに NUL があればバイナリとして飛ばす）を `cat-file --batch` で読み、
+    確度の高い規則だけ（`forge_git::secret_scan`: 秘密鍵の見出し、AWS・GitHub・GitLab・Slack・Google、`fgp_` / `gss_` / `whsec_`）。
+    本体の文字の種類が少ないもの・`EXAMPLE` はプレースホルダーとして外す。見つかったら FG-GIT-0022。
+  - 見つかった blob を足したコミットは `log --reverse --raw --no-abbrev --no-renames --stdin --not --all` で 1 回だけ探す（見つからなくても拒否は変えない）。
+- **利用者に見せるもの**: フックの stderr（git が `remote:` で送る）にコード・利用者向けの文・ファイルのパス・コミット・規則・request_id。
+  **秘密の値は出さない**（serve のログにも出さない。result にも書かない）。ref はすべて `ng <ref> pre-receive hook declined`。
+- **上限と、超えたときの扱い（決定）**: 全体 60 秒、新しいオブジェクト 50 万、秘密の検査で読む 256 MiB、表示する見つかりもの 20。
+  上限に当たったら **push を通し（fail open）、警告**（利用者に `FG-GIT-0024` の行、serve のログに FG-GIT-0024 warn）。**fail open は秘密の検査だけ**
+  （レビュー X8 を受けて。大きさは上のとおり完全か拒否）。1 MiB を超えるテキストの blob は秘密を調べないので `large_blob_unscanned` で
+  不完全として警告する。バイナリは数える（`skipped_binary`）が不完全にはしない（規則はテキストの型）。理由: 検査は
+  事故の防止（Should）で、大きな取り込みを止めると push そのものが使えなくなる。パック全体は `receive.maxInputSize` が別に縛る。
+  上限の前に見つかったものは拒否する。**検査が動かない（policy が読めない、隔離が不正、git の失敗）は push を拒否（fail closed）**、FG-GIT-0023（alert）。
+- **フックの置き方の追加（レビュー X8）**: スクリプトは serve の起動時に 1 回だけ書く（`Git::install_push_hook`。違うものがあれば起動しない）。
+  push ごとには読むだけで確かめ（無い・違う・Unix で実行権が無い・余計なものがある → 拒否）、push ごとの書き込み（Windows の同時の rename）をしない。
+  実行ファイルのパスは `\\?\` を外し（git for Windows の sh が実行できない）、引用符・`$` などを含むものは使わない。serve は自分の実行ファイルの
+  パスが分からない・使えないとき起動しない（検査なしで push を受けない）。
+- **フックが本当に動いたかの検査**（MR4 の追記が求めたもの）: フックは run の nonce を付けた `result` を書く。git の終了後に serve が読み、
+  ref が更新されたのに result が無い（または別の nonce）なら FG-GIT-0023 `reason=hook_not_run`（alert）。git がフックを黙って飛ばしても
+  見えるようにする（防ぐのではなく検出。手当ては runbook push-checks の unchecked push）。拒否されたのに result が無いのは `hook_no_result`。
+  git の終了後に ref が読めず反映が分からないまま result が無いのは `hook_unknown`（「反映 0」として隠さない）。
+- **誤検知の逃げ道**: ファイルのどこかに `forge:allow-secret` があれば、そのファイルの秘密の見つかりものは数えるだけで拒否しない
+  （レビューで見え、履歴に残る。serve は免除を 1 件ずつ `forge.git.push_check_waived`（規則・パス・blob）でログに出す）。行ごとの印にしない
+  理由: PEM の鍵は見出しの行に注記を書けない（同じ行に書くと鍵として読めなくなる）。合成の鍵の前置きの説明文に書けるファイル単位の印にした。**管理者が検査を飛ばす操作は作らない**（計画にない）。大きいファイルは設定の上限を上げる（承認された手順）。
+  プロジェクトごとの上限も作らない（計画にない。設定はインスタンスで 1 つ）。
+- コード: FG-GIT-0021 PushBlobTooLarge（info）、0022 PushSecretDetected（warn）、0023 PushCheckFailed（alert、runbook push-checks）、
+  0024 PushCheckIncomplete（warn）。
+- テスト: `a_push_with_a_private_key_is_refused_with_fg_git_0022`、`a_push_with_a_large_file_is_refused_with_fg_git_0021`、
+  `only_new_objects_are_checked_and_a_marked_fixture_passes`（forge-cli の本物の git の e2e）、forge-git の `push_scan` / `push_hook` /
+  `secret_scan` の単体テスト（`a_hook_without_its_policy_fails_closed`、`a_scan_past_its_byte_cap_is_incomplete_and_accepted` など）。

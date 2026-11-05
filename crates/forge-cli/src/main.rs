@@ -26,6 +26,8 @@ mod admin_user;
 mod db;
 mod doctor;
 mod explain;
+// M3 X8: the push checks' pre-receive hook.
+mod hook;
 mod oidc;
 mod runtime;
 mod serve;
@@ -88,6 +90,19 @@ enum Command {
         #[command(subcommand)]
         command: AdminCommand,
     },
+    /// Internal: run by git's hooks inside receive-pack (M3 X8), never by
+    /// hand.
+    #[command(hide = true)]
+    Hook {
+        #[command(subcommand)]
+        command: HookCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookCommand {
+    /// The push checks (large files, secrets) of one push.
+    PreReceive,
 }
 
 #[derive(Subcommand)]
@@ -363,6 +378,13 @@ enum ErrorsCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // The hook's output goes to the pusher: no log subscriber, no config.
+    if let Command::Hook {
+        command: HookCommand::PreReceive,
+    } = cli.command
+    {
+        return hook::pre_receive();
+    }
     let lang = Lang::parse(&cli.lang).unwrap_or(Lang::Ja);
     let request_id = RequestId::generate();
     // The server, and the one mutating operator command (its
@@ -420,6 +442,8 @@ fn main() -> ExitCode {
         | Command::Db {
             command: DbCommand::Status { .. },
         } => telemetry::init(LogFormat::Pretty, "warn"),
+        // Returned above, before any subscriber.
+        Command::Hook { .. } => false,
     };
 
     let config_file = cli.config;
@@ -645,6 +669,9 @@ fn main() -> ExitCode {
         // Returned above; reaching this arm is a programming error, reported.
         Command::Doctor { .. } => {
             Err(ForgeError::new(ErrorCode::Internal).with_context("operation", "doctor_dispatch"))
+        }
+        Command::Hook { .. } => {
+            Err(ForgeError::new(ErrorCode::Internal).with_context("operation", "hook_dispatch"))
         }
     };
     match result.and_then(|text| emit(&text)) {

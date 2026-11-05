@@ -321,6 +321,8 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
         "merge_requests",
         "merge_request_counters",
         "merge_request_mergeability",
+        "merge_request_conflict_scans",
+        "merge_request_conflict_pairs",
         "merge_request_versions",
         "merge_request_discussions",
         "merge_request_notes",

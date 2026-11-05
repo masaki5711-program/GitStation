@@ -113,6 +113,9 @@ pub enum Command {
         #[command(subcommand)]
         command: MrCommand,
     },
+    /// A merge request's predicted conflicts with other open merge requests
+    /// on its target, drafts included (M3 X6; never starts a scan).
+    Conflicts(ConflictsArgs),
     /// Namespace paths.
     #[command(disable_help_subcommand = true)]
     Namespace {
@@ -1636,6 +1639,14 @@ pub enum GitOperation {
     Get,
     Store,
     Erase,
+}
+
+#[derive(Args, Debug)]
+pub struct ConflictsArgs {
+    #[arg(long, value_parser = parse_id, value_name = "ID")]
+    pub project: i64,
+    #[arg(long, value_parser = parse_id, value_name = "IID")]
+    pub iid: i64,
 }
 
 #[derive(Args, Debug)]

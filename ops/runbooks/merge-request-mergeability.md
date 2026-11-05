@@ -1,4 +1,4 @@
-# Runbook: merge-request-mergeability（FG-REVIEW-0003。関連: FG-DB-0006、FG-GIT-0002 / 0003 / 0004）
+# Runbook: merge-request-mergeability（FG-REVIEW-0003、FG-REVIEW-0022。関連: FG-DB-0006、FG-GIT-0002 / 0003 / 0004）
 
 M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merge_request.mergeability`、表 `forge.merge_request_mergeability`）が
 決まらない・遅れるとき、および判定が残す参照されないオブジェクトでディスクが増えるとき。
@@ -65,6 +65,28 @@ M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merg
 
 - `gstn mr mergeability --project <id> --iid <iid>` が `can_be_merged` / `cannot_be_merged` になり、`checked_head_sha` が MR の `head_sha` と同じ。
 - `forge doctor` の `review.mergeability` が ok。
+
+## MR 同士の衝突の予測（FG-REVIEW-0022、M3 X6）
+
+衝突の予測（計画 04 C-2、ADR-0024 Amendment X6）は、MR の新しい head・target の変更・再オープンのたびにジョブ
+`merge_request.conflict_scan` が、同じ target に向けて開いている他の MR（下書きを含む）と比べる。まず変更ファイルの重なりで絞り、
+重なる組だけ `merge-tree` を試す。予測は **助言** で、マージを止めない（マージを止めるのは C-1 の判定）。
+
+- **Trigger**: ログの `forge.review.conflict_scan_incomplete`（`reason=peers_capped|pairs_capped|budget_exhausted|pair_failed`）、
+  `forge.review.conflict_scan_not_finished`（`reason=job_failed|job_stale`）。`gstn conflicts --project <id> --iid <iid>` の
+  scan が `incomplete` / `failed`。
+- **Diagnose（読み取りのみ）**:
+  - `SELECT merge_request_id, status, reason, scan_seq, scanned_head_sha, peers, pairs_tried, pairs_skipped, updated_at
+    FROM forge.merge_request_conflict_scans WHERE merge_request_id = <id>;`
+  - `SELECT low_mr_id, high_mr_id, outcome, reason, prediction_seq, checked_at FROM forge.merge_request_conflict_pairs
+    WHERE <id> IN (low_mr_id, high_mr_id);`
+  - `pair_failed` は同じ `request_id` で git のコード（FG-GIT-0002 / 0003 / 0004）が出ている。そのコードの手順で直す（ジョブは再試行する）。
+  - `peers_capped`（50 件）・`pairs_capped`（20 組）・`budget_exhausted`（120 秒）は上限による。target に開いている MR が多いと起きる。
+    試さなかった組は「衝突なし」とは表示しない（予測が無いだけ）。
+- **Mitigate**: 上限は仕様（M3 では設定にしていない）。試さなかった組は、どちらかの MR の次の push で試される。
+  `job_failed` / `job_stale` は原因のコードを直す。次の push・target の変更・再オープンで予測し直す。
+  `[MUTATING — needs approval]` 予測し直させたいときは、利用者がその MR の target を一度変えて戻す（戻し: 不要）。表を手で書き換えない。
+- **Verify**: `gstn conflicts` の scan が `scanned`、`stale: false`、`scanned_head_sha` が MR の `head_sha` と同じ。
 
 ## Escalate
 

@@ -28,6 +28,7 @@ use forge_db::tokens::{self, NewToken};
 use forge_db::users::{self, NewUser};
 use forge_db::{protected_refs, repositories, Db};
 use forge_errors::ErrorCode;
+use forge_git::push_scan::ScanLimits;
 use forge_git::{Git, GitConfig, GitStream, StorageRoot};
 use forge_web::{
     AppConfig, AppState, BoundedAuthenticator, GitHttpLimits, Lookups, ServerLimits, SmartHttp,
@@ -58,7 +59,7 @@ fn ctx(request: &str) -> ChangeContext {
 }
 
 /// How a fixture's server runs.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Options {
     max_streams: usize,
     acquire_timeout: Duration,
@@ -69,6 +70,14 @@ struct Options {
     /// Record pushes with a recorder that always fails (the database is
     /// "down" after the ref update; MR4).
     failing_recorder: bool,
+    /// Run the push checks (M3 X8) with this test's `forge` binary, as
+    /// `forge serve` does.
+    push_checks: bool,
+    /// Another binary for the hook script (X8 review: `hook_not_run`, the
+    /// Windows verbatim path).
+    push_check_exe: Option<PathBuf>,
+    /// Other scan limits (X8 review: tiny caps).
+    push_check_limits: Option<ScanLimits>,
 }
 
 impl Default for Options {
@@ -79,6 +88,9 @@ impl Default for Options {
             big: false,
             limits: GitHttpLimits::default(),
             failing_recorder: false,
+            push_checks: true,
+            push_check_exe: None,
+            push_check_limits: None,
         }
     }
 }
@@ -358,21 +370,34 @@ fn server(opts: Options) -> Server {
                 projects: Arc::new(db.clone()), // clone: also the push services below
             },
         )
-        .with_smart_http(
-            SmartHttp::new(
+        .with_smart_http({
+            let smart = SmartHttp::new(
                 git.clone(), // clone: shared pools with the test
                 StorageRoot::open(storage.path()).expect("root"),
                 opts.limits,
-            )
-            .with_push(
+            );
+            let smart = if opts.push_checks {
+                let exe = opts
+                    .push_check_exe
+                    .clone() // clone: the options stay readable
+                    .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_forge")));
+                let smart = smart.with_push_checks(exe).expect("push checks armed");
+                match opts.push_check_limits {
+                    Some(limits) => smart.with_push_check_limits(limits),
+                    None => smart,
+                }
+            } else {
+                smart
+            };
+            smart.with_push(
                 Arc::new(db.clone()),
                 if opts.failing_recorder {
                     Arc::new(DownRecorder) as Arc<dyn PushRecorder>
                 } else {
                     Arc::new(db.clone())
                 },
-            ),
-        );
+            )
+        });
         let router = forge_web::app(state, AppConfig::default()).expect("router");
         let listener = forge_web::server::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -1697,16 +1722,23 @@ impl std::io::Write for LogSink {
 }
 
 impl LogSink {
+    /// The process's sink, installed on first use (several tests read it;
+    /// each filters for its own events).
     fn install() -> Self {
-        let sink = Self::default();
-        let writer = sink.clone(); // clone: the subscriber writes, the test reads
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .flatten_event(true)
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::set_global_default(subscriber).expect("one subscriber per process");
-        sink
+        static SINK: std::sync::OnceLock<LogSink> = std::sync::OnceLock::new();
+        SINK.get_or_init(|| {
+            let sink = Self::default();
+            let writer = sink.clone(); // clone: the subscriber writes, the test reads
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .flatten_event(true)
+                .with_writer(move || writer.clone())
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("one subscriber per process");
+            sink
+        })
+        .clone() // clone: a shared handle
     }
 
     fn events(&self) -> Vec<serde_json::Value> {
@@ -1800,4 +1832,320 @@ fn hidden_merge_request_refs_are_not_advertised_or_fetchable() {
     let out = s.push(&s.dave_admin, &work, &["HEAD:refs/merge-requests/1/head"]);
     refused(&out, ErrorCode::ReservedRefNamespace);
     assert_eq!(s.refs(), before);
+}
+
+// ── M3 X8: push checks in the pre-receive hook ─────────────────────────
+//
+// The sample key is assembled at run time, so this file never trips the
+// checks of the repository that hosts it.
+
+fn synthetic_key() -> Vec<u8> {
+    [
+        "-----BEGIN OPENSSH PRIV",
+        "ATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAAsynthetic\n-----END OPENSSH PRIV",
+        "ATE KEY-----\n",
+    ]
+    .concat()
+    .into_bytes()
+}
+
+impl Server {
+    /// Whether the bare repository has `object`.
+    fn has_object(&self, object: &str) -> bool {
+        local_git(self.home.path())
+            .arg("--git-dir")
+            .arg(&self.bare)
+            .args(["cat-file", "-e", object])
+            .output()
+            .expect("cat-file")
+            .status
+            .success()
+    }
+
+    /// The push check runs left in `<git home>/push-checks` once every push
+    /// task ended (they are removed after git exits).
+    fn wait_no_check_runs(&self) {
+        let dir = self.storage.path().join("push-checks");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let left = std::fs::read_dir(&dir).map_or(0, Iterator::count);
+            if left == 0 {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{left} run(s) left in {dir:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[test]
+fn a_push_with_a_private_key_is_refused_with_fg_git_0022() {
+    let s = server(Options::default());
+    let work = s.work();
+    std::fs::create_dir_all(work.join("deploy")).expect("dir");
+    let commit = s.commit(&work, "deploy/id_ed25519", &synthetic_key());
+    s.commit(&work, "later.txt", b"synthetic later\n");
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/feature"]);
+    let text = refused(&out, ErrorCode::PushSecretDetected);
+    assert!(text.contains("deploy/id_ed25519"), "{text}");
+    assert!(text.contains(&commit[..12]), "{text}");
+    assert!(text.contains("private_key"), "{text}");
+    assert!(text.contains("request_id"), "{text}");
+    assert!(text.contains("pre-receive hook declined"), "{text}");
+    // Never the value.
+    assert!(!text.contains("b3BlbnNzaC1rZXkt"), "{text}");
+    // Nothing changed, and the quarantined objects are gone.
+    assert_eq!(s.refs(), before);
+    assert!(!s.has_object(&commit));
+    s.wait_no_check_runs();
+    assert!(s.pushed_rows().0.is_empty());
+}
+
+#[test]
+fn a_push_with_a_large_file_is_refused_with_fg_git_0021() {
+    let s = server(Options {
+        limits: GitHttpLimits {
+            push_max_blob_bytes: 64 * 1024,
+            ..GitHttpLimits::default()
+        },
+        ..Options::default()
+    });
+    let work = s.work();
+    let commit = s.commit(&work, "assets.bin", &noise(100 * 1024));
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/assets"]);
+    let text = refused(&out, ErrorCode::PushBlobTooLarge);
+    assert!(text.contains("assets.bin"), "{text}");
+    assert!(text.contains(&commit[..12]), "{text}");
+    assert!(text.contains("102400 bytes"), "{text}");
+    assert_eq!(s.refs(), before);
+    assert!(!s.has_object(&commit));
+    // A file under the limit passes (a fresh clone, without the big one).
+    let work = s.work();
+    let small = s.commit(&work, "small.bin", &noise(16 * 1024));
+    ok(
+        &s.push(&s.alice_write, &work, &["HEAD:refs/heads/small"]),
+        "push under the limit",
+    );
+    assert_eq!(s.refs().get("refs/heads/small"), Some(&small));
+    s.wait_no_check_runs();
+}
+
+#[test]
+fn only_new_objects_are_checked_and_a_marked_fixture_passes() {
+    let s = server(Options::default());
+    // A key already in the repository (pushed straight into the bare
+    // repository, as the fixture's seed is): a push on top of it passes.
+    let work = s.work();
+    s.commit(&work, "legacy.pem", &synthetic_key());
+    let bare = s.bare.to_string_lossy().into_owned();
+    s.local(&work, &["push", "-q", &bare, "HEAD:refs/heads/legacy"]);
+    let on_top = s.commit(&work, "next.txt", b"synthetic next\n");
+    ok(
+        &s.push(&s.alice_write, &work, &["HEAD:refs/heads/next"]),
+        "push on top of an old key",
+    );
+    assert_eq!(s.refs().get("refs/heads/next"), Some(&on_top));
+    // A reviewed synthetic fixture carries the marker.
+    let mut fixture = b"# synthetic test key, forge:allow-secret\n".to_vec();
+    fixture.extend_from_slice(&synthetic_key());
+    let marked = s.commit(&work, "fixture.pem", &fixture);
+    ok(
+        &s.push(&s.alice_write, &work, &["HEAD:refs/heads/next"]),
+        "push of a marked fixture",
+    );
+    assert_eq!(s.refs().get("refs/heads/next"), Some(&marked));
+    s.wait_no_check_runs();
+}
+
+// ── X8 review: the size check is complete, the rest of the e2e rows ─────
+
+fn tiny_caps(max_blob_bytes: u64) -> Options {
+    let mut limits = ScanLimits::new(max_blob_bytes);
+    limits.max_objects = 2;
+    Options {
+        limits: GitHttpLimits {
+            push_max_blob_bytes: max_blob_bytes,
+            ..GitHttpLimits::default()
+        },
+        push_check_limits: Some(limits),
+        ..Options::default()
+    }
+}
+
+/// X8 review (HIGH): padding a push past the secret scan's object cap
+/// does not let a large file through — and without one, the incomplete
+/// scan is accepted with the FG-GIT-0024 warning.
+#[test]
+fn a_padded_push_cannot_hide_a_large_file() {
+    let s = server(tiny_caps(64 * 1024));
+    let work = s.work();
+    for i in 0..20 {
+        std::fs::write(work.join(format!("pad{i:02}.txt")), format!("pad {i}\n")).expect("pad");
+    }
+    s.local(&work, &["add", "."]);
+    s.local(&work, &["commit", "-q", "-m", "padding"]);
+    let padded = s.local(&work, &["rev-parse", "HEAD"]);
+    // Only padding: accepted, with the warning.
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/padded"]);
+    let text = ok(&out, "padded push");
+    let _ = text;
+    assert!(
+        stderr(&out).contains(ErrorCode::PushCheckIncomplete.id()),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(s.refs().get("refs/heads/padded"), Some(&padded));
+    // Padding and a large file: refused all the same.
+    let big = s.commit(&work, "zz-big.bin", &noise(100 * 1024));
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/padded"]);
+    let text = refused(&out, ErrorCode::PushBlobTooLarge);
+    assert!(text.contains("zz-big.bin"), "{text}");
+    assert!(text.contains(&big[..12]), "{text}");
+    assert_eq!(s.refs(), before);
+    s.wait_no_check_runs();
+}
+
+/// A large blob only an annotated tag names (no tree, no commit) is sized.
+#[test]
+fn a_tag_of_a_large_blob_is_refused() {
+    let s = server(tiny_caps(64 * 1024));
+    let work = s.work();
+    std::fs::write(work.join("blob.bin"), noise(100 * 1024)).expect("write");
+    let blob = s.local(&work, &["hash-object", "-w", "blob.bin"]);
+    std::fs::remove_file(work.join("blob.bin")).expect("remove");
+    s.local(&work, &["tag", "-a", "-m", "a blob", "blob-tag", &blob]);
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["refs/tags/blob-tag"]);
+    let text = refused(&out, ErrorCode::PushBlobTooLarge);
+    assert!(text.contains(&blob[..12]), "{text}");
+    assert_eq!(s.refs(), before);
+    assert!(!s.has_object(&blob));
+}
+
+/// Pushes that bring nothing new pass: a branch at an existing commit,
+/// and a delete.
+#[test]
+fn a_branch_at_an_existing_commit_and_a_delete_pass() {
+    let s = server(Options::default());
+    let work = s.work();
+    ok(
+        &s.push(
+            &s.alice_write,
+            &work,
+            &[&format!("{}:refs/heads/again", s.tip)],
+        ),
+        "branch at an existing commit",
+    );
+    assert_eq!(s.refs().get("refs/heads/again"), Some(&s.tip));
+    ok(
+        &s.push(&s.alice_write, &work, &[":refs/heads/again"]),
+        "delete-only push",
+    );
+    assert!(!s.refs().contains_key("refs/heads/again"));
+    s.wait_no_check_runs();
+}
+
+/// One good and one bad ref: the hook refuses the whole push (plain and
+/// `--atomic`), so the good ref is not created either.
+#[test]
+fn a_mixed_push_is_refused_whole() {
+    let s = server(Options::default());
+    let good_work = s.work();
+    s.commit(&good_work, "fine.txt", b"synthetic fine\n");
+    let good = s.local(&good_work, &["rev-parse", "HEAD"]);
+    s.local(&good_work, &["branch", "good", &good]);
+    s.commit(&good_work, "id_rsa", &synthetic_key());
+    let before = s.refs();
+    for atomic in [false, true] {
+        let mut args: Vec<&str> = Vec::new();
+        if atomic {
+            args.push("--atomic");
+        }
+        args.extend(["refs/heads/good:refs/heads/good", "HEAD:refs/heads/bad"]);
+        let out = s.push(&s.alice_write, &good_work, &args);
+        let text = refused(&out, ErrorCode::PushSecretDetected);
+        assert!(text.contains("id_rsa"), "atomic={atomic}: {text}");
+        assert_eq!(s.refs(), before, "atomic={atomic}");
+    }
+    assert!(!s.has_object(&good));
+    s.wait_no_check_runs();
+}
+
+/// The `true` binary of this machine's shell tools (git for Windows ships
+/// one next to its sh).
+fn true_binary() -> PathBuf {
+    if cfg!(windows) {
+        let out = Command::new("git")
+            .arg("--exec-path")
+            .output()
+            .expect("git --exec-path");
+        let exec = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        // <git root>/mingw64/libexec/git-core → <git root>/usr/bin/true.exe
+        let root = exec.ancestors().nth(3).expect("git root").to_path_buf();
+        let path = root.join("usr").join("bin").join("true.exe");
+        assert!(path.is_file(), "{path:?}");
+        path
+    } else {
+        ["/bin/true", "/usr/bin/true"]
+            .iter()
+            .map(PathBuf::from)
+            .find(|p| p.is_file())
+            .expect("true")
+    }
+}
+
+/// A hook that exits 0 without its result (git ran something else, or
+/// skipped it): the refs change, and serve raises FG-GIT-0023
+/// `hook_not_run` (an alert) instead of passing it silently.
+#[test]
+fn a_hook_that_left_no_result_is_hook_not_run() {
+    let logs = LogSink::install();
+    let s = server(Options {
+        push_check_exe: Some(true_binary()),
+        ..Options::default()
+    });
+    let work = s.work();
+    let tip = s.commit(&work, "id_rsa", &synthetic_key());
+    ok(
+        &s.push(&s.alice_write, &work, &["HEAD:refs/heads/unchecked"]),
+        "the do-nothing hook accepts",
+    );
+    assert_eq!(s.refs().get("refs/heads/unchecked"), Some(&tip));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let found = logs.events().into_iter().any(|e| {
+            e["error_code"] == ErrorCode::PushCheckFailed.id()
+                && e["context"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("reason=hook_not_run")
+        });
+        if found {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no hook_not_run alert");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    s.wait_no_check_runs();
+}
+
+/// Windows: the binary path as canonicalize gives it (`\\?\D:\…`) still
+/// runs the hook (the prefix is stripped for git for Windows' sh).
+#[cfg(windows)]
+#[test]
+fn a_verbatim_windows_exe_path_runs_the_hook() {
+    let exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_forge")).expect("canonical");
+    assert!(exe.to_string_lossy().starts_with(r"\\?\"), "{exe:?}");
+    let s = server(Options {
+        push_check_exe: Some(exe),
+        ..Options::default()
+    });
+    let work = s.work();
+    s.commit(&work, "id_rsa", &synthetic_key());
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/win"]);
+    refused(&out, ErrorCode::PushSecretDetected);
+    s.wait_no_check_runs();
 }

@@ -357,6 +357,9 @@ async fn the_event_types_are_listed_by_class_and_marked_for_what_the_caller_may_
     assert_eq!(ok.status, StatusCode::OK, "{}", ok.json);
     let opened = find(&ok, "merge_request.opened").expect("integration type");
     assert_eq!(opened["class"], "integration");
+    // M3 X6: the conflict prediction is an integration-class event.
+    let predicted = find(&ok, "merge_request.conflict_predicted").expect("X6 type");
+    assert_eq!(predicted["class"], "integration");
     let added = find(&ok, "member.added").expect("maintainer type");
     assert_eq!(added["class"], "maintainer");
     assert!(

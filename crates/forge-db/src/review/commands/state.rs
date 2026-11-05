@@ -9,6 +9,7 @@ use super::{
     StateOutcome,
 };
 use crate::change::{ChangeContext, ChangeTx, Settle};
+use crate::review::conflicts::request_scan_on;
 use crate::review::version_refs::precondition;
 use crate::review::versions::{refresh_job, versions_on, RefreshRequest, RefreshTrigger};
 use crate::review::{Row, StoredMergeRequest, COLUMNS};
@@ -159,6 +160,11 @@ pub async fn reopen_mr_decided<P>(
             None,
         )?;
         tx.enqueue_job(&job).await?;
+        // M3 X6: other merge requests opened or moved while it was closed;
+        // the scan of the pairs it had is no longer current.
+        let origin = ctx.request_id.clone(); // clone: the job keeps its origin request
+        tx.step(|c| async move { request_scan_on(c, id, project, origin, None).await })
+            .await?;
         Ok(Settle::Commit(
             record,
             (StateOutcome::Changed, stored, decided),

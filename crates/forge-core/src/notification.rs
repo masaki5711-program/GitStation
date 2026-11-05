@@ -3,7 +3,9 @@
 //!
 //! The kinds are the events the merge request flow already publishes and
 //! whose recipient is known: the author of a merge request hears when it is
-//! approved, merged or commented. A "review requested" kind and a mention
+//! approved, merged or commented, and (M3 X6, plan 04 C-2) when the
+//! conflict scan predicts it conflicts with another open merge request —
+//! each side's author hears it from its own event. A "review requested" kind and a mention
 //! kind join with their events (none exists yet), a push-mirror failure kind
 //! with O2; the table CHECKs and this list change together, by migration.
 
@@ -19,6 +21,9 @@ pub enum NotificationKind {
     MergeRequestMerged,
     /// `merge_request.commented`: a note was added to your merge request.
     MergeRequestCommented,
+    /// `merge_request.conflict_predicted` (M3 X6): your merge request is
+    /// likely to conflict with another open one on the same target.
+    MergeRequestConflictPredicted,
 }
 
 impl NotificationKind {
@@ -26,6 +31,7 @@ impl NotificationKind {
         Self::MergeRequestApproved,
         Self::MergeRequestMerged,
         Self::MergeRequestCommented,
+        Self::MergeRequestConflictPredicted,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -33,6 +39,7 @@ impl NotificationKind {
             Self::MergeRequestApproved => "mr_approved",
             Self::MergeRequestMerged => "mr_merged",
             Self::MergeRequestCommented => "mr_commented",
+            Self::MergeRequestConflictPredicted => "mr_conflict_predicted",
         }
     }
 
@@ -47,6 +54,7 @@ impl NotificationKind {
             EventType::MergeRequestApproved => Some(Self::MergeRequestApproved),
             EventType::MergeRequestMerged => Some(Self::MergeRequestMerged),
             EventType::MergeRequestCommented => Some(Self::MergeRequestCommented),
+            EventType::MergeRequestConflictPredicted => Some(Self::MergeRequestConflictPredicted),
             EventType::ProjectCreated
             | EventType::RepositoryCreated
             | EventType::TokenCreated
@@ -190,6 +198,7 @@ mod tests {
             [
                 ("merge_request.approved", "mr_approved"),
                 ("merge_request.commented", "mr_commented"),
+                ("merge_request.conflict_predicted", "mr_conflict_predicted"),
                 ("merge_request.merged", "mr_merged"),
             ]
         );

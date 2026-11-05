@@ -731,6 +731,7 @@ fn git_http_limits_have_defaults_file_env_and_rules() {
     assert_eq!(cfg.git_http.body_timeout, Duration::from_secs(300));
     assert_eq!(cfg.git_http.max_object_wants, 10_000);
     assert_eq!(cfg.git_http.push_max_bytes, 2 * 1024 * 1024 * 1024);
+    assert_eq!(cfg.git_http.push_max_blob_bytes, 100 * 1024 * 1024);
 
     let f = file("[git.http]\nmax_streams = 8\nidle_timeout_ms = 1000\n");
     let cfg = load(
@@ -738,10 +739,12 @@ fn git_http_limits_have_defaults_file_env_and_rules() {
         &env(&[
             ("FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL", "2"),
             ("FORGE_GIT_HTTP_PUSH_MAX_BYTES", "65536"),
+            ("FORGE_GIT_HTTP_PUSH_MAX_BLOB_BYTES", "4096"),
         ]),
     )
     .expect("file + env");
     assert_eq!(cfg.git_http.push_max_bytes, 65536);
+    assert_eq!(cfg.git_http.push_max_blob_bytes, 4096);
     assert_eq!(cfg.git_http.max_streams, 8);
     assert_eq!(cfg.git_http.max_streams_per_principal, 2);
     assert_eq!(cfg.git_http.idle_timeout, Duration::from_millis(1000));

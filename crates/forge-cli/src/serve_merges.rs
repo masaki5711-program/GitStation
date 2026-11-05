@@ -231,10 +231,17 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::CheckRunDataInvalid
         | ErrorCode::CheckPayloadInvalid
         | ErrorCode::CheckRunLimitReached
+        // M3 X6: the conflict scan's own code never reaches a merge.
+        | ErrorCode::ConflictPredictionIncomplete
         // M3 O3: the maintenance job's own codes never reach a merge.
         | ErrorCode::RepositoryMaintenanceFailed
         | ErrorCode::RepositoryCorrupt
         | ErrorCode::RepositoryRefLockStale
+        // M3 X8: the push checks run in a push's hook, never in a merge.
+        | ErrorCode::PushBlobTooLarge
+        | ErrorCode::PushSecretDetected
+        | ErrorCode::PushCheckFailed
+        | ErrorCode::PushCheckIncomplete
         // M3 N1: the mail job's own code never reaches a merge.
         | ErrorCode::SmtpUnavailable => false,
     }

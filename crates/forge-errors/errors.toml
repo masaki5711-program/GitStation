@@ -949,6 +949,63 @@ fix = "When no git runs on the repository and the lock is older than the longest
 runbook = "repo-maintenance"
 test = "a_stale_packed_refs_lock_is_reported"
 
+# ── M3 X8: push checks (large files, secrets) in the pre-receive hook ──
+[[error]]
+code = "FG-GIT-0021"
+name = "PushBlobTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "プッシュに上限より大きいファイルが含まれていたため、プッシュ全体を拒否しました。ファイルを履歴から取り除いてからもう一度プッシュしてください。"
+user_message_en = "The push contained a file larger than the limit, so the whole push was refused. Remove the file from the history and push again."
+user_message_id = "Push berisi berkas yang lebih besar dari batas, sehingga seluruh push ditolak. Hapus berkas itu dari riwayat lalu push lagi."
+cause = "The pre-receive hook (`forge hook pre-receive`, M3 X8, ADR-0008 amendment X8) found a blob larger than `git.http.push_max_blob_bytes` (default 100 MiB) among the objects the push brings. The size check reads every object git received for the push (the quarantine's own object directory, streamed: `cat-file --batch-all-objects`), so it is complete whatever the push contains — a blob only an annotated tag names, or one hidden behind padding that stops the secret scan early, is sized all the same; a size check that cannot finish refuses the push (FG-GIT-0023 `size_check_failed`). git refused the whole push (`ng <ref> pre-receive hook declined` for every ref); the quarantined objects are discarded, no ref changed. A blob already in the repository never trips the check."
+diagnosis = "The pusher's terminal shows `remote: FG-GIT-0021 …` with one line per file: its path, its size, the limit and the commit that adds it (never the content). One info log line with `error_code`, `request_id` and in `context`: `event=forge.git.push_checked`, `verdict=refused`, `findings`, `rules`, `first_rule=large_blob`, `first_path`, `first_blob`, `first_commit`, `objects`, `repo_id`. Read-only on the pusher's side: `git rev-list --objects <commit> --not --remotes | git cat-file --batch-check='%(objectsize) %(rest)' | sort -n | tail`."
+fix = "The pusher removes the file from the commits not yet pushed (`git rm --cached <path>` and `git commit --amend`, or `git rebase -i` / `git filter-repo` for an older commit) and pushes again; large binary content belongs in an artifact store, not in git. When the file is legitimate, an administrator raises `git.http.push_max_blob_bytes` (configuration, restart) — runbook push-checks."
+runbook = "push-checks"
+test = "a_push_with_a_large_file_is_refused_with_fg_git_0021"
+
+[[error]]
+code = "FG-GIT-0022"
+name = "PushSecretDetected"
+http_status = 422
+severity = "warn"
+user_message_ja = "プッシュに秘密情報（鍵やトークン）らしい内容が含まれていたため、プッシュ全体を拒否しました。秘密を履歴から取り除き、漏れた可能性のある秘密は失効させてください。"
+user_message_en = "The push contained what looks like a secret (a key or a token), so the whole push was refused. Remove it from the history and revoke any secret that may have leaked."
+user_message_id = "Push berisi sesuatu yang tampak seperti rahasia (kunci atau token), sehingga seluruh push ditolak. Hapus dari riwayat dan cabut rahasia yang mungkin bocor."
+cause = "The pre-receive hook (M3 X8) found a high-confidence secret pattern in a text blob the push brings: `private_key` (a PEM / OpenSSH / PGP private key header), `aws_access_key_id`, `github_token`, `gitlab_token`, `slack_token`, `google_api_key`, `gitstation_token` (`fgp_` / `gss_`) or `gitstation_webhook_secret` (`whsec_`). Placeholder bodies (few distinct characters, `EXAMPLE`) do not match; a file containing the marker `forge:allow-secret` is a reviewed false positive and is accepted (counted as `allowed`; serve logs each waiver as `forge.git.push_check_waived` with `rule`, `path`, `blob`). Blobs above 1 MiB and binary blobs (a NUL in the first 8000 bytes) are not scanned for secrets. git refused the whole push; the quarantined objects are discarded, no ref changed — but the secret has left the pusher's machine."
+diagnosis = "The pusher sees `remote: FG-GIT-0022 …` with one line per finding: the rule, the path and the commit (never the matched value). One warn log line with `error_code`, `request_id` and in `context`: `event=forge.git.push_checked`, `verdict=refused`, `findings`, `rules`, `first_rule`, `first_path`, `first_blob`, `first_commit`, `objects`, `bytes_scanned`, `allowed`, `repo_id` — the value is in no log line."
+fix = "Treat the secret as leaked if it was real: revoke / rotate it first (runbook secret-removal, step 1). Then remove it from the unpushed commits (`git commit --amend`, `git rebase -i`, `git filter-repo --replace-text`) and push again. For a synthetic test fixture, add the marker `forge:allow-secret` to the file (a comment line) — the reviewer sees it in the merge request. Runbook push-checks."
+runbook = "push-checks"
+test = "a_push_with_a_private_key_is_refused_with_fg_git_0022"
+
+[[error]]
+code = "FG-GIT-0023"
+name = "PushCheckFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "プッシュの検査を実行できなかったため、プッシュを拒否しました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The push checks could not run, so the push was refused. Contact the administrator with the request ID."
+user_message_id = "Pemeriksaan push tidak dapat dijalankan, sehingga push ditolak. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The push checks (M3 X8) did not complete as designed. In the hook (`forge hook pre-receive`; the push is refused — fail closed): `reason=env_missing` (no `FORGE_PUSH_CHECK_DIR` / run directory), `policy_unreadable` / `policy_invalid` (the run's policy file written by `forge serve`), `storage` (the repository path from the policy), `quarantine_invalid` (git's `GIT_OBJECT_DIRECTORY` / `GIT_ALTERNATE_OBJECT_DIRECTORIES` are not the repository's quarantine), `stdin_invalid` (git's update lines), `git_failed` (rev-list / cat-file / log failed: `cause_code`), `size_check_failed` (the complete size check of the received objects could not finish — `detail` spawn / git / read / unreadable, `cause_code` FG-GIT-0002 for its 120 s bound; never let through), `result_write` (the result file). In `forge serve` after receive-pack exited: `hook_not_run` (git applied refs but no result of this push's hook exists — the hook was skipped, e.g. the hooks directory was replaced or the binary was not executable; the refs were updated unchecked: an alert), `hook_no_result` (git reported `pre-receive hook declined` without a result: the hook crashed or could not start, e.g. `FORGE_PUSH_CHECK_EXE` not runnable), `hook_unknown` (no result, and the repository could not be read to say whether refs changed — treat as `hook_not_run`), `result_invalid` (unreadable result or another run's nonce), `run_dir` (the run directory could not be created or removed); at start-up `exe_unknown` / `exe_unusable` (`forge serve` could not find its own binary, or its path cannot be run by the hook script: the server does not start). A hooks directory forge did not write (`FG-GIT-0001 reason=hooks_dir`: `push_hook_missing`, `push_hook_mismatch`, `push_hook_not_executable`, `unexpected_entry`) also stops the start, and refuses a push when it changes later. Timeouts and caps are not this code: they make the scan incomplete (FG-GIT-0024)."
+diagnosis = "In `forge serve`'s log: one alert event with `error_code=FG-GIT-0023`, `request_id`, `reason`, `repo_id`, `applied` (refs git updated), and the hook's own `detail` / `cause_code` when it wrote a failed result. The pusher saw `remote: FG-GIT-0023 … (request_id: …)`. Check read-only: the hook script `<storage root>/push-hooks/pre-receive` (exactly the generated three lines, mode 0700), that `forge` (the serve binary, `FORGE_PUSH_CHECK_EXE`) runs `forge hook pre-receive` (it prints FG-GIT-0023 `env_missing` without the run directory), and `<storage root>/push-checks/` for stale run directories."
+fix = "Follow runbook push-checks: fix the cause named by `reason` (restore the hook script by moving the directory aside and letting forge regenerate it, redeploy a binary that runs, fix permissions of the storage root), then ask the pusher to push again. For `hook_not_run`, the pushed refs were not checked: run the checks by hand on the push's range (runbook push-checks, \"unchecked push\") and treat a finding like FG-GIT-0021 / FG-GIT-0022."
+runbook = "push-checks"
+test = "a_hook_without_its_policy_fails_closed"
+
+[[error]]
+code = "FG-GIT-0024"
+name = "PushCheckIncomplete"
+http_status = 500
+severity = "warn"
+user_message_ja = "プッシュは反映されましたが、大きすぎるため一部の内容を検査できませんでした。"
+user_message_en = "The push was applied, but part of it was too large to be checked."
+user_message_id = "Push sudah diterapkan, tetapi sebagian isinya terlalu besar untuk diperiksa."
+cause = "The push checks (M3 X8) stopped at a bound and let the push through (fail open with a warn, ADR-0008 amendment X8): `reason=objects_cap` (more than 500 000 new objects, or the object list did not fit its output cap), `bytes_cap` (more than 256 MiB of text blobs to scan for secrets), `deadline` (the 60 s bound of the secret scan), `large_blob_unscanned` (a text blob over 1 MiB and under the size limit was not scanned for secrets; `skipped_large` counts them). Binary blobs are counted (`skipped_binary`) but do not make it incomplete: the rules are text patterns. Only the secret scan fails open: the size check is always complete (or the push is refused, FG-GIT-0023). A finding made before the bound still refuses the push (FG-GIT-0021 / 0022). Typical for an initial import of a large repository."
+diagnosis = "One warn log line with `error_code=FG-GIT-0024`, `request_id` and in `context`: `event=forge.git.push_checked`, `verdict=accepted`, `incomplete` (the reason), `objects`, `pack_objects`, `blobs_scanned`, `bytes_scanned`, `skipped_large`, `skipped_binary`, `repo_id`. A complete accepted check logs the info event `forge.git.push_checked` instead. The pusher saw `remote: FG-GIT-0024 …`."
+fix = "Nothing is broken. If the push may hold secrets (an import from outside), scan the range by hand (runbook push-checks, \"unchecked push\"). Splitting a huge initial push into several pushes of older history first keeps each one within the bounds."
+runbook = "push-checks"
+test = "a_scan_past_its_byte_cap_is_incomplete_and_accepted"
+
 # --- WEB: the HTTP layer (forge-web) ----------------------------------------
 
 [[error]]
@@ -2017,3 +2074,19 @@ cause = "A check report named a new check on a commit that already holds 100 che
 diagnosis = "The log event carries `reason=too_many_runs`, `limit`, `project_id` and `head_sha`, with `action=CheckWrite`. The names on the commit: SELECT name, reported_by, updated_at FROM forge.check_runs WHERE project_id = <project_id> AND head_sha = '<head_sha>' ORDER BY name."
 fix = "Report under a stable name per kind of check (for example `ci/gates`, not `ci/gates-<run>`); the details of one run belong in its summary and annotations."
 test = "a_new_name_beyond_the_limit_is_check_run_limit_reached"
+
+# ── M3 X6: conflict prediction between open merge requests (plan 04 C-2,
+# ADR-0024 Amendment X6) ──
+[[error]]
+code = "FG-REVIEW-0022"
+name = "ConflictPredictionIncomplete"
+http_status = 500
+severity = "warn"
+user_message_ja = "ほかのマージリクエストとの衝突の見込みを、すべては確かめられていません。しばらくしてからもう一度確認してください。"
+user_message_en = "Possible conflicts with other merge requests have not all been checked. Check again later."
+user_message_id = "Kemungkinan konflik dengan merge request lain belum semuanya diperiksa. Periksa lagi nanti."
+cause = "The conflict scan of a merge request (M3 X6, plan 04 C-2: the job merge_request.conflict_scan, run after a new head, a retarget or a reopen) did not try every other open merge request on the same target branch. reason=peers_capped: more open merge requests target the branch than the scan considers (50, the most recently updated first). reason=pairs_capped: more pairs change a common path than the scan tries with merge-tree (20). reason=budget_exhausted: the scan's time budget (120 s) ran out before the last candidate. reason=pair_failed: git failed on at least one pair (its own FG-GIT code is logged with the same request_id as forge.review.conflict_pair_failed; the failure is stored on the pair and the worker's sweep re-requests the scan — it is not the job's failure). reason=peer_moved: another merge request moved or closed after the scan read it (its own scan writes the pair). reason=peer_invalid: a peer's stored head is not an object id (never written by forge; that pair is left out). A scan that ends `failed` with reason=no_version, target_missing, unrelated_histories or budget_exhausted (nothing could be predicted for this merge request) is logged at warn with this code too (forge.review.conflict_scanned). The worker's sweep requests scans for open merge requests with a head and no scan (opened before this build, or a version job's request that failed: the version job never fails on it, forge.review.conflict_scan_request_failed) and re-requests retryable failures after 5 minutes, at most 3 times (forge.review.conflict_scan_swept). reason=job_failed: the job failed for good before it stored a result. reason=job_stale: a scan stayed pending or scanning longer than the job's time limit with no queued or running job (the worker's sweep ended it). The pairs it did try are stored and their predictions stand; the ones left out are not predicted (never shown as \"no conflict\"). Never a user request's failure: logged by the worker; `gstn conflicts` shows the scan as `incomplete` or `failed` with the reason."
+diagnosis = "The event `forge.review.conflict_scan_incomplete` (or `forge.review.conflict_scan_not_finished` for job_failed / job_stale, `forge.review.conflict_scanned` status=failed) carries `reason`, `merge_request_id`, `scan_seq`, `peers`, `pairs_tried`, `pairs_skipped` and the job's request_id. For pair_failed, the git failure is logged under its own error_code with the same request_id (`other_merge_request_id`). Read the scan (read-only): SELECT merge_request_id, status, reason, scan_seq, scanned_head_sha, peers, pairs_tried, pairs_skipped, updated_at FROM forge.merge_request_conflict_scans WHERE merge_request_id = <id>; and its pairs: SELECT low_mr_id, high_mr_id, outcome, reason, checked_at FROM forge.merge_request_conflict_pairs WHERE <id> IN (low_mr_id, high_mr_id); and the jobs: SELECT id, state, attempts, last_error_code FROM forge.jobs WHERE kind = 'merge_request.conflict_scan' AND dedup_key LIKE 'mr_conflict_scan:<id>:%' ORDER BY id DESC LIMIT 5."
+fix = "A cap or the budget: expected on a target branch with very many open merge requests — the pairs left out are scanned again when either side gets a new head. pair_failed: fix the cause its FG-GIT code names (its runbook); the job retries. job_failed / job_stale: fix the cause the job's own error code names; the next push, retarget or reopen scans again. Never edit forge.merge_request_conflict_scans or forge.merge_request_conflict_pairs by hand outside an approved runbook step."
+runbook = "merge-request-mergeability"
+test = "a_scan_with_more_candidates_than_the_cap_is_incomplete"

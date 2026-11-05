@@ -43,6 +43,7 @@ describe('notification settings', () => {
     expect(within(group).getByLabelText<HTMLInputElement>(/Merge request merged/).checked).toBe(false);
     expect(within(group).getByLabelText<HTMLInputElement>(/Comment on a merge request/).checked).toBe(true);
     expect(within(group).getByText('mr_commented')).toBeTruthy();
+    expect(within(group).getByLabelText<HTMLInputElement>(/Likely conflict with another merge request/).checked).toBe(false);
   });
 
   it('links the help texts to their controls', async () => {

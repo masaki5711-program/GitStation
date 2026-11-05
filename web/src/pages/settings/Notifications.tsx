@@ -29,6 +29,8 @@ function kindLabel(t: TFunction, kind: string): string {
       return t('notifications.kinds.mr_merged');
     case 'mr_commented':
       return t('notifications.kinds.mr_commented');
+    case 'mr_conflict_predicted':
+      return t('notifications.kinds.mr_conflict_predicted');
     default:
       return kind;
   }
