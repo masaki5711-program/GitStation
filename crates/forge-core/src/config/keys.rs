@@ -153,6 +153,11 @@ pub const KEYS: &[Key] = &[
     number("git.http.max_streams", "FORGE_GIT_HTTP_MAX_STREAMS"),
     // M1 phase 9 MR4: the push size limit (receive.maxInputSize).
     number("git.http.push_max_bytes", "FORGE_GIT_HTTP_PUSH_MAX_BYTES"),
+    // M3 X8: the largest blob a push may bring (pre-receive push checks).
+    number(
+        "git.http.push_max_blob_bytes",
+        "FORGE_GIT_HTTP_PUSH_MAX_BLOB_BYTES",
+    ),
     number(
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",

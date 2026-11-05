@@ -29,6 +29,7 @@
 //! id). The per-principal stream cap is keyed by the user id.
 
 use std::num::NonZeroU64;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,6 +80,9 @@ pub struct GitHttpLimits {
     /// One push's pack (`receive.maxInputSize`); the body forge forwards
     /// may be this plus the command list (M1 phase 9 MR4).
     pub push_max_bytes: NonZeroU64,
+    /// The largest blob a push may bring (M3 X8, `git.http.push_max_blob_bytes`;
+    /// checked by the pre-receive hook when push checks are on).
+    pub push_max_blob_bytes: u64,
 }
 
 impl GitHttpLimits {
@@ -96,6 +100,7 @@ impl GitHttpLimits {
             // a zero would mean "unlimited" to git, so it falls back to 1.
             push_max_bytes: NonZeroU64::new(u64::from(cfg.push_max_bytes))
                 .unwrap_or(NonZeroU64::MIN),
+            push_max_blob_bytes: u64::from(cfg.push_max_blob_bytes),
         }
     }
 }
@@ -121,6 +126,10 @@ pub struct SmartHttp {
     /// The detached receive-pack tasks still running (graceful shutdown
     /// waits for them: [`SmartHttp::push_tasks`]).
     pub(crate) push_tasks: PushTasks,
+    /// The forge binary the pre-receive push checks run (`forge hook
+    /// pre-receive`, M3 X8). `None`: no hook (receive-pack keeps the empty
+    /// hooks directory) — `forge serve` always sets it.
+    pub(crate) push_checks: Option<PathBuf>,
     /// The browse API and the raw / archive routes (M2 MR7): the same git
     /// and storage, the browse limits, the per-repository cap and the ref
     /// cache every push drops.
@@ -188,6 +197,7 @@ impl std::fmt::Debug for SmartHttp {
             .field("storage", &self.storage)
             .field("limits", &self.limits)
             .field("push", &self.push.is_some())
+            .field("push_checks", &self.push_checks)
             .finish_non_exhaustive()
     }
 }
@@ -215,6 +225,7 @@ impl SmartHttp {
             body_slots,
             push: None,
             push_tasks: PushTasks::default(),
+            push_checks: None,
             browse,
         }
     }
@@ -247,6 +258,15 @@ impl SmartHttp {
             protection,
             recorder,
         });
+        self
+    }
+
+    /// Run the push checks (M3 X8: large files, secrets) in receive-pack's
+    /// pre-receive hook: `exe` is the forge binary (absolute) whose `hook
+    /// pre-receive` the hook script runs.
+    #[must_use]
+    pub fn with_push_checks(mut self, exe: PathBuf) -> Self {
+        self.push_checks = Some(exe);
         self
     }
 }

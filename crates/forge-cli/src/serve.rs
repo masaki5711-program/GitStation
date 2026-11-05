@@ -253,7 +253,22 @@ fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> SmartHttp {
         usize::try_from(limits.max_streams_per_principal).unwrap_or(usize::MAX);
     git.stream_idle_timeout = limits.idle_timeout;
     git.stream_timeout_total = limits.timeout;
-    SmartHttp::new(Git::new(git), storage, GitHttpLimits::from_config(limits))
+    let smart = SmartHttp::new(Git::new(git), storage, GitHttpLimits::from_config(limits));
+    // M3 X8: the push checks run this binary's `forge hook pre-receive`.
+    // Without a path to it, pushes keep the empty hooks directory and the
+    // start-up log says so (FG-GIT-0023 `reason=exe_unknown`, an alert).
+    match std::env::current_exe() {
+        Ok(exe) => smart.with_push_checks(exe),
+        Err(e) => {
+            forge_core::telemetry::log_failure(
+                &forge_errors::ForgeError::new(forge_errors::ErrorCode::PushCheckFailed)
+                    .with_context("reason", "exe_unknown")
+                    .with_source(e),
+                &forge_core::RequestId::generate(),
+            );
+            smart
+        }
+    }
 }
 
 /// The server's state: the database as readiness probe and as token and

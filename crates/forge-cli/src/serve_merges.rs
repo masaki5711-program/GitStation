@@ -234,6 +234,11 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::RepositoryMaintenanceFailed
         | ErrorCode::RepositoryCorrupt
         | ErrorCode::RepositoryRefLockStale
+        // M3 X8: the push checks run in a push's hook, never in a merge.
+        | ErrorCode::PushBlobTooLarge
+        | ErrorCode::PushSecretDetected
+        | ErrorCode::PushCheckFailed
+        | ErrorCode::PushCheckIncomplete
         // M3 N1: the mail job's own code never reaches a merge.
         | ErrorCode::SmtpUnavailable => false,
     }
