@@ -1020,5 +1020,11 @@ pub async fn reported_namespaces(
         .collect()
 }
 
+mod retention;
+pub use retention::{
+    expire_old_runs, retention_backlog, Expired, RetentionBacklog, BACKLOG_COUNT_LIMIT,
+    RETENTION_BATCH,
+};
+
 #[cfg(test)]
 mod tests;

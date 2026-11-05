@@ -21,7 +21,9 @@
 //! full batch), and the mergeability sweep (`mergeability_sweep`, M3 R2:
 //! every 30 s, stale `checking` rows ended and deferred `unchecked` rows
 //! re-requested), and the record of expired CODEOWNERS suspensions
-//! (`codeowners_restore`, M3 R6: every 60 s), and the repository
+//! (`codeowners_restore`, M3 R6: every 60 s), and the check-run
+//! retention (`check_run_retention`: every hour, check runs past
+//! `review.check_run_retention_days`), and the repository
 //! maintenance (`maintenance`, M3 O3: its OWN job runner for
 //! `repository.maintain` — the main runner never claims it, so a long gc
 //! never delays another job — and the nightly schedule, every 60 s).
@@ -76,6 +78,9 @@ mod seal;
 // ── M3 I1c: events retention ──
 mod events_retention;
 // ── end M3 I1c ──
+// ── check run retention (feat/db-check-run-retention) ──
+mod check_run_retention;
+// ── end check run retention ──
 // ── M2 MR6: the session purge ──
 mod session_purge;
 // ── end M2 MR6 ──
@@ -171,6 +176,8 @@ enum Task {
     CodeownersRestore,
     /// Events past the retention period (`events_retention`, M3 I1c).
     EventsRetention,
+    /// Check runs past `review.check_run_retention_days` (`check_run_retention`).
+    CheckRunRetention,
     // ── M3 O3 ──
     /// The maintenance's own job runner (`maintenance`).
     MaintenanceRunner,
@@ -227,6 +234,8 @@ fn tasks_with(
         Task::CodeownersRestore,
         // M3 I1c: needs only the database.
         Task::EventsRetention,
+        // Check runs: needs only the database.
+        Task::CheckRunRetention,
     ];
     // ── C5: no subscriber, no task (and no LISTEN connection) ──
     if !registry.is_empty() {
@@ -320,6 +329,8 @@ struct Shared {
     maintenance: Option<MaintenanceTask>,
     /// The notification lane (M3 N1); `None` unless `notify.enabled`.
     notify: Option<NotifyTask>,
+    /// `review.check_run_retention_days`.
+    check_run_retention_days: u32,
 }
 
 impl Task {
@@ -335,6 +346,7 @@ impl Task {
             Self::MergeabilitySweep => mergeability_sweep::NAME,
             Self::CodeownersRestore => codeowners_restore::NAME,
             Self::EventsRetention => events_retention::NAME,
+            Self::CheckRunRetention => check_run_retention::NAME,
             Self::MaintenanceRunner => maintenance::RUNNER_NAME,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
             Self::NotifyRunner => notify_lane::RUNNER_NAME,
@@ -360,6 +372,7 @@ impl Task {
             Self::MergeabilitySweep => mergeability_sweep::PERIOD,
             Self::CodeownersRestore => codeowners_restore::PERIOD,
             Self::EventsRetention => events_retention::PERIOD,
+            Self::CheckRunRetention => check_run_retention::PERIOD,
             Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
             Self::NotifyRunner => jobs::JOB_POLL_PERIOD,
@@ -409,6 +422,10 @@ impl Task {
             }
             Self::CodeownersRestore => codeowners_restore::run_codeowners_restore(db).await,
             Self::EventsRetention => events_retention::run_events_retention(db).await,
+            Self::CheckRunRetention => {
+                check_run_retention::run_check_run_retention(db, shared.check_run_retention_days)
+                    .await
+            }
             Self::MaintenanceRunner => match shared.maintenance.as_ref() {
                 Some(m) => {
                     let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver
@@ -525,7 +542,13 @@ pub(crate) async fn run_full(
         registry_with(review, notify.as_ref(), Some(db))?,
         jobs::SHUTDOWN_GRACE,
         keys,
-        (purge, Some(storage.clone()), maintenance, notify), // clone: the sweep's own handles
+        (
+            purge,
+            Some(storage.clone()), // clone: the sweep's own handles
+            maintenance,
+            notify,
+            review.check_run_retention_days,
+        ),
         shutdown,
     )
     .await
@@ -548,7 +571,13 @@ pub(crate) async fn run_with_notify(
         registry_with(&ReviewConfig::default(), Some(&notify), None)?,
         Duration::from_secs(5),
         keys,
-        (None, None, None, Some(notify)),
+        (
+            None,
+            None,
+            None,
+            Some(notify),
+            ReviewConfig::DEFAULT_CHECK_RUN_RETENTION_DAYS,
+        ),
         shutdown,
     )
     .await
@@ -571,7 +600,13 @@ pub(crate) async fn run_with(
         registry,
         grace,
         keys,
-        (None, None, None, None),
+        (
+            None,
+            None,
+            None,
+            None,
+            ReviewConfig::DEFAULT_CHECK_RUN_RETENTION_DAYS,
+        ),
         shutdown,
     )
     .await
@@ -584,12 +619,14 @@ async fn run_all(
     grace: Duration,
     keys: Arc<SealKeys>,
     // The purge (D5 MR4), the repositories (M3 R2 sweep) and the
-    // maintenance lane (M3 O3), when given.
-    (purge, storage, maintenance, notify): (
+    // maintenance lane (M3 O3) and the notification lane (M3 N1), when given;
+    // and `review.check_run_retention_days`.
+    (purge, storage, maintenance, notify, check_run_retention_days): (
         Option<PurgeTask>,
         Option<Storage>,
         Option<MaintenanceTask>,
         Option<NotifyTask>,
+        u32,
     ),
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
@@ -617,6 +654,7 @@ async fn run_all(
         storage,
         maintenance,
         notify,
+        check_run_retention_days,
     };
     let runners = tasks_with(
         &shared.registry,
