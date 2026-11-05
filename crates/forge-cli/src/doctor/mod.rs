@@ -38,6 +38,8 @@ mod checks;
 mod integrations;
 // M3 O3: FG-GIT-0018, FG-GIT-0019, the ref count.
 mod maintenance;
+// M3 N1: FG-INT-0015 (the mail queue and the relay).
+mod notify;
 mod oidc;
 mod render;
 // ── D4 MR3b ──
@@ -75,7 +77,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 27] = [
+const DB_CHECKS: [&str; 29] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -118,6 +120,9 @@ const DB_CHECKS: [&str; 27] = [
     "repositories.refs",
     // M3 O3 review: FG-GIT-0020 (a packed-refs.lock nobody holds).
     "repositories.stale_locks",
+    // M3 N1: FG-INT-0015 (the mail queue, the relay).
+    notify::NAMES[0],
+    notify::NAMES[1],
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -254,6 +259,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let [feed_lag, watermark, retention] = integrations::feed_checks(db).await;
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     let stale_locks = maintenance::stale_locks_check(db, root).await;
+    let [mail_queue, mail_relay] = notify::notify_checks(db, &cfg.notify).await;
     vec![
         bootstrap,
         connections,
@@ -283,6 +289,8 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         integrity,
         refs,
         stale_locks,
+        mail_queue,
+        mail_relay,
     ]
 }
 

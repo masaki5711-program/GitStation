@@ -144,6 +144,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 db.clone(),               // clone: the pool handle is shared
                 Arc::clone(&cursor_keys), // clone: the keys are shared with the lists
             ))
+            // M3 N1: a person's own notification settings (always: the
+            // routes are cheap and the settings are kept even while mail is
+            // off, so turning mail on later honours them).
+            .with_notifications(forge_notify::Settings::new(db.clone())) // clone: the pool handle is shared
             .with_smart_http(smart_http)
             .with_lists(
                 Lists::new(

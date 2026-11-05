@@ -747,6 +747,7 @@ dependencies = [
  "forge-git",
  "forge-hosting",
  "forge-integ",
+ "forge-notify",
  "forge-oidc",
  "forge-review",
  "forge-web",
