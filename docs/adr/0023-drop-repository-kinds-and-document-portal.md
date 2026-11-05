@@ -227,3 +227,65 @@
       （残るのは「behind だった」という 1 ビットとパスだけで、パスは参照する側のファイル自身の文字）。
     - **LOW**: 参照先のタグの一覧の git の失敗は、その項目の `undecided` にせず、run の失敗として返す（busy・時間切れはやり直し、最後は `error`）。
       `undecided` は一覧が上限で切れたときだけ。版の形でない固定（`stable`、`v1.2.3.4.5`、`v2.0-rc1`）は `success` のまま、notice の注釈で知らせる。
+
+## Amendment 2026-11-06 — X4: 要件の索引・spec-lint・`@req` の索引・spec-trace・仕様の API（計画 11 §5.7 の X4、計画 03 §4・§5.4・§7.2）
+
+計画の推奨（spec-trace は助言から、`PBI-123/AC-2` も対象）に沿い、開いていた点を次のとおり決めた（推奨のない点は、Claude が決定的であることと、
+読む人に読めないものを出さないこと、診断のしやすさを優先して決めた）。
+
+1. **要件ブロックの形式**（forge-core `spec_doc`）: 先頭の `---` で始まる YAML の前付け（`spec`・`title`・`status` が必須、`owners` は任意。ほかのキーは拒否。
+   X1 の `repo_config` と同じ木の組み立てで、アンカー・エイリアス・タグ・重複したキーは拒否）と、`::: req <ID> [priority=…] [status=…]` 〜 `:::` のブロック。
+   要件 ID は `-` で区切った 2 つ以上の大文字英数字の部分（先頭は英字、64 バイトまで）。**`PBI` で始まる系列は要件 ID にしない**（kanflow の作業項目と取り違えないため）。
+   `priority` は `must` / `should` / `could` / `wont`、`status` は `active` / `deprecated`（ID は消さず廃止にする、計画 03 §4.2）。ほかの `::: note` などの入れ物は入れ子にでき、
+   要件ではない。**フェンスのコードブロックの中は読まない**（仕様の例に書式を載せられるように）。解析は止まらない: 壊れたブロックがあっても次のブロックを読み、
+   規則の違反を行と規則の名前で残す（1 文書 200 件まで、要件は 2000 件まで、本文は 16 KiB まで）。前付けも要件ブロックも無い Markdown（README）は仕様の文書ではない。
+2. **自分の仕様の置き場所**: `.forge/repo.yml` の `path:` の項目。無ければ（ファイルが無い・拒否された・`repo:` だけ）既定の `spec/`（計画 03 §4.4）。
+   その下の `*.md` / `*.markdown`（通常のファイルだけ）を読む。
+3. **`@req` の形式**（forge-core `req_tags`）: 語 `@req`（直前が英数字・`_`・`.`・`@`・`/` でなく、直後が空白）のあとに ID を 1 つ、`,` で区切って続けてよい。
+   ID は要件 ID か、kanflow の受入基準 `PBI-<番号>/AC-<番号>`（番号は先頭に 0 を付けない、AC は 1〜9999）。文末の `.`・`)`・`` ` `` などは ID に含めない。
+   それ以外が続くタグは「形の崩れたタグ」として行を残す。言語を問わず、コメントでも名前でもよい（計画 03 §4.3）。
+4. **索引は保存しない**（追記のマイグレーションは無し）: 索引はコミットごとに git から作る（forge-checks `spec_index::index_commit`: `ls-tree -r`、
+   `cat-file --batch`、`git grep -F @req`）。決定的で、古くならず、後から埋める処理も要らない。**上限**: Markdown 1000 ファイル、合計 8 MiB、1 ファイル 256 KiB
+   （超えたファイルは読まずに `file_too_large` の違反）、`git grep` の出力 8 MiB と 20 秒。上限に当たれば `incomplete`（`spec_files` / `spec_bytes` / `tag_lines`、
+   新しいコード **`FG-REPO-0031` SpecIndexIncomplete**）として必ず答えに出し、黙って通さない。リポジトリをまたぐ一意性の検出と、全リポジトリの要件の検索
+   （MCP の `search_requirements`、計画 03 §6）には保存した索引が要るが、それは文脈 API の X5（または M4 の影響の分析）で、使う側と一緒に決める。
+5. **`forge/spec-lint`**（決定的）: 文書の規則、同じ ID の二重の定義（`duplicate_id`、最初の場所を付ける）、同じ `spec:` の名前（`duplicate_spec`）、
+   **壊れた参照** `broken_reference` = このリポジトリ自身の系列（ID の最後の部分を除いたもの、`ZEVA-CFG`）の ID を指すのに、定義が無く、`repo:` の `scope:` にも当たらないタグ。
+   ほかの系列のタグはこのリポジトリが判断するものではない（spec-trace が `unknown` と言う）。結論: 違反なし `success`、違反あり **`failure`**
+   （新しいコード **`FG-REPO-0028` SpecLintProblem**、要約と failure の注釈に `パス:行 規則`）、違反は無いが索引が上限 `neutral`。必須にするかは保護ブランチの規則で決める。
+6. **`forge/spec-trace`**（決定的、**助言**、計画 03 §9-4 と 06 の D-7）: MR が触れる対象 =（a）head と対象ブランチの先端の **マージベース** から、自分の仕様で追加・変更された要件
+   （廃止したものは除く。マージベースが無ければ head のすべてを新しいものとする）∪（b）追加された `@req`（(パス, ID) の組で比べる。行が動いただけでは追加ではない）
+   ∪（c）MR に結びついた作業項目 `PBI-<番号>`。それぞれ head の木に `@req` があれば `tested`（件数）、無ければ `untested`（新しいコード **`FG-REPO-0029` RequirementUntested**）、
+   (b) の ID が自分の仕様にも `repo:` の `scope:` にも無ければ `unknown`（**`FG-REPO-0030` RequirementTagUnknown**、形の崩れたタグも同じコード）。
+   作業項目は、その受入基準 `PBI-<番号>/AC-*` のどれかのテストがあれば `tested`。結論は `success` か `neutral` で、**`failure` にはしない**。
+   **M3 はテストの有無だけ** を見る。ADR-0017 §4.1.1 の「マージ結果の tree と JUnit の成功」は、パイプラインがある M4 で足す（そのとき必須化も計測を見て決める）。
+7. **run に出すもの**: このリポジトリ自身の文字だけ（自分の仕様の ID とパス、自分のタグ、MR 自身の作業項目）。run はプロジェクトを読める全員とサービスアカウントに見えるので、
+   参照先の仕様は **読まない**（X2 の「保存した run に参照先の中身を残さない」と同じ考え）。参照先の要件まで含めた表は、仕様の API の trace で読む人の権限で見る。
+8. **いつ評価するか**: 購読者 `spec-index`（`independent`、forge-db `checks::spec_index`）が、`merge_request.pushed` ごとにジョブ `check.spec_index`
+   （payload は `project_id`・`iid`・`head_sha`、重複の鍵 `spec_index:<project>:<iid>:<head>`、120 秒、5 回）を積む。spec-trace は作業項目の結びつきを見るので、
+   `work_item.linked` / `unlinked` でもその MR の **今の head** をもう一度評価する（鍵に `:seq:<seq>` を足し、イベントごとに 1 回）。版がまだ無い MR は飛ばす
+   （最初の版が、その時点の結びつきで評価される）。1 つのジョブが 2 つの run を書く。同じ head を持つ 2 つの MR は、後から書いた方の run が残る（run はコミットのもの）。
+9. **失敗を黙らせない**（X2 と同じ形）: 評価の締め切り 80 秒、書き込みは 1 件 10 秒（80 + 10 + 10 < ジョブの 120 秒）。git / DB / 準備中 / 時間切れはやり直し、
+   最後の試みでは両方の run を `error`（要約に FG コードと request id）にしてからジョブを死なせる（`SpecChecks::fail`）。答えずに死んだジョブ（worker の落ち、reaper）は、
+   `forge worker` の新しいタスク `spec_index_sweep`（60 秒ごと、50 件まで）が、7 日以内に死んで head に 2 つの run が揃っていない `check.spec_index` を探して `error` を書く
+   （X2 の部分索引 `jobs_dead_kind` をそのまま使う）。`error` も書けなければ `forge.spec_index.error_unrecorded`（error）を出す。プロジェクトか MR が消えていれば何も書かない
+   （`forge.spec_index.gone`、info）。
+10. **forge 自身の run**: `FORGE_REPORTED_CHECKS` に `forge/spec-lint` と `forge/spec-trace` を足した。X2 のマイグレーションの CHECK（`forge/` ⇔ 報告者なし）と、
+    報告者の上限に数えない規則はそのまま効く（1 コミットの読み取りの上限は 100 + 3 = 103 件）。マージの規則の `unreportable_checks` と doctor の `checks.reporters` にも入らない。
+    書けるのは forge-checks だけ（`tests/decided_callers.rs` のまま）。
+11. **仕様の API**（計画 03 §7.2）: パスは計画の `/api/v1/specs/{repo}/…` ではなく、ほかの API と同じプロジェクトの id の形 `GET /api/v1/projects/{id}/specs/{requirements,versions,diff,trace}`
+    （ADR-0015。リポジトリのパスはプロジェクトの id で引く）。版は計画の `version=` ではなく browse API と同じ `ref`（タグの名前を渡せば版）。新しい Action **`SpecRead`**
+    （`read_api`、`RepoBrowse` と同じ arm。権限の表の行は `RepoBrowse` の全行の双子で、`the_spec_api_mirrors_every_browse_row` が保証する）。
+    - `requirements?ref=&q=&limit=`: 自分の仕様の文書・要件（ID と本文の大文字小文字を区別しない検索、既定 100、最大 500）・文書の違反（200 件まで。壊れた参照はタグが要るので spec-lint と trace で）。
+    - `versions`: `forge_core::spec_version` で版の形のタグだけ、系列ごとに新しい順（200 件まで）。公開日と変更の要約は M4 の影響の分析で。
+    - `diff?from=&to=`: 要件ごとの追加・変更（本文か priority）・削除・廃止。別のファイルへ動いただけでは変更ではない。
+    - `trace?ref=`: 自分の要件と、`repo:` の項目ごとに **読む人の権限で辿った** 参照先（`prove_spec_ref` は `SpecRead` の証明も受け付け、参照先を `SpecRead` で判定する）の
+      `scope:` の中の要件、それぞれを指すこのリポジトリの `@req` のテスト（件数と、最初の 20 か所）。読めない参照先は `unavailable`（`FG-REPO-0026`）で要件を出さない。
+      要件の状態（計画 03 §5.5 の 5 段階）は M4。
+    - 1 人 1 分に 120 回（`FG-WEB-0010`、辿った参照は X1 の上限にも数える）、1 回 30 秒（`FG-WEB-0002 operation=spec_index`）。
+12. **`gstn spec`**: `requirements`・`versions`・`diff`・`trace`（C-1: 予定のままのルートを残さない）。
+13. **置き場所（クレート）**: 解析・lint・差分・trace は純粋な forge-core（`spec_doc`・`req_tags`・`spec_index`）、git の読み取りは forge-git の browse API
+    （`blobs_under`・`read_blobs`・`grep_fixed`・`merge_base`）、索引の組み立てと 2 つのチェックは forge-checks（`spec_index`・`spec_checks`）、ジョブと購読者は forge-db
+    （`checks::spec_index`）、ルートは forge-web（`routes/specs.rs`）。新しいクレートは作らない。
+14. **見つけた既存の問題（この MR では直さない）**: `gstn` の URL の組み立ては空白を `+` にするが、サーバーの query の復号は `+` を空白に戻さない
+    （`gstn browse commits --path "a b"` も同じ）。`gstn spec requirements --search` に空白を含めると一致しない。別の MR で直す。
