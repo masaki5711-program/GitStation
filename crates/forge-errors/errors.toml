@@ -497,6 +497,58 @@ diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/s
 fix = "Read the later version's changes and raise `version:` in .forge/repo.yml in this merge request, or keep the pin on purpose (the run stays neutral). Nothing to change on the server."
 test = "a_pin_behind_the_latest_version_is_neutral_with_spec_version_behind"
 
+[[error]]
+code = "FG-REPO-0028"
+name = "SpecLintProblem"
+http_status = 422
+severity = "info"
+user_message_ja = "このコミットの仕様の文書か @req の参照が規則に合っていません。forge/spec-lint の一覧のファイルと行を直してください。"
+user_message_en = "A specification document or @req reference at this commit breaks a rule. Fix the files and lines forge/spec-lint lists."
+user_message_id = "Dokumen spesifikasi atau referensi @req pada commit ini melanggar aturan. Perbaiki berkas dan baris yang dicantumkan forge/spec-lint."
+cause = "The check `forge/spec-lint` (M3 X4, plan 03 §5.4, ADR-0023 Amendment X4) indexed a merge request version's head: the Markdown files under the repository's own specification directories (its `.forge/repo.yml` `path:` entries, or `spec/`) and every `@req` tag of its tree. A rule is broken; the run concludes `failure` and its summary and annotations list each `path:line rule`. Document rules (forge_core::spec_doc): not_utf8, file_too_large (over 256 KiB: not read), front_matter_missing (requirement blocks without a front matter), front_matter_unclosed, front_matter_too_large, front_matter_syntax, front_matter_not_a_mapping, front_matter_duplicate_key, front_matter_multiple_documents, front_matter_yaml_feature (anchors, aliases, tags), front_matter_unknown_key (only spec / title / status / owners), spec_missing, spec_invalid, title_missing, title_invalid, status_missing, status_invalid (draft / review / approved / deprecated), owners_invalid (a list of at most 32 short texts), requirement_id_missing, requirement_id_invalid (upper-case letters and digits in two or more `-`-separated segments, first a letter, at most 64 bytes, never the `PBI` family), attribute_invalid (not key=value), attribute_unknown (only priority / status), attribute_duplicate, priority_invalid (must / should / could / wont), requirement_status_invalid (active / deprecated), block_nested (`::: req` inside a requirement), block_unclosed, close_unmatched (a `:::` with nothing open), body_empty, body_too_long (over 16 KiB), too_many_requirements (over 2000 in one file), too_deep (containers nested over 16). Index rules (forge_core::spec_index::lint): duplicate_id (an id defined twice; the detail names the first place), duplicate_spec (a `spec:` name used twice), broken_reference (a tag names an id of one of this repository's own families — the id without its last segment — that it does not define and no `repo:` entry's `scope:` covers). Not a server fault: the files are the repository's content. A block inside a fenced code block is never read."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/spec-lint; the summary lists every problem). The job's log event `forge.spec_index.recorded` carries `request_id`, `project_id`, `iid`, `head_sha`, both conclusions and the document and tag counts. Read the file at that commit (read-only): gstn browse blob --project <id> --ref <head> --path <path>, or check the whole index with gstn spec requirements --project <id> --ref <head>."
+fix = "Correct the document or the tag at the listed line in the merge request. An id is never removed: mark it `status=deprecated` (plan 03 §4.2). Nothing to change on the server."
+test = "a_spec_lint_problem_fails_with_spec_lint_problem_and_an_annotation"
+
+[[error]]
+code = "FG-REPO-0029"
+name = "RequirementUntested"
+http_status = 409
+severity = "info"
+user_message_ja = "この MR が触れる要件か作業項目に、@req の付いたテストがありません。テストに @req <要件 ID> または @req PBI-<番号>/AC-<番号> を付けてください。"
+user_message_en = "A requirement or work item this merge request touches has no @req test. Tag a test with @req <requirement id> or @req PBI-<n>/AC-<m>."
+user_message_id = "Persyaratan atau item kerja yang disentuh merge request ini tidak memiliki tes @req. Tandai tes dengan @req <id persyaratan> atau @req PBI-<n>/AC-<m>."
+cause = "The check `forge/spec-trace` (M3 X4, plan 03 §5.4, plan 06 D-7; advisory, plan 03 §9-4) found a touched subject with no `@req` tag naming it anywhere in the head's tree: a requirement added or changed in this repository's own specification since the merge base with the target branch (a deprecated one is not touched), or a kanflow work item the merge request is linked to (`PBI-<n>`) without any test of one of its acceptance criteria (`@req PBI-<n>/AC-<m>`). A notice, never an HTTP error: the run concludes `neutral` and never `failure` (it blocks a merge only when a protected branch requires forge/spec-trace, and `neutral` does not satisfy a required check). In M3 the check looks for a tagged test, not for its result in a pipeline (that comes with the CI of M4, ADR-0017 §4.1.1)."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/spec-trace; the summary lists every touched subject with `tested` / `untested` / `unknown`, why it is touched — spec_changed, tag_added, work_item_linked — and where). The trace of the whole specification at a revision: gstn spec trace --project <id> --ref <rev>. The work item links: gstn mr work-items --project <id> --iid <iid>."
+fix = "Add or tag a test for the requirement (a comment or a name with `@req <ID>`; any language), or for one of the work item's acceptance criteria (`@req PBI-<n>/AC-<m>`). A requirement that no longer applies is `status=deprecated`. Nothing to change on the server."
+test = "an_untested_touched_requirement_is_a_neutral_trace_never_a_failure"
+
+[[error]]
+code = "FG-REPO-0030"
+name = "RequirementTagUnknown"
+http_status = 422
+severity = "info"
+user_message_ja = "@req のタグが、どの要件にも、参照している仕様の範囲にも当たりません（または形式が違います）。要件 ID か PBI-<番号>/AC-<番号> を確かめてください。"
+user_message_en = "A @req tag names no requirement here or in a referenced specification's scope (or is malformed). Check the requirement id or PBI-<n>/AC-<m>."
+user_message_id = "Tag @req tidak merujuk persyaratan mana pun di sini maupun dalam cakupan spesifikasi yang dirujuk (atau formatnya salah). Periksa id persyaratan atau PBI-<n>/AC-<m>."
+cause = "The check `forge/spec-trace` (M3 X4, advisory) found a `@req` tag the merge request adds (a (path, id) pair not at the merge base) whose id this repository's own specification does not define and no `.forge/repo.yml` `repo:` entry's `scope:` covers (an entry without a scope covers every id), or a tag followed by no requirement id or acceptance criterion at all (malformed: `@req` then text that is neither `<ID>` nor `PBI-<n>/AC-<m>`). The referenced specifications themselves are not read by the check (the run is shown to every reader of the project), so a covered id counts as known. A notice: the run concludes `neutral`, never `failure`."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/spec-trace; `unknown <ID>` and `malformed @req at <path>:<line>` lines, with an annotation on each). Compare with the requirement index: gstn spec requirements --project <id> --ref <head> and the references: gstn browse spec-refs --project <id> --ref <head>."
+fix = "Correct the id in the tag, add the requirement to the specification, or add the referenced specification's id pattern to `scope:` in .forge/repo.yml. Nothing to change on the server."
+test = "spec_trace_counts_added_tags_and_flags_unknown_and_malformed_ones"
+
+[[error]]
+code = "FG-REPO-0031"
+name = "SpecIndexIncomplete"
+http_status = 409
+severity = "info"
+user_message_ja = "仕様の索引が上限に達したため、一部しか読めていません。結果は読めた範囲のものです。仕様のファイルを分けるか小さくしてください。"
+user_message_en = "The specification index hit a bound, so only part of it was read; the results are about what was read. Split or shrink the specification files."
+user_message_id = "Indeks spesifikasi mencapai batas sehingga hanya sebagian yang terbaca; hasilnya hanya untuk bagian yang terbaca. Pecah atau perkecil berkas spesifikasi."
+cause = "Indexing a commit's requirements (M3 X4, forge-checks spec_index: `forge/spec-lint`, `forge/spec-trace` and the spec API `GET /api/v1/projects/{id}/specs/…`) stops at its bounds rather than run unbounded: at most 1000 Markdown files under the specification directories (`spec_files`), at most 8 MiB read in all (`spec_bytes`; a single file over 256 KiB is not read and is the problem file_too_large instead), and at most 8 MiB of `git grep` output for the `@req` tags (`tag_lines`). The first bound hit is named; the answers are about what was read and never claim more: spec-lint concludes `neutral` instead of `success`, spec-trace `neutral`, and the API answers carry `incomplete: <reason>` with this code. Not a server fault."
+diagnosis = "The run's summary or the API's `incomplete` names the bound. Count the files: gstn browse tree --project <id> --ref <rev> --path spec. The job's log event `forge.spec_index.recorded` carries `incomplete` with `request_id`."
+fix = "Keep the specification within the bounds: fewer, smaller Markdown files under the specification directories (split a large one), or list only the specification directories in `.forge/repo.yml` `path:` entries. Nothing to change on the server."
+test = "an_incomplete_index_is_never_a_silent_pass"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]

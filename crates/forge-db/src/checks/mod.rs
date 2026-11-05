@@ -1087,9 +1087,13 @@ pub use retention::{
 };
 
 pub mod spec_drift;
+pub mod spec_index;
 
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod forge_tests;
+
+#[cfg(test)]
+mod spec_index_tests;

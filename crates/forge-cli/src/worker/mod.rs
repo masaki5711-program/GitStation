@@ -25,7 +25,9 @@
 //! retention (`check_run_retention`: every hour, check runs past
 //! `review.check_run_retention_days`), and the spec drift sweep
 //! (`spec_drift_sweep`, M3 X2: every 60 s, `error` for dead
-//! `check.spec_drift` jobs left without a run), and the repository
+//! `check.spec_drift` jobs left without a run), the spec index sweep
+//! (`spec_index_sweep`, M3 X4: every 60 s, `error` for both runs of dead
+//! `check.spec_index` jobs), and the repository
 //! maintenance (`maintenance`, M3 O3: its OWN job runner for
 //! `repository.maintain` — the main runner never claims it, so a long gc
 //! never delays another job — and the nightly schedule, every 60 s), and
@@ -71,6 +73,9 @@ mod review;
 // ── M3 X2: `forge/spec-drift` (the `check.spec_drift` job) ──
 mod spec_drift;
 mod spec_drift_sweep;
+// ── M3 X4: `forge/spec-lint` and `forge/spec-trace` (the `check.spec_index` job) ──
+mod spec_index;
+mod spec_index_sweep;
 // ── end M3 X2 ──
 // ── M3 R2: stale and deferred mergeability checks ──
 mod mergeability_sweep;
@@ -199,6 +204,8 @@ enum Task {
     CheckRunRetention,
     /// Dead `check.spec_drift` jobs answered with `error` (`spec_drift_sweep`, M3 X2).
     SpecDriftSweep,
+    /// Dead `check.spec_index` jobs answered with `error` (`spec_index_sweep`, M3 X4).
+    SpecIndexSweep,
     // ── M3 O3 ──
     /// The maintenance's own job runner (`maintenance`).
     MaintenanceRunner,
@@ -284,6 +291,8 @@ fn tasks_with(
         Task::CheckRunRetention,
         // M3 X2: needs only the database.
         Task::SpecDriftSweep,
+        // M3 X4: needs only the database.
+        Task::SpecIndexSweep,
         // M3 I2: needs only the database.
         Task::WebhookRetention,
     ];
@@ -345,7 +354,11 @@ fn registry_with(
         .with(Arc::new(forge_db::work_items::WorkItemSync))?
         // M3 X2 (`independent`): every merge request version asks for its
         // `forge/spec-drift` run (the `check.spec_drift` job).
-        .with(Arc::new(forge_db::checks::spec_drift::SpecDriftRequests))?;
+        .with(Arc::new(forge_db::checks::spec_drift::SpecDriftRequests))?
+        // M3 X4 (`independent`): every merge request version (and a work
+        // item link change) asks for its `forge/spec-lint` and
+        // `forge/spec-trace` runs (the `check.spec_index` job).
+        .with(Arc::new(forge_db::checks::spec_index::SpecIndexRequests))?;
     // M3 I2: deliveries are recorded only when the lane can send them.
     let registry = if webhooks {
         registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?
@@ -418,6 +431,7 @@ impl Task {
             Self::EventsRetention => events_retention::NAME,
             Self::CheckRunRetention => check_run_retention::NAME,
             Self::SpecDriftSweep => spec_drift_sweep::NAME,
+            Self::SpecIndexSweep => spec_index_sweep::NAME,
             Self::MaintenanceRunner => maintenance::RUNNER_NAME,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
             Self::WebhookRunner => webhooks::RUNNER_NAME,
@@ -447,6 +461,7 @@ impl Task {
             Self::EventsRetention => events_retention::PERIOD,
             Self::CheckRunRetention => check_run_retention::PERIOD,
             Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
+            Self::SpecIndexSweep => spec_index_sweep::PERIOD,
             Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
             Self::WebhookRunner => jobs::JOB_POLL_PERIOD,
@@ -498,6 +513,7 @@ impl Task {
             }
             Self::CodeownersRestore => codeowners_restore::run_codeowners_restore(db).await,
             Self::SpecDriftSweep => spec_drift_sweep::run_spec_drift_sweep(db).await,
+            Self::SpecIndexSweep => spec_index_sweep::run_spec_index_sweep(db).await,
             Self::EventsRetention => events_retention::run_events_retention(db).await,
             Self::CheckRunRetention => {
                 check_run_retention::run_check_run_retention(db, shared.check_run_retention_days)

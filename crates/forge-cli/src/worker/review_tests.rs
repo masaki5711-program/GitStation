@@ -337,6 +337,8 @@ fn the_production_registry_starts_the_subscribers_task() {
             forge_db::work_items::WORK_ITEM_SYNC,
             // M3 X2: every merge request version asks for its spec drift run.
             forge_db::checks::spec_drift::SPEC_DRIFT_SUBSCRIBER,
+            // M3 X4: and for its spec lint and trace runs.
+            forge_db::checks::spec_index::SPEC_INDEX_SUBSCRIBER,
         ]
     );
     let tasks = crate::worker::tasks(

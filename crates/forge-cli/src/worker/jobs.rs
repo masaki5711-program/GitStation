@@ -33,6 +33,7 @@ use tokio::sync::watch;
 use super::provision::{ProvisionHandler, Storage};
 use super::review::{ConflictScanHandler, MergeabilityHandler, RefreshHandler};
 use super::spec_drift::SpecDriftHandler;
+use super::spec_index::SpecIndexHandler;
 use super::supervise::Next;
 
 /// How often an idle runner looks for a ready job.
@@ -45,8 +46,9 @@ pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 /// Every job handler of this build: `repository.provision` (D4 MR3b),
 /// `merge_request.refresh` (M3 R1b: merge request versions),
 /// `merge_request.mergeability` (M3 R2: the trial merge),
-/// `merge_request.conflict_scan` (M3 X6: conflicts between merge requests) and
-/// `check.spec_drift` (M3 X2: `forge/spec-drift`).
+/// `merge_request.conflict_scan` (M3 X6: conflicts between merge requests),
+/// `check.spec_drift` (M3 X2: `forge/spec-drift`) and `check.spec_index`
+/// (M3 X4: `forge/spec-lint` and `forge/spec-trace`).
 pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHandler>>, ForgeError> {
     // clone: the handler owns its storage handles (paths and an Arc)
     let provision = ProvisionHandler::new(db, storage.clone())?;
@@ -54,12 +56,14 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
     let mergeability = MergeabilityHandler::new(db, storage)?;
     let conflicts = ConflictScanHandler::new(db, storage)?;
     let spec_drift = SpecDriftHandler::new(db, storage)?;
+    let spec_index = SpecIndexHandler::new(db, storage)?;
     Ok(vec![
         Arc::new(provision),
         Arc::new(refresh),
         Arc::new(mergeability),
         Arc::new(conflicts),
         Arc::new(spec_drift),
+        Arc::new(spec_index),
     ])
 }
 

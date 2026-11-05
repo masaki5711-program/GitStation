@@ -37,7 +37,19 @@ pub const SPEC_DRIFT_CHECK: &str = "forge/spec-drift";
 /// The `forge/` names forge's own worker reports (never over HTTP: the
 /// `CheckWrite` route refuses `forge/` to everyone, ADR-0024 §10). A
 /// required `forge/` name outside this list has no reporter.
-pub const FORGE_REPORTED_CHECKS: &[&str] = &[SPEC_DRIFT_CHECK];
+pub const FORGE_REPORTED_CHECKS: &[&str] = &[SPEC_DRIFT_CHECK, SPEC_LINT_CHECK, SPEC_TRACE_CHECK];
+
+/// `forge/spec-lint` (M3 X4, plan 03 §5.4): whether the commit's own
+/// specification documents and the `@req` tags of its families keep the
+/// rules (`success`) or not (`failure`; `neutral` when the index hit a
+/// bound). Reported by forge's worker only.
+pub const SPEC_LINT_CHECK: &str = "forge/spec-lint";
+
+/// `forge/spec-trace` (M3 X4, plan 03 §5.4, ADR-0017 §4.1.1 started as
+/// advice — plan 03 §9-4): whether every requirement a merge request
+/// touches has a `@req` test at its head (`success`) or not (`neutral`,
+/// never `failure` while advisory). Reported by forge's worker only.
+pub const SPEC_TRACE_CHECK: &str = "forge/spec-trace";
 
 /// The most runs one commit holds in all: the reporters' cap
 /// ([`MAX_CHECK_RUNS_PER_COMMIT`], which counts no `forge/` name) plus one

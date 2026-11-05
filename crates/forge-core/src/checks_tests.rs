@@ -62,9 +62,17 @@ fn a_snapshot_answers_only_for_its_own_head() {
 /// and only they count as reported by forge.
 #[test]
 fn forge_reports_exactly_its_own_checks() {
-    use crate::checks::{forge_reports, FORGE_REPORTED_CHECKS, SPEC_DRIFT_CHECK};
+    use crate::checks::{
+        forge_reports, FORGE_REPORTED_CHECKS, SPEC_DRIFT_CHECK, SPEC_LINT_CHECK, SPEC_TRACE_CHECK,
+    };
     use crate::merge_conditions::CheckNamespace;
-    assert_eq!(FORGE_REPORTED_CHECKS, &[SPEC_DRIFT_CHECK]);
+    // M3 X4: forge/spec-lint and forge/spec-trace join forge/spec-drift.
+    assert_eq!(
+        FORGE_REPORTED_CHECKS,
+        &[SPEC_DRIFT_CHECK, SPEC_LINT_CHECK, SPEC_TRACE_CHECK]
+    );
+    assert_eq!(SPEC_LINT_CHECK, "forge/spec-lint");
+    assert_eq!(SPEC_TRACE_CHECK, "forge/spec-trace");
     for raw in FORGE_REPORTED_CHECKS {
         let n = name(raw);
         assert_eq!(n.namespace(), CheckNamespace::Forge, "{raw}");
@@ -72,8 +80,9 @@ fn forge_reports_exactly_its_own_checks() {
     }
     for raw in [
         "forge/risk",
-        "forge/spec-trace",
+        "forge/spec-conformance",
         "ci/spec-drift",
+        "ci/spec-trace",
         "ext/spec-drift",
     ] {
         assert!(!forge_reports(&name(raw)), "{raw}");

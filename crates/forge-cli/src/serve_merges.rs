@@ -125,6 +125,11 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::SpecVersionNotFound
         | ErrorCode::SpecRepositoryUnavailable
         | ErrorCode::SpecVersionBehind
+        // M3 X4: content outcomes of the spec index (never a merge's).
+        | ErrorCode::SpecLintProblem
+        | ErrorCode::RequirementUntested
+        | ErrorCode::RequirementTagUnknown
+        | ErrorCode::SpecIndexIncomplete
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden
