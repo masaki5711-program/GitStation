@@ -581,6 +581,31 @@ impl ResourceCtx for TokenOwnerCtx {
     }
 }
 
+/// The notification settings of `owner` (`NotificationPreferencesRead` /
+/// `…Write`, M3 N1): the id is the owner, so a proof names whose they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationPreferencesCtx {
+    owner: UserId,
+}
+
+impl NotificationPreferencesCtx {
+    pub fn new(owner: UserId) -> Self {
+        Self { owner }
+    }
+}
+
+impl sealed::Sealed for NotificationPreferencesCtx {}
+
+impl ResourceCtx for NotificationPreferencesCtx {
+    type Id = UserId;
+    fn resource(&self) -> Resource {
+        Resource::NotificationPreferences { owner: self.owner }
+    }
+    fn id(&self) -> UserId {
+        self.owner
+    }
+}
+
 /// A token about to be created for `owner` with `scopes` (`TokenCreate`):
 /// the id is the owner, so the proof names whose token it is.
 #[derive(Debug, Clone, PartialEq, Eq)]

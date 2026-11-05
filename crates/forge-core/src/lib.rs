@@ -22,6 +22,9 @@ pub mod merge_request;
 pub mod move_details;
 pub mod namespace_path;
 pub mod namespace_resolver;
+// ── M3 N1: notification kinds and delivery states ──
+pub mod notification;
+// ── end M3 N1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod path_vectors;
 pub mod push;
@@ -79,6 +82,7 @@ pub use namespace_resolver::{
     GroupRecord, NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess,
     ProjectAccessLoader, ProjectRecord, ProjectRepository, Resolution, Resolved, ResolvedTarget,
 };
+pub use notification::{NotificationKind, NotificationState};
 pub use push::{
     ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedCommits,
     PushedRef, Pusher, MAX_PUSHED_COMMITS, PUSH_RECORD_BUDGET,

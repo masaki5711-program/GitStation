@@ -25,6 +25,8 @@ forge-review.workspace = true
 forge-checks.workspace = true
 # M3 I1c: the integrations' event feed (serve).
 forge-integ.workspace = true
+# M3 N1: the notify subscriber and the mail job (the worker's notification lane).
+forge-notify.workspace = true
 forge-oidc.workspace = true
 httpdate.workspace = true
 tokio.workspace = true
@@ -39,6 +41,8 @@ embed-ui = ["forge-web/embed-ui"]
 [dev-dependencies]
 forge-oidc = { workspace = true, features = ["test-support"] }
 forge-db = { workspace = true, features = ["test-support"] }
+# The worker test reads the mail a fake relay received.
+forge-notify = { workspace = true, features = ["test-support"] }
 # tests/smart_http_e2e.rs: gzip request bodies.
 flate2.workspace = true
 tempfile.workspace = true

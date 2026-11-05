@@ -938,6 +938,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "user end-sessions",
             "token list",
             "token revoke",
+            "notifications get",
+            "notifications set",
             "admin service-account list",
             "admin service-account view",
             "admin service-account update",

@@ -766,6 +766,25 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             "forge.retention_policy",
             plain(&["forge_app:SELECT", "forge_ro:SELECT", "forge_purge:SELECT"]),
         ),
+        // ── M3 N1: notifications (20261120100000) ──
+        (
+            "forge.notification_preferences",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.notifications",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
     ]
 }
 
@@ -938,6 +957,9 @@ const LATER_TABLES: &[&str] = &[
     "retention_policy",
     // ── M3 O3: the maintenance ledger (migration 20261117100000) ──
     "repository_maintenance",
+    // ── M3 N1: notifications (migration 20261120100000) ──
+    "notification_preferences",
+    "notifications",
 ];
 
 /// Every table the first migration creates.

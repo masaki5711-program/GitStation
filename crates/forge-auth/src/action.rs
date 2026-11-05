@@ -181,6 +181,13 @@ actions! {
     TokenList,
     /// `DELETE /api/v1/user/tokens/{id}` (M2 MR6).
     TokenRevoke,
+    // --- REST API: notification settings (M3 N1, ADR-0016 Amendment N1) ---
+    /// `GET /api/v1/user/notification-preferences`: one's own mail
+    /// settings (mail on or off, language, muted kinds). Only the person:
+    /// another user's are not found, administrators included.
+    NotificationPreferencesRead,
+    /// `PUT /api/v1/user/notification-preferences`: replace one's own.
+    NotificationPreferencesWrite,
     UserCreate,
     /// `POST /api/v1/admin/users/{id}/disable` (M2 MR6): administrators,
     /// never an agent; the administration guard always holds over HTTP
@@ -439,6 +446,7 @@ impl Action {
             | Action::GroupRead
             | Action::GroupList
             | Action::TokenList
+            | Action::NotificationPreferencesRead
             | Action::AdminSessionList
             | Action::UserSearch
             | Action::UserAdminList
@@ -471,6 +479,7 @@ impl Action {
             | Action::NamespaceTombstoneRelease
             | Action::UserRename
             | Action::TokenRevoke
+            | Action::NotificationPreferencesWrite
             | Action::AdminSessionRevoke
             | Action::UserCreate
             | Action::UserDisable

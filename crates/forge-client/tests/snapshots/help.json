@@ -5256,6 +5256,130 @@
     {
       "args": [],
       "examples": [
+        "gstn notifications get --json"
+      ],
+      "name": "notifications get",
+      "output": {
+        "properties": {
+          "email_enabled": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muted_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "email_enabled",
+          "language",
+          "muted_kinds",
+          "kinds"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notification-preferences"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show your notification settings: mail on or off, the language of the mail (null: the instance default) and the kinds muted; kinds lists every kind there is."
+    },
+    {
+      "args": [
+        {
+          "description": "on | off: all mail.",
+          "kind": "option",
+          "name": "--email",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "ja | en | id | default (the instance's).",
+          "kind": "option",
+          "name": "--language",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A kind to stop (repeatable; notifications get lists them).",
+          "kind": "option",
+          "name": "--mute",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A kind to receive again (repeatable).",
+          "kind": "option",
+          "name": "--unmute",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn notifications set --email off",
+        "gstn notifications set --mute mr_commented --language en"
+      ],
+      "name": "notifications set",
+      "output": {
+        "properties": {
+          "email_enabled": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muted_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "email_enabled",
+          "language",
+          "muted_kinds",
+          "kinds"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notification-preferences",
+        "PUT /api/v1/user/notification-preferences"
+      ],
+      "scopes": [
+        "read_api",
+        "api"
+      ],
+      "summary": "Change your notification settings; a flag changes only what it names (the rest is kept). Nobody else's can be changed, administrators included."
+    },
+    {
+      "args": [],
+      "examples": [
         "gstn admin service-account list --json"
       ],
       "name": "admin service-account list",
