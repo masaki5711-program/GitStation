@@ -158,6 +158,53 @@ fn blame_human(body: &Value) -> String {
     rows.join("\n")
 }
 
+/// `gstn browse spec-refs`: the revision, the file's state, and one line
+/// per reference (line, what it names, the pin, the status).
+fn spec_refs_human(body: &Value) -> String {
+    let mut rows = vec![
+        revision(body),
+        format!("{}: {}", text(body, "path"), text(body, "config")),
+    ];
+    if let Some(p) = body.get("problem").filter(|p| !p.is_null()) {
+        rows.push(format!(
+            "{} line {}: {}",
+            text(p, "error_code"),
+            text(p, "line"),
+            text(p, "reason")
+        ));
+    }
+    for e in body
+        .get("specs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let what = if text(e, "type") == "path" {
+            format!("path {}", terminal_text(&text(e, "path")))
+        } else {
+            let pin = e.get("pin").cloned().unwrap_or(Value::Null);
+            format!(
+                "repo {} {} {}",
+                terminal_text(&text(e, "repo")),
+                text(&pin, "type"),
+                terminal_text(&text(&pin, "name"))
+            )
+        };
+        let mut row = format!("line {}  {what}  {}", text(e, "line"), text(e, "status"));
+        if let Some(code) = e.get("error_code").and_then(Value::as_str) {
+            row.push_str(&format!(" ({code})"));
+        }
+        if let Some(commit) = e.get("commit").and_then(Value::as_str) {
+            row.push_str(&format!(" {commit}"));
+        }
+        rows.push(row);
+    }
+    rows.join(
+        "
+",
+    )
+}
+
 fn truncated_note(body: &Value, what: &str) -> &'static str {
     if body.get("truncated").and_then(Value::as_bool) == Some(true) {
         match what {
@@ -313,6 +360,20 @@ pub fn browse(cli: &Cli, cmd: &BrowseCommand, env: EnvFn<'_>, io: &mut Io<'_>) -
                 body.get("diff").unwrap_or(&Value::Null),
                 *patch,
             ));
+            emit(io, cli, body, &human)
+        }
+        BrowseCommand::SpecRefs { project, rev } => {
+            let c = client(cli, env, io)?;
+            let q: Vec<(String, String)> =
+                rev.iter().map(|r| ("ref".to_string(), r.clone())).collect();
+            let body = call(
+                &c,
+                Method::Get,
+                &repository(*project, "spec-refs"),
+                &q,
+                None,
+            )?;
+            let human = spec_refs_human(&body);
             emit(io, cli, body, &human)
         }
         BrowseCommand::Blame { project, rev, path } => {

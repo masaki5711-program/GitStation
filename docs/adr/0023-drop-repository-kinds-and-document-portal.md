@@ -132,7 +132,7 @@
 1. **読み取りの API**: `GET /api/v1/projects/{id}/repository/spec-refs[?ref=]`。新しい Action `SpecRefRead`（`read_api`）。
    判定の規則は `RepoBrowse` と同じ（同じ arm。Reporter、内部のプロジェクトはサインインした人全員、サービスアカウントは所属だけ）。
    権限の表の行は `RepoBrowse` の全行の双子（`the_spec_refs_mirror_every_browse_row` が保証する）。`ref` を省くと既定のブランチを読む。
-   `gstn` の専用コマンドは X4（`gstn spec`）で足す（それまでは `gstn api`）。
+   `gstn browse spec-refs --project <id> [--ref <rev>]` で読める（C-1: 予定のままのルートを残さない）。X4 の `gstn spec` は要件の索引の側を足す。
 2. **参照先の権限は、読む人の権限で判定する**（計画 11 の X1）。`repo:` のパスは読む人を viewer として 1 回だけ引き、
    参照先のプロジェクトをもう一度 `authorize()`（forge-auth の `prove_spec_ref`。ルートの証明の principal を使い、呼び出し側が渡す principal は使わない）で判定する。
    参照する側のプロジェクトを読めることは、参照先を読む理由にならない。
