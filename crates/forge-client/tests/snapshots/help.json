@@ -3971,6 +3971,7 @@
               "required": [
                 "iid",
                 "draft",
+                "head_sha",
                 "outcome",
                 "reason",
                 "conflicts",
@@ -4000,6 +4001,7 @@
               "reason",
               "stale",
               "scanned_head_sha",
+              "scanned_target_sha",
               "scanned_at",
               "peers",
               "pairs_tried",

@@ -2019,6 +2019,11 @@ export interface components {
             conflicts_truncated: boolean;
             draft: boolean;
             /**
+             * @description The other merge request's head the prediction is about (its current
+             *     head).
+             */
+            head_sha: string;
+            /**
              * Format: int64
              * @description The other merge request's number in the project.
              */
@@ -2053,9 +2058,13 @@ export interface components {
             /** @description UTC, RFC 3339. */
             scanned_at: string | null;
             scanned_head_sha: string | null;
+            /** @description The target tip the finished scan read. */
+            scanned_target_sha: string | null;
             /**
-             * @description The finished scan looked at another head or target than the current
-             *     ones (the next scan follows the version job).
+             * @description The finished scan looked at another head, target branch or target
+             *     tip than the current ones (its predictions about the head still
+             *     stand; a new head is scanned by the version job, a moved target by
+             *     the next push).
              */
             stale: boolean;
             /**

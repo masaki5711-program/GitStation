@@ -62,11 +62,12 @@ pub use approvals::{
     StoredApproval, StoredApprovalRule, MAX_APPROVALS, MAX_RULES, MAX_RULE_APPROVERS,
 };
 pub use conflicts::{
-    begin_scan, conflict_predictions, conflict_scan, conflict_scan_job, conflict_scan_payload,
-    fail_scan, prediction_incomplete, reap_stale_scans, record_scan, request_scan,
-    request_scan_for_head, scan_peers, ConflictScanRequest, PairOutcome, PairResult, Peer,
-    ScanRecorded, ScanResult, ScanStart, ScanStatus, StoredPrediction, StoredScan,
-    CONFLICT_SCAN_JOB, CONFLICT_SCAN_TIMEOUT, MAX_PREDICTIONS, SCAN_STALE_AFTER,
+    abandon_scan, begin_scan, conflict_predictions, conflict_scan, conflict_scan_job,
+    conflict_scan_payload, fail_scan, prediction_incomplete, reap_stale_scans, record_scan,
+    request_scan, request_scan_for_head, scan_peers, sweep_scans, ConflictScanRequest, PairOutcome,
+    PairResult, Peer, Peers, ScanAsk, ScanRecorded, ScanResult, ScanStart, ScanStatus,
+    StoredPrediction, StoredScan, SweptScan, CONFLICT_SCAN_JOB, CONFLICT_SCAN_TIMEOUT,
+    MAX_PREDICTIONS, SCAN_STALE_AFTER, SCAN_SWEEP_ATTEMPTS, SCAN_SWEEP_BACKOFF,
 };
 pub use discussions::{
     add_note_mr_decided, discussion, discussions, resolve_discussion_mr_decided,

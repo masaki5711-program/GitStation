@@ -36,9 +36,10 @@ fn human(body: &Value) -> String {
         out.push_str(" (the last scan is for another head or target)");
     }
     out.push_str(&format!(
-        "\nhead: {}\nscanned: head {} at {}; {} other merge requests, {} trial merges, {} left out",
+        "\nhead: {}\nscanned: head {} target {} at {}; {} other merge requests, {} trial merges, {} left out",
         text(body, "head_sha"),
         text(scan, "scanned_head_sha"),
+        text(scan, "scanned_target_sha"),
         text(scan, "scanned_at"),
         text(scan, "peers"),
         text(scan, "pairs_tried"),

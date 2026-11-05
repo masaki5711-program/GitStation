@@ -633,6 +633,8 @@ async fn conflicts_are_read_by_members_with_each_prediction() {
     assert_eq!(predictions[0]["draft"], true);
     assert_eq!(predictions[0]["outcome"], "conflict");
     assert_eq!(predictions[0]["conflicts"], json!(["feature.txt"]));
+    assert_eq!(body["scan"]["scanned_target_sha"], w.base.as_str());
+    assert_eq!(predictions[0]["head_sha"], other.as_str());
     let (status, body) = send(
         w.router.clone(),
         "GET",
@@ -659,5 +661,26 @@ async fn conflicts_are_read_by_members_with_each_prediction() {
     );
     let (status, body) = w.get("/conflicts", read).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // Review MEDIUM: the target moved since the scan: `stale` (a fresh
+    // router reads the ref list anew).
+    let moved = commit_on(
+        &w.path,
+        Some(&w.base),
+        &[(
+            "README", "moved
+",
+        )],
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/main", &moved], None);
+    let (status, body) = send(
+        w.fresh_router(),
+        "GET",
+        &w.uri("/conflicts"),
+        session(w.dev),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["scan"]["stale"], true, "{body}");
     w.t.drop_now().await;
 }

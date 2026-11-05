@@ -422,6 +422,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     reason: None,
                     head: oid('a').ok(),
                     target_branch: branch("main"),
+                    target_sha: oid('9').ok(),
                     peers: 1,
                     pairs_tried: 1,
                     pairs_skipped: 0,
@@ -442,7 +443,9 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     done,
                     ScanRecorded::Stored {
                         predicted: vec![peer.id],
-                        skipped: 0
+                        skipped: 0,
+                        status: ScanStatus::Scanned,
+                        reason: None,
                     }
                 );
             }

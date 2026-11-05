@@ -187,12 +187,17 @@ async fn refresh_locked(
     } else {
         None
     };
-    // M3 X6: the conflict scan of the (new) head, drafts included.
-    let scan_requested = if stored.state == forge_core::MergeRequestState::Open {
-        crate::conflicts::after_version(db, mr, request_id).await?
+    // M3 X6: the conflict scan of the (new) head, drafts included; never
+    // fails the version job (review HIGH: the sweep covers a failed request).
+    let scan = if stored.state == forge_core::MergeRequestState::Open {
+        crate::conflicts::after_version(db, mr, request_id).await
     } else {
-        None
+        crate::conflicts::ScanAsked {
+            outcome: "not_open",
+            seq: None,
+        }
     };
+    let scan_requested = scan.seq;
     tracing::info!(
         target: "forge_review",
         event = "forge.review.version_refreshed",
@@ -205,6 +210,7 @@ async fn refresh_locked(
         ref_changes = synced.map_or(0, |s| s.changes),
         check_requested,
         scan_requested,
+        scan = scan.outcome,
         duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "merge request versions refreshed"
     );

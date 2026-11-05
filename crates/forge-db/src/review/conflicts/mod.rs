@@ -44,9 +44,13 @@ mod run;
 mod stale;
 
 pub(crate) use request::request_scan_on;
-pub use request::{request_scan, request_scan_for_head};
+pub use request::{
+    request_scan, request_scan_for_head, sweep_scans, ScanAsk, SweptScan, SCAN_SWEEP_ATTEMPTS,
+    SCAN_SWEEP_BACKOFF,
+};
 pub use run::{
-    begin_scan, record_scan, scan_peers, PairResult, Peer, ScanRecorded, ScanResult, ScanStart,
+    abandon_scan, begin_scan, record_scan, scan_peers, PairResult, Peer, Peers, ScanRecorded,
+    ScanResult, ScanStart,
 };
 pub use stale::{fail_scan, reap_stale_scans, SCAN_STALE_AFTER};
 
@@ -142,6 +146,8 @@ pub struct StoredScan {
     pub scan_seq: i64,
     pub scanned_head_sha: Option<ObjectId>,
     pub scanned_target_branch: Option<RefName>,
+    /// The target tip the last finished scan read.
+    pub scanned_target_sha: Option<ObjectId>,
     /// UTC, RFC 3339.
     pub scanned_at: Option<String>,
     pub peers: i32,
@@ -155,6 +161,8 @@ pub struct StoredPrediction {
     pub other: MergeRequestId,
     pub other_iid: i64,
     pub other_draft: bool,
+    /// The other's head the prediction is about (its current head).
+    pub other_head: ObjectId,
     pub outcome: PairOutcome,
     pub reason: Option<String>,
     pub conflicts: Vec<String>,
@@ -185,10 +193,11 @@ type ScanRow = (
     i32,
     i32,
     i32,
+    Option<String>,
 );
 
 fn parse_scan(row: ScanRow, mr: MergeRequestId) -> Result<StoredScan, ForgeError> {
-    let (status, reason, scan_seq, head, target, scanned_at, peers, tried, skipped) = row;
+    let (status, reason, scan_seq, head, target, scanned_at, peers, tried, skipped, tip) = row;
     Ok(StoredScan {
         status: ScanStatus::parse(&status)
             .ok_or_else(|| stored_invalid("stored_scan_status_invalid", mr))?,
@@ -199,6 +208,11 @@ fn parse_scan(row: ScanRow, mr: MergeRequestId) -> Result<StoredScan, ForgeError
             .transpose()?,
         scanned_target_branch: target
             .map(|t| RefName::parse(&t).map_err(|_| stored_invalid("stored_branch_invalid", mr)))
+            .transpose()?,
+        scanned_target_sha: tip
+            .map(|t| {
+                ObjectId::parse(&t).map_err(|_| stored_invalid("stored_target_sha_invalid", mr))
+            })
             .transpose()?,
         scanned_at,
         peers,
@@ -216,7 +230,7 @@ pub async fn conflict_scan(db: &Db, mr: MergeRequestId) -> Result<Option<StoredS
             sqlx::query_as(&format!(
                 "SELECT status, reason, scan_seq, scanned_head_sha, scanned_target_branch, \
                  to_char(scanned_at AT TIME ZONE 'UTC', {UTC}), peers, pairs_tried, \
-                 pairs_skipped FROM forge.merge_request_conflict_scans \
+                 pairs_skipped, scanned_target_sha FROM forge.merge_request_conflict_scans \
                  WHERE merge_request_id = $1"
             ))
             .bind(mr.get())
@@ -232,6 +246,7 @@ type PredictionRow = (
     i64,
     i64,
     bool,
+    String,
     String,
     Option<String>,
     Vec<String>,
@@ -258,7 +273,7 @@ pub async fn conflict_predictions(
                    UNION ALL \
                    SELECT p.low_mr_id, p.high_head_sha, p.low_head_sha, p.* \
                    FROM forge.merge_request_conflict_pairs p WHERE p.high_mr_id = $1) \
-                 SELECT o.id, o.iid, o.draft, x.outcome, x.reason, x.conflicts, \
+                 SELECT o.id, o.iid, o.draft, x.other_head, x.outcome, x.reason, x.conflicts, \
                         x.conflicts_truncated, to_char(x.checked_at AT TIME ZONE 'UTC', {UTC}) \
                  FROM mine x \
                  JOIN forge.merge_requests m ON m.id = $1 \
@@ -279,11 +294,13 @@ pub async fn conflict_predictions(
         .await?;
     rows.into_iter()
         .map(
-            |(other, other_iid, other_draft, outcome, reason, conflicts, truncated, at)| {
+            |(other, other_iid, other_draft, head, outcome, reason, conflicts, truncated, at)| {
                 Ok(StoredPrediction {
                     other: MergeRequestId::new(other),
                     other_iid,
                     other_draft,
+                    other_head: ObjectId::parse(&head)
+                        .map_err(|_| stored_invalid("stored_head_sha_invalid", mr))?,
                     outcome: PairOutcome::parse(&outcome)
                         .ok_or_else(|| stored_invalid("stored_pair_outcome_invalid", mr))?,
                     reason,

@@ -6,7 +6,7 @@ use forge_core::{
 };
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::{stored_invalid, PairOutcome, ScanStatus};
+use super::{PairOutcome, ScanStatus};
 use crate::change::{
     AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome, Settle,
 };
@@ -21,7 +21,8 @@ pub enum ScanStart {
     Scan,
 }
 
-/// Start the run of request `seq` of `mr`.
+/// Start the run of request `seq` of `mr`. The last reason stays until the
+/// result is stored (a reader still sees why the last scan ended).
 pub async fn begin_scan(db: &Db, mr: MergeRequestId, seq: i64) -> Result<ScanStart, ForgeError> {
     const QUERY: &str = "review.conflict_scan_begin";
     db.within(QUERY, async {
@@ -31,7 +32,7 @@ pub async fn begin_scan(db: &Db, mr: MergeRequestId, seq: i64) -> Result<ScanSta
             .await
             .map_err(|e| query_error(QUERY, e))?;
         let started = sqlx::query(
-            "UPDATE forge.merge_request_conflict_scans SET status = 'scanning', reason = NULL, \
+            "UPDATE forge.merge_request_conflict_scans SET status = 'scanning', \
              updated_at = now() WHERE merge_request_id = $1 AND scan_seq = $2",
         )
         .bind(mr.get())
@@ -48,6 +49,38 @@ pub async fn begin_scan(db: &Db, mr: MergeRequestId, seq: i64) -> Result<ScanSta
     .await
 }
 
+/// End request `seq` of `mr` without a result (the merge request is no
+/// longer open): `failed` with `reason`, so no row stays `scanning` (a
+/// reopen requests a new scan). `true` when written.
+pub async fn abandon_scan(
+    db: &Db,
+    mr: MergeRequestId,
+    seq: i64,
+    reason: &'static str,
+) -> Result<bool, ForgeError> {
+    const QUERY: &str = "review.conflict_scan_abandon";
+    db.within(QUERY, async {
+        let mut conn = db
+            .write_pool()
+            .acquire()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        sqlx::query(
+            "UPDATE forge.merge_request_conflict_scans SET status = 'failed', reason = $3, \
+             updated_at = now() WHERE merge_request_id = $1 AND scan_seq = $2 \
+             AND status IN ('pending', 'scanning')",
+        )
+        .bind(mr.get())
+        .bind(seq)
+        .bind(reason)
+        .execute(&mut *conn)
+        .await
+        .map(|r| r.rows_affected() > 0)
+        .map_err(|e| query_error(QUERY, e))
+    })
+    .await
+}
+
 /// Another open merge request on the same target branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Peer {
@@ -56,6 +89,18 @@ pub struct Peer {
     /// Its recorded head (the hidden version ref keeps the commit).
     pub head: ObjectId,
     pub draft: bool,
+}
+
+/// The peers of a scan ([`scan_peers`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Peers {
+    /// At most the caller's limit, most recently updated first.
+    pub peers: Vec<Peer>,
+    /// How many there are in all (more than `peers`: past the cap).
+    pub total: i64,
+    /// Peers whose stored head is not an object id (never written by
+    /// forge; logged by the caller, the scan is `incomplete peer_invalid`).
+    pub invalid: Vec<MergeRequestId>,
 }
 
 /// The open merge requests of `project` on `target` but `mr` that have a
@@ -67,7 +112,7 @@ pub async fn scan_peers(
     target: &RefName,
     mr: MergeRequestId,
     limit: i64,
-) -> Result<(Vec<Peer>, i64), ForgeError> {
+) -> Result<Peers, ForgeError> {
     const QUERY: &str = "review.conflict_scan_peers";
     db.within(QUERY, async {
         let mut conn = db
@@ -102,20 +147,25 @@ pub async fn scan_peers(
             .await
             .map_err(|e| query_error(QUERY, e))?
         };
-        let peers = rows
-            .into_iter()
-            .map(|(id, iid, head, draft)| {
-                let other = MergeRequestId::new(id);
-                Ok(Peer {
+        let mut peers = Vec::with_capacity(rows.len());
+        let mut invalid = Vec::new();
+        for (id, iid, head, draft) in rows {
+            let other = MergeRequestId::new(id);
+            match ObjectId::parse(&head) {
+                Ok(head) => peers.push(Peer {
                     merge_request: other,
                     iid,
-                    head: ObjectId::parse(&head)
-                        .map_err(|_| stored_invalid("stored_head_sha_invalid", other))?,
+                    head,
                     draft,
-                })
-            })
-            .collect::<Result<Vec<_>, ForgeError>>()?;
-        Ok((peers, total))
+                }),
+                Err(_) => invalid.push(other),
+            }
+        }
+        Ok(Peers {
+            peers,
+            total,
+            invalid,
+        })
     })
     .await
 }
@@ -141,6 +191,8 @@ pub struct ScanResult {
     /// The head scanned (`None`: no version yet).
     pub head: Option<ObjectId>,
     pub target_branch: RefName,
+    /// The target tip the scan read (`None`: not read).
+    pub target_sha: Option<ObjectId>,
     pub peers: i32,
     pub pairs_tried: i32,
     pub pairs_skipped: i32,
@@ -159,6 +211,10 @@ pub enum ScanRecorded {
     Stored {
         predicted: Vec<MergeRequestId>,
         skipped: usize,
+        /// What was stored (`incomplete peer_moved` when a pair was
+        /// skipped).
+        status: ScanStatus,
+        reason: Option<&'static str>,
     },
 }
 
@@ -286,10 +342,10 @@ async fn write_pair(
         .map_err(|e| query_error("review.conflict_pair_create", e))
     })
     .await?;
-    let (previous, seq): (String, i64) = tx
+    let (previous, seq): (Option<String>, i64) = tx
         .step(|c| async move {
             sqlx::query_as(
-                "SELECT outcome, prediction_seq FROM forge.merge_request_conflict_pairs \
+                "SELECT last_decided, prediction_seq FROM forge.merge_request_conflict_pairs \
                  WHERE low_mr_id = $1 AND high_mr_id = $2 FOR UPDATE",
             )
             .bind(low.get())
@@ -299,8 +355,11 @@ async fn write_pair(
             .map_err(|e| query_error("review.conflict_pair_lock", e))
         })
         .await?;
+    // Measured against the last outcome that was not `failed`: conflict →
+    // failed → conflict is one prediction (and one mail), not two.
     let entered = pair.outcome == PairOutcome::Conflict
-        && PairOutcome::parse(&previous) != Some(PairOutcome::Conflict);
+        && previous.as_deref().and_then(PairOutcome::parse) != Some(PairOutcome::Conflict);
+    let decided = (pair.outcome != PairOutcome::Failed).then(|| pair.outcome.as_str());
     let seq = if entered { seq + 1 } else { seq };
     let outcome = pair.outcome.as_str();
     let reason = pair.reason;
@@ -310,6 +369,7 @@ async fn write_pair(
             "UPDATE forge.merge_request_conflict_pairs SET low_head_sha = $3, \
              high_head_sha = $4, target_branch = $5, outcome = $6, reason = $7, \
              conflicts = $8, conflicts_truncated = $9, prediction_seq = $10, \
+             last_decided = COALESCE($11, last_decided), \
              checked_at = now(), updated_at = now() WHERE low_mr_id = $1 AND high_mr_id = $2",
         )
         .bind(low.get())
@@ -322,6 +382,7 @@ async fn write_pair(
         .bind(conflicts)
         .bind(truncated)
         .bind(seq)
+        .bind(decided)
         .execute(c)
         .await
         .map(drop)
@@ -362,93 +423,122 @@ pub async fn record_scan(
             return Ok(Settle::Discard(ScanRecorded::Superseded));
         };
         let scanned_head = result.head.as_ref().map(ObjectId::as_str);
+        if latest == seq && state != MergeRequestState::Open.as_str() {
+            // Closed or merged mid-run: never left `scanning` (review LOW);
+            // a reopen requests a new scan.
+            tx.step(|c| async move {
+                sqlx::query(
+                    "UPDATE forge.merge_request_conflict_scans SET status = 'failed', \
+                     reason = 'not_open', updated_at = now() WHERE merge_request_id = $1",
+                )
+                .bind(mr.get())
+                .execute(c)
+                .await
+                .map(drop)
+                .map_err(|e| query_error("review.conflict_scan_closed", e))
+            })
+            .await?;
+            return Ok(Settle::CommitDerived(ScanRecorded::Superseded));
+        }
         if latest != seq
-            || state != MergeRequestState::Open.as_str()
             || head.as_deref() != scanned_head
             || target != result.target_branch.as_str()
         {
-            // A closed merge request keeps its row as it is: nothing reads
-            // it, the reaper skips it, and a reopen requests a new scan.
             return Ok(Settle::Discard(ScanRecorded::Superseded));
         }
         let project = ProjectId::new(project);
+        let mut audits = Vec::new();
+        let mut events = Vec::new();
+        let mut predicted = Vec::new();
+        let mut skipped = 0usize;
+        if let Some(head) = result.head.as_ref() {
+            let side = Side {
+                mr,
+                project,
+                head: head.clone(), // clone: the side owns its id
+                target: result.target_branch.clone(), // clone: as above
+            };
+            // A stable lock order across scans: by the pair's (low, high).
+            let mut pairs: Vec<&PairResult> = result.pairs.iter().collect();
+            pairs.sort_by_key(|p| {
+                let (a, b) = (mr.get(), p.other.get());
+                (a.min(b), a.max(b))
+            });
+            for pair in pairs {
+                match write_pair(&mut tx, &side, pair).await? {
+                    None => skipped += 1,
+                    Some(None) => {}
+                    Some(Some(prediction_seq)) => {
+                        let conflict_files = pair.conflicts.len();
+                        let files_truncated = pair.conflicts_truncated;
+                        for (this, this_iid, this_head, other, other_iid, other_head) in [
+                            (mr, iid, head, pair.other, pair.other_iid, &pair.other_head),
+                            (pair.other, pair.other_iid, &pair.other_head, mr, iid, head),
+                        ] {
+                            let (audit, event) = side_event(
+                                project,
+                                MergeRequestChange::ConflictPredicted {
+                                    merge_request: this,
+                                    iid: this_iid,
+                                    other_merge_request: other,
+                                    other_iid,
+                                    head_sha: this_head.clone(), // clone: the change owns its ids
+                                    other_head_sha: other_head.clone(), // clone: as above
+                                    target_branch: result.target_branch.clone(), // clone: as above
+                                    prediction_seq,
+                                    conflict_files,
+                                    files_truncated,
+                                },
+                            )?;
+                            audits.push(audit);
+                            events.push(event);
+                        }
+                        predicted.push(pair.other);
+                    }
+                }
+            }
+        }
+        // A peer that moved or closed after the scan read it was not
+        // written: say so (review MEDIUM) — its own scan, or the next one
+        // of this merge request, writes the pair.
+        let (status, reason) = if skipped > 0 && result.status == ScanStatus::Scanned {
+            (ScanStatus::Incomplete, Some("peer_moved"))
+        } else {
+            (result.status, result.reason)
+        };
+        let skipped_total = result
+            .pairs_skipped
+            .saturating_add(i32::try_from(skipped).unwrap_or(i32::MAX));
+        let target_sha = result.target_sha.as_ref().map(ObjectId::as_str);
         tx.step(|c| async move {
             sqlx::query(
                 "UPDATE forge.merge_request_conflict_scans SET status = $2, reason = $3, \
                  scanned_head_sha = $4, scanned_target_branch = $5, scanned_at = now(), \
-                 peers = $6, pairs_tried = $7, pairs_skipped = $8, updated_at = now() \
-                 WHERE merge_request_id = $1",
+                 peers = $6, pairs_tried = $7, pairs_skipped = $8, scanned_target_sha = $9, \
+                 sweep_attempts = CASE WHEN $2 = 'scanned' THEN 0 ELSE sweep_attempts END, \
+                 updated_at = now() WHERE merge_request_id = $1",
             )
             .bind(mr.get())
-            .bind(result.status.as_str())
-            .bind(result.reason)
+            .bind(status.as_str())
+            .bind(reason)
             .bind(scanned_head)
             .bind(result.target_branch.as_str())
             .bind(result.peers)
             .bind(result.pairs_tried)
-            .bind(result.pairs_skipped)
+            .bind(skipped_total)
+            .bind(target_sha)
             .execute(c)
             .await
             .map(drop)
             .map_err(|e| query_error("review.conflict_scan_store", e))
         })
         .await?;
-        let Some(head) = result.head.as_ref() else {
-            return Ok(Settle::CommitDerived(ScanRecorded::Stored {
-                predicted: Vec::new(),
-                skipped: 0,
-            }));
+        let recorded = ScanRecorded::Stored {
+            predicted,
+            skipped,
+            status,
+            reason,
         };
-        let side = Side {
-            mr,
-            project,
-            head: head.clone(),                   // clone: the side owns its id
-            target: result.target_branch.clone(), // clone: as above
-        };
-        // A stable lock order across scans: by the pair's (low, high).
-        let mut pairs: Vec<&PairResult> = result.pairs.iter().collect();
-        pairs.sort_by_key(|p| {
-            let (a, b) = (mr.get(), p.other.get());
-            (a.min(b), a.max(b))
-        });
-        let mut audits = Vec::new();
-        let mut events = Vec::new();
-        let mut predicted = Vec::new();
-        let mut skipped = 0usize;
-        for pair in pairs {
-            match write_pair(&mut tx, &side, pair).await? {
-                None => skipped += 1,
-                Some(None) => {}
-                Some(Some(prediction_seq)) => {
-                    let conflict_files = pair.conflicts.len();
-                    let files_truncated = pair.conflicts_truncated;
-                    for (this, this_iid, this_head, other, other_iid, other_head) in [
-                        (mr, iid, head, pair.other, pair.other_iid, &pair.other_head),
-                        (pair.other, pair.other_iid, &pair.other_head, mr, iid, head),
-                    ] {
-                        let (audit, event) = side_event(
-                            project,
-                            MergeRequestChange::ConflictPredicted {
-                                merge_request: this,
-                                iid: this_iid,
-                                other_merge_request: other,
-                                other_iid,
-                                head_sha: this_head.clone(), // clone: the change owns its ids
-                                other_head_sha: other_head.clone(), // clone: as above
-                                target_branch: result.target_branch.clone(), // clone: as above
-                                prediction_seq,
-                                conflict_files,
-                                files_truncated,
-                            },
-                        )?;
-                        audits.push(audit);
-                        events.push(event);
-                    }
-                    predicted.push(pair.other);
-                }
-            }
-        }
-        let recorded = ScanRecorded::Stored { predicted, skipped };
         let mut audits = audits.into_iter();
         let Some(audit) = audits.next() else {
             return Ok(Settle::CommitDerived(recorded));

@@ -1509,7 +1509,7 @@ fn mr_work_item_commands_call_their_routes() {
     assert_eq!(srv.seen().len(), before, "nothing was sent");
 }
 
-const CONFLICTS: &str = r#"{"iid":3,"head_sha":"2222222222222222222222222222222222222222","scan":{"status":"incomplete","reason":"pairs_capped","stale":false,"scanned_head_sha":"2222222222222222222222222222222222222222","scanned_at":"2026-11-05T02:00:00Z","peers":3,"pairs_tried":1,"pairs_skipped":1},"predictions":[{"iid":4,"draft":true,"outcome":"conflict","reason":null,"conflicts":["a.txt","\u001b[31mevil"],"conflicts_truncated":true,"checked_at":"2026-11-05T02:00:00Z"},{"iid":5,"draft":false,"outcome":"failed","reason":"git_timeout","conflicts":[],"conflicts_truncated":false,"checked_at":"2026-11-05T02:00:00Z"}]}"#;
+const CONFLICTS: &str = r#"{"iid":3,"head_sha":"2222222222222222222222222222222222222222","scan":{"status":"incomplete","reason":"pairs_capped","stale":false,"scanned_head_sha":"2222222222222222222222222222222222222222","scanned_target_sha":"3333333333333333333333333333333333333333","scanned_at":"2026-11-05T02:00:00Z","peers":3,"pairs_tried":1,"pairs_skipped":1},"predictions":[{"iid":4,"draft":true,"head_sha":"4444444444444444444444444444444444444444","outcome":"conflict","reason":null,"conflicts":["a.txt","\u001b[31mevil"],"conflicts_truncated":true,"checked_at":"2026-11-05T02:00:00Z"},{"iid":5,"draft":false,"head_sha":"5555555555555555555555555555555555555555","outcome":"failed","reason":"git_timeout","conflicts":[],"conflicts_truncated":false,"checked_at":"2026-11-05T02:00:00Z"}]}"#;
 
 /// M3 X6: `gstn conflicts` calls its route and prints the scan and each
 /// prediction (draft marked, failed pairs with their reason); server text

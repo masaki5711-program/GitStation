@@ -24,7 +24,6 @@ use forge_db::review::{
     ScanStatus,
 };
 use forge_db::test_support::FreshDb;
-use forge_errors::ErrorCode;
 use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::mergeability::MergeTreeLimits;
 use forge_git::{Git, GitConfig, StorageRoot};
@@ -71,20 +70,45 @@ fn with_line(n: usize, text: &str) -> String {
     l.join("\n") + "\n"
 }
 
-/// A commit of the flat `files` on top of `parent`.
-fn commit(repo: &Path, parent: Option<&str>, files: &[(&str, String)]) -> String {
-    let mut sorted: Vec<&(&str, String)> = files.iter().collect();
-    sorted.sort_by_key(|(name, _)| *name);
-    let mut listing = String::new();
-    for (name, content) in sorted {
-        let blob = plumb(
-            repo,
-            &["hash-object", "-w", "--stdin"],
-            Some(content.as_bytes()),
-        );
-        listing.push_str(&format!("100644 blob {blob}\t{name}\n"));
+/// The tree of `files` (paths may hold one directory level: `d/x`).
+fn tree_of(repo: &Path, files: &[(&str, String)]) -> String {
+    let mut top: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut dirs: std::collections::BTreeMap<String, Vec<(String, String)>> =
+        std::collections::BTreeMap::new();
+    for (name, content) in files {
+        match name.split_once('/') {
+            Some((dir, rest)) => dirs
+                .entry(dir.to_owned())
+                .or_default()
+                .push((rest.to_owned(), content.clone())),
+            None => {
+                let blob = plumb(
+                    repo,
+                    &["hash-object", "-w", "--stdin"],
+                    Some(content.as_bytes()),
+                );
+                top.insert((*name).to_owned(), format!("100644 blob {blob}"));
+            }
+        }
     }
-    let tree = plumb(repo, &["mktree"], Some(listing.as_bytes()));
+    for (dir, entries) in dirs {
+        let inner: Vec<(&str, String)> = entries
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.clone()))
+            .collect();
+        let sub = tree_of(repo, &inner);
+        top.insert(dir, format!("040000 tree {sub}"));
+    }
+    let mut listing = String::new();
+    for (name, entry) in top {
+        listing.push_str(&format!("{entry}\t{name}\n"));
+    }
+    plumb(repo, &["mktree"], Some(listing.as_bytes()))
+}
+
+/// A commit of `files` on top of `parent`.
+fn commit(repo: &Path, parent: Option<&str>, files: &[(&str, String)]) -> String {
+    let tree = tree_of(repo, files);
     let mut args = vec!["commit-tree", tree.as_str(), "-m", "synthetic"];
     if let Some(p) = parent {
         args.extend(["-p", p]);
@@ -172,6 +196,67 @@ impl World {
             }
         }
         files
+    }
+
+    /// The base files without `removed`, with `changes` applied.
+    fn files_without(
+        &self,
+        removed: &[&str],
+        changes: &[(&'static str, String)],
+    ) -> Vec<(&'static str, String)> {
+        let mut files = self.files(changes);
+        files.retain(|(n, _)| !removed.contains(n));
+        files
+    }
+
+    /// A merge request on a branch at `files` (on `parent`), with its first
+    /// version; the scan the version job requested.
+    async fn mr_at(
+        &self,
+        name: &str,
+        parent: &str,
+        files: &[(&'static str, String)],
+    ) -> (StoredMergeRequest, Option<i64>) {
+        let head = commit(&self.path, Some(parent), files);
+        plumb(
+            &self.path,
+            &["update-ref", &format!("refs/heads/{name}"), &head],
+            None,
+        );
+        let proof = open_proof(
+            &self.t,
+            &session(self.owner),
+            self.project,
+            (name, "main"),
+            false,
+        )
+        .await
+        .expect("open proof");
+        let mr = self
+            .review
+            .open(
+                &request(&format!("req-open-{name}")),
+                &proof,
+                ready(self.repo),
+                &NewFields {
+                    title: format!("Change {name}"),
+                    description: String::new(),
+                },
+            )
+            .await
+            .expect("open");
+        let report = refresh(
+            &self.t.db,
+            &self.refs,
+            RefreshRequest {
+                merge_request: mr.id,
+                pushed_by: None,
+            },
+            &RequestId::parse(&format!("req-v-{name}")).expect("id"),
+        )
+        .await
+        .expect("version");
+        (mr, report.scan_requested)
     }
 
     /// Branch `name` at one commit on `parent` with `changes`, then a merge
@@ -500,11 +585,12 @@ async fn a_scan_with_more_candidates_than_the_cap_is_incomplete() {
     w.t.drop_now().await;
 }
 
-/// A git timeout on a pair is stored on the pair (`failed git_timeout`),
-/// the scan is `incomplete pair_failed`, and the error is returned for the
-/// worker's retry — never "no conflict".
+/// A git timeout on a pair is stored on the pair (`failed git_timeout`) and
+/// the scan is `incomplete pair_failed` — never "no conflict". It is not
+/// the job's failure (review MEDIUM: only a failure on the scanned merge
+/// request itself retries the job; the sweep re-requests the scan).
 #[tokio::test]
-async fn a_git_timeout_on_a_pair_is_stored_and_returned() {
+async fn a_git_timeout_on_a_pair_is_stored_on_the_pair() {
     let w = world().await;
     let base = w.base_commit.clone();
     let (one, _) = w
@@ -520,8 +606,11 @@ async fn a_git_timeout_on_a_pair_is_stored_and_returned() {
         },
         ..ScanLimits::default()
     };
-    let err = w.run(&two, seq2, limits).await.expect_err("timeout");
-    assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");
+    let report = w
+        .run(&two, seq2, limits)
+        .await
+        .expect("a pair failure is stored");
+    assert_eq!(report.reason, Some("pair_failed"));
     let row = conflict_scan(&w.t.db, two.id)
         .await
         .expect("read")
@@ -546,5 +635,140 @@ async fn a_git_timeout_on_a_pair_is_stored_and_returned() {
         Some(PairOutcome::Failed),
         "a failed pair is shown, never as no conflict"
     );
+    w.t.drop_now().await;
+}
+
+/// Review HIGH (git-protocol): a rename on one side and an edit of the same
+/// lines on the other conflict at the rename's destination, which only one
+/// side's `--no-renames` path set holds. Never downgraded to clean.
+#[tokio::test]
+async fn a_rename_with_an_edit_against_an_edit_is_predicted() {
+    let w = world().await;
+    let base = w.base_commit.clone();
+    let (one, _) = w
+        .mr_at(
+            "one",
+            &base,
+            &w.files_without(&["a.txt"], &[("moved.txt", with_line(2, "one"))]),
+        )
+        .await;
+    let (two, seq) = w
+        .mr_at("two", &base, &w.files(&[("a.txt", with_line(2, "two"))]))
+        .await;
+    let report = w.run(&two, seq, ScanLimits::default()).await.expect("scan");
+    assert_eq!(report.predicted, vec![one.id], "{report:?}");
+    assert_eq!(w.pair(&one, &two).await.0, "conflict");
+    w.t.drop_now().await;
+}
+
+/// Review HIGH: the same file renamed to two different names conflicts
+/// (rename/rename), though each destination is in one side's set only.
+#[tokio::test]
+async fn a_rename_to_two_names_is_predicted() {
+    let w = world().await;
+    let base = w.base_commit.clone();
+    let a = lines().join("\n") + "\n";
+    let (one, _) = w
+        .mr_at(
+            "one",
+            &base,
+            &w.files_without(&["a.txt"], &[("one.txt", a.clone())]),
+        )
+        .await;
+    let (two, seq) = w
+        .mr_at(
+            "two",
+            &base,
+            &w.files_without(&["a.txt"], &[("two.txt", a)]),
+        )
+        .await;
+    let report = w.run(&two, seq, ScanLimits::default()).await.expect("scan");
+    assert_eq!(report.predicted, vec![one.id], "{report:?}");
+    w.t.drop_now().await;
+}
+
+/// Review HIGH: a file on one side where the other adds a directory of the
+/// same name (directory/file) shares no exact path, yet conflicts: the
+/// narrowing counts a path and its directory as overlapping.
+#[tokio::test]
+async fn a_file_against_a_directory_of_the_same_name_is_predicted() {
+    let w = world().await;
+    let base = w.base_commit.clone();
+    let (one, _) = w
+        .mr_at("one", &base, &w.files(&[("d", "a file\n".to_owned())]))
+        .await;
+    let (two, seq) = w
+        .mr_at(
+            "two",
+            &base,
+            &w.files(&[("d/x", "in a directory\n".to_owned())]),
+        )
+        .await;
+    let report = w.run(&two, seq, ScanLimits::default()).await.expect("scan");
+    assert_eq!(report.pairs_tried, 1, "not narrowed away: {report:?}");
+    assert_eq!(report.predicted, vec![one.id], "{report:?}");
+    w.t.drop_now().await;
+}
+
+/// Review MEDIUM: with no budget left, no git process is started with a
+/// zero timeout: the candidate is skipped as `budget_exhausted`.
+#[tokio::test]
+async fn an_exhausted_budget_skips_the_pair_without_running_git() {
+    let w = world().await;
+    let base = w.base_commit.clone();
+    let (_one, _) = w
+        .mr("one", &base, &[("a.txt", with_line(2, "one"))], false)
+        .await;
+    let (two, seq) = w
+        .mr("two", &base, &[("a.txt", with_line(2, "two"))], false)
+        .await;
+    let limits = ScanLimits {
+        budget: Duration::ZERO,
+        ..ScanLimits::default()
+    };
+    let report = w.run(&two, seq, limits).await.expect("stored");
+    assert_eq!(
+        (report.status, report.reason),
+        (Some(ScanStatus::Failed), Some("budget_exhausted")),
+        "{report:?}"
+    );
+    assert_eq!(report.pairs_tried, 0);
+    w.t.drop_now().await;
+}
+
+/// Review HIGH: a failed scan request never fails the version job (the
+/// version is recorded, `scan_requested` is `None`), and the sweep requests
+/// the scan the version job could not (`never_scanned`).
+#[tokio::test]
+async fn a_failed_scan_request_does_not_fail_the_version_job() {
+    let w = world().await;
+    let base = w.base_commit.clone();
+    // The scan table unreachable for the request (synthetic fault).
+    w.t.exec_superuser(
+        "ALTER TABLE forge.merge_request_conflict_scans RENAME TO merge_request_conflict_scans_away",
+    )
+    .await;
+    let (one, seq) = w
+        .mr("one", &base, &[("a.txt", with_line(2, "one"))], false)
+        .await;
+    assert_eq!(seq, None, "no scan was requested");
+    w.t.exec_superuser(
+        "ALTER TABLE forge.merge_request_conflict_scans_away RENAME TO merge_request_conflict_scans",
+    )
+    .await;
+    let swept =
+        forge_db::review::sweep_scans(&w.t.db, 10, &RequestId::parse("req-sw").expect("id"))
+            .await
+            .expect("sweep");
+    assert_eq!(swept.len(), 1);
+    assert_eq!(
+        (swept[0].merge_request, swept[0].why.as_str()),
+        (one.id, "never_scanned")
+    );
+    let report = w
+        .run(&one, Some(swept[0].scan_seq), ScanLimits::default())
+        .await
+        .expect("scan");
+    assert_eq!(report.status, Some(ScanStatus::Scanned));
     w.t.drop_now().await;
 }

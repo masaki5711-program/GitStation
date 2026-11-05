@@ -12,6 +12,7 @@ use crate::review::{
     close_mr_decided, edit_mr_decided, open_mr_decided, record_mr_version, reopen_mr_decided,
     MergeRequestPatch, NewMergeRequest, StoredMergeRequest,
 };
+use crate::review::{sweep_scans, SCAN_SWEEP_ATTEMPTS};
 use crate::test_support::FreshDb;
 use crate::users::{self, NewUser};
 
@@ -160,6 +161,7 @@ impl World {
             reason: None,
             head: Some(oid(head)),
             target_branch: mr.target_branch.clone(),
+            target_sha: Some(oid('9')),
             peers: i32::try_from(pairs.len()).expect("small"),
             pairs_tried: i32::try_from(pairs.len()).expect("small"),
             pairs_skipped: 0,
@@ -224,7 +226,9 @@ async fn a_pair_that_enters_conflict_is_predicted_once_for_both_sides() {
         done,
         ScanRecorded::Stored {
             predicted: vec![b.id],
-            skipped: 0
+            skipped: 0,
+            status: ScanStatus::Scanned,
+            reason: None,
         }
     );
     let events = w.predicted_events().await;
@@ -268,7 +272,9 @@ async fn a_pair_that_enters_conflict_is_predicted_once_for_both_sides() {
         again,
         ScanRecorded::Stored {
             predicted: Vec::new(),
-            skipped: 0
+            skipped: 0,
+            status: ScanStatus::Scanned,
+            reason: None,
         }
     );
     assert_eq!(w.predicted_events().await.len(), 2);
@@ -360,10 +366,18 @@ async fn a_pair_whose_other_side_moved_is_skipped() {
         done,
         ScanRecorded::Stored {
             predicted: Vec::new(),
-            skipped: 1
+            skipped: 1,
+            status: ScanStatus::Incomplete,
+            reason: Some("peer_moved"),
         }
     );
     assert!(w.predicted_events().await.is_empty());
+    let row = w.scan_row(&a).await;
+    assert_eq!(
+        (row.status, row.reason.as_deref(), row.pairs_skipped),
+        (ScanStatus::Incomplete, Some("peer_moved"), 1),
+        "a skipped pair is never hidden (review MEDIUM)"
+    );
     w.t.drop_now().await;
 }
 
@@ -393,6 +407,7 @@ async fn a_superseded_or_moved_scan_writes_nothing() {
         reason: None,
         head: Some(oid(head)),
         target_branch: branch("main"),
+        target_sha: Some(oid('9')),
         peers: 1,
         pairs_tried: 1,
         pairs_skipped: 0,
@@ -513,6 +528,148 @@ async fn a_stale_or_failed_scan_is_ended_with_its_reason() {
     assert_eq!(
         (row.status, row.reason.as_deref()),
         (ScanStatus::Failed, Some("job_stale"))
+    );
+    w.t.drop_now().await;
+}
+
+/// Review LOW: conflict → failed → conflict is one prediction (one event per
+/// side, one mail), measured against the last outcome that was not failed.
+#[tokio::test]
+async fn a_failed_scan_between_two_conflicts_predicts_once() {
+    let w = world().await;
+    let a = w.mr("a", "main", 'a').await;
+    let b = w.mr("b", "main", 'b').await;
+    w.scan(
+        &a,
+        'a',
+        vec![pair(&b, 'b', PairOutcome::Conflict)],
+        "req-s1",
+    )
+    .await;
+    let failed = PairResult {
+        reason: Some("git_timeout"),
+        ..pair(&b, 'b', PairOutcome::Failed)
+    };
+    w.scan(&a, 'a', vec![failed], "req-s2").await;
+    w.scan(
+        &a,
+        'a',
+        vec![pair(&b, 'b', PairOutcome::Conflict)],
+        "req-s3",
+    )
+    .await;
+    assert_eq!(w.predicted_events().await.len(), 2, "one prediction only");
+    w.t.drop_now().await;
+}
+
+/// Review LOW: a merge request closed mid-run never leaves its row
+/// `scanning`.
+#[tokio::test]
+async fn a_scan_of_a_closed_merge_request_ends_not_open() {
+    let w = world().await;
+    let a = w.mr("a", "main", 'a').await;
+    let seq = request_scan(&w.t.db, a.id, RequestId::parse("req-q").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
+    assert_eq!(
+        begin_scan(&w.t.db, a.id, seq).await.expect("begin"),
+        ScanStart::Scan
+    );
+    let user = ctx(Actor::User(w.alice), "req-close");
+    let _ = close_mr_decided(&w.t.db, &user, w.project, a.iid, w.alice, |_| Ok(()))
+        .await
+        .expect("close");
+    let result = ScanResult {
+        status: ScanStatus::Scanned,
+        reason: None,
+        head: Some(oid('a')),
+        target_branch: branch("main"),
+        target_sha: Some(oid('9')),
+        peers: 0,
+        pairs_tried: 0,
+        pairs_skipped: 0,
+        pairs: Vec::new(),
+    };
+    assert_eq!(
+        record_scan(&w.t.db, &system("req-r"), a.id, seq, &result)
+            .await
+            .expect("record"),
+        ScanRecorded::Superseded
+    );
+    let row = w.scan_row(&a).await;
+    assert_eq!(
+        (row.status, row.reason.as_deref()),
+        (ScanStatus::Failed, Some("not_open"))
+    );
+    w.t.drop_now().await;
+}
+
+/// Review HIGH: the sweep scans open merge requests that were never scanned
+/// (opened before this build, or a request that failed) and re-requests a
+/// retryable failure after its backoff, at most `SCAN_SWEEP_ATTEMPTS` times;
+/// a deterministic failure is left alone.
+#[tokio::test]
+async fn the_sweep_requests_never_scanned_and_retryable_failed_scans() {
+    let w = world().await;
+    let a = w.mr("a", "main", 'a').await;
+    let b = w.mr("b", "main", 'b').await;
+    let origin = RequestId::parse("req-sweep").expect("id");
+    let swept = sweep_scans(&w.t.db, 10, &origin).await.expect("sweep");
+    let mut ids: Vec<(MergeRequestId, String)> = swept
+        .iter()
+        .map(|s| (s.merge_request, s.why.clone()))
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            (a.id, "never_scanned".to_owned()),
+            (b.id, "never_scanned".to_owned())
+        ]
+    );
+    assert!(
+        sweep_scans(&w.t.db, 10, &origin)
+            .await
+            .expect("again")
+            .is_empty(),
+        "pending rows are not swept"
+    );
+    // A retryable failure (git_timeout) on a, a deterministic one on b,
+    // both finished long enough ago.
+    let mut su = w.t.superuser().await;
+    sqlx::query(
+        "UPDATE forge.merge_request_conflict_scans SET status = 'failed', \
+         reason = CASE WHEN merge_request_id = $1 THEN 'git_timeout' ELSE 'unrelated_histories' END, \
+         updated_at = now() - interval '1 hour'",
+    )
+    .bind(a.id.get())
+    .execute(&mut su)
+    .await
+    .expect("age");
+    let mut attempts = Vec::new();
+    for _ in 0..(SCAN_SWEEP_ATTEMPTS + 1) {
+        let swept = sweep_scans(&w.t.db, 10, &origin).await.expect("sweep");
+        attempts.push(
+            swept
+                .iter()
+                .map(|s| (s.merge_request, s.attempt))
+                .collect::<Vec<_>>(),
+        );
+        sqlx::query(
+            "UPDATE forge.merge_request_conflict_scans SET status = 'failed', \
+             reason = 'git_timeout', updated_at = now() - interval '1 hour' \
+             WHERE merge_request_id = $1",
+        )
+        .bind(a.id.get())
+        .execute(&mut su)
+        .await
+        .expect("fail again");
+    }
+    assert_eq!(
+        attempts,
+        vec![vec![(a.id, 2)], vec![(a.id, 3)], vec![], vec![]],
+        "capped: the never-scanned request was the first attempt"
     );
     w.t.drop_now().await;
 }

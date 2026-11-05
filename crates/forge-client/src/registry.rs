@@ -827,7 +827,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         ],
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts"],
-        output: r#"{"type":"object","required":["iid","head_sha","scan","predictions"],"properties":{"scan":{"type":"object","required":["status","reason","stale","scanned_head_sha","scanned_at","peers","pairs_tried","pairs_skipped"],"properties":{"status":{"type":"string","enum":["none","pending","scanning","scanned","incomplete","failed"]}}},"predictions":{"type":"array","items":{"type":"object","required":["iid","draft","outcome","reason","conflicts","conflicts_truncated","checked_at"],"properties":{"outcome":{"type":"string","enum":["conflict","failed"]}}}}}}"#,
+        output: r#"{"type":"object","required":["iid","head_sha","scan","predictions"],"properties":{"scan":{"type":"object","required":["status","reason","stale","scanned_head_sha","scanned_target_sha","scanned_at","peers","pairs_tried","pairs_skipped"],"properties":{"status":{"type":"string","enum":["none","pending","scanning","scanned","incomplete","failed"]}}},"predictions":{"type":"array","items":{"type":"object","required":["iid","draft","head_sha","outcome","reason","conflicts","conflicts_truncated","checked_at"],"properties":{"outcome":{"type":"string","enum":["conflict","failed"]}}}}}}"#,
     },
     CommandSpec {
         name: "namespace resolve",

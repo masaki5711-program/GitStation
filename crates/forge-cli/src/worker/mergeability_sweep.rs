@@ -24,6 +24,12 @@
 //!    (`forge_db::review::reap_stale_scans`: `failed reason=job_stale`,
 //!    each logged with FG-REVIEW-0022); the next push, retarget or reopen
 //!    scans again.
+//! 5. (M3 X6 review) requests conflict scans for open merge requests with a
+//!    head and no scan row (opened before this build, or a version job's
+//!    request that failed), and re-requests scans that ended `failed` /
+//!    `incomplete` with a retryable reason after a backoff, at most
+//!    `SCAN_SWEEP_ATTEMPTS` times each (`forge_db::review::sweep_scans`,
+//!    each request logged).
 //!
 //! A full batch runs again at once. A failed run (the database) is returned
 //! and logged once per failure streak by the supervisor with `error_code`
@@ -34,7 +40,7 @@ use std::time::Duration;
 use forge_core::RequestId;
 use forge_db::review::{
     confirm_live, decided_candidates, reap_stale_checks, reap_stale_scans, request_check,
-    sweep_unchecked, SCAN_STALE_AFTER, STALE_AFTER, SWEEP_BATCH,
+    sweep_scans, sweep_unchecked, SCAN_STALE_AFTER, STALE_AFTER, SWEEP_BATCH,
 };
 use forge_db::Db;
 use forge_errors::ForgeError;
@@ -65,6 +71,7 @@ pub(crate) async fn run_mergeability_sweep(
         None => (0, 0),
     };
     let scans_reaped = reap_stale_scans(db, SCAN_STALE_AFTER, REAP_BATCH).await?;
+    let scans_swept = sweep_scans(db, SWEEP_BATCH, &request_id).await?;
     if !swept.is_empty() || moved > 0 {
         tracing::info!(
             target: "forge_cli",
@@ -80,6 +87,7 @@ pub(crate) async fn run_mergeability_sweep(
         if full(swept.len(), SWEEP_BATCH)
             || full(reaped.len(), REAP_BATCH)
             || full(scans_reaped.len(), REAP_BATCH)
+            || full(scans_swept.len(), SWEEP_BATCH)
             || full(verified, SWEEP_BATCH)
         {
             Next::Immediately

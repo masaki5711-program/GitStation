@@ -131,12 +131,23 @@ impl ScanReport {
 /// UTF-8).
 type Paths = Option<BTreeSet<String>>;
 
+/// What reading one side found.
+enum SideRead {
+    /// Its merge base with the target tip and its changed paths.
+    Paths { base: ObjectId, paths: Paths },
+    /// No common history with the target.
+    Unrelated,
+    /// The budget ran out before git could run (no process started).
+    Budget,
+}
+
 /// One candidate pair (it changes a path the scanned merge request
-/// changes, or a set is unknown).
+/// changes, or a directory of one, or a set is unknown).
 struct Candidate<'a> {
     peer: &'a Peer,
-    /// `None`: a set is unknown, every conflicted path counts.
-    overlap: Option<BTreeSet<String>>,
+    base: ObjectId,
+    /// `None`: a set is unknown.
+    theirs: Paths,
 }
 
 fn i32_of(n: usize) -> i32 {
@@ -155,7 +166,73 @@ fn pair_of(peer: &Peer, outcome: PairOutcome, reason: Option<&'static str>) -> P
     }
 }
 
-/// What the git part found, and the first git failure (stored first).
+/// Whether `set` holds a path below directory `dir`.
+fn has_below(set: &BTreeSet<String>, dir: &str) -> bool {
+    let prefix = format!("{dir}/");
+    set.range(prefix.clone()..)
+        .next()
+        .is_some_and(|p| p.starts_with(&prefix))
+}
+
+/// Whether `set` holds `path` or one of its directories.
+fn has_at_or_above(set: &BTreeSet<String>, path: &str) -> bool {
+    set.contains(path)
+        || path
+            .match_indices('/')
+            .any(|(i, _)| set.contains(&path[..i]))
+}
+
+/// Whether the two sides touch a common path: the same path, or a path and
+/// a directory of it (a file on one side where the other has a directory
+/// of that name — directory/file — shares no exact path; review HIGH).
+pub(crate) fn overlaps(mine: &BTreeSet<String>, theirs: &BTreeSet<String>) -> bool {
+    mine.iter()
+        .any(|p| has_at_or_above(theirs, p) || has_below(theirs, p))
+}
+
+/// What a trial merge's conflict means for the pair.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// A conflict between the two (`kept`: the paths to store).
+    Conflict { kept: Vec<String> },
+    /// Every conflicted path is changed by exactly one side AND by the
+    /// target between the two sides' bases: that side's conflict with the
+    /// target (C-1's), not theirs.
+    TargetOnly,
+}
+
+/// The rule (review HIGH): a reported conflict stays a conflict unless
+/// every path is changed by exactly one side and by the target between
+/// the bases (`target_delta`; `None` when unknown or the bases are the
+/// same commit). A rename destination, a rename/rename or a
+/// directory/file path is never in the target's delta when the target did
+/// not touch it, so it stays a conflict; an empty or cut list, or an
+/// unknown side, too.
+pub(crate) fn verdict(
+    files: Vec<String>,
+    truncated: bool,
+    mine: Option<&BTreeSet<String>>,
+    theirs: Option<&BTreeSet<String>>,
+    target_delta: Option<&BTreeSet<String>>,
+) -> Verdict {
+    let (Some(mine), Some(theirs), Some(delta)) = (mine, theirs, target_delta) else {
+        return Verdict::Conflict { kept: files };
+    };
+    if files.is_empty() || truncated {
+        return Verdict::Conflict { kept: files };
+    }
+    let target_only = |f: &String| mine.contains(f) != theirs.contains(f) && delta.contains(f);
+    if files.iter().all(target_only) {
+        Verdict::TargetOnly
+    } else {
+        Verdict::Conflict {
+            kept: files.into_iter().filter(|f| !target_only(f)).collect(),
+        }
+    }
+}
+
+/// What the git part found, and a failure on the scanned merge request
+/// itself (stored first, then the job's error).
 struct Computed {
     result: ScanResult,
     git_error: Option<ForgeError>,
@@ -177,47 +254,95 @@ impl ConflictPredictor {
         self
     }
 
-    /// A read's timeout: its own, cut to what is left of the budget.
-    fn timeout(&self, deadline: Instant, own: Duration) -> Duration {
-        own.min(deadline.saturating_duration_since(Instant::now()))
+    /// A call's timeout: its own, cut to what is left of the budget;
+    /// `None` when nothing is left (no git process is started then).
+    fn timeout(deadline: Instant, own: Duration) -> Option<Duration> {
+        let left = deadline.saturating_duration_since(Instant::now());
+        (!left.is_zero()).then(|| own.min(left))
     }
 
-    /// The changed paths of `head` since its merge base with `tip`
-    /// (`Ok(None)` for the outer option: no common history).
+    /// The merge base of `head` with `tip` and the paths changed since.
     async fn changed(
         &self,
         repo: RepoId,
         tip: &ObjectId,
         head: &ObjectId,
         deadline: Instant,
-    ) -> Result<Option<Paths>, ForgeError> {
-        let read = self.timeout(deadline, self.limits.read_timeout);
+    ) -> Result<SideRead, ForgeError> {
+        let Some(read) = Self::timeout(deadline, self.limits.read_timeout) else {
+            return Ok(SideRead::Budget);
+        };
         let Some(base) = self
             .git
             .merge_base(&self.storage, repo, tip, head, read)
             .await?
         else {
-            return Ok(None);
+            return Ok(SideRead::Unrelated);
         };
-        let read = self.timeout(deadline, self.limits.read_timeout);
+        let Some(read) = Self::timeout(deadline, self.limits.read_timeout) else {
+            return Ok(SideRead::Budget);
+        };
+        let paths = self.paths(repo, &base, head, read).await?;
+        Ok(SideRead::Paths { base, paths })
+    }
+
+    async fn paths(
+        &self,
+        repo: RepoId,
+        from: &ObjectId,
+        to: &ObjectId,
+        timeout: Duration,
+    ) -> Result<Paths, ForgeError> {
         let paths = self
             .git
             .changed_paths(
                 &self.storage,
                 repo,
-                &base,
-                head,
+                from,
+                to,
                 self.limits.paths_max,
-                read,
+                timeout,
             )
             .await?;
-        Ok(Some(match paths {
+        Ok(match paths {
             ChangedPaths::Complete(paths) => Some(paths.into_iter().collect()),
             ChangedPaths::TooMany | ChangedPaths::NonUtf8 => None,
-        }))
+        })
+    }
+
+    /// The paths the target changed between the two bases (`None` when the
+    /// bases are the same commit, unknown, or git fails: then nothing is
+    /// downgraded).
+    async fn target_delta(
+        &self,
+        repo: RepoId,
+        mine: &ObjectId,
+        theirs: &ObjectId,
+        deadline: Instant,
+        request_id: &RequestId,
+    ) -> Option<BTreeSet<String>> {
+        if mine == theirs {
+            return None;
+        }
+        let timeout = Self::timeout(deadline, self.limits.read_timeout)?;
+        match self.paths(repo, mine, theirs, timeout).await {
+            Ok(paths) => paths,
+            Err(e) => {
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.review.conflict_delta_unread",
+                    error_code = e.code().id(),
+                    request_id = %request_id,
+                    error = %e,
+                    "could not read the target's changes between the bases; the conflict stands"
+                );
+                None
+            }
+        }
     }
 
     /// The git part (module docs, steps 2 and 3).
+    #[allow(clippy::too_many_lines)] // one scan, read top to bottom
     async fn compute(
         &self,
         repo: RepoId,
@@ -225,85 +350,96 @@ impl ConflictPredictor {
         target: &RefName,
         peers: &[Peer],
         total_peers: i64,
+        request_id: &RequestId,
     ) -> Computed {
         let deadline = Instant::now() + self.limits.budget;
-        let failed = |reason: &'static str, head: Option<&ObjectId>| ScanResult {
-            status: ScanStatus::Failed,
-            reason: Some(reason),
-            head: head.cloned(),           // clone: the result owns its ids
-            target_branch: target.clone(), // clone: as above
-            peers: 0,
-            pairs_tried: 0,
-            pairs_skipped: 0,
-            pairs: Vec::new(),
+        let failed = |reason: &'static str, head: Option<&ObjectId>, tip: Option<&ObjectId>| {
+            ScanResult {
+                status: ScanStatus::Failed,
+                reason: Some(reason),
+                head: head.cloned(),           // clone: the result owns its ids
+                target_branch: target.clone(), // clone: as above
+                target_sha: tip.cloned(),      // clone: as above
+                peers: 0,
+                pairs_tried: 0,
+                pairs_skipped: 0,
+                pairs: Vec::new(),
+            }
         };
         let done = |result| Computed {
             result,
             git_error: None,
         };
         let Some(head) = head else {
-            return done(failed("no_version", None));
+            return done(failed("no_version", None, None));
         };
-        let read = self.timeout(deadline, self.limits.read_timeout);
+        let Some(read) = Self::timeout(deadline, self.limits.read_timeout) else {
+            return done(failed("budget_exhausted", Some(head), None));
+        };
         let tip = match self.git.read_ref(&self.storage, repo, target, read).await {
             Ok(Some(tip)) => tip,
-            Ok(None) => return done(failed("target_missing", Some(head))),
+            Ok(None) => return done(failed("target_missing", Some(head), None)),
             Err(e) => {
                 return Computed {
-                    result: failed(git_reason(&e).as_str(), Some(head)),
+                    result: failed(git_reason(&e).as_str(), Some(head), None),
                     git_error: Some(e),
                 }
             }
         };
-        let own = match self.changed(repo, &tip, head, deadline).await {
-            Ok(Some(paths)) => paths,
-            Ok(None) => return done(failed("unrelated_histories", Some(head))),
+        let (own_base, own) = match self.changed(repo, &tip, head, deadline).await {
+            Ok(SideRead::Paths { base, paths }) => (base, paths),
+            Ok(SideRead::Unrelated) => {
+                return done(failed("unrelated_histories", Some(head), Some(&tip)))
+            }
+            Ok(SideRead::Budget) => {
+                return done(failed("budget_exhausted", Some(head), Some(&tip)))
+            }
             Err(e) => {
                 return Computed {
-                    result: failed(git_reason(&e).as_str(), Some(head)),
+                    result: failed(git_reason(&e).as_str(), Some(head), Some(&tip)),
                     git_error: Some(e),
                 }
             }
         };
         let mut pairs = Vec::new();
         let mut candidates = Vec::new();
-        let mut git_error: Option<ForgeError> = None;
+        // A failure on a pair is stored on the pair (review MEDIUM: not the
+        // job's error; the sweep re-requests the scan).
+        let mut pair_failed = false;
         let mut budget_out = false;
         let mut skipped = 0usize;
         for peer in peers {
-            if Instant::now() >= deadline {
-                budget_out = true;
-                skipped += 1;
-                continue;
-            }
             match self.changed(repo, &tip, &peer.head, deadline).await {
-                Ok(None) => pairs.push(pair_of(
+                Ok(SideRead::Budget) => {
+                    budget_out = true;
+                    skipped += 1;
+                }
+                Ok(SideRead::Unrelated) => pairs.push(pair_of(
                     peer,
                     PairOutcome::Failed,
                     Some("unrelated_histories"),
                 )),
-                Ok(Some(theirs)) => {
-                    let overlap = match (&own, &theirs) {
-                        (Some(mine), Some(theirs)) => {
-                            let common: BTreeSet<String> =
-                                mine.intersection(theirs).cloned().collect(); // clone: the set owns its paths
-                            if common.is_empty() {
-                                pairs.push(pair_of(peer, PairOutcome::NoOverlap, None));
-                                continue;
-                            }
-                            Some(common)
+                Ok(SideRead::Paths { base, paths }) => {
+                    if let (Some(mine), Some(theirs)) = (&own, &paths) {
+                        if !overlaps(mine, theirs) {
+                            pairs.push(pair_of(peer, PairOutcome::NoOverlap, None));
+                            continue;
                         }
-                        _ => None,
-                    };
-                    candidates.push(Candidate { peer, overlap });
+                    }
+                    candidates.push(Candidate {
+                        peer,
+                        base,
+                        theirs: paths,
+                    });
                 }
                 Err(e) => {
+                    log_pair_failure(request_id, peer, &e);
                     pairs.push(pair_of(
                         peer,
                         PairOutcome::Failed,
                         Some(git_reason(&e).as_str()),
                     ));
-                    git_error.get_or_insert(e);
+                    pair_failed = true;
                 }
             }
         }
@@ -314,14 +450,13 @@ impl ConflictPredictor {
                 skipped += 1;
                 continue;
             }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
+            let Some(timeout) = Self::timeout(deadline, self.limits.merge_tree.timeout) else {
                 budget_out = true;
                 skipped += 1;
                 continue;
-            }
+            };
             let limits = MergeTreeLimits {
-                timeout: self.limits.merge_tree.timeout.min(left),
+                timeout,
                 ..self.limits.merge_tree
             };
             tried += 1;
@@ -336,35 +471,51 @@ impl ConflictPredictor {
                     files,
                     files_truncated,
                 }) => {
-                    let relevant: Vec<String> = match &candidate.overlap {
-                        Some(common) => files.into_iter().filter(|f| common.contains(f)).collect(),
-                        None => files,
-                    };
-                    if relevant.is_empty() && !files_truncated {
-                        // Conflicts only where one side alone changes: that
-                        // side's conflict with the target (C-1's), not theirs.
-                        pairs.push(pair_of(peer, PairOutcome::Clean, None));
-                    } else {
-                        let (conflicts, cut) = stored_files(&relevant);
-                        pairs.push(PairResult {
-                            conflicts,
-                            conflicts_truncated: files_truncated || cut,
-                            ..pair_of(peer, PairOutcome::Conflict, None)
-                        });
+                    let delta = self
+                        .target_delta(repo, &own_base, &candidate.base, deadline, request_id)
+                        .await;
+                    let count = files.len();
+                    match verdict(
+                        files,
+                        files_truncated,
+                        own.as_ref(),
+                        candidate.theirs.as_ref(),
+                        delta.as_ref(),
+                    ) {
+                        Verdict::TargetOnly => {
+                            tracing::info!(
+                                target: "forge_review",
+                                event = "forge.review.conflict_downgraded",
+                                request_id = %request_id,
+                                other_merge_request_id = peer.merge_request.get(),
+                                conflict_files = count,
+                                "every conflicted path is one side's conflict with the target; the pair is clean"
+                            );
+                            pairs.push(pair_of(peer, PairOutcome::Clean, None));
+                        }
+                        Verdict::Conflict { kept } => {
+                            let (conflicts, cut) = stored_files(&kept);
+                            pairs.push(PairResult {
+                                conflicts,
+                                conflicts_truncated: files_truncated || cut,
+                                ..pair_of(peer, PairOutcome::Conflict, None)
+                            });
+                        }
                     }
                 }
                 Err(e) => {
+                    log_pair_failure(request_id, peer, &e);
                     pairs.push(pair_of(
                         peer,
                         PairOutcome::Failed,
                         Some(git_reason(&e).as_str()),
                     ));
-                    git_error.get_or_insert(e);
+                    pair_failed = true;
                 }
             }
         }
         let peers_capped = i64::try_from(peers.len()).unwrap_or(i64::MAX) < total_peers;
-        let reason = if git_error.is_some() {
+        let reason = if pair_failed {
             Some("pair_failed")
         } else if budget_out {
             Some("budget_exhausted")
@@ -375,24 +526,36 @@ impl ConflictPredictor {
         } else {
             None
         };
-        Computed {
-            result: ScanResult {
-                status: if reason.is_some() {
-                    ScanStatus::Incomplete
-                } else {
-                    ScanStatus::Scanned
-                },
-                reason,
-                head: Some(head.clone()), // clone: the result owns its ids
-                target_branch: target.clone(), // clone: as above
-                peers: i32_of(peers.len()),
-                pairs_tried: i32_of(tried),
-                pairs_skipped: i32_of(skipped),
-                pairs,
+        done(ScanResult {
+            status: if reason.is_some() {
+                ScanStatus::Incomplete
+            } else {
+                ScanStatus::Scanned
             },
-            git_error,
-        }
+            reason,
+            head: Some(head.clone()),      // clone: the result owns its ids
+            target_branch: target.clone(), // clone: as above
+            target_sha: Some(tip),
+            peers: i32_of(peers.len()),
+            pairs_tried: i32_of(tried),
+            pairs_skipped: i32_of(skipped),
+            pairs,
+        })
     }
+}
+
+/// A git failure on one pair: logged once with its code (the pair stores
+/// the reason; the scan is `incomplete pair_failed`).
+fn log_pair_failure(request_id: &RequestId, peer: &Peer, e: &ForgeError) {
+    tracing::warn!(
+        target: "forge_review",
+        event = "forge.review.conflict_pair_failed",
+        error_code = e.code().id(),
+        request_id = %request_id,
+        other_merge_request_id = peer.merge_request.get(),
+        error = %e,
+        "git failed on one pair of the conflict scan; stored on the pair"
+    );
 }
 
 /// The scan job (module docs). Errors: forge-db's (`FG-DB-0001` / `0002`),
@@ -418,7 +581,8 @@ pub async fn scan(
     };
     let stored = &target.merge_request;
     if stored.state != forge_core::MergeRequestState::Open {
-        // A reopen requests a new scan; the reaper skips closed ones.
+        // Never left `scanning` (review LOW); a reopen requests a new scan.
+        review::abandon_scan(db, mr, seq, "not_open").await?;
         return Ok(ScanReport::skipped("not_open"));
     }
     if !target.repository_ready {
@@ -432,20 +596,49 @@ pub async fn scan(
         .map(ObjectId::parse)
         .transpose()?;
     let limit = i64::try_from(predictor.limits.peers_max).unwrap_or(i64::MAX);
-    let (peers, total) = if head.is_some() {
+    let found = if head.is_some() {
         review::scan_peers(db, stored.project_id, &stored.target_branch, mr, limit).await?
     } else {
-        (Vec::new(), 0)
+        review::Peers {
+            peers: Vec::new(),
+            total: 0,
+            invalid: Vec::new(),
+        }
     };
-    let Computed { result, git_error } = predictor
+    for other in &found.invalid {
+        // Never written by forge: that pair is left out (review LOW), not
+        // the whole scan.
+        tracing::warn!(
+            target: "forge_review",
+            event = "forge.review.conflict_peer_invalid",
+            error_code = ErrorCode::Internal.id(),
+            request_id = %request_id,
+            merge_request_id = mr.get(),
+            other_merge_request_id = other.get(),
+            reason = "stored_head_sha_invalid",
+            "a peer's stored head is not an object id; its pair is not scanned"
+        );
+    }
+    let Computed {
+        mut result,
+        git_error,
+    } = predictor
         .compute(
             target.repository,
             head.as_ref(),
             &stored.target_branch,
-            &peers,
-            total,
+            &found.peers,
+            found.total,
+            request_id,
         )
         .await;
+    if !found.invalid.is_empty() && result.status == ScanStatus::Scanned {
+        result.status = ScanStatus::Incomplete;
+        result.reason = Some("peer_invalid");
+    }
+    result.pairs_skipped = result
+        .pairs_skipped
+        .saturating_add(i32_of(found.invalid.len()));
     let recorded = review::record_scan(db, &system(request_id), mr, seq, &result).await;
     let recorded = match (recorded, git_error) {
         (Ok(_), Some(e)) => {
@@ -461,7 +654,18 @@ pub async fn scan(
     };
     let (outcome, predicted) = match recorded {
         ScanRecorded::Superseded => ("superseded", Vec::new()),
-        ScanRecorded::Stored { predicted, .. } => ("scanned", predicted),
+        ScanRecorded::Stored {
+            predicted,
+            status,
+            reason,
+            skipped,
+        } => {
+            // What was stored (a peer that moved makes it `incomplete`).
+            result.status = status;
+            result.reason = reason;
+            result.pairs_skipped = result.pairs_skipped.saturating_add(i32_of(skipped));
+            ("scanned", predicted)
+        }
     };
     if outcome == "scanned" {
         log_scan(
@@ -524,6 +728,7 @@ fn log_scan(
         ScanStatus::Failed => tracing::warn!(
             target: "forge_review",
             event = "forge.review.conflict_scanned",
+            error_code = review::prediction_incomplete("failed").code().id(),
             request_id = %request_id,
             merge_request_id = mr.get(),
             iid,
@@ -597,18 +802,54 @@ pub async fn fail(
     }
 }
 
+/// What the version job's scan request did (its log value and the seq).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanAsked {
+    /// `requested`, `answered`, `not_open`, `no_head` or `failed`.
+    pub outcome: &'static str,
+    pub seq: Option<i64>,
+}
+
 /// The version job's request after a version: a scan of `mr` at its
 /// current head unless its stored scan already answers it (see
 /// `forge_db::review::request_scan_for_head`; nothing before the first
-/// version or when the merge request is not open). The scan's seq when one
-/// was requested.
+/// version or when the merge request is not open). **Never fails the version
+/// job** (review HIGH): a failure is logged here at warn with its code and
+/// request id (`outcome = failed`), and the worker's sweep requests the scan
+/// later (`never_scanned`, or the retryable reason of the last scan).
 pub(crate) async fn after_version(
     db: &Db,
     mr: MergeRequestId,
     request_id: &RequestId,
-) -> Result<Option<i64>, ForgeError> {
+) -> ScanAsked {
+    match ask_after_version(db, mr, request_id).await {
+        Ok(asked) => asked,
+        Err(e) => {
+            tracing::warn!(
+                target: "forge_review",
+                event = "forge.review.conflict_scan_request_failed",
+                error_code = e.code().id(),
+                request_id = %request_id,
+                merge_request_id = mr.get(),
+                error = %e,
+                "could not request the conflict scan after a version; the sweep requests it"
+            );
+            ScanAsked {
+                outcome: "failed",
+                seq: None,
+            }
+        }
+    }
+}
+
+async fn ask_after_version(
+    db: &Db,
+    mr: MergeRequestId,
+    request_id: &RequestId,
+) -> Result<ScanAsked, ForgeError> {
+    let no = |outcome| ScanAsked { outcome, seq: None };
     let Some(now) = review::refresh_target(db, mr).await? else {
-        return Ok(None);
+        return Ok(no("not_open"));
     };
     let Some(head) = now
         .merge_request
@@ -617,9 +858,14 @@ pub(crate) async fn after_version(
         .map(ObjectId::parse)
         .transpose()?
     else {
-        return Ok(None);
+        return Ok(no("no_head"));
     };
-    review::request_scan_for_head(db, mr, &head, request_id.clone()).await // clone: the job keeps its origin
+    // clone: the job keeps its origin
+    let asked = review::request_scan_for_head(db, mr, &head, request_id.clone()).await?;
+    Ok(ScanAsked {
+        outcome: asked.as_str(),
+        seq: asked.seq(),
+    })
 }
 
 #[cfg(test)]

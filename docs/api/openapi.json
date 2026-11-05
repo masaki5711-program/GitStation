@@ -1172,6 +1172,10 @@
           "draft": {
             "type": "boolean"
           },
+          "head_sha": {
+            "description": "The other merge request's head the prediction is about (its current\nhead).",
+            "type": "string"
+          },
           "iid": {
             "description": "The other merge request's number in the project.",
             "format": "int64",
@@ -1193,6 +1197,7 @@
         "required": [
           "iid",
           "draft",
+          "head_sha",
           "outcome",
           "reason",
           "conflicts",
@@ -1238,8 +1243,15 @@
               "null"
             ]
           },
+          "scanned_target_sha": {
+            "description": "The target tip the finished scan read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "stale": {
-            "description": "The finished scan looked at another head or target than the current\nones (the next scan follows the version job).",
+            "description": "The finished scan looked at another head, target branch or target\ntip than the current ones (its predictions about the head still\nstand; a new head is scanned by the version job, a moved target by\nthe next push).",
             "type": "boolean"
           },
           "status": {
@@ -1252,6 +1264,7 @@
           "reason",
           "stale",
           "scanned_head_sha",
+          "scanned_target_sha",
           "scanned_at",
           "peers",
           "pairs_tried",
