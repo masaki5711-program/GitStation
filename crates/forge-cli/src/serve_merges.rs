@@ -120,6 +120,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PurgeBatchIncomplete
         | ErrorCode::NamespaceMoveContended
         | ErrorCode::RepositoryPathNotResolved
+        // M3 X1: content outcomes of the spec references (never a merge's).
+        | ErrorCode::RepoConfigInvalid
+        | ErrorCode::SpecVersionNotFound
+        | ErrorCode::SpecRepositoryUnavailable
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

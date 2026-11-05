@@ -956,6 +956,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["ref","path","oid","size","binary","hunks","commits","truncated"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"oid":{"type":"string"},"size":{"type":"integer"},"binary":{"type":"boolean"},"hunks":{"type":"array","items":{"type":"object","required":["commit","start","orig_start","lines"]}},"commits":{"type":"array","items":{"type":"object","required":["oid","author_name","author_email","author_time","author_tz","summary","boundary","path"]}},"truncated":{"type":"boolean"}}}"#,
     },
     CommandSpec {
+        name: "browse spec-refs",
+        summary: "Show a revision's .forge/repo.yml and its spec references, each resolved with your permissions (unreadable ones are unavailable).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", false, "A full commit id, a branch or a tag (default: the default branch)."),
+        ],
+        examples: &["gstn browse spec-refs --project 7", "gstn browse spec-refs --project 7 --ref main --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/spec-refs"],
+        output: r#"{"type":"object","required":["ref","path","config","problem","specs"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"config":{"enum":["absent","valid","invalid"]},"problem":{"type":["object","null"],"required":["error_code","line","reason"]},"specs":{"type":"array","items":{"type":"object","required":["line","type","repo","path","pin","scope","status","error_code","project_id","commit"],"properties":{"type":{"enum":["repo","path"]},"status":{"enum":["resolved","version_not_found","unavailable","local"]}}}}}}"#,
+    },
+    CommandSpec {
         name: "user rename",
         summary: "Rename a user and their personal namespace (administrators). Needs --yes.",
         args: &[

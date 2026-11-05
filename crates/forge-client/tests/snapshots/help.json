@@ -4918,6 +4918,112 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag (default: the default branch).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse spec-refs --project 7",
+        "gstn browse spec-refs --project 7 --ref main --json"
+      ],
+      "name": "browse spec-refs",
+      "output": {
+        "properties": {
+          "config": {
+            "enum": [
+              "absent",
+              "valid",
+              "invalid"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "problem": {
+            "required": [
+              "error_code",
+              "line",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "specs": {
+            "items": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "resolved",
+                    "version_not_found",
+                    "unavailable",
+                    "local"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "repo",
+                    "path"
+                  ]
+                }
+              },
+              "required": [
+                "line",
+                "type",
+                "repo",
+                "path",
+                "pin",
+                "scope",
+                "status",
+                "error_code",
+                "project_id",
+                "commit"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "config",
+          "problem",
+          "specs"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/spec-refs"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show a revision's .forge/repo.yml and its spec references, each resolved with your permissions (unreadable ones are unavailable)."
+    },
+    {
+      "args": [
+        {
           "description": "The user id.",
           "kind": "positional",
           "name": "id",

@@ -931,6 +931,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "browse commit",
             "browse compare",
             "browse blame",
+            "browse spec-refs",
             "user rename",
             "user search",
             "user list",

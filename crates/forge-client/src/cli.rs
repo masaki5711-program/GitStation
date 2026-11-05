@@ -1127,6 +1127,15 @@ pub enum BrowseCommand {
         #[arg(long)]
         patch: bool,
     },
+    /// A revision's `.forge/repo.yml` and its spec references, each
+    /// resolved for you (M3 X1).
+    SpecRefs {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+    },
     /// Who last changed each line of a file.
     Blame {
         #[arg(long, value_parser = parse_id, value_name = "ID")]

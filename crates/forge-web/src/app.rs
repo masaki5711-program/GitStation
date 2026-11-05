@@ -114,6 +114,11 @@ pub struct AppState {
     pub resolve_limiter: Arc<routes::namespaces::PrefixLimiter>,
     /// The user search's rate limit per caller (M2 MR6, `FG-WEB-0010`).
     pub search_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X1: the spec references followed per caller (`FG-WEB-0010`).
+    pub spec_refs_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X1: one budget for a whole spec-refs request (`FG-WEB-0002
+    /// operation=spec_refs`).
+    pub spec_refs_budget: Duration,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -157,7 +162,23 @@ impl AppState {
             callback_limiter: Arc::default(),
             resolve_limiter: Arc::default(),
             search_limiter: Arc::new(routes::directory::search_limiter()),
+            spec_refs_limiter: Arc::new(routes::spec_refs::limiter()),
+            spec_refs_budget: routes::spec_refs::BUDGET,
         }
+    }
+
+    /// The spec-refs limiter (M3 X1; tests set a small one).
+    #[must_use]
+    pub fn with_spec_refs_limiter(mut self, limiter: routes::namespaces::CallerLimiter) -> Self {
+        self.spec_refs_limiter = Arc::new(limiter);
+        self
+    }
+
+    /// The spec-refs request budget (M3 X1; tests set a small one).
+    #[must_use]
+    pub fn with_spec_refs_budget(mut self, budget: Duration) -> Self {
+        self.spec_refs_budget = budget;
+        self
     }
 
     /// The OIDC sign-in (M2 MR4).
@@ -1013,6 +1034,22 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<b::BlobBody>(Verb::Get, b::BLOB)
         .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+        // M3 X1: `.forge/repo.yml` and its spec references; every referenced
+        // project decided again with the reader's own principal.
+        .route_with(
+            Verb::Get,
+            routes::spec_refs::SPEC_REFS,
+            Action::SpecRefRead,
+            "A revision's .forge/repo.yml and its pinned spec references, each resolved for the reader (unreadable ones are unavailable)",
+            routes::spec_refs::SPEC_REFS_OF,
+            routes::spec_refs::spec_refs,
+        )
+        .responds::<routes::spec_refs::SpecRefsBody>(Verb::Get, routes::spec_refs::SPEC_REFS)
+        .queries(
+            Verb::Get,
+            routes::spec_refs::SPEC_REFS,
+            routes::spec_refs::SPEC_REFS_QUERY,
+        )
 }
 
 /// The history half of the browse API (`RepoBrowse`, `read_api`; M2 MR8):

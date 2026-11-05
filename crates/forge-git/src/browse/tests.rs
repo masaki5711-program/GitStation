@@ -913,3 +913,100 @@ async fn git_answers_forge_cannot_trust_are_git_process_failed() {
     let e = b.blob(f.id, &h.c2, &path).await.expect_err("cut");
     assert_eq!(reason(&e), "ls_tree_truncated");
 }
+
+/// M3 X1: a small settings file (`.forge/repo.yml`) read whole or not at
+/// all — absent, not a regular file, or over the cap are answers, never
+/// a part of the file.
+#[tokio::test]
+async fn small_files_are_read_whole_or_named_absent_not_a_file_or_too_large() {
+    let f = fixture().await;
+    let p = f.path.as_path();
+    let yml = blob(p, b"specs: []\n");
+    let big = blob(p, &[b'#'; 40]);
+    let forge = mktree(
+        p,
+        &[
+            ("100644", "blob", &yml, "repo.yml"),
+            ("100644", "blob", &big, "big.yml"),
+            ("120000", "blob", &yml, "link.yml"),
+            (
+                "040000",
+                "tree",
+                &mktree(p, &[("100644", "blob", &yml, "x")]),
+                "dir.yml",
+            ),
+        ],
+    );
+    let root = mktree(p, &[("040000", "tree", &forge, ".forge")]);
+    let c = commit(p, &root, None);
+    let b = f.browser(BrowseLimits::default());
+    let path = |s: &str| RepoPath::parse(s).expect("path");
+    assert_eq!(
+        b.small_file(f.id, &c, &path(".forge/repo.yml"), 32)
+            .await
+            .expect("read"),
+        SmallFile::Found(b"specs: []\n".to_vec())
+    );
+    assert_eq!(
+        b.small_file(f.id, &c, &path(".forge/big.yml"), 32)
+            .await
+            .expect("read"),
+        SmallFile::TooLarge
+    );
+    assert_eq!(
+        b.small_file(f.id, &c, &path(".forge/link.yml"), 32)
+            .await
+            .expect("read"),
+        SmallFile::NotAFile
+    );
+    assert_eq!(
+        b.small_file(f.id, &c, &path(".forge/dir.yml"), 32)
+            .await
+            .expect("read"),
+        SmallFile::NotAFile
+    );
+    assert_eq!(
+        b.small_file(f.id, &c, &path(".forge/none.yml"), 32)
+            .await
+            .expect("read"),
+        SmallFile::Absent
+    );
+    assert_eq!(
+        b.small_file(f.id, &c, &path("README.md"), 32)
+            .await
+            .expect("read"),
+        SmallFile::Absent
+    );
+}
+
+/// M3 X1 review: a full ref name looked up as a typed outcome (a commit,
+/// missing, or naming no commit) — never a reason string to match on.
+#[tokio::test]
+async fn find_ref_tells_a_commit_from_missing_and_not_a_commit() {
+    let f = fixture().await;
+    let h = history(&f.path);
+    let b = f.browser(BrowseLimits::default());
+    let name = |s: &str| forge_core::RefName::parse(s).expect("ref");
+    match b.find_ref(f.id, &name("refs/tags/v1")).await.expect("v1") {
+        RefLookup::Commit(rev) => assert_eq!(rev.commit, h.c1, "peeled"),
+        other @ (RefLookup::Missing | RefLookup::NotACommit) => panic!("{other:?}"),
+    }
+    assert_eq!(
+        b.find_ref(f.id, &name("refs/tags/v9")).await.expect("v9"),
+        RefLookup::Missing
+    );
+    assert_eq!(
+        b.find_ref(f.id, &name("refs/tags/treetag"))
+            .await
+            .expect("tt"),
+        RefLookup::NotACommit
+    );
+    match b
+        .find_ref(f.id, &name("refs/heads/main"))
+        .await
+        .expect("main")
+    {
+        RefLookup::Commit(rev) => assert_eq!(rev.commit, h.c2),
+        other @ (RefLookup::Missing | RefLookup::NotACommit) => panic!("{other:?}"),
+    }
+}

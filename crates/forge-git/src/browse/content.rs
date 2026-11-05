@@ -4,7 +4,7 @@ use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 
 use super::path::RepoPath;
-use super::tree::TreeEntry;
+use super::tree::{EntryKind, TreeEntry};
 use super::{not_resolved, Browser, Deadline};
 use crate::revision::Revision;
 use crate::stream::GitStream;
@@ -34,6 +34,20 @@ pub struct RawBlob {
     pub size: u64,
     pub oid: String,
     pub body: RawBody,
+}
+
+/// A small file read whole (M3 X1: `.forge/repo.yml`), or why not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SmallFile {
+    /// No entry at the path (also: a parent is not a directory).
+    Absent,
+    /// The entry is not a regular file: a directory, a symlink (never
+    /// followed) or a submodule.
+    NotAFile,
+    /// The file is larger than the cap: not read at all.
+    TooLarge,
+    /// The whole file.
+    Found(Vec<u8>),
 }
 
 /// The archive formats (`git archive --format`).
@@ -75,6 +89,50 @@ impl ArchiveFormat {
 }
 
 impl Browser {
+    /// The regular file at `path` of `commit`, whole, when it is at most
+    /// `max_bytes` (M3 X1: `.forge/repo.yml`). `ls-tree` decides what the
+    /// entry is (a symlink is never followed); the size is checked before
+    /// `cat-file` runs, and the read is capped again on its own output.
+    pub async fn small_file(
+        &self,
+        repo: RepoId,
+        commit: &str,
+        path: &RepoPath,
+        max_bytes: u64,
+    ) -> Result<SmallFile, ForgeError> {
+        let deadline = Deadline::new(self.limits.timeout);
+        if path.is_root() {
+            return Ok(SmallFile::NotAFile);
+        }
+        let Some(entry) = self.entry_at(repo, commit, path, deadline).await? else {
+            return Ok(SmallFile::Absent);
+        };
+        if entry.kind != EntryKind::Blob {
+            return Ok(SmallFile::NotAFile);
+        }
+        if entry.blob_size()? > max_bytes {
+            return Ok(SmallFile::TooLarge);
+        }
+        let cap = usize::try_from(max_bytes)
+            .unwrap_or(usize::MAX)
+            .saturating_add(1);
+        let dir = self.storage.existing(repo)?;
+        let _slot = self.claim(repo)?;
+        let (out, truncated) = self
+            .git
+            .command("cat-file")
+            .arg("blob")
+            .revision(Revision::object_id(&entry.oid)?)
+            .repo(&dir)
+            .timeout(deadline.left()?)
+            .output_truncated(cap)
+            .await?;
+        if truncated || out.stdout.len() as u64 > max_bytes {
+            return Ok(SmallFile::TooLarge);
+        }
+        Ok(SmallFile::Found(out.stdout))
+    }
+
     /// The blob entry at `path` (`not_a_blob` for a tree or a submodule).
     pub(super) async fn blob_entry(
         &self,
