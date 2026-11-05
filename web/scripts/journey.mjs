@@ -19,6 +19,7 @@ import { mergeBackend } from './journey-merge.mjs';
 import { mrBackend } from './journey-mr.mjs';
 import { PNG, REFS, browse } from './journey-repo.mjs';
 import { SECRET, settingsBackend } from './journey-settings.mjs';
+import { HOOK_SECRET, ROTATED_SECRET, webhooksBackend } from './journey-webhooks.mjs';
 import { dist, listen, redirect, sendError, sendJson, shellCsp, standIn } from './standin.mjs';
 
 const CSRF = 'a'.repeat(64);
@@ -52,6 +53,7 @@ function backend() {
   const projects = [forgeWeb];
   const unexpected = [];
   const settings = settingsBackend(CSRF);
+  const webhooks = webhooksBackend(CSRF);
   const mergeRequests = mrBackend(CSRF, user);
   const merging = mergeBackend(CSRF, user);
   let nextId = 9;
@@ -103,7 +105,9 @@ function backend() {
       if (mr.error) return sendError(res, mr.status, ...mr.error), true;
       return sendJson(res, mr.status, mr.body), true;
     }
-    const more = settings.answer(req, url, body, forgeWeb);
+    // Webhooks and notification preferences (U3a) come before the settings
+    // fake, which claims every /projects/7/ and /user/ path.
+    const more = webhooks.answer(req, url, body) ?? settings.answer(req, url, body, forgeWeb);
     if (more !== null) {
       if (more.error) return sendError(res, more.status, ...more.error), true;
       if (more.status === 204) {
@@ -210,7 +214,7 @@ async function main() {
       // The browser logs every 4xx as a console error; the journey causes a
       // 401 (signed out), a 403 (a merge refused, U2), a 404 (unknown path), a 409 (duplicate, the
       // last-administrator guard, a stale view or stale merge settings) and a 429 (rename limit) on purpose.
-      if (/Failed to load resource: the server responded with a status of (401|403|404|409|429)/.test(msg.text())) return;
+      if (/Failed to load resource: the server responded with a status of (400|401|403|404|409|429)/.test(msg.text())) return;
       if (msg.type() === 'error' || /Content Security Policy/i.test(msg.text())) {
         problems.push(`console ${msg.type()}: ${msg.text()}`);
       }
@@ -696,6 +700,95 @@ async function main() {
     if (mergedOverflow > 0) problems.push(`53-merged-375: the page scrolls sideways by ${mergedOverflow}px at 375px`);
     await check('53-merged-375');
     await page.setViewportSize({ width: 1100, height: 800 });
+
+    // 6f. Webhooks and notifications (U3a). The URL is write-only (the page
+    // shows the origin, never the path with the receiver's token); the secret
+    // is announced, focused and shown once; a stopped webhook says why and what
+    // to press; a redelivery still in progress is refused 429 with its reason.
+    await page.goto(`${base}/acme/forge-web/-/webhooks`, { waitUntil: 'networkidle' });
+    await h1('Webhooks');
+    await page.getByText('No webhooks yet. Add one below.').waitFor();
+    await check('60-webhooks-empty');
+    await page.getByLabel('Payload URL').fill('https://evil.test/x');
+    await page.getByRole('button', { name: 'Add webhook' }).click();
+    const notAllowed = page.getByRole('alert').filter({ hasText: 'This destination is not allowed.' });
+    await notAllowed.waitFor();
+    if (!(await notAllowed.innerText()).includes('req-allow')) problems.push('webhook refusal: request id is missing');
+    await check('61-webhook-refused');
+    await page.getByLabel('Payload URL').fill('https://hooks.example.test:8443/t/receiver-token');
+    await page.getByLabel('Event types').fill('merge_request.*');
+    await page.getByRole('button', { name: 'Add webhook' }).click();
+    const secretPanel = page.getByTestId('webhook-secret');
+    await secretPanel.waitFor();
+    if ((await page.getByTestId('webhook-secret-value').innerText()) !== HOOK_SECRET) {
+      problems.push('webhook secret: not shown after create');
+    }
+    if ((await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))) !== 'webhook-secret') {
+      problems.push('webhook secret: the panel did not take the focus');
+    }
+    await page.getByText('The secret is shown below, once.').first().waitFor({ state: 'attached' });
+    await check('62-webhook-secret');
+    await page.getByRole('button', { name: 'I have saved it' }).click();
+    await secretPanel.waitFor({ state: 'detached' });
+    const hooksText = await page.locator('main').innerText();
+    if (hooksText.includes(HOOK_SECRET) || hooksText.includes('receiver-token')) {
+      problems.push('webhook list shows the secret or the write-only URL path');
+    }
+    await page.getByText('https://hooks.example.test:8443', { exact: true }).waitFor();
+    await check('63-webhooks-list');
+    await page.getByRole('button', { name: 'Disable https://hooks.example.test:8443' }).click();
+    await page.getByText('Turned off by a person. Press Enable to start again.').waitFor();
+    await check('64-webhook-stopped');
+    await page.getByRole('button', { name: 'Enable https://hooks.example.test:8443' }).click();
+    await page.getByText('Enabled again. Its failure count was reset.').waitFor();
+    await page.getByRole('button', { name: 'Edit https://hooks.example.test:8443' }).click();
+    await page.getByRole('dialog').getByLabel('Event types').fill('*');
+    await check('65-webhook-edit');
+    await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByText('Saved.').first().waitFor();
+    await page.getByRole('button', { name: 'Rotate secret of https://hooks.example.test:8443' }).click();
+    await page.getByRole('dialog').getByRole('heading', { name: 'Rotate the secret?' }).waitFor();
+    await check('66-webhook-rotate-confirm');
+    await page.getByRole('dialog').getByRole('button', { name: 'Rotate secret', exact: true }).click();
+    await secretPanel.waitFor();
+    if ((await page.getByTestId('webhook-secret-value').innerText()) !== ROTATED_SECRET) {
+      problems.push('webhook secret: the rotated secret is not shown');
+    }
+    if ((await page.evaluate(() => document.activeElement?.getAttribute('data-testid'))) !== 'webhook-secret') {
+      problems.push('webhook secret: the panel did not take the focus after a rotation');
+    }
+    await page.getByRole('button', { name: 'I have saved it' }).click();
+
+    await page.getByRole('link', { name: 'Deliveries of https://hooks.example.test:8443' }).click();
+    await h1('Delivery history');
+    await page.getByRole('row', { name: /merge_request\.opened/ }).first().waitFor();
+    await check('67-deliveries');
+    await page.getByRole('button', { name: 'Redeliver merge_request.opened (#25)' }).click();
+    const inProgress = page.getByRole('alert').filter({ hasText: 'still in progress' });
+    await inProgress.waitFor();
+    if (!(await inProgress.innerText()).includes('req-redeliver-429')) problems.push('redeliver 429: request id is missing');
+    await check('68-redeliver-refused');
+    await page.getByRole('button', { name: 'Redeliver merge_request.opened (#25)' }).click();
+    await page.getByText('Queued for delivery again.').waitFor();
+    await page.getByRole('button', { name: 'Show older deliveries' }).click();
+    await page.getByRole('button', { name: 'Redeliver merge_request.opened (#1)' }).waitFor();
+    await check('69-deliveries-older');
+    await page.getByRole('link', { name: 'Back to webhooks' }).click();
+    await h1('Webhooks');
+    await page.getByRole('button', { name: 'Delete https://hooks.example.test:8443' }).click();
+    await page.getByRole('dialog').getByRole('heading', { name: 'Delete this webhook?' }).waitFor();
+    await check('70-webhook-delete-confirm');
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete webhook' }).click();
+    await page.getByText('The webhook was deleted.').waitFor();
+
+    await page.goto(`${base}/taro/-/settings?tab=notifications`, { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { level: 2, name: 'Notifications' }).waitFor();
+    await check('71-notifications');
+    await page.getByLabel('Send me notification mail').uncheck();
+    await page.getByLabel('Language of the mail').selectOption('ja');
+    await page.getByRole('button', { name: 'Save notification settings' }).click();
+    await page.getByText('Notification settings were saved.').waitFor();
+    await check('72-notifications-saved');
 
     // 7. Sign out: a real form POST with the CSRF token; back to the sign-in screen.
     await page.goto(`${base}/`, { waitUntil: 'networkidle' });
