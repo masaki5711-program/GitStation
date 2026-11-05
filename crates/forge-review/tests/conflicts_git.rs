@@ -772,3 +772,36 @@ async fn a_failed_scan_request_does_not_fail_the_version_job() {
     assert_eq!(report.status, Some(ScanStatus::Scanned));
     w.t.drop_now().await;
 }
+
+/// Re-review MEDIUM: a directory renamed on one side (`d/` → `e/`) and a file
+/// added under the old directory on the other share no changed path, yet
+/// merge-ort (directory renames = conflict, git 2.38+ `merge-tree`) reports
+/// a conflict at the suggested new place (`e/new`, exit 1 — checked with git
+/// 2.53). The narrowing keeps the pair: the deleted path's directory is a
+/// directory of a path on the other side.
+#[tokio::test]
+async fn a_directory_rename_against_a_file_added_in_it_is_predicted() {
+    let w = world().await;
+    let base = commit(
+        &w.path,
+        Some(&w.base_commit),
+        &w.files(&[("d/x", "x\n".to_owned()), ("d/y", "y\n".to_owned())]),
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/main", &base], None);
+    let renamed = w.files(&[("e/x", "x\n".to_owned()), ("e/y", "y\n".to_owned())]);
+    let (one, _) = w.mr_at("one", &base, &renamed).await;
+    let added = w.files(&[
+        ("d/x", "x\n".to_owned()),
+        ("d/y", "y\n".to_owned()),
+        ("d/new", "n\n".to_owned()),
+    ]);
+    let (two, seq) = w.mr_at("two", &base, &added).await;
+    let report = w.run(&two, seq, ScanLimits::default()).await.expect("scan");
+    assert_eq!(report.pairs_tried, 1, "not narrowed away: {report:?}");
+    assert_eq!(report.predicted, vec![one.id], "{report:?}");
+    assert_eq!(
+        w.pair(&one, &two).await,
+        ("conflict".to_owned(), vec!["e/new".to_owned()])
+    );
+    w.t.drop_now().await;
+}

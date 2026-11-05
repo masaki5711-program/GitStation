@@ -1968,3 +1968,7 @@ push のたびに計算する。両方の作成者と kanflow に知らせる」
   `begin_scan` は前の理由を結果の保存まで残す。閉じた MR の行は `failed not_open` にし、`scanning` のまま残さない。予測の「入った」は
   `failed` 以外の最後の結果（`last_decided`）と比べる（conflict → failed → conflict でメールを 2 回出さない）。runbook `repo-maintenance`
   に、`merge-tree --write-tree` が書く loose オブジェクトの増え方と確かめ方を足した。
+- **ディレクトリの名前の変更（再レビュー MEDIUM、改訂）**: 片側が `d/` を `e/` に変え（`d/x` を削除、`e/x` を追加）、もう片側が `d/new` を
+  足すと、変更パスは重ならないが merge-ort（git 2.53 で確認）は `e/new` の衝突（directory rename suggested、終了コード 1）を返す。絞り込みは、
+  片側が **削除した** パスのディレクトリ（`diff-tree --diff-filter=D`、forge-git の `deleted_paths`）が、もう片側の変更パスのディレクトリの
+  どれかと同じなら組を候補に残す（どちらかの集合が不明なら常に候補）。テスト `a_directory_rename_against_a_file_added_in_it_is_predicted`。

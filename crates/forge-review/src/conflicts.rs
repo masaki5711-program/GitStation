@@ -133,8 +133,13 @@ type Paths = Option<BTreeSet<String>>;
 
 /// What reading one side found.
 enum SideRead {
-    /// Its merge base with the target tip and its changed paths.
-    Paths { base: ObjectId, paths: Paths },
+    /// Its merge base with the target tip, its changed paths and, of those,
+    /// the deleted ones (a directory rename's old paths).
+    Paths {
+        base: ObjectId,
+        paths: Paths,
+        deleted: Paths,
+    },
     /// No common history with the target.
     Unrelated,
     /// The budget ran out before git could run (no process started).
@@ -188,6 +193,35 @@ fn has_at_or_above(set: &BTreeSet<String>, path: &str) -> bool {
 pub(crate) fn overlaps(mine: &BTreeSet<String>, theirs: &BTreeSet<String>) -> bool {
     mine.iter()
         .any(|p| has_at_or_above(theirs, p) || has_below(theirs, p))
+}
+
+/// Every directory above the paths of `set` (`a/b/c` → `a`, `a/b`).
+fn dirs_of(set: &BTreeSet<String>) -> BTreeSet<&str> {
+    set.iter()
+        .flat_map(|p| p.match_indices('/').map(move |(i, _)| &p[..i]))
+        .collect()
+}
+
+/// Whether a directory a side deleted a path from is a directory of a path
+/// the other side changes (re-review MEDIUM: a directory renamed on one
+/// side — `d/x` deleted, `e/x` added — and a file added under `d/` on the
+/// other share no path, yet merge-ort's directory-rename detection reports
+/// a conflict at the suggested new place). Bounded by the path caps.
+pub(crate) fn shares_a_deleted_dir(deleted: &BTreeSet<String>, other: &BTreeSet<String>) -> bool {
+    let gone = dirs_of(deleted);
+    !gone.is_empty() && dirs_of(other).iter().any(|d| gone.contains(d))
+}
+
+/// Whether a pair is a candidate for a trial merge: `None` sets (unknown)
+/// always are.
+pub(crate) fn is_candidate(mine: (&Paths, &Paths), theirs: (&Paths, &Paths)) -> bool {
+    let ((Some(mine), Some(mine_deleted)), (Some(theirs), Some(theirs_deleted))) = (mine, theirs)
+    else {
+        return true;
+    };
+    overlaps(mine, theirs)
+        || shares_a_deleted_dir(mine_deleted, theirs)
+        || shares_a_deleted_dir(theirs_deleted, mine)
 }
 
 /// What a trial merge's conflict means for the pair.
@@ -283,7 +317,33 @@ impl ConflictPredictor {
             return Ok(SideRead::Budget);
         };
         let paths = self.paths(repo, &base, head, read).await?;
-        Ok(SideRead::Paths { base, paths })
+        let deleted = if paths.is_some() {
+            let Some(read) = Self::timeout(deadline, self.limits.read_timeout) else {
+                return Ok(SideRead::Budget);
+            };
+            let deleted = self
+                .git
+                .deleted_paths(
+                    &self.storage,
+                    repo,
+                    &base,
+                    head,
+                    self.limits.paths_max,
+                    read,
+                )
+                .await?;
+            match deleted {
+                ChangedPaths::Complete(d) => Some(d.into_iter().collect()),
+                ChangedPaths::TooMany | ChangedPaths::NonUtf8 => None,
+            }
+        } else {
+            None
+        };
+        Ok(SideRead::Paths {
+            base,
+            paths,
+            deleted,
+        })
     }
 
     async fn paths(
@@ -386,8 +446,12 @@ impl ConflictPredictor {
                 }
             }
         };
-        let (own_base, own) = match self.changed(repo, &tip, head, deadline).await {
-            Ok(SideRead::Paths { base, paths }) => (base, paths),
+        let (own_base, own, own_deleted) = match self.changed(repo, &tip, head, deadline).await {
+            Ok(SideRead::Paths {
+                base,
+                paths,
+                deleted,
+            }) => (base, paths, deleted),
             Ok(SideRead::Unrelated) => {
                 return done(failed("unrelated_histories", Some(head), Some(&tip)))
             }
@@ -419,12 +483,14 @@ impl ConflictPredictor {
                     PairOutcome::Failed,
                     Some("unrelated_histories"),
                 )),
-                Ok(SideRead::Paths { base, paths }) => {
-                    if let (Some(mine), Some(theirs)) = (&own, &paths) {
-                        if !overlaps(mine, theirs) {
-                            pairs.push(pair_of(peer, PairOutcome::NoOverlap, None));
-                            continue;
-                        }
+                Ok(SideRead::Paths {
+                    base,
+                    paths,
+                    deleted,
+                }) => {
+                    if !is_candidate((&own, &own_deleted), (&paths, &deleted)) {
+                        pairs.push(pair_of(peer, PairOutcome::NoOverlap, None));
+                        continue;
                     }
                     candidates.push(Candidate {
                         peer,

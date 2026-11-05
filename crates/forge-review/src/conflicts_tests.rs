@@ -86,3 +86,32 @@ fn only_a_target_only_conflict_is_downgraded() {
         }
     );
 }
+
+/// Re-review MEDIUM: a directory renamed on one side (its old paths
+/// deleted) and a path added under the old directory on the other are a
+/// candidate; a deletion elsewhere is not.
+#[test]
+fn a_deleted_directory_shared_with_the_other_side_is_a_candidate() {
+    let mine = Some(set(&["d/x", "d/y", "e/x", "e/y"]));
+    let mine_deleted = Some(set(&["d/x", "d/y"]));
+    let theirs = Some(set(&["d/new"]));
+    let theirs_deleted = Some(set(&[]));
+    assert!(is_candidate(
+        (&mine, &mine_deleted),
+        (&theirs, &theirs_deleted)
+    ));
+    assert!(is_candidate(
+        (&theirs, &theirs_deleted),
+        (&mine, &mine_deleted)
+    ));
+    let elsewhere = Some(set(&["f/new"]));
+    assert!(!is_candidate(
+        (&mine, &mine_deleted),
+        (&elsewhere, &theirs_deleted)
+    ));
+    // A deleted top-level file has no directory to share.
+    let top = Some(set(&["a.txt"]));
+    assert!(!is_candidate((&top, &top), (&elsewhere, &theirs_deleted)));
+    // Unknown sets are always candidates.
+    assert!(is_candidate((&None, &None), (&theirs, &theirs_deleted)));
+}
