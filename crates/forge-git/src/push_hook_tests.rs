@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)] // tests may fail loudly
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use forge_core::RepoId;
 
@@ -28,6 +28,7 @@ async fn fixture() -> Fixture {
         .init_bare(&git, id, uuid::Uuid::new_v4(), None)
         .await
         .expect("init");
+    git.install_push_hook().expect("hook installed");
     Fixture {
         _home: home,
         _root_dir: root_dir,
@@ -49,7 +50,7 @@ impl Fixture {
                     request_id: "req-x8-test".to_owned(),
                     lang: Lang::En,
                     repo_id: self.id,
-                    max_blob_bytes,
+                    limits: crate::push_scan::ScanLimits::new(max_blob_bytes),
                 },
             )
             .expect("run")
@@ -161,32 +162,75 @@ async fn no_result_is_none_and_another_runs_result_is_invalid() {
     assert_eq!(err.code(), ErrorCode::PushCheckFailed);
 }
 
+fn policy(f: &Fixture) -> PushCheckPolicy {
+    PushCheckPolicy {
+        request_id: "req".to_owned(),
+        lang: Lang::En,
+        repo_id: f.id,
+        limits: crate::push_scan::ScanLimits::new(1),
+    }
+}
+
+fn arm(f: &Fixture) -> Result<PushCheckRun, ForgeError> {
+    f.git
+        .push_check_run(&f.root, &std::env::current_exe().expect("exe"), &policy(f))
+}
+
+/// Written once at start; a push only verifies it. Missing, changed or
+/// (Unix) not executable refuses the push (X8 review: no writes per push,
+/// the execute bit checked).
 #[tokio::test]
 async fn the_hook_script_is_forges_own() {
     let f = fixture().await;
-    let _run = f.run(1);
     let script = f.git.push_hooks_dir().join("pre-receive");
     assert_eq!(
         std::fs::read_to_string(&script).expect("script"),
         HOOK_SCRIPT
     );
-    // A second run keeps it; a changed script refuses the next push.
-    let _again = f.run(1);
+    let _run = arm(&f).expect("verified");
+    // A second start keeps it.
+    f.git.install_push_hook().expect("idempotent");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let err = arm(&f).expect_err("not executable");
+        assert_eq!(err.code(), ErrorCode::GitUnavailable);
+        assert!(format!("{:?}", err.context()).contains("push_hook_not_executable"));
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    }
+
     std::fs::write(&script, "#!/bin/sh\nexit 0\n").expect("tamper");
+    let err = arm(&f).expect_err("changed");
+    assert_eq!(err.code(), ErrorCode::GitUnavailable);
     let err = f
         .git
-        .push_check_run(
-            &f.root,
-            &std::env::current_exe().expect("exe"),
-            &PushCheckPolicy {
-                request_id: "req".to_owned(),
-                lang: Lang::En,
-                repo_id: f.id,
-                max_blob_bytes: 1,
-            },
-        )
-        .expect_err("refused");
+        .install_push_hook()
+        .expect_err("start refuses a changed one");
     assert_eq!(err.code(), ErrorCode::GitUnavailable);
+
+    std::fs::remove_file(&script).expect("remove");
+    let err = arm(&f).expect_err("missing");
+    assert!(format!("{:?}", err.context()).contains("push_hook_missing"));
+}
+
+#[test]
+fn the_hook_exe_loses_the_verbatim_prefix() {
+    #[cfg(windows)]
+    {
+        assert_eq!(
+            hook_exe(Path::new(r"\\?\D:\APP\forge\forge.exe")).expect("exe"),
+            "D:/APP/forge/forge.exe"
+        );
+        assert!(hook_exe(Path::new(r"\\?\UNC\host\share\forge.exe")).is_err());
+    }
+    #[cfg(unix)]
+    assert_eq!(
+        hook_exe(Path::new("/opt/forge/bin/forge")).expect("exe"),
+        "/opt/forge/bin/forge"
+    );
+    assert!(hook_exe(Path::new("forge")).is_err());
 }
 
 #[tokio::test]

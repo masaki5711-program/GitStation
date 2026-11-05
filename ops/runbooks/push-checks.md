@@ -7,7 +7,8 @@ push の検査（M3 X8、ADR-0008 の追記 X8）は、receive-pack の **pre-re
 - 秘密: 秘密鍵（PEM / OpenSSH / PGP）、AWS のアクセスキー ID、GitHub・GitLab・Slack・Google のトークン、GitStation 自身の
   `fgp_` / `gss_` / `whsec_` → **FG-GIT-0022**（push 全体を拒否）。1 MiB を超える blob とバイナリは秘密の検査をしない
 - 検査が動かなかった → **FG-GIT-0023**（alert。フックの中なら拒否 = fail closed。`hook_not_run` は ref が検査なしで更新された）
-- 上限（新しいオブジェクト 50 万、秘密の検査 256 MiB、全体 60 秒）で止まった → **FG-GIT-0024**（warn。push は通す = fail open）
+- 秘密の検査が上限（新しいオブジェクト 50 万、256 MiB、60 秒）で止まった、または 1 MiB を超えるテキストを調べなかった → **FG-GIT-0024**（warn。push は通す = fail open）。
+  **大きさの検査は止まらない**: 受け取ったオブジェクトをすべて流して読み、読み切れなければ拒否（FG-GIT-0023 `size_check_failed`、120 秒）
 
 仕組み: `forge serve` が push ごとに `<storage root>/push-checks/<nonce>/policy` を書き、receive-pack を
 `-c core.hooksPath=<storage root>/push-hooks` と環境変数 `FORGE_PUSH_CHECK_DIR`・`FORGE_PUSH_CHECK_EXE`（serve の実行ファイル）で起動する。
@@ -47,8 +48,17 @@ git の終了後、serve が `result` を読んでログに 1 行出し、run �
    - `reason=hook_not_run`（`applied`）: git がフックを飛ばした。スクリプトの実行権限（Unix）、`core.hooksPath` を上書きする設定が無いか
      （`git config --show-origin --get-all core.hooksPath` を、`HOME=<storage root>` で）
    - `reason=run_dir`（`detail=create` / `remove` / `policy_write`）: `<storage root>/push-checks` の権限・空き
-   - `reason=exe_unknown`（serve の起動時）: serve が自分の実行ファイルのパスを得られなかった。この serve では検査が動いていない
-5. FG-GIT-0024: `incomplete`（`objects_cap` / `bytes_cap` / `deadline`）と `objects`。初回の大きな取り込みに多い。
+   - `reason=exe_unknown` / `exe_unusable`（serve の起動時）: serve が自分の実行ファイルのパスを得られない・使えない。**serve は起動しない**
+   - `reason=size_check_failed`（`detail`、`cause_code`）: 受け取ったオブジェクトの大きさを読み切れなかった（120 秒、git の失敗）。push は拒否された。
+     巨大な push なら分けてもらう。続くなら `df`、`git --version`、ディスクの遅さ
+   - `reason=hook_unknown`: git の後で ref が読めず、反映が分からないまま result が無い。`hook_not_run` と同じに扱う（unchecked push を手で）
+   - 起動時の `FG-GIT-0001 reason=hooks_dir`（`push_hook_missing` / `push_hook_mismatch` / `push_hook_not_executable` / `unexpected_entry`）: serve は起動しない。
+     Mitigate 3 で直す
+5. FG-GIT-0024: `incomplete`（`objects_cap` / `bytes_cap` / `deadline` / `large_blob_unscanned`）、`objects`、`skipped_large`、`skipped_binary`。初回の大きな取り込みに多い。
+6. 免除（`forge:allow-secret`）: 同じ `request_id` の `forge.git.push_check_waived` の行（`rule`、`path`、`blob`）。本物の秘密を印で隠していないか、
+   該当のファイルを MR で確かめる（値はログに無い）。
+7. git の隔離: forge は git 2.38 以上を求め（`forge doctor` の git の版）、その git はパックを受け取れば必ず隔離する。隔離の変数が無い push は
+   パックが無い（削除だけ、既存のコミットへの ref）ので、大きさの検査は測るものが無い。
 
 ## Mitigate
 
@@ -77,6 +87,13 @@ git の終了後、serve が `result` を読んでログに 1 行出し、run �
    見つかったら FG-GIT-0021 / 0022 と同じに扱う（すでに ref から届くので、取り除くには runbook secret-removal）。
 5. 残った run のディレクトリ（`<storage root>/push-checks/<nonce>`、push が終わっても残ったもの）は、push が動いていないときに
    `[MUTATING — needs approval]` 消してよい（中身は policy と result だけで、秘密は無い。戻し: 不要）。
+
+## Windows の注意
+
+- `<storage root>/push-hooks` と `push-checks` は Unix では 0700 で作るが、Windows ではモードを付けない（ACL は親から継承する）。
+  storage root の ACL を、serve を動かすアカウントと管理者だけにしておく（`icacls <storage root>` で確かめる）。他の利用者が書けると
+  フックのスクリプトを書き換えられる（forge は内容を毎回確かめるが、確かめた後から git が実行するまでの間は守れない）。
+- 実行ファイルのパスは `\\?\` を外し、`/` に直してスクリプトに渡す（git for Windows の sh が実行する）。
 
 ## Verify
 

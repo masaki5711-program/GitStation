@@ -79,6 +79,7 @@ use forge_core::{
 use forge_errors::{ErrorCode, ForgeError, Lang};
 use forge_git::push_hook::{HookOutcome, PushCheckPolicy, PushCheckRun, Verdict};
 use forge_git::push_introduced::RefSnapshot;
+use forge_git::push_scan::ScanLimits;
 use forge_git::receive_report::{refusal_report, ReportRewriter, RewriteTexts};
 use forge_git::receive_request::{
     check_unambiguous, CommandParser, Parsed, ReceivePackRequest, MAX_COMMAND_SECTION,
@@ -320,16 +321,20 @@ async fn receive_pack_inner(
 
     // 4b. The push checks (M3 X8): one run of the pre-receive hook.
     let checks = match &smart.push_checks {
-        Some(exe) => Some(smart.git.push_check_run(
-            &smart.storage,
-            exe,
-            &PushCheckPolicy {
-                request_id: log.request_id.to_string(),
-                lang: log.lang,
-                repo_id: repository.id,
-                max_blob_bytes: limits.push_max_blob_bytes,
-            },
-        )?),
+        Some(checks) => Some(
+            smart.git.push_check_run(
+                &smart.storage,
+                &checks.exe,
+                &PushCheckPolicy {
+                    request_id: log.request_id.to_string(),
+                    lang: log.lang,
+                    repo_id: repository.id,
+                    limits: checks
+                        .limits
+                        .unwrap_or_else(|| ScanLimits::new(limits.push_max_blob_bytes)),
+                },
+            )?,
+        ),
         None => None,
     };
 
@@ -817,34 +822,55 @@ impl Receiver {
     }
 
     /// What this push's pre-receive check decided (M3 X8), logged once,
-    /// then its run directory removed. `applied`: the refs git updated.
+    /// then its run directory removed. `applied`: the refs git updated, or
+    /// `None` when the repository could not say (reconciliation failed).
     /// No result of this run while refs changed means git skipped the
-    /// hook: `FG-GIT-0023 reason=hook_not_run` (the refs were not checked).
-    fn push_checked(&mut self, applied: usize) {
+    /// hook: `FG-GIT-0023 reason=hook_not_run` (the refs were not checked);
+    /// unknown refs and no result: `reason=hook_unknown` (the same alert,
+    /// never hidden as "nothing applied").
+    fn push_checked(&mut self, applied: Option<usize>) {
         let Some(run) = self.checks.take() else {
             return;
         };
+        let applied_text = applied.map_or_else(|| "unknown".to_owned(), |n| n.to_string());
         let fail = |reason: &'static str| {
             ForgeError::new(ErrorCode::PushCheckFailed)
                 .with_context("reason", reason)
                 .with_context("event", "forge.git.push_checked")
-                .with_context("applied", applied)
+                .with_context("applied", &applied_text)
         };
-        match run.outcome() {
-            Ok(Some(outcome)) => self.log_checked(&outcome, applied),
-            Ok(None) if applied > 0 => self.log.failure(fail("hook_not_run")),
-            Ok(None) if self.hook_declined => self.log.failure(fail("hook_no_result")),
+        match (run.outcome(), applied) {
+            (Ok(Some(outcome)), _) => self.log_checked(&outcome, &applied_text),
+            (Ok(None), None) => self.log.failure(fail("hook_unknown")),
+            (Ok(None), Some(n)) if n > 0 => self.log.failure(fail("hook_not_run")),
+            (Ok(None), Some(_)) if self.hook_declined => {
+                self.log.failure(fail("hook_no_result"));
+            }
             // git stopped before the hook (an unpack error): nothing ran.
-            Ok(None) => {}
-            Err(err) => self.log.failure(err.with_context("applied", applied)),
+            (Ok(None), Some(_)) => {}
+            (Err(err), _) => self.log.failure(err.with_context("applied", &applied_text)),
         }
         if let Err(err) = run.remove() {
             self.log.failure(err);
         }
     }
 
-    fn log_checked(&self, outcome: &HookOutcome, applied: usize) {
+    fn log_checked(&self, outcome: &HookOutcome, applied: &str) {
         let r = &outcome.report;
+        // Every waived finding, with its path (X8 review): a marker that
+        // hides a real secret is found from the log, not only from review.
+        for w in &r.waivers {
+            tracing::info!(
+                target: "forge_web::git",
+                request_id = %self.log.request_id,
+                project_id = self.log.project_id.get(),
+                repo_id = self.log.repo_id,
+                rule = %w.rule,
+                blob = %w.blob,
+                path = %w.path,
+                "forge.git.push_check_waived"
+            );
+        }
         let with_counts = |err: ForgeError| {
             err.with_context("event", "forge.git.push_checked")
                 .with_context("verdict", format!("{:?}", outcome.verdict).to_lowercase())
@@ -853,6 +879,9 @@ impl Receiver {
                 .with_context("blobs_scanned", r.blobs_scanned)
                 .with_context("bytes_scanned", r.bytes_scanned)
                 .with_context("allowed", r.allowed)
+                .with_context("pack_objects", r.pack_objects)
+                .with_context("skipped_large", r.skipped_large)
+                .with_context("skipped_binary", r.skipped_binary)
         };
         match outcome.verdict {
             Verdict::Refused => {
@@ -904,6 +933,8 @@ impl Receiver {
                     blobs_scanned = r.blobs_scanned,
                     bytes_scanned = r.bytes_scanned,
                     allowed = r.allowed,
+                    pack_objects = r.pack_objects,
+                    skipped_binary = r.skipped_binary,
                     "forge.git.push_checked"
                 ),
             },
@@ -977,7 +1008,7 @@ impl Receiver {
             Err(err) => {
                 // Unknown whether a ref changed: an absent hook result
                 // counts as a skipped hook only when one did.
-                self.push_checked(0);
+                self.push_checked(None);
                 let commands: Vec<String> = self
                     .commands
                     .iter()
@@ -1036,7 +1067,7 @@ impl Receiver {
     /// Step 6, for the updates git applied (`source`: `report`, or the
     /// reconciliation's reason).
     async fn after_push(mut self, applied: Vec<(String, String, String)>, source: &'static str) {
-        self.push_checked(applied.len());
+        self.push_checked(Some(applied.len()));
         if applied.is_empty() {
             return;
         }

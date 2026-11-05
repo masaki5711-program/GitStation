@@ -37,8 +37,24 @@ async fn fixture() -> Fixture {
 }
 
 pub(crate) fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
+    plumb_in(repo, None, args, input)
+}
+
+/// `plumb` writing new objects into `quarantine` (as receive-pack does:
+/// the repository's objects as the alternate).
+pub(crate) fn plumb_in(
+    repo: &Path,
+    quarantine: Option<&Path>,
+    args: &[&str],
+    input: Option<&[u8]>,
+) -> String {
     use std::io::Write as _;
-    let mut child = Command::new("git")
+    let mut cmd = Command::new("git");
+    if let Some(q) = quarantine {
+        cmd.env("GIT_OBJECT_DIRECTORY", q)
+            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", repo.join("objects"));
+    }
+    let mut child = cmd
         .arg("--git-dir")
         .arg(repo)
         .args(args)
@@ -65,6 +81,37 @@ pub(crate) fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String 
 
 /// A commit (no ref points at it) with `files` (name, content).
 pub(crate) fn commit(repo: &Path, files: &[(&str, &[u8])], parent: Option<&str>) -> String {
+    commit_in(repo, None, files, parent)
+}
+
+/// A quarantine directory of `repo`, as git creates one for a push.
+pub(crate) fn quarantine_dir(repo: &Path, name: &str) -> PathBuf {
+    let dir = repo
+        .join("objects")
+        .join(format!("tmp_objdir-incoming-{name}"));
+    std::fs::create_dir_all(&dir).expect("quarantine");
+    dir
+}
+
+pub(crate) fn quarantine_of(repo: &Path, dir: &Path) -> Quarantine {
+    Quarantine::from_hook_env(
+        repo,
+        Some(dir.as_os_str()),
+        Some(repo.join("objects").as_os_str()),
+    )
+    .expect("valid")
+    .expect("some")
+}
+
+/// `commit`, its new objects written into `quarantine`.
+pub(crate) fn commit_in(
+    repo: &Path,
+    quarantine: Option<&Path>,
+    files: &[(&str, &[u8])],
+    parent: Option<&str>,
+) -> String {
+    let plumb =
+        |repo: &Path, args: &[&str], input: Option<&[u8]>| plumb_in(repo, quarantine, args, input);
     // Top-level files, and files one directory down (`dir/name`).
     let mut tree = String::new();
     let mut dirs: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
@@ -103,12 +150,44 @@ fn limits(max_blob_bytes: u64) -> ScanLimits {
     ScanLimits::new(max_blob_bytes)
 }
 
+/// X8 review (HIGH): a secret scan cut short by its caps must not let a
+/// large blob through — the size check reads the whole quarantine.
+#[tokio::test]
+async fn a_capped_listing_still_refuses_a_large_blob() {
+    let f = fixture().await;
+    let dir = quarantine_dir(&f.path, "pad");
+    let mut files: Vec<(String, Vec<u8>)> = (0..30)
+        .map(|i| (format!("pad{i:02}.txt"), format!("pad {i}\n").into_bytes()))
+        .collect();
+    files.push(("zz-big.bin".to_owned(), vec![9u8; 8192]));
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(n, c)| (n.as_str(), c.as_slice()))
+        .collect();
+    let tip = commit_in(&f.path, Some(&dir), &refs, None);
+    let q = quarantine_of(&f.path, &dir);
+    let mut l = limits(4096);
+    l.max_objects = 3;
+    let report = f
+        .git
+        .scan_push(&f.path, Some(&q), &[tip], &l)
+        .await
+        .expect("scan");
+    assert_eq!(report.incomplete, Some("objects_cap"), "{report:?}");
+    assert_eq!(report.total_findings, 1, "{report:?}");
+    let finding = report.findings.first().expect("finding");
+    assert_eq!(finding.kind, FindingKind::LargeBlob { size: 8192 });
+    assert_eq!(finding.path, "zz-big.bin");
+}
+
 #[tokio::test]
 async fn large_and_secret_blobs_of_new_commits_are_found_with_path_and_commit() {
     let f = fixture().await;
     let base = commit(&f.path, &[("README", b"hello\n")], None);
-    let tip = commit(
+    let dir = quarantine_dir(&f.path, "both");
+    let tip = commit_in(
         &f.path,
+        Some(&dir),
         &[
             ("README", b"hello\n"),
             ("big.bin", &[7u8; 4096]),
@@ -116,9 +195,10 @@ async fn large_and_secret_blobs_of_new_commits_are_found_with_path_and_commit() 
         ],
         Some(&base),
     );
+    let q = quarantine_of(&f.path, &dir);
     let report = f
         .git
-        .scan_push(&f.path, None, std::slice::from_ref(&tip), &limits(1024))
+        .scan_push(&f.path, Some(&q), std::slice::from_ref(&tip), &limits(1024))
         .await
         .expect("scan");
     assert_eq!(report.incomplete, None);
@@ -278,4 +358,62 @@ fn paths_lose_control_characters_and_are_cut() {
     let long = "é".repeat(200);
     let cut = clean_path(long.as_bytes());
     assert!(cut.len() <= 256 && cut.chars().all(|c| c == 'é'));
+}
+
+/// X8 review (MEDIUM): what the secret scan leaves out is not silent. A
+/// text blob too large to scan makes it incomplete; a binary one is
+/// counted; a waived finding is kept with its path for serve's log.
+#[tokio::test]
+async fn skipped_blobs_and_waivers_are_reported() {
+    let f = fixture().await;
+    let mut marked = b"# synthetic forge:allow-secret\n".to_vec();
+    marked.extend_from_slice(&key_file());
+    let mut binary = vec![0u8; 16];
+    binary.extend_from_slice(&key_file());
+    let tip = commit(
+        &f.path,
+        &[
+            ("big.txt", &[b'a'; 3000]),
+            ("image.bin", &binary),
+            ("fixtures/key.pem", &marked),
+        ],
+        None,
+    );
+    let mut l = limits(1 << 20);
+    l.secret_blob_max = 2048;
+    let report = f
+        .git
+        .scan_push(&f.path, None, &[tip], &l)
+        .await
+        .expect("scan");
+    assert!(report.findings.is_empty(), "{report:?}");
+    assert_eq!(report.incomplete, Some("large_blob_unscanned"));
+    assert_eq!(report.skipped_large, 1);
+    assert_eq!(report.skipped_binary, 1);
+    assert_eq!(report.allowed, 1);
+    let waiver = report.waivers.first().expect("waiver");
+    assert_eq!(waiver.rule, "private_key");
+    assert_eq!(waiver.path, "fixtures/key.pem");
+}
+
+/// The size check cannot be cut short into an accept: past its bound the
+/// scan is an error (FG-GIT-0023, the push refused).
+#[tokio::test]
+async fn a_size_check_that_cannot_finish_fails_closed() {
+    let f = fixture().await;
+    let dir = quarantine_dir(&f.path, "slow");
+    let tip = commit_in(&f.path, Some(&dir), &[("a.txt", b"a")], None);
+    let q = quarantine_of(&f.path, &dir);
+    let mut l = limits(1 << 20);
+    l.size_timeout = Duration::ZERO;
+    let err = f
+        .git
+        .scan_push(&f.path, Some(&q), &[tip], &l)
+        .await
+        .expect_err("refused");
+    assert_eq!(err.code(), ErrorCode::PushCheckFailed);
+    assert!(
+        format!("{:?}", err.context()).contains("size_check_failed"),
+        "{err:?}"
+    );
 }

@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-The pre-receive hook (`forge hook pre-receive`, M3 X8, ADR-0008 amendment X8) found a blob larger than `git.http.push_max_blob_bytes` (default 100 MiB) among the objects the push brings (the objects reachable from the new tips and from no ref before the push, read inside git's quarantine). git refused the whole push (`ng <ref> pre-receive hook declined` for every ref); the quarantined objects are discarded, no ref changed. A blob already in the repository never trips the check.
+The pre-receive hook (`forge hook pre-receive`, M3 X8, ADR-0008 amendment X8) found a blob larger than `git.http.push_max_blob_bytes` (default 100 MiB) among the objects the push brings. The size check reads every object git received for the push (the quarantine's own object directory, streamed: `cat-file --batch-all-objects`), so it is complete whatever the push contains — a blob only an annotated tag names, or one hidden behind padding that stops the secret scan early, is sized all the same; a size check that cannot finish refuses the push (FG-GIT-0023 `size_check_failed`). git refused the whole push (`ng <ref> pre-receive hook declined` for every ref); the quarantined objects are discarded, no ref changed. A blob already in the repository never trips the check.
 
 ## 調べ方 (diagnosis)
 

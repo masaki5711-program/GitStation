@@ -492,6 +492,7 @@ async fn a_stalled_record_keeps_the_audit_row_without_the_commits() {
 /// A run for the fixture's repository (the hook script and the policy;
 /// whether the hook then writes a result is up to the test).
 fn check_run(r: &Receiver) -> forge_git::push_hook::PushCheckRun {
+    r.smart.git.install_push_hook().expect("hook");
     r.smart
         .git
         .push_check_run(
@@ -501,7 +502,7 @@ fn check_run(r: &Receiver) -> forge_git::push_hook::PushCheckRun {
                 request_id: "req-push-unit".to_owned(),
                 lang: Lang::En,
                 repo_id: RepoId::new(9),
-                max_blob_bytes: 1,
+                limits: ScanLimits::new(1),
             },
         )
         .expect("run")
@@ -517,7 +518,7 @@ async fn refs_applied_without_a_hook_result_is_hook_not_run() {
     let run_dir = run.dir().to_path_buf();
     r.checks = Some(run);
     let (buf, _guard) = capture();
-    r.push_checked(2);
+    r.push_checked(Some(2));
     let events = buf.events();
     let failed: Vec<&Value> = events
         .iter()
@@ -534,14 +535,14 @@ async fn refs_applied_without_a_hook_result_is_hook_not_run() {
     let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
     r.checks = Some(check_run(&r));
     let (buf, _guard) = capture();
-    r.push_checked(0);
+    r.push_checked(Some(0));
     assert!(buf.events().is_empty());
     // git said the hook declined, but no result: it never got that far.
     let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
     r.checks = Some(check_run(&r));
     r.hook_declined = true;
     let (buf, _guard) = capture();
-    r.push_checked(0);
+    r.push_checked(Some(0));
     let events = buf.events();
     assert!(
         events
@@ -551,6 +552,23 @@ async fn refs_applied_without_a_hook_result_is_hook_not_run() {
                     .as_str()
                     .unwrap_or_default()
                     .contains("reason=hook_no_result")),
+        "{events:?}"
+    );
+    // The repository could not say which refs changed (reconciliation
+    // failed) and there is no result: never counted as "nothing applied".
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    r.checks = Some(check_run(&r));
+    let (buf, _guard) = capture();
+    r.push_checked(None);
+    let events = buf.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["error_code"] == ErrorCode::PushCheckFailed.id()
+                && e["context"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("reason=hook_unknown")),
         "{events:?}"
     );
 }
@@ -576,7 +594,7 @@ async fn a_refused_check_is_logged_with_its_first_finding() {
     std::fs::write(run.dir().join("result"), result).expect("result");
     r.checks = Some(run);
     let (buf, _guard) = capture();
-    r.push_checked(0);
+    r.push_checked(Some(0));
     let events = buf.events();
     let found: Vec<&Value> = events
         .iter()

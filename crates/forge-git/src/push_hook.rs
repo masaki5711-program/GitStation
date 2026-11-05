@@ -3,15 +3,18 @@
 //! (`forge hook pre-receive`) does, and how serve reads what it decided.
 //!
 //! - **The hook script** — `<git home>/push-hooks/pre-receive`, forge's
-//!   own [`HOOK_SCRIPT`] (three lines; mode 0700 on Unix). receive-pack of
-//!   a push with checks gets `-c core.hooksPath=<git home>/push-hooks`
-//!   instead of the empty hooks directory. A directory or script that is
-//!   not exactly forge's refuses the push (`FG-GIT-0001 reason=hooks_dir`,
-//!   as the empty directory does).
+//!   own [`HOOK_SCRIPT`] (three lines; mode 0700 on Unix), written once
+//!   when `forge serve` starts ([`Git::install_push_hook`]; a different
+//!   existing script stops the start). receive-pack of a push with checks
+//!   gets `-c core.hooksPath=<git home>/push-hooks` instead of the empty
+//!   hooks directory. Each push only verifies the directory: a script that
+//!   is missing, not exactly forge's, or (Unix) not executable, or another
+//!   entry, refuses the push (`FG-GIT-0001 reason=hooks_dir`, as the empty
+//!   directory does). No push writes it: no concurrent renames.
 //! - **One run per push** ([`PushCheckRun`]) — `<git home>/push-checks/<nonce>/`
 //!   (0700) holding `policy`, written by serve: the nonce, the request id,
 //!   the language, the storage root, the repository id, git's binary and
-//!   home, the blob size limit. receive-pack gets `FORGE_PUSH_CHECK_DIR`
+//!   home, the scan's limits ([`ScanLimits`]). receive-pack gets `FORGE_PUSH_CHECK_DIR`
 //!   (that directory) and `FORGE_PUSH_CHECK_EXE` (the forge binary) in its
 //!   cleared environment; the hook inherits them. The hook holds no
 //!   secret and connects to no database.
@@ -33,12 +36,13 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError, Lang};
 
 use crate::command::{Git, GitCommand, GitConfig};
-use crate::push_scan::{Finding, FindingKind, Quarantine, ScanLimits, ScanReport};
+use crate::push_scan::{Finding, FindingKind, Quarantine, ScanLimits, ScanReport, Waiver};
 use crate::storage::StorageRoot;
 use crate::upload_request::is_object_id;
 
@@ -71,7 +75,30 @@ pub struct PushCheckPolicy {
     pub request_id: String,
     pub lang: Lang,
     pub repo_id: RepoId,
-    pub max_blob_bytes: u64,
+    pub limits: ScanLimits,
+}
+
+/// The forge binary as the hook script runs it: absolute, UTF-8, without
+/// the Windows verbatim prefix (`\\?\`, which git for Windows' sh cannot
+/// run), forward slashes on Windows. Anything else is `FG-GIT-0023
+/// reason=exe_unusable`.
+pub fn hook_exe(exe: &Path) -> Result<String, ForgeError> {
+    let Some(text) = exe.to_str().filter(|_| exe.is_absolute()) else {
+        return Err(failed("exe_unusable").with_context("detail", "not_absolute_utf8"));
+    };
+    let text = match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with(r"UNC\") => rest,
+        Some(_) => return Err(failed("exe_unusable").with_context("detail", "unc_path")),
+        None => text,
+    };
+    if text.contains(['"', '$', '`', '\n']) {
+        return Err(failed("exe_unusable").with_context("detail", "shell_characters"));
+    }
+    Ok(if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.to_owned()
+    })
 }
 
 /// One armed push (serve's side; see the module docs).
@@ -140,7 +167,35 @@ impl Git {
         self.config().home.join("push-hooks")
     }
 
-    /// Arm the checks for one push: the hook script in place, a fresh run
+    /// Write the hook script when missing, then verify it (serve's start).
+    /// A different script or another entry already there is an error: an
+    /// operator moves the directory aside (runbook push-checks).
+    pub fn install_push_hook(&self) -> Result<(), ForgeError> {
+        let hooks = self.push_hooks_dir();
+        let bad = |detail: &'static str| hooks_dir_error(&hooks, detail);
+        crate::smart_http::ensure_private_dir(&hooks)
+            .map_err(|e| bad("create_failed").with_source(e))?;
+        let script = hooks.join(HOOK_NAME);
+        match std::fs::symlink_metadata(&script) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let tmp = self
+                    .config()
+                    .home
+                    .join(format!("push-hook-{}.tmp", uuid::Uuid::new_v4().simple()));
+                write_private(&tmp, HOOK_SCRIPT.as_bytes())
+                    .map_err(|e| bad("create_failed").with_source(e))?;
+                if let Err(e) = std::fs::rename(&tmp, &script) {
+                    let _ = std::fs::remove_file(&tmp); // ignore: the rename error is reported
+                    return Err(bad("create_failed").with_source(e));
+                }
+            }
+            Err(e) => return Err(bad("unreadable").with_source(e)),
+        }
+        verify_hook(&hooks)
+    }
+
+    /// Arm the checks for one push: the hook script verified, a fresh run
     /// directory with the policy. `exe`: the forge binary (`forge hook
     /// pre-receive`).
     pub fn push_check_run(
@@ -164,16 +219,8 @@ impl Git {
                 .with_source(e)
         })?;
         let hooks = self.push_hooks_dir();
-        ensure_hook(&hooks, &dir)?;
-        let Some(exe) = exe.to_str().filter(|_| exe.is_absolute()) else {
-            return Err(failed("run_dir").with_context("detail", "exe_not_absolute_utf8"));
-        };
-        // git for Windows runs the hook with its sh: forward slashes.
-        let exe = if cfg!(windows) {
-            exe.replace('\\', "/")
-        } else {
-            exe.to_owned()
-        };
+        verify_hook(&hooks)?;
+        let exe = hook_exe(exe)?;
         let mut text = String::new();
         let mut put = |k: &str, v: &str| {
             let _ = writeln!(text, "{k}\t{}", one_line(v)); // ignore: writing to a String cannot fail
@@ -186,7 +233,14 @@ impl Git {
         put("repo_id", &policy.repo_id.get().to_string());
         put("git_bin", &self.config().bin.to_string_lossy());
         put("git_home", &home.to_string_lossy());
-        put("max_blob_bytes", &policy.max_blob_bytes.to_string());
+        let l = &policy.limits;
+        put("max_blob_bytes", &l.max_blob_bytes.to_string());
+        put("secret_blob_max", &l.secret_blob_max.to_string());
+        put("max_scan_bytes", &l.max_scan_bytes.to_string());
+        put("max_objects", &l.max_objects.to_string());
+        put("timeout_ms", &l.timeout.as_millis().to_string());
+        put("size_timeout_ms", &l.size_timeout.as_millis().to_string());
+        put("max_findings", &l.max_findings.to_string());
         write_private(&dir.join("policy"), text.as_bytes()).map_err(|e| {
             failed("run_dir")
                 .with_context("detail", "policy_write")
@@ -247,19 +301,23 @@ impl PushCheckRun {
     }
 }
 
-/// The hook script in place: the directory a real directory holding
-/// exactly [`HOOK_SCRIPT`] as `pre-receive` (written when missing, through
-/// a temporary file in `scratch` and a rename).
-fn ensure_hook(hooks: &Path, scratch: &Path) -> Result<(), ForgeError> {
-    let bad = |detail: &'static str| {
-        ForgeError::new(ErrorCode::GitUnavailable)
-            .with_context("reason", "hooks_dir")
-            .with_context("detail", detail)
-            .with_context("path", hooks.display())
+fn hooks_dir_error(hooks: &Path, detail: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::GitUnavailable)
+        .with_context("reason", "hooks_dir")
+        .with_context("detail", detail)
+        .with_context("path", hooks.display())
+}
+
+/// The hooks directory as forge wrote it: a real directory (not writable
+/// by group or others) holding exactly [`HOOK_SCRIPT`] as `pre-receive`,
+/// executable by its owner (Unix). Read only — pushes never write it.
+fn verify_hook(hooks: &Path) -> Result<(), ForgeError> {
+    let bad = |detail: &'static str| hooks_dir_error(hooks, detail);
+    let meta = match std::fs::symlink_metadata(hooks) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(bad("push_hook_missing")),
+        Err(e) => return Err(bad("unreadable").with_source(e)),
     };
-    crate::smart_http::ensure_private_dir(hooks)
-        .map_err(|e| bad("create_failed").with_source(e))?;
-    let meta = std::fs::symlink_metadata(hooks).map_err(|e| bad("unreadable").with_source(e))?;
     if !meta.is_dir() {
         return Err(bad("not_a_directory"));
     }
@@ -270,30 +328,37 @@ fn ensure_hook(hooks: &Path, scratch: &Path) -> Result<(), ForgeError> {
             return Err(bad("insecure_permissions"));
         }
     }
-    let script = hooks.join(HOOK_NAME);
     for entry in std::fs::read_dir(hooks).map_err(|e| bad("unreadable").with_source(e))? {
         let entry = entry.map_err(|e| bad("unreadable").with_source(e))?;
         if entry.file_name() != OsStr::new(HOOK_NAME) {
             return Err(bad("unexpected_entry"));
         }
     }
-    match std::fs::symlink_metadata(&script) {
-        Ok(m) if m.is_file() => {
-            let text = read_small(&script).map_err(|e| bad("unreadable").with_source(e))?;
-            if text != HOOK_SCRIPT {
-                return Err(bad("push_hook_mismatch"));
-            }
-            Ok(())
+    let script = hooks.join(HOOK_NAME);
+    let meta = match std::fs::symlink_metadata(&script) {
+        Ok(m) if m.is_file() => m,
+        Ok(_) => return Err(bad("push_hook_mismatch")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(bad("push_hook_missing")),
+        Err(e) => return Err(bad("unreadable").with_source(e)),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = meta.permissions().mode();
+        if mode & 0o100 == 0 {
+            return Err(bad("push_hook_not_executable"));
         }
-        Ok(_) => Err(bad("push_hook_mismatch")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let tmp = scratch.join("pre-receive.tmp");
-            write_private(&tmp, HOOK_SCRIPT.as_bytes())
-                .map_err(|e| bad("create_failed").with_source(e))?;
-            std::fs::rename(&tmp, &script).map_err(|e| bad("create_failed").with_source(e))
+        if mode & 0o022 != 0 {
+            return Err(bad("insecure_permissions"));
         }
-        Err(e) => Err(bad("unreadable").with_source(e)),
     }
+    #[cfg(not(unix))]
+    let _ = meta;
+    let text = read_small(&script).map_err(|e| bad("unreadable").with_source(e))?;
+    if text != HOOK_SCRIPT {
+        return Err(bad("push_hook_mismatch"));
+    }
+    Ok(())
 }
 
 /// Write a new file readable (and, for the hook, runnable) by the owner
@@ -357,7 +422,7 @@ struct ReadPolicy {
     repo_id: RepoId,
     git_bin: PathBuf,
     git_home: PathBuf,
-    max_blob_bytes: u64,
+    limits: ScanLimits,
 }
 
 fn read_policy(dir: &Path) -> Result<ReadPolicy, ForgeError> {
@@ -385,10 +450,27 @@ fn read_policy(dir: &Path) -> Result<ReadPolicy, ForgeError> {
         repo_id: RepoId::new(get("repo_id")?.parse().map_err(|_| invalid("repo_id"))?),
         git_bin: PathBuf::from(get("git_bin")?),
         git_home: PathBuf::from(get("git_home")?),
-        max_blob_bytes: get("max_blob_bytes")?
-            .parse()
-            .map_err(|_| invalid("max_blob_bytes"))?,
+        limits: ScanLimits {
+            max_blob_bytes: number(&get, "max_blob_bytes")?,
+            secret_blob_max: number(&get, "secret_blob_max")?,
+            max_scan_bytes: number(&get, "max_scan_bytes")?,
+            max_objects: usize::try_from(number(&get, "max_objects")?)
+                .map_err(|_| invalid("max_objects"))?,
+            timeout: Duration::from_millis(number(&get, "timeout_ms")?),
+            size_timeout: Duration::from_millis(number(&get, "size_timeout_ms")?),
+            max_findings: usize::try_from(number(&get, "max_findings")?)
+                .map_err(|_| invalid("max_findings"))?,
+        },
     })
+}
+
+fn number(
+    get: &impl Fn(&'static str) -> Result<String, ForgeError>,
+    key: &'static str,
+) -> Result<u64, ForgeError> {
+    get(key)?
+        .parse()
+        .map_err(|_| failed("policy_invalid").with_context("detail", key))
 }
 
 /// The new tips of git's update lines (`<old> <new> <ref>`; deletes left
@@ -464,13 +546,8 @@ async fn check(policy: &ReadPolicy, env: &HookEnv, stdin: &[u8]) -> Result<ScanR
     cfg.max_output_bytes = HOOK_MAX_OUTPUT;
     cfg.max_concurrency = 2;
     let git = Git::new(cfg);
-    git.scan_push(
-        &repo,
-        quarantine.as_ref(),
-        &tips,
-        &ScanLimits::new(policy.max_blob_bytes),
-    )
-    .await
+    git.scan_push(&repo, quarantine.as_ref(), &tips, &policy.limits)
+        .await
 }
 
 fn failed_outcome(e: &ForgeError) -> HookOutcome {
@@ -510,7 +587,11 @@ fn decide(policy: &ReadPolicy, report: ScanReport) -> (HookOutcome, HookExit) {
         for code in codes {
             let _ = writeln!(stderr, "{} {}", code.id(), code.user_message(lang)); // ignore: String
             for f in report.findings.iter().filter(|f| f.kind.code() == code) {
-                let _ = writeln!(stderr, "  {}", finding_line(f, policy.max_blob_bytes));
+                let _ = writeln!(
+                    stderr,
+                    "  {}",
+                    finding_line(f, policy.limits.max_blob_bytes)
+                );
                 // ignore: String
             }
         }
@@ -586,7 +667,8 @@ fn write_result(dir: &Path, nonce: &str, o: &HookOutcome) -> Result<(), ForgeErr
     let _ = write!(
         text,
         "version\t{VERSION}\nnonce\t{nonce}\nverdict\t{}\nreason\t{}\ndetail\t{}\ncause_code\t{}\n\
-         incomplete\t{}\nobjects\t{}\nblobs_scanned\t{}\nbytes_scanned\t{}\nallowed\t{}\ntotal_findings\t{}\n",
+         incomplete\t{}\nobjects\t{}\nblobs_scanned\t{}\nbytes_scanned\t{}\nallowed\t{}\ntotal_findings\t{}\n\
+         pack_objects\t{}\nskipped_large\t{}\nskipped_binary\t{}\n",
         o.verdict.as_str(),
         opt(&o.reason),
         opt(&o.detail),
@@ -597,7 +679,19 @@ fn write_result(dir: &Path, nonce: &str, o: &HookOutcome) -> Result<(), ForgeErr
         r.bytes_scanned,
         r.allowed,
         r.total_findings,
+        r.pack_objects,
+        r.skipped_large,
+        r.skipped_binary,
     ); // ignore: writing to a String cannot fail
+    for w in &r.waivers {
+        let _ = writeln!(
+            text,
+            "waiver\t{}\t{}\t{}",
+            one_line(&w.rule),
+            w.blob,
+            one_line(&w.path)
+        ); // ignore: as above
+    }
     for f in &r.findings {
         let (kind, detail) = match &f.kind {
             FindingKind::LargeBlob { size } => ("large_blob", size.to_string()),
@@ -644,8 +738,27 @@ fn parse_result(text: &str) -> Result<(String, HookOutcome), ForgeError> {
         "objects_cap" => Some("objects_cap"),
         "bytes_cap" => Some("bytes_cap"),
         "deadline" => Some("deadline"),
+        "large_blob_unscanned" => Some("large_blob_unscanned"),
         _ => return Err(invalid("incomplete")),
     };
+    let mut waivers = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("waiver\t") else {
+            continue;
+        };
+        let mut p = rest.splitn(3, '\t');
+        let (Some(rule), Some(blob), Some(path)) = (p.next(), p.next(), p.next()) else {
+            return Err(invalid("waiver"));
+        };
+        if !is_object_id(blob) {
+            return Err(invalid("waiver"));
+        }
+        waivers.push(Waiver {
+            rule: rule.to_owned(),
+            blob: blob.to_owned(),
+            path: path.to_owned(),
+        });
+    }
     let mut findings = Vec::new();
     for line in text.lines() {
         let Some(rest) = line.strip_prefix("finding\t") else {
@@ -688,6 +801,10 @@ fn parse_result(text: &str) -> Result<(String, HookOutcome), ForgeError> {
             blobs_scanned: count("blobs_scanned")?,
             bytes_scanned: num("bytes_scanned")?,
             allowed: count("allowed")?,
+            waivers,
+            pack_objects: count("pack_objects")?,
+            skipped_large: count("skipped_large")?,
+            skipped_binary: count("skipped_binary")?,
             incomplete,
         },
     };

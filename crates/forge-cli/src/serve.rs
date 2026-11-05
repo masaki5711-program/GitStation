@@ -46,7 +46,7 @@ use forge_core::config::{Config, DatabaseConfig, GitHttpConfig};
 use forge_core::readiness::ReadinessProbe;
 use forge_core::{Authenticator, SessionAuthenticator};
 use forge_db::{Db, MIGRATOR};
-use forge_errors::ForgeError;
+use forge_errors::{ErrorCode, ForgeError};
 use forge_git::{Git, GitConfig, StorageRoot};
 use forge_web::{
     AppConfig, AppState, BoundedAuthenticator, GitHttpLimits, Lists, Lookups, ServerLimits,
@@ -77,7 +77,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // file stops the start.
     let webhook_keys = cfg.webhook.secret_keys()?.map(Arc::new);
     block_on(async {
-        let smart_http = smart_http(storage, &cfg.git_http);
+        let smart_http = smart_http(storage, &cfg.git_http)?;
         forge_git::version::detect(&smart_http.git).await?;
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
@@ -245,7 +245,7 @@ const PUSH_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(9
 /// git for the Smart HTTP routes: `git` from `PATH`, HOME = the storage
 /// root (only forge writes it; no user or shared config applies), stream
 /// pools and timeouts from `git.http.*`.
-fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> SmartHttp {
+fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> Result<SmartHttp, ForgeError> {
     let mut git = GitConfig::new("git", storage.path());
     // u32 → usize: lossless on the supported (32/64-bit) targets.
     git.max_streams = usize::try_from(limits.max_streams).unwrap_or(usize::MAX);
@@ -255,20 +255,14 @@ fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> SmartHttp {
     git.stream_timeout_total = limits.timeout;
     let smart = SmartHttp::new(Git::new(git), storage, GitHttpLimits::from_config(limits));
     // M3 X8: the push checks run this binary's `forge hook pre-receive`.
-    // Without a path to it, pushes keep the empty hooks directory and the
-    // start-up log says so (FG-GIT-0023 `reason=exe_unknown`, an alert).
-    match std::env::current_exe() {
-        Ok(exe) => smart.with_push_checks(exe),
-        Err(e) => {
-            forge_core::telemetry::log_failure(
-                &forge_errors::ForgeError::new(forge_errors::ErrorCode::PushCheckFailed)
-                    .with_context("reason", "exe_unknown")
-                    .with_source(e),
-                &forge_core::RequestId::generate(),
-            );
-            smart
-        }
-    }
+    // Without a usable path to it, or with a hooks directory forge did not
+    // write, the server does not start (X8 review: never push unchecked).
+    let exe = std::env::current_exe().map_err(|e| {
+        ForgeError::new(ErrorCode::PushCheckFailed)
+            .with_context("reason", "exe_unknown")
+            .with_source(e)
+    })?;
+    smart.with_push_checks(exe)
 }
 
 /// The server's state: the database as readiness probe and as token and

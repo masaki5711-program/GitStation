@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-The pre-receive hook (M3 X8) found a high-confidence secret pattern in a text blob the push brings: `private_key` (a PEM / OpenSSH / PGP private key header), `aws_access_key_id`, `github_token`, `gitlab_token`, `slack_token`, `google_api_key`, `gitstation_token` (`fgp_` / `gss_`) or `gitstation_webhook_secret` (`whsec_`). Placeholder bodies (few distinct characters, `EXAMPLE`) do not match; a file containing the marker `forge:allow-secret` is a reviewed false positive and is accepted (counted as `allowed`). Blobs above 1 MiB and binary blobs (a NUL in the first 8000 bytes) are not scanned for secrets. git refused the whole push; the quarantined objects are discarded, no ref changed — but the secret has left the pusher's machine.
+The pre-receive hook (M3 X8) found a high-confidence secret pattern in a text blob the push brings: `private_key` (a PEM / OpenSSH / PGP private key header), `aws_access_key_id`, `github_token`, `gitlab_token`, `slack_token`, `google_api_key`, `gitstation_token` (`fgp_` / `gss_`) or `gitstation_webhook_secret` (`whsec_`). Placeholder bodies (few distinct characters, `EXAMPLE`) do not match; a file containing the marker `forge:allow-secret` is a reviewed false positive and is accepted (counted as `allowed`; serve logs each waiver as `forge.git.push_check_waived` with `rule`, `path`, `blob`). Blobs above 1 MiB and binary blobs (a NUL in the first 8000 bytes) are not scanned for secrets. git refused the whole push; the quarantined objects are discarded, no ref changed — but the secret has left the pusher's machine.
 
 ## 調べ方 (diagnosis)
 

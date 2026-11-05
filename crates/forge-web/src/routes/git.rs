@@ -129,7 +129,7 @@ pub struct SmartHttp {
     /// The forge binary the pre-receive push checks run (`forge hook
     /// pre-receive`, M3 X8). `None`: no hook (receive-pack keeps the empty
     /// hooks directory) — `forge serve` always sets it.
-    pub(crate) push_checks: Option<PathBuf>,
+    pub(crate) push_checks: Option<PushChecks>,
     /// The browse API and the raw / archive routes (M2 MR7): the same git
     /// and storage, the browse limits, the per-repository cap and the ref
     /// cache every push drops.
@@ -180,6 +180,13 @@ impl PushTasks {
             }
         }
     }
+}
+
+/// The push checks' binary and (tests) limits.
+#[derive(Debug, Clone)]
+pub(crate) struct PushChecks {
+    pub(crate) exe: PathBuf,
+    pub(crate) limits: Option<forge_git::push_scan::ScanLimits>,
 }
 
 /// The push's protection snapshot and its recorder (forge-core traits;
@@ -263,10 +270,23 @@ impl SmartHttp {
 
     /// Run the push checks (M3 X8: large files, secrets) in receive-pack's
     /// pre-receive hook: `exe` is the forge binary (absolute) whose `hook
-    /// pre-receive` the hook script runs.
+    /// pre-receive` the hook script runs. Writes the hook script once
+    /// (`Git::install_push_hook`); an unusable binary path or a hooks
+    /// directory forge did not write is an error — `forge serve` then does
+    /// not start (X8 review: never run pushes unchecked).
+    pub fn with_push_checks(mut self, exe: PathBuf) -> Result<Self, ForgeError> {
+        forge_git::push_hook::hook_exe(&exe)?;
+        self.git.install_push_hook()?;
+        self.push_checks = Some(PushChecks { exe, limits: None });
+        Ok(self)
+    }
+
+    /// Other scan limits than the defaults (tests: tiny caps).
     #[must_use]
-    pub fn with_push_checks(mut self, exe: PathBuf) -> Self {
-        self.push_checks = Some(exe);
+    pub fn with_push_check_limits(mut self, limits: forge_git::push_scan::ScanLimits) -> Self {
+        if let Some(checks) = &mut self.push_checks {
+            checks.limits = Some(limits);
+        }
         self
     }
 }

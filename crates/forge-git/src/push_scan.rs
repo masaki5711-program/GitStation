@@ -2,8 +2,26 @@
 //! brings, read inside git's quarantine by the pre-receive hook, checked
 //! for blobs over the size limit and for secrets ([`crate::secret_scan`]).
 //!
-//! "What a push brings" is every object reachable from its new tips and
-//! from no ref before the push:
+//! **The size check is complete or it refuses** (X8 review: a scan that
+//! stopped at a cap must not let a large blob through). It streams every
+//! object git received for this push — the quarantine's own object
+//! directory, without the repository's objects as alternates:
+//!
+//! ```text
+//! GIT_OBJECT_DIRECTORY=<quarantine> git cat-file --batch-all-objects --unordered \
+//!     --batch-check='%(objectname) %(objecttype) %(objectsize)'
+//! ```
+//!
+//! read line by line (no output held in memory; only the blobs over the
+//! limit are kept). It has its own bound ([`ScanLimits::size_timeout`]);
+//! any failure or timeout is an error (FG-GIT-0023, the push is refused).
+//! A blob only an annotated tag or a tree names is sized like any other.
+//! Without a quarantine git received no pack (git ≥ 2.38, which forge
+//! requires, always quarantines a received pack): nothing new to size.
+//!
+//! **The secret scan may stop early** (fail open with a warn). It looks at
+//! every object reachable from the new tips and from no ref before the
+//! push:
 //!
 //! ```text
 //! git rev-list --objects --stdin --not --all        (tips on stdin)
@@ -23,27 +41,32 @@
 //! passed to these commands only; `GIT_QUARANTINE_PATH` is set too, so git
 //! itself refuses any ref update from them.
 //!
-//! Bounds ([`ScanLimits`]): one deadline for the whole scan, an object
-//! count cap and a byte cap of content read for the secret scan. Hitting
-//! one makes the report incomplete (`objects_cap`, `bytes_cap`,
-//! `deadline`) — the caller lets the push through with a warn
-//! (FG-GIT-0024, fail open); a git failure other than a timeout is an
-//! error (FG-GIT-0023, fail closed). Object ids reach git only on stdin,
-//! validated.
+//! Bounds of the secret scan ([`ScanLimits`]): one deadline, an object
+//! count cap and a byte cap of content read. Hitting one, or a text blob
+//! too large to scan (over 1 MiB, under the size limit), makes the report
+//! incomplete (`objects_cap`, `bytes_cap`, `deadline`,
+//! `large_blob_unscanned`) — the caller lets the push through with a warn
+//! (FG-GIT-0024). Binary blobs (a NUL in the first 8000 bytes) are counted
+//! (`skipped_binary`) but do not make it incomplete: the rules are text
+//! patterns. A git failure other than a timeout is an error (FG-GIT-0023,
+//! fail closed). Object ids reach git only on stdin, validated.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use forge_errors::{ErrorCode, ForgeError};
+use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::time::Instant;
 
 use crate::command::{Git, GitCommand};
 use crate::secret_scan::{self, SecretScan};
 use crate::upload_request::is_object_id;
 
-/// The bound of the whole scan.
+/// The bound of the secret scan.
 pub const SCAN_TIMEOUT: Duration = Duration::from_secs(60);
+/// The bound of the size check (complete, or the push is refused).
+pub const SIZE_TIMEOUT: Duration = Duration::from_secs(120);
 /// The most new objects looked at.
 pub const MAX_OBJECTS: usize = 500_000;
 /// Blobs larger than this are not scanned for secrets (only sized).
@@ -65,7 +88,10 @@ pub struct ScanLimits {
     pub secret_blob_max: u64,
     pub max_scan_bytes: u64,
     pub max_objects: usize,
+    /// The secret scan's bound (past it: incomplete, accepted).
     pub timeout: Duration,
+    /// The size check's bound (past it: refused).
+    pub size_timeout: Duration,
     pub max_findings: usize,
 }
 
@@ -78,6 +104,7 @@ impl ScanLimits {
             max_scan_bytes: MAX_SCAN_BYTES,
             max_objects: MAX_OBJECTS,
             timeout: SCAN_TIMEOUT,
+            size_timeout: SIZE_TIMEOUT,
             max_findings: MAX_FINDINGS,
         }
     }
@@ -133,10 +160,27 @@ pub struct ScanReport {
     /// Text blobs scanned for secrets, and their bytes.
     pub blobs_scanned: usize,
     pub bytes_scanned: u64,
-    /// Blobs whose finding the allow marker waived.
+    /// Blobs whose finding the allow marker waived (all counted; at most
+    /// `max_findings` kept in `waivers`).
     pub allowed: usize,
-    /// Why the scan stopped early (`objects_cap`, `bytes_cap`, `deadline`).
+    pub waivers: Vec<Waiver>,
+    /// Objects git received for the push (the size check's count).
+    pub pack_objects: usize,
+    /// Text blobs over `secret_blob_max` (not scanned for secrets) and
+    /// binary blobs (not scanned).
+    pub skipped_large: usize,
+    pub skipped_binary: usize,
+    /// Why the secret scan stopped early or left something out
+    /// (`objects_cap`, `bytes_cap`, `deadline`, `large_blob_unscanned`).
     pub incomplete: Option<&'static str>,
+}
+
+/// A finding the allow marker waived (serve logs each with its path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Waiver {
+    pub rule: String,
+    pub blob: String,
+    pub path: String,
 }
 
 /// git's quarantine of the push being received, checked against the
@@ -227,57 +271,176 @@ impl Git {
         if tips.is_empty() {
             return Ok(report);
         }
+        // 1. Sizes: every received object, complete or refused.
+        let (large, total_large) = self
+            .size_check(repo, quarantine, limits, &mut report)
+            .await?;
+        // 2. Secrets: the new objects with their names (may stop early).
         let scan = Scan {
             git: self,
             repo,
             quarantine,
             deadline: Instant::now() + limits.timeout,
         };
-        let Some(listed) = scan.list(tips, limits, &mut report).await? else {
-            return Ok(report);
-        };
+        let listed = scan
+            .list(tips, limits, &mut report)
+            .await?
+            .unwrap_or_default();
         report.objects = listed.len();
-        let Some(sized) = scan.sizes(&listed).await? else {
-            report.incomplete = Some("deadline");
-            return Ok(report);
-        };
-        // Sizes first (cheap and complete), then the secret scan.
         let mut found: Vec<(usize, FindingKind)> = Vec::new();
-        let mut candidates: Vec<(usize, u64)> = Vec::new();
-        let mut planned = 0u64;
-        for (i, size) in sized {
-            if size > limits.max_blob_bytes {
-                found.push((i, FindingKind::LargeBlob { size }));
-            } else if size <= limits.secret_blob_max {
-                if planned.saturating_add(size) > limits.max_scan_bytes {
-                    report.incomplete.get_or_insert("bytes_cap");
-                    continue;
+        if !listed.is_empty() {
+            match scan.sizes(&listed).await? {
+                None => {
+                    report.incomplete.get_or_insert("deadline");
                 }
-                planned += size;
-                candidates.push((i, size));
+                Some(sized) => {
+                    let mut candidates: Vec<(usize, u64)> = Vec::new();
+                    let mut planned = 0u64;
+                    for (i, size) in sized {
+                        if size > limits.max_blob_bytes {
+                            // A size finding already (step 1).
+                        } else if size > limits.secret_blob_max {
+                            report.skipped_large += 1;
+                            report.incomplete.get_or_insert("large_blob_unscanned");
+                        } else if planned.saturating_add(size) > limits.max_scan_bytes {
+                            report.incomplete.get_or_insert("bytes_cap");
+                        } else {
+                            planned += size;
+                            candidates.push((i, size));
+                        }
+                    }
+                    scan.secrets(&listed, &candidates, &mut found, limits, &mut report)
+                        .await?;
+                }
             }
         }
-        scan.secrets(&listed, &candidates, &mut found, &mut report)
-            .await?;
         found.sort_by_key(|(i, _)| *i);
-        report.total_findings = found.len();
-        found.truncate(limits.max_findings);
-        let mut findings: Vec<Finding> = found
+        let path_of = |id: &str| {
+            listed
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| clean_path(&l.path))
+                .unwrap_or_default()
+        };
+        let mut findings: Vec<Finding> = large
             .into_iter()
-            .filter_map(|(i, kind)| {
-                listed.get(i).map(|l| Finding {
+            .map(|(blob, size)| Finding {
+                kind: FindingKind::LargeBlob { size },
+                path: path_of(&blob),
+                blob,
+                commit: None,
+            })
+            .collect();
+        report.total_findings = total_large + found.len();
+        for (i, kind) in found {
+            if findings.len() >= limits.max_findings {
+                break;
+            }
+            if let Some(l) = listed.get(i) {
+                findings.push(Finding {
                     kind,
                     blob: l.id.clone(), // clone: the report owns its copy
                     path: clean_path(&l.path),
                     commit: None,
-                })
-            })
-            .collect();
+                });
+            }
+        }
         if !findings.is_empty() {
             scan.attribute(tips, &mut findings).await;
         }
         report.findings = findings;
         Ok(report)
+    }
+}
+
+impl Git {
+    /// Every object git received for the push, streamed: the blobs over
+    /// the limit (at most `max_findings` kept, all counted). Complete or an
+    /// error — never partial (see the module docs).
+    async fn size_check(
+        &self,
+        repo: &Path,
+        quarantine: Option<&Quarantine>,
+        limits: &ScanLimits,
+        report: &mut ScanReport,
+    ) -> Result<(Vec<(String, u64)>, usize), ForgeError> {
+        let Some(q) = quarantine else {
+            return Ok((Vec::new(), 0));
+        };
+        let size_failed = |detail: &'static str| {
+            ForgeError::new(ErrorCode::PushCheckFailed)
+                .with_context("reason", "size_check_failed")
+                .with_context("detail", detail)
+        };
+        let mut stream = self
+            .command("cat-file")
+            .repo(repo)
+            .env("GIT_OBJECT_DIRECTORY", q.objects.clone().into_os_string())
+            .env("GIT_QUARANTINE_PATH", q.objects.clone().into_os_string())
+            .arg("--batch-all-objects")
+            .arg("--unordered")
+            .arg("--batch-check=%(objectname) %(objecttype) %(objectsize)")
+            .timeout(limits.size_timeout)
+            .idle_timeout(limits.size_timeout)
+            .spawn_stream("push-check")
+            .await
+            .map_err(|e| {
+                size_failed("spawn")
+                    .with_context("cause_code", e.code().id())
+                    .with_source(e)
+            })?;
+        drop(stream.take_stdin());
+        let Some(stdout) = stream.take_stdout() else {
+            return Err(size_failed("stdout_missing"));
+        };
+        let mut lines = BufReader::new(stdout);
+        let mut line = Vec::new();
+        let mut large = Vec::new();
+        let mut total = 0usize;
+        let mut read_error = None;
+        let mut unreadable = false;
+        loop {
+            line.clear();
+            match lines.read_until(b'\n', &mut line).await {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    read_error = Some(e);
+                    break;
+                }
+            }
+            let parsed = std::str::from_utf8(&line).ok().and_then(|text| {
+                let mut parts = text.trim_end().split(' ');
+                let (id, kind, size) = (parts.next()?, parts.next()?, parts.next()?);
+                let size: u64 = size.parse().ok()?;
+                is_object_id(id).then_some((id, kind, size))
+            });
+            let Some((id, kind, size)) = parsed else {
+                unreadable = true;
+                break;
+            };
+            report.pack_objects += 1;
+            if kind == "blob" && size > limits.max_blob_bytes {
+                total += 1;
+                if large.len() < limits.max_findings {
+                    large.push((id.to_owned(), size));
+                }
+            }
+        }
+        drop(lines);
+        // A timeout (FG-GIT-0002) or a failed git refuses the push here.
+        stream.finish().await.map_err(|e| {
+            size_failed("git")
+                .with_context("cause_code", e.code().id())
+                .with_source(e)
+        })?;
+        if let Some(e) = read_error {
+            return Err(size_failed("read").with_source(e));
+        }
+        if unreadable {
+            return Err(size_failed("unreadable"));
+        }
+        Ok((large, total))
     }
 }
 
@@ -422,6 +585,7 @@ impl Scan<'_> {
         listed: &[Listed],
         candidates: &[(usize, u64)],
         found: &mut Vec<(usize, FindingKind)>,
+        limits: &ScanLimits,
         report: &mut ScanReport,
     ) -> Result<(), ForgeError> {
         let mut rest = candidates;
@@ -463,8 +627,20 @@ impl Scan<'_> {
                             rule: rule.to_owned(),
                         },
                     )),
-                    SecretScan::Allowed(_) => report.allowed += 1,
-                    SecretScan::Clean | SecretScan::Binary => {}
+                    SecretScan::Allowed(rule) => {
+                        report.allowed += 1;
+                        if report.waivers.len() < limits.max_findings {
+                            if let Some(l) = listed.get(*i) {
+                                report.waivers.push(Waiver {
+                                    rule: rule.to_owned(),
+                                    blob: l.id.clone(), // clone: the report owns its copy
+                                    path: clean_path(&l.path),
+                                });
+                            }
+                        }
+                    }
+                    SecretScan::Binary => report.skipped_binary += 1,
+                    SecretScan::Clean => {}
                 }
             }
         }
@@ -502,15 +678,19 @@ impl Scan<'_> {
                 continue;
             }
             // `:<mode> <mode> <old> <new> <status>\t<path>`
-            let Some(new) = line
-                .strip_prefix(':')
-                .and_then(|l| l.split(['\t', ' ']).nth(3))
-            else {
+            let Some(raw) = line.strip_prefix(':') else {
+                continue;
+            };
+            let (head, path) = raw.split_once('\t').unwrap_or((raw, ""));
+            let Some(new) = head.split(' ').nth(3) else {
                 continue;
             };
             for f in findings.iter_mut() {
                 if f.commit.is_none() && f.blob == new {
                     f.commit = commit.map(str::to_owned);
+                    if f.path.is_empty() {
+                        f.path = clean_path(path.as_bytes());
+                    }
                 }
             }
         }

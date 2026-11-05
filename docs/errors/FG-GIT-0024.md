@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-The push checks (M3 X8) stopped at a bound and let the push through (fail open with a warn, ADR-0008 amendment X8): `reason=objects_cap` (more than 500 000 new objects, or the object list did not fit its output cap), `bytes_cap` (more than 256 MiB of text blobs to scan for secrets), `deadline` (the 60 s bound of the whole scan). The size check ran on every object listed before the bound; the secret scan covered what was read before it. A finding made before the bound still refuses the push (FG-GIT-0021 / 0022). Typical for an initial import of a large repository.
+The push checks (M3 X8) stopped at a bound and let the push through (fail open with a warn, ADR-0008 amendment X8): `reason=objects_cap` (more than 500 000 new objects, or the object list did not fit its output cap), `bytes_cap` (more than 256 MiB of text blobs to scan for secrets), `deadline` (the 60 s bound of the secret scan), `large_blob_unscanned` (a text blob over 1 MiB and under the size limit was not scanned for secrets; `skipped_large` counts them). Binary blobs are counted (`skipped_binary`) but do not make it incomplete: the rules are text patterns. Only the secret scan fails open: the size check is always complete (or the push is refused, FG-GIT-0023). A finding made before the bound still refuses the push (FG-GIT-0021 / 0022). Typical for an initial import of a large repository.
 
 ## 調べ方 (diagnosis)
 
-One warn log line with `error_code=FG-GIT-0024`, `request_id` and in `context`: `event=forge.git.push_checked`, `verdict=accepted`, `incomplete` (the reason), `objects`, `blobs_scanned`, `bytes_scanned`, `repo_id`. A complete accepted check logs the info event `forge.git.push_checked` instead. The pusher saw `remote: FG-GIT-0024 …`.
+One warn log line with `error_code=FG-GIT-0024`, `request_id` and in `context`: `event=forge.git.push_checked`, `verdict=accepted`, `incomplete` (the reason), `objects`, `pack_objects`, `blobs_scanned`, `bytes_scanned`, `skipped_large`, `skipped_binary`, `repo_id`. A complete accepted check logs the info event `forge.git.push_checked` instead. The pusher saw `remote: FG-GIT-0024 …`.
 
 ## 対処 (fix)
 
