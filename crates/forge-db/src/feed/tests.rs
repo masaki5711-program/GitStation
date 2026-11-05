@@ -377,7 +377,7 @@ async fn head(w: &World) -> i64 {
 // ── plan 02 §8.2: the regressions ──────────────────────────────────────
 
 /// A merge request closed without merging is in the feed with its work
-/// item (the dev_status part is I1d's).
+/// item, and (M3 I1d) the development status shows it closed.
 #[tokio::test]
 async fn closed_without_merge_is_returned_and_dev_status_closed() {
     let w = world().await;
@@ -409,6 +409,10 @@ async fn closed_without_merge_is_returned_and_dev_status_closed() {
             .and_then(|u| u.username.as_deref()),
         Some("alice")
     );
+    // M3 I1d, the development status part: still linked, shown closed.
+    let status = dev_status(&w, "PBI-12", MrStateFilter::All).await;
+    assert_eq!(iid_states(&status[0].1), [(mr.iid, "closed")]);
+    assert!(status[0].1.merge_requests[0].closed_at.is_some());
     w.t.drop_now().await;
 }
 
@@ -1554,5 +1558,273 @@ async fn the_batched_access_read_gives_each_binding_its_own_facts() {
     assert_eq!(facts(guest.project_id), Some((Some("guest"), false)));
     assert_eq!(facts(left.project_id), Some((None, false)));
     assert_eq!(facts(deleted.project_id), Some((Some("reporter"), true)));
+    w.t.drop_now().await;
+}
+
+// ── M3 I1d: the development status ─────────────────────────────────────
+
+/// The merge's end state (R4 needs git; the status reads only the rows):
+/// the merge request `merged` and its applied attempt.
+async fn mark_merged(w: &World, mr: &StoredMergeRequest) {
+    let id = mr.id.get();
+    let p = mr.project_id.get();
+    let sha = "c".repeat(40);
+    w.t.commit_audited(
+        ("project", p),
+        &[
+            format!(
+                "UPDATE forge.merge_requests SET state = 'merged', revision = revision + 1 \
+                 WHERE id = {id}"
+            ),
+            format!(
+                "INSERT INTO forge.merge_request_merges (merge_request_id, project_id, method, \
+                 requested_by, credential_kind, credential_id, request_id, head_sha, \
+                 target_branch, delete_source_branch) VALUES ({id}, {p}, 'merge_commit', {}, \
+                 'session', 1, 'req-merge', '{sha}', 'refs/heads/main', false)",
+                w.alice.get()
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'prepared', \
+                 expected_old = '{sha}', new_sha = '{sha}' WHERE merge_request_id = {id}"
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'executing', \
+                 executing_at = now() WHERE merge_request_id = {id}"
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'applied', \
+                 finished_at = '2026-11-04T05:06:07Z' WHERE merge_request_id = {id}"
+            ),
+        ],
+    )
+    .await;
+}
+
+/// A head on the merge request (as a version sets it) and its check runs.
+async fn head_with_runs(
+    w: &World,
+    mr: &StoredMergeRequest,
+    sha: &str,
+    runs: &[(&str, &str, Option<&str>)],
+) {
+    let p = mr.project_id.get();
+    let mut statements = vec![format!(
+        "UPDATE forge.merge_requests SET head_sha = '{sha}', revision = revision + 1 \
+         WHERE id = {}",
+        mr.id.get()
+    )];
+    for (name, status, conclusion) in runs {
+        let (conclusion, completed) = match conclusion {
+            Some(c) => (format!("'{c}'"), "now()"),
+            None => ("NULL".to_owned(), "NULL"),
+        };
+        statements.push(format!(
+            "INSERT INTO forge.check_runs (project_id, head_sha, name, status, conclusion, \
+             reported_by, request_id, completed_at) VALUES ({p}, '{sha}', '{name}', '{status}', \
+             {conclusion}, {}, 'req-check', {completed})",
+            w.sa.get()
+        ));
+    }
+    w.t.commit_audited(("project", p), &statements).await;
+}
+
+/// The development status of `reference` (every bound kanflow project),
+/// in the feed's decision.
+async fn dev_status(
+    w: &World,
+    reference: &str,
+    state: MrStateFilter,
+) -> Vec<(DevWorkItem, DevItemStatus)> {
+    let (mut snap, _, visible) = decided(w).await;
+    let items = snap
+        .bound_work_items(
+            &visible,
+            &forge_core::WorkItemRef::parse(reference).expect("ref"),
+            None,
+        )
+        .await
+        .expect("work items");
+    let ids: Vec<i64> = items.iter().filter_map(|i| i.id).collect();
+    let mut statuses = snap
+        .dev_status_of(&visible, &ids, state)
+        .await
+        .expect("status");
+    snap.close().await;
+    items
+        .into_iter()
+        .map(|i| {
+            let s = i.id.and_then(|id| statuses.remove(&id)).unwrap_or_default();
+            (i, s)
+        })
+        .collect()
+}
+
+fn iid_states(status: &DevItemStatus) -> Vec<(i64, &str)> {
+    status
+        .merge_requests
+        .iter()
+        .map(|m| (m.iid, m.state.as_str()))
+        .collect()
+}
+
+/// Plan 11 I1 test column: open, merged and closed merge requests are all
+/// listed (`state=all`), newest first, with their times and branches; a
+/// state narrows them.
+#[tokio::test]
+async fn dev_status_returns_open_merged_closed() {
+    let w = world().await;
+    let p = w.web.project_id;
+    let open = open_mr(&w, p, "PBI-12 open one", "open-one").await;
+    let closed = open_mr(&w, p, "PBI-12 closed one", "closed-one").await;
+    let merged = open_mr(&w, p, "PBI-12 merged one", "merged-one").await;
+    close_mr(&w, &closed, "req-close-closed").await;
+    mark_merged(&w, &merged).await;
+    drain(&w.t).await;
+    let all = dev_status(&w, "PBI-12", MrStateFilter::All).await;
+    assert_eq!(all.len(), 1);
+    let (item, status) = &all[0];
+    assert_eq!(
+        (
+            item.provider.as_str(),
+            item.external_project_id.as_str(),
+            item.reference.as_str()
+        ),
+        ("kanflow", "kf-1", "PBI-12")
+    );
+    assert_eq!(
+        iid_states(status),
+        [
+            (merged.iid, "merged"),
+            (closed.iid, "closed"),
+            (open.iid, "open")
+        ]
+    );
+    let of = |iid: i64| {
+        status
+            .merge_requests
+            .iter()
+            .find(|m| m.iid == iid)
+            .expect("listed")
+    };
+    assert_eq!(
+        of(merged.iid).merged_at.as_deref(),
+        Some("2026-11-04T05:06:07Z")
+    );
+    assert!(of(closed.iid).closed_at.is_some() && of(closed.iid).merged_at.is_none());
+    assert!(of(open.iid).merged_at.is_none() && of(open.iid).closed_at.is_none());
+    assert_eq!(of(open.iid).project_path.as_deref(), Some("alice/web"));
+    assert_eq!(
+        (
+            of(open.iid).source_branch.as_str(),
+            of(open.iid).target_branch.as_str()
+        ),
+        ("open-one", "main")
+    );
+    assert_eq!(of(open.iid).link_source, "auto");
+    assert!(!status.truncated);
+    for (state, want) in [
+        (MrStateFilter::Open, open.iid),
+        (MrStateFilter::Closed, closed.iid),
+        (MrStateFilter::Merged, merged.iid),
+    ] {
+        let narrowed = dev_status(&w, "PBI-12", state).await;
+        let iids: Vec<i64> = narrowed[0].1.merge_requests.iter().map(|m| m.iid).collect();
+        assert_eq!(iids, [want], "{state:?}");
+    }
+    w.t.drop_now().await;
+}
+
+/// Plan 11 I1 test column: a head without a check run has no runs — the
+/// summary `none`, never `success` — while a head whose run succeeded
+/// lists it; another head's runs never show.
+#[tokio::test]
+async fn no_checks_is_distinct_from_success() {
+    let w = world().await;
+    let p = w.web.project_id;
+    let bare = open_mr(&w, p, "PBI-5 no checks", "bare").await;
+    let green = open_mr(&w, p, "PBI-5 green", "green").await;
+    let red = open_mr(&w, p, "PBI-5 red", "red").await;
+    head_with_runs(&w, &bare, &"1".repeat(40), &[]).await;
+    head_with_runs(
+        &w,
+        &green,
+        &"2".repeat(40),
+        &[("ci/gates", "completed", Some("success"))],
+    )
+    .await;
+    head_with_runs(
+        &w,
+        &red,
+        &"3".repeat(40),
+        &[
+            ("ci/gates", "completed", Some("success")),
+            ("ci/lint", "in_progress", None),
+        ],
+    )
+    .await;
+    drain(&w.t).await;
+    let all = dev_status(&w, "PBI-5", MrStateFilter::All).await;
+    let of = |iid: i64| {
+        all[0]
+            .1
+            .merge_requests
+            .iter()
+            .find(|m| m.iid == iid)
+            .expect("listed")
+    };
+    assert!(of(bare.iid).checks.is_empty(), "no run reported");
+    assert_eq!(
+        of(green.iid).checks,
+        [DevCheckRun {
+            name: "ci/gates".to_owned(),
+            status: forge_core::checks::CheckStatus::Completed,
+            conclusion: Some(forge_core::checks::CheckConclusion::Success),
+        }]
+    );
+    let names: Vec<&str> = of(red.iid).checks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["ci/gates", "ci/lint"]);
+    assert_ne!(of(bare.iid).checks, of(green.iid).checks);
+    w.t.drop_now().await;
+}
+
+/// The paged walk: every work item of the bound kanflow projects once, in
+/// id order, `limit + 1` read to tell whether more remain; an unbound
+/// kanflow project's items never show.
+#[tokio::test]
+async fn work_items_are_walked_in_id_order() {
+    let w = world().await;
+    for n in 1..=5 {
+        open_mr(
+            &w,
+            w.web.project_id,
+            &format!("PBI-{n} change"),
+            &format!("b{n}"),
+        )
+        .await;
+    }
+    drain(&w.t).await;
+    let (mut snap, _, visible) = decided(&w).await;
+    let first = snap.work_items_after(&visible, 0, 3).await.expect("first");
+    assert_eq!(first.len(), 4, "limit + 1");
+    let after = first[2].id.expect("stored");
+    let rest = snap
+        .work_items_after(&visible, after, 3)
+        .await
+        .expect("rest");
+    snap.close().await;
+    let refs: Vec<&str> = first[..3]
+        .iter()
+        .chain(rest.iter())
+        .map(|i| i.reference.as_str())
+        .collect();
+    assert_eq!(refs, ["PBI-1", "PBI-2", "PBI-3", "PBI-4", "PBI-5"]);
+    unbind(&w, w.web.project_id).await;
+    let (mut snap, _, visible) = decided(&w).await;
+    assert!(snap
+        .work_items_after(&visible, 0, 3)
+        .await
+        .expect("none")
+        .is_empty());
+    snap.close().await;
     w.t.drop_now().await;
 }

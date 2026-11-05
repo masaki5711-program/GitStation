@@ -1255,3 +1255,52 @@ gstn に読み取りのコマンドを足した: `gstn integration events <id> [
 `gstn integration cursor <id> [--json]`（`…/events/cursor`）。どちらも `read_api`。サービスアカウントのトークン（`GSTN_TOKEN`）で、
 運用者が連携の読み取りを確かめるのに使う。カーソルは gstn も読まない（`A-Z a-z 0-9 - _` の 1024 文字までだけを確かめて送る）。
 forge-client の `coverage.rs` に `Command` の行、ヘルプのスナップショットを更新した（テスト `integration_feed_commands_read_the_feed_routes`）。
+
+## Amendment（2026-11-04、M3 I1d `feat/cross-work-item-dev-status`: 開発状況）
+
+計画 11 §5 I1 の 4 つ目の MR。計画 02 §5.2 の開発状況 API と、410 からの復旧（§11.2: `/cursor` → 開発状況 → その位置から読む）の
+2 段目を実装した。API の契約は `docs/api/dev-status.md`（schema_version 1、欄は足すだけ）、例は `docs/api/dev-status.example.json`
+（kanflow の偽の GitStation の golden）。作業項目のリンクのマージの条件は ADR-0024 の I1d の節。
+
+1. **経路**（計画 11 の決定 6: URL は既存に合わせてハイフン。02 §5.2 の `/work_items/{provider}/{ref}/dev_status` は連携の下に移した）:
+   `GET /api/v1/integrations/{id}/work-items/{ref}/dev-status?project_id=&state=`（1 つの PBI）と
+   `GET /api/v1/integrations/{id}/dev-status?cursor=&limit=&state=`（すべての作業項目をページで。復旧用）。`state` は `all`（既定）・
+   `open`・`merged`・`closed`。`project_id`（kanflow のプロジェクト）を省くと、連携の見える結びつけのすべての kanflow のプロジェクトの、
+   その参照の作業項目（1 つの連携が複数の kanflow のプロジェクトを結べるので、`PBI-12` だけでは 1 つに決まらない）。
+2. **判定**: 新しい `Action::IntegrationDevStatusRead`（`read_api`）。経路の判定は履歴と同じ `Resource::IntegrationFeed`（その連携の
+   サービスアカウントだけ。人・管理者・ボット・別の連携・存在しない連携は FG-REPO-0005、エージェント・`Forge-Act-As`・無効の連携は
+   FG-AUTH-0003）。見える範囲は履歴の `prove_visible` の `VisibleSet` をそのまま使う（同じスナップショット）。権限の表の行は
+   `matrix_rows_dev_status.rs`: `IntegrationEventRead` のすべての行の双子（テスト `the_dev_status_routes_mirror_every_feed_row`）。
+   連携の `event_types` が `merge_request.*` を許さないなら MR を出さない（`VisibleSet::shows_merge_requests`。許可リストは連携が
+   読むものを狭める）。gstn: `integration dev-status <id> --ref PBI-<n>`・`integration dev-status-list <id>`（I1c と同じく、
+   サービスアカウントのトークンで運用者が確かめる読み取りのコマンド。人の経路が無いので `gstn pbi` は作らない）。
+3. **答え**: 作業項目ごとに、**開いたリンク**の MR（新しい順、最大 100、`merge_requests_truncated`）を、MR のプロジェクトがその作業項目の
+   結びつけで、見えるときだけ。各 MR は `project {id, path}`・`iid`・`title`・`state`・`draft`・ブランチ・`head_sha`・時刻（`merged_at` は
+   適用されたマージの試みの `finished_at`、`closed_at`）・`approvals.given`（今の head と target の生きている承認。数えるかは状態の API）・
+   `checks`（C1: 今の head の実行すべて）と `checks_state`（`none` / `pending` / `failure` / `neutral` / `success`。**報告が無いのは
+   `none` で成功ではない**）・`link {source, linked_at}`。02 §5.2 の例の `branches`・`deployments`・`done_candidate` は後の MR（欄を足す）。
+4. **`as_of_seq` と `feed_cursor`**: 1 つの `REPEATABLE READ READ ONLY` のスナップショットで読み、`as_of_seq` = 履歴の読む上限
+   `min(high_seq, work-item-sync の last_seq)`（その位置までのイベントの変化はすべて反映。MR の行はイベントと同じトランザクション、
+   リンクは購読者がその位置まで進んでいる）。`feed_cursor` はその位置の履歴のカーソル（`/events/cursor` がその時点で返すものと同じ位置）で、
+   そこから履歴を読めば取りこぼさない（その後の変化が既に反映されていることはある: 少なくとも 1 回）。したがって §11.2 の順番
+   （`/cursor` → 開発状況 → その位置）でも、開発状況の `feed_cursor` からでもよい。
+5. **ページ**: 作業項目の id の順。`limit` 1〜100（既定 50）、1 ページの MR が約 1000 件を超えるとそこで切る。ページのカーソルは
+   `forge_core::DevStatusPosition`（purpose `integration.dev_status`、履歴のカーソルと別の purpose なので互いに通らない）: 最初のページの
+   履歴の位置（連携・epoch・`VisibleSet` のハッシュ・`seq`）と最後の作業項目の id。**どのページも最初のページの `as_of_seq`** を返し、
+   後のページは履歴のカーソルと同じ順で確かめる（epoch → `ahead_of_head` → `retention` → `visible_set_changed`、FG-INT-0007。
+   この連携のものでなければ FG-INT-0008）。たどる途中の結びつけ・ロール・`event_types` の変化は 410 で、最初からやり直す。
+   追記のマイグレーション `20261119100100` が `work_items (integration_id, id)` の索引を足した。
+6. **エラーコード**: 新しいコードは無い。結ばれていない kanflow のプロジェクトの参照（または見える結びつけが無い）は
+   **FG-REPO-0005**（`resource=work_item reason=unbound_ref`、計画 11 の `unbound_ref_is_404`）。まだ誰も名指していない参照は 404 ではなく
+   空の `merge_requests`。履歴と同じ「同時に 1 つ」の 429（FG-WEB-0010）、30 秒の打ち切り（FG-WEB-0002 `operation=integration_dev_status`）。
+7. **呼び出し元**: `Feed::work_item_dev_status` / `Feed::dev_status_page` を呼ぶのは forge-web の `routes/integration_dev_status.rs` だけ
+   （forge-integ `tests/decided_callers.rs`）。SQL は forge-db `feed::dev_status`（`FeedSnapshot` のメソッド、`VisibleSet` の project id だけを SQL にする）。
+
+テスト: `dev_status_returns_open_merged_closed`、`no_checks_is_distinct_from_success`、`bulk_dev_status_paginates_all`、`unbound_ref_is_404`、
+02 §8.2 の `closed_without_merge_is_returned_and_dev_status_closed`（開発状況の部分。forge-integ）、経路の
+`dev_status_principal_must_be_the_integrations_service_account`、`dev_status_parameters_are_checked`、
+`the_dev_status_answers_the_golden_example_shape`（forge-web）、`a_dev_status_cursor_round_trips_and_is_bound_to_its_purpose`（forge-core）、
+gstn の `integration_dev_status_commands_read_their_routes`。Runbook `integration-feed-lag` の復旧に開発状況 API を書いた。
+
+**受け入れた残り**: (1) `approvals.given` は数えるかを判定しない（判定は git と規則が要る。状態の API を使う）。(2) `project.path` は読む時点の
+パス。(3) 1 回の答えは最大 100 作業項目 × 100 MR を 1 文で読む（上限の中）。

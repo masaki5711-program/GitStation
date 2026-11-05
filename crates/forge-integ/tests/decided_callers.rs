@@ -95,7 +95,13 @@ fn only_forge_auth_builds_a_visible_set() {
 
 #[test]
 fn only_forge_integ_reads_feed_pages() {
-    let found = mentions(&[needle(&[".read_feed", "_page("])]);
+    // M3 I1d: the development status's reads of the same snapshot too.
+    let found = mentions(&[
+        needle(&[".read_feed", "_page("]),
+        needle(&[".dev_status", "_of("]),
+        needle(&[".work_items", "_after("]),
+        needle(&[".bound_work", "_items("]),
+    ]);
     let offenders: Vec<_> = found
         .iter()
         .filter(|(krate, _)| krate != "forge-integ" && krate != "forge-db")
@@ -155,4 +161,31 @@ fn only_forge_integ_proves_what_the_feed_sees() {
     assert!(found
         .iter()
         .any(|(k, f)| k == "forge-integ" && f == "src/lib.rs"));
+}
+
+/// M3 I1d: the development status reads the feed's snapshot with its
+/// decision; only forge-web's development-status routes call it.
+#[test]
+fn only_the_dev_status_routes_read_the_dev_status() {
+    let found = mentions(&[
+        needle(&[".work_item_dev", "_status("]),
+        needle(&[".dev_status", "_page("]),
+    ]);
+    let offenders: Vec<_> = found
+        .iter()
+        .filter(|(krate, file)| {
+            !(krate == "forge-integ"
+                || (krate == "forge-web" && file == "src/routes/integration_dev_status.rs"))
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "the development status read outside its routes: {offenders:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|(k, f)| k == "forge-web" && f == "src/routes/integration_dev_status.rs"),
+        "the dev-status routes call it: {found:?}"
+    );
 }

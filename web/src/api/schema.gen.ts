@@ -407,6 +407,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/{id}/dev-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every work item's development status, page by page (the resync after a 410: take GET …/events/cursor, read these pages, then the feed from that cursor or feed_cursor; FG-INT-0007 410 when the walk cannot continue) */
+        get: operations["get_api_v1_integrations_id_dev_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/{id}/events": {
         parameters: {
             query?: never;
@@ -433,6 +450,23 @@ export interface paths {
         };
         /** The feed's head as a cursor (a resync takes it first, then the development status, then reads from it) */
         get: operations["get_api_v1_integrations_id_events_cursor"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/{id}/work-items/{ref}/dev-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One work item's development status: the merge requests linked to PBI-<n> across the integration's bound projects, open, merged and closed (state=all by default), with approvals, the head's checks and as_of_seq / feed_cursor (the integration's own service account; read_api; FG-REPO-0005 for a reference of no bound kanflow project) */
+        get: operations["get_api_v1_integrations_id_work_items_ref_dev_status"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1955,6 +1989,129 @@ export interface components {
              *     purge has started).
              */
             purge_after: string;
+        };
+        /** @description The approvals given on the head and target now. */
+        DevStatusApprovalsBody: {
+            /**
+             * Format: int32
+             * @description Live approvals of the current head and target, counted or not (what
+             *     a merge needs is the merge status: `GET …/merge-requests/{iid}/status`).
+             */
+            given: number;
+        };
+        /** @description One work item's answer. */
+        DevStatusBody: {
+            /**
+             * Format: int64
+             * @description Every event with `seq <= as_of_seq` is reflected here.
+             */
+            as_of_seq: number;
+            /**
+             * @description The feed's cursor at `as_of_seq`: reading `GET …/events` from it
+             *     misses nothing this answer does not show.
+             */
+            feed_cursor: string;
+            /**
+             * Format: int32
+             * @description `1`.
+             */
+            schema_version: number;
+            /** @description One per bound kanflow project (one with `project_id`). */
+            work_items: components["schemas"]["DevStatusWorkItemBody"][];
+        };
+        /** @description One check run on the merge request's head (M3 C1). */
+        DevStatusCheckBody: {
+            /**
+             * @description `success`, `neutral`, `failure`, `error`, `action_required`; `null`
+             *     until completed.
+             */
+            conclusion: string | null;
+            /** @description `<namespace>/<name>`. */
+            name: string;
+            /** @description `queued`, `in_progress` or `completed`. */
+            status: string;
+        };
+        /** @description How the merge request is linked to the work item. */
+        DevStatusLinkBody: {
+            /** @description UTC, RFC 3339. */
+            linked_at: string;
+            /** @description `auto` (detected in the title or the source branch) or `manual`. */
+            source: string;
+        };
+        /** @description One merge request linked to the work item. */
+        DevStatusMergeRequestBody: {
+            approvals: components["schemas"]["DevStatusApprovalsBody"];
+            /** @description Every check run reported on the head (empty: none — never success). */
+            checks: components["schemas"]["DevStatusCheckBody"][];
+            /** @description `none` (no run), `pending`, `failure`, `neutral` or `success`. */
+            checks_state: string;
+            /** @description When it was closed without merging (`null` otherwise). */
+            closed_at: string | null;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            draft: boolean;
+            /** @description `null` before the first version. */
+            head_sha: string | null;
+            /** Format: int64 */
+            iid: number;
+            link: components["schemas"]["DevStatusLinkBody"];
+            /** @description When it was merged (`null` otherwise). */
+            merged_at: string | null;
+            project: components["schemas"]["DevStatusProjectBody"];
+            /** @description Without `refs/heads/`. */
+            source_branch: string;
+            /**
+             * @description `open`, `merged` or `closed` (a merge request closed without merging
+             *     stays linked, plan 02 §8.2).
+             */
+            state: string;
+            target_branch: string;
+            title: string;
+            updated_at: string;
+        };
+        /** @description One page of every work item's status. */
+        DevStatusPageBody: {
+            /**
+             * Format: int64
+             * @description The first page's position, on every page: every event with `seq <=
+             *     as_of_seq` is reflected in the whole walk.
+             */
+            as_of_seq: number;
+            /**
+             * @description The feed's cursor at `as_of_seq` (resume the feed from it after the
+             *     last page).
+             */
+            feed_cursor: string;
+            has_more: boolean;
+            /** @description The next page (`null`: this is the last). */
+            next_cursor: string | null;
+            /**
+             * Format: int32
+             * @description `1`.
+             */
+            schema_version: number;
+            /** @description In id order. */
+            work_items: components["schemas"]["DevStatusWorkItemBody"][];
+        };
+        /** @description The project of a merge request. */
+        DevStatusProjectBody: {
+            /** Format: int64 */
+            id: number;
+            /** @description The project's path now (display only; `null` if it cannot be read). */
+            path: string | null;
+        };
+        /** @description One work item's development status. */
+        DevStatusWorkItemBody: {
+            /** @description The merge requests with an open link, newest first (at most 100). */
+            merge_requests: components["schemas"]["DevStatusMergeRequestBody"][];
+            /** @description More merge requests are linked than listed. */
+            merge_requests_truncated: boolean;
+            /** @description The kanflow project id of the binding. */
+            project_id: string;
+            /** @description `kanflow`. */
+            provider: string;
+            /** @description `PBI-<n>`. */
+            ref: string;
         };
         /** @description The changed files of a diff. */
         DiffBody: {
@@ -4541,6 +4698,44 @@ export interface operations {
             };
         };
     };
+    get_api_v1_integrations_id_dev_status: {
+        parameters: {
+            query?: {
+                /** @description The previous page's next_cursor (opaque; bound to this integration). Without it the first page, as of now */
+                cursor?: string;
+                /** @description Work items per page, 1..=100 (default 50); a page also ends at about 1000 merge requests */
+                limit?: number;
+                /** @description all (default), open, merged or closed: which linked merge requests to list */
+                state?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevStatusPageBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_integrations_id_events: {
         parameters: {
             query?: {
@@ -4595,6 +4790,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeedCursorBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_integrations_id_work_items_ref_dev_status: {
+        parameters: {
+            query?: {
+                /** @description The kanflow project id of the binding (A-Z a-z 0-9 . _ : -, 1-100); without it every bound kanflow project's work item of that reference */
+                project_id?: string;
+                /** @description all (default), open, merged or closed: which linked merge requests to list */
+                state?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevStatusBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

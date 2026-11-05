@@ -1308,6 +1308,66 @@ pub enum IntegrationFeedCommand {
         #[arg(value_parser = parse_id)]
         id: i64,
     },
+    /// One work item's development status (M3 I1d): its linked merge
+    /// requests across the integration's bound projects.
+    #[command(name = "dev-status")]
+    DevStatus {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The work item, `PBI-<n>`.
+        #[arg(long = "ref", value_parser = parse_work_item_ref, value_name = "PBI-N")]
+        reference: String,
+        /// The kanflow project id of the binding (default: every bound one).
+        #[arg(long, value_parser = parse_external_project, value_name = "ID")]
+        project_id: Option<String>,
+        /// all (default), open, merged or closed.
+        #[arg(long, value_parser = ["all", "open", "merged", "closed"])]
+        state: Option<String>,
+    },
+    /// Every work item's development status, one page (the resync after
+    /// a 410).
+    #[command(name = "dev-status-list")]
+    DevStatusList {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The previous page's next_cursor.
+        #[arg(long, value_parser = parse_feed_cursor)]
+        cursor: Option<String>,
+        /// Work items per page, 1..=100 (default 50).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100), value_name = "N")]
+        limit: Option<u32>,
+        /// all (default), open, merged or closed.
+        #[arg(long, value_parser = ["all", "open", "merged", "closed"])]
+        state: Option<String>,
+    },
+}
+
+/// A work item reference in its canonical form `PBI-<n>` (no leading 0).
+fn parse_work_item_ref(raw: &str) -> Result<String, String> {
+    let ok = raw.strip_prefix("PBI-").is_some_and(|d| {
+        !d.is_empty()
+            && d.len() <= 7
+            && d.bytes().all(|b| b.is_ascii_digit())
+            && (d == "0" || !d.starts_with('0'))
+    });
+    if ok {
+        Ok(raw.to_string())
+    } else {
+        Err("--ref is PBI-<n> (digits, no leading zero)".to_string())
+    }
+}
+
+/// A kanflow project id (`A-Z a-z 0-9 . _ : -`, 1..=100).
+fn parse_external_project(raw: &str) -> Result<String, String> {
+    let ok = (1..=100).contains(&raw.len())
+        && raw
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'));
+    if ok {
+        Ok(raw.to_string())
+    } else {
+        Err("--project-id is 1-100 of A-Z a-z 0-9 . _ : -".to_string())
+    }
 }
 
 /// A feed cursor: base64url text, at most 1024 characters (opaque to gstn).

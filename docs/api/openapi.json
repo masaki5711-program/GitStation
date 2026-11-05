@@ -1438,6 +1438,305 @@
         ],
         "type": "object"
       },
+      "DevStatusApprovalsBody": {
+        "additionalProperties": false,
+        "description": "The approvals given on the head and target now.",
+        "properties": {
+          "given": {
+            "description": "Live approvals of the current head and target, counted or not (what\na merge needs is the merge status: `GET …/merge-requests/{iid}/status`).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "given"
+        ],
+        "type": "object"
+      },
+      "DevStatusBody": {
+        "additionalProperties": false,
+        "description": "One work item's answer.",
+        "properties": {
+          "as_of_seq": {
+            "description": "Every event with `seq <= as_of_seq` is reflected here.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "feed_cursor": {
+            "description": "The feed's cursor at `as_of_seq`: reading `GET …/events` from it\nmisses nothing this answer does not show.",
+            "type": "string"
+          },
+          "schema_version": {
+            "description": "`1`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "work_items": {
+            "description": "One per bound kanflow project (one with `project_id`).",
+            "items": {
+              "$ref": "#/components/schemas/DevStatusWorkItemBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "as_of_seq",
+          "feed_cursor",
+          "work_items"
+        ],
+        "type": "object"
+      },
+      "DevStatusCheckBody": {
+        "additionalProperties": false,
+        "description": "One check run on the merge request's head (M3 C1).",
+        "properties": {
+          "conclusion": {
+            "description": "`success`, `neutral`, `failure`, `error`, `action_required`; `null`\nuntil completed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`<namespace>/<name>`.",
+            "type": "string"
+          },
+          "status": {
+            "description": "`queued`, `in_progress` or `completed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "conclusion"
+        ],
+        "type": "object"
+      },
+      "DevStatusLinkBody": {
+        "additionalProperties": false,
+        "description": "How the merge request is linked to the work item.",
+        "properties": {
+          "linked_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "source": {
+            "description": "`auto` (detected in the title or the source branch) or `manual`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "linked_at"
+        ],
+        "type": "object"
+      },
+      "DevStatusMergeRequestBody": {
+        "additionalProperties": false,
+        "description": "One merge request linked to the work item.",
+        "properties": {
+          "approvals": {
+            "$ref": "#/components/schemas/DevStatusApprovalsBody"
+          },
+          "checks": {
+            "description": "Every check run reported on the head (empty: none — never success).",
+            "items": {
+              "$ref": "#/components/schemas/DevStatusCheckBody"
+            },
+            "type": "array"
+          },
+          "checks_state": {
+            "description": "`none` (no run), `pending`, `failure`, `neutral` or `success`.",
+            "type": "string"
+          },
+          "closed_at": {
+            "description": "When it was closed without merging (`null` otherwise).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "description": "`null` before the first version.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "link": {
+            "$ref": "#/components/schemas/DevStatusLinkBody"
+          },
+          "merged_at": {
+            "description": "When it was merged (`null` otherwise).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "$ref": "#/components/schemas/DevStatusProjectBody"
+          },
+          "source_branch": {
+            "description": "Without `refs/heads/`.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`open`, `merged` or `closed` (a merge request closed without merging\nstays linked, plan 02 §8.2).",
+            "type": "string"
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "iid",
+          "title",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "head_sha",
+          "created_at",
+          "updated_at",
+          "merged_at",
+          "closed_at",
+          "approvals",
+          "checks",
+          "checks_state",
+          "link"
+        ],
+        "type": "object"
+      },
+      "DevStatusPageBody": {
+        "additionalProperties": false,
+        "description": "One page of every work item's status.",
+        "properties": {
+          "as_of_seq": {
+            "description": "The first page's position, on every page: every event with `seq <=\nas_of_seq` is reflected in the whole walk.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "feed_cursor": {
+            "description": "The feed's cursor at `as_of_seq` (resume the feed from it after the\nlast page).",
+            "type": "string"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "description": "The next page (`null`: this is the last).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "description": "`1`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "work_items": {
+            "description": "In id order.",
+            "items": {
+              "$ref": "#/components/schemas/DevStatusWorkItemBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "as_of_seq",
+          "feed_cursor",
+          "work_items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "DevStatusProjectBody": {
+        "additionalProperties": false,
+        "description": "The project of a merge request.",
+        "properties": {
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The project's path now (display only; `null` if it cannot be read).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "path"
+        ],
+        "type": "object"
+      },
+      "DevStatusWorkItemBody": {
+        "additionalProperties": false,
+        "description": "One work item's development status.",
+        "properties": {
+          "merge_requests": {
+            "description": "The merge requests with an open link, newest first (at most 100).",
+            "items": {
+              "$ref": "#/components/schemas/DevStatusMergeRequestBody"
+            },
+            "type": "array"
+          },
+          "merge_requests_truncated": {
+            "description": "More merge requests are linked than listed.",
+            "type": "boolean"
+          },
+          "project_id": {
+            "description": "The kanflow project id of the binding.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "`kanflow`.",
+            "type": "string"
+          },
+          "ref": {
+            "description": "`PBI-<n>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "project_id",
+          "ref",
+          "merge_requests",
+          "merge_requests_truncated"
+        ],
+        "type": "object"
+      },
       "DiffBody": {
         "additionalProperties": false,
         "description": "The changed files of a diff.",
@@ -6770,6 +7069,76 @@
         "x-forge-max-body-bytes": 4096
       }
     },
+    "/api/v1/integrations/{id}/dev-status": {
+      "get": {
+        "operationId": "get_api_v1_integrations_id_dev_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; bound to this integration). Without it the first page, as of now",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Work items per page, 1..=100 (default 50); a page also ends at about 1000 merge requests",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "all (default), open, merged or closed: which linked merge requests to list",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevStatusPageBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Every work item's development status, page by page (the resync after a 410: take GET …/events/cursor, read these pages, then the feed from that cursor or feed_cursor; FG-INT-0007 410 when the walk cannot continue)",
+        "x-forge-action": "IntegrationDevStatusRead"
+      }
+    },
     "/api/v1/integrations/{id}/events": {
       "get": {
         "operationId": "get_api_v1_integrations_id_events",
@@ -6870,6 +7239,73 @@
         },
         "summary": "The feed's head as a cursor (a resync takes it first, then the development status, then reads from it)",
         "x-forge-action": "IntegrationEventCursorRead"
+      }
+    },
+    "/api/v1/integrations/{id}/work-items/{ref}/dev-status": {
+      "get": {
+        "operationId": "get_api_v1_integrations_id_work_items_ref_dev_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The kanflow project id of the binding (A-Z a-z 0-9 . _ : -, 1-100); without it every bound kanflow project's work item of that reference",
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "all (default), open, merged or closed: which linked merge requests to list",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevStatusBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One work item's development status: the merge requests linked to PBI-<n> across the integration's bound projects, open, merged and closed (state=all by default), with approvals, the head's checks and as_of_seq / feed_cursor (the integration's own service account; read_api; FG-REPO-0005 for a reference of no bound kanflow project)",
+        "x-forge-action": "IntegrationDevStatusRead"
       }
     },
     "/api/v1/namespaces/resolve": {

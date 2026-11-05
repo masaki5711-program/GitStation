@@ -55,7 +55,9 @@ pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
 pub use discussion::{CommentAction, DiscussionKind, DiscussionSide};
 pub use event_type::{EventType, VisibilityClass};
-pub use feed::{FeedBinding, FeedMaterial, FeedPosition, VisibleProject, VisibleSet};
+pub use feed::{
+    DevStatusPosition, FeedBinding, FeedMaterial, FeedPosition, VisibleProject, VisibleSet,
+};
 pub use ids::{
     ApprovalId, ApprovalRuleId, DiscussionId, GroupId, IntegrationId, MergeRequestId, NamespaceId,
     NoteId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,

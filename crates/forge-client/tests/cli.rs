@@ -948,6 +948,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "admin integration bindings",
             "integration events",
             "integration cursor",
+            "integration dev-status",
+            "integration dev-status-list",
             "integration-binding list",
             "integration-binding set",
             "integration-binding remove",
