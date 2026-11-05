@@ -60,6 +60,7 @@ mod history;
 mod path;
 mod reach;
 mod refs;
+mod scan;
 mod tree;
 
 pub use blame::{Blame, BlameCommit, BlameHunk};
@@ -69,6 +70,7 @@ pub use history::{CommitDetail, CommitInfo, CommitPage, Comparison, LogCursor};
 pub use path::RepoPath;
 pub use reach::ReachRoots;
 pub use refs::{RefEntry, RefKind, RefList, RefLookup, ResolvedRev, ResolvedSpec, Target};
+pub use scan::{BlobListing, GrepHit, GrepHits, ListedBlob};
 pub use tree::{EntryKind, Tree, TreeEntry};
 
 /// The browse limits (plan 10 §5).
@@ -342,3 +344,6 @@ use tree::parse_tree;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod scan_tests;
