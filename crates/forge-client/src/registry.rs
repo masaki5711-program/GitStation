@@ -815,6 +815,21 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["id","resolved","resolved_by","resolved_at","notes"]}"#,
     },
     CommandSpec {
+        name: "conflicts",
+        summary: "A merge request's predicted conflicts with the other open merge requests on its target branch, drafts included (M3 X6): the last scan (scanned / incomplete with why / failed) and each merge request whose head conflicts with this one in a file both change, with the files. The server scans after every new head, retarget and reopen; this never starts a scan.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &[
+            "gstn conflicts --project 7 --iid 3",
+            "gstn conflicts --project 7 --iid 3 --json",
+        ],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts"],
+        output: r#"{"type":"object","required":["iid","head_sha","scan","predictions"],"properties":{"scan":{"type":"object","required":["status","reason","stale","scanned_head_sha","scanned_at","peers","pairs_tried","pairs_skipped"],"properties":{"status":{"type":"string","enum":["none","pending","scanning","scanned","incomplete","failed"]}}},"predictions":{"type":"array","items":{"type":"object","required":["iid","draft","outcome","reason","conflicts","conflicts_truncated","checked_at"],"properties":{"outcome":{"type":"string","enum":["conflict","failed"]}}}}}}"#,
+    },
+    CommandSpec {
         name: "namespace resolve",
         summary: "Which project, group or user a full path names (and its ids).",
         args: &[arg("path", "positional", true, "The full path, e.g. team/app.")],

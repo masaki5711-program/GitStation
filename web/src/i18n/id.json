@@ -853,7 +853,8 @@
     "kinds": {
       "mr_approved": "Merge request disetujui",
       "mr_merged": "Merge request digabung",
-      "mr_commented": "Komentar pada merge request"
+      "mr_commented": "Komentar pada merge request",
+      "mr_conflict_predicted": "Kemungkinan konflik dengan merge request lain"
     }
   },
   "sa": {

@@ -2,7 +2,7 @@
 //! The merge request reads of M3 R2 (ADR-0024 §1–§3) through the product
 //! router, against the development database and a real bare repository:
 //! `GET …/{iid}/versions`, `…/versions/{n}/diff`, `…/compare?from=&to=`
-//! and `…/mergeability`. The versions and the status are written by the
+//! and `…/mergeability`; M3 X6: `…/conflicts`. The versions and the status are written by the
 //! worker's own functions (`forge_review::refresh` / `check`). A member
 //! reads; someone who cannot see the project gets FG-REPO-0005; an unknown
 //! and a purged version answer alike (FG-REPO-0023 ref_not_found); a trial
@@ -396,6 +396,7 @@ async fn versions_diffs_compare_and_mergeability_are_read_by_members_only() {
         "/versions/1/diff",
         "/compare?from=1&to=2",
         "/mergeability",
+        "/conflicts",
     ] {
         let (status, body) = w.get(tail, session(w.outsider)).await;
         assert_eq!(
@@ -459,11 +460,12 @@ async fn versions_diffs_compare_and_mergeability_are_read_by_members_only() {
     w.t.drop_now().await;
 }
 
-const READS: [&str; 4] = [
+const READS: [&str; 5] = [
     "/versions",
     "/versions/1/diff",
     "/compare?from=1&to=2",
     "/mergeability",
+    "/conflicts",
 ];
 
 /// Review (pr-test): nobody signed in is FG-AUTH-0001 (401) on every read;
@@ -547,5 +549,115 @@ async fn a_decision_for_an_old_target_tip_is_reported_unchecked_and_stale() {
     assert_eq!(body["stale"], true);
     assert_eq!(body["reason"], Value::Null);
     assert_eq!(body["checked_target_sha"], w.base.as_str());
+    w.t.drop_now().await;
+}
+
+/// M3 X6 (plan 04 C-2): `GET …/conflicts` — before any scan `none`; after a
+/// second merge request (a draft) changes the same line and both versions
+/// were scanned by the worker's own functions, each side reads the other as
+/// a predicted conflict with the file; an unknown query parameter is
+/// FG-WEB-0006; a `read_api` token reads (the denials are in the
+/// tables above: outsider 404, anonymous 401, no read scope 403).
+#[tokio::test]
+async fn conflicts_are_read_by_members_with_each_prediction() {
+    let w = world().await;
+    let (status, body) = w.get("/conflicts", session(w.dev)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["scan"]["status"], "none", "{body}");
+    assert_eq!(body["predictions"], json!([]));
+    // Merge request !1 (feature: feature.txt "one") and its scan.
+    let scanner = forge_review::ConflictPredictor::new(w.git.clone(), w.storage.clone());
+    let run = |mr: MergeRequestId, request: &'static str| {
+        let (t, refs, scanner) = (&w.t, &w.refs, &scanner);
+        async move {
+            let rid = RequestId::parse(request).expect("id");
+            let report = forge_review::refresh(
+                &t.db,
+                refs,
+                forge_review::RefreshRequest {
+                    merge_request: mr,
+                    pushed_by: None,
+                },
+                &rid,
+            )
+            .await
+            .expect("refresh");
+            let seq = report.scan_requested.expect("a scan");
+            forge_review::scan(
+                &t.db,
+                scanner,
+                forge_db::review::ConflictScanRequest {
+                    merge_request: mr,
+                    scan_seq: seq,
+                },
+                &rid,
+            )
+            .await
+            .expect("scan")
+        }
+    };
+    run(w.mr, "req-c1").await;
+    // !2 (a draft) changes the same file's only line differently.
+    let other = commit_on(
+        &w.path,
+        Some(&w.base),
+        &[("README", "base\n"), ("feature.txt", "other\n")],
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/other", &other], None);
+    // The browse ref list is cached for 5 s: a fresh router sees `other`.
+    let (status, opened) = send(
+        w.fresh_router(),
+        "POST",
+        &format!("/api/v1/projects/{}/merge-requests", w.project),
+        session(w.dev),
+        Some(json!({"title": "Other", "source_branch": "other", "target_branch": "main", "draft": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let second: i64 =
+        w.t.json_rows("SELECT id FROM forge.merge_requests WHERE iid = 2")
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .expect("second id");
+    let report = run(MergeRequestId::new(second), "req-c2").await;
+    assert_eq!(report.predicted, vec![w.mr], "{report:?}");
+    let (status, body) = w.get("/conflicts", session(w.dev)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["head_sha"], w.c1.as_str());
+    assert_eq!(body["scan"]["status"], "scanned", "{body}");
+    assert_eq!(body["scan"]["stale"], false);
+    let predictions = body["predictions"].as_array().expect("predictions");
+    assert_eq!(predictions.len(), 1, "{body}");
+    assert_eq!(predictions[0]["iid"], 2);
+    assert_eq!(predictions[0]["draft"], true);
+    assert_eq!(predictions[0]["outcome"], "conflict");
+    assert_eq!(predictions[0]["conflicts"], json!(["feature.txt"]));
+    let (status, body) = send(
+        w.router.clone(),
+        "GET",
+        &format!("/api/v1/projects/{}/merge-requests/2/conflicts", w.project),
+        session(w.dev),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["predictions"][0]["iid"], 1, "{body}");
+    assert_eq!(body["predictions"][0]["draft"], false);
+    let (status, body) = w.get("/conflicts?x=1", session(w.dev)).await;
+    assert_eq!(
+        (status, body["error_code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("FG-WEB-0006")),
+        "{body}"
+    );
+    let read = Principal::authenticated(
+        w.dev,
+        false,
+        true,
+        Credential::Token(vec![Scope::ReadApi]),
+        forge_auth::AccountKind::Human,
+    );
+    let (status, body) = w.get("/conflicts", read).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     w.t.drop_now().await;
 }

@@ -3936,6 +3936,97 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn conflicts --project 7 --iid 3",
+        "gstn conflicts --project 7 --iid 3 --json"
+      ],
+      "name": "conflicts",
+      "output": {
+        "properties": {
+          "predictions": {
+            "items": {
+              "properties": {
+                "outcome": {
+                  "enum": [
+                    "conflict",
+                    "failed"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "iid",
+                "draft",
+                "outcome",
+                "reason",
+                "conflicts",
+                "conflicts_truncated",
+                "checked_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "scan": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "none",
+                  "pending",
+                  "scanning",
+                  "scanned",
+                  "incomplete",
+                  "failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "stale",
+              "scanned_head_sha",
+              "scanned_at",
+              "peers",
+              "pairs_tried",
+              "pairs_skipped"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "iid",
+          "head_sha",
+          "scan",
+          "predictions"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A merge request's predicted conflicts with the other open merge requests on its target branch, drafts included (M3 X6): the last scan (scanned / incomplete with why / failed) and each merge request whose head conflicts with this one in a file both change, with the files. The server scans after every new head, retarget and reopen; this never starts a scan."
+    },
+    {
+      "args": [
+        {
           "description": "The full path, e.g. team/app.",
           "kind": "positional",
           "name": "path",

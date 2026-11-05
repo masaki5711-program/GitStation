@@ -51,6 +51,7 @@ use crate::registry::{Dispatched, QueryParam, WriteParts};
 use crate::routes::write::{bounded, json, no_store};
 
 mod approvals;
+mod conflicts;
 mod discussion_loaders;
 mod discussions;
 mod loaders;
@@ -68,6 +69,9 @@ pub use approvals::{
     APPROVE, MAX_BODY as APPROVAL_MAX_BODY, RULE as APPROVAL_RULE, RULES as APPROVAL_RULES,
     TO_APPROVE, TO_UNAPPROVE, UNAPPROVE,
 };
+pub use conflicts::{
+    conflicts, ConflictPredictionBody, ConflictScanBody, ConflictsBody, CONFLICTS, CONFLICTS_SUFFIX,
+};
 pub use discussion_loaders::{
     DiscussionToReply, DiscussionToResolve, DiscussionToStart, TO_RESOLVE, TO_UNRESOLVE,
 };
@@ -80,7 +84,7 @@ pub use discussions::{
 pub use loaders::{
     MergeRequestOf, MergeRequestRead, MergeRequestToClose, MergeRequestToPurge,
     MergeRequestToReopen, MergeRequestToUpdate, MergeRequestsOf, NewMergeRequest, VersionDiffOf,
-    COMPARE_OF, DISCUSSIONS_OF, MERGEABILITY_OF, VERSIONS_OF,
+    COMPARE_OF, CONFLICTS_OF, DISCUSSIONS_OF, MERGEABILITY_OF, VERSIONS_OF,
 };
 pub use mergeability::{mergeability, MergeabilityBody};
 pub use merges::{

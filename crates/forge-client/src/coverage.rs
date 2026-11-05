@@ -409,6 +409,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/mergeability",
         Coverage::Command("mr mergeability"),
     ),
+    // M3 X6 (plan 04 C-2): predicted conflicts between open merge requests.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/conflicts",
+        Coverage::Command("conflicts"),
+    ),
     // M3 R3 (ADR-0024 §6, §12): discussions.
     (
         "GET",

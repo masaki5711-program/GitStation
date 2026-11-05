@@ -853,7 +853,8 @@
     "kinds": {
       "mr_approved": "Merge request approved",
       "mr_merged": "Merge request merged",
-      "mr_commented": "Comment on a merge request"
+      "mr_commented": "Comment on a merge request",
+      "mr_conflict_predicted": "Likely conflict with another merge request"
     }
   },
   "sa": {
