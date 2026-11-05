@@ -58,6 +58,9 @@ pub async fn preferences(db: &Db, user: UserId) -> Result<Preferences, ForgeErro
     )
 }
 
+/// id, user, kind, project, iid, actor, request id, state.
+type SendRow = (i64, i64, String, i64, i64, Option<i64>, String, String);
+
 type PreferencesRow = (bool, Option<String>, Vec<String>);
 
 /// A stored value this build cannot read (the CHECKs make it a bug or a
@@ -302,16 +305,15 @@ pub async fn begin_send(db: &Db, id: i64, attempt: i32) -> Result<Begin, ForgeEr
             .begin()
             .await
             .map_err(|e| query_error(QUERY, e))?;
-        let row: Option<(i64, i64, String, i64, i64, Option<i64>, String, String)> =
-            sqlx::query_as(
-                "SELECT id, user_id, kind, project_id, merge_request_iid, actor_user_id, \
+        let row: Option<SendRow> = sqlx::query_as(
+            "SELECT id, user_id, kind, project_id, merge_request_iid, actor_user_id, \
                         request_id, state \
                  FROM forge.notifications WHERE id = $1 FOR UPDATE",
-            )
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| query_error(QUERY, e))?;
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
         let Some((id, user, kind, project, iid, actor, request_id, state)) = row else {
             return Ok(Begin::Missing);
         };

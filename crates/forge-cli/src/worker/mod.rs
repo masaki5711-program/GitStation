@@ -200,6 +200,7 @@ pub(crate) struct PurgeTask {
 }
 
 /// Every task of this worker.
+#[cfg(test)]
 fn tasks(
     registry: &Registry,
     purge: Option<&PurgeTask>,
@@ -258,6 +259,7 @@ fn tasks_with(
 /// `ordered`: the work item links and the events' work items; it stops and
 /// alerts on an event it cannot process). The others (`notify`,
 /// `webhook-dispatch`, …) join with their features.
+#[cfg(test)]
 fn registry(review: &ReviewConfig) -> Result<Registry, ForgeError> {
     registry_with(review, None)
 }

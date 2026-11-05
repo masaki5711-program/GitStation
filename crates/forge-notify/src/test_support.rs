@@ -3,6 +3,9 @@
 //! records what it was sent, and can be told to misbehave at each step.
 //! Synthetic data only; no real host is ever contacted.
 
+// Test code: it may fail loudly (rust/testing.md).
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

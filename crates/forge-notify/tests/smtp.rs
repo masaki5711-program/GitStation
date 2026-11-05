@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly (rust/testing.md)
 //! The SMTP sender against an in-process fake relay (M3 N1): what is sent,
 //! how every failure is classified (the phases decide whether another try
 //! is safe), the timeouts, AUTH and the refusal to continue in clear text

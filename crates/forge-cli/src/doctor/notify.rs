@@ -97,6 +97,7 @@ async fn relay_line(host: &str, port: u16, within: Duration) -> Check {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)] // tests may fail loudly
 mod tests {
     use super::*;
     use crate::doctor::Outcome;
@@ -118,7 +119,7 @@ mod tests {
                 .iter()
                 .find(|(k, _)| *k == "reason")
                 .map(|(_, v)| v.to_string()),
-            _ => None,
+            Outcome::Ok(_) | Outcome::Warn(_) | Outcome::Skip(_) => None,
         }
     }
 

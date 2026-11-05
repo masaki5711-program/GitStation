@@ -3,6 +3,8 @@
 //! mail through the real worker (sequencer, subscriber, the lane's own job
 //! runner, the SMTP sender), and without the lane nothing records or sends.
 
+#![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly
+
 use std::time::{Duration, Instant};
 
 use forge_core::{RefName, RequestId};

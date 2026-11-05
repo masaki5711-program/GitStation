@@ -4,6 +4,8 @@
 //! schema's backstops by constraint name and the doctor's backlog.
 //! Synthetic data only.
 
+#![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly
+
 use std::time::Duration;
 
 use forge_core::ids::{ProjectId, UserId};

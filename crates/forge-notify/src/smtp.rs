@@ -735,6 +735,7 @@ impl Conn {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)] // tests may fail loudly
 mod tests {
     use super::*;
 

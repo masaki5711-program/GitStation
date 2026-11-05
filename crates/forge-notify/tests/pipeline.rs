@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly (rust/testing.md)
 //! The notify subscriber and the send job against a migrated database (M3
 //! N1): events become one notification per recipient, a person who cannot
 //! see the project (any more) is never mailed, the person's settings and
@@ -776,7 +777,9 @@ async fn a_run_that_died_mid_send_is_recorded_unknown_and_the_retry_sends_nothin
     let id = w.ids().await[0];
     // Run 1 took the send and the worker died before it could record.
     assert!(matches!(
-        notify::begin_send(&w.t.db, id, 1).await.expect("begin"),
+        notify::begin_send(&w.t.db, id, 1)
+            .await
+            .expect("take the send"),
         notify::Begin::Send(_)
     ));
     let log = Capture::default();

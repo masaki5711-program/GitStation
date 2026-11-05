@@ -193,6 +193,7 @@ fn encode_word(chunk: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)] // tests may fail loudly
 mod tests {
     use std::time::Duration;
 

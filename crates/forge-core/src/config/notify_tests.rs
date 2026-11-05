@@ -1,6 +1,8 @@
 //! Tests of `notify.*` (M3 N1). A separate file: `config_tests.rs` is edited by
 //! other branches.
 
+#![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly
+
 use std::io::Write as _;
 use std::time::Duration;
 
