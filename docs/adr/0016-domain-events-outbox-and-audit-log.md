@@ -1422,3 +1422,69 @@ forge-auth `an_owner_who_lost_the_project_is_int_0010_owner_lost` と権限の�
 ほかの Webhook の配信を遅らせる。(2) TLS の受信先への配信は自動テストがない（証明書を作るクレートがない）。検証は reqwest の rustls が
 URL の名前で行い、`resolve` の固定はアドレスだけを替える。(3) `work_items` は配信の時点の記録（`work-item-sync` より先に配ることがある。
 履歴 API が正）。(4) 作成者が権限を失った間のイベントは記録しない（ログだけ）。(5) 無効の間のイベントは記録しないので再送できない。
+## Amendment（2026-11-05、M3 N1 `feat/cross-notifications`: メールの通知）
+
+計画 11 §5 N1 と §10 Q6。社内の SMTP の事実（ホスト・送信元・認証）は分かっていない（Q6 の答えは該当の MR に着手する前に利用者に聞く、と
+2026-11-02 に決めた）。**分かっていないものはすべて設定の鍵にし、起動時に検証し、`notify.enabled = true` と中継の名前が揃うまで何も送らない**
+形で実装した。実際のホストには一度も接続していない（試験は同じプロセスの偽の中継）。
+
+1. **通知する範囲（この MR の最小限の集合）**: 計画 11 §3 は「レビューの依頼・承認・マージ・ミラーの失敗」を挙げる。いま発行されているイベントで
+   受け手が決まるものは次の 3 つで、**どれも MR の作者に伝える**。自分の操作は伝えない。
+   | イベント | 種類（`notification_preferences.muted_kinds` の値） | 伝えない場合 |
+   |---|---|---|
+   | `merge_request.approved` | `mr_approved` | 承認した人が作者 |
+   | `merge_request.merged` | `mr_merged` | マージした人（`merged_by`）が作者 |
+   | `merge_request.commented` | `mr_commented` | コメントした人が作者、またはスレッドの解決・再開（`action != note_added`） |
+   **レビューの依頼**: レビュー担当者という概念もイベントも R1〜R6 に無い（`merge_request.review_requested` は 02 §5.8 の一覧にあるが未発行）→ そのイベントを足す
+   MR と一緒に種類を足す。**ミラーの失敗**: O2 のイベントと一緒。**メンション**: コメント本文の解析が無い → 後。種類の追加は
+   `NotificationKind`（forge-core、`EventType` を `_` なしで網羅）と表の CHECK（追記のマイグレーション）を一緒に変える。
+2. **購読者 `notify`（`independent`）**: イベントごと・受け手ごとに 1 行を、購読者の進みと同じトランザクションで `forge.notifications` に書く
+   （`UNIQUE (event_id, user_id)` なので、繰り返された手順は 2 行目を足せない）。書く時点で判断し、理由を残す: `pending`（+ ジョブ `notification.send`）、
+   `skipped`（`muted` / `opted_out`）、`suppressed`（`recipient_inactive` / `recipient_not_person` / `no_address` / `address_invalid` / `not_visible` /
+   `merge_request_gone`）。「なぜメールが来ないのか」は表を見れば答えが出る。未知のイベントの型は警告して通す（`forge.subscribers.unknown_event_type`）。
+   `notify.enabled = false` のワーカーも購読者 `notify` を**登録したまま**にする（`Notify::paused`）: 全イベントを読んで何も記録せずに通す。位置は先頭に追従するので、**無効の間のイベントは後で有効にしても遡って送られず**（無効 → 有効で全期間を一度に送ってしまうのを防ぐ）、購読者の遅れ（`subscribers.lag`）は 0 のまま、イベントの保持も止められない。試験 `turning_mail_off_and_on_again_does_not_mail_the_disabled_period`。最初に購読者を登録するのは最初の起動（先頭から）。
+3. **見える人だけ（送る時にもう一度）**: 可視性は `forge_auth::prove(MergeRequestRead)` を受け手を「セッションの人」として呼ぶ（画面で MR を見せるのと同じ判断。
+   この crate に権限の規則は無い）。**登録時と、メールを作る直前の 2 回**判断する: 間にメンバーから外された・無効にされた・メールを止めた人には送らない
+   （`suppressed` / `skipped` と理由）。プロジェクトの削除待ち・存在しないプロジェクトも「見えない」。
+4. **配信 = ジョブ `notification.send`（ジョブの待ち行列の上）**: 再試行・待ち（10 秒から倍々、上限 1 時間）・鍵・リース・doctor のジョブの健康は待ち行列のもの。
+   `max_attempts` は `notify.max_attempts`。**ワーカーの専用のランナー**（保守のレーンと同じ。中継が遅いと 1 件が `notify.send_timeout_ms` まで塞ぎ、1 つずつしか
+   動かない主のランナーのマージ・作成のジョブを遅らせるため）。ジョブの内容は通知の id だけ。
+5. **二重に送らない（at-most-once）**: 状態機械は forge-db `notify`（`begin_send` が行を `FOR UPDATE` で取って `sending` にし、`finish` は実行の番号で守る）。
+   - 相手が受け取っていないと分かる失敗（接続・TLS・ログイン・時間切れ・4xx）→ `retrying`、ジョブを再試行。最後の試行は `failed`（`tries_used_up`）。**ジョブは成功で終える**
+     （落とすと `dead` = FG-DB-0006 のアラートが SMTP の障害の件数だけ鳴る。結果は通知の行が持つ）。5xx → `failed`（`rejected_permanent`）、再試行しない。
+   - **本文を渡し終えたのに応答が無い**（接続が切れた・時間切れ）→ `unknown`（`outcome_unknown`）。中継が受け取ったかもしれないので**再び送らない**。
+   - 送っている最中に実行が死んだ → 次の実行が `sending` を見つけて `unknown`（`interrupted`）にする。終わった行へのジョブの再実行は何もしない。
+   - 安定した `Message-ID`（`<notification-{id}@…>`）を付ける（人にも中継にも同じ通知と分かる）。
+6. **SMTP の自前のクライアント（`smtp.rs`）— crate を調べた上で**: `lettre` を調べた（MIT、事実上の標準）。依存が 6 つ増え（async-trait・email-encoding・nom・
+   quoted_printable ほか）、**失敗が「本文を渡す前」か「後」かを呼び出し側に教えない**（接続が切れたことしか言わない）。5. の at-most-once はその区別がなければ作れない
+   ので、段階を持つ小さなクライアントを書いた（接続 → TLS → EHLO → STARTTLS → AUTH PLAIN → MAIL → RCPT → DATA → 本文 → QUIT）。段階の失敗は `FG-INT-0015` の
+   `stage` / `reason` / `smtp_code` になる。本文の組み立ては `mail.rs`（ヘッダーは 1 行・RFC 2047、本文は base64、`Auto-Submitted: auto-generated`）。
+   - **接続は `notify.connect_timeout_ms`、会話全体は `notify.send_timeout_ms`**（1 つの締め切りをすべての段階が共有）。応答の行は 2 KiB・64 行まで。
+   - **TLS は設定どおりに必須**: `starttls` で中継が STARTTLS を出さない・拒む場合は clear text で続けない（`tls_failed`、MAIL FROM の前に止まる）。STARTTLS の前に
+     届いていたバイトがあれば拒む（CVE-2011-0411 型）。信頼する根は `notify.smtp_ca_file` の PEM **だけ**（`starttls` / `tls` では必須、無ければ起動時に FG-SYS-0002 `reason=missing`。OS の信頼の保管庫も公開の根の束も使わない。レビュー指摘で保管庫への格下げを削除）（公開の根の束は入れない）。
+     rustls は ring（reqwest が既に使うもの。`aws-lc-rs` は入れない）。
+   - **認証は AUTH PLAIN のみ、TLS の上でだけ**（`tls = none` と認証情報の組は起動時に FG-SYS-0002 `credentials_without_tls`）。パスワードは `notify.smtp_password_file`（0600）。
+     ログにもエラーにも `Debug` にも出ない。
+   - 宛先・送信元はメールボックス 1 つの形だけ通す（`forge_core::config::valid_mailbox`: ASCII、`@` 1 つ、点のあるドメイン）。改行や `>` を含む値は命令にならない。
+7. **メールの中身**: 受け手が GitStation で見られるものだけ（プロジェクトのパス、MR の番号とタイトル、操作した人の表示名、`web.base_url` があればリンク
+   `{origin}/{path}/-/pull/{iid}`）。ブランチ名・コミット・パス・エラー・コードは入れない。タイトルと名前は 1 行にし（制御文字は空白）、長いものは切る。
+   言語は本人の設定、無ければ `notify.default_language`（`ja`）。ja / en / id の 3 つの文と、止め方（`gstn notifications set`）を末尾に書く。
+8. **本人の設定（`notification_preferences`、`GET|PUT /api/v1/user/notification-preferences`）**: メールの入り切り・言語・止める種類。**本人だけ**（ルートに利用者が無く、
+   `Resource::NotificationPreferences { owner }` を他人のものにすると、管理者でも `FG-REPO-0005`）。`Action::NotificationPreferencesRead`（`read_api`）/ `…Write`（`api`）、
+   許可と拒否の行は `matrix_rows.rs`。**管理者の読み取りは作らない**: 利用者の連絡の好みは本人のもので、サポートは通知の行（理由つき）を見れば足りる。
+   エージェントの資格情報は拒まない（`people_only` ではない）。**監査はしない**（誰かのアクセスも他人のデータも変えない。変更はこの表の `updated_at` だけ）。
+   PUT は全体の置き換えで、止める種類は並べ替えて重複を除く。未知の言語・種類は `FG-WEB-0006`（欄の名前はログだけ）で何も変えない。設定は `notify.enabled` に
+   関係なく保存する（後でメールを有効にしたときに効く）。
+9. **失敗・観測**: `FG-INT-0015`（warn、`reason`: `connect_failed` / `connection_lost` / `tls_failed` / `auth_failed` / `timeout` / `rejected_temporary` /
+   `rejected_permanent` / `tries_used_up` / `outcome_unknown`、`stage`、`smtp_code`、`notification_id`、`attempt`）をジョブの境界で 1 回、`request_id` つきで出す。宛先・本文・
+   中継の返事の文はログに出さない。`forge doctor`: `notify.queue`（10 分より古い待ち・24 時間の `failed`・30 日の `unknown` と最も古いものの経過・24 時間の宛先の不備による `suppressed`（`no_address` / `address_invalid`）を人の選択と別に警告。`notify.enabled = false` でも読む）と `notify.relay`（TCP の接続だけ、何も送らない）。
+   Runbook `notification-email`。
+10. **受け入れた残り**: (1) TLS の握手の通し試験は無い（証明書の生成の依存を試験に入れない判断）。設定・CA の読み込み・格下げの拒否・段階の分類は試験している。
+    (2) 通知の行（と設定）の保持期間は決めていない。**プロジェクトの purge も利用者の退職（無効化。利用者の行は消えない）も `notifications` / `notification_preferences` の行を消さない**（`forge_app` に DELETE 権限が無く、プロジェクトへの外部キーも無い）。行が持つのは id・種類・状態・理由だけで、本文・宛先・タイトルは無い。消す仕組みは（1 行 約 200 バイト。アプリ内の通知 U4 が同じ表を使うので、そこで `read_at` と一緒に決める）。
+    (3) 1 通知 = 1 通（ダイジェストなし。計画 08 の「まとめて」は後）。(4) 送るのは 1 件ずつ（レーンのランナーが 1 つ）。
+    (5) 本文の言語は受け手の設定で、操作した人のものではない。
+
+テスト: forge-core の `exactly_the_planned_events_notify`、`notify_*`（設定の検証）。forge-db の `notify::tests`（設定・1 行 1 ジョブ・`begin_send` の 1 回・`unknown`・理由つきの終わり・
+backlog）。forge-notify の `tests/smtp.rs`（偽の中継で配信・段階ごとの失敗の分類・時間切れ・AUTH・格下げの拒否・`smtp_failures_are_int_0015`）、`tests/pipeline.rs`（購読者・見えなくなった人・
+設定・言語・内部の情報が無い・再試行の上限・永続的な拒否・unknown・二重に送らない）。forge-web の `notification_routes`。forge-cli のワーカーの通し試験
+`the_worker_turns_an_approval_event_into_a_mail` と doctor の `notify::tests`。gstn の `tests/notifications.rs`（`get_reads_the_own_settings_route`、`set_changes_only_what_it_is_told_and_keeps_the_rest` ほか）。

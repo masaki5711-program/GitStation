@@ -261,6 +261,7 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::RefProtectionChange { .. }
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
+        | Resource::NotificationPreferences { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

@@ -229,7 +229,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // M3 O3: the maintenance job's own codes never reach a merge.
         | ErrorCode::RepositoryMaintenanceFailed
         | ErrorCode::RepositoryCorrupt
-        | ErrorCode::RepositoryRefLockStale => false,
+        | ErrorCode::RepositoryRefLockStale
+        // M3 N1: the mail job's own code never reaches a merge.
+        | ErrorCode::SmtpUnavailable => false,
     }
 }
 

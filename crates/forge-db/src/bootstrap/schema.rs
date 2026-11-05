@@ -773,6 +773,25 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             [dml("forge_app"), columns("forge_ro", "SELECT", WEBHOOKS_RO)].concat(),
         ),
         ("forge.webhook_deliveries", operational()),
+        // ── M3 N1: notifications (20261120100000) ──
+        (
+            "forge.notification_preferences",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.notifications",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
     ]
 }
 
@@ -970,6 +989,9 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 I2: webhooks (migration 20261120200000) ──
     "webhooks",
     "webhook_deliveries",
+    // ── M3 N1: notifications (migration 20261120100000) ──
+    "notification_preferences",
+    "notifications",
 ];
 
 /// Every table the first migration creates.

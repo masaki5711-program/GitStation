@@ -30,6 +30,8 @@ forge-review.workspace = true
 forge-checks.workspace = true
 # M3 I1c: the integrations' event feed (web -> integ -> auth / db, plan 11 3.7).
 forge-integ.workspace = true
+# M3 N1: the notification settings (web -> notify -> auth / db, plan 11 3.7).
+forge-notify.workspace = true
 url.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).

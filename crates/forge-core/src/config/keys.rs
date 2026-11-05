@@ -207,6 +207,26 @@ pub const KEYS: &[Key] = &[
     ),
     number("maintenance.batch_max", "FORGE_MAINTENANCE_BATCH_MAX"),
     number("maintenance.refs_warn", "FORGE_MAINTENANCE_REFS_WARN"),
+    // M3 N1: e-mail notifications (ADR-0016 Amendment N1).
+    boolean("notify.enabled", "FORGE_NOTIFY_ENABLED"),
+    text("notify.smtp_host", "FORGE_NOTIFY_SMTP_HOST"),
+    number("notify.smtp_port", "FORGE_NOTIFY_SMTP_PORT"),
+    text("notify.smtp_tls", "FORGE_NOTIFY_SMTP_TLS"),
+    text("notify.smtp_ca_file", "FORGE_NOTIFY_SMTP_CA_FILE"),
+    text("notify.smtp_username", "FORGE_NOTIFY_SMTP_USERNAME"),
+    text(
+        "notify.smtp_password_file",
+        "FORGE_NOTIFY_SMTP_PASSWORD_FILE",
+    ),
+    text("notify.from_address", "FORGE_NOTIFY_FROM_ADDRESS"),
+    text("notify.from_name", "FORGE_NOTIFY_FROM_NAME"),
+    text("notify.default_language", "FORGE_NOTIFY_DEFAULT_LANGUAGE"),
+    number(
+        "notify.connect_timeout_ms",
+        "FORGE_NOTIFY_CONNECT_TIMEOUT_MS",
+    ),
+    number("notify.send_timeout_ms", "FORGE_NOTIFY_SEND_TIMEOUT_MS"),
+    number("notify.max_attempts", "FORGE_NOTIFY_MAX_ATTEMPTS"),
     // M2 MR3: web sessions (ADR-0021 §5, §7, §12).
     text("web.base_url", "FORGE_WEB_BASE_URL"),
     text("web.session_key_file", "FORGE_WEB_SESSION_KEY_FILE"),

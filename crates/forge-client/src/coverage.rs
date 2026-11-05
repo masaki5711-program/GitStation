@@ -36,6 +36,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/user/tokens/{id}",
         Coverage::Command("token revoke"),
     ),
+    // M3 N1: your own notification settings.
+    (
+        "GET",
+        "/api/v1/user/notification-preferences",
+        Coverage::Command("notifications get"),
+    ),
+    (
+        "PUT",
+        "/api/v1/user/notification-preferences",
+        Coverage::Command("notifications set"),
+    ),
     (
         "GET",
         "/api/v1/user/sessions",

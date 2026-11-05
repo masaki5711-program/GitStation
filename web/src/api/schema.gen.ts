@@ -1413,6 +1413,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own notification settings: mail on or off, the language of the mail, the kinds muted (nobody else's, administrators included) */
+        get: operations["get_api_v1_user_notification_preferences"];
+        /** Replace the caller's own notification settings (an unknown language or kind is FG-WEB-0006) */
+        put: operations["put_api_v1_user_notification_preferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user/sessions": {
         parameters: {
             query?: never;
@@ -2942,6 +2960,23 @@ export interface components {
              * @description The version's number.
              */
             version: number;
+        };
+        /** @description The caller's settings. */
+        PreferencesBody: {
+            email_enabled: boolean;
+            /** @description Every kind of notification there is. */
+            kinds: string[];
+            language: string | null;
+            muted_kinds: string[];
+        };
+        /** @description `PUT /api/v1/user/notification-preferences`. */
+        PreferencesInput: {
+            /** @description `false` stops every mail. */
+            email_enabled: boolean;
+            /** @description `ja`, `en` or `id`; `null` (or absent) for the instance default. */
+            language?: string | null;
+            /** @description Kinds to stop (`GET`'s `kinds` lists them). */
+            muted_kinds: string[];
         };
         /** @description A project as the API shows it. */
         ProjectBody: {
@@ -7545,6 +7580,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserSelf"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_notification_preferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreferencesBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_user_notification_preferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreferencesInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreferencesBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

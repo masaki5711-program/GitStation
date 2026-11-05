@@ -275,6 +275,9 @@ pub(crate) enum Fixture {
     MakeInternalDeleted,
     OwnToken,
     ForeignToken,
+    /// The caller's own notification settings (M3 N1) or another user's.
+    OwnNotificationPreferences,
+    ForeignNotificationPreferences,
     /// Creating an own token with plain scopes.
     OwnTokenRequest,
     /// Creating an own token that carries the admin scope.
@@ -885,6 +888,10 @@ impl Fixture {
             },
             Fixture::OwnToken => Resource::Token { owner: ME },
             Fixture::ForeignToken => Resource::Token { owner: OTHER },
+            Fixture::OwnNotificationPreferences => Resource::NotificationPreferences { owner: ME },
+            Fixture::ForeignNotificationPreferences => {
+                Resource::NotificationPreferences { owner: OTHER }
+            }
             Fixture::OwnTokenRequest => Resource::TokenRequest {
                 owner: ME,
                 scopes: vec![Scope::ReadRepository],

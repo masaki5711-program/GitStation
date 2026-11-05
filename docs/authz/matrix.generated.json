@@ -43,6 +43,8 @@
   { "action": "TokenCreate", "allow": 3, "deny": 9, "public": false, "git_operation": false },
   { "action": "TokenList", "allow": 4, "deny": 6, "public": false, "git_operation": false },
   { "action": "TokenRevoke", "allow": 3, "deny": 12, "public": false, "git_operation": false },
+  { "action": "NotificationPreferencesRead", "allow": 3, "deny": 6, "public": false, "git_operation": false },
+  { "action": "NotificationPreferencesWrite", "allow": 3, "deny": 7, "public": false, "git_operation": false },
   { "action": "UserCreate", "allow": 2, "deny": 3, "public": false, "git_operation": false },
   { "action": "UserDisable", "allow": 2, "deny": 8, "public": false, "git_operation": false },
   { "action": "UserSearch", "allow": 4, "deny": 3, "public": false, "git_operation": false },

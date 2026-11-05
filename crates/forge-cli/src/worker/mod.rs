@@ -49,6 +49,8 @@ use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::subscribers::Registry;
 use forge_db::{Db, MIGRATOR};
 use forge_errors::{ErrorCode, ForgeError};
+#[cfg(test)]
+use forge_notify::Sender;
 use tokio::sync::watch;
 
 use crate::runtime::block_on;
@@ -73,6 +75,9 @@ mod codeowners_restore;
 // ── M3 O3: the repository maintenance (own runner + schedule) ──
 pub(crate) mod maintenance;
 // ── end M3 O3 ──
+// ── M3 N1: the notification lane (the subscriber and its own job runner) ──
+mod notify_lane;
+// ── end M3 N1 ──
 mod seal;
 // ── M3 I1c: events retention ──
 mod events_retention;
@@ -91,6 +96,7 @@ pub(crate) mod webhooks;
 // ── end M3 I2 ──
 mod supervise;
 
+use notify_lane::{NotifyLane, NotifyTask};
 use provision::Storage;
 use supervise::{supervise, Next, Runner};
 
@@ -110,6 +116,11 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
     let storage = Storage::open(cfg.storage_root()?)?;
     // M3 O3: the prune grace against the merge window, before anything runs.
     maintenance::check_settings(&cfg.maintenance)?;
+    // M3 N1: mail lane inputs (the lane itself is built after the database).
+    let notify = cfg.notify.enabled.then(|| NotifyLane {
+        cfg: cfg.notify.clone(), // clone: the lane owns its settings
+        origin: cfg.web.base_url().map(|u| u.origin().to_owned()),
+    });
     block_on(async {
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
@@ -138,7 +149,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             keys,
             &storage,
             purge,
-            (&cfg.review, Some(&cfg.maintenance)),
+            (&cfg.review, Some(&cfg.maintenance), notify.as_ref()),
             webhook,
             stopped,
         )
@@ -186,6 +197,10 @@ enum Task {
     /// The nightly maintenance schedule (`maintenance::run_schedule`).
     MaintenanceSchedule,
     // ── end M3 O3 ──
+    // ── M3 N1 ──
+    /// The notification lane's own job runner (`notify_lane`).
+    NotifyRunner,
+    // ── end M3 N1 ──
     // ── M3 I2 ──
     /// The webhook lane's own job runner (`webhooks`).
     WebhookRunner,
@@ -228,10 +243,22 @@ pub(crate) struct PurgeTask {
 }
 
 /// Every task of this worker.
+#[cfg(test)]
 fn tasks(
     registry: &Registry,
     purge: Option<&PurgeTask>,
     maintenance: Option<&MaintenanceTask>,
+    webhook: &WebhookLane,
+) -> Vec<Task> {
+    tasks_with(registry, purge, maintenance, None, webhook)
+}
+
+/// [`tasks`] with the notification lane's runner when given (M3 N1).
+fn tasks_with(
+    registry: &Registry,
+    purge: Option<&PurgeTask>,
+    maintenance: Option<&MaintenanceTask>,
+    notify: Option<&NotifyTask>,
     webhook: &WebhookLane,
 ) -> Vec<Task> {
     let mut tasks = vec![
@@ -269,6 +296,10 @@ fn tasks(
         tasks.push(Task::MaintenanceRunner);
         tasks.push(Task::MaintenanceSchedule);
     }
+    // ── M3 N1: only with the notification lane (notify.enabled) ──
+    if notify.is_some() {
+        tasks.push(Task::NotifyRunner);
+    }
     tasks
 }
 
@@ -279,19 +310,50 @@ fn tasks(
 /// enqueues the mergeability checks of a target push, at most
 /// `review.mergeability_fanout_max`) and `work-item-sync` (M3 I1b,
 /// `ordered`: the work item links and the events' work items; it stops and
-/// alerts on an event it cannot process), and `webhook-dispatch` (M3 I2,
-/// `independent`, with the webhook lane only: it records each event's
-/// deliveries). The others (`notify`, …) join with their features.
-fn registry(review: &ReviewConfig, webhooks: bool) -> Result<Registry, ForgeError> {
+/// alerts on an event it cannot process), `notify` (M3 N1, `independent`)
+/// and `webhook-dispatch` (M3 I2, `independent`, with the webhook lane
+/// only: it records each event's deliveries).
+#[cfg(test)]
+fn registry(review: &ReviewConfig) -> Result<Registry, ForgeError> {
+    registry_with(review, None, None, false)
+}
+
+/// [`registry`] with the `notify` subscriber when the lane exists, and
+/// `webhook-dispatch` when `webhooks` (the webhook lane exists).
+fn registry_with(
+    review: &ReviewConfig,
+    notify: Option<&NotifyTask>,
+    paused: Option<&Db>,
+    webhooks: bool,
+) -> Result<Registry, ForgeError> {
     let registry = Registry::new()
         .with(Arc::new(forge_db::review::MergeRequestRefresh::new(
             review.mergeability_fanout_max,
         )))?
         .with(Arc::new(forge_db::work_items::WorkItemSync))?;
-    if webhooks {
-        return registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch));
+    // M3 I2: deliveries are recorded only when the lane can send them.
+    let registry = if webhooks {
+        registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?
+    } else {
+        registry
+    };
+    // M3 N1 (`independent`): merge request events become notifications
+    // when mail is configured; without it nothing is recorded at all (no
+    // backlog that nothing would send).
+    match notify {
+        Some(task) => {
+            let subscriber: Arc<dyn forge_db::subscribers::Subscriber> =
+                Arc::clone(&task.subscriber) as Arc<dyn forge_db::subscribers::Subscriber>;
+            registry.with(subscriber)
+        }
+        // Mail off: the subscriber stays registered but passes every event
+        // over, so its cursor follows the head (no replay of the disabled
+        // period on enabling, no lag, retention not held back).
+        None => match paused {
+            Some(db) => registry.with(Arc::new(forge_notify::Notify::paused(db)?)),
+            None => Ok(registry),
+        },
     }
-    Ok(registry)
 }
 // ── end C5 ──
 
@@ -318,6 +380,8 @@ struct Shared {
     storage: Option<Storage>,
     /// The maintenance lane (M3 O3); `None` in the loop tests.
     maintenance: Option<MaintenanceTask>,
+    /// The notification lane (M3 N1); `None` unless `notify.enabled`.
+    notify: Option<NotifyTask>,
     /// `review.check_run_retention_days`.
     check_run_retention_days: u32,
     /// The webhook lane (M3 I2).
@@ -342,6 +406,7 @@ impl Task {
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
             Self::WebhookRunner => webhooks::RUNNER_NAME,
             Self::WebhookRetention => webhooks::RETENTION_NAME,
+            Self::NotifyRunner => notify_lane::RUNNER_NAME,
         }
     }
 
@@ -369,6 +434,7 @@ impl Task {
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
             Self::WebhookRunner => jobs::JOB_POLL_PERIOD,
             Self::WebhookRetention => webhooks::RETENTION_PERIOD,
+            Self::NotifyRunner => jobs::JOB_POLL_PERIOD,
         }
     }
 
@@ -440,6 +506,13 @@ impl Task {
             Self::WebhookRetention => {
                 webhooks::run_retention(db, shared.webhook.retention_days).await
             }
+            Self::NotifyRunner => match shared.notify.as_ref() {
+                Some(n) => {
+                    let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver
+                    jobs::run_job(&n.runner, shared.grace, stop).await
+                }
+                None => Err(self.unconfigured()),
+            },
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")
@@ -466,13 +539,13 @@ impl Task {
 }
 
 impl Task {
-    /// `tasks` starts the maintenance tasks only with their lane: reaching
-    /// this is a bug.
+    /// `tasks` starts the maintenance and notification tasks only with
+    /// their lane: reaching this is a bug.
     fn unconfigured(self) -> ForgeError {
         ForgeError::new(ErrorCode::Internal)
             .with_context("operation", "worker_task")
             .with_context("task", self.name())
-            .with_context("reason", "maintenance_unconfigured")
+            .with_context("reason", "lane_unconfigured")
     }
 }
 
@@ -504,7 +577,7 @@ pub(crate) async fn run(
         keys,
         storage,
         purge,
-        (review, None),
+        (review, None, None),
         WebhookLane::default(),
         shutdown,
     )
@@ -518,7 +591,11 @@ pub(crate) async fn run_full(
     keys: Arc<SealKeys>,
     storage: &Storage,
     purge: Option<PurgeTask>,
-    (review, maintenance): (&ReviewConfig, Option<&MaintenanceConfig>),
+    (review, maintenance, notify): (
+        &ReviewConfig,
+        Option<&MaintenanceConfig>,
+        Option<&NotifyLane>,
+    ),
     webhook: WebhookLane,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
@@ -534,18 +611,53 @@ pub(crate) async fn run_full(
             })
         })
         .transpose()?;
+    // M3 N1: the relay's CA file and password are read now.
+    let notify = notify
+        .map(|lane| NotifyTask::new(db, lane, None))
+        .transpose()?;
     run_all(
         db,
         runner,
-        registry(review, webhook.runner.is_some())?,
+        registry_with(review, notify.as_ref(), Some(db), webhook.runner.is_some())?,
         jobs::SHUTDOWN_GRACE,
         keys,
         (
             purge,
             Some(storage.clone()), // clone: the sweep's own handles
             maintenance,
+            notify,
             review.check_run_retention_days,
             webhook,
+        ),
+        shutdown,
+    )
+    .await
+}
+
+/// [`run_with`] with the notification lane built on `sender` (tests).
+#[cfg(test)]
+pub(crate) async fn run_with_notify(
+    db: &Db,
+    lane: &NotifyLane,
+    sender: Option<Arc<dyn Sender>>,
+    keys: Arc<SealKeys>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), ForgeError> {
+    let notify = NotifyTask::new(db, lane, sender)?;
+    let runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
+    run_all(
+        db,
+        runner,
+        registry_with(&ReviewConfig::default(), Some(&notify), None, false)?,
+        Duration::from_secs(5),
+        keys,
+        (
+            None,
+            None,
+            None,
+            Some(notify),
+            ReviewConfig::DEFAULT_CHECK_RUN_RETENTION_DAYS,
+            WebhookLane::default(),
         ),
         shutdown,
     )
@@ -573,6 +685,7 @@ pub(crate) async fn run_with(
             None,
             None,
             None,
+            None,
             ReviewConfig::DEFAULT_CHECK_RUN_RETENTION_DAYS,
             WebhookLane::default(),
         ),
@@ -588,11 +701,13 @@ async fn run_all(
     grace: Duration,
     keys: Arc<SealKeys>,
     // The purge (D5 MR4), the repositories (M3 R2 sweep) and the
-    // maintenance lane (M3 O3), when given; and `review.check_run_retention_days`.
-    (purge, storage, maintenance, check_run_retention_days, webhook): (
+    // maintenance lane (M3 O3), the notification lane (M3 N1) and the webhook
+    // lane (M3 I2), when given; and `review.check_run_retention_days`.
+    (purge, storage, maintenance, notify, check_run_retention_days, webhook): (
         Option<PurgeTask>,
         Option<Storage>,
         Option<MaintenanceTask>,
+        Option<NotifyTask>,
         u32,
         WebhookLane,
     ),
@@ -631,13 +746,15 @@ async fn run_all(
         purge,
         storage,
         maintenance,
+        notify,
         check_run_retention_days,
         webhook,
     };
-    let runners = tasks(
+    let runners = tasks_with(
         &shared.registry,
         shared.purge.as_ref(),
         shared.maintenance.as_ref(),
+        shared.notify.as_ref(),
         &shared.webhook,
     )
     .into_iter()
@@ -650,6 +767,8 @@ async fn run_all(
 mod jobs_tests;
 #[cfg(test)]
 pub(crate) mod loop_tests;
+#[cfg(test)]
+mod notify_tests;
 #[cfg(test)]
 mod seal_tests;
 // ── C5: the subscribers task's tests live in subscribers_tests.rs ──

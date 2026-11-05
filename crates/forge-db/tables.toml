@@ -549,6 +549,22 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 # ── end M3 I2 ──
+# ── M3 N1: e-mail notifications (20261120100000, ADR-0016 Amendment N1) ──
+# A person's own notification settings (e-mail on / off, language, muted
+# kinds). Not audited: it changes no one's access and no one else's data.
+[tables.notification_preferences]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# One row per (source event, recipient): the delivery record, written by the
+# notify subscriber in its progress transaction and settled by the
+# notification.send job.
+[tables.notifications]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 N1 ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

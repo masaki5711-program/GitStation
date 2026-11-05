@@ -3647,6 +3647,70 @@
         ],
         "type": "object"
       },
+      "PreferencesBody": {
+        "additionalProperties": false,
+        "description": "The caller's settings.",
+        "properties": {
+          "email_enabled": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "description": "Every kind of notification there is.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muted_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "email_enabled",
+          "language",
+          "muted_kinds",
+          "kinds"
+        ],
+        "type": "object"
+      },
+      "PreferencesInput": {
+        "additionalProperties": false,
+        "description": "`PUT /api/v1/user/notification-preferences`.",
+        "properties": {
+          "email_enabled": {
+            "description": "`false` stops every mail.",
+            "type": "boolean"
+          },
+          "language": {
+            "description": "`ja`, `en` or `id`; `null` (or absent) for the instance default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muted_kinds": {
+            "description": "Kinds to stop (`GET`'s `kinds` lists them).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "email_enabled",
+          "muted_kinds"
+        ],
+        "type": "object"
+      },
       "ProjectBody": {
         "additionalProperties": false,
         "description": "A project as the API shows it.",
@@ -11540,6 +11604,73 @@
         },
         "summary": "The caller's own account (M1 phase 8b MR6)",
         "x-forge-action": "UserSelfRead"
+      }
+    },
+    "/api/v1/user/notification-preferences": {
+      "get": {
+        "operationId": "get_api_v1_user_notification_preferences",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own notification settings: mail on or off, the language of the mail, the kinds muted (nobody else's, administrators included)",
+        "x-forge-action": "NotificationPreferencesRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_user_notification_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencesInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Replace the caller's own notification settings (an unknown language or kind is FG-WEB-0006)",
+        "x-forge-action": "NotificationPreferencesWrite",
+        "x-forge-max-body-bytes": 1024
       }
     },
     "/api/v1/user/sessions": {

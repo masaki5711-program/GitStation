@@ -155,6 +155,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 cfg.webhook.policy.clone(), // clone: the routes own their policy
                 webhook_keys,
             ))
+            // M3 N1: a person's own notification settings (always: the
+            // routes are cheap and the settings are kept even while mail is
+            // off, so turning mail on later honours them).
+            .with_notifications(forge_notify::Settings::new(db.clone())) // clone: the pool handle is shared
             .with_smart_http(smart_http)
             .with_lists(
                 Lists::new(

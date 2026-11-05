@@ -1031,6 +1031,30 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["DELETE /api/v1/user/tokens/{id}"],
         output: r#"{"type":"object","required":["id","revoked"],"properties":{"id":{"type":"integer"},"revoked":{"const":true}}}"#,
     },
+    // ── M3 N1: your notification settings ──
+    CommandSpec {
+        name: "notifications get",
+        summary: "Show your notification settings: mail on or off, the language of the mail (null: the instance default) and the kinds muted; kinds lists every kind there is.",
+        args: &[],
+        examples: &["gstn notifications get --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/user/notification-preferences"],
+        output: r#"{"type":"object","required":["email_enabled","language","muted_kinds","kinds"],"properties":{"email_enabled":{"type":"boolean"},"language":{"type":["string","null"]},"muted_kinds":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"type":"string"}}}}"#,
+    },
+    CommandSpec {
+        name: "notifications set",
+        summary: "Change your notification settings; a flag changes only what it names (the rest is kept). Nobody else's can be changed, administrators included.",
+        args: &[
+            arg("--email", "option", false, "on | off: all mail."),
+            arg("--language", "option", false, "ja | en | id | default (the instance's)."),
+            arg("--mute", "option", false, "A kind to stop (repeatable; notifications get lists them)."),
+            arg("--unmute", "option", false, "A kind to receive again (repeatable)."),
+        ],
+        examples: &["gstn notifications set --email off", "gstn notifications set --mute mr_commented --language en"],
+        scopes: &["read_api", "api"],
+        routes: &["GET /api/v1/user/notification-preferences", "PUT /api/v1/user/notification-preferences"],
+        output: r#"{"type":"object","required":["email_enabled","language","muted_kinds","kinds"],"properties":{"email_enabled":{"type":"boolean"},"language":{"type":["string","null"]},"muted_kinds":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"type":"string"}}}}"#,
+    },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {
         name: "admin service-account list",

@@ -24,6 +24,9 @@ mod git_http;
 mod hosting;
 mod keys;
 mod maintenance;
+// ── M3 N1: `notify.*` ──
+mod notify;
+// ── end M3 N1 ──
 mod review;
 mod secret;
 mod server_limits;
@@ -43,6 +46,7 @@ pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
+pub use notify::{valid_mailbox, NotifyConfig, SmtpConfig, SmtpTls};
 pub use review::ReviewConfig;
 pub(crate) use secret::read_secret_text;
 pub use secret::{DatabaseUrl, Secret};
@@ -68,6 +72,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_FEED_",
     // M3 O3: `maintenance.*`.
     "FORGE_MAINTENANCE_",
+    // M3 N1: `notify.*`.
+    "FORGE_NOTIFY_",
     // M2 MR3 / MR4 (ADR-0021 §12): `web.*` and `auth.oidc.*`.
     "FORGE_WEB_",
     "FORGE_AUTH_",
@@ -162,6 +168,8 @@ pub struct Config {
     pub feed: FeedConfig,
     /// `maintenance.*` (the repository maintenance, M3 O3).
     pub maintenance: MaintenanceConfig,
+    /// `notify.*` (e-mail notifications, M3 N1).
+    pub notify: NotifyConfig,
     /// `web.*` (the base URL, the session keys and lifetimes, M2 MR3).
     pub web: WebConfig,
     /// `auth.oidc.*` (the browser sign-in, M2 MR4).
@@ -409,6 +417,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         review: ReviewConfig::load(get)?,
         feed: FeedConfig::load(get)?,
         maintenance: MaintenanceConfig::load(get)?,
+        notify: NotifyConfig::load(get)?,
         web: WebConfig::load(
             get,
             text("web.base_url")?,

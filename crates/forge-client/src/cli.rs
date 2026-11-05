@@ -137,6 +137,12 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
+    /// Your notification settings: mail on or off, language, muted kinds (M3 N1).
+    #[command(disable_help_subcommand = true)]
+    Notifications {
+        #[command(subcommand)]
+        command: NotificationsCommand,
+    },
     /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
     Admin {
@@ -1140,6 +1146,34 @@ pub enum TokenCommand {
         /// Confirm (gstn never prompts).
         #[arg(long)]
         yes: bool,
+    },
+}
+
+/// `notifications set --email`.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MailSwitch {
+    On,
+    Off,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum NotificationsCommand {
+    /// Your settings: mail on or off, the language of the mail, the kinds muted.
+    Get,
+    /// Change your settings; a flag changes only what it names.
+    Set {
+        /// Turn all mail on or off.
+        #[arg(long, value_enum)]
+        email: Option<MailSwitch>,
+        /// The language of the mail: ja, en, id, or default (the instance's).
+        #[arg(long, value_parser = ["ja", "en", "id", "default"])]
+        language: Option<String>,
+        /// Stop a kind of notification (repeatable; `notifications get` lists them).
+        #[arg(long, value_parser = parse_text, value_name = "KIND")]
+        mute: Vec<String>,
+        /// Receive a kind again (repeatable).
+        #[arg(long, value_parser = parse_text, value_name = "KIND")]
+        unmute: Vec<String>,
     },
 }
 

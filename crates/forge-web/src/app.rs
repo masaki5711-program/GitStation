@@ -83,6 +83,10 @@ pub struct AppState {
     /// them; without them those routes answer `FG-SYS-0001
     /// reason=webhooks_unconfigured`).
     pub webhooks: Option<Arc<forge_integ::webhooks::Webhooks>>,
+    /// The caller's notification settings (M3 N1, ADR-0016 Amendment N1;
+    /// `forge serve` always sets it; without it those routes answer
+    /// `FG-SYS-0001 reason=notifications_unconfigured`).
+    pub notifications: Option<Arc<forge_notify::Settings>>,
     /// The list routes' page loaders and cursor keys (M1 phase 8b MR7b;
     /// `forge serve` always sets them, refusing to start without
     /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
@@ -144,6 +148,7 @@ impl AppState {
             checks: None,
             feed: None,
             webhooks: None,
+            notifications: None,
             lists: None,
             sessions: None,
             web_origin: None,
@@ -193,6 +198,13 @@ impl AppState {
     #[must_use]
     pub fn with_checks(mut self, checks: forge_checks::Checks) -> Self {
         self.checks = Some(Arc::new(checks));
+        self
+    }
+
+    /// The notification settings commands (M3 N1).
+    #[must_use]
+    pub fn with_notifications(mut self, settings: forge_notify::Settings) -> Self {
+        self.notifications = Some(Arc::new(settings));
         self
     }
 
@@ -455,10 +467,10 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    webhook_routes(check_routes(dev_status_routes(feed_routes(
-        integration_routes(service_account_routes(account_routes(history_routes(
-            browse_routes(git_routes(shell_routes(merge_request_routes(
-                member_routes(move_routes(hosting_routes(fixed))),
+    webhook_routes(notification_routes(check_routes(dev_status_routes(
+        feed_routes(integration_routes(service_account_routes(account_routes(
+            history_routes(browse_routes(git_routes(shell_routes(
+                merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
             )))),
         )))),
     ))))
@@ -647,6 +659,31 @@ fn service_account_routes(registry: Registry<AppState>) -> Registry<AppState> {
             sa::revoke,
         )
         .responds_no_content(Verb::Delete, sa::TOKEN)
+}
+
+/// The caller's own notification settings (M3 N1, ADR-0016 Amendment N1).
+fn notification_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::notifications as n;
+    registry
+        .route_with(
+            Verb::Get,
+            n::PREFERENCES,
+            Action::NotificationPreferencesRead,
+            "The caller's own notification settings: mail on or off, the language of the mail, the kinds muted (nobody else's, administrators included)",
+            n::OwnPreferences,
+            n::read,
+        )
+        .responds::<n::PreferencesBody>(Verb::Get, n::PREFERENCES)
+        .route_with_body(
+            Verb::Put,
+            n::PREFERENCES,
+            Action::NotificationPreferencesWrite,
+            "Replace the caller's own notification settings (an unknown language or kind is FG-WEB-0006)",
+            n::MAX_BODY,
+            n::OwnPreferencesChange,
+            n::replace,
+        )
+        .responds::<n::PreferencesBody>(Verb::Put, n::PREFERENCES)
 }
 
 /// The Checks API (M3 C1, ADR-0024 §10, docs/api/checks.md): a commit's
