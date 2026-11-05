@@ -49,3 +49,34 @@ FeedCursorInvalid (400), FG-INT-0009 FeedConsumerLag (warn; also doctor
 `act_as_refused`, `integration_disabled`).
 
 **Runbook**: `ops/runbooks/integration-feed-lag.md`.
+
+## Webhooks (M3 I2; ADR-0016 §8 and its Amendment I2; docs/api/webhooks.md)
+
+- `webhooks::Webhooks` (`forge serve` builds one with `webhook.allowed_targets`,
+  `webhook.allow_http` and `webhook.secret_keys_file`): `list` / `get`
+  (`WebhookRead`), `create` / `update` / `delete` / `rotate_secret`
+  (`WebhookManage`), `deliveries` (`WebhookDeliveryRead`), `redeliver`
+  (`WebhookRedeliver`) on the route's proof; every write is decided again in
+  forge-db's `*_decided` command (`Authorized::reconfirm`). The URL passes
+  forge-core's `TargetPolicy` after the decision (`FG-INT-0010`); the secret
+  (`whsec_…`) is generated here, sealed for the row's `uid` and shown once.
+- `webhooks::WebhookDispatch` (`webhook-dispatch`, independent): one delivery
+  row and its first `webhook.deliver` job per (webhook, event) the owner may
+  still see (`forge_auth::prove_webhook_delivery`) and the allowlist admits.
+- `webhooks::DeliverHandler` (`webhook.deliver`, the worker's own lane): one
+  attempt — decided again, the target checked against the policy of the moment
+  and the addresses resolved now, the connection pinned to the checked
+  address (`webhooks::Transport`: no proxy, no redirect, 3 s connect, 10 s in
+  all, ≤ 4 KiB read, roots of `webhook.ca_file` only), signed with the current
+  and (for 24 h after a rotation) the previous secret, then recorded
+  (`forge_db::webhooks::record_attempt`): the next attempt after the backoff,
+  the last one, the automatic disable.
+- Only this crate calls the webhook `*_decided` commands and
+  `prove_webhook_delivery` (`tests/decided_callers.rs`).
+
+**Owned error codes** (I2): FG-INT-0004 WebhookDeadLettered (warn), FG-INT-0010
+WebhookTargetForbidden (400, warn), FG-INT-0011 WebhookDisabled (warn),
+FG-INT-0020 WebhookAttemptFailed (info); the 21st webhook of a project is
+FG-INT-0012 `reason=webhook_limit`.
+
+**Runbook**: `ops/runbooks/webhook-delivery.md`.
