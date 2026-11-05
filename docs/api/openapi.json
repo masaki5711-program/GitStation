@@ -1370,6 +1370,30 @@
         ],
         "type": "object"
       },
+      "CreateWebhook": {
+        "additionalProperties": false,
+        "description": "`POST …/webhooks`.",
+        "properties": {
+          "event_types": {
+            "description": "`*` (every integration-class event, the default), a family\n(`merge_request.*`) of the integration class, or an exact type name;\na maintainer- or deployment-class type only by its name; 1..=64.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "An absolute `https` URL (`http` only where the operator allows it)\nof at most 2048 bytes, without user information or a fragment, whose\nhost and port the operator's allowlist names.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
       "CreatedToken": {
         "additionalProperties": false,
         "description": "A created token: the secret, shown this once.",
@@ -1413,6 +1437,24 @@
         ],
         "type": "object"
       },
+      "CreatedWebhook": {
+        "additionalProperties": false,
+        "description": "A created webhook and its secret (shown this once).",
+        "properties": {
+          "secret": {
+            "description": "`whsec_…`: the HMAC-SHA256 key of `Forge-Signature`. Never shown\nagain.",
+            "type": "string"
+          },
+          "webhook": {
+            "$ref": "#/components/schemas/WebhookBody"
+          }
+        },
+        "required": [
+          "webhook",
+          "secret"
+        ],
+        "type": "object"
+      },
       "DeletionBody": {
         "additionalProperties": false,
         "description": "`DELETE /api/v1/projects/{id}`: when the grace period began and when\nthe purge may start.",
@@ -1435,6 +1477,130 @@
           "id",
           "deleted_at",
           "purge_after"
+        ],
+        "type": "object"
+      },
+      "DeliveryBody": {
+        "additionalProperties": false,
+        "description": "One delivery (never the body sent or the answer's body).",
+        "properties": {
+          "attempts": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "delivery_id": {
+            "description": "The `Forge-Delivery` value.",
+            "type": "string"
+          },
+          "event_id": {
+            "description": "`evt_…` (the feed's id).",
+            "type": "string"
+          },
+          "event_seq": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_duration_ms": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_reason": {
+            "description": "`status`, `redirect`, `connect`, `timeout`, `tls`, `dns`,\n`target_forbidden`, … (docs/api/webhooks.md).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_status": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "redeliveries": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "state": {
+            "description": "`pending`, `succeeded`, `failed` or `skipped`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "delivery_id",
+          "event_seq",
+          "event_id",
+          "event_type",
+          "state",
+          "attempts",
+          "last_status",
+          "last_reason",
+          "last_error_code",
+          "last_duration_ms",
+          "redeliveries",
+          "created_at",
+          "last_attempt_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "DeliveryList": {
+        "additionalProperties": false,
+        "description": "A page of the delivery history.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryBody"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "description": "Pass as `before` for the next (older) page; `null`: no more.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_before"
         ],
         "type": "object"
       },
@@ -3817,6 +3983,20 @@
         ],
         "type": "object"
       },
+      "RedeliveryQueued": {
+        "additionalProperties": false,
+        "description": "A redelivery was queued.",
+        "properties": {
+          "outcome": {
+            "description": "`queued`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
       "RefBody": {
         "additionalProperties": false,
         "description": "One branch or tag.",
@@ -4128,6 +4308,29 @@
           "owner"
         ],
         "type": "string"
+      },
+      "RotatedWebhookSecret": {
+        "additionalProperties": false,
+        "description": "A rotated secret (shown this once).",
+        "properties": {
+          "previous_secret_valid_until": {
+            "description": "The previous secret still signs until then (UTC, RFC 3339).",
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "secret_version": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "secret",
+          "secret_version",
+          "previous_secret_valid_until"
+        ],
+        "type": "object"
       },
       "RuleStatusBody": {
         "additionalProperties": false,
@@ -5080,6 +5283,36 @@
         },
         "type": "object"
       },
+      "UpdateWebhook": {
+        "additionalProperties": false,
+        "description": "`PATCH …/webhooks/{webhook_id}`: the fields to change.",
+        "properties": {
+          "enabled": {
+            "description": "`true` enables it again and clears its failure count.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "event_types": {
+            "description": "Replaces the allowlist (the rules of `CreateWebhook`).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "UpdatedIntegration": {
         "additionalProperties": false,
         "description": "What an update changed.",
@@ -5129,6 +5362,32 @@
           "outcome",
           "fields",
           "service_account"
+        ],
+        "type": "object"
+      },
+      "UpdatedWebhook": {
+        "additionalProperties": false,
+        "description": "What an update changed.",
+        "properties": {
+          "fields": {
+            "description": "`url`, `event_types`, `enabled`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "description": "`updated`, or `unchanged` (nothing was written).",
+            "type": "string"
+          },
+          "webhook": {
+            "$ref": "#/components/schemas/WebhookBody"
+          }
+        },
+        "required": [
+          "outcome",
+          "fields",
+          "webhook"
         ],
         "type": "object"
       },
@@ -5434,6 +5693,115 @@
           "internal"
         ],
         "type": "string"
+      },
+      "WebhookBody": {
+        "additionalProperties": false,
+        "description": "One webhook (never a secret).",
+        "properties": {
+          "consecutive_failures": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "disabled_reason": {
+            "description": "`manual`, `failures` (50 failed attempts in a row) or `failing_24h`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "event_types": {
+            "description": "Sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "failing_since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_delivery_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_id": {
+            "description": "The person who created it: deliveries stop when they can no longer\nmanage the project's webhooks.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "previous_secret_valid_until": {
+            "description": "The previous secret still signs until then (UTC, RFC 3339).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "secret_version": {
+            "description": "The version of the current secret (`Forge-Signature-Kid`).",
+            "format": "int32",
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "owner_id",
+          "url",
+          "event_types",
+          "enabled",
+          "disabled_reason",
+          "secret_version",
+          "previous_secret_valid_until",
+          "consecutive_failures",
+          "failing_since",
+          "last_delivery_at",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "WebhookList": {
+        "additionalProperties": false,
+        "description": "A project's webhooks.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebhookBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
       },
       "WorkItemBody": {
         "additionalProperties": false,
@@ -10684,6 +11052,435 @@
         "summary": "Set a project's visibility (Owner)",
         "x-forge-action": "ProjectVisibilityChange",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/webhooks": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_webhooks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's webhooks, never a secret (Maintainer)",
+        "x-forge-action": "WebhookRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_webhooks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhook"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedWebhook"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a webhook owned by the caller; its URL must be on the operator's allowlist (400 FG-INT-0010); the secret is shown once (people only; Maintainer; at most 20)",
+        "x-forge-action": "WebhookManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/{webhook_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_webhooks_webhook_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a webhook and its delivery history (people only; Maintainer)",
+        "x-forge-action": "WebhookManage"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id_webhooks_webhook_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One webhook of the project (Maintainer)",
+        "x-forge-action": "WebhookRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id_webhooks_webhook_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhook"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedWebhook"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a webhook's URL, event types or enabled flag; enabling clears its failure count (people only; Maintainer)",
+        "x-forge-action": "WebhookManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_webhooks_webhook_id_deliveries",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only deliveries with a smaller id (the last id of the previous page)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Deliveries per page, 1..=100 (default 20), newest first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A webhook's delivery history, newest first: state, attempts, the last status and reason (never a body; Maintainer)",
+        "x-forge-action": "WebhookDeliveryRead"
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_webhooks_webhook_id_deliveries_delivery_id_redeliver",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeliveryQueued"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Deliver one delivery again with the same delivery id (people only; Maintainer; 429 while pending or within 60 s of its last attempt)",
+        "x-forge-action": "WebhookRedeliver"
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/secret": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_webhooks_webhook_id_secret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotatedWebhookSecret"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Replace a webhook's secret, shown once; the previous one still signs for 24 hours (people only; Maintainer)",
+        "x-forge-action": "WebhookManage"
       }
     },
     "/api/v1/session": {

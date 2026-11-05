@@ -72,6 +72,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     if let Some(keys) = cfg.web.session_keys()? {
         tracing::info!(kids = ?keys.kids(), "forge.serve.session_keys_loaded");
     }
+    // M3 I2: the webhooks' secret keys (optional: without them a webhook
+    // cannot be created, FG-SYS-0002 reason=missing on that route); a bad
+    // file stops the start.
+    let webhook_keys = cfg.webhook.secret_keys()?.map(Arc::new);
     block_on(async {
         let smart_http = smart_http(storage, &cfg.git_http);
         forge_git::version::detect(&smart_http.git).await?;
@@ -143,6 +147,13 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             .with_feed(forge_integ::Feed::new(
                 db.clone(),               // clone: the pool handle is shared
                 Arc::clone(&cursor_keys), // clone: the keys are shared with the lists
+            ))
+            // M3 I2: project webhooks (the operator's target policy and
+            // secret keys).
+            .with_webhooks(forge_integ::webhooks::Webhooks::new(
+                db.clone(),                 // clone: the pool handle is shared
+                cfg.webhook.policy.clone(), // clone: the routes own their policy
+                webhook_keys,
             ))
             .with_smart_http(smart_http)
             .with_lists(

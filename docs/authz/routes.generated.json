@@ -856,6 +856,70 @@
     "word": "fixed"
   },
   {
+    "action": "WebhookRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/webhooks",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/webhooks",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookManage",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookDeliveryRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookRedeliver",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/secret",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "SessionRead",
     "method": "GET",
     "path": "/api/v1/session",
@@ -1298,5 +1362,9 @@
   {
     "action": "SessionContinue",
     "decided_in": "/api/v1/session"
+  },
+  {
+    "action": "WebhookDeliver",
+    "decided_in": "/api/v1/projects/{id}/webhooks"
   }
 ]

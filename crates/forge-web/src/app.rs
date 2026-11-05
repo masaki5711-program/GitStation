@@ -79,6 +79,10 @@ pub struct AppState {
     /// always sets it; without it the feed routes answer `FG-SYS-0001
     /// reason=feed_unconfigured`).
     pub feed: Option<Arc<forge_integ::Feed>>,
+    /// Project webhooks (M3 I2, ADR-0016 §8; `forge serve` always sets
+    /// them; without them those routes answer `FG-SYS-0001
+    /// reason=webhooks_unconfigured`).
+    pub webhooks: Option<Arc<forge_integ::webhooks::Webhooks>>,
     /// The list routes' page loaders and cursor keys (M1 phase 8b MR7b;
     /// `forge serve` always sets them, refusing to start without
     /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
@@ -139,6 +143,7 @@ impl AppState {
             review: None,
             checks: None,
             feed: None,
+            webhooks: None,
             lists: None,
             sessions: None,
             web_origin: None,
@@ -195,6 +200,13 @@ impl AppState {
     #[must_use]
     pub fn with_feed(mut self, feed: forge_integ::Feed) -> Self {
         self.feed = Some(Arc::new(feed));
+        self
+    }
+
+    /// Project webhooks (M3 I2).
+    #[must_use]
+    pub fn with_webhooks(mut self, webhooks: forge_integ::webhooks::Webhooks) -> Self {
+        self.webhooks = Some(Arc::new(webhooks));
         self
     }
 
@@ -293,9 +305,14 @@ pub const PLANNED: &[Action] = &[Action::UserCreate, Action::AuditRead, Action::
 /// MR5, ADR-0021 §7) is decided by the session authentication of every
 /// cookie-authenticated route when the 5-minute refresh check is due;
 /// `GET /api/v1/session` (which the page reads first) stands for them.
+/// `WebhookDeliver` (M3 I2, ADR-0016 §8) is decided in `POST
+/// …/webhooks` (and a `PATCH` changing the event types) for each class the
+/// creator names, and again by the worker for the owner before every
+/// delivery (`forge_auth::prove_webhook_delivery`).
 pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
     (Action::SessionCreate, routes::auth::CALLBACK_PATH),
     (Action::SessionContinue, routes::session::PATH),
+    (Action::WebhookDeliver, routes::webhooks::COLLECTION),
 ];
 
 /// The words whose page is the SPA shell on a project (ADR-0015 "ルートの
@@ -438,12 +455,12 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    check_routes(dev_status_routes(feed_routes(integration_routes(
-        service_account_routes(account_routes(history_routes(browse_routes(git_routes(
-            shell_routes(merge_request_routes(member_routes(move_routes(
-                hosting_routes(fixed),
+    webhook_routes(check_routes(dev_status_routes(feed_routes(
+        integration_routes(service_account_routes(account_routes(history_routes(
+            browse_routes(git_routes(shell_routes(merge_request_routes(
+                member_routes(move_routes(hosting_routes(fixed))),
             )))),
-        ))))),
+        )))),
     ))))
 }
 
@@ -765,6 +782,88 @@ fn integration_routes(registry: Registry<AppState>) -> Registry<AppState> {
             i::unbind,
         )
         .responds_no_content(Verb::Delete, i::PROJECT_BINDING)
+}
+
+/// Project webhooks (M3 I2, ADR-0016 §8, docs/api/webhooks.md): a
+/// project's Maintainers read them; managing and redelivering are people's.
+fn webhook_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::webhooks as h;
+    registry
+        .route_with(
+            Verb::Get,
+            h::COLLECTION,
+            Action::WebhookRead,
+            "A project's webhooks, never a secret (Maintainer)",
+            h::WebhooksOf,
+            h::list,
+        )
+        .responds::<h::WebhookList>(Verb::Get, h::COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            h::COLLECTION,
+            Action::WebhookManage,
+            "Create a webhook owned by the caller; its URL must be on the operator's allowlist (400 FG-INT-0010); the secret is shown once (people only; Maintainer; at most 20)",
+            h::MAX_BODY,
+            h::WebhooksOf,
+            h::create,
+        )
+        .responds_created::<h::CreatedWebhook>(Verb::Post, h::COLLECTION)
+        .route_with(
+            Verb::Get,
+            h::ONE,
+            Action::WebhookRead,
+            "One webhook of the project (Maintainer)",
+            h::WEBHOOK,
+            h::read,
+        )
+        .responds::<h::WebhookBody>(Verb::Get, h::ONE)
+        .route_with_body(
+            Verb::Patch,
+            h::ONE,
+            Action::WebhookManage,
+            "Change a webhook's URL, event types or enabled flag; enabling clears its failure count (people only; Maintainer)",
+            h::MAX_BODY,
+            h::WEBHOOK,
+            h::update,
+        )
+        .responds::<h::UpdatedWebhook>(Verb::Patch, h::ONE)
+        .route_with(
+            Verb::Delete,
+            h::ONE,
+            Action::WebhookManage,
+            "Delete a webhook and its delivery history (people only; Maintainer)",
+            h::WEBHOOK,
+            h::delete,
+        )
+        .responds_no_content(Verb::Delete, h::ONE)
+        .route_with(
+            Verb::Post,
+            h::SECRET,
+            Action::WebhookManage,
+            "Replace a webhook's secret, shown once; the previous one still signs for 24 hours (people only; Maintainer)",
+            h::WEBHOOK_SECRET,
+            h::rotate,
+        )
+        .responds::<h::RotatedWebhookSecret>(Verb::Post, h::SECRET)
+        .route_with(
+            Verb::Get,
+            h::DELIVERIES,
+            Action::WebhookDeliveryRead,
+            "A webhook's delivery history, newest first: state, attempts, the last status and reason (never a body; Maintainer)",
+            h::WEBHOOK_DELIVERIES,
+            h::deliveries,
+        )
+        .responds::<h::DeliveryList>(Verb::Get, h::DELIVERIES)
+        .queries(Verb::Get, h::DELIVERIES, h::DELIVERIES_QUERY)
+        .route_with(
+            Verb::Post,
+            h::REDELIVER,
+            Action::WebhookRedeliver,
+            "Deliver one delivery again with the same delivery id (people only; Maintainer; 429 while pending or within 60 s of its last attempt)",
+            h::RedeliveryOf,
+            h::redeliver,
+        )
+        .responds_accepted::<h::RedeliveryQueued>(Verb::Post, h::REDELIVER)
 }
 
 /// The integrations' event feed (M3 I1c, ADR-0016 §7, plan 02 §11.2,

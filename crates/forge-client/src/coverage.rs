@@ -525,6 +525,47 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/commits/{sha}/checks",
         Coverage::Command("checks list"),
     ),
+    // M3 I2 (ADR-0016 §8): project webhooks.
+    (
+        "GET",
+        "/api/v1/projects/{id}/webhooks",
+        Coverage::Command("webhook list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/webhooks",
+        Coverage::Command("webhook create"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}",
+        Coverage::Command("webhook view"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}",
+        Coverage::Command("webhook update"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}",
+        Coverage::Command("webhook delete"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}/secret",
+        Coverage::Command("webhook rotate-secret"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries",
+        Coverage::Command("webhook deliveries"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
+        Coverage::Command("webhook redeliver"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

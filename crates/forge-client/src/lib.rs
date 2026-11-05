@@ -30,6 +30,8 @@ pub mod mr_work_items;
 pub mod registry;
 pub mod review;
 pub mod store;
+// M3 I2: project webhooks.
+pub mod webhooks;
 
 #[cfg(test)]
 mod tests;

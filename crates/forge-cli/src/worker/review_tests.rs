@@ -173,7 +173,7 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
     for handler in handlers(&t.db, &storage).expect("handlers") {
         runner.register(handler).expect("register");
     }
-    let registry = registry(&forge_core::config::ReviewConfig::default()).expect("registry");
+    let registry = registry(&forge_core::config::ReviewConfig::default(), false).expect("registry");
     for subscriber in registry.iter() {
         register(&t.db, subscriber.as_ref(), Start::Head)
             .await
@@ -328,13 +328,18 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
 /// worker starts its `subscribers` task.
 #[test]
 fn the_production_registry_starts_the_subscribers_task() {
-    let registry = registry(&forge_core::config::ReviewConfig::default()).expect("registry");
+    let registry = registry(&forge_core::config::ReviewConfig::default(), false).expect("registry");
     let names: Vec<&str> = registry.iter().map(|s| s.name()).collect();
     assert_eq!(
         names,
         [REFRESH_SUBSCRIBER, forge_db::work_items::WORK_ITEM_SYNC]
     );
-    let tasks = crate::worker::tasks(&registry, None, None);
+    let tasks = crate::worker::tasks(
+        &registry,
+        None,
+        None,
+        &crate::worker::WebhookLane::default(),
+    );
     assert!(
         tasks.contains(&crate::worker::Task::Subscribers),
         "{tasks:?}"

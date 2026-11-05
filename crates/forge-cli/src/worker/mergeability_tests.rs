@@ -82,7 +82,7 @@ impl World {
         for handler in handlers(&t.db, &storage).expect("handlers") {
             runner.register(handler).expect("register");
         }
-        let registry = registry(&ReviewConfig::default()).expect("registry");
+        let registry = registry(&ReviewConfig::default(), false).expect("registry");
         for subscriber in registry.iter() {
             register(&t.db, subscriber.as_ref(), Start::Head)
                 .await
