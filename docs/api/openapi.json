@@ -2210,6 +2210,68 @@
         ],
         "type": "object"
       },
+      "EventClassBody": {
+        "additionalProperties": false,
+        "description": "One class of event types and whether the caller may subscribe to it.",
+        "properties": {
+          "class": {
+            "description": "`integration` (also what `*` and `<family>.*` name), `maintainer`\nor `deployment` (the last two only by exact type name).",
+            "type": "string"
+          },
+          "subscribable": {
+            "description": "`false` for a credential that may read but not subscribe (an agent's\ntoken, a service account): create and update would refuse it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "class",
+          "subscribable"
+        ],
+        "type": "object"
+      },
+      "EventTypeBody": {
+        "additionalProperties": false,
+        "description": "One event type a webhook may name.",
+        "properties": {
+          "class": {
+            "description": "`integration`, `maintainer` or `deployment` (the admin class is never\nlisted).",
+            "type": "string"
+          },
+          "name": {
+            "description": "The exact name (`merge_request.opened`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "class"
+        ],
+        "type": "object"
+      },
+      "EventTypeList": {
+        "additionalProperties": false,
+        "description": "The event types a webhook may name.",
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/EventClassBody"
+            },
+            "type": "array"
+          },
+          "items": {
+            "description": "Sorted by name.",
+            "items": {
+              "$ref": "#/components/schemas/EventTypeBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "classes"
+        ],
+        "type": "object"
+      },
       "FeedActorBody": {
         "additionalProperties": false,
         "description": "The actor of an event.",
@@ -11208,6 +11270,47 @@
         "summary": "Create a webhook owned by the caller; its URL must be on the operator's allowlist (400 FG-INT-0010); the secret is shown once (people only; Maintainer; at most 20)",
         "x-forge-action": "WebhookManage",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/event-types": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_webhooks_event_types",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventTypeList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The event types a webhook may name, each with its class, and per class whether the caller may subscribe to it (Maintainer)",
+        "x-forge-action": "WebhookRead"
       }
     },
     "/api/v1/projects/{id}/webhooks/{webhook_id}": {

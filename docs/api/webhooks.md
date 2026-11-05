@@ -32,6 +32,7 @@ M3 I2（ADR-0016 §8 と末尾の Amendment I2、計画 02 §5.5・§11.1、計�
 | 経路 | Action | トークン | 答え |
 |---|---|---|---|
 | `GET /api/v1/projects/{id}/webhooks` | `WebhookRead` | `read_api` | `200` `{items: [Webhook]}`（最大 20） |
+| `GET /api/v1/projects/{id}/webhooks/event-types` | `WebhookRead` | `read_api` | `200` `{items: [{name, class}], classes: [{class, subscribable}]}`。選べる種類の全部（名前の順。admin の分類は載らない）と、その分類。`classes` は `integration`・`maintainer`・`deployment` の順で、`subscribable` は呼んだ資格で作成・変更が通るか（`WebhookDeliver` を `authorize()` で判定）。エージェントのトークン・サービスアカウントは読めるが `false`。`*` と `<家族>.*` は `integration` の分類 |
 | `POST /api/v1/projects/{id}/webhooks` `{url, event_types?}` | `WebhookManage` | `api` | `201` `{webhook, secret}`。21 個目は `409 FG-INT-0012`（`reason=webhook_limit`） |
 | `GET …/webhooks/{webhook_id}` | `WebhookRead` | `read_api` | `200` Webhook |
 | `PATCH …/webhooks/{webhook_id}` `{url?, event_types?, enabled?}` | `WebhookManage` | `api` | `200` `{outcome: updated|unchanged, fields, webhook}`。`enabled: true` は連続の失敗の数を 0 に戻す |
