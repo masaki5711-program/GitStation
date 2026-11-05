@@ -372,6 +372,22 @@ connection, mapping driver errors to registered codes, migrations
   the warn, stale running, no success within twice the interval; `None` before the migration). The project purge deletes the rows. `review::merges::
   try_lock_merges` takes the merge lock without waiting (`None` while a merge holds it: the
   maintenance's pack-refs); `REPO_MAINT_LOCK_PREFIX` (`repo_maint:`) is reserved for O1.
+- **Conflict predictions** (`review/conflicts/`, M3 X6, plan 04 C-2, ADR-0024 Amendment X6): the
+  derived tables `merge_request_conflict_scans` (one row per merge request: `status` pending /
+  scanning / scanned / incomplete / failed, `reason`, `scan_seq`, what the last scan looked at and
+  its counts) and `merge_request_conflict_pairs` (one row per unordered pair `low_mr_id <
+  high_mr_id`: the two heads, the target, `outcome` no_overlap / clean / conflict / failed, the
+  conflicted paths, `prediction_seq`; migration 20261123100000). `request_scan_on` (the retarget
+  and the reopen, in their transaction), `request_scan` / `request_scan_for_head` (the version
+  job: unless a `pending` scan or a finished one of this head and target with a non-retryable
+  reason answers), the job `merge_request.conflict_scan` (dedup `mr_conflict_scan:<id>:<seq>`),
+  `begin_scan`, `scan_peers`, `record_scan` (under the scan row's lock; each pair row created,
+  locked and updated in (low, high) order; a pair that enters `conflict` writes
+  `merge_request.conflict_predicted` for both sides, one audit row each, actor `system`),
+  `fail_scan` / `reap_stale_scans` (`job_failed` / `job_stale`, FG-REVIEW-0022), reads
+  `conflict_scan` and `conflict_predictions` (only pairs whose two heads are current, both open,
+  same target). Purged with the project. The notification kind `mr_conflict_predicted`
+  (migration 20261123100100).
 - **Mergeability** (`review/mergeability.rs`, M3 R2, ADR-0024 §3): the derived table
   `merge_request_mergeability` (one row per merge request: `status` unchecked / checking /
   can_be_merged / cannot_be_merged / check_failed, `reason`, `check_seq`, the checked

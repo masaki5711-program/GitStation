@@ -322,6 +322,19 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 R2 ──
 
+# ── M3 X6: predicted conflicts between open merge requests (plan 04 C-2,
+# ADR-0024 Amendment X6), derived from git ──
+[tables.merge_request_conflict_scans]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.merge_request_conflict_pairs]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 X6 ──
+
 # ── M3 R4: merge attempts (ADR-0024 §4.2), the merge job's operational record;
 # the merge itself is audited on the project (merge_request.merged) ──
 [tables.merge_request_merges]

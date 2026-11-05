@@ -562,6 +562,14 @@
   {
     "action": "MergeRequestRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/conflicts",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions",
     "public": false,
     "scope": "fixed",

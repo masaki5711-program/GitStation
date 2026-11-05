@@ -1151,6 +1151,162 @@
         ],
         "type": "object"
       },
+      "ConflictPredictionBody": {
+        "additionalProperties": false,
+        "description": "One current prediction.",
+        "properties": {
+          "checked_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "conflicts": {
+            "description": "The conflicted paths both change (at most 100;\n`conflicts_truncated` beyond).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "conflicts_truncated": {
+            "type": "boolean"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "description": "The other merge request's head the prediction is about (its current\nhead).",
+            "type": "string"
+          },
+          "iid": {
+            "description": "The other merge request's number in the project.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "outcome": {
+            "description": "`conflict` (predicted) or `failed` (could not be decided).",
+            "type": "string"
+          },
+          "reason": {
+            "description": "`failed`: `unrelated_histories`, `git_timeout`, `git_busy`,\n`git_failed`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "draft",
+          "head_sha",
+          "outcome",
+          "reason",
+          "conflicts",
+          "conflicts_truncated",
+          "checked_at"
+        ],
+        "type": "object"
+      },
+      "ConflictScanBody": {
+        "additionalProperties": false,
+        "description": "The last scan of the merge request.",
+        "properties": {
+          "pairs_skipped": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "pairs_tried": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "peers": {
+            "description": "Other open merge requests considered, trial merges run, candidates\nleft out by a cap or the time budget.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "`incomplete`: `peers_capped`, `pairs_capped`, `budget_exhausted`,\n`pair_failed`; `failed`: `no_version`, `target_missing`,\n`unrelated_histories`, `git_timeout`, `git_busy`, `git_failed`,\n`job_failed`, `job_stale`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned_at": {
+            "description": "UTC, RFC 3339.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned_head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned_target_sha": {
+            "description": "The target tip the finished scan read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "description": "The finished scan looked at another head, target branch or target\ntip than the current ones (its predictions about the head still\nstand; a new head is scanned by the version job, a moved target by\nthe next push).",
+            "type": "boolean"
+          },
+          "status": {
+            "description": "`none` (never scanned), `pending`, `scanning`, `scanned`,\n`incomplete` (some pairs were not tried: see `reason`) or `failed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason",
+          "stale",
+          "scanned_head_sha",
+          "scanned_target_sha",
+          "scanned_at",
+          "peers",
+          "pairs_tried",
+          "pairs_skipped"
+        ],
+        "type": "object"
+      },
+      "ConflictsBody": {
+        "additionalProperties": false,
+        "description": "A merge request's predicted conflicts.",
+        "properties": {
+          "head_sha": {
+            "description": "The merge request's current head (`null` before its first version).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "predictions": {
+            "description": "By the other merge request's number; only pairs whose two heads are\nboth merge requests' current heads.",
+            "items": {
+              "$ref": "#/components/schemas/ConflictPredictionBody"
+            },
+            "type": "array"
+          },
+          "scan": {
+            "$ref": "#/components/schemas/ConflictScanBody"
+          }
+        },
+        "required": [
+          "iid",
+          "head_sha",
+          "scan",
+          "predictions"
+        ],
+        "type": "object"
+      },
       "CreateGroup": {
         "additionalProperties": false,
         "description": "`POST /api/v1/groups` and `…/{id}/subgroups`.",
@@ -9388,6 +9544,55 @@
           }
         },
         "summary": "Compare two versions of a merge request, head to head (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/conflicts": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_conflicts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's predicted conflicts with other open merge requests on its target, as last scanned (as the repository browse API)",
         "x-forge-action": "MergeRequestRead"
       }
     },

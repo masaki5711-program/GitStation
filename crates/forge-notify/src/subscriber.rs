@@ -7,6 +7,7 @@
 //! | `merge_request.approved` | the merge request's author | the approver is the author |
 //! | `merge_request.merged` | the author | the person who merged is the author |
 //! | `merge_request.commented` | the author | the commenter is the author, or the event is a thread being resolved or reopened |
+//! | `merge_request.conflict_predicted` (M3 X6) | the author of the event's merge request (each side of the pair has its own event) | — (the scan is the system's) |
 //!
 //! Every other event concerns nobody (decided in `NotificationKind::
 //! from_event`, which matches every event type). A "review requested"
@@ -128,6 +129,9 @@ fn actor_of(
             (action == forge_core::CommentAction::NoteAdded.as_str())
                 .then(|| event.actor_user_id.map(UserId::new))
         }
+        // M3 X6: the conflict scan (actor system) acted, nobody in person;
+        // the event's own merge request's author is told.
+        NotificationKind::MergeRequestConflictPredicted => Some(None),
     })
 }
 

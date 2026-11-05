@@ -867,7 +867,8 @@
     "kinds": {
       "mr_approved": "マージリクエストが承認された",
       "mr_merged": "マージリクエストがマージされた",
-      "mr_commented": "マージリクエストにコメントが付いた"
+      "mr_commented": "マージリクエストにコメントが付いた",
+      "mr_conflict_predicted": "ほかのマージリクエストと衝突する見込み"
     }
   },
   "sa": {

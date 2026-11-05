@@ -1508,3 +1508,49 @@ fn mr_work_item_commands_call_their_routes() {
     }
     assert_eq!(srv.seen().len(), before, "nothing was sent");
 }
+
+const CONFLICTS: &str = r#"{"iid":3,"head_sha":"2222222222222222222222222222222222222222","scan":{"status":"incomplete","reason":"pairs_capped","stale":false,"scanned_head_sha":"2222222222222222222222222222222222222222","scanned_target_sha":"3333333333333333333333333333333333333333","scanned_at":"2026-11-05T02:00:00Z","peers":3,"pairs_tried":1,"pairs_skipped":1},"predictions":[{"iid":4,"draft":true,"head_sha":"4444444444444444444444444444444444444444","outcome":"conflict","reason":null,"conflicts":["a.txt","\u001b[31mevil"],"conflicts_truncated":true,"checked_at":"2026-11-05T02:00:00Z"},{"iid":5,"draft":false,"head_sha":"5555555555555555555555555555555555555555","outcome":"failed","reason":"git_timeout","conflicts":[],"conflicts_truncated":false,"checked_at":"2026-11-05T02:00:00Z"}]}"#;
+
+/// M3 X6: `gstn conflicts` calls its route and prints the scan and each
+/// prediction (draft marked, failed pairs with their reason); server text
+/// is sanitized; `--json` is the body as the server sent it.
+#[test]
+fn conflicts_calls_its_route_and_prints_each_prediction() {
+    let srv = Mock::start(|_| ok(CONFLICTS));
+    let sb = Sandbox::new();
+    let o = gstn(&sb, &srv, &["conflicts", "--project", "7", "--iid", "3"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(r.method, "GET");
+    assert_eq!(r.target, "/api/v1/projects/7/merge-requests/3/conflicts");
+    assert!(
+        o.stdout.contains("!3: scan incomplete (pairs_capped)"),
+        "{}",
+        o.stdout
+    );
+    assert!(o.stdout.contains("!4 (draft): conflict"), "{}", o.stdout);
+    assert!(o.stdout.contains("  conflict: a.txt"), "{}", o.stdout);
+    assert!(
+        o.stdout.contains("!5: failed (git_timeout)"),
+        "{}",
+        o.stdout
+    );
+    assert!(o.stdout.contains("more conflicted files"), "{}", o.stdout);
+    assert!(
+        !o.stdout.contains('\u{1b}'),
+        "terminal escapes are sanitized"
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &["conflicts", "--project", "7", "--iid", "3", "--json"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let v: serde_json::Value = serde_json::from_str(&o.stdout).expect("json");
+    assert_eq!(v["predictions"][0]["iid"], 4);
+    // A missing --iid is refused before any request.
+    let before = srv.seen().len();
+    let o = gstn(&sb, &srv, &["conflicts", "--project", "7"]);
+    assert_ne!(o.code, 0);
+    assert_eq!(srv.seen().len(), before);
+}

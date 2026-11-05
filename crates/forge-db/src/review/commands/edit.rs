@@ -9,6 +9,7 @@ use super::{
     MergeRequestFacts,
 };
 use crate::change::{ChangeContext, ChangeTx, Settle};
+use crate::review::conflicts::request_scan_on;
 use crate::review::mergeability::request_check_on;
 use crate::review::{Row, StoredMergeRequest, COLUMNS};
 use crate::Db;
@@ -174,6 +175,10 @@ pub async fn edit_mr_decided<P>(
             // `unchecked` now, checked again by the job.
             let origin = ctx.request_id.clone(); // clone: the job keeps its origin request
             tx.step(|c| async move { request_check_on(c, id, project, origin, None).await })
+                .await?;
+            // M3 X6: the other merge requests on the new target are others.
+            let origin = ctx.request_id.clone(); // clone: the job keeps its origin request
+            tx.step(|c| async move { request_scan_on(c, id, project, origin, None).await })
                 .await?;
         }
         Ok(Settle::Commit(

@@ -1885,3 +1885,90 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   この条件では判定しない（計画 02 F-5 は kanflow の checks の提供者 `kanflow/work-item` などの必須のチェックで行う、§10）。
   したがって、完全な自動マージを既定とする構成でも、この条件を **人の承認の代わりに数えてはならない**（人の判断が要るなら承認の
   ルール・保護ブランチの最低の承認数・CODEOWNERS を使う）。
+
+## 実装で決めたこと（X6 `feat/git-conflict-prediction`、2026-11-05）— MR 同士の衝突の予測（計画 04 C-2）
+
+計画 04 C-2・計画 11 §5.7 X6 の推奨（「まず変更ファイルの重なりで絞り、重なる組だけ `merge-tree` で試す。下書きも対象。
+push のたびに計算する。両方の作成者と kanflow に知らせる」）をそのまま採った。決めたことは次のとおり。
+
+- **予測は助言**: マージを止めない。マージを止めるのは C-1（§3）の判定と `evaluate_merge()` のまま。`BlockReason` は足さない。
+- **きっかけ**: 版のジョブが新しい head のあとに（`request_scan_for_head`。`pending` のスキャン、または同じ head と target で
+  やり直しても同じ答えになる理由で終わったスキャンがあれば要求しない）、target の変更（編集のトランザクションの中）、再オープン
+  （同じく）。target が進んだだけでは要求しない（2 つの head は変わらない。変更ファイルの重なりが少し変わるのは次の push で拾う）。
+  読み取りでは積まない（R2 の決定 6 と同じ）。
+- **1 回のスキャン**（ジョブ `merge_request.conflict_scan`、dedup `mr_conflict_scan:<mr_id>:<scan_seq>`、R2 の `check_seq` と同じ守り）:
+  MR M（記録した head H、target T）と、T に向けて開いている他の MR（**下書きを含む**、head のあるもの）を最近更新された順に
+  **50 件**まで。T の先端との merge-base からの変更パス（`merge-base`、`diff-tree --no-renames`、各 10 秒、1 000 件まで）で絞り、
+  重ならない組は `no_overlap`（`merge-tree` を動かさない）。重なる組だけ `merge-tree --write-tree H P` を **20 組**まで、各 30 秒、
+  スキャン全体の git の時間は **120 秒**まで（ジョブの時間切れは 180 秒）。git は forge-git の 1 つの包み（引数のベクタ、
+  `--end-of-options`、検証済みのオブジェクト ID、時間切れ、git の同時実行の枠）だけを使い、新しい git の呼び出しは足していない。
+- **何を衝突とするか**: `merge-tree` の衝突のうち **両方が変更するパス** にあるものだけを予測の衝突にする。片方だけが変更するパスの
+  衝突は、その側が古い target を基にしていて target と衝突しているもの（C-1 が `cannot_be_merged` で示す）なので、2 つの MR の
+  衝突とは数えない（`clean`）。片方の変更パスが上限を超える・UTF-8 でないときは集合が不明なので、組を候補に残し、衝突のパスを
+  すべて数える（黙って「衝突なし」にしない）。衝突の一覧が切れたときも衝突とする。
+- **決まらないこと**: 版なし `no_version`・target なし `target_missing`・M に共通の履歴なし `unrelated_histories` はスキャンの `failed`。
+  相手と共通の履歴が無い組は組の `failed unrelated_histories`。M の git の失敗はスキャンを `failed git_*` で保存してから返す
+  （worker が再試行）。組の git の失敗は組を `failed git_*` で保存し、スキャンは `incomplete pair_failed`、最初の失敗を保存の後に返す。
+  上限・時間の予算で試さなかった組は数え（`pairs_skipped`）、スキャンは `incomplete`（`peers_capped`・`pairs_capped`・
+  `budget_exhausted`）。どれも **新しいコード FG-REVIEW-0022** ConflictPredictionIncomplete（warn、HTTP では返さない、
+  runbook `merge-request-mergeability`）でログに 1 回出す。最後まで失敗したジョブは `failed job_failed`、`pending` / `scanning` のまま
+  生きているジョブの無い行は worker の見回り（`mergeability_sweep` の 4 段目）が `failed job_stale` にする。
+- **状態の置き場**: 派生の表 2 つ（追記のマイグレーション 20261123100000、`tables.toml` の `kind = "derived"`、プロジェクトの purge で消す）。
+  `merge_request_conflict_scans`（MR ごとに 1 行）と `merge_request_conflict_pairs`（順序のない組ごとに 1 行、`low_mr_id < high_mr_id`、
+  見た 2 つの head・target・`outcome` no_overlap / clean / conflict / failed・両方が変更する衝突のパス（100 件・16 KiB まで）・
+  `prediction_seq`）。組の行は、作ってからロックして更新する（2 つのスキャンが同じ組を同時に書いても「初めて」が 2 回にならない）。
+  ロックの順は (low, high)。相手がスキャンの読んだ後に動いた・閉じた組は書かない（相手のスキャンが書く）。
+- **イベント `merge_request.conflict_predicted`**（integration、§6 の表に足す。`MergeRequestTransition::ConflictPredict`）: 組が
+  `conflict` に **入ったとき**だけ、**両側に 1 件ずつ**（集約はそれぞれの MR、ペイロードは相手の ID と番号・両方の head・target・
+  `prediction_seq`・衝突のパスの件数・`files_truncated`。パスはイベントに入れない）、監査の行も側ごとに 1 行（actor `system`）、
+  dedup `merge_request_conflict_predicted:<mr_id>:<other_id>:<prediction_seq>`。衝突のままの再スキャン・新しい head でも衝突のまま、
+  では出さない。`clean` に戻ったことのイベントは作らない（計画に無い。読み取りで分かる）。`every_merge_request_transition_emits_exactly_one_event`
+  は「MR ごとにちょうど 1 件」を確かめる（この遷移だけ 2 つの MR に 1 件ずつ）。
+- **知らせ**: kanflow はイベントの履歴（I1c）と Webhook で受ける（integration の分類）。作成者には通知の種類 **`mr_conflict_predicted`**
+  （追記のマイグレーション 20261123100100 で表の CHECK を足した。止められる種類）でメールする。行為者はシステムなので「自分の操作」
+  の除外は無い。メールには相手の番号もパスも書かない（「ほかの MR と衝突の見込み。`gstn conflicts` で確かめる」）。
+- **読み取り**: `GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts`（`MergeRequestRead`、新しい Action なし。C-1 の表の行と
+  `gstn conflicts --project --iid`）。最後のスキャン（`none` / `pending` / `scanning` / `scanned` / `incomplete` / `failed`、理由、
+  `stale`、数）と、**2 つの head がどちらも今の head で、両方開いていて同じ target の** `conflict` / `failed` の組だけを返す（古い head の
+  予測は見せない）。
+- **テスト**: `tests/conflicts_git.rs`（実際の git: 同じ行の変更は予測・下書きも・両側にイベント、別ファイルは `no_overlap`、同じファイルの
+  離れた箇所は `clean`、target とだけの衝突は数えない、上限で `incomplete`、`merge-tree` の時間切れは組に保存して返す）、
+  `review/conflicts/tests.rs`（入ったときだけ両側に 1 回、古い head は読まない、相手が動いた組は書かない、古い seq・動いた head は
+  書かない、target の変更と再オープンで要求、`job_failed` / `job_stale`）、`merge_request_version_routes.rs`（読める人・404・401・403）。
+
+### X6 の独立レビューで決めたこと（2026-11-06）
+
+独立レビュー（git-protocol・silent-failure）の HIGH 3 件と MEDIUM / LOW への対応。上の X6 の節と違えたところは **改訂** と書いた。
+
+- **名前の変更で「clean」に誤って下げない（HIGH、改訂）**: `diff-tree --no-renames` のパスの集合は名前の変更の行き先を片側にしか
+  持たないので、「両方が変更するパスの衝突だけを数える」は rename/modify（片側が名前を変えて同じ行を変え、もう片側が元の名前で変える）を
+  `clean` にしていた。規則を逆にした: `merge-tree` が衝突を返したら **衝突のまま** とし、`clean` に下げるのは「報告されたすべてのパスが
+  ちょうど片側だけが変更するパスで、**かつ 2 つの base の間で target が変更したパス**（`diff-tree <自分の base> <相手の base>`）」の
+  ときだけ（それは古い target を基にした側の target との衝突で、C-1 が示す）。base が同じ・差が読めない・集合が不明・一覧が空か切れた
+  ときは下げない。下げたときは `forge.review.conflict_downgraded` を info で 1 回出す。名前の変更の行き先、rename/rename、
+  ディレクトリ/ファイルは target が触れていなければ衝突のまま。**絞り込み**も、パスとそのディレクトリ（`d` と `d/x`）を重なりと数える
+  （ディレクトリ/ファイルの組を `no_overlap` で落とさない）。テストは実際の git で rename/modify、rename/rename、ディレクトリ/ファイル。
+- **見回りがスキャンを要求する（HIGH、改訂）**: worker の `mergeability_sweep` の 5 段目 `sweep_scans` が、head のある開いている MR で
+  スキャンの行が無いもの（この版の前から開いている MR、版のジョブの要求の失敗）と、再試行で答えが変わりうる理由（`git_*`・`job_failed`・
+  `job_stale`・`pair_failed`・`budget_exhausted`・`peer_moved`）で `failed` / `incomplete` に終わった行を、終わってから 5 分後に、行ごとに
+  **3 回まで**（`sweep_attempts`、追記のマイグレーション 20261123100200。見回り以外の要求で 0 に戻る）要求し、1 件ずつ info で出す
+  （`forge.review.conflict_scan_swept`、`why`・`attempt`）。
+- **スキャンの要求の失敗で版のジョブを失敗させない（HIGH）**: 版のジョブはスキャンの要求の失敗を warn（`error_code`・`request_id`、
+  `forge.review.conflict_scan_request_failed`）で出して続け、見回りが拾う。ログの `scan` は `requested` / `answered` / `not_open` /
+  `no_head` / `failed` を区別する。
+- **MEDIUM**: 予算が 0 なら git を起動しない（`budget_exhausted`）。組の git の失敗は組に保存し、ジョブの失敗にしない（再試行するのは
+  M 自身の失敗だけ。組は見回りが再要求する）。書かなかった組（相手が動いた・閉じた）は `incomplete peer_moved` として数える。
+  `failed`（`no_version`・`target_missing`・`unrelated_histories`・`budget_exhausted`）も FG-REVIEW-0022 つきで warn に出す。スキャンは
+  読んだ target の先端（`scanned_target_sha`）を持ち、API の `stale` は head・target のブランチ・target の先端のどれかが違えば true。
+  予測は相手の head（`head_sha`）を返す。**相手の MR のスキャンは積み直さない**（決定）: 組は対称で、M の新しい head のスキャンが
+  (M, P) の組をすべて書き直すので P のスキャンを積み直す必要がない（積み直すと 1 回の push が最大 50 × 20 の trial merge になる）。
+  P の行の `stale` は P 自身の head と target についてのもの。上限（50 件）を超えて M のスキャンが試さなかった P は、P の次の push か
+  見回り（`peers_capped` は再試行の理由にしない: 同じ結果になる）で決まる。
+- **LOW**: head が object id でない相手は、その組だけを飛ばしてスキャンを `incomplete peer_invalid` にする（FG-SYS-0001 で warn）。
+  `begin_scan` は前の理由を結果の保存まで残す。閉じた MR の行は `failed not_open` にし、`scanning` のまま残さない。予測の「入った」は
+  `failed` 以外の最後の結果（`last_decided`）と比べる（conflict → failed → conflict でメールを 2 回出さない）。runbook `repo-maintenance`
+  に、`merge-tree --write-tree` が書く loose オブジェクトの増え方と確かめ方を足した。
+- **ディレクトリの名前の変更（再レビュー MEDIUM、改訂）**: 片側が `d/` を `e/` に変え（`d/x` を削除、`e/x` を追加）、もう片側が `d/new` を
+  足すと、変更パスは重ならないが merge-ort（git 2.53 で確認）は `e/new` の衝突（directory rename suggested、終了コード 1）を返す。絞り込みは、
+  片側が **削除した** パスのディレクトリ（`diff-tree --diff-filter=D`、forge-git の `deleted_paths`）が、もう片側の変更パスのディレクトリの
+  どれかと同じなら組を候補に残す（どちらかの集合が不明なら常に候補）。テスト `a_directory_rename_against_a_file_added_in_it_is_predicted`。

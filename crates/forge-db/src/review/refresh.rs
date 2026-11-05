@@ -329,6 +329,7 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::MergeRequestPushed
                 | EventType::MergeRequestConflictDetected
                 | EventType::MergeRequestConflictResolved
+                | EventType::MergeRequestConflictPredicted
                 | EventType::MergeRequestCommented
                 | EventType::MergeRequestMerged
                 | EventType::MergeRequestSourceBranchDeleted

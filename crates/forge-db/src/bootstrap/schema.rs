@@ -635,6 +635,9 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.merge_request_versions", operational()),
         // ── M3 R2: mergeability, DELETE for the purge (20261108100000) ──
         ("forge.merge_request_mergeability", operational()),
+        // ── M3 X6: conflict predictions, DELETE for the purge (20261123100000) ──
+        ("forge.merge_request_conflict_scans", operational()),
+        ("forge.merge_request_conflict_pairs", operational()),
         // ── M3 R3: discussions and notes, DELETE for the purge (20261109100000) ──
         ("forge.merge_request_discussions", operational()),
         ("forge.merge_request_notes", operational()),
@@ -956,6 +959,9 @@ const LATER_TABLES: &[&str] = &[
     "merge_request_versions",
     // ── M3 R2: mergeability (migration 20261108100000) ──
     "merge_request_mergeability",
+    // ── M3 X6: conflict predictions (migration 20261123100000) ──
+    "merge_request_conflict_scans",
+    "merge_request_conflict_pairs",
     // ── M3 R3: discussions and notes (migration 20261109100000) ──
     "merge_request_discussions",
     "merge_request_notes",
