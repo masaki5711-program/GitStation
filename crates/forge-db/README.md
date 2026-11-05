@@ -821,3 +821,7 @@ write it); `Db::connect_maint` + `new_epoch` run `forge.feed_new_epoch`
 never chosen nor updated by forge_app) makes a rebind a new visible set.
 `tokens_scopes_known` gains `user_employee_number`. Tests `src/feed/tests.rs`
 (the visible set decided with forge-auth, a dev-dependency).
+
+## notify (M3 N1)
+
+`forge_db::notify` (ADR-0016 Amendment N1, migration `20261120100000`): a person's settings (`forge.notification_preferences`: `preferences` / `set_preferences`, no row = the defaults) and the delivery records (`forge.notifications`, derived, one row per source event and recipient). `enqueue` (called by the `notify` subscriber with its `DerivedTx`) writes the row and, for `Initial::Queue`, the `notification.send` job (dedup key `notification:<id>`); the send job walks the state machine: `begin_send` (row lock, `pending|retrying` → `sending`, run number recorded; a row still `sending` means the previous run died: `unknown` / `interrupted`, never sent again), `finish` (fenced by the run number: `sent`, `retrying`, `failed`, `unknown`, `skipped`, `suppressed`, each with a short reason code). `recipient` and `backlog` feed the mail and `forge doctor` (`notify.queue`). No foreign key to projects or events (the purge and the retention delete them).
