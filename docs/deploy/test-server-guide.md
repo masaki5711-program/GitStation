@@ -321,7 +321,7 @@ tls_root_cert = "<INTERNAL_CA_PEM>"
 | `api.cursor_keys_file` | `FORGE_API_CURSOR_KEYS_FILE` | 一覧カーソルの鍵 | **serve に必須** | `<SECRETS_DIR>/cursor-keys` |
 | `api.list_max_concurrent` / `list_max_concurrent_per_principal` / `cursor_max_age_s` | `FORGE_API_…` | 一覧の同時実行・カーソルの寿命 | 任意 | 16 / 2 / 86400 |
 | `audit.seal_keys_file` | `FORGE_AUDIT_SEAL_KEYS_FILE` | 監査の封印の鍵 | **worker に必須** | `<SECRETS_DIR>/audit-seal-keys` |
-| `git.http.fetch_request_max_bytes` / `idle_timeout_ms` / `timeout_ms` / `body_timeout_ms` / `max_object_wants` / `want_check_timeout_ms` / `max_streams` / `max_streams_per_principal` / `push_max_bytes` | `FORGE_GIT_HTTP_…` | Smart HTTP の上限 | 任意 | 16 MiB / 60 s / 3600 s / 300 s / 10000 / 30 s / 16 / 4 / 2 GiB |
+| `git.http.fetch_request_max_bytes` / `idle_timeout_ms` / `timeout_ms` / `body_timeout_ms` / `max_object_wants` / `want_check_timeout_ms` / `max_streams` / `max_streams_per_principal` / `push_max_bytes` / `push_max_blob_bytes` | `FORGE_GIT_HTTP_…` | Smart HTTP の上限（`push_max_blob_bytes` は push の検査の 1 ファイルの上限、M3 X8） | 任意 | 16 MiB / 60 s / 3600 s / 300 s / 10000 / 30 s / 16 / 4 / 2 GiB / 100 MiB |
 | `hosting.deletion_grace_days` / `purge_interval_secs` | `FORGE_HOSTING_…` | 削除待ちの日数（1〜365）・purge の周期（10〜86400） | 任意 | 7 / 300 |
 | `review.mergeability_fanout_max` | `FORGE_REVIEW_MERGEABILITY_FANOUT_MAX` | target の 1 回の push でマージできるかを確かめ直す MR の数の上限（1〜500。超えた分は `unchecked`） | 任意 | 50 |
 | `review.check_run_retention_days` | `FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS` | チェックの実行（と注釈）を `updated_at` からこの日数で消す（開いている MR の今の head は残す。30〜3650。Runbook `checks-reporting` の E） | 任意 | 180 |
