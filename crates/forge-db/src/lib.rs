@@ -130,6 +130,9 @@ pub mod checks;
 // ── M3 O3: the repository maintenance ledger and schedule ──
 pub mod maintenance;
 // ── end M3 O3 ──
+// ── M3 N1: notifications ──
+pub mod notify;
+// ── end M3 N1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]
