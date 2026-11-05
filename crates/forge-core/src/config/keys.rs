@@ -235,4 +235,13 @@ pub const KEYS: &[Key] = &[
     text("auth.oidc.access_role", "FORGE_AUTH_OIDC_ACCESS_ROLE"),
     text("auth.oidc.signing_algs", "FORGE_AUTH_OIDC_SIGNING_ALGS"),
     boolean("auth.oidc.auto_link", "FORGE_AUTH_OIDC_AUTO_LINK"),
+    // M3 I2: webhooks (ADR-0016 §8).
+    text("webhook.allowed_targets", "FORGE_WEBHOOK_ALLOWED_TARGETS"),
+    boolean("webhook.allow_http", "FORGE_WEBHOOK_ALLOW_HTTP"),
+    text("webhook.secret_keys_file", "FORGE_WEBHOOK_SECRET_KEYS_FILE"),
+    text("webhook.ca_file", "FORGE_WEBHOOK_CA_FILE"),
+    number(
+        "webhook.delivery_retention_days",
+        "FORGE_WEBHOOK_DELIVERY_RETENTION_DAYS",
+    ),
 ];

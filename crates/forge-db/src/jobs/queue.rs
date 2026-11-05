@@ -71,6 +71,30 @@ pub(crate) async fn enqueue_on(
     Ok(id.map_or(Enqueued::Deduped, |id| Enqueued::Queued(JobId::new(id))))
 }
 
+/// [`enqueue_on`] for a job ready only after `delay` (M3 I2: the next
+/// attempt of a webhook delivery, after its backoff). The same dedup rule.
+pub(crate) async fn enqueue_after_on(
+    conn: &mut PgConnection,
+    job: &NewJob,
+    delay: Duration,
+) -> Result<Enqueued, ForgeError> {
+    let id: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key,          origin_request_id, origin_event_seq, run_after)          VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7,                  pg_catalog.now() + pg_catalog.make_interval(secs => $8))          ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead'          DO NOTHING          RETURNING id",
+    )
+    .bind(job.kind.as_str())
+    .bind(job.payload.to_string())
+    .bind(i32::from(job.max_attempts.get()))
+    .bind(job.timeout.millis())
+    .bind(job.dedup_key.as_ref().map(|k| k.as_str()))
+    .bind(job.origin_request_id.as_str())
+    .bind(job.origin_event_seq)
+    .bind(delay.as_secs_f64())
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| query_error("jobs.enqueue_after", e))?;
+    Ok(id.map_or(Enqueued::Deduped, |id| Enqueued::Queued(JobId::new(id))))
+}
+
 type ClaimRow = (i64, String, String, i32, i32, i32, String, Option<i64>);
 
 /// Claim the oldest ready job of one of `kinds` (none: nothing is claimed).

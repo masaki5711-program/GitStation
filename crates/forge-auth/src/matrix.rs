@@ -1017,6 +1017,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_work_items::WORK_ITEM_ROWS,
         crate::matrix_rows_feed::FEED_ROWS,
         crate::matrix_rows_dev_status::DEV_STATUS_ROWS,
+        crate::matrix_rows_webhooks::WEBHOOK_ROWS.as_slice(),
     ]
     .concat()
 });

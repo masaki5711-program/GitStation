@@ -1001,6 +1001,34 @@ pub fn authorize(
         ) => project_events(principal, project, *class)
             .map_err(|e| e.with_context("action", action.name())),
 
+        // --- webhooks (M3 I2, ADR-0016 §8, plan 11 §4.3) ---
+        // A project's Maintainers (visibility and pending deletion were
+        // decided above: FG-REPO-0005 / FG-REPO-0006). Managing and
+        // redelivering are people's.
+        (Action::WebhookRead | Action::WebhookDeliveryRead, Resource::Project(p)) => {
+            need(Role::Maintainer, p.role)
+        }
+        (Action::WebhookManage | Action::WebhookRedeliver, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+        // A delivery, for the webhook's owner (`prove_webhook_delivery`):
+        // still a Maintainer of the project; every class but admin (the
+        // maintainer and deployment classes need Maintainer and Developer,
+        // which the owner holds; the webhook names them explicitly).
+        (Action::WebhookDeliver, Resource::ProjectEvents { project, class }) => {
+            people_only()?;
+            need(Role::Maintainer, project.role)?;
+            match class {
+                forge_core::VisibilityClass::Integration
+                | forge_core::VisibilityClass::Maintainer
+                | forge_core::VisibilityClass::Deployment => Ok(()),
+                forge_core::VisibilityClass::Admin => {
+                    Err(refused("class_not_for_webhooks").with_context("class", class.as_str()))
+                }
+            }
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1082,6 +1110,11 @@ pub fn authorize(
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
             | Action::IntegrationDevStatusRead
+            | Action::WebhookRead
+            | Action::WebhookManage
+            | Action::WebhookDeliveryRead
+            | Action::WebhookRedeliver
+            | Action::WebhookDeliver
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }

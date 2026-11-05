@@ -1529,3 +1529,51 @@ fn maintenance_config_has_defaults_ranges_and_a_window() {
         );
     }
 }
+
+/// M3 I2: `[webhook]` — an empty allowlist by default, http off, the
+/// retention bounded, a bad allowlist entry named by its number only.
+#[test]
+fn webhook_settings_default_closed_and_are_checked() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert!(cfg.webhook.policy.is_empty());
+    assert!(!cfg.webhook.policy.allow_http());
+    assert_eq!(cfg.webhook.delivery_retention_days, 30);
+    assert!(cfg.webhook.secret_keys_file.is_none());
+    let cfg = load(
+        None,
+        &env(&[
+            (
+                "FORGE_WEBHOOK_ALLOWED_TARGETS",
+                "kanflow.internal:443, 10.0.0.0/8:8443",
+            ),
+            ("FORGE_WEBHOOK_ALLOW_HTTP", "true"),
+            ("FORGE_WEBHOOK_DELIVERY_RETENTION_DAYS", "7"),
+        ]),
+    )
+    .expect("set");
+    assert_eq!(cfg.webhook.policy.rules().len(), 2);
+    assert!(cfg.webhook.policy.allow_http());
+    assert_eq!(cfg.webhook.delivery_retention_days, 7);
+    for (key, value, reason) in [
+        ("FORGE_WEBHOOK_DELIVERY_RETENTION_DAYS", "0", "zero"),
+        ("FORGE_WEBHOOK_DELIVERY_RETENTION_DAYS", "366", "above_max"),
+        ("FORGE_WEBHOOK_ALLOW_HTTP", "yes", "invalid"),
+        (
+            "FORGE_WEBHOOK_SECRET_KEYS_FILE",
+            "relative/keys",
+            "not_absolute",
+        ),
+        (
+            "FORGE_WEBHOOK_ALLOWED_TARGETS",
+            "kanflow.internal",
+            "invalid",
+        ),
+    ] {
+        let e = load(None, &env(&[(key, value)])).expect_err(key);
+        let config_key = key
+            .trim_start_matches("FORGE_")
+            .to_ascii_lowercase()
+            .replacen('_', ".", 1);
+        assert_invalid(&e, &config_key, reason);
+    }
+}

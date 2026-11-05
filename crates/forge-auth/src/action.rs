@@ -267,6 +267,32 @@ actions! {
     /// (`prove_visible`): the linked merge requests of the bound projects
     /// it may see.
     IntegrationDevStatusRead,
+    // --- webhooks (M3 I2, ADR-0016 §8, plan 11 §4.3) ---
+    /// `GET /api/v1/projects/{id}/webhooks` and `…/webhooks/{webhook_id}`:
+    /// a project's webhooks (never a secret). Maintainer and above;
+    /// `read_api`.
+    WebhookRead,
+    /// `POST /api/v1/projects/{id}/webhooks`, `PATCH|DELETE
+    /// …/webhooks/{webhook_id}`, `POST …/{webhook_id}/secret` (rotate):
+    /// create, change, delete a webhook, replace its secret. People only (a
+    /// webhook sends the project's events out; its owner answers for it);
+    /// Maintainer and above; `api`. The URL must pass the operator's
+    /// target policy (`FG-INT-0010`), checked after the decision.
+    WebhookManage,
+    /// `GET …/webhooks/{webhook_id}/deliveries`: the delivery history.
+    /// Maintainer and above; `read_api`.
+    WebhookDeliveryRead,
+    /// `POST …/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver`:
+    /// ask for one delivery again (rate-limited). People only; Maintainer
+    /// and above; `api`. The pair is looked up together after the
+    /// decision (a delivery of another webhook is not found).
+    WebhookRedeliver,
+    /// Not a route: whether a webhook's owner may still have one class of
+    /// its project's events delivered (`Resource::ProjectEvents`), decided
+    /// by `prove_webhook_delivery` when an event is dispatched and before
+    /// every attempt. People only; Maintainer of the project; the admin
+    /// class never.
+    WebhookDeliver,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -398,6 +424,9 @@ impl Action {
                 | Action::IntegrationManage
                 | Action::IntegrationRead
                 | Action::IntegrationBindingManage
+                | Action::WebhookManage
+                | Action::WebhookRedeliver
+                | Action::WebhookDeliver
         )
     }
 
@@ -455,6 +484,9 @@ impl Action {
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
             | Action::IntegrationDevStatusRead
+            | Action::WebhookRead
+            | Action::WebhookDeliveryRead
+            | Action::WebhookDeliver
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -488,6 +520,8 @@ impl Action {
             | Action::CheckWrite
             | Action::CheckNamespaceGrantManage
             | Action::IntegrationBindingManage
+            | Action::WebhookManage
+            | Action::WebhookRedeliver
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),

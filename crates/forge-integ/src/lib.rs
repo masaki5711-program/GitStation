@@ -49,6 +49,9 @@ use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
 mod dev_status;
+// ── M3 I2: webhooks (ADR-0016 §8) ──
+pub mod webhooks;
+// ── end M3 I2 ──
 
 pub use dev_status::{
     checks_state, CheckConclusion, CheckStatus, DevMergeRequest, DevStatus, PageQuery,

@@ -91,6 +91,9 @@ pub mod integrations;
 // ── M3 I1b: work items, their links and the work-item-sync subscriber ──
 pub mod work_items;
 // ── end M3 I1b ──
+// ── M3 I2: webhooks and their deliveries (ADR-0016 §8) ──
+pub mod webhooks;
+// ── end M3 I2 ──
 // ── M3 I1c: the event feed of an integration, retention and the epoch ──
 pub mod feed;
 // ── end M3 I1c ──

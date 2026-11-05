@@ -525,6 +525,31 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 I1c ──
 
+# ── M3 I2: webhooks (ADR-0016 §8, Amendment I2) ──
+# A project's push receivers; the delivery counters are unaudited. Not the
+# sealed secrets for the read pool.
+[tables.webhooks]
+guarded = false
+kind = "audited"
+ro_columns = [
+    "id", "uid", "project_id", "owner_user_id", "url", "event_types", "enabled",
+    "disabled_reason", "secret_key_id", "secret_version", "secret_prev_key_id",
+    "secret_prev_until", "consecutive_failures", "failing_since", "last_delivery_at",
+    "created_at", "updated_at",
+]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["consecutive_failures", "failing_since", "last_delivery_at", "updated_at"]
+txn_audited_columns = []
+
+# One row per (webhook, event), written by the webhook-dispatch subscriber
+# and the webhook.deliver job; never a response body.
+[tables.webhook_deliveries]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 I2 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true

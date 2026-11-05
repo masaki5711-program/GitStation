@@ -766,8 +766,37 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             "forge.retention_policy",
             plain(&["forge_app:SELECT", "forge_ro:SELECT", "forge_purge:SELECT"]),
         ),
+        // ── M3 I2: webhooks (the read pool without the sealed secrets) and
+        // their deliveries (20261120200000) ──
+        (
+            "forge.webhooks",
+            [dml("forge_app"), columns("forge_ro", "SELECT", WEBHOOKS_RO)].concat(),
+        ),
+        ("forge.webhook_deliveries", operational()),
     ]
 }
+
+/// The read pool's columns of forge.webhooks (tables.toml `ro_columns`):
+/// not secret_ciphertext or secret_prev_ciphertext.
+const WEBHOOKS_RO: &[&str] = &[
+    "id",
+    "uid",
+    "project_id",
+    "owner_user_id",
+    "url",
+    "event_types",
+    "enabled",
+    "disabled_reason",
+    "secret_key_id",
+    "secret_version",
+    "secret_prev_key_id",
+    "secret_prev_until",
+    "consecutive_failures",
+    "failing_since",
+    "last_delivery_at",
+    "created_at",
+    "updated_at",
+];
 
 /// The columns forge_app may update on forge.web_sessions.
 const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
@@ -938,6 +967,9 @@ const LATER_TABLES: &[&str] = &[
     "retention_policy",
     // ── M3 O3: the maintenance ledger (migration 20261117100000) ──
     "repository_maintenance",
+    // ── M3 I2: webhooks (migration 20261120200000) ──
+    "webhooks",
+    "webhook_deliveries",
 ];
 
 /// Every table the first migration creates.

@@ -29,6 +29,9 @@ mod secret;
 mod server_limits;
 mod tls;
 mod web;
+// ── M3 I2 ──
+mod webhook;
+// ── end M3 I2 ──
 
 pub use api::ApiConfig;
 pub(crate) use audit::decode_hex;
@@ -41,10 +44,12 @@ pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
 pub use review::ReviewConfig;
+pub(crate) use secret::read_secret_text;
 pub use secret::{DatabaseUrl, Secret};
 pub use server_limits::ServerLimitsConfig;
 pub use tls::TlsMode;
 pub use web::{BaseUrl, WebConfig};
+pub use webhook::WebhookConfig;
 
 /// Environment prefixes owned by the configuration: an unknown variable
 /// under one of them is a typo. Other `FORGE_*` variables (for example the
@@ -161,6 +166,8 @@ pub struct Config {
     pub web: WebConfig,
     /// `auth.oidc.*` (the browser sign-in, M2 MR4).
     pub auth: AuthConfig,
+    /// `webhook.*` (the targets, the secret keys and the CA, M3 I2).
+    pub webhook: WebhookConfig,
 }
 
 impl Config {
@@ -408,6 +415,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
             password_path("web.session_key_file")?,
         )?,
         auth: AuthConfig::load(get)?,
+        webhook: WebhookConfig::load(get)?,
     }
     .validate_across()
 }

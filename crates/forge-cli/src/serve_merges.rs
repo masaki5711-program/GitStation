@@ -214,6 +214,11 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::FeedCursorInvalid
         | ErrorCode::FeedConsumerLag
         | ErrorCode::FeedEpochChanged
+        // M3 I2: the webhook codes never reach the merge job.
+        | ErrorCode::WebhookDeadLettered
+        | ErrorCode::WebhookTargetForbidden
+        | ErrorCode::WebhookDisabled
+        | ErrorCode::WebhookAttemptFailed
         | ErrorCode::ApprovalRuleChanged
         | ErrorCode::MergeRuleChanged
         // M3 C1: a stored run this build cannot read stays unreadable;

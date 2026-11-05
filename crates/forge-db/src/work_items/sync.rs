@@ -448,7 +448,9 @@ impl Subscriber for WorkItemSync {
                 // M3 C1: a check run names a commit, not a merge request;
                 // which merge requests' work items it concerns is the
                 // feed's to resolve (I1c), not recorded here.
-                | EventType::CheckCompleted => Ok(()),
+                | EventType::CheckCompleted
+                // M3 I2: a webhook's own state, no merge request.
+                | EventType::WebhookDisabled => Ok(()),
             }
         })
     }

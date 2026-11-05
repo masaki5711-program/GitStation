@@ -189,3 +189,51 @@ fn only_the_dev_status_routes_read_the_dev_status() {
         "the dev-status routes call it: {found:?}"
     );
 }
+
+/// M3 I2: the webhook commands decide inside their transaction on the
+/// route's proof (`Authorized::reconfirm`); only forge-integ's `Webhooks`
+/// calls them (forge-db defines and tests them).
+#[test]
+fn only_forge_integ_calls_the_webhook_commands() {
+    let found = mentions(&[
+        needle(&["webhooks::create", "_decided("]),
+        needle(&["webhooks::update", "_decided("]),
+        needle(&["webhooks::delete", "_decided("]),
+        needle(&["db::create", "_decided("]),
+        needle(&["rotate_secret", "_decided("]),
+        needle(&["redeliver", "_decided("]),
+    ]);
+    let offenders: Vec<_> = found
+        .iter()
+        .filter(|(krate, _)| krate != "forge-integ" && krate != "forge-db")
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "webhook commands called outside forge-integ: {offenders:?}"
+    );
+    assert!(found
+        .iter()
+        .any(|(k, f)| k == "forge-integ" && f == "src/webhooks/mod.rs"));
+}
+
+/// M3 I2: what a webhook may carry is decided by forge-auth's
+/// `prove_webhook_delivery` on material forge-db read; only forge-integ
+/// (the dispatch subscriber and the delivery job) calls it.
+#[test]
+fn only_forge_integ_decides_webhook_deliveries() {
+    let found = mentions(&[needle(&["prove_webhook", "_delivery"])]);
+    let offenders: Vec<_> = found
+        .iter()
+        .filter(|(krate, _)| krate != "forge-integ" && krate != "forge-auth")
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "prove_webhook_delivery called outside forge-integ: {offenders:?}"
+    );
+    for file in ["src/webhooks/dispatch.rs", "src/webhooks/deliver.rs"] {
+        assert!(
+            found.iter().any(|(k, f)| k == "forge-integ" && f == file),
+            "{file}: {found:?}"
+        );
+    }
+}

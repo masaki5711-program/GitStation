@@ -1732,11 +1732,11 @@ code = "FG-INT-0012"
 name = "IntegrationLimitReached"
 http_status = 409
 severity = "info"
-user_message_ja = "この連携に結びつけられるプロジェクトの上限に達しました。使っていない結びつけを解除してから、もう一度試してください。"
-user_message_en = "This integration is bound to the maximum number of projects. Unbind a project it no longer needs, then try again."
-user_message_id = "Integrasi ini sudah terikat ke jumlah proyek maksimum. Lepaskan ikatan proyek yang tidak lagi diperlukan, lalu coba lagi."
-cause = "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}` would bind a 201st project to one integration (ADR-0016 §1, §7: at most 200 bindings per integration, because the event feed decides every bound project on every read). The count is taken under the integration's row lock, so two binds at once cannot both pass. Nothing was written. Webhooks (20 per project, I2) will reuse this code with their own `limit`."
-diagnosis = "The log event carries `reason=binding_limit`, `limit` (200), `integration_id` and `project_id`, with `action=IntegrationBindingManage`. Count the bindings: SELECT count(*) FROM forge.integration_bindings WHERE integration_id = <integration_id>; `GET /api/v1/admin/integrations/{integration_id}/bindings` lists them (administrators)."
+user_message_ja = "上限（連携に結びつけるプロジェクトは 200、プロジェクトの Webhook は 20）に達しました。使っていないものを外してから、もう一度試してください。"
+user_message_en = "The limit is reached (200 projects per integration, 20 webhooks per project). Remove one that is no longer needed, then try again."
+user_message_id = "Batas tercapai (200 proyek per integrasi, 20 webhook per proyek). Hapus yang tidak lagi diperlukan, lalu coba lagi."
+cause = "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}` would bind a 201st project to one integration (ADR-0016 §1, §7: at most 200 bindings per integration, because the event feed decides every bound project on every read). The count is taken under the integration's row lock, so two binds at once cannot both pass. Nothing was written. M3 I2: `POST /api/v1/projects/{id}/webhooks` past 20 webhooks of one project (`reason=webhook_limit`, `limit` 20, counted under a per-project lock)."
+diagnosis = "The log event carries `reason=binding_limit`, `limit` (200), `integration_id` and `project_id`, with `action=IntegrationBindingManage` (webhooks: `reason=webhook_limit`, `project_id`, `action=WebhookManage`; `gstn webhook list --project <id>`). Count the bindings: SELECT count(*) FROM forge.integration_bindings WHERE integration_id = <integration_id>; `GET /api/v1/admin/integrations/{integration_id}/bindings` lists them (administrators)."
 fix = "Unbind projects the integration no longer needs (`DELETE /api/v1/projects/{id}/integration-bindings/{integration_id}`, a Maintainer of that project), or split the work over a second integration with its own service account (runbook integrations). The limit is fixed in code (forge-db `integrations::MAX_BINDINGS`)."
 runbook = "integrations"
 test = "binding_limit_200_is_int_0012"
@@ -1839,6 +1839,62 @@ diagnosis = "The doctor line or the log event carries `reason`, `integration_id`
 fix = "Follow runbook integration-feed-lag: check that kanflow's poller runs and authenticates (the service account's token: runbook service-accounts), that the work-item-sync subscriber is not stuck (doctor subscribers.work-item-sync; it bounds what the feed returns), then let the consumer catch up. A consumer that cannot catch up before retention resyncs after its 410."
 runbook = "integration-feed-lag"
 test = "feed_lag_names_not_reading_and_behind_integrations"
+# ── M3 I2: webhooks (ADR-0016 §8, plan 02 §5.5 / §11.1, ADR-0016 Amendment I2) ──
+[[error]]
+code = "FG-INT-0004"
+name = "WebhookDeadLettered"
+http_status = 500
+severity = "warn"
+user_message_ja = "Webhook の配信が再試行の上限まで失敗しました。配信の履歴を確かめ、受信先を直してから再送してください。"
+user_message_en = "A webhook delivery failed on every retry. Check the delivery history, fix the receiver, then redeliver."
+user_message_id = "Pengiriman webhook gagal pada setiap percobaan ulang. Periksa riwayat pengiriman, perbaiki penerima, lalu kirim ulang."
+cause = "One delivery (one event to one webhook) failed on its last attempt: forge-integ's `webhook.deliver` job tried it `attempts` times (at most 10, backoff 10 s × 4^(n−1) up to 4 h, about 16 h in all) and every attempt failed — the receiver answered a status other than 2xx (a redirect is never followed and counts as a failure), refused or timed out the connection (3 s connect, 10 s in all), failed TLS, the name did not resolve, or the target is no longer allowed. The delivery's row is `state = failed` with the last status and reason; nothing is retried by itself after this. Not an alert: the receiver is outside forge, and the event stays readable in the integration feed."
+diagnosis = "The log event carries `webhook_id`, `delivery_id` (the Forge-Delivery value), `event_id`, `event_type`, `attempts`, `last_status` (or `none`), `last_reason` (`status`, `redirect`, `connect`, `connect_timeout`, `timeout`, `tls`, `body`, `request`, `dns`, `target_forbidden`) and `origin` (scheme://host:port only, never the path or query). `gstn webhook deliveries <webhook_id> --project <id>` (or GET /api/v1/projects/{id}/webhooks/{webhook_id}/deliveries) lists them; SELECT state, attempts, last_status, last_reason, last_error_code FROM forge.webhook_deliveries WHERE delivery_uid = '<delivery_id>'."
+fix = "Follow runbook webhook-delivery: make the receiver answer 2xx within 10 s at the configured URL (no redirect), check that `webhook.allowed_targets` still names it, then redeliver (`gstn webhook redeliver <webhook_id> <delivery_id> --project <id>`, a Maintainer). A receiver that missed many events reads them from the integration feed instead."
+runbook = "webhook-delivery"
+test = "a_delivery_out_of_attempts_is_int_0004"
+
+[[error]]
+code = "FG-INT-0010"
+name = "WebhookTargetForbidden"
+http_status = 400
+severity = "warn"
+user_message_ja = "この送り先は許可されていません。"
+user_message_en = "This destination is not allowed."
+user_message_id = "Tujuan ini tidak diizinkan."
+cause = "A webhook URL or delivery was refused before anything was sent (ADR-0016 §8: only the operator's allowlist; SSRF defences resolved at connect time). On a create or update (400): the URL is not an absolute http(s) URL of at most 2048 bytes (`invalid_url`), uses http while `webhook.allow_http` is false (`scheme`), carries user information (`userinfo`) or a fragment (`fragment`), names a host and port that `webhook.allowed_targets` does not list (`not_allowlisted`; the list is empty by default, so nothing can be delivered until the operator adds the internal receivers), or names an address that is always refused whatever the list says (`loopback`, `link_local` — 169.254.169.254 metadata included —, `unspecified`, `multicast`, `broadcast`, `reserved`, `ipv4_compatible`, `nat64`, `six_to_four`; an IPv4-mapped IPv6 address is judged by its IPv4). At delivery time the same checks run again on the addresses the name resolves to now, and the connection is pinned to the checked address (DNS rebinding): `resolved_denied` when any resolved address is in an always-refused range, `resolved_not_allowlisted`, `dns` when the name does not resolve. A delivery is also refused when the webhook's owner (the person who created it) can no longer manage webhooks of the project (`owner_lost`: membership removed, demoted below Maintainer, account disabled, project pending deletion). The user sees only the one sentence; the reason is in the log."
+diagnosis = "The log event carries `reason`, `origin` (scheme://host:port, never the path, query or user information) and, at delivery time, `webhook_id`, `delivery_id` and `address` (the resolved address that was refused); for `owner_lost` `owner_id` and `decision` (the code authorize() answered). Compare with the server's `webhook.allowed_targets` (`forge doctor` prints `webhook.allowed_targets`) and with `nslookup <host>` on the server."
+fix = "If the receiver is a legitimate internal system, the operator adds `host:port` (or `cidr:port`) to `webhook.allowed_targets` and restarts (runbook webhook-delivery); never allowlist loopback, link-local or metadata addresses (they are refused regardless). For `owner_lost`, a Maintainer recreates the webhook under their own name, or the owner's role is restored."
+runbook = "webhook-delivery"
+test = "loopback_target_is_int_0010"
+
+[[error]]
+code = "FG-INT-0011"
+name = "WebhookDisabled"
+http_status = 500
+severity = "warn"
+user_message_ja = "Webhook が失敗し続けたので、自動で無効にしました。受信先を直してから、もう一度有効にしてください。"
+user_message_en = "A webhook kept failing and was disabled automatically. Fix the receiver, then enable it again."
+user_message_id = "Webhook terus gagal sehingga dinonaktifkan secara otomatis. Perbaiki penerima, lalu aktifkan kembali."
+cause = "A webhook's delivery attempts failed 50 times in a row (`reason=failures`) or kept failing without a success for 24 hours (`reason=failing_24h`; ADR-0016 §8). forge disabled it (`webhooks.enabled = false`, `disabled_reason`), wrote the `webhook.disabled` audit row on the project as the system and published the `webhook.disabled` event (maintainer class: the hook point a notification, or another webhook naming the type, can follow). Its pending deliveries end as `skipped` (`webhook_disabled`); new events are not recorded for it until a Maintainer enables it again."
+diagnosis = "The log event carries `webhook_id`, `project_id`, `reason`, `failures` and `failing_since` (RFC 3339, UTC). `gstn webhook view <webhook_id> --project <id>` shows `enabled`, `disabled_reason` and `consecutive_failures`; the deliveries show the last statuses and reasons. SELECT action, details, occurred_at FROM forge.audit_log WHERE action = 'webhook.disabled' ORDER BY id DESC LIMIT 10."
+fix = "Follow runbook webhook-delivery: fix the receiver, then enable the webhook (`gstn webhook update <webhook_id> --project <id> --enable`, a Maintainer; enabling resets the failure count) and redeliver the deliveries that matter, or let the receiver catch up from the integration feed."
+runbook = "webhook-delivery"
+test = "fifty_consecutive_failures_disable_the_webhook"
+
+[[error]]
+code = "FG-INT-0020"
+name = "WebhookAttemptFailed"
+http_status = 502
+severity = "info"
+user_message_ja = "Webhook の配信の 1 回が失敗しました。自動で再試行します。"
+user_message_en = "One webhook delivery attempt failed. It will be retried automatically."
+user_message_id = "Satu percobaan pengiriman webhook gagal. Akan dicoba ulang secara otomatis."
+cause = "One attempt of a webhook delivery failed and another is scheduled: the receiver answered a non-2xx status or a redirect (never followed), the connection was refused, timed out or failed TLS, or the name did not resolve. The delivery stays `pending` with `last_status` / `last_reason`; the next attempt runs after the backoff (10 s × 4^(n−1), at most 4 h). After the last attempt the delivery is `failed` (FG-INT-0004). Each failed attempt counts towards the webhook's automatic disable (FG-INT-0011). Nobody is waiting on it: info."
+diagnosis = "The log event carries `webhook_id`, `delivery_id`, `attempt`, `status` (or `none`), `reason` (as FG-INT-0004's `last_reason`), `retry_in_s`, `consecutive_failures`, `origin` and, when the receiver answered, `response_head` (at most 128 printable characters of the body with long token-like runs replaced by `[redacted]`; the body itself is never stored)."
+fix = "Usually nothing: a receiver that is briefly down catches up with the retries. If one webhook keeps failing, follow runbook webhook-delivery before it is disabled."
+runbook = "webhook-delivery"
+test = "a_failed_attempt_is_retried_with_backoff"
 # ── U2 follow-up: the rules' optimistic concurrency ──────────────────────
 [[error]]
 code = "FG-REVIEW-0018"

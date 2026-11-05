@@ -10,17 +10,17 @@
 
 ## 利用者向けメッセージ
 
-- ja: この連携に結びつけられるプロジェクトの上限に達しました。使っていない結びつけを解除してから、もう一度試してください。
-- en: This integration is bound to the maximum number of projects. Unbind a project it no longer needs, then try again.
-- id: Integrasi ini sudah terikat ke jumlah proyek maksimum. Lepaskan ikatan proyek yang tidak lagi diperlukan, lalu coba lagi.
+- ja: 上限（連携に結びつけるプロジェクトは 200、プロジェクトの Webhook は 20）に達しました。使っていないものを外してから、もう一度試してください。
+- en: The limit is reached (200 projects per integration, 20 webhooks per project). Remove one that is no longer needed, then try again.
+- id: Batas tercapai (200 proyek per integrasi, 20 webhook per proyek). Hapus yang tidak lagi diperlukan, lalu coba lagi.
 
 ## 原因 (cause)
 
-`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}` would bind a 201st project to one integration (ADR-0016 §1, §7: at most 200 bindings per integration, because the event feed decides every bound project on every read). The count is taken under the integration's row lock, so two binds at once cannot both pass. Nothing was written. Webhooks (20 per project, I2) will reuse this code with their own `limit`.
+`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}` would bind a 201st project to one integration (ADR-0016 §1, §7: at most 200 bindings per integration, because the event feed decides every bound project on every read). The count is taken under the integration's row lock, so two binds at once cannot both pass. Nothing was written. M3 I2: `POST /api/v1/projects/{id}/webhooks` past 20 webhooks of one project (`reason=webhook_limit`, `limit` 20, counted under a per-project lock).
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason=binding_limit`, `limit` (200), `integration_id` and `project_id`, with `action=IntegrationBindingManage`. Count the bindings: SELECT count(*) FROM forge.integration_bindings WHERE integration_id = <integration_id>; `GET /api/v1/admin/integrations/{integration_id}/bindings` lists them (administrators).
+The log event carries `reason=binding_limit`, `limit` (200), `integration_id` and `project_id`, with `action=IntegrationBindingManage` (webhooks: `reason=webhook_limit`, `project_id`, `action=WebhookManage`; `gstn webhook list --project <id>`). Count the bindings: SELECT count(*) FROM forge.integration_bindings WHERE integration_id = <integration_id>; `GET /api/v1/admin/integrations/{integration_id}/bindings` lists them (administrators).
 
 ## 対処 (fix)
 
