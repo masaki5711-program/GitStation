@@ -51,7 +51,9 @@ gstn: `gstn integration dev-status <id> --ref PBI-<n>` と `gstn integration dev
 ## `GET /api/v1/integrations/{id}/dev-status?cursor=…&limit=…&state=…`
 
 すべての作業項目（見える結びつけの kanflow のプロジェクトのもの。リンクが今は無いものも `merge_requests: []` で出る）を、作業項目の id の順に
-ページで返す。
+ページで返す。**開いたリンクがすべて見えないプロジェクト（サービスアカウントが Guest・メンバーでない・削除待ち）の MR にしか無い作業項目は
+出さない**（見えないプロジェクトだけが使った参照を知らせない）。同じ kanflow のプロジェクトに結んだ見えないプロジェクトの MR は、
+1 つの PBI の答えにもページにも出ない。
 
 | パラメーター | 内容 |
 |---|---|

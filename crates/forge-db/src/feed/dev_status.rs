@@ -251,6 +251,10 @@ impl FeedSnapshot {
     /// Up to `limit + 1` work items of the integration after `after` (by
     /// id) on the visible bindings' external projects — the paged status
     /// (the extra one says whether more remain).
+    /// I1d review: a work item whose only open links are in projects the
+    /// set does not show is not walked (it would name a reference only a
+    /// hidden project used); one with a visible link, or with no open link
+    /// at all, is.
     pub async fn work_items_after(
         &mut self,
         visible: &VisibleSet,
@@ -279,6 +283,11 @@ impl FeedSnapshot {
                    AND w.external_project_id IN (SELECT b.external_project_id \
                      FROM forge.integration_bindings b \
                      WHERE b.integration_id = $1 AND b.project_id = ANY($2)) \
+                   AND (EXISTS (SELECT 1 FROM forge.merge_request_work_items l \
+                         WHERE l.work_item_id = w.id AND l.unlinked_at IS NULL \
+                           AND l.project_id = ANY($2)) \
+                     OR NOT EXISTS (SELECT 1 FROM forge.merge_request_work_items l \
+                         WHERE l.work_item_id = w.id AND l.unlinked_at IS NULL)) \
                  ORDER BY w.id LIMIT $4",
             )
             .bind(integration)

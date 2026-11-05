@@ -1887,3 +1887,73 @@ async fn the_allowlist_narrows_checks_and_approvals() {
     assert_eq!(checks_only.checks.as_ref().map(Vec::len), Some(1));
     w.t.drop_now().await;
 }
+
+/// I1d review (security MEDIUM): two projects bound to the same kanflow
+/// project, the service account only a Guest of one (then no member) — that
+/// project's merge requests never appear, in one work item's status or in
+/// the walk; a work item linked only from the hidden project is not walked
+/// (it would name a reference only the hidden project used).
+#[tokio::test]
+async fn a_hidden_project_on_the_same_kanflow_project_never_shows() {
+    let w = world().await;
+    let api = second_project(&w, "api").await;
+    bind(&w, api.project_id, "kf-1").await;
+    let seen = open_mr(&w, w.web.project_id, "PBI-3 visible", "visible").await;
+    let _hidden = open_mr(&w, api.project_id, "PBI-3 hidden", "hidden").await;
+    let _only = open_mr(&w, api.project_id, "PBI-4 api only", "api-only").await;
+    drain(&w.t).await;
+    let both = dev_status(&w, "PBI-3", MrStateFilter::All).await;
+    assert_eq!(
+        both[0].1.merge_requests.len(),
+        2,
+        "both visible while a Reporter"
+    );
+    for hide in [
+        format!(
+            "UPDATE forge.project_members SET role = 'guest' WHERE project_id = {} AND user_id = {}",
+            api.project_id.get(),
+            w.sa.get()
+        ),
+        format!(
+            "DELETE FROM forge.project_members WHERE project_id = {} AND user_id = {}",
+            api.project_id.get(),
+            w.sa.get()
+        ),
+    ] {
+        w.t.commit_audited(("project", api.project_id.get()), &[hide.clone()])
+            .await;
+        let one = dev_status(&w, "PBI-3", MrStateFilter::All).await;
+        assert_eq!(iid_states(&one[0].1), [(seen.iid, "open")], "{hide}");
+        assert!(dev_status(&w, "PBI-4", MrStateFilter::All).await[0]
+            .1
+            .merge_requests
+            .is_empty());
+        let (mut snap, _, visible) = decided(&w).await;
+        let walked: Vec<String> = snap
+            .work_items_after(&visible, 0, 10)
+            .await
+            .expect("walk")
+            .into_iter()
+            .map(|i| i.reference)
+            .collect();
+        let ids: Vec<i64> = snap
+            .work_items_after(&visible, 0, 10)
+            .await
+            .expect("walk")
+            .into_iter()
+            .filter_map(|i| i.id)
+            .collect();
+        let statuses = snap
+            .dev_status_of(&visible, &ids, MrStateFilter::All)
+            .await
+            .expect("status");
+        snap.close().await;
+        assert_eq!(walked, ["PBI-3"], "{hide}");
+        let listed: Vec<ProjectId> = statuses
+            .values()
+            .flat_map(|s| s.merge_requests.iter().map(|m| m.project_id))
+            .collect();
+        assert_eq!(listed, [w.web.project_id], "{hide}");
+    }
+    w.t.drop_now().await;
+}
