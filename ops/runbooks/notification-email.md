@@ -9,7 +9,7 @@
 - `forge doctor` の `notify.queue` が **FG-INT-0015**（warn）で失敗した。`reason`:
   - `backlog`: 10 分より古い通知が待っている（ワーカーが動いていない、または中継が落ちていて試行が尽きていない）
   - `failed_recently`: 24 時間以内に `failed` になった通知がある（中継が 5xx で拒んだ、または試行が尽きた）
-  - `outcome_unknown`: 24 時間以内に `unknown` になった通知がある（本文を渡した後に応答が無かった。**再送しない**）
+  - `outcome_unknown`: 30 日以内に `unknown` になった通知がある（確認済みの印は無いので、30 日たつと数えない。最も古いものの経過秒が `oldest_unknown_secs`）（本文を渡した後に応答が無かった。**再送しない**）
 - `forge doctor` の `notify.relay` が失敗した（このホストから中継の `host:port` へ TCP でつながらない。何も送らない確認）
 - ワーカーのログに **FG-INT-0015**（warn）。`reason`: `connect_failed`、`connection_lost`、`tls_failed`、`auth_failed`、`timeout`、
   `rejected_temporary`（4xx）、`rejected_permanent`（5xx）、`tries_used_up`、`outcome_unknown`。`stage`: `connect` / `tls` / `auth` / `mail_from` /

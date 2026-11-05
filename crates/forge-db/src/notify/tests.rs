@@ -510,7 +510,9 @@ async fn the_backlog_counts_waiting_and_recent_problems() {
             waiting: 0,
             oldest_waiting_secs: None,
             failed_24h: 0,
-            unknown_24h: 0
+            unknown_30d: 0,
+            oldest_unknown_secs: None,
+            address_suppressed_24h: 0,
         }
     );
     open_mr(&w).await;
@@ -528,7 +530,7 @@ async fn the_backlog_counts_waiting_and_recent_problems() {
         .expect("failed"));
     let after = backlog(&w.t.db).await.expect("after");
     assert_eq!(
-        (after.waiting, after.failed_24h, after.unknown_24h),
+        (after.waiting, after.failed_24h, after.unknown_30d),
         (0, 1, 0)
     );
     assert_eq!(after.oldest_waiting_secs, None);
@@ -547,4 +549,61 @@ fn the_project_and_error_types_are_the_shared_ones() {
     let _: ProjectId = ProjectId::new(1);
     assert_eq!(SEND_JOB, "notification.send");
     assert_eq!(ErrorCode::SmtpUnavailable.id(), "FG-INT-0015");
+}
+
+#[tokio::test]
+async fn the_backlog_reports_old_unknowns_and_unusable_addresses_apart() {
+    let w = world(QUEUE).await;
+    open_mr(&w).await;
+    drain(&w, &QUEUE).await.expect("drain");
+    let id = first_id(&w).await;
+    assert!(matches!(
+        begin_send(&w.t.db, id, 1).await.expect("take the send"),
+        Begin::Send(_)
+    ));
+    assert!(finish(&w.t.db, id, 1, Finish::Unknown("outcome_unknown"))
+        .await
+        .expect("unknown"));
+    // Three days old: past the 24 h of failures, still reported.
+    sqlx::query("UPDATE forge.notifications SET updated_at = now() - interval '3 days'")
+        .execute(&mut w.t.superuser().await)
+        .await
+        .expect("age");
+    let b = backlog(&w.t.db).await.expect("backlog");
+    assert_eq!(b.unknown_30d, 1);
+    assert!(
+        b.oldest_unknown_secs.is_some_and(|s| s >= 3 * 86_400 - 60),
+        "{b:?}"
+    );
+    // Past 30 days it is history.
+    sqlx::query("UPDATE forge.notifications SET updated_at = now() - interval '31 days'")
+        .execute(&mut w.t.superuser().await)
+        .await
+        .expect("age");
+    let b = backlog(&w.t.db).await.expect("backlog");
+    assert_eq!((b.unknown_30d, b.oldest_unknown_secs), (0, None));
+    // Operational suppressions are counted apart from the person's choices.
+    for (n, reason) in [
+        (1, "address_invalid"),
+        (2, "no_address"),
+        (3, "not_visible"),
+    ] {
+        sqlx::query(
+            "INSERT INTO forge.notifications (user_id, kind, event_id, event_seq, project_id,              merge_request_iid, request_id, state, reason)              VALUES ($1, 'mr_merged', gen_random_uuid(), $2, 1, 1, 'r', 'suppressed', $3)",
+        )
+        .bind(w.alice.get())
+        .bind(n as i64)
+        .bind(reason)
+        .execute(&mut w.t.superuser().await)
+        .await
+        .expect("insert");
+    }
+    assert_eq!(
+        backlog(&w.t.db)
+            .await
+            .expect("backlog")
+            .address_suppressed_24h,
+        2
+    );
+    w.t.drop_now().await;
 }

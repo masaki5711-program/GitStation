@@ -1360,7 +1360,7 @@ gstn の `integration_dev_status_commands_read_their_routes`。Runbook `integrat
    関係なく保存する（後でメールを有効にしたときに効く）。
 9. **失敗・観測**: `FG-INT-0015`（warn、`reason`: `connect_failed` / `connection_lost` / `tls_failed` / `auth_failed` / `timeout` / `rejected_temporary` /
    `rejected_permanent` / `tries_used_up` / `outcome_unknown`、`stage`、`smtp_code`、`notification_id`、`attempt`）をジョブの境界で 1 回、`request_id` つきで出す。宛先・本文・
-   中継の返事の文はログに出さない。`forge doctor`: `notify.queue`（10 分より古い待ち・24 時間の `failed` / `unknown`）と `notify.relay`（TCP の接続だけ、何も送らない）。
+   中継の返事の文はログに出さない。`forge doctor`: `notify.queue`（10 分より古い待ち・24 時間の `failed`・30 日の `unknown` と最も古いものの経過・24 時間の宛先の不備による `suppressed`（`no_address` / `address_invalid`）を人の選択と別に警告。`notify.enabled = false` でも読む）と `notify.relay`（TCP の接続だけ、何も送らない）。
    Runbook `notification-email`。
 10. **受け入れた残り**: (1) TLS の握手の通し試験は無い（証明書の生成の依存を試験に入れない判断）。設定・CA の読み込み・格下げの拒否・段階の分類は試験している。
     (2) 通知の行（と設定）の保持期間は決めていない。**プロジェクトの purge も利用者の退職（無効化。利用者の行は消えない）も `notifications` / `notification_preferences` の行を消さない**（`forge_app` に DELETE 権限が無く、プロジェクトへの外部キーも無い）。行が持つのは id・種類・状態・理由だけで、本文・宛先・タイトルは無い。消す仕組みは（1 行 約 200 バイト。アプリ内の通知 U4 が同じ表を使うので、そこで `read_at` と一緒に決める）。

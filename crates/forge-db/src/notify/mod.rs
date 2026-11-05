@@ -484,13 +484,23 @@ pub struct Backlog {
     pub oldest_waiting_secs: Option<i64>,
     /// `failed` in the last 24 hours.
     pub failed_24h: i64,
-    /// `unknown` in the last 24 hours.
-    pub unknown_24h: i64,
+    /// `unknown` in the last 30 days (there is no acknowledgement: after
+    /// that it is history).
+    pub unknown_30d: i64,
+    /// Age in seconds of the oldest of those.
+    pub oldest_unknown_secs: Option<i64>,
+    /// `suppressed` in the last 24 hours because the address is missing or
+    /// unusable (`no_address`, `address_invalid`): data to fix, not a choice.
+    pub address_suppressed_24h: i64,
 }
+
+/// waiting, oldest waiting, failed 24 h, unknown 30 d, oldest unknown,
+/// address suppressions 24 h.
+type BacklogRow = (i64, Option<i64>, i64, i64, Option<i64>, i64);
 
 pub async fn backlog(db: &Db) -> Result<Backlog, ForgeError> {
     const QUERY: &str = "notify.backlog";
-    let (waiting, oldest, failed, unknown): (i64, Option<i64>, i64, i64) = db
+    let (waiting, oldest, failed, unknown, oldest_unknown, address): BacklogRow = db
         .within(QUERY, async {
             sqlx::query_as(
                 "SELECT count(*) FILTER (WHERE state IN ('pending', 'sending', 'retrying')), \
@@ -499,6 +509,12 @@ pub async fn backlog(db: &Db) -> Result<Backlog, ForgeError> {
                         count(*) FILTER (WHERE state = 'failed' \
                           AND updated_at > now() - interval '24 hours'), \
                         count(*) FILTER (WHERE state = 'unknown' \
+                          AND updated_at > now() - interval '30 days'), \
+                        floor(extract(epoch FROM now() - min(updated_at) \
+                          FILTER (WHERE state = 'unknown' \
+                            AND updated_at > now() - interval '30 days')))::bigint, \
+                        count(*) FILTER (WHERE state = 'suppressed' \
+                          AND reason IN ('no_address', 'address_invalid') \
                           AND updated_at > now() - interval '24 hours') \
                  FROM forge.notifications",
             )
@@ -511,7 +527,9 @@ pub async fn backlog(db: &Db) -> Result<Backlog, ForgeError> {
         waiting,
         oldest_waiting_secs: oldest,
         failed_24h: failed,
-        unknown_24h: unknown,
+        unknown_30d: unknown,
+        oldest_unknown_secs: oldest_unknown,
+        address_suppressed_24h: address,
     })
 }
 
