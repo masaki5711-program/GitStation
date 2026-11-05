@@ -34,6 +34,10 @@
 //! - [`maintenance`] runs the steps of the repository maintenance job
 //!   (M3 O3): gc with a prune grace, pack-refs, commit-graph, fsck and the
 //!   object / ref counts, each bounded and killed with its process tree.
+//! - [`push_hook`] / [`push_scan`] / [`secret_scan`] are the push checks
+//!   (M3 X8): the pre-receive hook serve arms per push, the scan of what a
+//!   push brings inside git's quarantine (blob sizes, secrets) and the
+//!   secret patterns.
 
 pub mod browse;
 mod command;
@@ -47,7 +51,9 @@ pub mod pkt_line;
 mod process;
 mod process_tree;
 mod push_check;
+pub mod push_hook;
 pub mod push_introduced;
+pub mod push_scan;
 pub mod receive_report;
 pub mod receive_request;
 mod redact;
@@ -55,6 +61,7 @@ mod refs;
 pub mod review_changes;
 pub mod review_inputs;
 mod revision;
+pub mod secret_scan;
 pub mod smart_http;
 pub mod storage;
 mod stream;

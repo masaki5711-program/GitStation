@@ -246,6 +246,15 @@ impl GitCommand {
         self
     }
 
+    /// Replace every earlier `-c key=…` of this invocation with one
+    /// `key=value` (M3 X8: receive-pack's `core.hooksPath` becomes the push
+    /// hooks directory). Crate-internal, like [`Self::config_override`].
+    #[must_use]
+    pub(crate) fn replace_config(mut self, key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        self.config.retain(|(k, _)| *k != key);
+        self.config_override(key, value)
+    }
+
     /// Pin the repository (`GIT_DIR`) and run inside it — git never discovers
     /// a repository by walking up from the working directory.
     #[must_use]

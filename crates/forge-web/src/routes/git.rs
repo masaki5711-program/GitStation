@@ -29,6 +29,7 @@
 //! id). The per-principal stream cap is keyed by the user id.
 
 use std::num::NonZeroU64;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,6 +80,9 @@ pub struct GitHttpLimits {
     /// One push's pack (`receive.maxInputSize`); the body forge forwards
     /// may be this plus the command list (M1 phase 9 MR4).
     pub push_max_bytes: NonZeroU64,
+    /// The largest blob a push may bring (M3 X8, `git.http.push_max_blob_bytes`;
+    /// checked by the pre-receive hook when push checks are on).
+    pub push_max_blob_bytes: u64,
 }
 
 impl GitHttpLimits {
@@ -96,6 +100,7 @@ impl GitHttpLimits {
             // a zero would mean "unlimited" to git, so it falls back to 1.
             push_max_bytes: NonZeroU64::new(u64::from(cfg.push_max_bytes))
                 .unwrap_or(NonZeroU64::MIN),
+            push_max_blob_bytes: u64::from(cfg.push_max_blob_bytes),
         }
     }
 }
@@ -121,6 +126,10 @@ pub struct SmartHttp {
     /// The detached receive-pack tasks still running (graceful shutdown
     /// waits for them: [`SmartHttp::push_tasks`]).
     pub(crate) push_tasks: PushTasks,
+    /// The forge binary the pre-receive push checks run (`forge hook
+    /// pre-receive`, M3 X8). `None`: no hook (receive-pack keeps the empty
+    /// hooks directory) — `forge serve` always sets it.
+    pub(crate) push_checks: Option<PushChecks>,
     /// The browse API and the raw / archive routes (M2 MR7): the same git
     /// and storage, the browse limits, the per-repository cap and the ref
     /// cache every push drops.
@@ -173,6 +182,13 @@ impl PushTasks {
     }
 }
 
+/// The push checks' binary and (tests) limits.
+#[derive(Debug, Clone)]
+pub(crate) struct PushChecks {
+    pub(crate) exe: PathBuf,
+    pub(crate) limits: Option<forge_git::push_scan::ScanLimits>,
+}
+
 /// The push's protection snapshot and its recorder (forge-core traits;
 /// forge-db implements both on `Db`).
 #[derive(Clone)]
@@ -188,6 +204,7 @@ impl std::fmt::Debug for SmartHttp {
             .field("storage", &self.storage)
             .field("limits", &self.limits)
             .field("push", &self.push.is_some())
+            .field("push_checks", &self.push_checks)
             .finish_non_exhaustive()
     }
 }
@@ -215,6 +232,7 @@ impl SmartHttp {
             body_slots,
             push: None,
             push_tasks: PushTasks::default(),
+            push_checks: None,
             browse,
         }
     }
@@ -247,6 +265,28 @@ impl SmartHttp {
             protection,
             recorder,
         });
+        self
+    }
+
+    /// Run the push checks (M3 X8: large files, secrets) in receive-pack's
+    /// pre-receive hook: `exe` is the forge binary (absolute) whose `hook
+    /// pre-receive` the hook script runs. Writes the hook script once
+    /// (`Git::install_push_hook`); an unusable binary path or a hooks
+    /// directory forge did not write is an error — `forge serve` then does
+    /// not start (X8 review: never run pushes unchecked).
+    pub fn with_push_checks(mut self, exe: PathBuf) -> Result<Self, ForgeError> {
+        forge_git::push_hook::hook_exe(&exe)?;
+        self.git.install_push_hook()?;
+        self.push_checks = Some(PushChecks { exe, limits: None });
+        Ok(self)
+    }
+
+    /// Other scan limits than the defaults (tests: tiny caps).
+    #[must_use]
+    pub fn with_push_check_limits(mut self, limits: forge_git::push_scan::ScanLimits) -> Self {
+        if let Some(checks) = &mut self.push_checks {
+            checks.limits = Some(limits);
+        }
         self
     }
 }

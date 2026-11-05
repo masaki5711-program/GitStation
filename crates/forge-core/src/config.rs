@@ -490,6 +490,7 @@ fn git_http<'a>(get: impl Fn(&str) -> Option<&'a str> + Copy) -> Result<GitHttpC
             d.max_streams_per_principal,
         )?,
         push_max_bytes: positive(get, "git.http.push_max_bytes", d.push_max_bytes)?,
+        push_max_blob_bytes: positive(get, "git.http.push_max_blob_bytes", d.push_max_blob_bytes)?,
     }
     .validate()
 }
