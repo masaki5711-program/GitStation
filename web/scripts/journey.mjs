@@ -18,6 +18,7 @@ import { chromium } from 'playwright';
 import { mergeBackend } from './journey-merge.mjs';
 import { mrBackend } from './journey-mr.mjs';
 import { PNG, REFS, browse } from './journey-repo.mjs';
+import { SA_SECRET, serviceAccountsBackend } from './journey-service-accounts.mjs';
 import { SECRET, settingsBackend } from './journey-settings.mjs';
 import { HOOK_SECRET, ROTATED_SECRET, webhooksBackend } from './journey-webhooks.mjs';
 import { dist, listen, redirect, sendError, sendJson, shellCsp, standIn } from './standin.mjs';
@@ -54,6 +55,7 @@ function backend() {
   const unexpected = [];
   const settings = settingsBackend(CSRF);
   const webhooks = webhooksBackend(CSRF);
+  const serviceAccounts = serviceAccountsBackend(CSRF, user);
   const mergeRequests = mrBackend(CSRF, user);
   const merging = mergeBackend(CSRF, user);
   let nextId = 9;
@@ -105,9 +107,12 @@ function backend() {
       if (mr.error) return sendError(res, mr.status, ...mr.error), true;
       return sendJson(res, mr.status, mr.body), true;
     }
-    // Webhooks and notification preferences (U3a) come before the settings
-    // fake, which claims every /projects/7/ and /user/ path.
-    const more = webhooks.answer(req, url, body) ?? settings.answer(req, url, body, forgeWeb);
+    // Webhooks, notification preferences (U3a) and service accounts come before
+    // the settings fake, which claims every /projects/7/, /user/ and /admin/ path.
+    const more =
+      webhooks.answer(req, url, body) ??
+      serviceAccounts.answer(req, url, body) ??
+      settings.answer(req, url, body, forgeWeb);
     if (more !== null) {
       if (more.error) return sendError(res, more.status, ...more.error), true;
       if (more.status === 204) {
@@ -792,6 +797,76 @@ async function main() {
     await page.getByRole('button', { name: 'Save notification settings' }).click();
     await page.getByText('Notification settings were saved.').waitFor();
     await check('72-notifications-saved');
+
+    // 6g. Service accounts (admin). A taken username is refused with its reason
+    // and request id; the secret of a new token is announced, focused and shown
+    // once with a copy button; a refused issue shows no secret; revoke and
+    // disable ask first; a disabled account says why it gets no token.
+    await page.goto(`${base}/taro/-/settings?tab=service-accounts`, { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { level: 2, name: 'Service accounts' }).waitFor();
+    await page.getByRole('rowheader', { name: /CI runner/ }).waitFor();
+    await check('80-service-accounts');
+    await page.getByLabel('Username').fill('sa-ci-runner');
+    await page.getByLabel('Description').fill('Duplicate on purpose');
+    await page.getByRole('button', { name: 'Create service account' }).click();
+    const taken = page.getByRole('alert').filter({ hasText: 'That username is already in use.' });
+    await taken.waitFor();
+    if (!(await taken.innerText()).includes('req-sa-dup')) problems.push('service account refusal: request id is missing');
+    await check('81-service-account-refused');
+    await page.getByLabel('Username').fill('sa-kanflow');
+    await page.getByLabel('Display name').fill('Kanflow');
+    await page.getByLabel('Description').fill('PM integration');
+    await page.getByRole('button', { name: 'Create service account' }).click();
+    await page.getByText('The service account Kanflow was created.').waitFor({ state: 'attached' });
+    await page.getByRole('rowheader', { name: /Kanflow/ }).waitFor();
+    await check('82-service-account-created');
+    await page.getByRole('link', { name: 'Manage tokens of Kanflow' }).click();
+    await page.getByRole('heading', { level: 2, name: 'Kanflow' }).waitFor();
+    await page.getByText('This account has no tokens yet.').waitFor();
+    await check('83-service-account-detail');
+    await page.getByLabel('Name', { exact: true }).fill('refuse-me');
+    await page.getByRole('button', { name: 'Issue token' }).click();
+    const sessionNeeded = page.getByRole('alert').filter({ hasText: 'A browser session is needed for this.' });
+    await sessionNeeded.waitFor();
+    if (!(await sessionNeeded.innerText()).includes('req-sa-session')) problems.push('token refusal: request id is missing');
+    await check('84-token-refused');
+    await page.getByLabel('Name', { exact: true }).fill('sync');
+    await page.getByLabel('merge_execute').check();
+    await page.getByRole('button', { name: 'Issue token' }).click();
+    const saPanel = page.getByTestId('token-secret');
+    await saPanel.waitFor();
+    if ((await saPanel.getByTestId('token-value').innerText()) !== SA_SECRET) problems.push('service account token: the secret is not shown');
+    if (!(await saPanel.innerText()).includes('only time the token is shown')) problems.push('service account token: the one-time warning is missing');
+    await saPanel.getByRole('button', { name: 'Copy the token' }).waitFor();
+    if (!(await saPanel.evaluate((el) => el === document.activeElement))) problems.push('service account token: the secret panel does not have the focus');
+    await check('85-service-account-secret');
+    await page.getByRole('button', { name: 'I have stored it' }).click();
+    await page.getByRole('rowheader', { name: 'sync' }).waitFor();
+    if ((await page.content()).includes(SA_SECRET)) problems.push('service account token: the secret is still on the page after "I have stored it"');
+    await page.getByRole('button', { name: 'Revoke sync' }).click();
+    await page.getByRole('dialog').getByRole('heading', { name: 'Revoke this token?' }).waitFor();
+    await check('86-token-revoke-confirm');
+    await page.getByRole('dialog').getByRole('button', { name: 'Revoke' }).click();
+    await page.getByText('Revoked', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Disable Kanflow' }).click();
+    await page.getByRole('dialog').getByRole('heading', { name: 'Disable this service account?' }).waitFor();
+    await page.getByRole('dialog').getByRole('button', { name: 'Disable' }).click();
+    await page.getByRole('note').filter({ hasText: 'is disabled, so no token can be issued' }).waitFor();
+    await check('87-service-account-disabled');
+    await page.setViewportSize({ width: 375, height: 800 });
+    for (const [path, name] of [
+      ['/taro/-/settings?tab=service-accounts', '88-service-accounts-375'],
+      ['/taro/-/settings?tab=service-accounts&account=4', '89-service-account-375'],
+    ]) {
+      await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
+      await h1('Account settings');
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      if (overflow > 0) problems.push(`${name}: the page scrolls sideways by ${overflow}px at 375px`);
+      await check(name);
+    }
+    await page.setViewportSize({ width: 1100, height: 800 });
 
     // 7. Sign out: a real form POST with the CSRF token; back to the sign-in screen.
     await page.goto(`${base}/`, { waitUntil: 'networkidle' });
