@@ -432,7 +432,7 @@ async fn unreportable_names_are_the_ones_without_a_granted_reporter() {
     // M3 X2: `forge/spec-drift` is reported by forge's own worker, so it is
     // never unreportable; another `forge/` name has no reporter yet.
     let drift = parse_name("forge/spec-drift").expect("name");
-    let names: Vec<_> = ["ci/gates", "kanflow/work-item", "forge/risk"]
+    let names: Vec<_> = ["ci/gates", "kanflow/work-item", "forge/deploy-gate"]
         .iter()
         .map(|n| parse_name(n).expect("name"))
         .collect();

@@ -831,7 +831,7 @@ async fn unreported_requirements_and_reporters_are_counted() {
             format!(
                 "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
                  required_checks) SELECT id, project_id, ARRAY['ci/gates', 'ci/lint', \
-                 'forge/risk']::text[] FROM forge.protected_refs WHERE project_id = {p}"
+                 'forge/deploy-gate']::text[] FROM forge.protected_refs WHERE project_id = {p}"
             ),
             format!(
                 "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
@@ -846,8 +846,8 @@ async fn unreported_requirements_and_reporters_are_counted() {
         ],
     )
     .await;
-    // M3 X2: `forge/spec-drift` has forge's worker as its reporter; only
-    // `forge/risk` (no reporter yet) counts.
+    // M3 X2 / X7: `forge/spec-drift` and `forge/risk` have forge's worker as their reporter; only
+    // `forge/deploy-gate` (no reporter) counts.
     let unreported = unreported_requirements(&w.t.db).await.expect("required");
     assert_eq!(
         unreported.into_iter().collect::<Vec<_>>(),
