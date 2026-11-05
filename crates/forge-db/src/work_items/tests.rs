@@ -1413,3 +1413,74 @@ async fn unbinding_ends_the_projects_links_to_the_old_binding() {
     assert_eq!(answer.work_item.id, id);
     w.t.drop_now().await;
 }
+
+/// The link condition on the read pool and in a transaction (asserted
+/// equal).
+async fn both(w: &World, mr: MergeRequestId) -> bool {
+    let pooled = work_item_linked(&w.t.db, mr).await.expect("read pool");
+    let mut conn = w.t.superuser().await;
+    let mut tx = conn.begin().await.expect("begin");
+    let locked = linked_on(&mut tx, mr).await.expect("in a transaction");
+    assert_eq!(pooled, locked, "the status and the gate read alike");
+    pooled
+}
+
+/// M3 I1d: the merge condition `require_work_item_link` reads an open link
+/// of the project's current binding — on the read pool (the status) and in
+/// a transaction (the merge gate) alike. An ended link, and a link of an
+/// unbound project (ended by the unbind; the new binding's items are other
+/// rows), never count.
+#[tokio::test]
+async fn the_link_condition_sees_only_open_links_of_the_current_binding() {
+    let w = world().await;
+    let mr = open(&w, "Plain title", "plain").await;
+    drain(&w.t).await;
+    assert!(!both(&w, mr.id).await, "no link yet");
+    assert_eq!(
+        link(&w, &mr, "PBI-2", "req-link").await,
+        LinkOutcome::Changed
+    );
+    assert!(both(&w, mr.id).await, "an open link of the binding");
+    unlink_work_item_mr_decided(
+        &w.t.db,
+        &ctx(Actor::User(w.alice), "req-unlink"),
+        (w.web.project_id, mr.iid),
+        &LinkTarget::Ref(reference("PBI-2")),
+        (w.alice, LinkActorKind::Human),
+        |_| Ok(()),
+    )
+    .await
+    .expect("unlink");
+    assert!(!both(&w, mr.id).await, "an ended link does not count");
+    assert_eq!(
+        link(&w, &mr, "PBI-3", "req-link-3").await,
+        LinkOutcome::Changed
+    );
+    integrations::unbind_decided(
+        &w.t.db,
+        &system("req-unbind"),
+        w.web.project_id,
+        w.alice,
+        w.integration,
+        |_| Ok(()),
+    )
+    .await
+    .expect("unbind");
+    assert!(!both(&w, mr.id).await, "an unbound project has no link");
+    let (_bound, _, ()) = integrations::bind_decided(
+        &w.t.db,
+        &system("req-rebind"),
+        w.web.project_id,
+        w.alice,
+        w.integration,
+        "kf-2",
+        |_| Ok(()),
+    )
+    .await
+    .expect("rebind");
+    assert!(
+        !both(&w, mr.id).await,
+        "the old binding's work items never satisfy the new binding"
+    );
+    w.t.drop_now().await;
+}

@@ -33,7 +33,9 @@
 //! `Retry-After: 1` (per process; review I1c).
 //!
 //! Only forge-web's feed routes call [`Feed::read_events`] and
-//! [`Feed::head_cursor`] (`tests/decided_callers.rs`).
+//! [`Feed::head_cursor`], and only its development-status routes call
+//! [`Feed::work_item_dev_status`] and [`Feed::dev_status_page`] (M3 I1d,
+//! `dev_status.rs`; `tests/decided_callers.rs`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +47,14 @@ use forge_core::{telemetry, CursorKeys, FeedPosition, IntegrationId, RequestId, 
 use forge_db::feed::{self as db_feed, FeedEvent, FeedRead, FeedSnapshot, FeedState};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
+
+mod dev_status;
+
+pub use dev_status::{
+    checks_state, CheckConclusion, CheckStatus, DevMergeRequest, DevStatus, PageQuery,
+    WorkItemQuery, WorkItemStatus, DEFAULT_DEV_STATUS_LIMIT,
+};
+pub use forge_db::feed::{DevCheckRun, MrStateFilter, MAX_DEV_STATUS_LIMIT};
 
 /// The format version of the feed's answers (docs/api/integration-feed.md:
 /// fields are only ever added).
@@ -316,6 +326,18 @@ impl Feed {
         let days = u64::try_from(d.state.retention_days.max(1)).unwrap_or(1);
         let max_age = Duration::from_secs(days * 86_400 * 3 / 2);
         let position = FeedPosition::open(&self.keys, integration, cursor, max_age)?;
+        self.check_position(d, integration, &position)
+    }
+
+    /// A sealed position checked against the state and the set, in the
+    /// order epoch → `ahead_of_head` → `retention` → `visible_set_changed`
+    /// (the feed's cursor and the development status's page cursor alike).
+    fn check_position(
+        &self,
+        d: &Decided,
+        integration: IntegrationId,
+        position: &FeedPosition,
+    ) -> Result<i64, ForgeError> {
         if position.epoch != d.state.epoch {
             return Err(expired("epoch_mismatch", integration));
         }

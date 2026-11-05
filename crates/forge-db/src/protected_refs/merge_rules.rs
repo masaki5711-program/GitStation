@@ -52,10 +52,11 @@ pub(super) fn parse_merge(
     checks: Option<Vec<String>>,
     discussions: Option<bool>,
     no_push: Option<bool>,
+    link: Option<bool>,
 ) -> Result<Option<MergeRule>, ForgeError> {
-    match (approvals, checks, discussions, no_push) {
-        (None, None, None, None) => Ok(None),
-        (Some(approvals), Some(checks), Some(discussions), Some(no_push)) => {
+    match (approvals, checks, discussions, no_push, link) {
+        (None, None, None, None, None) => Ok(None),
+        (Some(approvals), Some(checks), Some(discussions), Some(no_push), Some(link)) => {
             let required_approvals = u32::try_from(approvals)
                 .ok()
                 .filter(|n| *n <= MAX_REQUIRED_APPROVALS)
@@ -76,6 +77,7 @@ pub(super) fn parse_merge(
                 required_checks,
                 require_resolved_discussions: discussions,
                 direct_push_forbidden: no_push,
+                require_work_item_link: link,
             }))
         }
         _ => Err(stored_invalid("stored_merge_rule_invalid", id)),
@@ -123,10 +125,11 @@ async fn merge_rule_on(
     conn: &mut PgConnection,
     rule: ProtectedRefId,
 ) -> Result<Option<(MergeRule, String)>, ForgeError> {
-    type Row = (i32, Vec<String>, bool, bool, String);
+    type Row = (i32, Vec<String>, bool, bool, bool, String);
     let row: Option<Row> = sqlx::query_as(&format!(
         "SELECT m.required_approvals, m.required_checks, m.require_resolved_discussions, \
-         m.direct_push_forbidden, {UPDATED_AT_US} FROM forge.protected_ref_merge_rules m \
+         m.direct_push_forbidden, m.require_work_item_link, {UPDATED_AT_US} \
+         FROM forge.protected_ref_merge_rules m \
          WHERE m.protected_ref_id = $1 FOR UPDATE"
     ))
     .bind(rule.get())
@@ -135,8 +138,8 @@ async fn merge_rule_on(
     .map_err(|e| query_error("protected_refs.merge_rule_lock", e))?;
     match row {
         None => Ok(None),
-        Some((a, c, d, p, updated_at)) => {
-            let merge = parse_merge(rule.get(), Some(a), Some(c), Some(d), Some(p))?
+        Some((a, c, d, p, l, updated_at)) => {
+            let merge = parse_merge(rule.get(), Some(a), Some(c), Some(d), Some(p), Some(l))?
                 .ok_or_else(|| stored_invalid("stored_merge_rule_invalid", rule.get()))?;
             Ok(Some((merge, updated_at)))
         }
@@ -253,13 +256,14 @@ pub async fn put_merge_rule_decided<P>(
             sqlx::query(
                 "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
                  required_approvals, required_checks, require_resolved_discussions, \
-                 direct_push_forbidden, created_at, updated_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp(), clock_timestamp()) \
+                 direct_push_forbidden, require_work_item_link, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp(), clock_timestamp()) \
                  ON CONFLICT (protected_ref_id) DO UPDATE SET \
                  required_approvals = EXCLUDED.required_approvals, \
                  required_checks = EXCLUDED.required_checks, \
                  require_resolved_discussions = EXCLUDED.require_resolved_discussions, \
                  direct_push_forbidden = EXCLUDED.direct_push_forbidden, \
+                 require_work_item_link = EXCLUDED.require_work_item_link, \
                  updated_at = clock_timestamp()",
             )
             .bind(rule.get())
@@ -268,6 +272,7 @@ pub async fn put_merge_rule_decided<P>(
             .bind(&checks)
             .bind(merge.require_resolved_discussions)
             .bind(merge.direct_push_forbidden)
+            .bind(merge.require_work_item_link)
             .execute(c)
             .await
             .map(drop)

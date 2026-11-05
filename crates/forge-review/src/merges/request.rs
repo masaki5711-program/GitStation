@@ -212,6 +212,7 @@ impl Review {
                     &stored.target_branch,
                     sha,
                     gate.unresolved_discussions,
+                    gate.work_item_linked,
                     &gate.check_runs,
                 );
                 let facts = MergeFacts {
@@ -232,6 +233,7 @@ impl Review {
                         .inputs(stored, sha, gate.approvals.clone()), // clone: the evaluation owns its inputs
                     checks: conditions.checks,
                     discussions: conditions.discussions,
+                    work_item_link: conditions.work_item_link,
                 };
                 evaluate_merge(&facts).map(drop).map_err(|reasons| {
                     if reasons.contains(&BlockReason::MergeabilityUnknown)

@@ -187,3 +187,30 @@ fn the_cursor_route_mirrors_every_feed_row() {
         missing.join("\n")
     );
 }
+
+/// M3 I1d: the development status decides exactly what the feed decides
+/// (the same principal rules and the same visible set), so every feed row
+/// — route and project level — has its `IntegrationDevStatusRead` twin
+/// with the same actor, fixture and outcome.
+#[test]
+fn the_dev_status_routes_mirror_every_feed_row() {
+    use crate::matrix::ROWS;
+    let missing: Vec<String> = ROWS
+        .iter()
+        .filter(|r| r.action == Action::IntegrationEventRead)
+        .filter(|r| {
+            !ROWS.iter().any(|c| {
+                c.action == Action::IntegrationDevStatusRead
+                    && c.actor == r.actor
+                    && c.fixture == r.fixture
+                    && c.expect == r.expect
+            })
+        })
+        .map(|r| format!("{:?} {:?} {:?}", r.actor, r.fixture, r.expect))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "rows without a dev-status twin:\n{}",
+        missing.join("\n")
+    );
+}

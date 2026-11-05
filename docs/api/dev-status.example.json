@@ -1,0 +1,77 @@
+{
+  "work_item": {
+    "schema_version": 1,
+    "as_of_seq": 982,
+    "feed_cursor": "AQAF3m0bK9kq-opaque-cursor-text",
+    "work_items": [
+      {
+        "provider": "kanflow",
+        "project_id": "kf-1",
+        "ref": "PBI-12",
+        "merge_requests": [
+          {
+            "project": { "id": 7, "path": "app/portal" },
+            "iid": 88,
+            "title": "PBI-12 lock the account after repeated failures",
+            "state": "open",
+            "draft": false,
+            "source_branch": "feature/PBI-12-lockout",
+            "target_branch": "main",
+            "head_sha": "2222222222222222222222222222222222222222",
+            "created_at": "2026-11-04T01:00:00Z",
+            "updated_at": "2026-11-04T02:10:00Z",
+            "merged_at": null,
+            "closed_at": null,
+            "approvals": { "given": 1 },
+            "checks": [
+              { "name": "ci/gates", "status": "completed", "conclusion": "success" },
+              { "name": "kanflow/work-item", "status": "in_progress", "conclusion": null }
+            ],
+            "checks_state": "pending",
+            "link": { "source": "auto", "linked_at": "2026-11-04T01:00:01Z" }
+          },
+          {
+            "project": { "id": 7, "path": "app/portal" },
+            "iid": 87,
+            "title": "Login form (first try)",
+            "state": "closed",
+            "draft": false,
+            "source_branch": "feature/PBI-12-login-form",
+            "target_branch": "main",
+            "head_sha": null,
+            "created_at": "2026-11-03T09:00:00Z",
+            "updated_at": "2026-11-03T12:00:00Z",
+            "merged_at": null,
+            "closed_at": "2026-11-03T12:00:00Z",
+            "approvals": { "given": 0 },
+            "checks": [],
+            "checks_state": "none",
+            "link": { "source": "auto", "linked_at": "2026-11-03T09:00:01Z" }
+          }
+        ],
+        "merge_requests_truncated": false
+      }
+    ]
+  },
+  "page": {
+    "schema_version": 1,
+    "as_of_seq": 982,
+    "feed_cursor": "AQAF3m0bK9kq-opaque-cursor-text",
+    "work_items": [
+      {
+        "provider": "kanflow",
+        "project_id": "kf-1",
+        "ref": "PBI-3",
+        "merge_requests": [],
+        "merge_requests_truncated": false
+      }
+    ],
+    "next_cursor": "AQAF3m0bK9kq-opaque-page-cursor",
+    "has_more": true
+  },
+  "not_found": {
+    "error_code": "FG-REPO-0005",
+    "user_message": "Not found, or you do not have access.",
+    "request_id": "req-0001"
+  }
+}

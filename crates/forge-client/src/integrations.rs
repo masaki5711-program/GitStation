@@ -133,6 +133,44 @@ fn page_human(v: &Value) -> String {
     lines.join("\n")
 }
 
+/// A development status as lines: per work item, one line, then one per
+/// merge request (`!iid state project … checks <state>`).
+fn dev_status_human(v: &Value) -> String {
+    let mut lines = vec![format!("as_of_seq: {}", text(v, "as_of_seq"))];
+    for item in v
+        .get("work_items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        lines.push(format!(
+            "{} ({})",
+            text(item, "ref"),
+            text(item, "project_id")
+        ));
+        for mr in item
+            .get("merge_requests")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let project = mr
+                .get("project")
+                .map(|p| text(p, "path"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  !{} {} {} {} checks {}",
+                text(mr, "iid"),
+                text(mr, "state"),
+                project,
+                text(mr, "title"),
+                text(mr, "checks_state")
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
 /// `gstn integration events|cursor` (M3 I1c): the feed routes, which only
 /// the integration's own service account may read (docs/api/integration-feed.md).
 pub fn feed(
@@ -159,6 +197,58 @@ pub fn feed(
                 None,
             )?;
             let human = page_human(&body);
+            emit(io, cli, body, &human)
+        }
+        IntegrationFeedCommand::DevStatus {
+            id,
+            reference,
+            project_id,
+            state,
+        } => {
+            let c = client(cli, env, io)?;
+            let mut query: Vec<(String, String)> = Vec::new();
+            if let Some(p) = project_id {
+                query.push(("project_id".to_string(), p.clone()));
+            }
+            if let Some(s) = state {
+                query.push(("state".to_string(), s.clone()));
+            }
+            let body = call(
+                &c,
+                Method::Get,
+                &format!("/api/v1/integrations/{id}/work-items/{reference}/dev-status"),
+                &query,
+                None,
+            )?;
+            let human = dev_status_human(&body);
+            emit(io, cli, body, &human)
+        }
+        IntegrationFeedCommand::DevStatusList {
+            id,
+            cursor,
+            limit,
+            state,
+        } => {
+            let c = client(cli, env, io)?;
+            let mut query: Vec<(String, String)> = Vec::new();
+            if let Some(cursor) = cursor {
+                query.push(("cursor".to_string(), cursor.clone()));
+            }
+            if let Some(n) = limit {
+                query.push(("limit".to_string(), n.to_string()));
+            }
+            if let Some(s) = state {
+                query.push(("state".to_string(), s.clone()));
+            }
+            let body = call(
+                &c,
+                Method::Get,
+                &format!("/api/v1/integrations/{id}/dev-status"),
+                &query,
+                None,
+            )?;
+            let mut human = dev_status_human(&body);
+            human.push_str(&format!("\nnext_cursor: {}", text(&body, "next_cursor")));
             emit(io, cli, body, &human)
         }
         IntegrationFeedCommand::Cursor { id } => {

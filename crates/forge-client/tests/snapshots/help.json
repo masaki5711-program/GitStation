@@ -2173,10 +2173,18 @@
           "name": "--direct-push-forbidden",
           "repeatable": false,
           "required": false
+        },
+        {
+          "description": "true / false: require an open link to a work item (PBI-<n>) of the project's integration binding (work_item_link_missing).",
+          "kind": "option",
+          "name": "--work-item-link",
+          "repeatable": false,
+          "required": false
         }
       ],
       "examples": [
-        "gstn merge-rule set --project 7 --rule-id 2 --approvals 1 --resolved-discussions true --direct-push-forbidden true"
+        "gstn merge-rule set --project 7 --rule-id 2 --approvals 1 --resolved-discussions true --direct-push-forbidden true",
+        "gstn merge-rule set --project 7 --rule-id 2 --work-item-link true"
       ],
       "name": "merge-rule set",
       "output": {
@@ -2187,6 +2195,7 @@
               "required_checks",
               "require_resolved_discussions",
               "direct_push_forbidden",
+              "require_work_item_link",
               "updated_at"
             ],
             "type": "object"
@@ -2208,7 +2217,7 @@
       "scopes": [
         "api"
       ],
-      "summary": "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). A required check no active service account may report blocks every merge (the answer warns `required_checks_unreportable` and names them in `unreportable_checks`; grant the namespace with admin service-account grant-checks). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten."
+      "summary": "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, the direct-push ban (merges still land), and (M3 I1d) a work item link (warns `work_item_link_unbound` on a project without an integration binding). A required check no active service account may report blocks every merge (the answer warns `required_checks_unreportable` and names them in `unreportable_checks`; grant the namespace with admin service-account grant-checks). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten."
     },
     {
       "args": [
@@ -5834,6 +5843,144 @@
         "read_api"
       ],
       "summary": "The head of an integration's event feed as a cursor (a resync takes it first, then the development status, then reads from it; the integration's own service account token)."
+    },
+    {
+      "args": [
+        {
+          "description": "The integration id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The work item, PBI-<n>.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The kanflow project id of the binding (default: every bound one).",
+          "kind": "option",
+          "name": "--project-id",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "all (default), open, merged or closed.",
+          "kind": "option",
+          "name": "--state",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn integration dev-status 3 --ref PBI-12 --json"
+      ],
+      "name": "integration dev-status",
+      "output": {
+        "properties": {
+          "schema_version": {
+            "const": 1
+          },
+          "work_items": {
+            "items": {
+              "required": [
+                "provider",
+                "project_id",
+                "ref",
+                "merge_requests",
+                "merge_requests_truncated"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "as_of_seq",
+          "feed_cursor",
+          "work_items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/integrations/{id}/work-items/{ref}/dev-status"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "One work item's development status (M3 I1d): the merge requests linked to PBI-<n> across the integration's bound projects — open, merged and closed — with approvals, the head's checks (checks_state none is no run, never success) and as_of_seq / feed_cursor (the integration's own service account token, read_api; FG-REPO-0005 for a reference of no bound kanflow project)."
+    },
+    {
+      "args": [
+        {
+          "description": "The integration id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The previous page's next_cursor.",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Work items per page, 1 to 100 (default 50).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "all (default), open, merged or closed.",
+          "kind": "option",
+          "name": "--state",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn integration dev-status-list 3 --cursor <next_cursor> --json"
+      ],
+      "name": "integration dev-status-list",
+      "output": {
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "const": 1
+          }
+        },
+        "required": [
+          "schema_version",
+          "as_of_seq",
+          "feed_cursor",
+          "work_items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/integrations/{id}/dev-status"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "One page of every work item's development status (M3 I1d; the resync after a 410: integration cursor first, then these pages until next_cursor is null, then integration events from that cursor or feed_cursor; FG-INT-0007 410 when the walk cannot continue)."
     },
     {
       "args": [

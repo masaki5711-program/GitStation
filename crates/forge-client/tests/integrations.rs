@@ -222,3 +222,92 @@ fn integration_feed_commands_read_the_feed_routes() {
     }
     assert_eq!(srv.seen().len(), before);
 }
+
+const DEV_STATUS: &str = r#"{"schema_version":1,"as_of_seq":9,"feed_cursor":"f9","work_items":[{"provider":"kanflow","project_id":"kf-1","ref":"PBI-12","merge_requests":[{"project":{"id":7,"path":"app/portal"},"iid":87,"title":"Login form","state":"closed","draft":false,"source_branch":"feature/PBI-12","target_branch":"main","head_sha":null,"created_at":"2026-11-04T00:00:00Z","updated_at":"2026-11-04T00:00:00Z","merged_at":null,"closed_at":"2026-11-04T01:00:00Z","approvals":{"given":0},"checks":[],"checks_state":"none","link":{"source":"auto","linked_at":"2026-11-04T00:00:00Z"}}],"merge_requests_truncated":false}],"next_cursor":"p2","has_more":true}"#;
+
+/// M3 I1d (C-1): `integration dev-status` and `dev-status-list` read the
+/// development-status routes with the integration's service account token;
+/// a malformed reference, limit or cursor never leaves gstn.
+#[test]
+fn integration_dev_status_commands_read_their_routes() {
+    let srv = Mock::start(|_| ok(DEV_STATUS));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "integration",
+            "dev-status",
+            "3",
+            "--ref",
+            "PBI-12",
+            "--project-id",
+            "kf-1",
+            "--state",
+            "closed",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (m, t, _) = last(&srv);
+    assert_eq!(m, "GET");
+    assert!(
+        t.starts_with("/api/v1/integrations/3/work-items/PBI-12/dev-status?"),
+        "{t}"
+    );
+    assert!(
+        t.contains("project_id=kf-1") && t.contains("state=closed"),
+        "{t}"
+    );
+    let v: Value = serde_json::from_str(&o.stdout).expect("json");
+    assert_eq!(v["work_items"][0]["merge_requests"][0]["state"], "closed");
+    let human = gstn(
+        &sb,
+        &srv,
+        &["integration", "dev-status", "3", "--ref", "PBI-12"],
+    );
+    assert_eq!(human.code, 0, "{}", human.stderr);
+    assert!(human.stdout.contains("PBI-12"), "{}", human.stdout);
+    assert!(human.stdout.contains("!87"), "{}", human.stdout);
+    assert!(human.stdout.contains("closed"), "{}", human.stdout);
+    assert!(human.stdout.contains("checks none"), "{}", human.stdout);
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "integration",
+            "dev-status-list",
+            "3",
+            "--cursor",
+            "p1",
+            "--limit",
+            "100",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (_, t, _) = last(&srv);
+    assert!(t.starts_with("/api/v1/integrations/3/dev-status?"), "{t}");
+    assert!(t.contains("cursor=p1") && t.contains("limit=100"), "{t}");
+    let human = gstn(&sb, &srv, &["integration", "dev-status-list", "3"]);
+    assert!(human.stdout.contains("next_cursor: p2"), "{}", human.stdout);
+    let before = srv.seen().len();
+    for args in [
+        &["integration", "dev-status", "3", "--ref", "PBI-012"][..],
+        &[
+            "integration",
+            "dev-status",
+            "3",
+            "--ref",
+            "PBI-1",
+            "--state",
+            "draft",
+        ][..],
+        &["integration", "dev-status-list", "3", "--limit", "101"][..],
+        &["integration", "dev-status-list", "3", "--cursor", "a b"][..],
+    ] {
+        let bad = gstn(&sb, &srv, args);
+        assert_ne!(bad.code, 0, "{args:?}");
+    }
+    assert_eq!(srv.seen().len(), before);
+}

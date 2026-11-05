@@ -309,6 +309,7 @@ fn only_people_only_actions_refuse_by_account_kind() {
                                     Action::CheckWrite
                                         | Action::IntegrationEventRead
                                         | Action::IntegrationEventCursorRead
+                                        | Action::IntegrationDevStatusRead
                                 )
                         }
                         // M3 I1c (ADR-0016 §7): the feed is read by the
@@ -320,6 +321,7 @@ fn only_people_only_actions_refuse_by_account_kind() {
                                     r.action,
                                     Action::IntegrationEventRead
                                         | Action::IntegrationEventCursorRead
+                                        | Action::IntegrationDevStatusRead
                                 )
                         }
                         // A Guest member of an internal project reads by

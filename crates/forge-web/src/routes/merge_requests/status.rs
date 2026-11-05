@@ -54,13 +54,15 @@ pub enum StatusReasonName {
     RequiredCheckMissing,
     RequiredCheckNotSuccessful,
     UnresolvedDiscussions,
+    /// M3 I1d.
+    WorkItemLinkMissing,
     ConfigChangeNeedsMaintainerApproval,
     ChangedPathsUnknown,
 }
 
 impl StatusReasonName {
     /// Every name, in ADR-0024 §7's order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::NotOpen,
         Self::Draft,
         Self::MergeInProgress,
@@ -75,6 +77,7 @@ impl StatusReasonName {
         Self::RequiredCheckMissing,
         Self::RequiredCheckNotSuccessful,
         Self::UnresolvedDiscussions,
+        Self::WorkItemLinkMissing,
         Self::ConfigChangeNeedsMaintainerApproval,
         Self::ChangedPathsUnknown,
     ];
@@ -97,6 +100,7 @@ impl StatusReasonName {
             BlockReason::RequiredCheckMissing { .. } => Self::RequiredCheckMissing,
             BlockReason::RequiredCheckNotSuccessful { .. } => Self::RequiredCheckNotSuccessful,
             BlockReason::UnresolvedDiscussions { .. } => Self::UnresolvedDiscussions,
+            BlockReason::WorkItemLinkMissing => Self::WorkItemLinkMissing,
             BlockReason::ConfigChangeNeedsMaintainerApproval => {
                 Self::ConfigChangeNeedsMaintainerApproval
             }
@@ -176,6 +180,15 @@ pub struct StatusDiscussionsBody {
     pub unresolved: u32,
 }
 
+/// The work item link condition (M3 I1d).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatusWorkItemLinkBody {
+    /// An open link to a work item of the project's integration binding
+    /// exists (`false`: `work_item_link_missing`).
+    pub linked: bool,
+}
+
 /// CODEOWNERS enforcement now.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -234,6 +247,10 @@ pub struct MergeRequestStatusBody {
     /// `null` when the merge rule does not require resolved discussions.
     #[schema(required = true)]
     pub discussions: Option<StatusDiscussionsBody>,
+    /// M3 I1d (added within `schema_version` 1): `null` when the merge rule
+    /// does not require a work item link.
+    #[schema(required = true)]
+    pub work_item_link: Option<StatusWorkItemLinkBody>,
     pub codeowners: StatusCodeownersBody,
     /// What the caller could do now (added within `schema_version` 1, U2).
     pub viewer: StatusViewerBody,
@@ -319,6 +336,9 @@ pub(super) fn status_body(
         discussions: s
             .discussions
             .map(|unresolved| StatusDiscussionsBody { unresolved }),
+        work_item_link: s
+            .work_item_link
+            .map(|linked| StatusWorkItemLinkBody { linked }),
         codeowners: StatusCodeownersBody {
             enforced: s.settings.codeowners.enforced(),
             suspended_until,

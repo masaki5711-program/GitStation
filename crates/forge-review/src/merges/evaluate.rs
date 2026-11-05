@@ -15,7 +15,9 @@
 //! success), `required_check_not_successful` and `unresolved_discussions`
 //! ([`MergeFacts::checks`], [`MergeFacts::discussions`]); the protected
 //! branch's minimum approvals is an approval requirement
-//! (`approvals_missing` with the rule `@protected_branch`). The matches
+//! (`approvals_missing` with the rule `@protected_branch`). M3 I1d adds
+//! `work_item_link_missing` ([`MergeFacts::work_item_link`]: the rule's
+//! `require_work_item_link` and no open link of the project's binding). The matches
 //! below are exhaustive; the order is [`BlockReason::rank`] — ADR-0024 §7's
 //! list — whatever the order the reasons were found in.
 
@@ -82,6 +84,10 @@ pub enum BlockReason {
     UnresolvedDiscussions {
         count: u32,
     },
+    /// The merge rule requires a work item link and the merge request has
+    /// no open link to a work item of its project's current binding (M3
+    /// I1d, ADR-0024 §7 / §11).
+    WorkItemLinkMissing,
 }
 
 // M3 C1: the check run types moved to forge-core (forge-checks records
@@ -114,6 +120,7 @@ impl BlockReason {
             Self::RequiredCheckMissing { .. } => "required_check_missing",
             Self::RequiredCheckNotSuccessful { .. } => "required_check_not_successful",
             Self::UnresolvedDiscussions { .. } => "unresolved_discussions",
+            Self::WorkItemLinkMissing => "work_item_link_missing",
         }
     }
 
@@ -135,8 +142,9 @@ impl BlockReason {
             Self::RequiredCheckMissing { .. } => 11,
             Self::RequiredCheckNotSuccessful { .. } => 12,
             Self::UnresolvedDiscussions { .. } => 13,
-            Self::ConfigChangeNeedsMaintainerApproval => 14,
-            Self::ChangedPathsUnknown { .. } => 15,
+            Self::WorkItemLinkMissing => 14,
+            Self::ConfigChangeNeedsMaintainerApproval => 15,
+            Self::ChangedPathsUnknown { .. } => 16,
         }
     }
 
@@ -176,6 +184,7 @@ impl BlockReason {
             | Self::Conflict
             | Self::FfNotPossible
             | Self::NothingToMerge
+            | Self::WorkItemLinkMissing
             | Self::ConfigChangeNeedsMaintainerApproval => None,
         }
     }
@@ -216,6 +225,10 @@ pub struct MergeFacts {
     /// M3 R6: the unresolved discussions when the target's merge rule asks
     /// for them resolved (`None`: not required).
     pub discussions: Option<u32>,
+    /// M3 I1d: whether the merge request has an open link to a work item of
+    /// its project's current binding, when the target's merge rule requires
+    /// one (`None`: not required).
+    pub work_item_link: Option<bool>,
 }
 
 /// The proof that `evaluate_merge()` found nothing blocking. No public
@@ -279,6 +292,9 @@ pub fn evaluate_merge(facts: &MergeFacts) -> Result<MergeClearance, Vec<BlockRea
     }
     if let Some(count) = facts.discussions.filter(|n| *n > 0) {
         reasons.push(BlockReason::UnresolvedDiscussions { count });
+    }
+    if facts.work_item_link == Some(false) {
+        reasons.push(BlockReason::WorkItemLinkMissing);
     }
     // The fixed order of ADR-0024 §7 (stable: within one reason, the
     // order found — rule names, CODEOWNERS lines, check names).
@@ -358,6 +374,7 @@ mod tests {
             approvals: crate::approvals::ApprovalInputs::nothing_required(),
             checks: Vec::new(),
             discussions: None,
+            work_item_link: None,
         }
     }
 
@@ -388,6 +405,7 @@ mod tests {
             approvals: crate::approvals::ApprovalInputs::nothing_required(),
             checks: Vec::new(),
             discussions: None,
+            work_item_link: None,
         };
         let reasons = evaluate_merge(&facts).expect_err("blocked");
         let names: Vec<&str> = reasons.iter().map(|r| r.as_str()).collect();

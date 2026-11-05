@@ -217,9 +217,6 @@ export function settingsBackend(csrf) {
         return { status: 204 };
       }
       if (method === 'PUT') {
-        if ('require_work_item_link' in input) {
-          return { status: 400, error: ['Not available yet.', 'req-mrule-i1', 'FG-WEB-0006'] };
-        }
         if (!('expected_updated_at' in input)) {
           return { status: 400, error: ['expected_updated_at is required.', 'req-mrule-400', 'FG-WEB-0006'] };
         }
@@ -231,9 +228,14 @@ export function settingsBackend(csrf) {
           required_checks: input.required_checks ?? [],
           require_resolved_discussions: input.require_resolved_discussions === true,
           direct_push_forbidden: input.direct_push_forbidden === true,
+          // M3 I1d: the work item link condition (this project has no binding).
+          require_work_item_link: input.require_work_item_link === true,
           updated_at: stamp(),
         };
-        r.warnings = r.merge_rule.required_checks.length > 0 ? ['required_checks_unreportable'] : [];
+        r.warnings = [
+          ...(r.merge_rule.required_checks.length > 0 ? ['required_checks_unreportable'] : []),
+          ...(r.merge_rule.require_work_item_link ? ['work_item_link_unbound'] : []),
+        ];
         return json(r);
       }
     }

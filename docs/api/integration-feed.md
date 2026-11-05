@@ -34,7 +34,7 @@ golden）は `docs/api/integration-feed.example.json`。forge-web のテスト `
 
 | パラメーター | 内容 |
 |---|---|
-| `cursor` | 前の答えの `next_cursor`、イベントの `cursor`、または `…/events/cursor` の答え。無ければ保持されている最も古いイベント（`retained_from`）から。保持期間の中なら **結びつけより前の履歴も**返る（見えるかは読む時点で判定する）。最初の同期は `…/events/cursor` → 開発状況 API（I1d）→ その位置から、の順にする |
+| `cursor` | 前の答えの `next_cursor`、イベントの `cursor`、または `…/events/cursor` の答え。無ければ保持されている最も古いイベント（`retained_from`）から。保持期間の中なら **結びつけより前の履歴も**返る（見えるかは読む時点で判定する）。最初の同期は `…/events/cursor` → 開発状況 API（I1d、`docs/api/dev-status.md`）→ その位置から、の順にする |
 | `limit` | 1〜500（既定 100）。答えは約 2 MiB でも切れる（`has_more: true`） |
 
 それ以外のパラメーター・同じパラメーターの繰り返し・`limit` の範囲外・空のカーソルは `FG-WEB-0006`（400、`reason=param_invalid`）。
@@ -80,7 +80,7 @@ golden）は `docs/api/integration-feed.example.json`。forge-web のテスト `
 **410 からの復旧**（この順番でないと、取り直しの間の変化を取りこぼす）:
 
 1. `GET /api/v1/integrations/{id}/events/cursor` で今の位置を取って保存する
-2. 開発状況 API（`state=all`、I1d）で全体を取り直す
+2. 開発状況 API（`GET …/dev-status?state=all` を `next_cursor` が `null` になるまで。`docs/api/dev-status.md`）で全体を取り直す
 3. 1 の位置から `GET …/events` を読む
 
 ## 運用

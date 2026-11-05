@@ -58,6 +58,11 @@
 
 - **kanflow の復旧（410 のとき。kanflow 側の動作で、サーバーの変更ではない）**: 先に `GET /api/v1/integrations/{id}/events/cursor` で今の位置を取る →
   開発状況 API（`state=all`）で全体を取り直す → 取っておいた位置から履歴を読む。順番を変えると、取り直しの間の変化を取りこぼす。
+  開発状況 API は M3 I1d の `GET /api/v1/integrations/{id}/dev-status?cursor=…`（`next_cursor` が `null` になるまで。契約は
+  `docs/api/dev-status.md`）。どのページも最初のページの `as_of_seq` と `feed_cursor` を返し、`feed_cursor` から履歴を読んでもよい。
+  運用者が確かめるときは、そのサービスアカウントのトークンで `gstn integration dev-status-list <id> --json` / `gstn integration dev-status <id> --ref PBI-<n> --json`。
+  ページの途中の 410（`visible_set_changed` など）は最初のページからやり直す。1 つの PBI が `404 FG-REPO-0005`（`reason=unbound_ref`）なら、
+  その kanflow のプロジェクトが連携に結ばれていない（`gstn admin integration bindings <id>`、Runbook `integrations`）。
 - **`work-item-sync` が止まっている**: Runbook `subscriber-lag.md`（飛ばすのは最後の手段）。再開すれば履歴も先へ進む。
 - **鍵を早く消した（FG-INT-0008 `rule=kid`）**: 承認を得て、消した鍵を `api.cursor_keys_file` に戻す（復号にだけ使われる）→ `forge serve` を再起動。
   戻せないなら kanflow に取り直しを頼む（上の復旧手順）。

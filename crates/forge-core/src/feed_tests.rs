@@ -173,3 +173,96 @@ fn an_authentic_cursor_past_max_age_is_int_0007_retention() {
         .iter()
         .any(|(k, v)| *k == "reason" && v == "retention"));
 }
+
+/// M3 I1d: a development-status page cursor carries the feed position of
+/// its first page and the last work item returned; it is sealed for its
+/// own purpose, so neither cursor passes for the other, and it is bound to
+/// its integration like the feed's.
+#[test]
+fn a_dev_status_cursor_round_trips_and_is_bound_to_its_purpose() {
+    let k = keys();
+    let at = DevStatusPosition {
+        feed: FeedPosition {
+            integration: INT,
+            epoch: [3; DIGEST_BYTES],
+            visible_set: [5; DIGEST_BYTES],
+            seq: 41,
+        },
+        after_work_item: 99,
+    };
+    let sealed = at.seal(&k).expect("seal");
+    assert_eq!(
+        DevStatusPosition::open(&k, INT, &sealed, AGE).expect("open"),
+        at
+    );
+    let other = DevStatusPosition::open(&k, IntegrationId::new(8), &sealed, AGE)
+        .expect_err("another integration");
+    assert_eq!(other.code(), ErrorCode::FeedCursorInvalid);
+    assert_eq!(rule(&other), "other_integration");
+    // A feed cursor is no page cursor, and a page cursor no feed cursor.
+    let feed = at.feed.seal(&k).expect("feed cursor");
+    assert_eq!(
+        rule(&DevStatusPosition::open(&k, INT, &feed, AGE).expect_err("feed")),
+        "tag"
+    );
+    assert_eq!(
+        rule(&FeedPosition::open(&k, INT, &sealed, AGE).expect_err("page")),
+        "tag"
+    );
+    let odd = k
+        .encode(DEV_STATUS_CURSOR_PURPOSE, &[1, 2, 3])
+        .expect("odd");
+    assert_eq!(
+        rule(&DevStatusPosition::open(&k, INT, &odd, AGE).expect_err("odd")),
+        "payload"
+    );
+}
+
+/// M3 I1d: the development status shows merge requests only when the
+/// allowlist admits merge request events (it narrows what the integration
+/// reads, the feed's and the status's alike).
+#[test]
+fn merge_requests_are_shown_only_when_the_allowlist_admits_them() {
+    let every = VisibleSet::from_authorized_decisions(INT, vec![project(1, 3)], &all());
+    assert!(every.shows_merge_requests());
+    let narrowed = VisibleSet::from_authorized_decisions(
+        INT,
+        vec![project(1, 3)],
+        &["repository.pushed".to_owned()],
+    );
+    assert!(!narrowed.shows_merge_requests());
+    let family = VisibleSet::from_authorized_decisions(
+        INT,
+        vec![project(1, 3)],
+        &["merge_request.*".to_owned()],
+    );
+    assert!(family.shows_merge_requests());
+    let nothing = VisibleSet::from_authorized_decisions(INT, Vec::new(), &all());
+    assert!(!nothing.shows_merge_requests());
+}
+
+/// I1d review (security MEDIUM): the allowlist narrows the development
+/// status like the feed — a merge request's checks only with `check.*`
+/// admitted, its approvals only with `merge_request.approved` /
+/// `.unapproved` admitted.
+#[test]
+fn checks_and_approvals_follow_the_allowlist() {
+    let set = |types: &[&str]| {
+        VisibleSet::from_authorized_decisions(
+            INT,
+            vec![project(1, 3)],
+            &types.iter().map(|t| (*t).to_owned()).collect::<Vec<_>>(),
+        )
+    };
+    let every = set(&["*"]);
+    assert!(every.shows_checks() && every.shows_approvals());
+    let mrs = set(&["merge_request.*"]);
+    assert!(mrs.shows_approvals() && !mrs.shows_checks());
+    let opened = set(&["merge_request.opened", "check.completed"]);
+    assert!(opened.shows_checks() && !opened.shows_approvals());
+    let unapproved = set(&["merge_request.opened", "merge_request.unapproved"]);
+    assert!(unapproved.shows_approvals());
+    // Without merge requests there is nothing to hang them on.
+    let checks_only = set(&["check.*"]);
+    assert!(!checks_only.shows_checks() && !checks_only.shows_approvals());
+}

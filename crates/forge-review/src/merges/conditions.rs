@@ -1,7 +1,8 @@
 //! The M3 R6 inputs of `evaluate_merge()` beyond the approvals (ADR-0024
 //! §7, §10, §12): the target's merge rule (the strictest of the matching
 //! protection rules) turned into the required checks with their runs on
-//! the head, and the unresolved discussions when the rule asks for them.
+//! the head, the unresolved discussions when the rule asks for them, and
+//! (M3 I1d) whether a work item is linked when the rule requires a link.
 //! Shared by the merge request, the job's gates and the status read, so
 //! every decision reads the conditions alike.
 //!
@@ -37,15 +38,20 @@ pub struct Conditions {
     pub checks: Vec<RequiredCheck>,
     /// The unresolved discussions when the rule requires them resolved.
     pub discussions: Option<u32>,
+    /// M3 I1d: whether a work item of the project's binding is linked, when
+    /// the rule requires a link (`None`: not required).
+    pub work_item_link: Option<bool>,
 }
 
 /// The conditions `protection` puts on a merge of `head` into `target`
-/// (`unresolved`: the merge request's unresolved discussions now).
+/// (`unresolved`: the merge request's unresolved discussions now;
+/// `linked`: it has an open link to a work item of the project's binding).
 pub fn conditions(
     protection: &ProtectionRules,
     target: &RefName,
     head: &ObjectId,
     unresolved: u32,
+    linked: bool,
     runs: &dyn CheckRuns,
 ) -> Conditions {
     let rule = protection.merge_rule(target);
@@ -59,6 +65,7 @@ pub fn conditions(
             })
             .collect(),
         discussions: rule.require_resolved_discussions.then_some(unresolved),
+        work_item_link: rule.require_work_item_link.then_some(linked),
     }
 }
 

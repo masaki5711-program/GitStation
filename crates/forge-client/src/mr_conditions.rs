@@ -191,6 +191,7 @@ pub fn merge_rule_cmd(
             clear_checks,
             resolved_discussions,
             direct_push_forbidden,
+            work_item_link,
         } => {
             let c = client(cli, env, io)?;
             // The PUT replaces the merge rule: read it first and keep what
@@ -226,6 +227,9 @@ pub fn merge_rule_cmd(
                     .map_or_else(|| keep("require_resolved_discussions", json!(false)), Value::Bool),
                 "direct_push_forbidden": direct_push_forbidden
                     .map_or_else(|| keep("direct_push_forbidden", json!(false)), Value::Bool),
+                // M3 I1d: the work item link condition.
+                "require_work_item_link": work_item_link
+                    .map_or_else(|| keep("require_work_item_link", json!(false)), Value::Bool),
                 // U2 follow-up: the merge rule this replaces (`null`: none
                 // yet); changed in between is FG-REVIEW-0019 (run it
                 // again), never overwritten.
@@ -243,7 +247,7 @@ pub fn merge_rule_cmd(
                 .as_array()
                 .is_some_and(|w| w.iter().any(|x| x == "required_checks_unreportable"));
             let mut human = format!(
-                "Rule {} ({}): {} approval(s), checks [{}], resolved discussions {}, direct pushes {}",
+                "Rule {} ({}): {} approval(s), checks [{}], resolved discussions {}, direct pushes {}, work item link {}",
                 text(&body, "id"),
                 text(&body, "pattern"),
                 m["required_approvals"],
@@ -261,8 +265,16 @@ pub fn merge_rule_cmd(
                     "forbidden"
                 } else {
                     "allowed"
+                },
+                if m["require_work_item_link"] == Value::Bool(true) {
+                    "required"
+                } else {
+                    "not required"
                 }
             );
+            let unbound = body["warnings"]
+                .as_array()
+                .is_some_and(|w| w.iter().any(|x| x == "work_item_link_unbound"));
             if warned {
                 let names = body["unreportable_checks"]
                     .as_array()
@@ -277,6 +289,11 @@ pub fn merge_rule_cmd(
                 human.push_str(&format!(
                     "\nwarning: no service account may report [{names}]: every merge into this branch is blocked (required_check_missing). Grant the namespace to a reporter (gstn admin service-account grant-checks) or remove the checks with --clear-checks (runbook checks-reporting).",
                 ));
+            }
+            if unbound {
+                human.push_str(
+                    "\nwarning: the project has no integration binding: no merge request can link a work item, so every merge into this branch is blocked (work_item_link_missing). Bind the project (gstn integration-binding set) or turn the condition off with --work-item-link false (runbook merge-blocked).",
+                );
             }
             emit(io, cli, body, &human)
         }

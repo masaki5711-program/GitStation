@@ -25,6 +25,7 @@ mod matrix_rows;
 mod matrix_rows_approval;
 mod matrix_rows_checks;
 mod matrix_rows_conditions;
+mod matrix_rows_dev_status;
 mod matrix_rows_discussion;
 mod matrix_rows_feed;
 mod matrix_rows_integrations;

@@ -436,6 +436,7 @@ describe('merge conditions of protected branches', () => {
     required_checks: ['ci/gates'],
     require_resolved_discussions: false,
     direct_push_forbidden: true,
+    require_work_item_link: false,
     updated_at: STAMP,
   };
   const BLOCKED = protectedRef(1, 'refs/heads/main', {
@@ -454,8 +455,58 @@ describe('merge conditions of protected branches', () => {
     expect(text).toContain('Direct pushes are forbidden too, so this branch cannot change at all.');
     // Tags have no merge conditions.
     expect(within(conditions).queryByText('refs/tags/v*')).toBeNull();
-    // Work items (I1) are not offered yet.
-    expect(document.body.textContent).not.toMatch(/work item/i);
+    // M3 I1d: no link condition on this rule, so no work item line.
+    expect(within(conditions).queryByText('A linked work item (PBI) is needed')).toBeNull();
+  });
+
+  it('M3 I1d: shows a link condition, keeps it on save, and can turn it off; warns when the project is not bound', async () => {
+    const LINKED = protectedRef(1, 'refs/heads/main', {
+      merge_rule: { ...BLOCKED_RULE, required_checks: [], direct_push_forbidden: false, require_work_item_link: true },
+      warnings: ['work_item_link_unbound'],
+    });
+    const { server } = await open({
+      [`GET ${API}/protected-refs`]: () => json(200, { rules: [LINKED] }),
+      [`PUT ${API}/protected-refs/1/merge-rule`]: () => json(200, LINKED),
+    });
+    const conditions = await section('Merge conditions of protected branches');
+    expect(await within(conditions).findByText('A linked work item (PBI) is needed')).toBeTruthy();
+    const notes = await within(conditions).findAllByRole('note');
+    expect(notes.map((n) => n.textContent).join(' ')).toContain(
+      'This project is not connected to Kanflow, so no merge request can link a work item',
+    );
+    fireEvent.click(within(conditions).getByRole('button', { name: 'Change the conditions of refs/heads/main' }));
+    let dialog = await screen.findByRole('dialog');
+    const box = within(dialog).getByLabelText<HTMLInputElement>('Require a linked work item (PBI)');
+    expect(box.checked).toBe(true);
+    // Review I1d: while ticked, the dialog's status region says what it
+    // costs on a project not connected to Kanflow (the box stays enabled).
+    expect(within(dialog).getByText(/not connected to Kanflow, nothing can link one/)).toBeTruthy();
+    expect(box.disabled).toBe(false);
+    fireEvent.change(within(dialog).getByLabelText('Approvals needed'), { target: { value: '2' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the conditions' }));
+    await waitFor(() => {
+      expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)).toHaveLength(1);
+    });
+    // Saving other fields never drops the link condition silently.
+    expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)[0]?.body).toMatchObject({
+      required_approvals: 2,
+      require_work_item_link: true,
+      expected_updated_at: STAMP,
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    fireEvent.click(within(conditions).getByRole('button', { name: 'Change the conditions of refs/heads/main' }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByLabelText('Require a linked work item (PBI)'));
+    expect(within(dialog).queryByText(/not connected to Kanflow, nothing can link one/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the conditions' }));
+    await waitFor(() => {
+      expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)).toHaveLength(2);
+    });
+    expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)[1]?.body).toMatchObject({
+      require_work_item_link: false,
+    });
   });
 
   it('changes the conditions: PUT with the four fields and expected_updated_at null (none yet), CSRF, and warns while typing checks', async () => {
@@ -483,6 +534,7 @@ describe('merge conditions of protected branches', () => {
       required_checks: ['ci/gates'],
       require_resolved_discussions: true,
       direct_push_forbidden: true,
+      require_work_item_link: false,
       expected_updated_at: null,
     });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(CSRF);

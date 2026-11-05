@@ -176,6 +176,7 @@ pub(super) fn decide(
         &stored.target_branch,
         &attempt.head_sha,
         gate.unresolved_discussions,
+        gate.work_item_linked,
         &gate.check_runs,
     );
     let facts = MergeFacts {
@@ -189,6 +190,7 @@ pub(super) fn decide(
         approvals,
         checks: conditions.checks,
         discussions: conditions.discussions,
+        work_item_link: conditions.work_item_link,
     };
     let clearance = evaluate_merge(&facts).map_err(|reasons| blocked(&reasons))?;
     let scopes = match &gate.credential.credential {
