@@ -35,6 +35,7 @@ pub mod session;
 pub mod shell;
 // M3 X1: `.forge/repo.yml` and its spec references.
 pub mod spec_refs;
+pub mod specs;
 pub mod tokens;
 pub mod user_sessions;
 pub mod users;

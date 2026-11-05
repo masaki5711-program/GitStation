@@ -343,6 +343,27 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/repository/spec-refs",
         Coverage::Command("browse spec-refs"),
     ),
+    // M3 X4: the spec API (plan 03 §7.2).
+    (
+        "GET",
+        "/api/v1/projects/{id}/specs/requirements",
+        Coverage::Command("spec requirements"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/specs/versions",
+        Coverage::Command("spec versions"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/specs/diff",
+        Coverage::Command("spec diff"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/specs/trace",
+        Coverage::Command("spec trace"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/protected-refs",

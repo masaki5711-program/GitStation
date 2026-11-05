@@ -1239,6 +1239,8 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         "routes/history.rs",
         // M3 X1: the browse API only (small_file, resolve_ref).
         "routes/spec_refs.rs",
+        // M3 X4: the browse API only (refs, resolve_ref, the index scans).
+        "routes/specs.rs",
         "git_stream.rs",
     ];
     let mut used_in = Vec::new();
