@@ -768,7 +768,7 @@
     "none": "Belum ada webhook. Tambahkan di bawah.",
     "origin": "Alamat (origin)",
     "eventTypes": "Jenis peristiwa",
-    "eventTypesHelp": "Pisahkan dengan koma atau spasi: * untuk semua, keluarga seperti merge_request.*, atau nama persis. Kosong berarti *.",
+    "eventTypesHelp": "Pilih peristiwa yang dikirim. \"Semua peristiwa\" mencakup seluruh peristiwa integrasi; peristiwa maintainer dipilih satu per satu.",
     "state": "Status",
     "enabled": "Aktif",
     "disabled": "Nonaktif",
@@ -837,7 +837,21 @@
     "redeliverOf": "Kirim ulang {{event}} (#{{id}})",
     "queued": "Masuk antrean untuk dikirim ulang.",
     "older": "Tampilkan pengiriman lebih lama",
-    "olderLoaded": "{{count}} pengiriman lagi dimuat."
+    "olderLoaded": "{{count}} pengiriman lagi dimuat.",
+    "allEvents": "Semua peristiwa (*)",
+    "allEventsHelp": "Seluruh peristiwa integrasi, termasuk yang ditambahkan nanti.",
+    "eventTypesRequired": "Pilih setidaknya satu jenis peristiwa.",
+    "classLocked": "Hanya orang dengan peran Maintainer yang dapat memilih peristiwa ini; login ini tidak bisa.",
+    "class": {
+      "integration": "Peristiwa integrasi",
+      "integrationHelp": "Merge request, push, pemeriksaan, dan item kerja. Untuk alat yang mengikuti proyek.",
+      "maintainer": "Peristiwa maintainer",
+      "maintainerHelp": "Anggota, cabang terlindungi, visibilitas, dan perubahan webhook. Dipilih satu per satu.",
+      "deployment": "Peristiwa deployment",
+      "deploymentHelp": "Deployment. Dipilih satu per satu.",
+      "other": "Entri tersimpan lainnya",
+      "otherHelp": "Tersimpan pada webhook ini, misalnya keluarga seperti merge_request.*. Hapus centang untuk menghapus."
+    }
   },
   "notifications": {
     "title": "Notifikasi",

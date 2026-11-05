@@ -340,6 +340,63 @@ async fn webhooks_are_a_maintainers_and_managing_them_a_persons() {
 }
 
 #[tokio::test]
+async fn the_event_types_are_listed_by_class_and_marked_for_what_the_caller_may_subscribe_to() {
+    let w = world().await;
+    let db = &w.t.db;
+    let uri = format!("{}/event-types", hooks_uri(w.web));
+    let find = |a: &Answer, name: &str| {
+        a.json["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|i| i["name"] == name)
+            .cloned()
+    };
+    // A Maintainer: every class but admin, all subscribable.
+    let ok = call(db, "GET", &uri, session(w.alice), None).await;
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.json);
+    let opened = find(&ok, "merge_request.opened").expect("integration type");
+    assert_eq!(opened["class"], "integration");
+    let added = find(&ok, "member.added").expect("maintainer type");
+    assert_eq!(added["class"], "maintainer");
+    assert!(
+        find(&ok, "token.created").is_none(),
+        "admin class is never listed"
+    );
+    assert!(find(&ok, "project.purged").is_none());
+    let classes = ok.json["classes"].as_array().expect("classes");
+    let names: Vec<&str> = classes.iter().filter_map(|c| c["class"].as_str()).collect();
+    assert_eq!(names, ["integration", "maintainer", "deployment"]);
+    assert!(
+        classes.iter().all(|c| c["subscribable"] == true),
+        "{classes:?}"
+    );
+    // An agent's token reads but may not subscribe (managing is a person's).
+    let agent = call(
+        db,
+        "GET",
+        &uri,
+        token(w.alice, &[Scope::ReadApi], true),
+        None,
+    )
+    .await;
+    assert_eq!(agent.status, StatusCode::OK, "{}", agent.json);
+    assert!(agent.json["classes"]
+        .as_array()
+        .expect("classes")
+        .iter()
+        .all(|c| c["subscribable"] == false));
+    // Not a Maintainer: refused; no role on a private project: not found.
+    let dev = call(db, "GET", &uri, session(w.dev), None).await;
+    assert_eq!(dev.status, StatusCode::FORBIDDEN, "{}", dev.json);
+    assert_eq!(dev.code(), "FG-AUTH-0003");
+    let out = call(db, "GET", &uri, session(w.outsider), None).await;
+    assert_eq!(out.status, StatusCode::NOT_FOUND, "{}", out.json);
+    assert_eq!(out.code(), "FG-REPO-0005");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
 async fn a_target_outside_the_allowlist_is_400_int_0010_with_one_sentence() {
     let w = world().await;
     for url in [

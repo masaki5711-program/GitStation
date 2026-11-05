@@ -5,6 +5,9 @@
 //!
 //! - `GET /api/v1/projects/{id}/webhooks` (`WebhookRead`): the project's
 //!   webhooks (at most 20), never a secret.
+//! - `GET …/webhooks/event-types` (`WebhookRead`): the event types a webhook
+//!   may name, each with its class, and per class whether the caller may
+//!   subscribe to it (the form's checkboxes).
 //! - `POST …/webhooks` (`WebhookManage`): create one owned by the caller;
 //!   `201` with the webhook and its `secret`, shown this once. The URL
 //!   passes the operator's target policy after the decision (`400
@@ -43,6 +46,9 @@ use crate::routes::write::{absent, bounded, json, no_store};
 
 /// `GET` / `POST` a project's webhooks.
 pub const COLLECTION: &str = "/api/v1/projects/{id}/webhooks";
+/// `GET`: the event types a webhook may name (a static segment, ahead of
+/// `{webhook_id}`).
+pub const EVENT_TYPES: &str = "/api/v1/projects/{id}/webhooks/event-types";
 /// `GET` / `PATCH` / `DELETE` one.
 pub const ONE: &str = "/api/v1/projects/{id}/webhooks/{webhook_id}";
 /// `POST`: rotate its secret.
@@ -137,6 +143,38 @@ pub struct WebhookBody {
 #[serde(deny_unknown_fields)]
 pub struct WebhookList {
     pub items: Vec<WebhookBody>,
+}
+
+/// One event type a webhook may name.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventTypeBody {
+    /// The exact name (`merge_request.opened`).
+    pub name: String,
+    /// `integration`, `maintainer` or `deployment` (the admin class is never
+    /// listed).
+    pub class: String,
+}
+
+/// One class of event types and whether the caller may subscribe to it.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventClassBody {
+    /// `integration` (also what `*` and `<family>.*` name), `maintainer`
+    /// or `deployment` (the last two only by exact type name).
+    pub class: String,
+    /// `false` for a credential that may read but not subscribe (an agent's
+    /// token, a service account): create and update would refuse it.
+    pub subscribable: bool,
+}
+
+/// The event types a webhook may name.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventTypeList {
+    /// Sorted by name.
+    pub items: Vec<EventTypeBody>,
+    pub classes: Vec<EventClassBody>,
 }
 
 /// A created webhook and its secret (shown this once).
@@ -285,6 +323,7 @@ enum Tail {
     Secret,
     Deliveries,
     Redeliver,
+    EventTypes,
 }
 
 fn ids(raw_path: &str) -> Result<Ids, ForgeError> {
@@ -302,6 +341,7 @@ fn ids(raw_path: &str) -> Result<Ids, ForgeError> {
     let id = |raw: &str, name| parse_positive_id(raw).ok_or_else(|| bad(name));
     let (webhook, delivery, tail) = match segments.as_slice() {
         [] => (None, None, Tail::Collection),
+        ["event-types"] => (None, None, Tail::EventTypes),
         [w] => (Some(id(w, "webhook_id")?), None, Tail::One),
         [w, "secret"] => (Some(id(w, "webhook_id")?), None, Tail::Secret),
         [w, "deliveries"] => (Some(id(w, "webhook_id")?), None, Tail::Deliveries),
@@ -363,6 +403,14 @@ async fn project_lookup(
     if ids.tail != Tail::Collection {
         return Err(wrong_tail());
     }
+    project_found(state, ids, viewer).await
+}
+
+async fn project_found(
+    state: &AppState,
+    ids: Ids,
+    viewer: Option<UserId>,
+) -> Result<Lookup<ProjectCtx>, ForgeError> {
     Ok(match project_record(state, ids.project, viewer).await? {
         Some(record) => found_project(ProjectCtx::new(projects::loaded(&record)), record),
         None => absent(),
@@ -391,6 +439,27 @@ impl BodyLoader<AppState, CreateWebhook> for WebhooksOf {
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, ProjectCtx> {
         Box::pin(project_lookup(state, parts, viewer))
+    }
+}
+
+/// `GET …/webhooks/event-types`: the project.
+pub struct EventTypesOf;
+
+impl Loader<AppState> for EventTypesOf {
+    type Ctx = ProjectCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, ProjectCtx> {
+        Box::pin(async move {
+            let ids = ids(parts.uri.path())?;
+            if ids.tail != Tail::EventTypes {
+                return Err(wrong_tail());
+            }
+            project_found(state, ids, viewer).await
+        })
     }
 }
 
@@ -508,6 +577,34 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
         let items = bounded(&state, "webhook_list", webhooks(&state)?.list(&w.proof)).await?;
         json(WebhookList {
             items: items.into_iter().map(body).collect(),
+        })
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
+/// `GET …/webhooks/event-types` → `200`.
+pub async fn event_types(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let w = request.into_write();
+    let built = async {
+        let catalog = webhooks(&state)?.event_types(&w.proof)?;
+        json(EventTypeList {
+            items: catalog
+                .items
+                .into_iter()
+                .map(|t| EventTypeBody {
+                    name: t.name.to_owned(),
+                    class: t.class.as_str().to_owned(),
+                })
+                .collect(),
+            classes: catalog
+                .classes
+                .into_iter()
+                .map(|c| EventClassBody {
+                    class: c.class.as_str().to_owned(),
+                    subscribable: c.subscribable,
+                })
+                .collect(),
         })
     }
     .await;
@@ -684,6 +781,8 @@ mod unit {
             (i.project, i.webhook, i.tail),
             (ProjectId::new(7), None, Tail::Collection)
         );
+        let i = ids("/api/v1/projects/7/webhooks/event-types").expect("event types");
+        assert_eq!((i.webhook, i.tail), (None, Tail::EventTypes));
         let i = ids("/api/v1/projects/7/webhooks/3").expect("one");
         assert_eq!((i.webhook, i.tail), (Some(WebhookId::new(3)), Tail::One));
         let i = ids("/api/v1/projects/7/webhooks/3/secret").expect("secret");

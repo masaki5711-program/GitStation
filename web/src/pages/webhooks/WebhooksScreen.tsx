@@ -7,9 +7,9 @@
 // - The secret of a create or a rotation is shown once, in this component's
 //   state only (never the query cache, storage or the URL), with a warning;
 //   a live region announces it, and the panel takes the focus.
-// - The allowed event types are the server's to judge (a refusal is shown):
-//   the API offers no list of them yet, so the field is free text, `*` by
-//   default.
+// - The event types are checkboxes grouped by class, from the API's list
+//   (`EventTypePicker`); `*` ("all events") is the default. The server still
+//   judges the choice (a refusal is shown).
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
@@ -35,13 +35,7 @@ import { Modal } from '../../ui/Modal';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from '../settings/common';
 import styles from '../settings/Settings.module.css';
 import { EnabledChip, StopReason } from './common';
-
-/** What the person typed, as the API wants it: names split at commas and
- * spaces, without repeats; nothing typed means every event (`*`). */
-export function parseEventTypes(text: string): string[] {
-  const names = text.split(/[\s,]+/).filter((s) => s !== '');
-  return names.length === 0 ? ['*'] : [...new Set(names)];
-}
+import { ALL_EVENTS, EventTypePicker } from './EventTypePicker';
 
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -197,21 +191,22 @@ function CreateForm({
   const refresh = useRefreshSessionOn403();
   const create = useCreateWebhook(projectId);
   const [url, setUrl] = useState('');
-  const [types, setTypes] = useState('*');
+  const [types, setTypes] = useState<string[]>([ALL_EVENTS]);
   const [attempt, setAttempt] = useState(0);
   const urlError = url.trim() === '' ? t('webhooks.urlRequired') : null;
-  const errors = urlError === null ? [] : [urlError];
+  const typesError = types.length === 0 ? t('webhooks.eventTypesRequired') : null;
+  const errors = [urlError, typesError].filter((e): e is string => e !== null);
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
     if (create.isPending) return;
     setAttempt((x) => x + 1);
     if (errors.length > 0) return;
     create.mutate(
-      { url: url.trim(), event_types: parseEventTypes(types) },
+      { url: url.trim(), event_types: types },
       {
         onSuccess: (created) => {
           setUrl('');
-          setTypes('*');
+          setTypes([ALL_EVENTS]);
           setAttempt(0);
           onCreated(created.webhook, created.secret);
           // Let go of the answer that holds the secret.
@@ -232,7 +227,12 @@ function CreateForm({
         help={t('webhooks.urlHelp')}
         required
       />
-      <TextField label={t('webhooks.eventTypes')} value={types} onChange={setTypes} help={t('webhooks.eventTypesHelp')} />
+      <EventTypePicker
+        projectId={projectId}
+        value={types}
+        onChange={setTypes}
+        error={attempt > 0 ? typesError : null}
+      />
       {create.isError && <Denied error={create.error} />}
       <button type="submit" className={controls.primary} aria-disabled={create.isPending ? 'true' : undefined}>
         {create.isPending ? t('settings.saving') : t('webhooks.createButton')}
@@ -460,18 +460,20 @@ function EditDialog({
   const update = useUpdateWebhook(projectId);
   return (
     <Modal open={hook !== null} onClose={onClose} title={t('webhooks.editTitle')} busy={update.isPending}>
-      {hook !== null && <EditForm hook={hook} update={update} onStart={onStart} onSaved={onSaved} onCancel={onClose} />}
+      {hook !== null && <EditForm projectId={projectId} hook={hook} update={update} onStart={onStart} onSaved={onSaved} onCancel={onClose} />}
     </Modal>
   );
 }
 
 function EditForm({
+  projectId,
   hook,
   update,
   onStart,
   onSaved,
   onCancel,
 }: {
+  projectId: number;
   hook: Webhook;
   update: ReturnType<typeof useUpdateWebhook>;
   /** Called when a save begins: the last result is cleared, so the same
@@ -483,13 +485,17 @@ function EditForm({
   const { t } = useTranslation();
   const refresh = useRefreshSessionOn403();
   const [url, setUrl] = useState('');
-  const [types, setTypes] = useState(hook.event_types.join(', '));
+  const [types, setTypes] = useState<string[]>(hook.event_types);
+  const [attempt, setAttempt] = useState(0);
+  const typesError = types.length === 0 ? t('webhooks.eventTypesRequired') : null;
   const [nothing, setNothing] = useState(false);
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
     if (update.isPending) return;
     onStart();
-    const next = parseEventTypes(types);
+    setAttempt((x) => x + 1);
+    if (typesError !== null) return;
+    const next = types;
     const body: { url?: string; event_types?: string[] } = {};
     if (url.trim() !== '') body.url = url.trim();
     if (!sameSet(next, hook.event_types)) body.event_types = next;
@@ -518,7 +524,12 @@ function EditForm({
         help={t('webhooks.urlHelp')}
         initialFocus
       />
-      <TextField label={t('webhooks.eventTypes')} value={types} onChange={setTypes} help={t('webhooks.eventTypesHelp')} />
+      <EventTypePicker
+        projectId={projectId}
+        value={types}
+        onChange={setTypes}
+        error={attempt > 0 ? typesError : null}
+      />
       <p role="status" className={styles.muted}>
         {nothing ? t('webhooks.nothingChanged') : ''}
       </p>

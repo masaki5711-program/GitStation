@@ -72,6 +72,18 @@ export function webhooksBackend(csrf) {
       return null;
     }
 
+    if (path === '/api/v1/projects/7/webhooks/event-types' && method === 'GET') {
+      return json({
+        items: [
+          { name: 'member.added', class: 'maintainer' },
+          { name: 'merge_request.merged', class: 'integration' },
+          { name: 'merge_request.opened', class: 'integration' },
+          { name: 'repository.pushed', class: 'integration' },
+        ],
+        classes: ['integration', 'maintainer', 'deployment'].map((c) => ({ class: c, subscribable: true })),
+      });
+    }
+
     if (path === '/api/v1/projects/7/webhooks') {
       if (method === 'GET') return json({ items: hooks.map(body) });
       if (method === 'POST') {
