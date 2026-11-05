@@ -25,7 +25,7 @@ on another feature crate.
 - `SmtpSender` (`smtp.rs`): a small SMTP submission client with explicit phases
   (why not a crate: ADR-0016 Amendment N1 §6) — connect timeout, one send deadline,
   STARTTLS required when configured and never downgraded, AUTH PLAIN over TLS only,
-  roots from `notify.smtp_ca_file` (else the OS store), hard reply limits.
+  roots from `notify.smtp_ca_file` only (required with TLS; never the OS store), hard reply limits.
 - `Settings`: the commands behind `GET|PUT /api/v1/user/notification-preferences`
   (decided by a proof of `NotificationPreferencesRead` / `…Write` on the caller's own
   settings; nobody else's, administrators included).

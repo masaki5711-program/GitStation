@@ -30,7 +30,7 @@
 | `notify.enabled` | `false` | `true` でだけ購読者とメールのランナーが動く。`false` の間のイベントは通知にならず、後で有効にしても遡らない |
 | `notify.smtp_host` / `notify.smtp_port` | — / 587（starttls）・465（tls）・25（none） | 中継 |
 | `notify.smtp_tls` | `starttls` | `none` / `starttls`（必須。出さない中継とは続けない）/ `tls`（最初から） |
-| `notify.smtp_ca_file` | OS の信頼の保管庫 | 中継の証明書を検証する根の PEM（これだけを信頼する） |
+| `notify.smtp_ca_file` | —（`starttls` / `tls` では必須） | 中継の証明書を検証する根の PEM。**これだけを信頼する**（OS の保管庫は使わない）。`none` とは組めない |
 | `notify.smtp_username` + `notify.smtp_password_file` | なし | AUTH PLAIN。`tls = none` とは組めない。ファイルは 0600 |
 | `notify.from_address` / `notify.from_name` | — / `GitStation` | 送信元（`local@domain` の形だけ） |
 | `notify.default_language` | `ja` | 言語を選んでいない人向け（`ja` / `en` / `id`） |
@@ -66,7 +66,7 @@
    | reason / stage | 見るもの |
    |---|---|
    | `connect_failed` / connect | 中継の名前・ポート、このホストからの経路（`notify.relay`）、ファイアウォール |
-   | `tls_failed` / tls | 中継が STARTTLS を出すか、証明書が `notify.smtp_ca_file`（または OS の保管庫）の根で検証できるか、証明書の名前が `notify.smtp_host` と合うか |
+   | `tls_failed` / tls | 中継が STARTTLS を出すか、証明書が `notify.smtp_ca_file` の根で検証できるか、証明書の名前が `notify.smtp_host` と合うか |
    | `auth_failed` / auth | ユーザー名・パスワード（`smtp_code=535`）、中継が AUTH PLAIN を出すか（TLS の後に出す中継が多い） |
    | `rejected_temporary`（4xx） | グレーリスト・中継の満杯。待てば再試行で通る |
    | `rejected_permanent` / rcpt_to | 宛先の拒否（`smtp_code=550` ほか）。その人のメールアドレス（`forge.users.email`）が正しいか |

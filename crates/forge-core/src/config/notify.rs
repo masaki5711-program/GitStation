@@ -11,7 +11,7 @@
 //! | `notify.smtp_host` | — | required when enabled; a host name or an IP address |
 //! | `notify.smtp_port` | 587 (`starttls`), 465 (`tls`), 25 (`none`) | 1 ..= 65535 |
 //! | `notify.smtp_tls` | `starttls` | `none` / `starttls` / `tls` (implicit) |
-//! | `notify.smtp_ca_file` | — | absolute path of the PEM roots that verify the relay; only these are trusted (no public roots); needs `starttls` / `tls` |
+//! | `notify.smtp_ca_file` | — | absolute path of the PEM roots that verify the relay; only these are trusted (no public roots, not the system store); **required** with `starttls` / `tls`, refused with `none` |
 //! | `notify.smtp_username` + `notify.smtp_password_file` | — | both or neither (AUTH PLAIN); never with `none` (no password in the clear) |
 //! | `notify.from_address` | — | required when enabled; a plain `local@domain` address |
 //! | `notify.from_name` | `GitStation` | at most 64 characters, no control characters |
@@ -246,6 +246,10 @@ impl NotifyConfig {
         }
         let host = host.ok_or_else(|| invalid(HOST_KEY, "missing"))?;
         let from_address = from_address.ok_or_else(|| invalid(FROM_KEY, "missing"))?;
+        // Only the operator's CA is trusted: no fallback to the system store.
+        if tls != SmtpTls::None && ca_file.is_none() {
+            return Err(invalid(CA_KEY, "missing"));
+        }
         if let Some(path) = &password_file {
             // A bad file stops the start, not the first mail.
             read_password(PASSWORD_KEY, path)?;

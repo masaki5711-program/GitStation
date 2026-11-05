@@ -27,12 +27,27 @@ fn assert_invalid(err: &ForgeError, key: &str, reason: &str) {
     assert!(text.contains(&format!("reason={reason}")), "{text}");
 }
 
+fn ca_path() -> &'static str {
+    static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        std::env::temp_dir()
+            .join("forge-n1-relay-ca.pem")
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
 fn notify_env<'a>(extra: &[(&'a str, &'a str)]) -> Env {
     let mut pairs = vec![
         ("FORGE_NOTIFY_ENABLED", "true"),
         ("FORGE_NOTIFY_SMTP_HOST", "mail.example.test"),
         ("FORGE_NOTIFY_FROM_ADDRESS", "forge@example.test"),
     ];
+    // TLS needs the operator's CA file (no OS store): the default env has one.
+    let plain = extra.contains(&("FORGE_NOTIFY_SMTP_TLS", "none"));
+    if !plain {
+        pairs.push(("FORGE_NOTIFY_SMTP_CA_FILE", ca_path()));
+    }
     pairs.retain(|(k, _)| !extra.iter().any(|(ek, _)| ek == k));
     pairs.extend_from_slice(extra);
     Env::from_pairs(pairs)
@@ -60,7 +75,7 @@ fn notify_is_off_by_default_with_documented_bounds() {
     assert_eq!(smtp.tls, SmtpTls::StartTls);
     assert_eq!(smtp.from_address, "forge@example.test");
     assert_eq!(smtp.from_name, "GitStation");
-    assert!(smtp.username.is_none() && smtp.ca_file.is_none());
+    assert!(smtp.username.is_none() && smtp.ca_file.is_some());
 
     // The default port follows the protection.
     for (tls, port) in [("tls", 465), ("none", 25), ("starttls", 587)] {
@@ -325,4 +340,37 @@ fn notify_credentials_need_protection_and_both_halves() {
     )
     .expect("off does not read");
     assert!(!off.notify.enabled);
+}
+
+/// Only the operator's CA is trusted: TLS without `notify.smtp_ca_file` is
+/// refused at load (no fallback to the operating system's store).
+#[test]
+fn notify_tls_requires_the_ca_file() {
+    for tls in ["starttls", "tls"] {
+        let err = load(
+            None,
+            &env(&[
+                ("FORGE_NOTIFY_ENABLED", "true"),
+                ("FORGE_NOTIFY_SMTP_HOST", "mail.example.test"),
+                ("FORGE_NOTIFY_FROM_ADDRESS", "forge@example.test"),
+                ("FORGE_NOTIFY_SMTP_TLS", tls),
+            ]),
+        )
+        .expect_err(tls);
+        assert_invalid(&err, "notify.smtp_ca_file", "missing");
+    }
+    // The default mode is starttls, so the default needs it too.
+    let err = load(
+        None,
+        &env(&[
+            ("FORGE_NOTIFY_ENABLED", "true"),
+            ("FORGE_NOTIFY_SMTP_HOST", "mail.example.test"),
+            ("FORGE_NOTIFY_FROM_ADDRESS", "forge@example.test"),
+        ]),
+    )
+    .expect_err("default tls");
+    assert_invalid(&err, "notify.smtp_ca_file", "missing");
+    // Plain text needs none; disabled needs none.
+    assert!(load(None, &notify_env(&[("FORGE_NOTIFY_SMTP_TLS", "none")])).is_ok());
+    assert!(load(None, &env(&[("FORGE_NOTIFY_SMTP_TLS", "tls")])).is_ok());
 }

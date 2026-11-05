@@ -216,9 +216,9 @@ impl SmtpSender {
     }
 }
 
-/// Roots: the PEM bundle of `notify.smtp_ca_file` only; without one, the
-/// operating system's trust store (an operator installs the internal CA
-/// there). Never a bundled public list.
+/// Roots: the PEM bundle of `notify.smtp_ca_file` only (the configuration
+/// requires it with TLS). Never the operating system's store, never a
+/// bundled public list.
 fn load_roots(smtp: &SmtpConfig) -> Result<rustls::RootCertStore, ForgeError> {
     const KEY: &str = "notify.smtp_ca_file";
     let mut roots = rustls::RootCertStore::empty();
@@ -239,17 +239,7 @@ fn load_roots(smtp: &SmtpConfig) -> Result<rustls::RootCertStore, ForgeError> {
                 return Err(config_error("invalid", KEY));
             }
         }
-        None => {
-            let native = rustls_native_certs::load_native_certs();
-            for cert in native.certs {
-                // A certificate the library cannot use is skipped; having
-                // none at all is the error below.
-                let _ = roots.add(cert);
-            }
-            if roots.is_empty() {
-                return Err(config_error("no_trust_roots", KEY));
-            }
-        }
+        None => return Err(config_error("missing", KEY)),
     }
     Ok(roots)
 }

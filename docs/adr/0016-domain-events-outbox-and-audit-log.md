@@ -1344,7 +1344,7 @@ gstn の `integration_dev_status_commands_read_their_routes`。Runbook `integrat
    `stage` / `reason` / `smtp_code` になる。本文の組み立ては `mail.rs`（ヘッダーは 1 行・RFC 2047、本文は base64、`Auto-Submitted: auto-generated`）。
    - **接続は `notify.connect_timeout_ms`、会話全体は `notify.send_timeout_ms`**（1 つの締め切りをすべての段階が共有）。応答の行は 2 KiB・64 行まで。
    - **TLS は設定どおりに必須**: `starttls` で中継が STARTTLS を出さない・拒む場合は clear text で続けない（`tls_failed`、MAIL FROM の前に止まる）。STARTTLS の前に
-     届いていたバイトがあれば拒む（CVE-2011-0411 型）。信頼する根は `notify.smtp_ca_file` の PEM だけ、無ければ OS の信頼の保管庫（公開の根の束は入れない）。
+     届いていたバイトがあれば拒む（CVE-2011-0411 型）。信頼する根は `notify.smtp_ca_file` の PEM **だけ**（`starttls` / `tls` では必須、無ければ起動時に FG-SYS-0002 `reason=missing`。OS の信頼の保管庫も公開の根の束も使わない。レビュー指摘で保管庫への格下げを削除）（公開の根の束は入れない）。
      rustls は ring（reqwest が既に使うもの。`aws-lc-rs` は入れない）。
    - **認証は AUTH PLAIN のみ、TLS の上でだけ**（`tls = none` と認証情報の組は起動時に FG-SYS-0002 `credentials_without_tls`）。パスワードは `notify.smtp_password_file`（0600）。
      ログにもエラーにも `Debug` にも出ない。
