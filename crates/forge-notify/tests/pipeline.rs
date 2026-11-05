@@ -860,3 +860,43 @@ async fn a_job_for_no_notification_is_a_permanent_failure() {
     assert_eq!(retry, Retry::Never);
     w.t.drop_now().await;
 }
+
+// ── review follow-ups ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn many_notes_on_one_merge_request_make_at_most_one_mail_per_window() {
+    let w = world().await;
+    let iid = w.open_mr(w.alice, "Fix rounding", "fix-rounding").await;
+    for n in 1..=20 {
+        w.emit(
+            "merge_request.commented",
+            Some(w.bob),
+            serde_json::json!({"merge_request_id": 1, "iid": iid, "action": "note_added"}),
+            n,
+        )
+        .await;
+    }
+    w.drain().await;
+    let rows = w.rows().await;
+    assert_eq!(rows.len(), 20);
+    let pending = rows.iter().filter(|r| r.2 == "pending").count();
+    assert_eq!(pending, 1, "{rows:?}");
+    assert!(rows
+        .iter()
+        .filter(|r| r.2 != "pending")
+        .all(|r| r.2 == "skipped" && r.3.as_deref() == Some("coalesced")));
+    assert_eq!(w.send_jobs().await, 1);
+    // A later window mails again; another merge request is its own.
+    w.t.exec_superuser("UPDATE forge.notifications SET created_at = now() - interval '11 minutes'")
+        .await;
+    w.emit(
+        "merge_request.commented",
+        Some(w.bob),
+        serde_json::json!({"merge_request_id": 1, "iid": iid, "action": "note_added"}),
+        100,
+    )
+    .await;
+    w.drain().await;
+    assert_eq!(w.send_jobs().await, 2);
+    w.t.drop_now().await;
+}

@@ -16,6 +16,12 @@ use crate::{query_error, Db};
 /// The job kind that delivers one notification (payload: its id).
 pub const SEND_JOB: &str = "notification.send";
 
+/// A burst of notes on one merge request is one mail per this many seconds
+/// per recipient (the rest are `skipped` with reason [`COALESCED`]).
+pub const COMMENT_WINDOW_SECS: i64 = 600;
+/// The reason of a notification folded into an earlier mail of its window.
+pub const COALESCED: &str = "coalesced";
+
 /// A person's settings (`forge.notification_preferences`). No row is the
 /// default: mail on, the instance language, nothing muted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,7 +182,26 @@ pub async fn enqueue(
     new: &NewNotification,
     delivery: &Delivery,
 ) -> Result<Recorded, ForgeError> {
-    let (state, reason) = match new.initial {
+    // Notes come in bursts: one mail per recipient and merge request per
+    // window; the others are recorded as `coalesced` (no job).
+    let mut initial = new.initial;
+    if initial == Initial::Queue && new.kind == NotificationKind::MergeRequestCommented {
+        let recent: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM forge.notifications WHERE user_id = $1                AND project_id = $2 AND merge_request_iid = $3 AND kind = $4                AND state IN ('pending', 'sending', 'retrying', 'sent', 'unknown')                AND created_at > now() - make_interval(secs => $5))",
+        )
+        .bind(new.user.get())
+        .bind(new.project.get())
+        .bind(new.iid)
+        .bind(new.kind.as_str())
+        .bind(COMMENT_WINDOW_SECS as f64)
+        .fetch_one(&mut *tx.conn())
+        .await
+        .map_err(|e| query_error("notify.coalesce", e))?;
+        if recent {
+            initial = Initial::Skip(COALESCED);
+        }
+    }
+    let (state, reason) = match initial {
         Initial::Queue => (NotificationState::Pending, None),
         Initial::Skip(reason) => (NotificationState::Skipped, Some(reason)),
         Initial::Suppress(reason) => (NotificationState::Suppressed, Some(reason)),
@@ -203,7 +228,7 @@ pub async fn enqueue(
     let Some(id) = id else {
         return Ok(Recorded::Duplicate);
     };
-    if new.initial == Initial::Queue {
+    if initial == Initial::Queue {
         let job = send_job(id, delivery, event)?;
         // The row is new, so its key is new: a Deduped here would mean a
         // job for a notification that did not exist.
