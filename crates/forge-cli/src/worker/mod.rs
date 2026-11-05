@@ -261,13 +261,14 @@ fn tasks_with(
 /// `webhook-dispatch`, …) join with their features.
 #[cfg(test)]
 fn registry(review: &ReviewConfig) -> Result<Registry, ForgeError> {
-    registry_with(review, None)
+    registry_with(review, None, None)
 }
 
 /// [`registry`] with the `notify` subscriber when the lane exists.
 fn registry_with(
     review: &ReviewConfig,
     notify: Option<&NotifyTask>,
+    paused: Option<&Db>,
 ) -> Result<Registry, ForgeError> {
     let registry = Registry::new()
         .with(Arc::new(forge_db::review::MergeRequestRefresh::new(
@@ -283,7 +284,13 @@ fn registry_with(
                 Arc::clone(&task.subscriber) as Arc<dyn forge_db::subscribers::Subscriber>;
             registry.with(subscriber)
         }
-        None => Ok(registry),
+        // Mail off: the subscriber stays registered but passes every event
+        // over, so its cursor follows the head (no replay of the disabled
+        // period on enabling, no lag, retention not held back).
+        None => match paused {
+            Some(db) => registry.with(Arc::new(forge_notify::Notify::paused(db)?)),
+            None => Ok(registry),
+        },
     }
 }
 // ── end C5 ──
@@ -515,7 +522,7 @@ pub(crate) async fn run_full(
     run_all(
         db,
         runner,
-        registry_with(review, notify.as_ref())?,
+        registry_with(review, notify.as_ref(), Some(db))?,
         jobs::SHUTDOWN_GRACE,
         keys,
         (purge, Some(storage.clone()), maintenance, notify), // clone: the sweep's own handles
@@ -538,7 +545,7 @@ pub(crate) async fn run_with_notify(
     run_all(
         db,
         runner,
-        registry_with(&ReviewConfig::default(), Some(&notify))?,
+        registry_with(&ReviewConfig::default(), Some(&notify), None)?,
         Duration::from_secs(5),
         keys,
         (None, None, None, Some(notify)),

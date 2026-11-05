@@ -27,7 +27,7 @@
 
 | 鍵 | 既定 | 内容 |
 |---|---|---|
-| `notify.enabled` | `false` | `true` でだけ購読者とメールのランナーが動く。`false` の間のイベントは通知にならず、後で有効にしても遡らない |
+| `notify.enabled` | `false` | `true` でだけ通知を記録しメールのランナーが動く。`false` の間も購読者は登録されたまま全イベントを読んで通す（記録しない・遅れない）ので、`false` の間のイベントは通知にならず、有効に戻しても遡らない |
 | `notify.smtp_host` / `notify.smtp_port` | — / 587（starttls）・465（tls）・25（none） | 中継 |
 | `notify.smtp_tls` | `starttls` | `none` / `starttls`（必須。出さない中継とは続けない）/ `tls`（最初から） |
 | `notify.smtp_ca_file` | —（`starttls` / `tls` では必須） | 中継の証明書を検証する根の PEM。**これだけを信頼する**（OS の保管庫は使わない）。`none` とは組めない |

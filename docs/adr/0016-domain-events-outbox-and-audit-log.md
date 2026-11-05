@@ -1325,7 +1325,7 @@ gstn の `integration_dev_status_commands_read_their_routes`。Runbook `integrat
    （`UNIQUE (event_id, user_id)` なので、繰り返された手順は 2 行目を足せない）。書く時点で判断し、理由を残す: `pending`（+ ジョブ `notification.send`）、
    `skipped`（`muted` / `opted_out`）、`suppressed`（`recipient_inactive` / `recipient_not_person` / `no_address` / `address_invalid` / `not_visible` /
    `merge_request_gone`）。「なぜメールが来ないのか」は表を見れば答えが出る。未知のイベントの型は警告して通す（`forge.subscribers.unknown_event_type`）。
-   `notify.enabled = false` のワーカーは購読者を登録しない（送る者のいない通知を溜めない）。**無効の間のイベントは後で有効にしても遡らない**（受け入れた制限）。
+   `notify.enabled = false` のワーカーも購読者 `notify` を**登録したまま**にする（`Notify::paused`）: 全イベントを読んで何も記録せずに通す。位置は先頭に追従するので、**無効の間のイベントは後で有効にしても遡って送られず**（無効 → 有効で全期間を一度に送ってしまうのを防ぐ）、購読者の遅れ（`subscribers.lag`）は 0 のまま、イベントの保持も止められない。試験 `turning_mail_off_and_on_again_does_not_mail_the_disabled_period`。最初に購読者を登録するのは最初の起動（先頭から）。
 3. **見える人だけ（送る時にもう一度）**: 可視性は `forge_auth::prove(MergeRequestRead)` を受け手を「セッションの人」として呼ぶ（画面で MR を見せるのと同じ判断。
    この crate に権限の規則は無い）。**登録時と、メールを作る直前の 2 回**判断する: 間にメンバーから外された・無効にされた・メールを止めた人には送らない
    （`suppressed` / `skipped` と理由）。プロジェクトの削除待ち・存在しないプロジェクトも「見えない」。

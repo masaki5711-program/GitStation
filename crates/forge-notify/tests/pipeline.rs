@@ -900,3 +900,41 @@ async fn many_notes_on_one_merge_request_make_at_most_one_mail_per_window() {
     assert_eq!(w.send_jobs().await, 2);
     w.t.drop_now().await;
 }
+
+#[tokio::test]
+async fn turning_mail_off_and_on_again_does_not_mail_the_disabled_period() {
+    let w = world().await;
+    let iid = w.open_mr(w.alice, "Fix rounding", "fix-rounding").await;
+    // Enabled: told.
+    w.approved(iid, w.bob, 1).await;
+    w.drain().await;
+    assert_eq!(w.rows().await.len(), 1);
+    // Switched off: the same subscriber row keeps reading, records nothing,
+    // and is not behind afterwards (no lag, no retention held back).
+    let paused = Notify::paused(&w.t.db).expect("paused");
+    w.approved(iid, w.carol, 2).await;
+    w.approved(iid, w.bob, 3).await;
+    forge_db::sequencer::run_once(
+        &w.t.db,
+        forge_db::sequencer::BatchSize::MAX,
+        forge_db::sequencer::AuditSequencing::Skip,
+    )
+    .await
+    .expect("sequencer");
+    while matches!(
+        subscribers::run_once(&w.t.db, &paused).await.expect("step"),
+        Progress::Handled { .. }
+    ) {}
+    assert_eq!(w.rows().await.len(), 1, "nothing recorded while off");
+    let state = subscribers::states(&w.t.db)
+        .await
+        .expect("states")
+        .expect("migrated");
+    let notify = state.iter().find(|s| s.name == "notify").expect("notify");
+    assert_eq!(notify.lag_events, 0, "{notify:?}");
+    // Switched on again: only what happens now is told.
+    w.approved(iid, w.bob, 4).await;
+    w.drain().await;
+    assert_eq!(w.rows().await.len(), 2, "{:?}", w.rows().await);
+    w.t.drop_now().await;
+}

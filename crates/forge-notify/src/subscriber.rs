@@ -18,8 +18,8 @@
 //! with a `notification.send` job, or `skipped` / `suppressed` with the
 //! reason, so "why did I get no mail?" always has an answer in the table.
 //! The mail itself is the job's, never the subscriber's (no network call in
-//! a step). With `notify.enabled = false` the worker does not register this
-//! subscriber at all.
+//! a step). With `notify.enabled = false` the worker registers [`Notify::paused`]:
+//! it reads every event and records nothing, so its cursor follows the head.
 //!
 //! An event whose payload this build cannot read fails the step (counted,
 //! quarantined after five tries: `FG-DB-0008`); a type this build does not
@@ -48,6 +48,9 @@ const JOB_MARGIN: Duration = Duration::from_secs(15);
 pub struct Notify {
     db: Db,
     delivery: Delivery,
+    /// `notify.enabled = false`: the subscriber stays registered and reads
+    /// every event, but records nothing (see [`Notify::paused`]).
+    paused: bool,
 }
 
 impl Notify {
@@ -58,6 +61,7 @@ impl Notify {
                 .with_context("subscriber", NAME)
         };
         Ok(Self {
+            paused: false,
             db: db.clone(), // clone: a pool handle
             delivery: Delivery {
                 max_attempts: MaxAttempts::new(cfg.max_attempts)
@@ -66,6 +70,20 @@ impl Notify {
                     .ok_or_else(|| internal("send_timeout_out_of_range"))?,
             },
         })
+    }
+}
+
+impl Notify {
+    /// The subscriber while mail is off (`notify.enabled = false`). It keeps
+    /// its row and its cursor moving — every event is read and passed over
+    /// without a row — so turning mail on later starts from the head, not
+    /// from where mail was switched off (no mail for the whole disabled
+    /// period), the subscriber lag stays zero and event retention is not
+    /// held back.
+    pub fn paused(db: &Db) -> Result<Self, ForgeError> {
+        let mut paused = Self::new(db, &NotifyConfig::default())?;
+        paused.paused = true;
+        Ok(paused)
     }
 }
 
@@ -171,6 +189,11 @@ impl Subscriber for Notify {
 
     fn handle<'a>(&'a self, event: &'a SourceEvent, tx: &'a mut DerivedTx<'_>) -> HandleFuture<'a> {
         Box::pin(async move {
+            if self.paused {
+                // Mail is off: read the event, record nothing (the cursor
+                // moves, so switching on later does not replay the period).
+                return Ok(());
+            }
             let Some(event_type) = EventType::parse(&event.event_type) else {
                 // A type this build does not know (a newer writer). The
                 // subscriber is independent, so it goes on, never silently.
