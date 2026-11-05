@@ -250,7 +250,10 @@ impl Inner {
             Err(e) => {
                 // A recipient address `decide` accepted but the mail
                 // refuses cannot be fixed by trying again.
-                let _ = self
+                // The permanent failure is returned only once the row says
+                // why; if the write fails that is logged with its code and
+                // the job is retried (the next run decides again).
+                return match self
                     .settle(
                         id,
                         attempt,
@@ -258,8 +261,14 @@ impl Inner {
                         request_id,
                         crate::access::reason::ADDRESS_INVALID,
                     )
-                    .await;
-                return Err(JobFailure::permanent(e));
+                    .await
+                {
+                    Ok(()) => Err(JobFailure::permanent(e)),
+                    Err(write) => {
+                        telemetry::log_failure(&write.error, request_id);
+                        Err(write)
+                    }
+                };
             }
         };
         let counts = (attempt, job.max_attempts);
@@ -305,14 +314,24 @@ impl Inner {
             SendOutcome::NotSent(failure) => {
                 // Recorded first; the job runner logs the returned error
                 // once, with the same request id.
-                let kept = notify::finish(
+                let kept = match notify::finish(
                     &self.db,
                     id,
                     attempt,
                     Finish::Retry(failure.reason.as_str()),
                 )
                 .await
-                .map_err(JobFailure::retry)?;
+                {
+                    Ok(kept) => kept,
+                    Err(write) => {
+                        // The cause must not vanish behind the write error.
+                        telemetry::log_failure(
+                            &failure.error(id, attempt, job.max_attempts),
+                            request_id,
+                        );
+                        return Err(JobFailure::retry(write));
+                    }
+                };
                 if !kept {
                     log_lost(id, attempt, request_id);
                     return Ok(());

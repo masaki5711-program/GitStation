@@ -938,3 +938,35 @@ async fn turning_mail_off_and_on_again_does_not_mail_the_disabled_period() {
     assert_eq!(w.rows().await.len(), 2, "{:?}", w.rows().await);
     w.t.drop_now().await;
 }
+
+#[tokio::test]
+async fn when_recording_a_retry_fails_the_smtp_cause_is_still_logged() {
+    let w = world().await;
+    let iid = w.open_mr(w.alice, "Fix rounding", "fix-rounding").await;
+    w.approved(iid, w.bob, 1).await;
+    w.drain().await;
+    let id = w.ids().await[0];
+    // The state write of a retry fails (a stand-in for the database going
+    // away between the SMTP failure and its record).
+    w.t.exec_superuser(
+        "CREATE FUNCTION forge.n1_fail_retry() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.state = 'retrying' THEN RAISE EXCEPTION 'n1 test'; END IF; RETURN NEW; END $$; \
+         CREATE TRIGGER n1_fail BEFORE UPDATE ON forge.notifications FOR EACH ROW \
+         EXECUTE FUNCTION forge.n1_fail_retry()",
+    )
+    .await;
+    let log = Capture::default();
+    let _guard = log.install();
+    let sender = Scripted::new(vec![not_sent(Reason::ConnectFailed, Stage::Connect, None)]);
+    let Err(JobFailure { retry, .. }) = w.handler(sender.clone()).run(claimed(id, 1, 3)).await
+    else {
+        panic!("the job must be retried");
+    };
+    assert_eq!(retry, Retry::Backoff);
+    let text = log.text();
+    assert!(
+        text.contains("FG-INT-0015") && text.contains("reason=connect_failed"),
+        "the SMTP cause is logged: {text}"
+    );
+    w.t.drop_now().await;
+}
