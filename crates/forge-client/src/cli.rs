@@ -87,6 +87,13 @@ pub enum Command {
         #[command(subcommand)]
         command: ChecksCommand,
     },
+    /// A project's webhooks (M3 I2): list, view, create, update, delete,
+    /// rotate-secret, deliveries, redeliver (Maintainers).
+    #[command(disable_help_subcommand = true)]
+    Webhook {
+        #[command(subcommand)]
+        command: WebhookCommand,
+    },
     /// An integration's event feed (M3 I1c): events, cursor — with the
     /// integration's own service account token.
     #[command(disable_help_subcommand = true)]
@@ -1278,6 +1285,91 @@ pub enum ChecksCommand {
         /// The full commit id (40 or 64 hex digits).
         #[arg(long, value_parser = parse_oid)]
         sha: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WebhookCommand {
+    /// A project's webhooks (never a secret).
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// One webhook: its URL, event types, state and failure count.
+    View {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Create a webhook owned by you; its secret is shown once.
+    Create {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// An https URL whose host and port the operator's allowlist names.
+        #[arg(long, value_parser = parse_text)]
+        url: String,
+        /// An event type, a family (`merge_request.*`) or `*` (repeatable;
+        /// default `*`).
+        #[arg(long = "event", value_parser = parse_text, value_name = "TYPE")]
+        events: Vec<String>,
+    },
+    /// Change a webhook's URL, event types (replaced), or enable / disable it.
+    Update {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_text)]
+        url: Option<String>,
+        /// The new event types (repeatable; replaces them all).
+        #[arg(long = "event", value_parser = parse_text, value_name = "TYPE")]
+        events: Vec<String>,
+        /// Enable it (clears the failure count).
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Delete a webhook and its delivery history.
+    Delete {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Replace the secret (shown once); the previous one signs for 24 hours.
+    #[command(name = "rotate-secret")]
+    RotateSecret {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// The delivery history, newest first.
+    Deliveries {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Only deliveries older than this delivery id.
+        #[arg(long, value_parser = parse_id)]
+        before: Option<i64>,
+        #[arg(long, value_parser = parse_limit)]
+        limit: Option<u32>,
+    },
+    /// Deliver one delivery again (the same delivery id).
+    Redeliver {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The delivery's id (from `webhook deliveries`).
+        #[arg(value_parser = parse_id)]
+        delivery: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
     },
 }
 

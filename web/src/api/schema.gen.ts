@@ -1291,6 +1291,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's webhooks, never a secret (Maintainer) */
+        get: operations["get_api_v1_projects_id_webhooks"];
+        put?: never;
+        /** Create a webhook owned by the caller; its URL must be on the operator's allowlist (400 FG-INT-0010); the secret is shown once (people only; Maintainer; at most 20) */
+        post: operations["post_api_v1_projects_id_webhooks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/{webhook_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One webhook of the project (Maintainer) */
+        get: operations["get_api_v1_projects_id_webhooks_webhook_id"];
+        put?: never;
+        post?: never;
+        /** Delete a webhook and its delivery history (people only; Maintainer) */
+        delete: operations["delete_api_v1_projects_id_webhooks_webhook_id"];
+        options?: never;
+        head?: never;
+        /** Change a webhook's URL, event types or enabled flag; enabling clears its failure count (people only; Maintainer) */
+        patch: operations["patch_api_v1_projects_id_webhooks_webhook_id"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A webhook's delivery history, newest first: state, attempts, the last status and reason (never a body; Maintainer) */
+        get: operations["get_api_v1_projects_id_webhooks_webhook_id_deliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deliver one delivery again with the same delivery id (people only; Maintainer; 429 while pending or within 60 s of its last attempt) */
+        post: operations["post_api_v1_projects_id_webhooks_webhook_id_deliveries_delivery_id_redeliver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace a webhook's secret, shown once; the previous one still signs for 24 hours (people only; Maintainer) */
+        post: operations["post_api_v1_projects_id_webhooks_webhook_id_secret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session": {
         parameters: {
             query?: never;
@@ -1981,6 +2069,21 @@ export interface components {
              */
             scopes: string[];
         };
+        /** @description `POST …/webhooks`. */
+        CreateWebhook: {
+            /**
+             * @description `*` (every integration-class event, the default), a family
+             *     (`merge_request.*`) of the integration class, or an exact type name;
+             *     a maintainer- or deployment-class type only by its name; 1..=64.
+             */
+            event_types?: string[] | null;
+            /**
+             * @description An absolute `https` URL (`http` only where the operator allows it)
+             *     of at most 2048 bytes, without user information or a fragment, whose
+             *     host and port the operator's allowlist names.
+             */
+            url: string;
+        };
         /** @description A created token: the secret, shown this once. */
         CreatedToken: {
             expires_at: string;
@@ -1992,6 +2095,15 @@ export interface components {
             scopes: string[];
             /** @description The whole token. It is never shown again: store it now. */
             token: string;
+        };
+        /** @description A created webhook and its secret (shown this once). */
+        CreatedWebhook: {
+            /**
+             * @description `whsec_…`: the HMAC-SHA256 key of `Forge-Signature`. Never shown
+             *     again.
+             */
+            secret: string;
+            webhook: components["schemas"]["WebhookBody"];
         };
         /**
          * @description `DELETE /api/v1/projects/{id}`: when the grace period began and when
@@ -2007,6 +2119,46 @@ export interface components {
              *     purge has started).
              */
             purge_after: string;
+        };
+        /** @description One delivery (never the body sent or the answer's body). */
+        DeliveryBody: {
+            /** Format: int32 */
+            attempts: number;
+            created_at: string;
+            /** @description The `Forge-Delivery` value. */
+            delivery_id: string;
+            /** @description `evt_…` (the feed's id). */
+            event_id: string;
+            /** Format: int64 */
+            event_seq: number;
+            event_type: string;
+            finished_at: string | null;
+            /** Format: int64 */
+            id: number;
+            last_attempt_at: string | null;
+            /** Format: int32 */
+            last_duration_ms: number | null;
+            last_error_code: string | null;
+            /**
+             * @description `status`, `redirect`, `connect`, `timeout`, `tls`, `dns`,
+             *     `target_forbidden`, … (docs/api/webhooks.md).
+             */
+            last_reason: string | null;
+            /** Format: int32 */
+            last_status: number | null;
+            /** Format: int32 */
+            redeliveries: number;
+            /** @description `pending`, `succeeded`, `failed` or `skipped`. */
+            state: string;
+        };
+        /** @description A page of the delivery history. */
+        DeliveryList: {
+            items: components["schemas"]["DeliveryBody"][];
+            /**
+             * Format: int64
+             * @description Pass as `before` for the next (older) page; `null`: no more.
+             */
+            next_before: number | null;
         };
         /** @description The approvals given on the head and target now. */
         DevStatusApprovalsBody: {
@@ -3012,6 +3164,11 @@ export interface components {
              */
             reset_approvals_on_push: boolean;
         };
+        /** @description A redelivery was queued. */
+        RedeliveryQueued: {
+            /** @description `queued`. */
+            outcome: string;
+        };
         /** @description One branch or tag. */
         RefBody: {
             /** @description The commit it peels to; `null` for a tag of a tree or a blob. */
@@ -3133,6 +3290,14 @@ export interface components {
          * @enum {string}
          */
         RoleName: "guest" | "reporter" | "developer" | "maintainer" | "owner";
+        /** @description A rotated secret (shown this once). */
+        RotatedWebhookSecret: {
+            /** @description The previous secret still signs until then (UTC, RFC 3339). */
+            previous_secret_valid_until: string;
+            secret: string;
+            /** Format: int32 */
+            secret_version: number;
+        };
         /** @description One approval rule's state on this merge request. */
         RuleStatusBody: {
             /** @description The rule's target pattern matches the merge request's target. */
@@ -3469,6 +3634,14 @@ export interface components {
             owner_id?: number | null;
             purpose?: string | null;
         };
+        /** @description `PATCH …/webhooks/{webhook_id}`: the fields to change. */
+        UpdateWebhook: {
+            /** @description `true` enables it again and clears its failure count. */
+            enabled?: boolean | null;
+            /** @description Replaces the allowlist (the rules of `CreateWebhook`). */
+            event_types?: string[] | null;
+            url?: string | null;
+        };
         /** @description What an update changed. */
         UpdatedIntegration: {
             /** @description The fields that changed: `enabled`, `event_types`. */
@@ -3484,6 +3657,14 @@ export interface components {
             /** @description `updated`, or `unchanged` (nothing was written). */
             outcome: string;
             service_account: components["schemas"]["ServiceAccountBody"];
+        };
+        /** @description What an update changed. */
+        UpdatedWebhook: {
+            /** @description `url`, `event_types`, `enabled`. */
+            fields: string[];
+            /** @description `updated`, or `unchanged` (nothing was written). */
+            outcome: string;
+            webhook: components["schemas"]["WebhookBody"];
         };
         /** @description One search match: names only. */
         UserName: {
@@ -3593,6 +3774,47 @@ export interface components {
          * @enum {string}
          */
         VisibilityName: "private" | "internal";
+        /** @description One webhook (never a secret). */
+        WebhookBody: {
+            /** Format: int32 */
+            consecutive_failures: number;
+            created_at: string;
+            /** @description `manual`, `failures` (50 failed attempts in a row) or `failing_24h`. */
+            disabled_reason: string | null;
+            enabled: boolean;
+            /** @description Sorted. */
+            event_types: string[];
+            failing_since: string | null;
+            /** Format: int64 */
+            id: number;
+            last_delivery_at: string | null;
+            /**
+             * @description `scheme://host:port` of the URL. The full URL is write-only: its
+             *     path or query may hold the receiver's token (I2 review).
+             */
+            origin: string;
+            /**
+             * Format: int64
+             * @description The person who answers for it: who created it, or last changed its
+             *     URL or event types or rotated its secret. Deliveries stop when they
+             *     can no longer manage the project's webhooks.
+             */
+            owner_id: number;
+            /** @description The previous secret still signs until then (UTC, RFC 3339). */
+            previous_secret_valid_until: string | null;
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * Format: int32
+             * @description The version of the current secret (`Forge-Signature-Kid`).
+             */
+            secret_version: number;
+            updated_at: string;
+        };
+        /** @description A project's webhooks. */
+        WebhookList: {
+            items: components["schemas"]["WebhookBody"][];
+        };
         /** @description A work item as kanflow names it (02 §5.7's `work_items` entry). */
         WorkItemBody: {
             /** @description The external (kanflow) project of the binding. */
@@ -7034,6 +7256,272 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_webhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_webhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWebhook"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedWebhook"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_webhooks_webhook_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_webhooks_webhook_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    patch_api_v1_projects_id_webhooks_webhook_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWebhook"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatedWebhook"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_webhooks_webhook_id_deliveries: {
+        parameters: {
+            query?: {
+                /** @description Only deliveries with a smaller id (the last id of the previous page) */
+                before?: number;
+                /** @description Deliveries per page, 1..=100 (default 20), newest first */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_webhooks_webhook_id_deliveries_delivery_id_redeliver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                delivery_id: number;
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeliveryQueued"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_webhooks_webhook_id_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatedWebhookSecret"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

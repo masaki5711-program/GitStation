@@ -6658,6 +6658,370 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook list --project 7 --json"
+      ],
+      "name": "webhook list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "project_id",
+                "owner_id",
+                "origin",
+                "event_types",
+                "enabled",
+                "secret_version",
+                "consecutive_failures"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/webhooks"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's webhooks (Maintainer): URL, event types, enabled, the failure count; never a secret."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook view 3 --project 7"
+      ],
+      "name": "webhook view",
+      "output": {
+        "required": [
+          "id",
+          "project_id",
+          "owner_id",
+          "origin",
+          "event_types",
+          "enabled",
+          "secret_version",
+          "consecutive_failures"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/webhooks/{webhook_id}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "One webhook of a project (Maintainer); disabled_reason says why it is off (manual, failures, failing_24h)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The receiver's https URL.",
+          "kind": "option",
+          "name": "--url",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "An event type, a family (merge_request.*) or * (repeatable; default *).",
+          "kind": "option",
+          "name": "--event",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn webhook create --project 7 --url https://kanflow.internal/hooks/forge --event 'merge_request.*'"
+      ],
+      "name": "webhook create",
+      "output": {
+        "required": [
+          "webhook",
+          "secret"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/webhooks"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create a webhook owned by you (a person; Maintainer). The URL must be https and on the operator's allowlist (400 FG-INT-0010 otherwise; loopback, link-local and metadata addresses never). The secret is shown once: give it to the receiver, which verifies Forge-Signature."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A new https URL (the allowlist again).",
+          "kind": "option",
+          "name": "--url",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new event types (repeatable).",
+          "kind": "option",
+          "name": "--event",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Enable it again.",
+          "kind": "flag",
+          "name": "--enable",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Disable it.",
+          "kind": "flag",
+          "name": "--disable",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn webhook update 3 --project 7 --enable"
+      ],
+      "name": "webhook update",
+      "output": {
+        "required": [
+          "outcome",
+          "fields",
+          "webhook"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/projects/{id}/webhooks/{webhook_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a webhook's URL or event types (replaced), or enable / disable it; --enable clears the failure count (a person; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook delete 3 --project 7 --yes"
+      ],
+      "name": "webhook delete",
+      "output": {
+        "type": "null"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/webhooks/{webhook_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Delete a webhook and its delivery history (a person; Maintainer). Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook rotate-secret 3 --project 7"
+      ],
+      "name": "webhook rotate-secret",
+      "output": {
+        "required": [
+          "secret",
+          "secret_version",
+          "previous_secret_valid_until"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/webhooks/{webhook_id}/secret"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Replace a webhook's secret, shown once; the previous secret still signs for 24 hours (two v1 values in Forge-Signature) so the receiver can switch (a person; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Only deliveries older than this delivery id.",
+          "kind": "option",
+          "name": "--before",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "1..=100 (default 20).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn webhook deliveries 3 --project 7 --limit 50 --json"
+      ],
+      "name": "webhook deliveries",
+      "output": {
+        "required": [
+          "items",
+          "next_before"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/webhooks/{webhook_id}/deliveries"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A webhook's delivery history, newest first: state, attempts, the last status, reason and FG code (never a body; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The delivery id.",
+          "kind": "positional",
+          "name": "delivery",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook redeliver 3 12 --project 7"
+      ],
+      "name": "webhook redeliver",
+      "output": {
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Deliver one delivery again with the same Forge-Delivery id (a person; Maintainer). 429 while it is pending or within 60 s of its last attempt."
+    },
+    {
+      "args": [
+        {
           "description": "GET | POST | PUT | PATCH | DELETE",
           "kind": "positional",
           "name": "method",

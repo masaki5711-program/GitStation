@@ -43,6 +43,9 @@ pub mod token;
 pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;
+// ── M3 I2: webhooks (ADR-0016 §8) ──
+pub mod webhook;
+// ── end M3 I2 ──
 pub mod work_item;
 
 pub use approval::{ApprovalRuleChange, UnapproveReason, UncountedReason};
@@ -63,7 +66,7 @@ pub use feed::{
 };
 pub use ids::{
     ApprovalId, ApprovalRuleId, DiscussionId, GroupId, IntegrationId, MergeRequestId, NamespaceId,
-    NoteId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,
+    NoteId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId, WebhookDeliveryId, WebhookId,
 };
 pub use integration::{IntegrationChange, IntegrationField, IntegrationKind};
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
@@ -99,6 +102,9 @@ pub use user_kind::UserKind;
 pub use web_path::{
     log_safe_path, parse_positive_id, parse_web_path, GitRoute, InstanceRoute, ParsedPath,
     RouteWord, TailSegments,
+};
+pub use webhook::{
+    DisableReason, WebhookChange, WebhookDeliverySet, WebhookField, WebhookMaterial,
 };
 pub use work_item::{
     find_refs, LinkActorKind, LinkSource, LinkTarget, UnlinkSource, WorkItem, WorkItemChange,
@@ -143,5 +149,7 @@ mod user_kind_tests;
 mod web_keys_tests;
 #[cfg(test)]
 mod web_path_tests;
+#[cfg(test)]
+mod webhook_tests;
 #[cfg(test)]
 mod work_item_tests;

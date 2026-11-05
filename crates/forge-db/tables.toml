@@ -525,6 +525,30 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 I1c ──
 
+# ── M3 I2: webhooks (ADR-0016 §8, Amendment I2) ──
+# A project's push receivers; the delivery counters are unaudited. Not the
+# sealed secrets or the full url (it may hold a receiver token) for the read pool.
+[tables.webhooks]
+guarded = false
+kind = "audited"
+ro_columns = [
+    "id", "uid", "project_id", "owner_user_id", "origin", "event_types", "enabled",
+    "disabled_reason", "secret_key_id", "secret_version", "secret_prev_key_id",
+    "secret_prev_until", "consecutive_failures", "failing_since", "last_delivery_at",
+    "created_at", "updated_at",
+]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["consecutive_failures", "failing_since", "last_delivery_at", "updated_at"]
+txn_audited_columns = []
+
+# One row per (webhook, event), written by the webhook-dispatch subscriber
+# and the webhook.deliver job; never a response body.
+[tables.webhook_deliveries]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 I2 ──
 # ── M3 N1: e-mail notifications (20261120100000, ADR-0016 Amendment N1) ──
 # A person's own notification settings (e-mail on / off, language, muted
 # kinds). Not audited: it changes no one's access and no one else's data.

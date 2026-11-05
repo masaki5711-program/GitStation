@@ -36,4 +36,7 @@ pub mod shell;
 pub mod tokens;
 pub mod user_sessions;
 pub mod users;
+// ── M3 I2: project webhooks (ADR-0016 §8) ──
+pub mod webhooks;
+// ── end M3 I2 ──
 mod write;

@@ -54,6 +54,9 @@ mod service_accounts;
 mod subscribers;
 // ── end C5 ──
 mod users;
+// ── M3 I2 ──
+mod webhooks;
+// ── end M3 I2 ──
 
 /// The outcome of one check.
 enum Outcome {
@@ -77,7 +80,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 30] = [
+const DB_CHECKS: [&str; 31] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -122,6 +125,8 @@ const DB_CHECKS: [&str; 30] = [
     "repositories.refs",
     // M3 O3 review: FG-GIT-0020 (a packed-refs.lock nobody holds).
     "repositories.stale_locks",
+    // M3 I2: FG-INT-0004 / FG-INT-0011 in the last 24 hours.
+    webhooks::DELIVERIES,
     // M3 N1: FG-INT-0015 (the mail queue, the relay).
     notify::NAMES[0],
     notify::NAMES[1],
@@ -198,6 +203,8 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
     checks.push(web_ui_check());
     // M2 MR4: the sign-in's provider (needs no database).
     checks.push(oidc::oidc_check(&cfg).await);
+    // M3 I2: the webhook settings (no database).
+    checks.extend(webhooks::config_checks(&cfg));
     checks
 }
 
@@ -262,6 +269,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let [feed_lag, watermark, retention] = integrations::feed_checks(db).await;
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     let stale_locks = maintenance::stale_locks_check(db, root).await;
+    let webhook_deliveries = webhooks::deliveries_check(db, &cfg.webhook).await;
     let [mail_queue, mail_relay] = notify::notify_checks(db, &cfg.notify).await;
     vec![
         bootstrap,
@@ -293,6 +301,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         integrity,
         refs,
         stale_locks,
+        webhook_deliveries,
         mail_queue,
         mail_relay,
     ]

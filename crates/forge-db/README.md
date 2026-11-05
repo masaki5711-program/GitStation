@@ -798,6 +798,21 @@ detected one the subscriber's progress; DELETE only while the repository is
 detection); unbinding ends the binding's open links (`unbound`). Tests
 `src/work_items/tests.rs`.
 
+**Webhooks (M3 I2, migration `20261120200000`, ADR-0016 Amendment I2)**:
+`webhooks::{create_webhook,update_webhook,delete_webhook,rotate_webhook_secret,redeliver_webhook}_decided` (decided in
+the transaction: project `FOR SHARE`, the caller's roles and account, then the
+per-project advisory lock or the webhook row `FOR UPDATE`; one `webhook.*`
+audit row on the project; 20 per project, `FG-INT-0012 reason=webhook_limit`),
+the subscriber's `enabled_on` / `material` / `record_delivery` (one
+`webhook_deliveries` row per (webhook, event) and its first `webhook.deliver`
+job), the job's `delivery_task` / `record_attempt` (one transaction: the
+delivery's state, the webhook's failure count, the next attempt through
+`jobs::enqueue_after_on`, and at 50 failures in a row or 24 h of failures the
+system's `webhook.disabled` audit row and event), the reads `list` / `get` /
+`deliveries` / `health` (the read pool cannot read the sealed secrets) and the
+retention `purge_deliveries`. The project purge deletes a project's webhooks
+and deliveries.
+
 **The integration feed (M3 I1c, migration `20261118100000`, ADR-0016 Amendment
 I1c)**: `feed::open` starts a `REPEATABLE READ READ ONLY` snapshot on the read
 pool (`FeedSnapshot`): `state` (epoch, `high_seq`, `retained_from`, the

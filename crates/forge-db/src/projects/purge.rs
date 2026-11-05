@@ -429,6 +429,22 @@ async fn finish_steps(
             .map_err(|e| query_error("projects.purge.finish.redirects", e))
         })
         .await?;
+    // M3 I2: the project's webhooks and their delivery history (audited
+    // on the project: the project.purged row covers them).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.webhook_deliveries WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.webhook_deliveries",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.webhooks WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.webhooks",
+    )
+    .await?;
     // M3 I1a: the project's integration binding goes with it (the service
     // account's membership goes with the members below).
     delete_rows(

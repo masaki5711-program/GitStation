@@ -803,6 +803,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -874,11 +875,13 @@ dependencies = [
  "forge-core",
  "forge-db",
  "forge-errors",
+ "reqwest",
  "serde_json",
  "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

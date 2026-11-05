@@ -14,6 +14,7 @@ use crate::repository::RepositoryState;
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
 use crate::user_kind::UserKind;
+use crate::webhook::WebhookChange;
 use crate::work_item::WorkItemChange;
 
 /// A field an update changed (`project.updated`, `group.updated`): the
@@ -381,6 +382,10 @@ pub enum AuditDetails {
     /// subscriber's detected links are derived events without audit rows).
     /// Shapes: [`WorkItemChange::to_value`].
     WorkItem(WorkItemChange),
+    /// `webhook.*` (M3 I2, ADR-0016 Amendment I2): on the project; only
+    /// `webhook.disabled` (the worker's automatic disable) publishes an
+    /// event. Shapes: [`WebhookChange::to_value`].
+    Webhook(WebhookChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -542,6 +547,7 @@ impl AuditDetails {
             Self::CheckNamespaceGrant { granted: false, .. } => "check_namespace.revoked",
             Self::Integration(change) => change.action(),
             Self::WorkItem(change) => change.action(),
+            Self::Webhook(change) => change.action(),
         }
     }
 
@@ -591,6 +597,7 @@ impl AuditDetails {
             Self::ProjectPurged { .. } => Some(EventType::ProjectPurged),
             Self::MergeRequest(change) => Some(change.transition().event_type()),
             Self::WorkItem(change) => Some(change.event_type()),
+            Self::Webhook(change) => change.event_type(),
             Self::MergeRequestVersion(_)
             | Self::ApprovalRule(_)
             | Self::ProtectedRefMergeRule(_)
@@ -1014,6 +1021,7 @@ impl AuditDetails {
             }),
             Self::Integration(change) => change.to_value(),
             Self::WorkItem(change) => change.to_value(),
+            Self::Webhook(change) => change.to_value(),
         }
     }
 
@@ -1092,7 +1100,8 @@ impl AuditDetails {
             | Self::CheckRunsExpired { .. }
             | Self::CheckNamespaceGrant { .. }
             | Self::Integration(_)
-            | Self::WorkItem(_) => self.to_value(),
+            | Self::WorkItem(_)
+            | Self::Webhook(_) => self.to_value(),
         }
     }
 }

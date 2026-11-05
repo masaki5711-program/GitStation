@@ -38,6 +38,10 @@ mod model;
 mod prove;
 mod ref_updates;
 mod viewer;
+// ── M3 I2 ──
+mod matrix_rows_webhooks;
+mod webhook_ctx;
+// ── end M3 I2 ──
 
 pub use action::Action;
 pub use authorize::authorize;
@@ -63,6 +67,7 @@ pub use prove::{
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 pub use viewer::{MergeRequestViewer, MergeSettingsViewer, TRIAL_SUSPENSION_MINUTES};
+pub use webhook_ctx::{prove_webhook_delivery, WebhookCtx, WebhookDeliveryCtx};
 
 #[cfg(test)]
 #[path = "authorize_tests.rs"]
@@ -91,3 +96,5 @@ mod ref_updates_tests;
 #[cfg(test)]
 #[path = "viewer_tests.rs"]
 mod viewer_tests;
+#[cfg(test)]
+mod webhook_tests;

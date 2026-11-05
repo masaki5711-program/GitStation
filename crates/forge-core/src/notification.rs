@@ -80,6 +80,14 @@ impl NotificationKind {
             | EventType::CheckCompleted
             | EventType::WorkItemLinked
             | EventType::WorkItemUnlinked => None,
+            // M3 I2: the automatic disable of a webhook (maintainer class).
+            // Not mailed yet: every notification kind here is about one
+            // merge request and its author (`forge.notifications` keys on
+            // the merge request), while this one would go to the project's
+            // Maintainers. Its own kind and recipients come with U4 (the
+            // webhook and notification screens); until then FG-INT-0011 and
+            // doctor `webhook.deliveries` report it.
+            EventType::WebhookDisabled => None,
         }
     }
 }

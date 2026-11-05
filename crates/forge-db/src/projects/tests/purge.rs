@@ -689,3 +689,69 @@ async fn the_purge_lock_is_exclusive_and_ends_with_release_or_drop() {
     other.release().await;
     t.drop_now().await;
 }
+
+/// M3 I2: the purge deletes the project's webhooks and their deliveries
+/// (audited on the project: the project.purged row covers them).
+#[tokio::test]
+async fn a_purge_removes_the_projects_webhooks_and_deliveries() {
+    use crate::webhooks::{self, NewWebhook};
+    use forge_core::webhook::{WebhookSecret, WebhookSecretKeys};
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let web = create_ok(&t, &project("web", alice.namespace_id, alice.user_id)).await;
+    let keys = WebhookSecretKeys::parse(
+        "1 0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    .expect("keys");
+    let uid = uuid::Uuid::new_v4();
+    let secret = keys
+        .seal(&uid, &WebhookSecret::generate().expect("secret"))
+        .expect("seal");
+    let (hook, ()) = webhooks::create_webhook_decided(
+        &t.db,
+        &ctx("req-hook"),
+        web.project_id,
+        alice.user_id,
+        &NewWebhook {
+            uid,
+            url: "https://kanflow.internal/hook".to_owned(),
+            origin: "https://kanflow.internal:443".to_owned(),
+            event_types: vec!["*".to_owned()],
+            secret,
+        },
+        |_| Ok(()),
+    )
+    .await
+    .expect("webhook");
+    let id = web.project_id.get();
+    t.exec_superuser(&format!(
+        "INSERT INTO forge.webhook_deliveries (delivery_uid, webhook_id, project_id, event_seq, \
+         event_id, event_type, request_id) VALUES (gen_random_uuid(), {}, {id}, 1, \
+         gen_random_uuid(), 'merge_request.opened', 'req-d')",
+        hook.get()
+    ))
+    .await;
+    delete(&t, web.project_id, alice.user_id).await;
+    expire(&t, web.project_id).await;
+    let started = purge::start(&t.db, &ctx("req-start"), web.project_id)
+        .await
+        .expect("start");
+    assert!(matches!(started, Started::Started { .. }), "{started:?}");
+    let finished = purge::finish(&t.db, &ctx("req-finish"), web.project_id, true)
+        .await
+        .expect("finish");
+    assert!(matches!(finished, Finished::Purged(_)), "{finished:?}");
+    let mut su = t.superuser().await;
+    for table in ["webhooks", "webhook_deliveries"] {
+        assert_eq!(
+            count(
+                &mut su,
+                &format!("SELECT count(*) FROM forge.{table} WHERE project_id = {id}")
+            )
+            .await,
+            0,
+            "{table}"
+        );
+    }
+    t.drop_now().await;
+}

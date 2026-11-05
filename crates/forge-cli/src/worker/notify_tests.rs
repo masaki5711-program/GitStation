@@ -145,7 +145,7 @@ fn without_the_lane_no_notify_subscriber_is_registered() {
     let base = registry(&review).expect("registry");
     assert!(!names(&base).contains(&"notify"), "{:?}", names(&base));
     assert_eq!(
-        names(&registry_with(&review, None, None).expect("registry")),
+        names(&registry_with(&review, None, None, false).expect("registry")),
         names(&base)
     );
 }
@@ -154,7 +154,7 @@ fn without_the_lane_no_notify_subscriber_is_registered() {
 async fn a_disabled_lane_still_registers_the_paused_subscriber() {
     let t = FreshDb::migrated().await;
     let review = forge_core::config::ReviewConfig::default();
-    let registry = registry_with(&review, None, Some(&t.db)).expect("registry");
+    let registry = registry_with(&review, None, Some(&t.db), false).expect("registry");
     let names: Vec<&'static str> = registry.iter().map(|s| s.name()).collect();
     assert!(names.contains(&"notify"), "{names:?}");
     t.drop_now().await;

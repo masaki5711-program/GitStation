@@ -85,6 +85,14 @@ id_type!(
     /// and the service account it acts as.
     IntegrationId
 );
+id_type!(
+    /// A row of forge.webhooks (M3 I2): one project's push receiver.
+    WebhookId
+);
+id_type!(
+    /// A row of forge.webhook_deliveries (M3 I2): one event to one webhook.
+    WebhookDeliveryId
+);
 
 #[cfg(test)]
 mod tests {

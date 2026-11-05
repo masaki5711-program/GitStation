@@ -338,7 +338,8 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::CodeownersEnforcementRestored
                 | EventType::CheckCompleted
                 | EventType::WorkItemLinked
-                | EventType::WorkItemUnlinked => Ok(()),
+                | EventType::WorkItemUnlinked
+                | EventType::WebhookDisabled => Ok(()),
             }
         })
     }
