@@ -39,7 +39,7 @@ pub struct WebhookPatch {
     pub enabled: Option<bool>,
 }
 
-/// What [`update_decided`] did.
+/// What [`update_webhook_decided`] did.
 #[must_use = "Unchanged wrote nothing; callers report it differently"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateOutcome {
@@ -47,7 +47,7 @@ pub enum UpdateOutcome {
     Unchanged,
 }
 
-/// What [`rotate_secret_decided`] did.
+/// What [`rotate_webhook_secret_decided`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rotated {
     pub secret_version: i32,
@@ -150,7 +150,7 @@ async fn lock_webhook(
 /// Create a webhook of `project` owned by `caller`. Errors (nothing
 /// written): `decide`'s, `FG-REPO-0005 resource=project`, `FG-INT-0012
 /// reason=webhook_limit` past [`MAX_WEBHOOKS`].
-pub async fn create_decided<P>(
+pub async fn create_webhook_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
     project: ProjectId,
@@ -230,7 +230,7 @@ pub async fn create_decided<P>(
 /// `owner_from` / `owner_id`). Nothing is written when every given
 /// value equals the stored one. Errors: `decide`'s, `FG-REPO-0005`
 /// (`resource=project` / `webhook`).
-pub async fn update_decided<P>(
+pub async fn update_webhook_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
     (project, webhook): (ProjectId, WebhookId),
@@ -316,7 +316,7 @@ pub async fn update_decided<P>(
 
 /// Delete a webhook and its delivery history (its queued jobs find nothing
 /// and end). Errors: `decide`'s, `FG-REPO-0005`.
-pub async fn delete_decided<P>(
+pub async fn delete_webhook_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
     (project, webhook): (ProjectId, WebhookId),
@@ -360,7 +360,7 @@ pub async fn delete_decided<P>(
 /// and still signs for [`SECRET_OVERLAP`] (a previous one still in its
 /// overlap is dropped: at most two secrets sign). Errors: `decide`'s,
 /// `seal`'s, `FG-REPO-0005`.
-pub async fn rotate_secret_decided<P>(
+pub async fn rotate_webhook_secret_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
     (project, webhook): (ProjectId, WebhookId),
@@ -469,7 +469,7 @@ pub(super) fn new_job(
 /// (`FG-WEB-0010`), for a disabled webhook (`FG-WEB-0006
 /// rule=webhook_disabled`). Errors: `decide`'s, `FG-REPO-0005`
 /// (`resource=project` / `webhook` / `webhook_delivery`).
-pub async fn redeliver_decided<P>(
+pub async fn redeliver_webhook_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
     (project, webhook, delivery): (ProjectId, WebhookId, WebhookDeliveryId),

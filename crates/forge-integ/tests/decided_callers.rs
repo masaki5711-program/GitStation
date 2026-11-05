@@ -196,12 +196,11 @@ fn only_the_dev_status_routes_read_the_dev_status() {
 #[test]
 fn only_forge_integ_calls_the_webhook_commands() {
     let found = mentions(&[
-        needle(&["webhooks::create", "_decided("]),
-        needle(&["webhooks::update", "_decided("]),
-        needle(&["webhooks::delete", "_decided("]),
-        needle(&["db::create", "_decided("]),
-        needle(&["rotate_secret", "_decided("]),
-        needle(&["redeliver", "_decided("]),
+        needle(&["create_webhook", "_decided("]),
+        needle(&["update_webhook", "_decided("]),
+        needle(&["delete_webhook", "_decided("]),
+        needle(&["rotate_webhook_secret", "_decided("]),
+        needle(&["redeliver_webhook", "_decided("]),
     ]);
     let offenders: Vec<_> = found
         .iter()

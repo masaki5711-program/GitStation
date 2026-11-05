@@ -799,7 +799,7 @@ detection); unbinding ends the binding's open links (`unbound`). Tests
 `src/work_items/tests.rs`.
 
 **Webhooks (M3 I2, migration `20261120200000`, ADR-0016 Amendment I2)**:
-`webhooks::{create,update,delete,rotate_secret,redeliver}_decided` (decided in
+`webhooks::{create_webhook,update_webhook,delete_webhook,rotate_webhook_secret,redeliver_webhook}_decided` (decided in
 the transaction: project `FOR SHARE`, the caller's roles and account, then the
 per-project advisory lock or the webhook row `FOR UPDATE`; one `webhook.*`
 audit row on the project; 20 per project, `FG-INT-0012 reason=webhook_limit`),

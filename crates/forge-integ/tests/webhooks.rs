@@ -17,13 +17,9 @@ use std::io::Write as _;
 use std::sync::{Arc, Mutex};
 
 use forge_auth::{prove, Action, Credential, LoadedProject, Principal, ProjectCtx, WebhookCtx};
-use forge_core::checks::{CheckConclusion, CheckStatus};
 use forge_core::webhook::{signature, TargetPolicy, WebhookSecretKeys};
-use forge_core::{
-    CheckName, ObjectId, ProjectId, RequestId, Role, UserId, UserKind, Visibility, WebhookId,
-};
+use forge_core::{ProjectId, RequestId, Role, UserId, UserKind, WebhookId};
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::checks::{self, NewCheckRun, ReportCredential};
 use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::projects::{self, CreatedProject, NewProject};
 use forge_db::sequencer::{self, AuditSequencing, BatchSize};
@@ -271,30 +267,33 @@ impl World {
         (created.webhook.id, created.secret.expose().to_owned())
     }
 
+    /// Publish one event of the project as alice, with its audit row in the
+    /// same transaction (`FreshDb::commit_audited`: the fixture never calls
+    /// another feature's decided command).
+    async fn publish(&self, event_type: &str, payload: &str) {
+        self.t
+            .commit_audited(
+                ("project", self.project().get()),
+                &[format!(
+                    "INSERT INTO forge.events (event_id, event_type, schema_version, \
+                     aggregate_type, aggregate_id, project_id, actor_kind, actor_user_id, \
+                     request_id, payload) VALUES (gen_random_uuid(), '{event_type}', 1, \
+                     'project', {p}, {p}, 'user', {a}, 'req-event', '{payload}'::jsonb)",
+                    p = self.project().get(),
+                    a = self.alice.get(),
+                )],
+            )
+            .await;
+    }
+
     /// A `check.completed` event of the project (integration class).
     async fn check_event(&self, n: u8) {
-        let head = ObjectId::parse(&format!("{:x}", n % 16).repeat(40)).expect("sha");
-        checks::report_check_run_decided(
-            &self.t.db,
-            &ChangeContext::new(
-                Actor::User(self.alice),
-                RequestId::parse("req-check").expect("request id"),
-            ),
-            (self.project(), &head),
-            self.alice,
-            ReportCredential(None),
-            &NewCheckRun {
-                name: CheckName::parse("ci/build").expect("name"),
-                status: CheckStatus::Completed,
-                conclusion: Some(CheckConclusion::Success),
-                summary: "synthetic".to_owned(),
-                details_url: None,
-                annotations: Vec::new(),
-            },
-            |_| Ok(()),
+        let head = format!("{:x}", n % 16).repeat(40);
+        self.publish(
+            "check.completed",
+            &format!(r#"{{"project_id": {}, "head_sha": "{head}", "name": "ci/build", "conclusion": "success"}}"#, self.project().get()),
         )
-        .await
-        .expect("check");
+        .await;
     }
 
     /// Number the events and let the subscriber take every one.
@@ -709,19 +708,14 @@ async fn a_webhook_delivers_only_what_its_owner_may_still_see() {
         )
         .await;
     // A maintainer-class event: only the webhook that names it.
-    projects::change_visibility_decided(
-        &w.t.db,
-        &ChangeContext::new(
-            Actor::User(w.alice),
-            RequestId::parse("req-vis").expect("id"),
+    w.publish(
+        "project.visibility_changed",
+        &format!(
+            r#"{{"project_id": {}, "from": "private", "to": "internal"}}"#,
+            w.project().get()
         ),
-        w.project(),
-        w.alice,
-        Visibility::Internal,
-        |_| Ok(()),
     )
-    .await
-    .expect("visibility");
+    .await;
     w.check_event(8).await;
     w.dispatch().await;
     let count = |hook: WebhookId| {

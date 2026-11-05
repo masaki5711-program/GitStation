@@ -282,7 +282,7 @@ impl Webhooks {
             secret: keys.seal(&uid, &secret)?,
         };
         let ctx = change_context(request, proof.principal(), user);
-        let (id, ()) = db::create_decided(&self.db, &ctx, project, user, &new, |facts| {
+        let (id, ()) = db::create_webhook_decided(&self.db, &ctx, project, user, &new, |facts| {
             let fresh = ProjectCtx::new(loaded(&facts.project));
             proof.reconfirm(account(facts.account), fresh).map(drop)
         })
@@ -326,7 +326,7 @@ impl Webhooks {
         };
         let ctx = change_context(request, proof.principal(), user);
         let (outcome, ()) =
-            db::update_decided(&self.db, &ctx, (project, webhook), user, &patch, |facts| {
+            db::update_webhook_decided(&self.db, &ctx, (project, webhook), user, &patch, |facts| {
                 let fresh = WebhookCtx::new(loaded(&facts.project), webhook);
                 proof.reconfirm(account(facts.account), fresh).map(drop)
             })
@@ -344,7 +344,7 @@ impl Webhooks {
         let user = caller(proof.principal(), Action::WebhookManage)?;
         let (project, webhook) = *proof.id();
         let ctx = change_context(request, proof.principal(), user);
-        db::delete_decided(&self.db, &ctx, (project, webhook), user, |facts| {
+        db::delete_webhook_decided(&self.db, &ctx, (project, webhook), user, |facts| {
             let fresh = WebhookCtx::new(loaded(&facts.project), webhook);
             proof.reconfirm(account(facts.account), fresh).map(drop)
         })
@@ -364,7 +364,7 @@ impl Webhooks {
         let keys = self.keys()?;
         let secret = WebhookSecret::generate()?;
         let ctx = change_context(request, proof.principal(), user);
-        let (rotated, ()) = db::rotate_secret_decided(
+        let (rotated, ()) = db::rotate_webhook_secret_decided(
             &self.db,
             &ctx,
             (project, webhook),
@@ -408,7 +408,7 @@ impl Webhooks {
         let user = caller(proof.principal(), Action::WebhookRedeliver)?;
         let (project, webhook, delivery) = *proof.id();
         let ctx = change_context(request, proof.principal(), user);
-        db::redeliver_decided(
+        db::redeliver_webhook_decided(
             &self.db,
             &ctx,
             (project, webhook, delivery),

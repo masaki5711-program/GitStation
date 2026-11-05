@@ -91,7 +91,7 @@ impl World {
     }
 
     async fn create(&self, request: &str) -> WebhookId {
-        create_decided(
+        create_webhook_decided(
             &self.t.db,
             &as_user(self.alice, request),
             self.project(),
@@ -222,7 +222,7 @@ async fn the_twenty_first_webhook_is_int_0012() {
     for i in 0..MAX_WEBHOOKS {
         w.create(&format!("req-hook-{i}")).await;
     }
-    let e = create_decided(
+    let e = create_webhook_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-21"),
         w.project(),
@@ -234,7 +234,7 @@ async fn the_twenty_first_webhook_is_int_0012() {
     .expect_err("limit");
     assert_reason(&e, ErrorCode::IntegrationLimitReached, "webhook_limit");
     // Another project has its own limit.
-    create_decided(
+    create_webhook_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-other"),
         w.other.project_id,
@@ -250,7 +250,7 @@ async fn the_twenty_first_webhook_is_int_0012() {
 #[tokio::test]
 async fn a_refused_decision_writes_nothing() {
     let w = world().await;
-    let e = create_decided(
+    let e = create_webhook_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-denied"),
         w.project(),
@@ -272,7 +272,7 @@ async fn a_refused_decision_writes_nothing() {
 async fn update_records_its_fields_and_enabling_again_resets_the_failures() {
     let w = world().await;
     let id = w.create("req-hook").await;
-    let (outcome, ()) = update_decided(
+    let (outcome, ()) = update_webhook_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-off"),
         (w.project(), id),
@@ -297,7 +297,7 @@ async fn update_records_its_fields_and_enabling_again_resets_the_failures() {
     assert!(!hook.enabled);
     assert_eq!(hook.disabled_reason, Some(DisableReason::Manual));
     // The same values again: nothing written.
-    let (again, ()) = update_decided(
+    let (again, ()) = update_webhook_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-same"),
         (w.project(), id),
@@ -322,7 +322,7 @@ async fn update_records_its_fields_and_enabling_again_resets_the_failures() {
         id.get()
     ))
     .await;
-    let _ = update_decided(
+    let _ = update_webhook_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-on"),
         (w.project(), id),
@@ -344,7 +344,7 @@ async fn update_records_its_fields_and_enabling_again_resets_the_failures() {
     assert_eq!(hook.consecutive_failures, 0);
     assert_eq!(hook.failing_since, None);
     // Another project's webhook id is not found after the decision.
-    let e = update_decided(
+    let e = update_webhook_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-idor"),
         (w.other.project_id, id),
@@ -363,7 +363,7 @@ async fn a_rotation_keeps_the_previous_secret_signing_for_24_hours() {
     let w = world().await;
     let id = w.create("req-hook").await;
     let before = delivery_task_of(&w, id).await;
-    let (rotated, ()) = rotate_secret_decided(
+    let (rotated, ()) = rotate_webhook_secret_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-rotate"),
         (w.project(), id),
@@ -427,7 +427,7 @@ async fn deleting_a_webhook_deletes_its_deliveries() {
     let w = world().await;
     let id = w.create("req-hook").await;
     let d = w.delivery(id, 1).await;
-    delete_decided(
+    delete_webhook_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-delete"),
         (w.project(), id),
@@ -679,7 +679,9 @@ async fn redelivery_starts_a_new_round_and_is_rate_limited() {
         let ctx = as_user(w.alice, request);
         let db = w.t.db.clone();
         let alice = w.alice;
-        async move { redeliver_decided(&db, &ctx, (project, id, delivery), alice, |_| Ok(())).await }
+        async move {
+            redeliver_webhook_decided(&db, &ctx, (project, id, delivery), alice, |_| Ok(())).await
+        }
     };
     // Still pending: refused.
     let e = redeliver("req-redeliver-1", d, w.project())
@@ -926,7 +928,7 @@ async fn editing_the_target_or_rotating_makes_the_editor_the_owner() {
     .expect("bob")
     .user_id;
     // Enabling / disabling alone keeps the owner.
-    let _ = update_decided(
+    let _ = update_webhook_decided(
         &w.t.db,
         &as_user(bob, "req-hook-off"),
         (w.project(), id),
@@ -945,7 +947,7 @@ async fn editing_the_target_or_rotating_makes_the_editor_the_owner() {
         .expect("hook");
     assert_eq!(hook.owner, w.alice);
     // A new event allowlist: bob answers for it now, audited.
-    let (outcome, ()) = update_decided(
+    let (outcome, ()) = update_webhook_decided(
         &w.t.db,
         &as_user(bob, "req-hook-types"),
         (w.project(), id),
@@ -976,7 +978,7 @@ async fn editing_the_target_or_rotating_makes_the_editor_the_owner() {
         format!("{}:{}", w.alice.get(), bob.get())
     );
     // A rotation by alice makes her the owner again.
-    let _ = rotate_secret_decided(
+    let _ = rotate_webhook_secret_decided(
         &w.t.db,
         &as_user(w.alice, "req-hook-rotate"),
         (w.project(), id),

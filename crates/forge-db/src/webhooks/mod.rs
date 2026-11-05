@@ -1,8 +1,8 @@
 //! Project webhooks and their delivery history (M3 I2; ADR-0016 §8 and
 //! its Amendment I2; migration 20261120200000).
 //!
-//! - **Managing** ([`create_decided`], [`update_decided`],
-//!   [`delete_decided`], [`rotate_secret_decided`], [`redeliver_decided`]):
+//! - **Managing** ([`create_webhook_decided`], [`update_webhook_decided`],
+//!   [`delete_webhook_decided`], [`rotate_webhook_secret_decided`], [`redeliver_webhook_decided`]):
 //!   decided inside the transaction like every project write — the project
 //!   row `FOR SHARE` (a purge, deletion or visibility change waits), the
 //!   caller's roles and account `FOR SHARE`, then `decide` (forge-integ:
@@ -52,8 +52,9 @@ pub use deliver::{
 };
 pub use dispatch::{enabled_on, material, record_delivery, DispatchTarget};
 pub use manage::{
-    create_decided, delete_decided, redeliver_decided, rotate_secret_decided, update_decided,
-    NewWebhook, Rotated, UpdateOutcome, WebhookPatch,
+    create_webhook_decided, delete_webhook_decided, redeliver_webhook_decided,
+    rotate_webhook_secret_decided, update_webhook_decided, NewWebhook, Rotated, UpdateOutcome,
+    WebhookPatch,
 };
 pub use read::{deliveries, get, health, list, WebhooksHealth, MAX_DELIVERIES_LISTED};
 pub use retention::{purge_deliveries, RETENTION_BATCH};

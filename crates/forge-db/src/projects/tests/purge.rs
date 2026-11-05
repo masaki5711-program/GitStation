@@ -707,7 +707,7 @@ async fn a_purge_removes_the_projects_webhooks_and_deliveries() {
     let secret = keys
         .seal(&uid, &WebhookSecret::generate().expect("secret"))
         .expect("seal");
-    let (hook, ()) = webhooks::create_decided(
+    let (hook, ()) = webhooks::create_webhook_decided(
         &t.db,
         &ctx("req-hook"),
         web.project_id,
