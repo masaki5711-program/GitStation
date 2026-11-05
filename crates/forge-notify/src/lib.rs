@@ -23,13 +23,16 @@
 pub mod access;
 pub mod job;
 pub mod mail;
+pub mod settings;
 pub mod smtp;
 pub mod subscriber;
 pub mod templates;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+pub use forge_db::notify::Preferences;
 pub use job::SendHandler;
 pub use mail::Mail;
+pub use settings::Settings;
 pub use smtp::{Reason, SendFailure, SendOutcome, Sender, SmtpSender, Stage};
 pub use subscriber::{Notify, NAME as SUBSCRIBER_NAME};

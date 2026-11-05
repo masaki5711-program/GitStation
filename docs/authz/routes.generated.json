@@ -872,6 +872,22 @@
     "word": "fixed"
   },
   {
+    "action": "NotificationPreferencesRead",
+    "method": "GET",
+    "path": "/api/v1/user/notification-preferences",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NotificationPreferencesWrite",
+    "method": "PUT",
+    "path": "/api/v1/user/notification-preferences",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "SessionList",
     "method": "GET",
     "path": "/api/v1/user/sessions",

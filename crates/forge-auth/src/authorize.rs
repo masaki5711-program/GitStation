@@ -205,6 +205,15 @@ pub fn authorize(
             Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_token"))
         }
     };
+    // Another user's notification settings are answered like missing ones.
+    let own_preferences = |owner| -> Result<(), ForgeError> {
+        if owner == user {
+            Ok(())
+        } else {
+            Err(deny(ErrorCode::NotFound)
+                .with_context("reason", "foreign_notification_preferences"))
+        }
+    };
     // Actions kept for people (ADR-0017 amendments MR7a, MR8, D5): an
     // agent's credential is refused whatever its role, administrators
     // included. Checked after visibility and scope, before roles.
@@ -550,6 +559,12 @@ pub fn authorize(
         // is not found for everyone, administrators included (an
         // administration route for others' tokens is not built yet).
         (Action::TokenRevoke, Resource::Token { owner }) => own_token(*owner),
+        // M3 N1: a person's own mail settings, for nobody else — an
+        // administrator included (support reads the delivery records).
+        (
+            Action::NotificationPreferencesRead | Action::NotificationPreferencesWrite,
+            Resource::NotificationPreferences { owner },
+        ) => own_preferences(*owner),
 
         (Action::UserCreate | Action::UserAdminList | Action::Metrics, Resource::Instance) => {
             admin_only()
@@ -1035,6 +1050,8 @@ pub fn authorize(
             | Action::TokenCreate
             | Action::TokenList
             | Action::TokenRevoke
+            | Action::NotificationPreferencesRead
+            | Action::NotificationPreferencesWrite
             | Action::UserCreate
             | Action::UserDisable
             | Action::UserSearch
@@ -1096,6 +1113,7 @@ pub fn authorize(
             | Resource::RefProtectionChange { .. }
             | Resource::VisibilityChange { .. }
             | Resource::Token { .. }
+            | Resource::NotificationPreferences { .. }
             | Resource::Session { .. }
             | Resource::TokenRequest { .. }
             | Resource::Admission { .. }
@@ -1175,6 +1193,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Group { .. }
         | Resource::Namespace { .. }
         | Resource::Token { .. }
+        | Resource::NotificationPreferences { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }
@@ -1223,6 +1242,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::RefProtectionChange { .. }
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
+        | Resource::NotificationPreferences { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

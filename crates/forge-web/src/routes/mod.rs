@@ -18,7 +18,9 @@ pub mod lists;
 pub mod members;
 pub mod merge_requests;
 pub mod moves;
+// M3 N1: the caller's notification settings.
 pub mod namespaces;
+pub mod notifications;
 pub mod project_writes;
 pub mod projects;
 pub mod protected_ref_merge_rules;

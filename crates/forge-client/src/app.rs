@@ -218,6 +218,9 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Namespace { command } => hosting::namespace(cli, command, env, io),
         Command::User { command } => hosting::user(cli, command, env, io),
         Command::Token { command } => hosting::token(cli, command, env, io),
+        Command::Notifications { command } => {
+            crate::notifications::notifications(cli, command, env, io)
+        }
         Command::Admin { command } => crate::admin::admin(cli, command, env, io),
         Command::Browse { command } => crate::browse::browse(cli, command, env, io),
         Command::Api(a) => api(cli, a, env, io),

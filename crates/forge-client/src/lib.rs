@@ -27,6 +27,7 @@ pub mod mr_conditions;
 pub mod mr_discussions;
 pub mod mr_merge;
 pub mod mr_work_items;
+pub mod notifications;
 pub mod registry;
 pub mod review;
 pub mod store;
