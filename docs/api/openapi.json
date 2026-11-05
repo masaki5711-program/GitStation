@@ -4182,6 +4182,31 @@
         ],
         "type": "object"
       },
+      "RepoConfigProblemBody": {
+        "additionalProperties": false,
+        "description": "Why `.forge/repo.yml` cannot be used.",
+        "properties": {
+          "error_code": {
+            "description": "`FG-REPO-0024`.",
+            "type": "string"
+          },
+          "line": {
+            "description": "1-based; 0 for the whole file.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "The rule broken (`FG-REPO-0024` lists them).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "line",
+          "reason"
+        ],
+        "type": "object"
+      },
       "ReportCheckRun": {
         "additionalProperties": false,
         "description": "`POST …/commits/{sha}/checks`.",
@@ -4754,6 +4779,160 @@
         },
         "required": [
           "visibility"
+        ],
+        "type": "object"
+      },
+      "SpecPinBody": {
+        "additionalProperties": false,
+        "description": "How a referenced repository's version is fixed.",
+        "properties": {
+          "name": {
+            "description": "The tag or branch name as written.",
+            "type": "string"
+          },
+          "ref_name": {
+            "description": "`refs/tags/…` or `refs/heads/…`.",
+            "type": "string"
+          },
+          "type": {
+            "description": "`version` (a tag) or `track` (a branch).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "name",
+          "ref_name"
+        ],
+        "type": "object"
+      },
+      "SpecRefBody": {
+        "additionalProperties": false,
+        "description": "One `specs:` entry, resolved for the reader.",
+        "properties": {
+          "commit": {
+            "description": "The pinned commit (`resolved`), or the read commit (`local`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "description": "`FG-REPO-0025` (`version_not_found`), `FG-REPO-0026`\n(`unavailable`); `null` otherwise.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "The entry's line in `.forge/repo.yml` (1-based).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The directory as written (`path` entries).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecPinBody",
+                "description": "The pin (`repo` entries)."
+              }
+            ]
+          },
+          "project_id": {
+            "description": "The referenced project, when the reader may read it.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "The repository path as written (`repo` entries).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "description": "The requirement id patterns this repository covers.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "`resolved`, `version_not_found`, `unavailable` (`repo` entries) or\n`local` (`path` entries).",
+            "type": "string"
+          },
+          "type": {
+            "description": "`repo` (another repository) or `path` (this one's directory).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "type",
+          "repo",
+          "path",
+          "pin",
+          "scope",
+          "status",
+          "error_code",
+          "project_id",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "SpecRefsBody": {
+        "additionalProperties": false,
+        "description": "A revision's `.forge/repo.yml` and its spec references.",
+        "properties": {
+          "config": {
+            "description": "`absent`, `valid` or `invalid`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "`.forge/repo.yml`.",
+            "type": "string"
+          },
+          "problem": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RepoConfigProblemBody",
+                "description": "Why the file cannot be used (`invalid` only)."
+              }
+            ]
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody",
+            "description": "The revision read."
+          },
+          "specs": {
+            "description": "In file order; empty unless `valid`.",
+            "items": {
+              "$ref": "#/components/schemas/SpecRefBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "config",
+          "problem",
+          "specs"
         ],
         "type": "object"
       },
@@ -10913,6 +11092,56 @@
         },
         "summary": "Split <ref>/<path> into a revision and a path (commit id, longest branch, longest tag)",
         "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/spec-refs": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_spec_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecRefsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A revision's .forge/repo.yml and its pinned spec references, each resolved for the reader (unreadable ones are unavailable)",
+        "x-forge-action": "SpecRefRead"
       }
     },
     "/api/v1/projects/{id}/repository/tree": {

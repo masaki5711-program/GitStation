@@ -39,6 +39,13 @@ actions! {
     /// `read_repository` token (CI clones) does not read the JSON API, and a
     /// `read_api` token still cannot clone.
     RepoBrowse,
+    /// `GET /api/v1/projects/{id}/repository/spec-refs` (M3 X1, plan 03
+    /// §4.4, ADR-0023 Amendment X1): a revision's `.forge/repo.yml` and
+    /// the spec references it pins. Decided like `RepoBrowse` (the same
+    /// arm, `read_api`) on the referencing project by the route, and again
+    /// on every referenced project with the reader's own principal
+    /// (`prove_spec_ref`).
+    SpecRefRead,
     // --- REST API: projects ---
     ProjectRead,
     /// `GET /api/v1/projects`: may the caller list at all (any active
@@ -469,6 +476,7 @@ impl Action {
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead
             | Action::RepoBrowse
+            | Action::SpecRefRead
             | Action::ProjectList
             | Action::MemberList
             | Action::ProtectedRefList

@@ -42,6 +42,10 @@ mod viewer;
 mod matrix_rows_webhooks;
 mod webhook_ctx;
 // ── end M3 I2 ──
+// ── M3 X1 ──
+mod matrix_rows_spec_refs;
+mod spec_ref;
+// ── end M3 X1 ──
 
 pub use action::Action;
 pub use authorize::authorize;
@@ -66,6 +70,7 @@ pub use prove::{
     VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
+pub use spec_ref::prove_spec_ref;
 pub use viewer::{MergeRequestViewer, MergeSettingsViewer, TRIAL_SUSPENSION_MINUTES};
 pub use webhook_ctx::{prove_webhook_delivery, WebhookCtx, WebhookDeliveryCtx};
 
@@ -93,6 +98,9 @@ mod service_account_tests;
 #[path = "ref_updates_tests.rs"]
 mod ref_updates_tests;
 
+#[cfg(test)]
+#[path = "spec_ref_tests.rs"]
+mod spec_ref_tests;
 #[cfg(test)]
 #[path = "viewer_tests.rs"]
 mod viewer_tests;

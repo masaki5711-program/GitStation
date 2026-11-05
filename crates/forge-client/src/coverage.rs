@@ -337,6 +337,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/repository/blame",
         Coverage::Command("browse blame"),
     ),
+    // M3 X1: `.forge/repo.yml` and its spec references; `gstn spec` is X4's.
+    (
+        "GET",
+        "/api/v1/projects/{id}/repository/spec-refs",
+        Coverage::Planned("M3 X4 (gstn spec)"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/protected-refs",

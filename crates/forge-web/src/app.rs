@@ -1004,6 +1004,22 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<b::BlobBody>(Verb::Get, b::BLOB)
         .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+        // M3 X1: `.forge/repo.yml` and its spec references; every referenced
+        // project decided again with the reader's own principal.
+        .route_with(
+            Verb::Get,
+            routes::spec_refs::SPEC_REFS,
+            Action::SpecRefRead,
+            "A revision's .forge/repo.yml and its pinned spec references, each resolved for the reader (unreadable ones are unavailable)",
+            routes::spec_refs::SPEC_REFS_OF,
+            routes::spec_refs::spec_refs,
+        )
+        .responds::<routes::spec_refs::SpecRefsBody>(Verb::Get, routes::spec_refs::SPEC_REFS)
+        .queries(
+            Verb::Get,
+            routes::spec_refs::SPEC_REFS,
+            routes::spec_refs::SPEC_REFS_QUERY,
+        )
 }
 
 /// The history half of the browse API (`RepoBrowse`, `read_api`; M2 MR8):

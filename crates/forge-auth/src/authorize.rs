@@ -265,9 +265,12 @@ pub fn authorize(
         // Returned above for every non-public action; kept for exhaustiveness.
         (_, Resource::Unresolved(reason)) => unresolved(*reason),
 
-        (Action::RepoRead | Action::RepoBrowse | Action::ProjectRead, Resource::Project(p)) => {
-            need(Role::Reporter, read_role(p))
-        }
+        // `SpecRefRead` (M3 X1): the referencing project by the route, and
+        // every referenced project again by `prove_spec_ref`.
+        (
+            Action::RepoRead | Action::RepoBrowse | Action::SpecRefRead | Action::ProjectRead,
+            Resource::Project(p),
+        ) => need(Role::Reporter, read_role(p)),
 
         // Before receive-pack starts (no ref is known yet): may this caller
         // push to the project at all? Stops non-developers from uploading
@@ -1055,6 +1058,7 @@ pub fn authorize(
             Action::RepoRead
             | Action::RepoPush
             | Action::RepoBrowse
+            | Action::SpecRefRead
             | Action::ProjectRead
             | Action::ProjectList
             | Action::ProjectCreate

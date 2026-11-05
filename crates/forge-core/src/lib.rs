@@ -33,6 +33,9 @@ pub mod readiness;
 pub mod ref_name;
 pub mod ref_pattern;
 pub mod ref_protection;
+// ── M3 X1: `.forge/repo.yml` and its spec references ──
+pub mod repo_config;
+// ── end M3 X1 ──
 pub mod repository;
 pub mod request_id;
 pub mod role;

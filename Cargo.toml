@@ -38,6 +38,11 @@ tempfile = "3"
 # already in the tree through sqlx (stringprep), MIT / Apache-2.0.
 unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 proptest = "1"
+# M3 X1: `.forge/repo.yml` (plan 03 §4.4, ADR-0023). Pure Rust, MIT OR
+# Apache-2.0; only its event parser is used (no alias expansion, no type
+# resolution: forge-core builds its own tree and refuses anchors, aliases
+# and tags). Without the default `encoding` feature (input is UTF-8 only).
+yaml-rust2 = { version = "0.13", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 serde_json = "1"
 http-body-util = "0.1"

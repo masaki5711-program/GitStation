@@ -824,6 +824,14 @@
     "word": "fixed"
   },
   {
+    "action": "SpecRefRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/spec-refs",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/tree",

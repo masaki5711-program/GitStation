@@ -63,7 +63,7 @@ mod refs;
 mod tree;
 
 pub use blame::{Blame, BlameCommit, BlameHunk};
-pub use content::{ArchiveFormat, Blob, RawBlob, RawBody};
+pub use content::{ArchiveFormat, Blob, RawBlob, RawBody, SmallFile};
 pub use diff::{Diff, DiffFile, DiffStatus, PatchOmitted};
 pub use history::{CommitDetail, CommitInfo, CommitPage, Comparison, LogCursor};
 pub use path::RepoPath;
