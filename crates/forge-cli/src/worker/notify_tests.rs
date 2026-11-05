@@ -7,10 +7,9 @@
 
 use std::time::{Duration, Instant};
 
-use forge_core::{RefName, RequestId};
+use forge_core::RequestId;
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::projects::{self, NewProject};
-use forge_db::review::{self, NewMergeRequest};
 use forge_db::subscribers::states;
 use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
@@ -45,26 +44,24 @@ async fn the_worker_turns_an_approval_event_into_a_mail() {
     )
     .await
     .expect("web");
-    let iid = review::open_mr_decided(
-        &t.db,
-        &ChangeContext::new(
-            Actor::User(alice.user_id),
-            RequestId::parse("req-open").expect("request id"),
-        ),
-        web.project_id,
-        alice.user_id,
-        &NewMergeRequest {
-            title: "Fix rounding".to_owned(),
-            description: String::new(),
-            source_branch: RefName::parse("refs/heads/fix-rounding").expect("branch"),
-            target_branch: RefName::parse("refs/heads/main").expect("branch"),
-            draft: false,
-        },
-        |_| Ok(()),
+    // A merge request as the command leaves it (counter + row, audited).
+    let p = web.project_id.get();
+    t.commit_audited(
+        ("project", p),
+        &[
+            format!(
+                "INSERT INTO forge.merge_request_counters (project_id, last_iid) VALUES ({p}, 1)"
+            ),
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id, \
+                 source_branch, target_branch) VALUES ({p}, 1, 'Fix rounding', {}, \
+                 'refs/heads/fix-rounding', 'refs/heads/main')",
+                alice.user_id.get()
+            ),
+        ],
     )
-    .await
-    .map(|(stored, ())| stored.iid)
-    .expect("open");
+    .await;
+    let iid = 1_i64;
 
     let relay = FakeSmtp::start(Script::default()).await;
     let lane = NotifyLane {

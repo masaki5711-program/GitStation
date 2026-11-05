@@ -12,14 +12,13 @@ use std::time::Duration;
 
 use forge_core::config::NotifyConfig;
 use forge_core::ids::{ProjectId, UserId};
-use forge_core::{NotificationKind, RefName, RequestId};
+use forge_core::{NotificationKind, RequestId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::jobs::{
     ClaimedJob, JobFailure, JobHandler as _, JobId, JobTimeout, Lease, Retry, WorkerId,
 };
 use forge_db::notify::{self, Preferences};
 use forge_db::projects::{self, CreatedProject, NewProject};
-use forge_db::review::{self, NewMergeRequest};
 use forge_db::subscribers::{self, Progress, Start};
 use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
@@ -94,26 +93,41 @@ impl World {
 
     /// A merge request of `author` (iid 1, 2, …).
     async fn open_mr(&self, author: UserId, title: &str, branch: &str) -> i64 {
-        review::open_mr_decided(
-            &self.t.db,
-            &ChangeContext::new(
-                Actor::User(author),
-                RequestId::parse(&format!("req-open-{branch}")).expect("request id"),
-            ),
-            self.project(),
-            author,
-            &NewMergeRequest {
-                title: title.to_owned(),
-                description: String::new(),
-                source_branch: RefName::parse(&format!("refs/heads/{branch}")).expect("branch"),
-                target_branch: RefName::parse("refs/heads/main").expect("branch"),
-                draft: false,
-            },
-            |_| Ok(()),
-        )
-        .await
-        .map(|(stored, ())| stored.iid)
-        .expect("open")
+        // Built like the command leaves it (counter + row, audited); the
+        // review commands are forge-review's alone (its guard test).
+        let p = self.project().get();
+        let title = title.replace('\'', "''");
+        let rows = self
+            .t
+            .json_rows(&format!(
+                "SELECT count(*) AS n FROM forge.merge_requests WHERE project_id = {p}"
+            ))
+            .await;
+        let iid = rows[0]["n"].as_i64().expect("count") + 1;
+        let counter = if iid == 1 {
+            format!(
+                "INSERT INTO forge.merge_request_counters (project_id, last_iid) VALUES ({p}, 1)"
+            )
+        } else {
+            format!(
+                "UPDATE forge.merge_request_counters SET last_iid = {iid} WHERE project_id = {p}"
+            )
+        };
+        self.t
+            .commit_audited(
+                ("project", p),
+                &[
+                    counter,
+                    format!(
+                        "INSERT INTO forge.merge_requests (project_id, iid, title, author_id, \
+                         source_branch, target_branch) VALUES ({p}, {iid}, '{title}', {}, \
+                         'refs/heads/{branch}', 'refs/heads/main')",
+                        author.get()
+                    ),
+                ],
+            )
+            .await;
+        iid
     }
 
     /// Publish a merge request event (the audit row its commit needs, then
