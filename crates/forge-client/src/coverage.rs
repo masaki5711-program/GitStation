@@ -549,6 +549,11 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ),
     (
         "GET",
+        "/api/v1/projects/{id}/webhooks/event-types",
+        Coverage::Command("webhook event-types"),
+    ),
+    (
+        "GET",
         "/api/v1/projects/{id}/webhooks/{webhook_id}",
         Coverage::Command("webhook view"),
     ),

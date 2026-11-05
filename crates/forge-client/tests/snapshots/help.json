@@ -6704,6 +6704,57 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook event-types --project 7 --json"
+      ],
+      "name": "webhook event-types",
+      "output": {
+        "properties": {
+          "classes": {
+            "items": {
+              "required": [
+                "class",
+                "subscribable"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "required": [
+                "name",
+                "class"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "classes"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/webhooks/event-types"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The event types a webhook may name, each with its class (integration, maintainer, deployment), and per class whether you may subscribe (Maintainer)."
+    },
+    {
+      "args": [
+        {
           "description": "The webhook id.",
           "kind": "positional",
           "name": "id",

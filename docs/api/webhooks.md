@@ -44,7 +44,7 @@ M3 I2（ADR-0016 §8 と末尾の Amendment I2、計画 02 §5.5・§11.1、計�
 - エージェントのトークン・サービスアカウント・ボットは作成・変更・削除・入れ替え・再送を拒否（`403 FG-AUTH-0003`）。読み取りは同じロールなら可。
 - 見えないプロジェクトは `404 FG-REPO-0005`、削除待ちは `FG-REPO-0006`。**別のプロジェクトの Webhook・別の Webhook の配信**は、判定の後に
   `404 FG-REPO-0005`（`resource=webhook` / `webhook_delivery`）。
-- `gstn webhook list|view|create|update|delete|rotate-secret|deliveries|redeliver`（`gstn help webhook`）。
+- `gstn webhook list|event-types|view|create|update|delete|rotate-secret|deliveries|redeliver`（`gstn help webhook`）。
 
 ## 配信の要求
 
