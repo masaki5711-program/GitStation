@@ -876,7 +876,15 @@
             "type": "string"
           },
           "reported_by": {
-            "$ref": "#/components/schemas/ReporterBody"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReporterBody",
+                "description": "The account that reported it last; `null` for a `forge/` run\n(forge's own worker, M3 X2)."
+              }
+            ]
           },
           "revision": {
             "description": "Counts the run's reports (1 at creation).",

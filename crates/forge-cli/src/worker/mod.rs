@@ -66,6 +66,9 @@ pub(crate) mod purge;
 // ── M3 R1b: merge request versions ──
 mod review;
 // ── end M3 R1b ──
+// ── M3 X2: `forge/spec-drift` (the `check.spec_drift` job) ──
+mod spec_drift;
+// ── end M3 X2 ──
 // ── M3 R2: stale and deferred mergeability checks ──
 mod mergeability_sweep;
 // ── end M3 R2 ──
@@ -310,7 +313,9 @@ fn tasks_with(
 /// enqueues the mergeability checks of a target push, at most
 /// `review.mergeability_fanout_max`) and `work-item-sync` (M3 I1b,
 /// `ordered`: the work item links and the events' work items; it stops and
-/// alerts on an event it cannot process), `notify` (M3 N1, `independent`)
+/// alerts on an event it cannot process), `spec-drift` (M3 X2,
+/// `independent`: the `check.spec_drift` job of each merge request
+/// version), `notify` (M3 N1, `independent`)
 /// and `webhook-dispatch` (M3 I2, `independent`, with the webhook lane
 /// only: it records each event's deliveries).
 #[cfg(test)]
@@ -330,7 +335,10 @@ fn registry_with(
         .with(Arc::new(forge_db::review::MergeRequestRefresh::new(
             review.mergeability_fanout_max,
         )))?
-        .with(Arc::new(forge_db::work_items::WorkItemSync))?;
+        .with(Arc::new(forge_db::work_items::WorkItemSync))?
+        // M3 X2 (`independent`): every merge request version asks for its
+        // `forge/spec-drift` run (the `check.spec_drift` job).
+        .with(Arc::new(forge_db::checks::spec_drift::SpecDriftRequests))?;
     // M3 I2: deliveries are recorded only when the lane can send them.
     let registry = if webhooks {
         registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?

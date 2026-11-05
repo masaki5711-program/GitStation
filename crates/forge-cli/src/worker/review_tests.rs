@@ -332,7 +332,12 @@ fn the_production_registry_starts_the_subscribers_task() {
     let names: Vec<&str> = registry.iter().map(|s| s.name()).collect();
     assert_eq!(
         names,
-        [REFRESH_SUBSCRIBER, forge_db::work_items::WORK_ITEM_SYNC]
+        [
+            REFRESH_SUBSCRIBER,
+            forge_db::work_items::WORK_ITEM_SYNC,
+            // M3 X2: every merge request version asks for its spec drift run.
+            forge_db::checks::spec_drift::SPEC_DRIFT_SUBSCRIBER,
+        ]
     );
     let tasks = crate::worker::tasks(
         &registry,

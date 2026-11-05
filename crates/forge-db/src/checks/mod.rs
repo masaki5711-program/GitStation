@@ -77,9 +77,10 @@ pub struct StoredCheckRun {
     pub conclusion: Option<CheckConclusion>,
     pub summary: String,
     pub details_url: Option<String>,
-    pub reported_by: UserId,
-    /// The reporter's username (`None`: the account row is gone — never
-    /// in practice: users are never deleted).
+    /// The account that reported it last; `None` exactly for a `forge/`
+    /// run (forge's own worker, M3 X2: `check_runs_reporter`).
+    pub reported_by: Option<UserId>,
+    /// The reporter's username (`None` for a `forge/` run).
     pub reported_by_username: Option<String>,
     pub revision: i64,
     /// RFC 3339 UTC with microseconds.
@@ -249,7 +250,7 @@ type FullRow = (
     Option<String>,
     String,
     Option<String>,
-    i64,
+    Option<i64>,
     Option<String>,
     i64,
     String,
@@ -331,7 +332,7 @@ fn parse_full(
         conclusion: run.conclusion,
         summary,
         details_url,
-        reported_by: UserId::new(reported_by),
+        reported_by: reported_by.map(UserId::new),
         reported_by_username: username,
         revision,
         created_at,
@@ -444,7 +445,6 @@ pub async fn report_check_run_decided<P>(
     new: &NewCheckRun,
     decide: impl FnOnce(&CheckReportFacts) -> Result<P, ForgeError>,
 ) -> Result<(Reported, P), ForgeError> {
-    const ACTION: &str = "check_run.reported";
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let locked = lock_shared(&mut tx, project).await?;
@@ -458,240 +458,290 @@ pub async fn report_check_run_decided<P>(
             project: caller.project,
             granted,
         })?;
-        let sha = head.as_str().to_owned();
-        let name = new.name.as_str().to_owned();
-        let key = format!("forge.check_runs:{}:{}", project.get(), sha);
-        tx.step(|c| async move {
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                .bind(key)
-                .execute(c)
-                .await
-                .map_err(|e| query_error("checks.commit_lock", e))
-        })
-        .await?;
-        let (s, n) = (sha.clone(), name.clone()); // clone: the step owns its binds
-        let existing: Option<(i64, Option<String>)> = tx
-            .step(|c| async move {
-                sqlx::query_as(
-                    "SELECT id, conclusion FROM forge.check_runs WHERE project_id = $1 \
-                     AND head_sha = $2 AND name = $3 FOR UPDATE",
-                )
-                .bind(project.get())
-                .bind(s)
-                .bind(n)
-                .fetch_optional(c)
-                .await
-                .map_err(|e| query_error("checks.run_lock", e))
-            })
-            .await?;
-        let status = new.status.as_str();
-        let conclusion = new.conclusion.map(CheckConclusion::as_str);
-        let summary = new.summary.clone(); // clone: the step owns its binds
-        let url = new.details_url.clone(); // clone: as above
-        let request_id = ctx.request_id.as_str().to_owned();
-        let (id, revision, previous, created) = match existing {
-            None => {
-                let s = sha.clone(); // clone: the step owns its binds
-                let count: i64 = tx
-                    .step(|c| async move {
-                        sqlx::query_scalar(
-                            "SELECT count(*) FROM forge.check_runs WHERE project_id = $1 \
-                             AND head_sha = $2",
-                        )
-                        .bind(project.get())
-                        .bind(s)
-                        .fetch_one(c)
-                        .await
-                        .map_err(|e| query_error("checks.run_count", e))
-                    })
-                    .await?;
-                if usize::try_from(count).unwrap_or(usize::MAX) >= MAX_CHECK_RUNS_PER_COMMIT {
-                    return Err(limit_reached(project, head));
-                }
-                let (s, n) = (sha.clone(), name.clone()); // clone: the step owns its binds
-                let id: i64 = tx
-                    .step(|c| async move {
-                        sqlx::query_scalar(
-                            "INSERT INTO forge.check_runs (project_id, head_sha, name, status, \
-                             conclusion, summary, details_url, reported_by, credential_id, \
-                             request_id, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, \
-                             $9, $10, CASE WHEN $4 = 'completed' THEN now() END) RETURNING id",
-                        )
-                        .bind(project.get())
-                        .bind(s)
-                        .bind(n)
-                        .bind(status)
-                        .bind(conclusion)
-                        .bind(summary)
-                        .bind(url)
-                        .bind(reporter.get())
-                        .bind(credential.0)
-                        .bind(request_id)
-                        .fetch_one(c)
-                        .await
-                        .map_err(|e| query_error("checks.run_insert", e))
-                    })
-                    .await?;
-                (id, 1_i64, None, true)
-            }
-            Some((id, previous)) => {
-                let previous = previous
-                    .as_deref()
-                    .map(|c| {
-                        CheckConclusion::parse(c).ok_or_else(|| {
-                            data_invalid("stored_status_invalid", project, head.as_str())
-                                .with_context("check_run_id", id)
-                        })
-                    })
-                    .transpose()?;
-                let revision: i64 = tx
-                    .step(|c| async move {
-                        sqlx::query_scalar(
-                            "UPDATE forge.check_runs SET status = $2, conclusion = $3, \
-                             summary = $4, details_url = $5, reported_by = $6, \
-                             credential_id = $7, request_id = $8, revision = revision + 1, \
-                             updated_at = now(), \
-                             completed_at = CASE WHEN $2 = 'completed' THEN \
-                             CASE WHEN status = 'completed' AND conclusion IS NOT DISTINCT FROM $3 \
-                             THEN completed_at ELSE now() END END \
-                             WHERE id = $1 RETURNING revision",
-                        )
-                        .bind(id)
-                        .bind(status)
-                        .bind(conclusion)
-                        .bind(summary)
-                        .bind(url)
-                        .bind(reporter.get())
-                        .bind(credential.0)
-                        .bind(request_id)
-                        .fetch_one(c)
-                        .await
-                        .map_err(|e| query_error("checks.run_update", e))
-                    })
-                    .await?;
-                tx.step(|c| async move {
-                    sqlx::query("DELETE FROM forge.check_annotations WHERE check_run_id = $1")
-                        .bind(id)
-                        .execute(c)
-                        .await
-                        .map_err(|e| query_error("checks.annotations_clear", e))
-                })
-                .await?;
-                (id, revision, previous, false)
-            }
-        };
-        if !new.annotations.is_empty() {
-            let mut positions = Vec::with_capacity(new.annotations.len());
-            let mut paths = Vec::with_capacity(new.annotations.len());
-            let mut starts = Vec::with_capacity(new.annotations.len());
-            let mut ends = Vec::with_capacity(new.annotations.len());
-            let mut levels = Vec::with_capacity(new.annotations.len());
-            let mut messages = Vec::with_capacity(new.annotations.len());
-            let mut titles = Vec::with_capacity(new.annotations.len());
-            // forge-checks keeps 50 annotations at most and lines within
-            // i32 (FG-REVIEW-0020); a value beyond is a broken precondition,
-            // never written saturated (review fix 8).
-            let out_of_range = |field: &'static str| {
-                ForgeError::new(ErrorCode::Internal)
-                    .with_context("reason", "annotation_out_of_range")
-                    .with_context("field", field)
-            };
-            for (i, a) in new.annotations.iter().enumerate() {
-                positions.push(i16::try_from(i).map_err(|_| out_of_range("position"))?);
-                paths.push(a.path.clone()); // clone: the arrays own their values
-                starts.push(i32::try_from(a.start_line).map_err(|_| out_of_range("start_line"))?);
-                ends.push(i32::try_from(a.end_line).map_err(|_| out_of_range("end_line"))?);
-                levels.push(a.level.as_str());
-                messages.push(a.message.clone()); // clone: as above
-                titles.push(a.title.clone()); // clone: as above
-            }
-            tx.step(|c| async move {
-                sqlx::query(
-                    "INSERT INTO forge.check_annotations (check_run_id, project_id, position, \
-                     path, start_line, end_line, level, message, title) \
-                     SELECT $1, $2, * FROM unnest($3::smallint[], $4::text[], $5::int[], \
-                     $6::int[], $7::text[], $8::text[], $9::text[])",
-                )
-                .bind(id)
-                .bind(project.get())
-                .bind(positions)
-                .bind(paths)
-                .bind(starts)
-                .bind(ends)
-                .bind(levels)
-                .bind(messages)
-                .bind(titles)
-                .execute(c)
-                .await
-                .map_err(|e| query_error("checks.annotations_insert", e))
-            })
-            .await?;
-        }
-        let change = CheckRunChange {
-            project,
-            check_run_id: id,
-            head_sha: head.clone(), // clone: the audit details own their commit
-            name: new.name.clone(), // clone: as above
-            status: new.status,
-            conclusion: new.conclusion,
-            previous_conclusion: previous,
-            created,
-            revision,
-        };
-        let completed_event = change.completed();
-        let details = AuditDetails::CheckRun(change);
-        let record = if completed_event {
-            let mut record = evented_record(&details, project)?;
-            let dedup = DedupKey::new(
-                "check_completed",
-                &[DedupPart::Id(id), DedupPart::Id(revision)],
-            )?;
-            for event in &mut record.events {
-                event.dedup_key = Some(dedup.clone()); // clone: one key for the one event
-            }
-            record
-        } else {
-            project_audit_only(project, &details)
-        };
-        let sql = format!(
-            "SELECT {} FROM forge.check_runs r LEFT JOIN forge.users u ON u.id = r.reported_by \
-             WHERE r.id = $1",
-            full_columns()
-        );
-        let row: FullRow = tx
-            .step(|c| async move {
-                sqlx::query_as(&sql)
-                    .bind(id)
-                    .fetch_one(c)
-                    .await
-                    .map_err(|e| query_error("checks.run_read", e))
-            })
-            .await?;
-        let notes: Vec<AnnotationRow> = tx
-            .step(|c| async move {
-                sqlx::query_as(ANNOTATIONS_SQL)
-                    .bind(vec![id])
-                    .fetch_all(c)
-                    .await
-                    .map_err(|e| query_error("checks.annotations_read", e))
-            })
-            .await?;
-        let mut annotations = parse_annotations(project, head, notes)?;
-        let run = parse_full(project, head, row, &mut annotations)?;
-        Ok(Settle::Commit(
-            record,
-            (
-                Reported {
-                    run,
-                    created,
-                    completed_event,
-                },
-                decided,
-            ),
-        ))
+        let by = Some((reporter, credential));
+        let (reported, record) = write_run(&mut tx, ctx, (project, head), by, new).await?;
+        Ok(Settle::Commit(record, (reported, decided)))
     }
     .await;
-    tx.settle(ACTION, outcome).await
+    tx.settle(REPORTED_ACTION, outcome).await
+}
+
+/// The audit action of a report that left the conclusion as it was.
+const REPORTED_ACTION: &str = "check_run.reported";
+
+/// Record forge's own run `new` on `head` of `project` (M3 X2: the
+/// `check.spec_drift` job, through forge-checks). No decision: forge's
+/// worker is no account and `forge/` is never written over HTTP; the run
+/// has no reporter (`check_runs_reporter`). Only a name of
+/// [`forge_core::checks::FORGE_REPORTED_CHECKS`] is accepted
+/// (`FG-SYS-0001 reason=not_forge_check` otherwise: a caller bug). The
+/// project row is taken `FOR SHARE` and the rest is a report's (lock order,
+/// the cap, `check.completed` only when the conclusion changed). Errors
+/// (nothing written): `FG-REPO-0005 resource=project` (a purged project),
+/// `FG-REVIEW-0021`, `FG-DB-*`.
+pub async fn record_forge_check_run(
+    db: &Db,
+    ctx: &ChangeContext,
+    (project, head): (ProjectId, &ObjectId),
+    new: &NewCheckRun,
+) -> Result<Reported, ForgeError> {
+    if !forge_core::checks::forge_reports(&new.name) {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "not_forge_check")
+            .with_context("name", new.name.as_str().to_owned()));
+    }
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = async {
+        let _locked = lock_shared(&mut tx, project).await?;
+        let (reported, record) = write_run(&mut tx, ctx, (project, head), None, new).await?;
+        Ok(Settle::Commit(record, reported))
+    }
+    .await;
+    tx.settle(REPORTED_ACTION, outcome).await
+}
+
+/// The write shared by a report and forge's own run, under the project
+/// row lock its caller took: the commit's advisory lock, the run's row
+/// (the cap for a new name), its annotations, the audit record and the
+/// row as read back. `by`: the reporting account and its credential
+/// (`None`: forge's worker).
+async fn write_run(
+    tx: &mut ChangeTx,
+    ctx: &ChangeContext,
+    (project, head): (ProjectId, &ObjectId),
+    by: Option<(UserId, ReportCredential)>,
+    new: &NewCheckRun,
+) -> Result<(Reported, ChangeRecord), ForgeError> {
+    let reporter = by.map(|(u, _)| u.get());
+    let credential = by.and_then(|(_, c)| c.0);
+    let sha = head.as_str().to_owned();
+    let name = new.name.as_str().to_owned();
+    let key = format!("forge.check_runs:{}:{}", project.get(), sha);
+    tx.step(|c| async move {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(key)
+            .execute(c)
+            .await
+            .map_err(|e| query_error("checks.commit_lock", e))
+    })
+    .await?;
+    let (s, n) = (sha.clone(), name.clone()); // clone: the step owns its binds
+    let existing: Option<(i64, Option<String>)> = tx
+        .step(|c| async move {
+            sqlx::query_as(
+                "SELECT id, conclusion FROM forge.check_runs WHERE project_id = $1 \
+             AND head_sha = $2 AND name = $3 FOR UPDATE",
+            )
+            .bind(project.get())
+            .bind(s)
+            .bind(n)
+            .fetch_optional(c)
+            .await
+            .map_err(|e| query_error("checks.run_lock", e))
+        })
+        .await?;
+    let status = new.status.as_str();
+    let conclusion = new.conclusion.map(CheckConclusion::as_str);
+    let summary = new.summary.clone(); // clone: the step owns its binds
+    let url = new.details_url.clone(); // clone: as above
+    let request_id = ctx.request_id.as_str().to_owned();
+    let (id, revision, previous, created) = match existing {
+        None => {
+            let s = sha.clone(); // clone: the step owns its binds
+            let count: i64 = tx
+                .step(|c| async move {
+                    sqlx::query_scalar(
+                        "SELECT count(*) FROM forge.check_runs WHERE project_id = $1 \
+                 AND head_sha = $2",
+                    )
+                    .bind(project.get())
+                    .bind(s)
+                    .fetch_one(c)
+                    .await
+                    .map_err(|e| query_error("checks.run_count", e))
+                })
+                .await?;
+            if usize::try_from(count).unwrap_or(usize::MAX) >= MAX_CHECK_RUNS_PER_COMMIT {
+                return Err(limit_reached(project, head));
+            }
+            let (s, n) = (sha.clone(), name.clone()); // clone: the step owns its binds
+            let id: i64 = tx
+                .step(|c| async move {
+                    sqlx::query_scalar(
+                        "INSERT INTO forge.check_runs (project_id, head_sha, name, status, \
+                 conclusion, summary, details_url, reported_by, credential_id, \
+                 request_id, completed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, \
+                 $9, $10, CASE WHEN $4 = 'completed' THEN now() END) RETURNING id",
+                    )
+                    .bind(project.get())
+                    .bind(s)
+                    .bind(n)
+                    .bind(status)
+                    .bind(conclusion)
+                    .bind(summary)
+                    .bind(url)
+                    .bind(reporter)
+                    .bind(credential)
+                    .bind(request_id)
+                    .fetch_one(c)
+                    .await
+                    .map_err(|e| query_error("checks.run_insert", e))
+                })
+                .await?;
+            (id, 1_i64, None, true)
+        }
+        Some((id, previous)) => {
+            let previous = previous
+                .as_deref()
+                .map(|c| {
+                    CheckConclusion::parse(c).ok_or_else(|| {
+                        data_invalid("stored_status_invalid", project, head.as_str())
+                            .with_context("check_run_id", id)
+                    })
+                })
+                .transpose()?;
+            let revision: i64 = tx
+                .step(|c| async move {
+                    sqlx::query_scalar(
+                        "UPDATE forge.check_runs SET status = $2, conclusion = $3, \
+                 summary = $4, details_url = $5, reported_by = $6, \
+                 credential_id = $7, request_id = $8, revision = revision + 1, \
+                 updated_at = now(), \
+                 completed_at = CASE WHEN $2 = 'completed' THEN \
+                 CASE WHEN status = 'completed' AND conclusion IS NOT DISTINCT FROM $3 \
+                 THEN completed_at ELSE now() END END \
+                 WHERE id = $1 RETURNING revision",
+                    )
+                    .bind(id)
+                    .bind(status)
+                    .bind(conclusion)
+                    .bind(summary)
+                    .bind(url)
+                    .bind(reporter)
+                    .bind(credential)
+                    .bind(request_id)
+                    .fetch_one(c)
+                    .await
+                    .map_err(|e| query_error("checks.run_update", e))
+                })
+                .await?;
+            tx.step(|c| async move {
+                sqlx::query("DELETE FROM forge.check_annotations WHERE check_run_id = $1")
+                    .bind(id)
+                    .execute(c)
+                    .await
+                    .map_err(|e| query_error("checks.annotations_clear", e))
+            })
+            .await?;
+            (id, revision, previous, false)
+        }
+    };
+    if !new.annotations.is_empty() {
+        let mut positions = Vec::with_capacity(new.annotations.len());
+        let mut paths = Vec::with_capacity(new.annotations.len());
+        let mut starts = Vec::with_capacity(new.annotations.len());
+        let mut ends = Vec::with_capacity(new.annotations.len());
+        let mut levels = Vec::with_capacity(new.annotations.len());
+        let mut messages = Vec::with_capacity(new.annotations.len());
+        let mut titles = Vec::with_capacity(new.annotations.len());
+        // forge-checks keeps 50 annotations at most and lines within
+        // i32 (FG-REVIEW-0020); a value beyond is a broken precondition,
+        // never written saturated (review fix 8).
+        let out_of_range = |field: &'static str| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "annotation_out_of_range")
+                .with_context("field", field)
+        };
+        for (i, a) in new.annotations.iter().enumerate() {
+            positions.push(i16::try_from(i).map_err(|_| out_of_range("position"))?);
+            paths.push(a.path.clone()); // clone: the arrays own their values
+            starts.push(i32::try_from(a.start_line).map_err(|_| out_of_range("start_line"))?);
+            ends.push(i32::try_from(a.end_line).map_err(|_| out_of_range("end_line"))?);
+            levels.push(a.level.as_str());
+            messages.push(a.message.clone()); // clone: as above
+            titles.push(a.title.clone()); // clone: as above
+        }
+        tx.step(|c| async move {
+            sqlx::query(
+                "INSERT INTO forge.check_annotations (check_run_id, project_id, position, \
+             path, start_line, end_line, level, message, title) \
+             SELECT $1, $2, * FROM unnest($3::smallint[], $4::text[], $5::int[], \
+             $6::int[], $7::text[], $8::text[], $9::text[])",
+            )
+            .bind(id)
+            .bind(project.get())
+            .bind(positions)
+            .bind(paths)
+            .bind(starts)
+            .bind(ends)
+            .bind(levels)
+            .bind(messages)
+            .bind(titles)
+            .execute(c)
+            .await
+            .map_err(|e| query_error("checks.annotations_insert", e))
+        })
+        .await?;
+    }
+    let change = CheckRunChange {
+        project,
+        check_run_id: id,
+        head_sha: head.clone(), // clone: the audit details own their commit
+        name: new.name.clone(), // clone: as above
+        status: new.status,
+        conclusion: new.conclusion,
+        previous_conclusion: previous,
+        created,
+        revision,
+    };
+    let completed_event = change.completed();
+    let details = AuditDetails::CheckRun(change);
+    let record = if completed_event {
+        let mut record = evented_record(&details, project)?;
+        let dedup = DedupKey::new(
+            "check_completed",
+            &[DedupPart::Id(id), DedupPart::Id(revision)],
+        )?;
+        for event in &mut record.events {
+            event.dedup_key = Some(dedup.clone()); // clone: one key for the one event
+        }
+        record
+    } else {
+        project_audit_only(project, &details)
+    };
+    let sql = format!(
+        "SELECT {} FROM forge.check_runs r LEFT JOIN forge.users u ON u.id = r.reported_by \
+         WHERE r.id = $1",
+        full_columns()
+    );
+    let row: FullRow = tx
+        .step(|c| async move {
+            sqlx::query_as(&sql)
+                .bind(id)
+                .fetch_one(c)
+                .await
+                .map_err(|e| query_error("checks.run_read", e))
+        })
+        .await?;
+    let notes: Vec<AnnotationRow> = tx
+        .step(|c| async move {
+            sqlx::query_as(ANNOTATIONS_SQL)
+                .bind(vec![id])
+                .fetch_all(c)
+                .await
+                .map_err(|e| query_error("checks.annotations_read", e))
+        })
+        .await?;
+    let mut annotations = parse_annotations(project, head, notes)?;
+    let run = parse_full(project, head, row, &mut annotations)?;
+    Ok((
+        Reported {
+            run,
+            created,
+            completed_event,
+        },
+        record,
+    ))
 }
 
 fn project_audit_only(project: ProjectId, details: &AuditDetails) -> ChangeRecord {
@@ -971,6 +1021,8 @@ pub async fn reporters(db: &Db) -> Result<BTreeMap<CheckNamespace, i64>, ForgeEr
 /// How many protected ref merge rules require a check of each namespace
 /// that no active service account may report on the rule's own project
 /// (doctor `checks.reporters`; empty: every required check has a reporter).
+/// The names forge's own worker reports (M3 X2: `forge/spec-drift`) have
+/// a reporter.
 pub async fn unreported_requirements(db: &Db) -> Result<BTreeMap<CheckNamespace, i64>, ForgeError> {
     const QUERY: &str = "checks.unreported_requirements";
     let rows: Vec<(String, i64)> = db
@@ -978,13 +1030,15 @@ pub async fn unreported_requirements(db: &Db) -> Result<BTreeMap<CheckNamespace,
             sqlx::query_as(
                 "SELECT split_part(c.name, '/', 1), count(DISTINCT r.protected_ref_id) \
                  FROM forge.protected_ref_merge_rules r, unnest(r.required_checks) AS c(name) \
-                 WHERE NOT EXISTS (SELECT 1 FROM forge.check_namespace_grants g \
+                 WHERE c.name <> ALL($1) \
+                 AND NOT EXISTS (SELECT 1 FROM forge.check_namespace_grants g \
                  JOIN forge.users u ON u.id = g.user_id \
                  WHERE g.project_id = r.project_id \
                  AND g.namespace = split_part(c.name, '/', 1) \
                  AND u.state = 'active' AND u.kind = 'service_account') \
                  GROUP BY 1 ORDER BY 1",
             )
+            .bind(forge_core::checks::FORGE_REPORTED_CHECKS)
             .fetch_all(db.pool().executor())
             .await
             .map_err(|e| read_query_error(QUERY, e))
@@ -1026,5 +1080,10 @@ pub use retention::{
     RETENTION_BATCH,
 };
 
+pub mod spec_drift;
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod forge_tests;

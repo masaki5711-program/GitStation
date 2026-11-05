@@ -50,14 +50,17 @@ fn read_file(path: &Path, what: &str) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| usage(format!("{what}_not_utf8")))
 }
 
-/// One run as a line: `ci/gates completed success (by ci-runner)`.
+/// One run as a line: `ci/gates completed success (by ci-runner)`; a
+/// run without a reporter (`null`: forge's own, M3 X2) is `(by forge)`.
 fn run_line(run: &Value) -> String {
     let conclusion = run.get("conclusion").and_then(Value::as_str).unwrap_or("-");
-    let by = run
-        .get("reported_by")
-        .and_then(|r| r.get("username"))
-        .and_then(Value::as_str)
-        .unwrap_or("-");
+    let by = match run.get("reported_by") {
+        Some(Value::Null) => "forge",
+        reporter => reporter
+            .and_then(|r| r.get("username"))
+            .and_then(Value::as_str)
+            .unwrap_or("-"),
+    };
     format!(
         "{} {} {} (by {})",
         sanitize(&text(run, "name")),

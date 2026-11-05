@@ -622,9 +622,3 @@ async fn every_followed_reference_counts_against_the_callers_limit() {
     assert_eq!(a.code(), "FG-WEB-0010");
     assert!(!a.header("retry-after").is_empty());
 }
-
-#[test]
-fn the_repo_config_path_is_a_tree_path() {
-    let path = super::repo_config_path().expect("parses");
-    assert_eq!(path.as_str(), ".forge/repo.yml");
-}

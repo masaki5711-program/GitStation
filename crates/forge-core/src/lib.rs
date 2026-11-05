@@ -41,6 +41,7 @@ pub mod request_id;
 pub mod role;
 pub mod scope;
 pub mod session_token;
+pub mod spec_version;
 pub mod telemetry;
 pub mod token;
 pub mod user_kind;

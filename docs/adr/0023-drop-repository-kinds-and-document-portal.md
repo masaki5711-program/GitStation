@@ -163,3 +163,50 @@
    - 版の解決は型の結果（forge-git の `Browser::find_ref` → `RefLookup::{Commit, Missing, NotACommit}`）。理由の文字列を照合しない。
    - 空・null（`~` / `null`）の値はそのフィールドの `*_invalid`。1 つの mapping は 64 キーまで（`too_many_keys`）、重複は読まない部分（`review:`）も含めて 1 回の走査で拒否。
    - `path:` は browse の規則（`RepoPath`）に加え、先頭の `:`（pathspec の magic）、ドライブ文字（`C:`）、バックスラッシュを拒否する（`SpecPath`）。
+
+## Amendment 2026-11-06 — X2: `forge/spec-drift`（計画 11 §5.7 の X2、計画 03 §5.4・§8.1 の (b)）
+
+計画の推奨（`neutral`、決定的）に沿い、開いていた点を次のとおり決めた（推奨のない点は、Claude が存在を漏らさないことと診断のしやすさを優先して決めた）。
+
+1. **いつ評価するか**: MR の版ごと（`merge_request.pushed`。開いたときの最初の版も、再オープンで head が変わったときもこのイベント）。
+   購読者 `spec-drift`（`independent`、forge-db `checks::spec_drift`）がジョブ `check.spec_drift`（payload は `project_id` と `head_sha`、
+   重複の鍵 `spec_drift:<project>:<head>`、60 秒、5 回）を積み、`forge worker` が forge-checks の `SpecDrift` で評価する。
+   同じ head は 1 回だけ（成功したジョブが鍵を持つ）。**参照先に新しい版が出ても、既にある run は評価し直さない**（run は head の時点の記録。
+   次の版で評価される。仕様の公開からの逆向きの再評価は M4 の影響の分析（計画 03 §5.2）で扱う）。
+2. **読む `.forge/repo.yml`**: MR の **head** のもの（その MR が版を上げていれば、上げた後を評価する）。ADR-0017 §4.1.1 の spec-trace が
+   対象ブランチの版を読むのとは目的が違う（spec-drift は「この変更が古い仕様に準拠したままか」を知らせる）。
+3. **参照先を辿る権限 — サインインした全員**: run はプロジェクトを読める全員に見える（`CheckRead` = `RepoBrowse`）。そこで参照先は
+   **ロールを持たないサインインした人** の権限で辿る: forge-auth の `prove_spec_ref_for_every_person`（`authorize()` の `SpecRefRead` を、
+   ロールを落とした `LoadedProject` と、id 0 の有効な人のセッションで判定。テストで「ロールのない人の `SpecRefRead`」と一致を確かめる）。
+   実際には内部公開で削除待ちでないプロジェクトだけを辿る。非公開の参照先は、MR の作成者が読めても `unavailable`（`FG-REPO-0026`）で、
+   版もタグも出さない（X1 の「読む人の権限で判定」を、読む人が不特定の run に広げた形）。検索は viewer なし（`NamespaceResolver` の同じ文）。
+   サービスアカウントは参照する側のプロジェクトの所属で run を読むが、内部公開の参照先は会社の全員が読めるものなので、範囲に入れない。
+   ADR-0017 §4.0 の spec-lane のボットの「固定した仕様のプロジェクトを読める」ローダーの規則は、ここでは **使わない**（結果が全員に見えるため）。
+4. **最新の版**: 版はタグ（計画 03 §5.1）。forge-core `spec_version`: 接頭辞（英字・`-`・`_`、32 バイトまで）+ 1〜4 個の数（各 9 桁まで）だけを
+   版とし、**同じ接頭辞の系列の中で** 数として比べる（足りない部分は 0、`v1.5` = `v1.5.0`）。`v2.0-rc1` などの付き物は版にしない。
+   同じ版の 2 つの綴りは文字列の大きい方を最新として名指す（決定的）。固定が版の形でなければ `unversioned`（比べない）。`track:` は `tracking`。
+   ref の一覧が上限（`BrowseLimits::max_refs`）で切れたら `undecided`（最新を言わない）。参照先の git の失敗は X1 と同じくその項目の答えにする
+   （タグの一覧は `undecided` と warn のログ `forge.spec_drift.tags_unread`）。
+5. **結論**: `success` — `.forge/repo.yml` が無い、またはすべての項目が `current` / `tracking` / `unversioned` / `local`。
+   `neutral` — `behind`（新しいコード **`FG-REPO-0027` SpecVersionBehind**、info、アラートなし、Runbook 不要）、`version_not_found`（FG-REPO-0025）、
+   `unavailable`（FG-REPO-0026）、`undecided`、またはファイルを使えない（FG-REPO-0024、参照は 1 つも辿らない）。`failure` にはしない（知らせるだけ）。
+   要約は行ごとの状態（行番号・書かれたとおりのパスと固定・状態・コード）、注釈は `.forge/repo.yml` の該当行（`behind` と `version_not_found` は warning、
+   他は notice）。要約は 64 KiB、注釈の文は 4 KiB で切り、末尾に `…` を付ける（拒否しない）。
+6. **失敗を黙らせない**: 評価の失敗（head を読めない git、DB、プロジェクトの検索の時間切れ）は何も書かずにジョブへ返し、git / DB / 準備中は
+   キューの間隔でやり直す。最後の試み、またはやり直しても無駄な失敗では、`error` の run（要約に FG コードと request id）を書いてからジョブを
+   死なせる（`FG-DB-0006` は従来どおりジョブの runner が出す）。`error` も書けなければ `forge.spec_drift.error_unrecorded`（error）を出す。
+   プロジェクトが消えていれば何も書かずに終える（`forge.spec_drift.project_gone`、info）。
+7. **forge 自身の run の書き込み**: forge の worker はアカウントではないので、`forge/` の run は **報告した主体なし** で保存する
+   （追記のマイグレーション 20261124100000: `check_runs.reported_by` を NULL 可にし、CHECK `check_runs_reporter` で
+   「`forge/` ⇔ `reported_by` が NULL（`credential_id` も NULL）」を固定）。forge-db `record_forge_check_run` は
+   `forge_core::checks::FORGE_REPORTED_CHECKS`（今は `forge/spec-drift` だけ）の名前しか受けず、報告と同じロックの順・上限・
+   `check.completed`（結論が変わったときだけ、actor は system）で書く。呼べるのは forge-checks だけ（`tests/decided_callers.rs` に足した）。
+   ADR-0017 の `InternalCheckWrite` と `Principal::system` は **作らない**（判定する主体がいない書き込みで、HTTP の `CheckWrite` は従来どおり
+   `forge/` を全員に拒否する。Action を増やすと INTERNAL のゲートの整備が要る — 必要になるのは主体を持つボット（spec-lane）が書くとき）。
+   API の `reported_by` は `forge/` の run で `null`（docs/api/checks.md、OpenAPI、`gstn checks list` は `forge` と表示）。
+8. **報告できない必須のチェック**: `forge/spec-drift` は forge が報告するので、マージの規則の `unreportable_checks` と doctor の
+   `checks.reporters` に入れない。他の `forge/` の名前（`forge/risk` など）は従来どおり入る。必須にすると `neutral` は満たさない（ADR-0024 §10）。
+9. **置き場所（クレート）**: X1 の組み立て（`.forge/repo.yml` の読み取りと、参照の辿り方）を forge-web のルートから
+   **forge-checks の `spec_refs`** へ移し、ルートと `SpecDrift` が共有する（`Reader::Proof` = 読む人、`Reader::EveryPerson` = 全員）。
+   新しいクレートは作らない（run を書くのが forge-checks で、機能クレート同士の辺を増やさない）。ログの `forge.spec_refs.unresolved` は
+   target が `forge_checks` になり、`reader`（`caller` / `every_person`）が増えた。ルートの振る舞いは変わらない（X1 のルートのテストがそのまま通る）。

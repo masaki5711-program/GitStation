@@ -134,7 +134,10 @@ pub struct CheckRunBody {
     #[schema(required = true)]
     pub details_url: Option<String>,
     pub annotations: Vec<AnnotationBody>,
-    pub reported_by: ReporterBody,
+    /// The account that reported it last; `null` for a `forge/` run
+    /// (forge's own worker, M3 X2).
+    #[schema(required = true)]
+    pub reported_by: Option<ReporterBody>,
     /// Counts the run's reports (1 at creation).
     pub revision: i64,
     /// UTC, RFC 3339 with microseconds.
@@ -201,10 +204,10 @@ pub(crate) fn run_body(run: &StoredCheckRun) -> CheckRunBody {
                 title: a.title.clone(),     // clone: as above
             })
             .collect(),
-        reported_by: ReporterBody {
-            id: run.reported_by.get(),
+        reported_by: run.reported_by.map(|id| ReporterBody {
+            id: id.get(),
             username: run.reported_by_username.clone(), // clone: as above
-        },
+        }),
         revision: run.revision,
         created_at: run.created_at.clone(),     // clone: as above
         updated_at: run.updated_at.clone(),     // clone: as above

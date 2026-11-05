@@ -22,7 +22,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | 名前空間 | 書ける主体 |
 |---|---|
 | `ci/`・`kanflow/` | その名前空間を **そのプロジェクトについて** 管理者から割り当てられたサービスアカウントで、そのプロジェクトの **Developer 以上のメンバー**（割り当てはプロジェクトごと。別のプロジェクトの割り当て・`kanflow` だけの割り当ては `ci/` を書けない）。人（管理者を含む）・ボット・エージェントのトークンは拒否（`FG-AUTH-0003`、`reason=not_service_account` / `agent_token`）。割り当てが無い: `reason=namespace_not_granted` |
-| `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。forge のチェックは後の MR（X2） |
+| `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。X2 から `forge/spec-drift` を書く（下の「forge 自身のチェック」） |
 | `ext/` | C1 では誰も書けない（`reason=ext_namespace_unavailable`）。`ext/` は必須のチェックにもできない（FG-REVIEW-0016） |
 
 - 見えないプロジェクト（サービスアカウントはメンバーのプロジェクトだけが見える）は、存在しないプロジェクトと同じ `FG-REPO-0005`（404）。
@@ -93,7 +93,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | `summary` | 文字列 | 書かれたまま（サーバーは描画しない） |
 | `details_url` | 文字列 / null | 正規化した URL |
 | `annotations[]` | 配列 | `{ "path", "start_line", "end_line", "level", "message", "title" }`（`title` は null 可） |
-| `reported_by` | オブジェクト | 最後に報告した主体 `{ "id", "username" }` |
+| `reported_by` | オブジェクト / `null` | 最後に報告した主体 `{ "id", "username" }`。`forge/` の run は `null`（forge 自身の worker。X2） |
 | `revision` | 整数 | 報告の回数（作成で 1） |
 | `created_at` / `updated_at` / `completed_at` | 文字列 / null | UTC、RFC 3339、マイクロ秒まで。`completed_at` はその結論になった最初の `completed` の報告の時刻（同じ結論の報告を繰り返しても変わらない） |
 
@@ -114,7 +114,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 その割り当ても消える。割り当てとは別に、サービスアカウントはそのプロジェクトの Developer 以上のメンバーでなければ報告できない。
 
 保護ブランチのマージの条件の答え（`PUT …/merge-rule`）は、必須のチェックのうち **そのプロジェクトについて報告できる有効なサービスアカウントが 1 つも無い** 名前を
-`unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は X2 まで常にここに入る）。
+`unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は、forge 自身が書く名前（X2 では `forge/spec-drift`）を除いて常にここに入る）。
 対処は runbook `checks-reporting`。
 
 ## 保持
@@ -123,3 +123,13 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 （既定 180 日、30〜3650）より古く、**開いている MR の今の head のコミットでない** もの（注釈は実行と一緒に、1 回に最大 1 000 件、古い順）。
 消した批ごとにプロジェクトの監査に `check_run.retention`（個数だけ）が残る。プロジェクトの完全削除でも消える。消えた実行は
 「報告なし」と同じに読まれる（`required_check_missing`）ので、必要なら報告し直す。runbook `checks-reporting` の E。
+
+## forge 自身のチェック（X2）
+
+| 名前 | いつ | 結論 |
+|---|---|---|
+| `forge/spec-drift` | MR の版ごと（`merge_request.pushed`、開いたときの最初の版を含む）。その head のコミットに 1 回 | `success`: `.forge/repo.yml` が無い、または固定したすべての版が同じ系列の最新・`track:`・版の形でない。`neutral`: 新しい版がある（`FG-REPO-0027`）、版が無い（`FG-REPO-0025`）、参照先をサインインした全員が読めない・無い（`FG-REPO-0026`）、タグを数えきれない、ファイルを使えない（`FG-REPO-0024`）。`error`: 評価がやり直しても失敗した（要約に FG コードと request id） |
+
+- 参照先は **サインインした全員** の権限で辿る（内部公開のプロジェクトだけ）。run はプロジェクトを読める全員に見えるので、一人でも読めない参照先の版は出さない。自分の権限での確認は `gstn browse spec-refs`。
+- 版はタグ。`v1.10` > `v1.9`、`v1.5` = `v1.5.0`、接頭辞（`v`、`spec-v`）ごとの系列で比べ、`v2.0-rc1` のような付き物のタグは版にしない。
+- 要約と注釈（`.forge/repo.yml` の行）に行ごとの状態を出す。`reported_by` は `null`。

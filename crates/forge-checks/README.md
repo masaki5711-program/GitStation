@@ -30,14 +30,28 @@ this crate calls the check commands (`tests/decided_callers.rs`).
   (`CheckNamespaceGrantManage`: administrators, people only; `ci` / `kanflow`; **a grant is
   for one project** — review fix 1).
 - `unreportable(project, &[CheckName])`: the required names no active service account may
-  report on that project (`forge/`, and `ci/` / `kanflow/` without a granted active
-  reporter there) — the merge rule's `unreportable_checks`.
+  report on that project (`forge/` names forge does not report itself — X2 reports
+  `forge/spec-drift` — and `ci/` / `kanflow/` without a granted active reporter there) — the merge rule's `unreportable_checks`.
 - `reporters(&Db)`: active reporters per namespace (doctor `checks.reporters`).
 - `validate::{parse_name, validate}`: the rules of docs/api/checks.md.
+- `spec_refs::{read_repo_config, follow, Reader, Followed}` (X1 / X2), `spec_drift::{SpecDrift,
+  assess}` (X2).
+
+**forge's own check (M3 X2, ADR-0023 Amendment X2)**: `spec_drift::SpecDrift` evaluates
+`forge/spec-drift` for one `check.spec_drift` job (a merge request version's head; the job is
+enqueued by forge-db's `spec-drift` subscriber and run by `forge worker`): it reads the head's
+`.forge/repo.yml`, follows each `repo:` entry for **every signed-in person**
+(`forge_auth::prove_spec_ref_for_every_person`), compares `version:` pins with the referenced
+repository's tags (`forge_core::spec_version`) and records the run with
+`forge_db::checks::record_forge_check_run` (no reporter). `success` / `neutral` (FG-REPO-0024,
+0025, 0026, 0027) / `error` (`SpecDrift::fail`, the job's last failure). `spec_refs` holds the
+reading and following shared with forge-web's `GET …/repository/spec-refs` (M3 X1, moved here
+by X2: `Reader::Proof` for the route's reader, `Reader::EveryPerson` for the job).
 
 **Owned error codes**: FG-REVIEW-0020 CheckPayloadInvalid (422), FG-REVIEW-0021
 CheckRunLimitReached (409, from forge-db), FG-DB-0022 CheckRunDataInvalid (500,
-alert; from forge-db). Denials are FG-AUTH-0003 with `reason`
+alert; from forge-db), FG-REPO-0027 SpecVersionBehind (info, a `forge/spec-drift`
+notice; X2 — FG-REPO-0024..0026 are forge-core's and the spec refs'). Denials are FG-AUTH-0003 with `reason`
 (`not_service_account`, `namespace_not_granted`, `forge_namespace_internal`,
 `ext_namespace_unavailable`, `agent_token`).
 

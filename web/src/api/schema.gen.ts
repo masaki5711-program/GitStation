@@ -1924,7 +1924,7 @@ export interface components {
             /** Format: int64 */
             id: number;
             name: string;
-            reported_by: components["schemas"]["ReporterBody"];
+            reported_by: null | components["schemas"]["ReporterBody"];
             /**
              * Format: int64
              * @description Counts the run's reports (1 at creation).

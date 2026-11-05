@@ -145,3 +145,65 @@ fn the_spec_refs_mirror_every_browse_row() {
         missing.join("\n")
     );
 }
+
+// ── M3 X2: `forge/spec-drift` follows a reference only when every
+// signed-in person may read it (the check run is shown to every reader of
+// the referencing project). ──
+
+/// The rule is `authorize()`'s own: for every visibility, deletion state
+/// and role the loader might have read, the answer equals SpecRefRead for
+/// a signed-in person who holds no role in the referenced project.
+#[test]
+fn every_person_follows_exactly_what_a_person_without_a_role_may_read() {
+    use crate::prove_spec_ref_for_every_person;
+    let nobody = reader(Credential::Session, AccountKind::Human);
+    for visibility in [Visibility::Private, Visibility::Internal] {
+        for pending_deletion in [false, true] {
+            for role in [
+                None,
+                Some(Role::Guest),
+                Some(Role::Reporter),
+                Some(Role::Owner),
+            ] {
+                let loaded = LoadedProject {
+                    id: ProjectId::new(2),
+                    visibility,
+                    role,
+                    pending_deletion,
+                };
+                let expected = prove(
+                    &nobody,
+                    Action::SpecRefRead,
+                    ProjectCtx::new(LoadedProject {
+                        role: None,
+                        ..loaded
+                    }),
+                )
+                .err()
+                .map(|e| e.code());
+                let got = prove_spec_ref_for_every_person(loaded)
+                    .err()
+                    .map(|e| e.code());
+                assert_eq!(
+                    got, expected,
+                    "{visibility:?} pending={pending_deletion} {role:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_person_reads_an_internal_project_and_no_private_one() {
+    use crate::prove_spec_ref_for_every_person;
+    prove_spec_ref_for_every_person(project(2, Visibility::Internal, None))
+        .expect("an internal project is read by every signed-in person");
+    // A role the loader read (for whoever) lends nothing: the rule is the
+    // least person's.
+    let private =
+        prove_spec_ref_for_every_person(project(3, Visibility::Private, Some(Role::Owner)));
+    assert_eq!(private.err().map(|e| e.code()), Some(ErrorCode::NotFound));
+    let mut deleting = project(4, Visibility::Internal, None);
+    deleting.pending_deletion = true;
+    assert!(prove_spec_ref_for_every_person(deleting).is_err());
+}

@@ -617,3 +617,103 @@ async fn the_sweep_rechecks_a_decided_status_whose_target_moved_silently() {
     assert_eq!(s.checked_target_sha, Some(oid(&clash)));
     w.t.drop_now().await;
 }
+
+// ── M3 X2: `forge/spec-drift` ──
+
+/// A commit whose tree is `.forge/repo.yml` (`yml`) and `README`.
+fn commit_with_repo_yml(repo: &Path, yml: &str) -> String {
+    let blob = plumb(
+        repo,
+        &["hash-object", "-w", "--stdin"],
+        Some(yml.as_bytes()),
+    );
+    let forge = plumb(
+        repo,
+        &["mktree"],
+        Some(format!("100644 blob {blob}\trepo.yml\n").as_bytes()),
+    );
+    let readme = plumb(repo, &["hash-object", "-w", "--stdin"], Some(b"base\n"));
+    let tree = plumb(
+        repo,
+        &["mktree"],
+        Some(format!("040000 tree {forge}\t.forge\n100644 blob {readme}\tREADME\n").as_bytes()),
+    );
+    plumb(repo, &["commit-tree", &tree, "-m", "synthetic"], None)
+}
+
+/// Every merge request version gets its `forge/spec-drift` run through
+/// the production subscriber (`spec-drift`) and job handler
+/// (`check.spec_drift`): written by forge's worker, without a reporter.
+#[tokio::test]
+async fn a_merge_request_version_gets_its_spec_drift_run() {
+    let mut w = World::new().await;
+    let base = commit_on(&w.path, None, &[("README", "base\n")]);
+    w.push("main", Some(&base)).await;
+    let head = commit_with_repo_yml(
+        &w.path,
+        "specs:\n  - repo: nobody/specs\n    version: v1\n  - path: spec/\n",
+    );
+    w.push("feature", Some(&head)).await;
+    let _mr = w.open("feature", "main").await;
+    w.drain().await;
+    let runs = forge_db::checks::check_runs(&w.t.db, w.project, &oid(&head))
+        .await
+        .expect("runs");
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let run = &runs[0];
+    assert_eq!(run.name.as_str(), forge_core::checks::SPEC_DRIFT_CHECK);
+    assert_eq!(
+        run.conclusion,
+        Some(forge_core::CheckConclusion::Neutral),
+        "{}",
+        run.summary
+    );
+    assert_eq!(run.reported_by, None);
+    assert!(run.summary.contains("FG-REPO-0026"), "{}", run.summary);
+    w.t.drop_now().await;
+}
+
+/// The handler's last failure records `error` on the head (the job dies;
+/// the check never stays without an answer).
+#[tokio::test]
+async fn a_spec_drift_job_that_dies_records_error() {
+    let w = World::new().await;
+    let missing = oid(&"e".repeat(40));
+    let mut job = forge_db::checks::spec_drift::spec_drift_job(
+        &forge_db::checks::spec_drift::SpecDriftRequest {
+            project: w.project,
+            head: missing.clone(),
+        },
+        RequestId::parse("req-drift-dies").expect("id"),
+        None,
+    )
+    .expect("job");
+    job.max_attempts = forge_db::jobs::MaxAttempts::new(1).expect("one attempt");
+    forge_db::jobs::enqueue(&w.t.db, &job)
+        .await
+        .expect("enqueue");
+    // The head is no commit of the repository: git fails (FG-GIT-0003),
+    // the one attempt is the last, the job dies after answering `error`.
+    let ran = w
+        .runner
+        .run_once()
+        .await
+        .expect("runner")
+        .expect("a job ran");
+    assert!(matches!(ran, forge_db::jobs::Ran::Dead { .. }), "{ran:?}");
+    let runs = forge_db::checks::check_runs(&w.t.db, w.project, &missing)
+        .await
+        .expect("runs");
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0].conclusion, Some(forge_core::CheckConclusion::Error));
+    assert!(
+        runs[0].summary.contains("req-drift-dies"),
+        "{}",
+        runs[0].summary
+    );
+    let dead =
+        w.t.json_rows("SELECT state FROM forge.jobs WHERE kind = 'check.spec_drift'")
+            .await;
+    assert_eq!(dead[0]["state"], "dead", "{dead:?}");
+    w.t.drop_now().await;
+}
