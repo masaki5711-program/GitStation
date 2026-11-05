@@ -1783,7 +1783,7 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   - **監査**: 監査される表なので、批ごとにプロジェクトごとの監査の行 `check_run.retention`（actor `system`、label `forge-worker`、
     details は `{"project_id","runs","annotations","older_than_days"}` の個数だけ。イベントなし）を同じ取引で書く（遅延トリガー
     `audited_change_present` を満たす）。何も消さない批は何も書かない。
-  - **マイグレーション**: 20261119100000（追記）は `check_runs (updated_at, id)` の索引だけ（古い順の走査が全表走査にならないため）。
+  - **マイグレーション**: 20261119100200（追記）は `check_runs (updated_at, id)` の索引だけ（古い順の走査が全表走査にならないため）。
   - **doctor `checks.retention`**: 窓＋1 日を過ぎて残っている対象（開いている MR の head を除く）があれば WARN（FG コードなし。件数、一番古い
     経過日数）。runbook `checks-reporting` の E。
   - **既知の割り切り**: 期限切れの実行の後で、MR がその古いコミットをまた head にした（ブランチを古いコミットへ戻した）ときは、実行が消えているので
