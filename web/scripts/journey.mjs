@@ -448,7 +448,10 @@ async function main() {
     if (!(await blockedNote.innerText()).includes('cannot change at all')) {
       problems.push('merge conditions: the "branch cannot change" warning is missing');
     }
-    if (/work item/i.test(await page.locator('main').innerText())) problems.push('merge conditions offer a work item link before I1');
+    // M3 I1d: the link condition is offered, but this save did not set it.
+    if (/linked work item \(PBI\) is needed|not connected to Kanflow/i.test(await page.locator('main').innerText())) {
+      problems.push('merge conditions show a work item link that was not asked for');
+    }
     await check('24d-merge-sections');
     await page.getByLabel('Last part of the path').fill('forge-web-2');
     await page.getByRole('button', { name: 'Move or rename' }).click();
