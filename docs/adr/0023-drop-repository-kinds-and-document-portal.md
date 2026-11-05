@@ -124,3 +124,34 @@
   権限の表に allow と deny の行）。承認の規則（必要な人数、承認者の条件、保護ブランチ）は forge にだけ置き、kanflow は表示と操作だけを持つ。
 - 時期: MR は M3 なので、forge の MR と承認が先（M3）、kanflow からの承認はその後（計画 02 の第 1 段）。代理実行は ADR と
   `security-reviewer` のレビューが必須（計画 02 §5.3）。
+
+## Amendment 2026-11-05 — X1: `.forge/repo.yml` の解析と仕様の参照の解決（計画 11 §5.7 の X1、計画 03 §8.1 の (a)）
+
+計画が開けていた選択を、次のとおり決めた（計画の推奨に沿う。推奨のない点は、Claude が診断のしやすさと、閉じた既定を優先して決めた）。
+
+1. **読み取りの API**: `GET /api/v1/projects/{id}/repository/spec-refs[?ref=]`。新しい Action `SpecRefRead`（`read_api`）。
+   判定の規則は `RepoBrowse` と同じ（同じ arm。Reporter、内部のプロジェクトはサインインした人全員、サービスアカウントは所属だけ）。
+   権限の表の行は `RepoBrowse` の全行の双子（`the_spec_refs_mirror_every_browse_row` が保証する）。`ref` を省くと既定のブランチを読む。
+   `gstn` の専用コマンドは X4（`gstn spec`）で足す（それまでは `gstn api`）。
+2. **参照先の権限は、読む人の権限で判定する**（計画 11 の X1）。`repo:` のパスは読む人を viewer として 1 回だけ引き、
+   参照先のプロジェクトをもう一度 `authorize()`（forge-auth の `prove_spec_ref`。ルートの証明の principal を使い、呼び出し側が渡す principal は使わない）で判定する。
+   参照する側のプロジェクトを読めることは、参照先を読む理由にならない。
+3. **存在を漏らさない**: 参照先が無い、プロジェクトではない（グループ・ユーザー）、移動・削除の墓標、`authorize()` の拒否、リポジトリの準備中は、
+   すべて同じ形の `unavailable`（`FG-REPO-0026`、`project_id` と `commit` は出さない）。理由はログ（`forge.spec_refs.unresolved` の `reason`）にだけ出す。
+   **移動の墓標は追わない**: 版を固定する参照なので、パスの書き換えを求める（暗黙のリダイレクトで別のリポジトリを指さない）。
+4. **版の解決**: `version: <tag>` は `refs/tags/<tag>`、`track: <branch>` は `refs/heads/<branch>`（完全な名前だけを引く。ブランチとタグの取り違えをしない）。
+   注釈付きのタグはコミットまで剥がす。読める参照先に無い版は `version_not_found`（`FG-REPO-0025`）。git の失敗・時間切れは要求全体の失敗（項目を黙って落とさない）。
+5. **ファイルの形式と、解析の閉じた既定**: 置き場所は `.forge/repo.yml` だけ（通常のファイル。シンボリックリンク・ディレクトリ・サブモジュールは `not_a_file`）、64 KiB まで。
+   最上位のキーは `specs`（と、ADR-0017 §2.7 が定める `review`。X1 では読まずに受け入れる）だけ。項目のキーは `repo` / `path` / `version` / `track` / `scope`。
+   知らないキー（ADR-0023 でなくした `kind:` を含む）、重複したキー、2 つ目の文書、YAML のアンカー・エイリアス・タグは **拒否する**（無視しない）。
+   スカラーは書かれたとおりの文字列（`1.10` は数値 1.1 にしない）。`specs:` は 32 項目まで、`scope:` は 64 個まで（要件 ID の型 `[A-Z0-9-]`、末尾に `*` を 1 つまで）。
+   拒否は `config: "invalid"` と `problem {error_code: FG-REPO-0024, line, reason}` で返し、**参照は 1 つも解決しない**（部分的な読み取りをしない）。
+   CODEOWNERS（ADR-0024 §9）と同じく、内容の問題は 200 の応答のデータで返す（読む人が直す場所を知るため）。
+6. **YAML の部品**: `yaml-rust2`（0.13、MIT OR Apache-2.0、純 Rust、既定の機能 `encoding` を外す）の **イベントのパーサーだけ** を使う。
+   木は forge-core が明示のスタックで組み立てる（深さ 16 まで）。エイリアスを展開する読み込み（billion laughs）は使わない。
+   新しい依存は arraydeque・hashlink 0.12・foldhash 0.2（いずれも許可済みのライセンス）。
+7. **置き場所（クレート）**: 解析は `forge-core::repo_config`（純粋、どのクレートからも使える）、ファイルの読み取りは `forge-git` の `Browser::small_file`、
+   判定は `forge-auth::prove_spec_ref`、組み立ては `forge-web` のルート。X2（`forge/spec-drift`）が同じ解決をジョブから使うときは、
+   組み立てを機能クレートへ移す（そのとき、ボットの主体の読める範囲は ADR-0017 §4.0 のローダーの規則で決める）。
+8. **エラーコード**: `FG-REPO-0024 RepoConfigInvalid`（422 / info）、`FG-REPO-0025 SpecVersionNotFound`（404 / info）、
+   `FG-REPO-0026 SpecRepositoryUnavailable`（404 / info）。どれも内容の問題で、アラートにしない（Runbook は不要）。
