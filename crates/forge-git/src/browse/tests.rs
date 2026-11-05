@@ -978,3 +978,35 @@ async fn small_files_are_read_whole_or_named_absent_not_a_file_or_too_large() {
         SmallFile::Absent
     );
 }
+
+/// M3 X1 review: a full ref name looked up as a typed outcome (a commit,
+/// missing, or naming no commit) — never a reason string to match on.
+#[tokio::test]
+async fn find_ref_tells_a_commit_from_missing_and_not_a_commit() {
+    let f = fixture().await;
+    let h = history(&f.path);
+    let b = f.browser(BrowseLimits::default());
+    let name = |s: &str| forge_core::RefName::parse(s).expect("ref");
+    match b.find_ref(f.id, &name("refs/tags/v1")).await.expect("v1") {
+        RefLookup::Commit(rev) => assert_eq!(rev.commit, h.c1, "peeled"),
+        other @ (RefLookup::Missing | RefLookup::NotACommit) => panic!("{other:?}"),
+    }
+    assert_eq!(
+        b.find_ref(f.id, &name("refs/tags/v9")).await.expect("v9"),
+        RefLookup::Missing
+    );
+    assert_eq!(
+        b.find_ref(f.id, &name("refs/tags/treetag"))
+            .await
+            .expect("tt"),
+        RefLookup::NotACommit
+    );
+    match b
+        .find_ref(f.id, &name("refs/heads/main"))
+        .await
+        .expect("main")
+    {
+        RefLookup::Commit(rev) => assert_eq!(rev.commit, h.c2),
+        other @ (RefLookup::Missing | RefLookup::NotACommit) => panic!("{other:?}"),
+    }
+}

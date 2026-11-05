@@ -26,10 +26,11 @@
 //! here: the route decides every referenced repository with the reader's
 //! permissions (forge-auth `prove_spec_ref`).
 
+use std::collections::HashSet;
 use std::fmt;
 
 use yaml_rust2::parser::{Event, Parser};
-use yaml_rust2::scanner::{Marker, ScanError};
+use yaml_rust2::scanner::{Marker, ScanError, TScalarStyle};
 
 use crate::namespace_path::LookupPath;
 use crate::ref_name::RefName;
@@ -45,8 +46,11 @@ pub const MAX_SPEC_REFS: usize = 32;
 pub const MAX_SCOPE_PATTERNS: usize = 64;
 /// The longest scope pattern (`scope_invalid`).
 pub const MAX_SCOPE_PATTERN_LEN: usize = 64;
-/// The longest `path:` (`path_invalid`).
-pub const MAX_SPEC_PATH_LEN: usize = 1024;
+/// The longest `path:` (`path_invalid`): the browse API's
+/// `RepoPath::MAX_BYTES`.
+pub const MAX_SPEC_PATH_LEN: usize = 4096;
+/// At most this many keys in one mapping (`too_many_keys`).
+pub const MAX_MAP_KEYS: usize = 64;
 /// The deepest nesting of collections (`too_deep`); the format needs 3.
 const MAX_DEPTH: usize = 16;
 
@@ -80,8 +84,27 @@ pub enum SpecSource {
         repo: LookupPath,
         pin: SpecPin,
     },
-    /// A directory of this repository (`path:`), as written.
-    Path(String),
+    /// A directory of this repository (`path:`).
+    Path(SpecPath),
+}
+
+/// A `path:` value: a tree path by the browse API's rules (`/`-separated,
+/// no empty, `.` or `..` segment, no control character, at most 4096
+/// bytes; one trailing `/` allowed), and also no leading `/`, no
+/// backslash, no leading `:` (git pathspec magic) and no drive letter
+/// (`C:`). Kept as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecPath(String);
+
+impl SpecPath {
+    /// `None` when `raw` breaks a rule above.
+    pub fn parse(raw: &str) -> Option<Self> {
+        spec_path(raw).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// How a referenced repository's version is fixed.
@@ -197,6 +220,8 @@ struct Node {
 #[derive(Debug)]
 enum Kind {
     Text(String),
+    /// An empty value, or a plain `~` / `null` (YAML's null): never text.
+    Null,
     List(Vec<Node>),
     Map(Vec<(Node, Node)>),
 }
@@ -205,7 +230,9 @@ enum Kind {
 /// key waiting for its value.
 enum Open {
     List(usize, Vec<Node>),
-    Map(usize, Vec<(Node, Node)>, Option<Node>),
+    /// Its line, its entries, the key waiting for its value, and the keys
+    /// so far (duplicates are refused in every mapping, read or not).
+    Map(usize, Vec<(Node, Node)>, Option<Node>, HashSet<String>),
 }
 
 fn syntax(e: &ScanError) -> RepoConfigProblem {
@@ -225,12 +252,23 @@ fn attach(stack: &mut [Open], node: Node) -> Result<Option<Node>, RepoConfigProb
             items.push(node);
             Ok(None)
         }
-        Some(Open::Map(_, entries, pending)) => {
+        Some(Open::Map(_, entries, pending, keys)) => {
             match pending.take() {
                 Some(key) => entries.push((key, node)),
                 None => {
                     if !matches!(node.kind, Kind::Text(_)) {
                         return Err(problem(node.line, "key_not_text"));
+                    }
+                    // Bounded while it is built: the duplicate check and
+                    // every later scan stay small.
+                    if entries.len() >= MAX_MAP_KEYS {
+                        return Err(problem(node.line, "too_many_keys"));
+                    }
+                    if let Kind::Text(name) = &node.kind {
+                        if !keys.insert(name.clone()) {
+                            // clone: the set owns its keys
+                            return Err(problem(node.line, "duplicate_key"));
+                        }
                     }
                     *pending = Some(node);
                 }
@@ -260,11 +298,13 @@ fn read_tree(text: &str) -> Result<Option<Node>, RepoConfigProblem> {
                 None
             }
             Event::Alias(_) => return Err(problem(line, "yaml_alias")),
-            Event::Scalar(value, _style, anchor, tag) => {
+            Event::Scalar(value, style, anchor, tag) => {
                 refuse_extras(line, anchor, tag.is_some())?;
+                let null = style == TScalarStyle::Plain
+                    && matches!(value.as_str(), "" | "~" | "null" | "Null" | "NULL");
                 Some(Node {
                     line,
-                    kind: Kind::Text(value),
+                    kind: if null { Kind::Null } else { Kind::Text(value) },
                 })
             }
             Event::SequenceStart(anchor, tag) => {
@@ -274,7 +314,10 @@ fn read_tree(text: &str) -> Result<Option<Node>, RepoConfigProblem> {
             }
             Event::MappingStart(anchor, tag) => {
                 refuse_extras(line, anchor, tag.is_some())?;
-                open(&mut stack, Open::Map(line, Vec::new(), None))?;
+                open(
+                    &mut stack,
+                    Open::Map(line, Vec::new(), None, HashSet::new()),
+                )?;
                 None
             }
             Event::SequenceEnd | Event::MappingEnd => match stack.pop() {
@@ -282,13 +325,13 @@ fn read_tree(text: &str) -> Result<Option<Node>, RepoConfigProblem> {
                     line: at,
                     kind: Kind::List(items),
                 }),
-                Some(Open::Map(at, entries, None)) => Some(Node {
+                Some(Open::Map(at, entries, None, _)) => Some(Node {
                     line: at,
                     kind: Kind::Map(entries),
                 }),
                 // A key without a value, or an end with nothing open: the
                 // parser never emits these for a well-formed stream.
-                Some(Open::Map(_, _, Some(_))) | None => return Err(problem(line, "syntax")),
+                Some(Open::Map(_, _, Some(_), _)) | None => return Err(problem(line, "syntax")),
             },
         };
         if let Some(node) = finished {
@@ -313,7 +356,7 @@ fn refuse_extras(line: usize, anchor: usize, tagged: bool) -> Result<(), RepoCon
 fn open(stack: &mut Vec<Open>, collection: Open) -> Result<(), RepoConfigProblem> {
     if stack.len() >= MAX_DEPTH {
         let line = match &collection {
-            Open::List(l, _) | Open::Map(l, _, _) => *l,
+            Open::List(l, _) | Open::Map(l, _, _, _) => *l,
         };
         return Err(problem(line, "too_deep"));
     }
@@ -332,11 +375,12 @@ fn mapping<'a>(
         return Err(problem(node.line, not_a_mapping));
     };
     let mut out: Vec<Field<'a>> = Vec::with_capacity(entries.len());
+    let mut seen: HashSet<&str> = HashSet::with_capacity(entries.len());
     for (key, value) in entries {
         let Kind::Text(name) = &key.kind else {
             return Err(problem(key.line, "key_not_text"));
         };
-        if out.iter().any(|f| f.key == name) {
+        if !seen.insert(name.as_str()) {
             return Err(problem(key.line, "duplicate_key"));
         }
         out.push(Field {
@@ -355,9 +399,12 @@ struct Field<'a> {
     value: &'a Node,
 }
 
-fn text(node: &Node) -> Result<&str, RepoConfigProblem> {
+/// A value that must be text: `empty` names the field's own rule for an
+/// empty or null value (reported at `at`, the key's line).
+fn text<'a>(node: &'a Node, at: usize, empty: &'static str) -> Result<&'a str, RepoConfigProblem> {
     match &node.kind {
         Kind::Text(t) => Ok(t),
+        Kind::Null => Err(problem(at, empty)),
         Kind::List(_) | Kind::Map(_) => Err(problem(node.line, "not_text")),
     }
 }
@@ -390,7 +437,7 @@ fn specs_of(node: &Node) -> Result<Vec<SpecEntry>, RepoConfigProblem> {
         let duplicate = out.iter().any(|seen| match (&seen.source, &entry.source) {
             (SpecSource::Repo { repo: a, .. }, SpecSource::Repo { repo: b, .. }) => a == b,
             (SpecSource::Path(a), SpecSource::Path(b)) => {
-                a.trim_end_matches('/') == b.trim_end_matches('/')
+                a.as_str().trim_end_matches('/') == b.as_str().trim_end_matches('/')
             }
             (SpecSource::Repo { .. }, SpecSource::Path(_))
             | (SpecSource::Path(_), SpecSource::Repo { .. }) => false,
@@ -419,10 +466,10 @@ fn entry_of(node: &Node) -> Result<SpecEntry, RepoConfigProblem> {
         // value's node starts on the next line).
         let at = field.line;
         match field.key {
-            "repo" => repo = Some((text(field.value)?, at)),
-            "path" => path = Some((text(field.value)?, at)),
-            "version" => version = Some((text(field.value)?, at)),
-            "track" => track = Some((text(field.value)?, at)),
+            "repo" => repo = Some((text(field.value, at, "repo_invalid")?, at)),
+            "path" => path = Some((text(field.value, at, "path_invalid")?, at)),
+            "version" => version = Some((text(field.value, at, "version_invalid")?, at)),
+            "track" => track = Some((text(field.value, at, "track_invalid")?, at)),
             "scope" => scope = scope_of(field.value)?,
             _ => return Err(problem(at, "unknown_key")),
         }
@@ -435,7 +482,7 @@ fn entry_of(node: &Node) -> Result<SpecEntry, RepoConfigProblem> {
             if version.is_some() || track.is_some() {
                 return Err(problem(line, "version_on_path"));
             }
-            SpecSource::Path(spec_path(p).ok_or(problem(at, "path_invalid"))?)
+            SpecSource::Path(SpecPath::parse(p).ok_or(problem(at, "path_invalid"))?)
         }
         (Some((r, at)), None) => {
             let pin = match (version, track) {
@@ -473,20 +520,23 @@ fn pinned(prefix: &str, name: &str) -> Option<RefName> {
     RefName::parse(&format!("{prefix}{name}")).ok()
 }
 
-/// A relative directory of this repository: `/`-separated segments, an
-/// optional trailing `/`, no empty, `.` or `..` segment, no control
-/// character or `\`.
+/// [`SpecPath`]'s rules.
 fn spec_path(raw: &str) -> Option<String> {
     if raw.is_empty() || raw.len() > MAX_SPEC_PATH_LEN || raw.starts_with('/') {
         return None;
     }
-    if raw.chars().any(|c| c.is_control() || c == '\\') {
+    // Git pathspec magic (`:(glob)…`), a drive letter (`C:` / `c:x`) and
+    // Windows separators are never a tree path here.
+    let bytes = raw.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if raw.starts_with(':') || drive || raw.contains('\\') {
         return None;
     }
     let body = raw.strip_suffix('/').unwrap_or(raw);
-    let ok = body
-        .split('/')
-        .all(|s| !s.is_empty() && s != "." && s != "..");
+    // The browse API's rules (forge_git::browse::RepoPath).
+    let ok = body.split('/').all(|seg| {
+        !seg.is_empty() && seg != "." && seg != ".." && !seg.chars().any(char::is_control)
+    });
     ok.then(|| raw.to_owned())
 }
 
@@ -500,7 +550,7 @@ fn scope_of(node: &Node) -> Result<Vec<ScopePattern>, RepoConfigProblem> {
     items
         .iter()
         .map(|item| {
-            let raw = text(item)?;
+            let raw = text(item, item.line, "scope_invalid")?;
             ScopePattern::parse(raw).ok_or(problem(item.line, "scope_invalid"))
         })
         .collect()

@@ -61,7 +61,7 @@ fn the_plan_example_parses_with_lines_pins_and_scopes() {
     assert_eq!(c.specs[1].line, 6);
     assert!(c.specs[1].scope.is_empty());
     match &c.specs[2].source {
-        SpecSource::Path(p) => assert_eq!(p, "spec/"),
+        SpecSource::Path(p) => assert_eq!(p.as_str(), "spec/"),
         SpecSource::Repo { .. } => panic!("a path entry"),
     }
 }
@@ -194,6 +194,25 @@ fn an_invalid_file_is_one_problem_with_a_line_and_a_reason() {
         ("specs:\n  - path: /etc\n", 2, "path_invalid"),
         ("specs:\n  - path: a/../b\n", 2, "path_invalid"),
         ("specs:\n  - path: \"\"\n", 2, "path_invalid"),
+        // Review X1 (LOW 5): an empty or null value is the field's own
+        // `*_invalid`, never the text "~".
+        ("specs:\n  - path:\n", 2, "path_invalid"),
+        ("specs:\n  - path: ~\n", 2, "path_invalid"),
+        ("specs:\n  - path: null\n", 2, "path_invalid"),
+        ("specs:\n  - repo:\n    version: v1\n", 2, "repo_invalid"),
+        ("specs:\n  - repo: a/b\n    track:\n", 3, "track_invalid"),
+        (
+            "specs:\n  - repo: a/b\n    version: ~\n",
+            3,
+            "version_invalid",
+        ),
+        // Review X1 (LOW 7): the browse path rules, plus no drive letter,
+        // no leading `:` (pathspec magic) and no backslash.
+        ("specs:\n  - path: \"C:/spec\"\n", 2, "path_invalid"),
+        ("specs:\n  - path: \"c:\"\n", 2, "path_invalid"),
+        ("specs:\n  - path: \":(glob)spec\"\n", 2, "path_invalid"),
+        ("specs:\n  - path: \"a\\\\b\"\n", 2, "path_invalid"),
+        ("specs:\n  - path: \"a\\tb\"\n", 2, "path_invalid"),
         ("specs:\n  - repo: [a]\n    version: v1\n", 2, "not_text"),
         ("specs:\n  - 3\n", 2, "entry_not_a_mapping"),
         (
@@ -248,6 +267,32 @@ fn the_limits_are_problems_not_truncations() {
             reason: "not_utf8"
         })
     );
+}
+
+#[test]
+fn a_path_is_a_tree_path_as_written() {
+    for good in ["spec", "spec/", "docs/spec", "spec:v2", "~notes", "仕様"] {
+        let c = ok(&format!("specs:\n  - path: \"{good}\"\n"));
+        match &c.specs[0].source {
+            SpecSource::Path(p) => assert_eq!(p.as_str(), good),
+            SpecSource::Repo { .. } => panic!("a path entry"),
+        }
+    }
+}
+
+/// Review X1 (LOW 6): a mapping holds at most `MAX_MAP_KEYS` keys, and
+/// duplicates are found in one pass.
+#[test]
+fn a_mapping_with_too_many_keys_is_refused() {
+    let keys: Vec<String> = (0..=MAX_MAP_KEYS).map(|i| format!("k{i}: 1")).collect();
+    let text = format!("review: {{{}}}\n", keys.join(", "));
+    assert_eq!(bad(&text).reason, "too_many_keys");
+    let keys: Vec<String> = (0..MAX_MAP_KEYS).map(|i| format!("k{i}: 1")).collect();
+    assert!(ok(&format!("review: {{{}}}\n", keys.join(", ")))
+        .specs
+        .is_empty());
+    let dup = format!("review: {{{}, k3: 2}}\n", keys[..10].join(", "));
+    assert_eq!(bad(&dup).reason, "duplicate_key");
 }
 
 proptest::proptest! {

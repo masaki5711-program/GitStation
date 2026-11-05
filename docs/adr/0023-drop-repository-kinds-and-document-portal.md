@@ -155,3 +155,11 @@
    組み立てを機能クレートへ移す（そのとき、ボットの主体の読める範囲は ADR-0017 §4.0 のローダーの規則で決める）。
 8. **エラーコード**: `FG-REPO-0024 RepoConfigInvalid`（422 / info）、`FG-REPO-0025 SpecVersionNotFound`（404 / info）、
    `FG-REPO-0026 SpecRepositoryUnavailable`（404 / info）。どれも内容の問題で、アラートにしない（Runbook は不要）。
+9. **X1 の独立レビュー（2026-11-06、security・rust。CRITICAL / HIGH なし）で直したこと**:
+   - 要求全体に 1 つの予算（20 秒、`AppState::spec_refs_budget`）。超えたら `FG-WEB-0002 operation=spec_refs`（項目ごとに worker を占有しない）。
+     たどった参照は 1 つずつ、読む人ごとの上限（60 秒に 600、`FG-WEB-0010`）に数える。
+   - 参照先のリポジトリでの git の失敗（busy・時間切れ・保管場所）は、その項目の `unavailable`（`FG-REPO-0026`）にする。
+     応答の状態コードが存在の手がかりにならないように。本当の失敗は warn のログ（`reason=git_failed`、`git_error_code`）にだけ出す。
+   - 版の解決は型の結果（forge-git の `Browser::find_ref` → `RefLookup::{Commit, Missing, NotACommit}`）。理由の文字列を照合しない。
+   - 空・null（`~` / `null`）の値はそのフィールドの `*_invalid`。1 つの mapping は 64 キーまで（`too_many_keys`）、重複は読まない部分（`review:`）も含めて 1 回の走査で拒否。
+   - `path:` は browse の規則（`RepoPath`）に加え、先頭の `:`（pathspec の magic）、ドライブ文字（`C:`）、バックスラッシュを拒否する（`SpecPath`）。

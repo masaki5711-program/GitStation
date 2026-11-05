@@ -68,7 +68,7 @@ pub use diff::{Diff, DiffFile, DiffStatus, PatchOmitted};
 pub use history::{CommitDetail, CommitInfo, CommitPage, Comparison, LogCursor};
 pub use path::RepoPath;
 pub use reach::ReachRoots;
-pub use refs::{RefEntry, RefKind, RefList, ResolvedRev, ResolvedSpec, Target};
+pub use refs::{RefEntry, RefKind, RefList, RefLookup, ResolvedRev, ResolvedSpec, Target};
 pub use tree::{EntryKind, Tree, TreeEntry};
 
 /// The browse limits (plan 10 §5).

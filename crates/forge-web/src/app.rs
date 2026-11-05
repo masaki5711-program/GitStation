@@ -114,6 +114,11 @@ pub struct AppState {
     pub resolve_limiter: Arc<routes::namespaces::PrefixLimiter>,
     /// The user search's rate limit per caller (M2 MR6, `FG-WEB-0010`).
     pub search_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X1: the spec references followed per caller (`FG-WEB-0010`).
+    pub spec_refs_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X1: one budget for a whole spec-refs request (`FG-WEB-0002
+    /// operation=spec_refs`).
+    pub spec_refs_budget: Duration,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -157,7 +162,23 @@ impl AppState {
             callback_limiter: Arc::default(),
             resolve_limiter: Arc::default(),
             search_limiter: Arc::new(routes::directory::search_limiter()),
+            spec_refs_limiter: Arc::new(routes::spec_refs::limiter()),
+            spec_refs_budget: routes::spec_refs::BUDGET,
         }
+    }
+
+    /// The spec-refs limiter (M3 X1; tests set a small one).
+    #[must_use]
+    pub fn with_spec_refs_limiter(mut self, limiter: routes::namespaces::CallerLimiter) -> Self {
+        self.spec_refs_limiter = Arc::new(limiter);
+        self
+    }
+
+    /// The spec-refs request budget (M3 X1; tests set a small one).
+    #[must_use]
+    pub fn with_spec_refs_budget(mut self, budget: Duration) -> Self {
+        self.spec_refs_budget = budget;
+        self
     }
 
     /// The OIDC sign-in (M2 MR4).

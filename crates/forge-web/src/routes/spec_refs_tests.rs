@@ -93,6 +93,10 @@ fn known(path: &str) -> Option<Known> {
             deleted: true,
             ..Known::private(12, Some(Role::Owner), 120)
         },
+        // Readable, but its repository is missing from storage: git fails.
+        "specs/broken" => Known::private(13, Some(Role::Reporter), 130),
+        // Readable; its lookup takes 400 ms (the request budget test).
+        "specs/slow" => Known::private(14, Some(Role::Reporter), 80),
         _ => return None,
     })
 }
@@ -116,6 +120,7 @@ impl forge_core::NamespaceResolver for World {
     ) -> LookupFuture<'a, Resolution> {
         let full = path.full_path();
         self.calls.lock().unwrap().push((full.clone(), viewer));
+        let slow = full == "specs/slow";
         let answer = match full.as_str() {
             "specs/old" => Resolution::Moved {
                 resolved: live(known("specs/engine").unwrap()),
@@ -134,7 +139,12 @@ impl forge_core::NamespaceResolver for World {
             }),
             other => known(other).map_or(Resolution::Absent, |k| Resolution::Live(live(k))),
         };
-        Box::pin(async move { Ok(answer) })
+        Box::pin(async move {
+            if slow {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            }
+            Ok(answer)
+        })
     }
 }
 
@@ -208,6 +218,13 @@ specs:
 ";
 
 async fn fixture(branches: &[(&str, Option<&str>)]) -> Fixture {
+    fixture_with(branches, |s| s).await
+}
+
+async fn fixture_with(
+    branches: &[(&str, Option<&str>)],
+    tweak: impl FnOnce(AppState) -> AppState,
+) -> Fixture {
     let home = tempfile::tempdir().expect("home");
     let root = tempfile::tempdir().expect("root");
     let git = Git::new(GitConfig::new("git", home.path()));
@@ -264,8 +281,10 @@ async fn fixture(branches: &[(&str, Option<&str>)]) -> Fixture {
     };
     let smart = SmartHttp::new(git, storage, GitHttpLimits::default())
         .with_browse_limits(BrowseLimits::default());
-    let state = AppState::new("test", Vec::new(), crate::tests::no_tokens(), lookups)
-        .with_smart_http(smart);
+    let state = tweak(
+        AppState::new("test", Vec::new(), crate::tests::no_tokens(), lookups)
+            .with_smart_http(smart),
+    );
     let router = build(crate::app::registry(), state, AppConfig::default()).expect("router");
     Fixture {
         _root: root,
@@ -517,4 +536,95 @@ async fn the_route_is_decided_on_the_referencing_project_and_strict_on_its_query
         assert_eq!(a.status, StatusCode::BAD_REQUEST, "{q}");
         assert_eq!(a.code(), "FG-WEB-0006", "{q}");
     }
+}
+
+// ── review X1 (MEDIUM 1, 2; LOW 4) ─────────────────────────────────────
+
+/// A git failure on a referenced repository (here: its directory is
+/// missing) is that entry's `unavailable`, never the request's status.
+#[tokio::test]
+async fn a_git_failure_on_a_referenced_repository_is_unavailable_not_the_status() {
+    let f = fixture(&[(
+        "broken",
+        Some(
+            "specs:
+  - repo: specs/broken
+    version: v1
+  - repo: specs/engine
+    version: v1.4
+",
+        ),
+    )])
+    .await;
+    let body = ok_body(&get(&f, "?ref=broken", person()).await);
+    let e = entry(&body, "specs/broken");
+    assert_eq!(e["status"], "unavailable", "{e}");
+    assert_eq!(e["error_code"], "FG-REPO-0026");
+    assert_eq!(e["project_id"], Value::Null);
+    // The other entries are still resolved.
+    assert_eq!(entry(&body, "specs/engine")["status"], "resolved");
+}
+
+/// One budget for the whole request: a slow lookup ends it with
+/// FG-WEB-0002 (operation=spec_refs), never a worker held per entry.
+#[tokio::test]
+async fn the_whole_request_has_one_budget() {
+    let f = fixture_with(
+        &[(
+            "slow",
+            Some(
+                "specs:
+  - repo: specs/slow
+    version: v1.4
+",
+            ),
+        )],
+        |s| s.with_spec_refs_budget(std::time::Duration::from_millis(100)),
+    )
+    .await;
+    let a = get(&f, "?ref=slow", person()).await;
+    assert_eq!(a.status, StatusCode::SERVICE_UNAVAILABLE, "{:?}", a.json());
+    assert_eq!(a.code(), "FG-WEB-0002");
+}
+
+/// Every followed reference counts against the caller's limit.
+#[tokio::test]
+async fn every_followed_reference_counts_against_the_callers_limit() {
+    let f = fixture_with(
+        &[(
+            "three",
+            Some(
+                "specs:
+  - repo: specs/engine
+    version: v1.4
+  - repo: specs/open
+    version: v1
+  - repo: specs/secret
+    version: v1
+  - path: spec/
+",
+            ),
+        )],
+        |s| {
+            s.with_spec_refs_limiter(crate::routes::namespaces::CallerLimiter::new(
+                "spec_refs",
+                4,
+                std::time::Duration::from_secs(60),
+            ))
+        },
+    )
+    .await;
+    // Three references: within the limit of four.
+    ok_body(&get(&f, "?ref=three", person()).await);
+    // Three more: the fifth is refused.
+    let a = get(&f, "?ref=three", person()).await;
+    assert_eq!(a.status, StatusCode::TOO_MANY_REQUESTS, "{:?}", a.json());
+    assert_eq!(a.code(), "FG-WEB-0010");
+    assert!(!a.header("retry-after").is_empty());
+}
+
+#[test]
+fn the_repo_config_path_is_a_tree_path() {
+    let path = super::repo_config_path().expect("parses");
+    assert_eq!(path.as_str(), ".forge/repo.yml");
 }
