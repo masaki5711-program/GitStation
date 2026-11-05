@@ -172,6 +172,11 @@ pub const KEYS: &[Key] = &[
         "review.mergeability_fanout_max",
         "FORGE_REVIEW_MERGEABILITY_FANOUT_MAX",
     ),
+    // The retention of check runs (ADR-0024 O3 note).
+    number(
+        "review.check_run_retention_days",
+        "FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS",
+    ),
     // M3 I1c: the feed's seal-sink comparison (ADR-0018 §5; false only in M3).
     boolean(
         "feed.require_sink_compare",
