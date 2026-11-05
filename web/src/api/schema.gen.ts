@@ -3754,9 +3754,15 @@ export interface components {
             id: number;
             last_delivery_at: string | null;
             /**
+             * @description `scheme://host:port` of the URL. The full URL is write-only: its
+             *     path or query may hold the receiver's token (I2 review).
+             */
+            origin: string;
+            /**
              * Format: int64
-             * @description The person who created it: deliveries stop when they can no longer
-             *     manage the project's webhooks.
+             * @description The person who answers for it: who created it, or last changed its
+             *     URL or event types or rotated its secret. Deliveries stop when they
+             *     can no longer manage the project's webhooks.
              */
             owner_id: number;
             /** @description The previous secret still signs until then (UTC, RFC 3339). */
@@ -3769,7 +3775,6 @@ export interface components {
              */
             secret_version: number;
             updated_at: string;
-            url: string;
         };
         /** @description A project's webhooks. */
         WebhookList: {

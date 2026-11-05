@@ -18,11 +18,14 @@ M3 I2（ADR-0016 §8 と末尾の Amendment I2、計画 02 §5.5・§11.1、計�
   種類の名前。maintainer の分類（`member.*`・`protected_ref.*`・`project.visibility_changed`・`merge_settings.*`・`webhook.disabled`）と
   deployment の分類は **名前を明示したときだけ**（家族の `*` では入らない）。admin の分類（`token.*`・インスタンス全体のイベント）は選べない。
   プロジェクトのないイベントは決して配らない。
-- **作成者の権限で判定し直す**: 配る記録を作るときと、各試行の直前に、Webhook を作った人（`owner_id`）がそのプロジェクトの Maintainer 以上で、
+- **所有者の権限で判定し直す**: 配る記録を作るときと、各試行の直前に、Webhook の所有者（`owner_id`。作った人。**URL・`event_types` を変えた人、
+  秘密を入れ替えた人がその時点で所有者になる**。監査の `owner_from` / `owner_id`）がそのプロジェクトの Maintainer 以上で、
   有効で、プロジェクトが削除待ちでないことを `authorize()` で確かめる。失えば配らない（配信は `skipped`、`last_reason=owner_lost`、
   ログに FG-INT-0010 `reason=owner_lost`）。
 - 秘密は作成と入れ替えのときに **1 回だけ** 返す（`whsec_…`）。サーバーは AES-256-GCM で封じて保存し（鍵は DB の外の
   `webhook.secret_keys_file`）、読み取りの答えには決して出さない。
+- **URL は書き込みだけ**: 読み取りの答え（作成の答えも）は `origin`（scheme://host:port）だけを返す。パスとクエリは受信先のトークンを
+  含みうるので、API にも読み取りのプール（`forge_ro`）にも出さない。
 
 ## 経路（Maintainer 以上。作成・変更・削除・入れ替え・再送は人だけ）
 
@@ -102,7 +105,7 @@ Forge-Signature-Kid: 2[,1]
 | `event_seq` / `event_id` / `event_type` | 元のイベント |
 | `state` | `pending`（試行を待つ・試行中）、`succeeded`、`failed`、`skipped`（送らずに終えた） |
 | `attempts` / `redeliveries` | 試行の数 / 再送の回数 |
-| `last_status` / `last_reason` / `last_error_code` / `last_duration_ms` | 最後の試行。`last_reason`: `status`、`redirect`、`connect`、`connect_timeout`、`timeout`、`tls`、`body`、`request`、`dns`、`target_forbidden`、`resolved_forbidden`、`webhook_disabled`、`owner_lost`、`not_admitted`、`event_gone` |
+| `last_status` / `last_reason` / `last_error_code` / `last_duration_ms` | 最後の試行。`last_reason`: `status`、`redirect`、`connect`、`connect_timeout`、`timeout`、`tls`、`body`、`request`、`dns`、`target_forbidden`、`resolved_forbidden`、`webhook_disabled`、`owner_lost`、`not_admitted`、`event_gone`、`internal`（ジョブが配信を続けられない）、`stuck`（生きたジョブのないまま 10 分） |
 
 本文と応答の本文は保存しない。履歴は終わったものを `webhook.delivery_retention_days`（既定 30 日）で消す。
 Runbook: `ops/runbooks/webhook-delivery.md`。

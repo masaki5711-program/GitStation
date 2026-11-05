@@ -11,7 +11,7 @@ use crate::{read_query_error, Db};
 pub const MAX_DELIVERIES_LISTED: i64 = 100;
 
 const SELECT: &str = concat!(
-    "SELECT w.id, w.project_id, w.owner_user_id, w.url, w.event_types, w.enabled, ",
+    "SELECT w.id, w.project_id, w.owner_user_id, w.origin, w.event_types, w.enabled, ",
     "w.disabled_reason, w.secret_version, ",
     "CASE WHEN w.secret_prev_until > now() THEN ",
     utc!("w.secret_prev_until"),
@@ -48,7 +48,7 @@ pub(super) fn webhook(row: Row) -> Result<Webhook, ForgeError> {
         id,
         project,
         owner,
-        url,
+        origin,
         mut event_types,
         enabled,
         disabled,
@@ -65,7 +65,7 @@ pub(super) fn webhook(row: Row) -> Result<Webhook, ForgeError> {
         id: WebhookId::new(id),
         project: ProjectId::new(project),
         owner: UserId::new(owner),
-        url,
+        origin,
         event_types,
         enabled,
         disabled_reason: disable_reason(id, disabled.as_deref())?,
@@ -243,15 +243,18 @@ pub struct WebhooksHealth {
     pub disabled_24h: i64,
     /// The oldest pending delivery's age in seconds.
     pub oldest_pending_s: Option<i64>,
+    /// Pending deliveries without a live job for [`super::STUCK_AFTER`]
+    /// (the sweep fails them: their job died).
+    pub stuck_pending: i64,
 }
 
 /// [`WebhooksHealth`] now.
 pub async fn health(db: &Db) -> Result<WebhooksHealth, ForgeError> {
     const QUERY: &str = "webhooks.health";
-    let row: (i64, i64, i64, Option<i64>) = db
+    let row: (i64, i64, i64, Option<i64>, i64) = db
         .within(QUERY, async {
             let mut conn = db.acquire().await?;
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 "SELECT (SELECT count(*) FROM forge.webhooks), \
                  (SELECT count(*) FROM forge.webhook_deliveries \
                    WHERE state = 'failed' AND finished_at > now() - interval '24 hours'), \
@@ -259,8 +262,10 @@ pub async fn health(db: &Db) -> Result<WebhooksHealth, ForgeError> {
                    AND disabled_reason IN ('failures', 'failing_24h') \
                    AND updated_at > now() - interval '24 hours'), \
                  (SELECT extract(epoch FROM now() - min(created_at))::bigint \
-                   FROM forge.webhook_deliveries WHERE state = 'pending')",
-            )
+                   FROM forge.webhook_deliveries WHERE state = 'pending'),                  (SELECT count(*) FROM forge.webhook_deliveries d WHERE {})",
+                super::STUCK_WHERE
+            ))
+            .bind(super::STUCK_AFTER.as_secs_f64())
             .fetch_one(&mut *conn)
             .await
             .map_err(|e| read_query_error(QUERY, e))
@@ -271,5 +276,6 @@ pub async fn health(db: &Db) -> Result<WebhooksHealth, ForgeError> {
         failed_24h: row.1,
         disabled_24h: row.2,
         oldest_pending_s: row.3,
+        stuck_pending: row.4,
     })
 }

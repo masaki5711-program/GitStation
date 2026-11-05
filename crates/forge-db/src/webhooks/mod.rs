@@ -47,8 +47,8 @@ mod retention;
 mod tests;
 
 pub use deliver::{
-    delivery_task, record_attempt, Attempt, AttemptOutcome, DeliveryEvent, DeliveryTask, Disabled,
-    EventActor, EventWorkItem, Recorded, RecordedAttempt,
+    delivery_task, fail_delivery, record_attempt, sweep_stuck, Attempt, AttemptOutcome,
+    DeliveryEvent, DeliveryTask, Disabled, EventActor, EventWorkItem, Recorded, RecordedAttempt,
 };
 pub use dispatch::{enabled_on, material, record_delivery, DispatchTarget};
 pub use manage::{
@@ -65,6 +65,14 @@ pub const DELIVER_JOB: &str = "webhook.deliver";
 /// How often one job may be re-run by the job runner for an internal
 /// failure (the delivery's own attempts are counted separately).
 pub const JOB_MAX_ATTEMPTS: u8 = 3;
+/// A pending delivery without a live `webhook.deliver` job for this long
+/// is stuck (its job died: a database failure, a lost lease, a broken
+/// payload): the sweep fails it (`FG-INT-0004 reason=stuck`) and doctor's
+/// `webhook.deliveries` warns until then.
+pub const STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
+/// The condition on `d` (a delivery) of a stuck one; `$1` = [`STUCK_AFTER`]
+/// in seconds.
+pub(crate) const STUCK_WHERE: &str = "d.state = 'pending'      AND coalesce(d.last_attempt_at, d.created_at) < now() - make_interval(secs => $1)      AND NOT EXISTS (SELECT 1 FROM forge.jobs j WHERE j.kind = 'webhook.deliver'          AND j.state IN ('queued', 'running')          AND j.dedup_key LIKE 'delivery:' || d.id || ':' || d.redeliveries || ':%')";
 /// One attempt's job may run this long (resolution 3 s + 10 s in all +
 /// database steps).
 pub const JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -75,7 +83,9 @@ pub struct Webhook {
     pub id: WebhookId,
     pub project: ProjectId,
     pub owner: UserId,
-    pub url: String,
+    /// `scheme://host:port` of the URL (the full URL is write-only: its
+    /// path or query may hold a receiver's token; I2 review).
+    pub origin: String,
     /// Sorted, without duplicates.
     pub event_types: Vec<String>,
     pub enabled: bool,

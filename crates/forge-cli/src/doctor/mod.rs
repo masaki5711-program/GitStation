@@ -264,7 +264,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let [feed_lag, watermark, retention] = integrations::feed_checks(db).await;
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     let stale_locks = maintenance::stale_locks_check(db, root).await;
-    let webhook_deliveries = webhooks::deliveries_check(db).await;
+    let webhook_deliveries = webhooks::deliveries_check(db, &cfg.webhook).await;
     vec![
         bootstrap,
         connections,

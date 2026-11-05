@@ -13,7 +13,9 @@
 --    a key of webhook.secret_keys_file (outside the database, ADR-0013),
 --    the associated data binding it to `uid`; during the 24 hours after a
 --    rotation the previous secret signs too (`secret_prev_*`). The read
---    pool never sees a ciphertext. The delivery counters
+--    pool never sees a ciphertext, nor the full `url` (its `origin` only).
+--    Changing the URL or event types, or rotating the secret, makes the
+--    caller the owner (audited). The delivery counters
 --    (`consecutive_failures`, `failing_since`, `last_delivery_at`,
 --    `updated_at`) are unaudited; disabling (by a person, or by the worker
 --    after 50 failed attempts in a row or 24 hours of failures,
@@ -39,6 +41,10 @@ CREATE TABLE forge.webhooks (
     url                    text NOT NULL CONSTRAINT webhooks_url_shape
         CHECK (length(url) BETWEEN 10 AND 2048
             AND url ~ '^https?://[^/?#@[:space:]]+([/?][^#[:space:]]*)?$'),
+    -- scheme://host:port of `url`: what reads, logs and audit rows show (the
+    -- path or query of `url` may hold a receiver's token: write-only).
+    origin                 text NOT NULL CONSTRAINT webhooks_origin_shape
+        CHECK (origin ~ '^https?://[^/?#@[:space:]]+:[0-9]{1,5}$'),
     event_types            text[] NOT NULL CONSTRAINT webhooks_event_types_entries
         CHECK (cardinality(event_types) BETWEEN 1 AND 64
             AND array_ndims(event_types) = 1
@@ -74,7 +80,7 @@ CREATE TABLE forge.webhooks (
 CREATE INDEX webhooks_project ON forge.webhooks (project_id, id);
 
 CREATE CONSTRAINT TRIGGER audited_change_present
-    AFTER INSERT OR DELETE OR UPDATE OF id, uid, project_id, owner_user_id, url, event_types,
+    AFTER INSERT OR DELETE OR UPDATE OF id, uid, project_id, owner_user_id, url, origin, event_types,
         enabled, disabled_reason, secret_key_id, secret_ciphertext, secret_version,
         secret_prev_key_id, secret_prev_ciphertext, secret_prev_until, created_at
     ON forge.webhooks
@@ -128,7 +134,7 @@ CREATE INDEX webhook_deliveries_open ON forge.webhook_deliveries (created_at)
     WHERE state = 'pending';
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON forge.webhooks TO forge_app;
-GRANT SELECT (id, uid, project_id, owner_user_id, url, event_types, enabled, disabled_reason,
+GRANT SELECT (id, uid, project_id, owner_user_id, origin, event_types, enabled, disabled_reason,
     secret_key_id, secret_version, secret_prev_key_id, secret_prev_until, consecutive_failures,
     failing_since, last_delivery_at, created_at, updated_at) ON forge.webhooks TO forge_ro;
 GRANT SELECT, INSERT, UPDATE, DELETE ON forge.webhook_deliveries TO forge_app;

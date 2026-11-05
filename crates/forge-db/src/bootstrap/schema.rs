@@ -777,13 +777,13 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
 }
 
 /// The read pool's columns of forge.webhooks (tables.toml `ro_columns`):
-/// not secret_ciphertext or secret_prev_ciphertext.
+/// not secret_ciphertext, secret_prev_ciphertext or url (I2 review).
 const WEBHOOKS_RO: &[&str] = &[
     "id",
     "uid",
     "project_id",
     "owner_user_id",
-    "url",
+    "origin",
     "event_types",
     "enabled",
     "disabled_reason",

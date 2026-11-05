@@ -5739,8 +5739,12 @@
               "null"
             ]
           },
+          "origin": {
+            "description": "`scheme://host:port` of the URL. The full URL is write-only: its\npath or query may hold the receiver's token (I2 review).",
+            "type": "string"
+          },
           "owner_id": {
-            "description": "The person who created it: deliveries stop when they can no longer\nmanage the project's webhooks.",
+            "description": "The person who answers for it: who created it, or last changed its\nURL or event types or rotated its secret. Deliveries stop when they\ncan no longer manage the project's webhooks.",
             "format": "int64",
             "minimum": 1,
             "type": "integer"
@@ -5764,16 +5768,13 @@
           },
           "updated_at": {
             "type": "string"
-          },
-          "url": {
-            "type": "string"
           }
         },
         "required": [
           "id",
           "project_id",
           "owner_id",
-          "url",
+          "origin",
           "event_types",
           "enabled",
           "disabled_reason",

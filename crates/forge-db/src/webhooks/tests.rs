@@ -180,7 +180,7 @@ async fn create_list_and_get_a_webhook_with_its_audit_row() {
     let hook = &listed[0];
     assert_eq!(hook.id, id);
     assert_eq!(hook.owner, w.alice);
-    assert_eq!(hook.url, "https://kanflow.internal/hook");
+    assert_eq!(hook.origin, "https://kanflow.internal:443");
     assert_eq!(hook.event_types, vec!["*"]);
     assert!(hook.enabled);
     assert_eq!(hook.secret_version, 1);
@@ -777,9 +777,9 @@ async fn webhook_checks_refuse_raw_rows_by_constraint_name() {
     let mut su = w.t.superuser().await;
     let insert = |url: &str, types: &str| {
         format!(
-            "INSERT INTO forge.webhooks (uid, project_id, owner_user_id, url, event_types, \
+            "INSERT INTO forge.webhooks (uid, project_id, owner_user_id, url, origin, event_types, \
              secret_key_id, secret_ciphertext) VALUES (gen_random_uuid(), {}, {}, '{url}', \
-             {types}, 1, decode(repeat('00', 40), 'hex'))",
+             'https://x.example:443', {types}, 1, decode(repeat('00', 40), 'hex'))",
             w.project().get(),
             w.alice.get()
         )
@@ -893,7 +893,7 @@ async fn the_read_pool_never_reads_a_sealed_secret_and_app_writes_are_audited() 
         };
         assert_eq!(state.as_deref(), Some("42501"), "{sql}");
     }
-    sqlx::raw_sql("SELECT url, event_types, secret_version FROM forge.webhooks")
+    sqlx::raw_sql("SELECT origin, event_types, secret_version FROM forge.webhooks")
         .execute(&mut su)
         .await
         .expect("the listed columns are readable");
@@ -908,5 +908,191 @@ async fn the_read_pool_never_reads_a_sealed_secret_and_app_writes_are_audited() 
         .expect("update");
     let e = tx.commit().await.expect_err("unaudited");
     assert!(e.to_string().contains("audit"), "{e}");
+    w.t.drop_now().await;
+}
+
+// ── review fixes (I2 review) ──
+
+#[tokio::test]
+async fn editing_the_target_or_rotating_makes_the_editor_the_owner() {
+    let w = world().await;
+    let id = w.create("req-hook").await;
+    let bob = users::create(
+        &w.t.db,
+        &system("req-user-bob"),
+        &NewUser::human("bob", "bob", "bob@example.test"),
+    )
+    .await
+    .expect("bob")
+    .user_id;
+    // Enabling / disabling alone keeps the owner.
+    let _ = update_decided(
+        &w.t.db,
+        &as_user(bob, "req-hook-off"),
+        (w.project(), id),
+        bob,
+        &WebhookPatch {
+            enabled: Some(false),
+            ..WebhookPatch::default()
+        },
+        |_| Ok(()),
+    )
+    .await
+    .expect("disable");
+    let hook = get(&w.t.db, w.project(), id)
+        .await
+        .expect("get")
+        .expect("hook");
+    assert_eq!(hook.owner, w.alice);
+    // A new event allowlist: bob answers for it now, audited.
+    let (outcome, ()) = update_decided(
+        &w.t.db,
+        &as_user(bob, "req-hook-types"),
+        (w.project(), id),
+        bob,
+        &WebhookPatch {
+            event_types: Some(vec!["merge_request.*".to_owned()]),
+            ..WebhookPatch::default()
+        },
+        |_| Ok(()),
+    )
+    .await
+    .expect("types");
+    assert_eq!(
+        outcome,
+        UpdateOutcome::Updated(vec![WebhookField::EventTypes, WebhookField::Owner])
+    );
+    let hook = get(&w.t.db, w.project(), id)
+        .await
+        .expect("get")
+        .expect("hook");
+    assert_eq!(hook.owner, bob);
+    assert_eq!(
+        w.text(
+            "SELECT (details->>'owner_from') || ':' || (details->>'owner_id') \
+             FROM forge.audit_log WHERE request_id = 'req-hook-types'"
+        )
+        .await,
+        format!("{}:{}", w.alice.get(), bob.get())
+    );
+    // A rotation by alice makes her the owner again.
+    let _ = rotate_secret_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-hook-rotate"),
+        (w.project(), id),
+        w.alice,
+        |uid| keys().seal(uid, &WebhookSecret::generate().expect("secret")),
+        |_| Ok(()),
+    )
+    .await
+    .expect("rotate");
+    let hook = get(&w.t.db, w.project(), id)
+        .await
+        .expect("get")
+        .expect("hook");
+    assert_eq!(hook.owner, w.alice);
+    assert_eq!(
+        w.text(
+            "SELECT details->>'owner_id' FROM forge.audit_log WHERE request_id = 'req-hook-rotate'"
+        )
+        .await,
+        w.alice.get().to_string()
+    );
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_pending_delivery_without_a_live_job_is_swept_failed() {
+    let w = world().await;
+    let id = w.create("req-hook").await;
+    let orphan = w.delivery(id, 1).await;
+    let queued = w.delivery(id, 2).await;
+    let recent = w.delivery(id, 3).await;
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.webhook_deliveries SET created_at = now() - interval '1 hour' \
+         WHERE id IN ({}, {}); \
+         INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key, \
+         origin_request_id) VALUES ('webhook.deliver', '{{}}', 'queued', 3, 30000, \
+         'delivery:{}:0:1', 'req-j')",
+        orphan.get(),
+        queued.get(),
+        queued.get()
+    ))
+    .await;
+    let h = health(&w.t.db).await.expect("health");
+    assert_eq!(h.stuck_pending, 1, "{h:?}");
+    assert_eq!(
+        sweep_stuck(&w.t.db, 100).await.expect("sweep"),
+        vec![orphan]
+    );
+    assert_eq!(
+        w.text(&format!(
+            "SELECT state || ':' || last_reason || ':' || last_error_code \
+             FROM forge.webhook_deliveries WHERE id = {}",
+            orphan.get()
+        ))
+        .await,
+        "failed:stuck:FG-INT-0004"
+    );
+    for live in [queued, recent] {
+        assert_eq!(
+            w.text(&format!(
+                "SELECT state FROM forge.webhook_deliveries WHERE id = {}",
+                live.get()
+            ))
+            .await,
+            "pending"
+        );
+    }
+    assert_eq!(health(&w.t.db).await.expect("health").stuck_pending, 0);
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_failed_job_fails_its_pending_delivery() {
+    let w = world().await;
+    let id = w.create("req-hook").await;
+    let d = w.delivery(id, 1).await;
+    assert!(fail_delivery(&w.t.db, d, Some(0), ErrorCode::DbQueryFailed)
+        .await
+        .expect("fail"));
+    assert_eq!(
+        w.text(&format!(
+            "SELECT state || ':' || last_reason || ':' || last_error_code \
+             FROM forge.webhook_deliveries WHERE id = {}",
+            d.get()
+        ))
+        .await,
+        "failed:internal:FG-DB-0002"
+    );
+    // Already finished: nothing changes.
+    assert!(!fail_delivery(&w.t.db, d, None, ErrorCode::DbQueryFailed)
+        .await
+        .expect("again"));
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn the_read_pool_never_reads_the_full_url() {
+    let w = world().await;
+    w.create("req-hook").await;
+    let mut su = w.t.superuser().await;
+    sqlx::raw_sql("SET ROLE forge_ro")
+        .execute(&mut su)
+        .await
+        .expect("role");
+    let state = match sqlx::raw_sql("SELECT url FROM forge.webhooks")
+        .execute(&mut su)
+        .await
+    {
+        Err(sqlx::Error::Database(e)) => e.code().map(|c| c.into_owned()),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(state.as_deref(), Some("42501"));
+    sqlx::raw_sql("SELECT origin FROM forge.webhooks")
+        .execute(&mut su)
+        .await
+        .expect("origin is readable");
+    drop(su);
     w.t.drop_now().await;
 }

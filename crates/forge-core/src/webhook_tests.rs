@@ -97,15 +97,25 @@ fn other_always_refused_ranges() {
         ("http://[64:ff9b::a00:1]/", "nat64"),
         ("http://[2002:a00:1::1]/", "six_to_four"),
         ("http://[::a00:1]/", "ipv4_compatible"),
+        // I2 review: Teredo, local-use NAT64, site-local, CGNAT, benchmarking.
+        ("http://[2001:0:4136:e378::1]/", "teredo"),
+        ("http://[64:ff9b:1::a00:1]/", "nat64"),
+        ("http://[fec0::1]/", "site_local"),
+        ("http://100.64.0.1/", "cgnat"),
+        ("http://100.127.255.254/", "cgnat"),
+        ("http://198.18.0.1/", "benchmarking"),
+        ("http://198.19.255.1/", "benchmarking"),
     ] {
         assert_eq!(refused(&p, raw, &[]), reason, "{raw}");
     }
     // Private addresses pass once allowlisted (and only then).
     assert_eq!(refused(&p, "http://10.1.2.3/", &[]), "allowed");
-    assert_eq!(refused(&p, "http://100.64.0.1/", &[]), "allowed");
     let none = policy("", true);
     assert_eq!(refused(&none, "http://10.1.2.3/", &[]), "not_allowlisted");
-    assert_eq!(refused(&none, "http://100.64.0.1/", &[]), "not_allowlisted");
+    // Next to the refused ranges, still allowed once listed.
+    assert_eq!(refused(&p, "http://100.128.0.1/", &[]), "allowed");
+    assert_eq!(refused(&p, "http://198.20.0.1/", &[]), "allowed");
+    assert_eq!(refused(&p, "http://[2001:db9::1]/", &[]), "allowed");
 }
 
 #[test]

@@ -923,3 +923,158 @@ impl Captured {
             .collect()
     }
 }
+
+// ── I2 review fixes ──
+
+#[tokio::test]
+async fn an_editor_removed_later_gets_deliveries_skipped_owner_lost() {
+    let w = world().await;
+    let bob = users::create(
+        &w.t.db,
+        &system("req-user-bob"),
+        &NewUser::human("bob", "bob", "bob@example.test"),
+    )
+    .await
+    .expect("bob")
+    .user_id;
+    projects::add_member(
+        &w.t.db,
+        &system("req-bob-member"),
+        w.project(),
+        bob,
+        Role::Maintainer,
+    )
+    .await
+    .expect("bob is a Maintainer");
+    let rx = Receiver::start(vec![answer(204)]).await;
+    let hooks = Webhooks::new(w.t.db.clone(), test_policy(rx.port), Some(keys()));
+    // Alice creates it; bob points it elsewhere (another event allowlist).
+    let (hook, _) = w.create_as(&hooks, w.alice, &rx.url(), None).await;
+    let proof = prove(
+        &World::person(bob),
+        Action::WebhookManage,
+        WebhookCtx::new(w.loaded(bob).await, hook),
+    )
+    .expect("proof");
+    let _edited = hooks
+        .update(
+            &request("req-bob-edit"),
+            &proof,
+            &WebhookChanges {
+                event_types: Some(vec!["check.*".to_owned()]),
+                ..WebhookChanges::default()
+            },
+        )
+        .await
+        .expect("edit");
+    // Bob leaves; alice is still the project's Owner.
+    let _demoted = projects::change_member(
+        &w.t.db,
+        &system("req-bob-demoted"),
+        w.project(),
+        bob,
+        Role::Maintainer,
+        Role::Developer,
+    )
+    .await
+    .expect("demote");
+    w.check_event(10).await;
+    w.dispatch().await;
+    w.deliver(Transport::new(test_policy(rx.port), None).expect("transport"))
+        .await;
+    assert_eq!(
+        rx.received().len(),
+        0,
+        "the removed editor's webhook delivered"
+    );
+    let rows = w
+        .rows(&format!(
+            "SELECT count(*) AS n FROM forge.webhook_deliveries WHERE webhook_id = {}",
+            hook.get()
+        ))
+        .await;
+    assert_eq!(
+        rows[0]["n"], 0,
+        "nothing recorded for an owner who lost the project"
+    );
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_job_that_cannot_run_fails_its_delivery_with_int_0004() {
+    let w = world().await;
+    let rx = Receiver::start(vec![answer(204)]).await;
+    let hooks = Webhooks::new(w.t.db.clone(), test_policy(rx.port), Some(keys()));
+    let (hook, _) = w.create_as(&hooks, w.alice, &rx.url(), None).await;
+    w.check_event(11).await;
+    w.dispatch().await;
+    // A payload this build cannot read (the round is gone).
+    w.t.exec_superuser(
+        "UPDATE forge.jobs SET payload = payload - 'round' WHERE kind = 'webhook.deliver'",
+    )
+    .await;
+    let log = Captured::default();
+    {
+        let _guard = log.install();
+        w.deliver(Transport::new(test_policy(rx.port), None).expect("transport"))
+            .await;
+    }
+    let rows = w
+        .rows(&format!(
+            "SELECT state, last_reason FROM forge.webhook_deliveries WHERE webhook_id = {}",
+            hook.get()
+        ))
+        .await;
+    assert_eq!(rows[0]["state"], "failed", "{rows:?}");
+    assert_eq!(rows[0]["last_reason"], "internal");
+    assert!(log.lines().iter().any(|l| l["error_code"] == "FG-INT-0004"
+        && l["context"]
+            .as_str()
+            .is_some_and(|c| c.contains("reason=job_failed"))));
+    assert_eq!(rx.received().len(), 0);
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_skipped_delivery_is_logged_with_its_reason() {
+    let w = world().await;
+    let rx = Receiver::start(vec![answer(204)]).await;
+    let hooks = Webhooks::new(w.t.db.clone(), test_policy(rx.port), Some(keys()));
+    let (hook, _) = w.create_as(&hooks, w.alice, &rx.url(), None).await;
+    w.check_event(12).await;
+    w.dispatch().await;
+    // Disabled after the event was dispatched.
+    let proof = prove(
+        &World::person(w.alice),
+        Action::WebhookManage,
+        WebhookCtx::new(w.loaded(w.alice).await, hook),
+    )
+    .expect("proof");
+    let _disabled = hooks
+        .update(
+            &request("req-off"),
+            &proof,
+            &WebhookChanges {
+                enabled: Some(false),
+                ..WebhookChanges::default()
+            },
+        )
+        .await
+        .expect("disable");
+    let log = Captured::default();
+    {
+        let _guard = log.install();
+        w.deliver(Transport::new(test_policy(rx.port), None).expect("transport"))
+            .await;
+    }
+    let line = log
+        .lines()
+        .into_iter()
+        .find(|l| l["event"] == "forge.webhooks.skipped")
+        .expect("the skip's log line");
+    assert_eq!(line["level"], "INFO");
+    assert_eq!(line["reason"], "webhook_disabled");
+    assert!(line["delivery_id"].is_string());
+    assert!(line["request_id"].is_string());
+    w.t.drop_now().await;
+}

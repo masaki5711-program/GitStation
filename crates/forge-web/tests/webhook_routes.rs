@@ -204,8 +204,23 @@ async fn a_maintainer_manages_a_webhook_and_sees_its_secret_once() {
     );
     let one = format!("{}/{hook}", hooks_uri(w.web));
     // Reads never show a secret.
+    // The full URL is write-only (its query holds the receiver's token).
+    assert!(
+        !created.json.to_string().contains("token=receiver"),
+        "{}",
+        created.json
+    );
+    assert_eq!(
+        created.json["webhook"]["origin"],
+        "https://kanflow.internal:443"
+    );
     let listed = call(db, "GET", &hooks_uri(w.web), session(w.alice), None).await;
     assert_eq!(listed.status, StatusCode::OK, "{}", listed.json);
+    assert!(
+        !listed.json.to_string().contains("token=receiver"),
+        "{}",
+        listed.json
+    );
     assert_eq!(listed.json["items"].as_array().map(Vec::len), Some(1));
     assert!(!listed.json.to_string().contains(secret));
     let read = call(

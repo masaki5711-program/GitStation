@@ -572,3 +572,70 @@ pub async fn record_attempt(
     .await;
     tx.settle("webhook.attempt", outcome).await
 }
+
+/// End delivery `delivery` as `failed` (`last_reason = internal`,
+/// `last_error_code` = `code`) when it is still pending (in `round`, when
+/// given): its job could not run it and will not again (a payload this
+/// build cannot read, the job's last run failing on the database). The
+/// caller logs `FG-INT-0004`. `false`: it was no longer pending (nothing
+/// written).
+pub async fn fail_delivery(
+    db: &Db,
+    delivery: WebhookDeliveryId,
+    round: Option<i32>,
+    code: ErrorCode,
+) -> Result<bool, ForgeError> {
+    const QUERY: &str = "webhooks.fail_delivery";
+    db.within(QUERY, async {
+        let mut conn = db
+            .write_pool()
+            .acquire()
+            .await
+            .map_err(|e| query_error("webhooks.acquire", e))?;
+        let done = sqlx::query(
+            "UPDATE forge.webhook_deliveries SET state = 'failed', last_reason = 'internal', \
+             last_error_code = $3, finished_at = now() \
+             WHERE id = $1 AND state = 'pending' AND ($2::int IS NULL OR redeliveries = $2)",
+        )
+        .bind(delivery.get())
+        .bind(round)
+        .bind(code.id())
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        Ok(done.rows_affected() > 0)
+    })
+    .await
+}
+
+/// Fail up to `batch` stuck deliveries (pending without a live job for
+/// [`super::STUCK_AFTER`]: `last_reason = stuck`, `FG-INT-0004`), so
+/// redelivery and retention work on them again; returns their ids (the
+/// caller logs them). One statement.
+pub async fn sweep_stuck(db: &Db, batch: i64) -> Result<Vec<WebhookDeliveryId>, ForgeError> {
+    const QUERY: &str = "webhooks.sweep_stuck";
+    db.within(QUERY, async {
+        let mut conn = db
+            .write_pool()
+            .acquire()
+            .await
+            .map_err(|e| query_error("webhooks.acquire", e))?;
+        let ids: Vec<i64> = sqlx::query_scalar(&format!(
+            "UPDATE forge.webhook_deliveries SET state = 'failed', last_reason = 'stuck', \
+             last_error_code = $3, finished_at = now() WHERE id IN ( \
+             SELECT d.id FROM forge.webhook_deliveries d WHERE {} ORDER BY d.id LIMIT $2 \
+             FOR UPDATE SKIP LOCKED) RETURNING id",
+            super::STUCK_WHERE
+        ))
+        .bind(super::STUCK_AFTER.as_secs_f64())
+        .bind(batch.clamp(1, 10_000))
+        .bind(ErrorCode::WebhookDeadLettered.id())
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let mut ids: Vec<WebhookDeliveryId> = ids.into_iter().map(WebhookDeliveryId::new).collect();
+        ids.sort();
+        Ok(ids)
+    })
+    .await
+}

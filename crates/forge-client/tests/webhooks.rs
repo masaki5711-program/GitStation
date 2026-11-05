@@ -13,7 +13,7 @@ fn gstn(sb: &Sandbox, srv: &Mock, args: &[&str]) -> Out {
     sb.run_env(&srv.url, args, "", &[("GSTN_TOKEN", TOKEN)])
 }
 
-const HOOK: &str = r#"{"id":3,"project_id":7,"owner_id":5,"url":"https://kanflow.internal/hook","event_types":["merge_request.*"],"enabled":true,"disabled_reason":null,"secret_version":1,"previous_secret_valid_until":null,"consecutive_failures":0,"failing_since":null,"last_delivery_at":null,"created_at":"2026-11-05T00:00:00Z","updated_at":"2026-11-05T00:00:00Z"}"#;
+const HOOK: &str = r#"{"id":3,"project_id":7,"owner_id":5,"origin":"https://kanflow.internal:443","event_types":["merge_request.*"],"enabled":true,"disabled_reason":null,"secret_version":1,"previous_secret_valid_until":null,"consecutive_failures":0,"failing_since":null,"last_delivery_at":null,"created_at":"2026-11-05T00:00:00Z","updated_at":"2026-11-05T00:00:00Z"}"#;
 
 #[test]
 fn webhook_create_posts_the_url_and_types_and_shows_the_secret_once() {

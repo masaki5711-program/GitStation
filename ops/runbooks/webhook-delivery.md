@@ -42,7 +42,9 @@
    | `tls` | 証明書を検証できない（`webhook.ca_file` の CA、名前の不一致） |
    | `dns` | 名前を解決できない |
    | `target_forbidden` / `resolved_forbidden` | 送り先の方針で拒否（下の FG-INT-0010） |
-   | `webhook_disabled` / `owner_lost` / `not_admitted` / `event_gone` | 送らずに終えた（`skipped`）。無効、作成者の権限の喪失、許可リストから外れた、イベントが保持で消えた |
+   | `webhook_disabled` / `owner_lost` / `not_admitted` / `event_gone` | 送らずに終えた（`skipped`）。無効、所有者の権限の喪失、許可リストから外れた、イベントが保持で消えた。ログ `forge.webhooks.skipped`（info、`delivery_id`・`reason`・`request_id`） |
+   | `internal` | 配信のジョブが続けられない（読めない payload、最後の実行の DB の失敗）。FG-INT-0004 `reason=job_failed`、`cause` がジョブのコード |
+   | `stuck` | 生きたジョブ（queued / running）のないまま 10 分 `pending` だった。worker の `webhook_delivery_retention`（5 分ごと）が `failed` にした（FG-INT-0004 `reason=stuck`） |
 3. DB（読み取り）:
    ```sql
    SELECT id, project_id, enabled, disabled_reason, consecutive_failures, failing_since, last_delivery_at
@@ -83,7 +85,13 @@
   gstn webhook update <webhook_id> --project <id> --enable
   ```
   有効にすると連続の失敗の数と `failing_since` を 0 に戻す。無効の間のイベントは記録されていない（再送できない）。履歴 API で埋める。
-- **作成者の権限の喪失（`owner_lost`）**: 今の Maintainer が自分の名前で作り直す（新しい秘密を受信先に渡す）か、作成者のロールを戻す。
+- **所有者の権限の喪失（`owner_lost`）**: 所有者は作った人か、最後に URL・`event_types` を変えた人・秘密を入れ替えた人（`gstn webhook view` の
+  `owner_id`、監査 `webhook.updated` / `webhook.secret_rotated` の `owner_from` → `owner_id`）。今の Maintainer が `gstn webhook rotate-secret` で
+  所有者になり（新しい秘密を受信先に渡す）、または所有者のロールを戻す。
+- **鍵がないのに Webhook がある**（doctor `webhook.deliveries` が FG-INT-0004 `reason=secret_keys_missing`、worker の起動ログ
+  `forge.worker.webhook_lane_off` が warn）: 何も配られていない。承認を得て `webhook.secret_keys_file` を戻し、`forge worker` を再起動する。
+- **配信が始まる位置**: 鍵を初めて設定して `forge worker` を起動したとき、`webhook-dispatch` は**今の先頭から**読む（それより前のイベントは配らない）。
+  起動ログ `forge.worker.webhook_dispatch_from` の `last_seq`。それ以前の分は受信先が履歴 API で読む。
 - **秘密の漏えい・入れ替え**（Maintainer）:
   ```
   gstn webhook rotate-secret <webhook_id> --project <id>

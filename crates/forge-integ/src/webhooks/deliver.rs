@@ -70,11 +70,36 @@ impl JobHandler for DeliverHandler {
     fn run(&self, job: ClaimedJob) -> JobFuture {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
-            let (delivery, round, attempt) = payload(&job).map_err(JobFailure::permanent)?;
-            inner
-                .attempt(&job.request_id(), delivery, round, attempt)
-                .await
-                .map_err(JobFailure::retry)
+            let request_id = job.request_id();
+            let (ids, result) = match payload(&job) {
+                Ok((delivery, round, attempt)) => (
+                    Some((delivery, round)),
+                    inner.attempt(&request_id, delivery, round, attempt).await,
+                ),
+                Err(e) => (None, Err(e)),
+            };
+            let Err(e) = result else {
+                return Ok(());
+            };
+            // I2 review: a job that will not run again (a payload this
+            // build cannot read, its last run failing) ends its delivery,
+            // so the row never stays pending (redelivery, retention and
+            // doctor see it).
+            let unreadable = ids.is_none();
+            if unreadable || job.lease.attempt >= job.max_attempts {
+                let (delivery, round) = match ids {
+                    Some((d, r)) => (Some(d), Some(r)),
+                    None => (delivery_of(&job), None),
+                };
+                if let Some(delivery) = delivery {
+                    inner.give_up(&request_id, delivery, round, &e).await;
+                }
+            }
+            Err(if unreadable {
+                JobFailure::permanent(e)
+            } else {
+                JobFailure::retry(e)
+            })
         })
     }
 }
@@ -106,10 +131,24 @@ fn payload(job: &ClaimedJob) -> Result<(WebhookDeliveryId, i32, i32), ForgeError
     ))
 }
 
-fn unix_now() -> u64 {
+/// The delivery id of a payload whatever else is wrong with it.
+fn delivery_of(job: &ClaimedJob) -> Option<WebhookDeliveryId> {
+    job.payload
+        .get("delivery_id")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|id| *id > 0)
+        .map(WebhookDeliveryId::new)
+}
+
+/// Seconds since the Unix epoch; a clock before it is an error, never a
+/// signature with `t=0` (I2 review).
+fn unix_now() -> Result<u64, ForgeError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+        .map(|d| d.as_secs())
+        .map_err(|_| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "clock_before_epoch")
+        })
 }
 
 fn reason_of(e: &ForgeError) -> &str {
@@ -126,6 +165,34 @@ fn origin(task: &DeliveryTask) -> String {
 }
 
 impl Inner {
+    /// End a delivery its job gave up on: `failed` and `FG-INT-0004
+    /// reason=job_failed` (with the job's error code). A failure to record
+    /// it is logged too; the sweep (`webhook_delivery_retention`) fails the
+    /// row later.
+    async fn give_up(
+        &self,
+        request_id: &RequestId,
+        delivery: WebhookDeliveryId,
+        round: Option<i32>,
+        cause: &ForgeError,
+    ) {
+        match db::fail_delivery(&self.db, delivery, round, cause.code()).await {
+            Ok(true) => telemetry::log_failure(
+                &ForgeError::new(ErrorCode::WebhookDeadLettered)
+                    .with_context("reason", "job_failed")
+                    .with_context("delivery_row_id", delivery.get())
+                    .with_context("cause", cause.code().id()),
+                request_id,
+            ),
+            Ok(false) => {}
+            Err(e) => telemetry::log_failure(
+                &e.with_context("operation", "webhooks.give_up")
+                    .with_context("delivery_row_id", delivery.get()),
+                request_id,
+            ),
+        }
+    }
+
     async fn attempt(
         &self,
         request_id: &RequestId,
@@ -142,7 +209,7 @@ impl Inner {
             return Ok(());
         }
         let (outcome, head) = self.outcome(request_id, &task, attempt).await?;
-        let recorded = db::record_attempt(
+        let recorded = match db::record_attempt(
             &self.db,
             request_id,
             &Attempt {
@@ -152,7 +219,26 @@ impl Inner {
                 outcome,
             },
         )
-        .await?;
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // I2 review: the job runs again and may send this delivery
+                // a second time (the receiver deduplicates on Forge-Delivery).
+                let sent = !matches!(outcome, AttemptOutcome::Skipped { .. });
+                tracing::warn!(
+                    target: "forge_integ",
+                    event = "forge.webhooks.attempt_unrecorded",
+                    request_id = %request_id,
+                    delivery_id = %task.delivery_uid,
+                    attempt,
+                    resend = sent,
+                    error_code = e.code().id(),
+                    "an attempt's outcome was not recorded; its job runs again"
+                );
+                return Err(e);
+            }
+        };
         report(request_id, &task, (attempt, outcome, head), &recorded);
         Ok(())
     }
@@ -190,7 +276,7 @@ impl Inner {
         }
         let body = body.to_string().into_bytes();
         let delivery_id = task.delivery_uid.to_string();
-        let t = unix_now();
+        let t = unix_now()?;
         let mut signatures = Vec::new();
         let mut kids = Vec::new();
         let current = self
@@ -297,6 +383,19 @@ fn report(
     (attempt, outcome, head): (i32, AttemptOutcome, Option<String>),
     recorded: &RecordedAttempt,
 ) {
+    if let (AttemptOutcome::Skipped { reason }, Recorded::Skipped) = (outcome, recorded.recorded) {
+        // I2 review: why a delivery went nowhere (owner_lost also logs
+        // FG-INT-0010).
+        tracing::info!(
+            target: "forge_integ",
+            event = "forge.webhooks.skipped",
+            request_id = %request_id,
+            webhook_id = task.webhook.get(),
+            delivery_id = %task.delivery_uid,
+            reason,
+            "a webhook delivery was skipped"
+        );
+    }
     if let AttemptOutcome::Failed { status, reason, .. } = outcome {
         let status = status.map_or_else(|| "none".to_owned(), |s| s.to_string());
         let base = |code: ErrorCode| {

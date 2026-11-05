@@ -104,11 +104,14 @@ pub struct WebhookBody {
     pub id: i64,
     #[schema(minimum = 1)]
     pub project_id: i64,
-    /// The person who created it: deliveries stop when they can no longer
-    /// manage the project's webhooks.
+    /// The person who answers for it: who created it, or last changed its
+    /// URL or event types or rotated its secret. Deliveries stop when they
+    /// can no longer manage the project's webhooks.
     #[schema(minimum = 1)]
     pub owner_id: i64,
-    pub url: String,
+    /// `scheme://host:port` of the URL. The full URL is write-only: its
+    /// path or query may hold the receiver's token (I2 review).
+    pub origin: String,
     /// Sorted.
     pub event_types: Vec<String>,
     pub enabled: bool,
@@ -224,7 +227,7 @@ fn body(w: Webhook) -> WebhookBody {
         id: w.id.get(),
         project_id: w.project.get(),
         owner_id: w.owner.get(),
-        url: w.url,
+        origin: w.origin,
         event_types: w.event_types,
         enabled: w.enabled,
         disabled_reason: w.disabled_reason.map(|r| r.as_str().to_owned()),

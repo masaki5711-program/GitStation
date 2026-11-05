@@ -1394,6 +1394,30 @@ forge-auth `an_owner_who_lost_the_project_is_int_0010_owner_lost` と権限の�
 `a_loopback_receiver_is_refused_at_delivery_by_the_production_policy`、`a_rotation_signs_with_both_secrets_for_the_overlap`、
 `a_webhook_delivers_only_what_its_owner_may_still_see`；forge-web `webhook_routes.rs`；gstn `tests/webhooks.rs`。
 
+### I2 の独立レビュー（2026-11-05）で変えた点
+
+最初のマイグレーション `20261120200000` はまだどこにも適用していないので、そのまま直した（列 `origin` を足し、`forge_ro` から `url` を外した）。
+
+1. **所有者を変更した人に移す**（security HIGH）: URL か `event_types` を変えた人、秘密を入れ替えた人が所有者（`owner_user_id`）になる
+   （`WebhookField::Owner`、監査の `owner_from` / `owner_id`）。変えた人が後で権限を失えば、元の作成者が Maintainer のままでも `owner_lost`。
+   有効・無効の切り替えだけでは所有者は変わらない。テスト `editing_the_target_or_rotating_makes_the_editor_the_owner`、
+   `an_editor_removed_later_gets_deliveries_skipped_owner_lost`。
+2. **`pending` のまま残らない**（silent-failure HIGH）: ジョブが配信を続けられない（読めない payload、最後の実行の DB の失敗）ときは
+   `fail_delivery` で `failed`（`last_reason = internal`、FG-INT-0004 `reason=job_failed`）。生きたジョブのないまま 10 分の `pending` は
+   worker の `webhook_delivery_retention`（5 分ごと）が `sweep_stuck` で `failed`（`stuck`、FG-INT-0004）にする。doctor `webhook.deliveries` は
+   その数（`stuck_pending`）と 24 時間を超えた `pending` を警告する。テスト `a_pending_delivery_without_a_live_job_is_swept_failed`、
+   `a_failed_job_fails_its_pending_delivery`、`a_job_that_cannot_run_fails_its_delivery_with_int_0004`、`stuck_old_or_unkeyed_work_is_a_warning`。
+3. **URL は書き込みだけ**（MEDIUM）: 答えは `origin` だけ、`forge_ro` は `url` を読めない（`the_read_pool_never_reads_the_full_url`）。
+4. **鍵がないのに Webhook がある**（MEDIUM）: doctor が FG-INT-0004 `reason=secret_keys_missing`、worker が `forge.worker.webhook_lane_off` を
+   warn（`error_code=FG-SYS-0002`）で出す。
+5. **送らずに終えた配信をログに残す**（MEDIUM）: `forge.webhooks.skipped`（info、`delivery_id`・`reason`・`request_id`）。
+6. **配信が始まる位置**（MEDIUM）: worker の起動が `webhook-dispatch` を登録し、`forge.worker.webhook_dispatch_from`（`last_seq`）を出す。
+   初めての登録は先頭から（それより前のイベントは配らない）。Runbook に書いた。
+7. **小さな点**（LOW）: 送った後に記録できなかったら `forge.webhooks.attempt_unrecorded`（warn、`delivery_id`・`resend`）。時計が epoch より前なら
+   `t=0` で署名せずに失敗（`clock_before_epoch`）。常に拒否に 100.64.0.0/10（`cgnat`。§8 の「許可リストにあるときだけ」から変えた）、
+   198.18.0.0/15（`benchmarking`）、2001::/32（`teredo`）、64:ff9b:1::/48（`nat64`）、fec0::/10（`site_local`）を足した。
+   `WebhookSecret` は `zeroize` で消す（すでに依存の木にあった）。
+
 **受け入れた残り**: (1) Webhook ごとの同時実行は worker の数まで（M3 は worker 1 つなので 1）。列は 1 件ずつなので、遅い受信先（最大 13 秒）は
 ほかの Webhook の配信を遅らせる。(2) TLS の受信先への配信は自動テストがない（証明書を作るクレートがない）。検証は reqwest の rustls が
 URL の名前で行い、`resolve` の固定はアドレスだけを替える。(3) `work_items` は配信の時点の記録（`work-item-sync` より先に配ることがある。

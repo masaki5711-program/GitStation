@@ -527,12 +527,12 @@ ro_columns = ["*"]
 
 # ── M3 I2: webhooks (ADR-0016 §8, Amendment I2) ──
 # A project's push receivers; the delivery counters are unaudited. Not the
-# sealed secrets for the read pool.
+# sealed secrets or the full url (it may hold a receiver token) for the read pool.
 [tables.webhooks]
 guarded = false
 kind = "audited"
 ro_columns = [
-    "id", "uid", "project_id", "owner_user_id", "url", "event_types", "enabled",
+    "id", "uid", "project_id", "owner_user_id", "origin", "event_types", "enabled",
     "disabled_reason", "secret_key_id", "secret_version", "secret_prev_key_id",
     "secret_prev_until", "consecutive_failures", "failing_since", "last_delivery_at",
     "created_at", "updated_at",

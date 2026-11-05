@@ -1273,7 +1273,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn webhook list --project 7 --json"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/webhooks"],
-        output: r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","project_id","owner_id","url","event_types","enabled","secret_version","consecutive_failures"]}}}}"#,
+        output: r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","project_id","owner_id","origin","event_types","enabled","secret_version","consecutive_failures"]}}}}"#,
     },
     CommandSpec {
         name: "webhook view",
@@ -1285,7 +1285,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn webhook view 3 --project 7"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/webhooks/{webhook_id}"],
-        output: r#"{"type":"object","required":["id","project_id","owner_id","url","event_types","enabled","secret_version","consecutive_failures"]}"#,
+        output: r#"{"type":"object","required":["id","project_id","owner_id","origin","event_types","enabled","secret_version","consecutive_failures"]}"#,
     },
     CommandSpec {
         name: "webhook create",

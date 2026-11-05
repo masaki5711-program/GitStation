@@ -12,8 +12,9 @@
 //!   by default (nothing can be delivered until the operator lists the
 //!   internal receivers). Whatever the list says, loopback, link-local
 //!   (169.254.169.254 metadata included), unspecified, multicast,
-//!   broadcast, reserved, IPv4-compatible, NAT64 and 6to4 addresses are
-//!   refused; an IPv4-mapped IPv6 address is judged by its IPv4.
+//!   broadcast, reserved, CGNAT (100.64/10), benchmarking (198.18/15),
+//!   IPv4-compatible, NAT64 (both prefixes), 6to4, Teredo (2001::/32) and
+//!   site-local (fec0::/10) addresses are refused; an IPv4-mapped IPv6 address is judged by its IPv4.
 //!   [`TargetPolicy::check_url`] runs when a URL is stored;
 //!   [`TargetPolicy::check_resolved`] runs at every delivery on the
 //!   addresses the name resolves to then, and returns the one address the
@@ -227,6 +228,12 @@ fn denied_v4(a: Ipv4Addr) -> Option<&'static str> {
         Some("multicast")
     } else if o[0] >= 240 {
         Some("reserved")
+    } else if o[0] == 100 && o[1] & 0xc0 == 64 {
+        // 100.64.0.0/10 (I2 review: refused whatever the allowlist says).
+        Some("cgnat")
+    } else if o[0] == 198 && o[1] & 0xfe == 18 {
+        // 198.18.0.0/15.
+        Some("benchmarking")
     } else {
         None
     }
@@ -244,6 +251,15 @@ fn denied_v6(a: Ipv6Addr) -> Option<&'static str> {
         Some("multicast")
     } else if s[0] == 0x64 && s[1] == 0xff9b && s[2..6].iter().all(|x| *x == 0) {
         Some("nat64")
+    } else if s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1 {
+        // 64:ff9b:1::/48, local-use NAT64.
+        Some("nat64")
+    } else if s[0] == 0x2001 && s[1] == 0 {
+        // 2001::/32, Teredo.
+        Some("teredo")
+    } else if s[0] & 0xffc0 == 0xfec0 {
+        // fec0::/10, deprecated site-local.
+        Some("site_local")
     } else if s[0] == 0x2002 {
         Some("six_to_four")
     } else if s[..6].iter().all(|x| *x == 0) {
@@ -553,8 +569,9 @@ pub fn signature_header(t: u64, signatures: &[String]) -> String {
     out
 }
 
-/// A webhook's secret. Never printed; shown to the person once.
-pub struct WebhookSecret(String);
+/// A webhook's secret. Never printed; shown to the person once; wiped
+/// from memory when dropped (`zeroize`).
+pub struct WebhookSecret(zeroize::Zeroizing<String>);
 
 impl std::fmt::Debug for WebhookSecret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -571,10 +588,12 @@ impl WebhookSecret {
     pub fn generate() -> Result<Self, ForgeError> {
         let mut bytes = [0u8; 32];
         getrandom::getrandom(&mut bytes).map_err(|_| rng_unavailable())?;
-        Ok(Self(format!(
+        let secret = Self(zeroize::Zeroizing::new(format!(
             "{SECRET_PREFIX}{}",
             URL_SAFE_NO_PAD.encode(bytes)
-        )))
+        )));
+        zeroize::Zeroize::zeroize(&mut bytes);
+        Ok(secret)
     }
 
     pub fn expose(&self) -> &str {
@@ -762,7 +781,7 @@ impl WebhookSecretKeys {
                 },
             )
             .map_err(|_| unreadable())?;
-        let text = String::from_utf8(plain).map_err(|_| unreadable())?;
+        let text = zeroize::Zeroizing::new(String::from_utf8(plain).map_err(|_| unreadable())?);
         if !text.starts_with(SECRET_PREFIX) {
             return Err(unreadable());
         }
@@ -942,6 +961,9 @@ pub enum WebhookField {
     Url,
     EventTypes,
     Enabled,
+    /// The URL or event types changed by someone else than the owner: the
+    /// caller answers for the webhook now (I2 review).
+    Owner,
 }
 
 impl WebhookField {
@@ -950,6 +972,7 @@ impl WebhookField {
             Self::Url => "url",
             Self::EventTypes => "event_types",
             Self::Enabled => "enabled",
+            Self::Owner => "owner",
         }
     }
 }
@@ -994,10 +1017,13 @@ pub enum WebhookChange {
         event_types: Vec<String>,
         secret_version: i32,
     },
-    /// `webhook.updated`: the fields changed and the state after.
+    /// `webhook.updated`: the fields changed and the state after
+    /// (`owner_from` → `owner`: the owner before and after).
     Updated {
         webhook: WebhookId,
         project: ProjectId,
+        owner_from: UserId,
+        owner: UserId,
         fields: Vec<WebhookField>,
         origin: String,
         enabled: bool,
@@ -1014,6 +1040,9 @@ pub enum WebhookChange {
     SecretRotated {
         webhook: WebhookId,
         project: ProjectId,
+        /// The rotation makes the caller the owner.
+        owner_from: UserId,
+        owner: UserId,
         secret_version: i32,
         previous_valid_until: String,
     },
@@ -1060,9 +1089,9 @@ impl WebhookChange {
     }
 
     /// Created `{"webhook_id","project_id","origin","event_types","secret_version"}`,
-    /// Updated `{"webhook_id","project_id","fields","origin","enabled","event_types"}`,
+    /// Updated `{"webhook_id","project_id","owner_from","owner_id","fields","origin","enabled","event_types"}`,
     /// Deleted `{"webhook_id","project_id","origin"}`, SecretRotated
-    /// `{"webhook_id","project_id","secret_version","previous_valid_until"}`,
+    /// `{"webhook_id","project_id","owner_from","owner_id","secret_version","previous_valid_until"}`,
     /// Disabled `{"webhook_id","project_id","reason","consecutive_failures","failing_since"}`,
     /// Redelivered `{"webhook_id","project_id","delivery_id"}`.
     pub fn to_value(&self) -> serde_json::Value {
@@ -1083,6 +1112,8 @@ impl WebhookChange {
             Self::Updated {
                 webhook,
                 project,
+                owner_from,
+                owner,
                 fields,
                 origin,
                 enabled,
@@ -1090,6 +1121,8 @@ impl WebhookChange {
             } => serde_json::json!({
                 "webhook_id": webhook.get(),
                 "project_id": project.get(),
+                "owner_from": owner_from.get(),
+                "owner_id": owner.get(),
                 "fields": fields.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
                 "origin": origin,
                 "enabled": enabled,
@@ -1107,11 +1140,15 @@ impl WebhookChange {
             Self::SecretRotated {
                 webhook,
                 project,
+                owner_from,
+                owner,
                 secret_version,
                 previous_valid_until,
             } => serde_json::json!({
                 "webhook_id": webhook.get(),
                 "project_id": project.get(),
+                "owner_from": owner_from.get(),
+                "owner_id": owner.get(),
                 "secret_version": secret_version,
                 "previous_valid_until": previous_valid_until,
             }),

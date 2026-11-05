@@ -43,7 +43,7 @@ fn hook_line(h: &Value) -> String {
         "{} {} {} [{}] failures {}",
         text(h, "id"),
         state,
-        text(h, "url"),
+        text(h, "origin"),
         types,
         text(h, "consecutive_failures")
     )

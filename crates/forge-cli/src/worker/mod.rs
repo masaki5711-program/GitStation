@@ -124,7 +124,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
         tracing::info!(db_target = %db.target(), "forge.worker.started");
         // M3 I2: the webhook lane (keys and CA read now: a bad one stops the start).
         let webhook = WebhookLane {
-            runner: webhooks::lane(&db, &cfg.webhook)?,
+            runner: webhooks::lane(&db, &cfg.webhook).await?,
             retention_days: cfg.webhook.delivery_retention_days,
         };
         let purger = purge::Purger::new(&db, storage.root.clone()); // clone: the purge's own handle

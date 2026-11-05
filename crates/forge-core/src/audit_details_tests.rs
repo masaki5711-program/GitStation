@@ -864,6 +864,8 @@ fn webhook_details_name_the_origin_only_and_disable_is_the_event() {
         WebhookChange::Updated {
             webhook,
             project,
+            owner_from: crate::ids::UserId::new(5),
+            owner: crate::ids::UserId::new(6),
             fields: vec![WebhookField::Url, WebhookField::Enabled],
             origin: "https://kanflow.internal:443".to_owned(),
             enabled: true,
@@ -877,6 +879,8 @@ fn webhook_details_name_the_origin_only_and_disable_is_the_event() {
         WebhookChange::SecretRotated {
             webhook,
             project,
+            owner_from: crate::ids::UserId::new(6),
+            owner: crate::ids::UserId::new(6),
             secret_version: 2,
             previous_valid_until: "2026-11-06T00:00:00Z".to_owned(),
         },
