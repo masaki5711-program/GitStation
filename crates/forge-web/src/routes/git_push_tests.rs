@@ -583,7 +583,8 @@ async fn a_refused_check_is_logged_with_its_first_finding() {
     let result = format!(
         "version\t1\nnonce\t{}\nverdict\trefused\nreason\t-\ndetail\t-\ncause_code\t-\n\
          incomplete\t-\nobjects\t3\nblobs_scanned\t1\nbytes_scanned\t40\nallowed\t0\n\
-         total_findings\t1\nfinding\tsecret\tprivate_key\t{}\t{}\tdeploy/id_rsa\n",
+         total_findings\t1\npack_objects\t3\nskipped_large\t0\nskipped_binary\t0\n\
+         finding\tsecret\tprivate_key\t{}\t{}\tdeploy/id_rsa\n",
         run.dir()
             .file_name()
             .and_then(|n| n.to_str())
