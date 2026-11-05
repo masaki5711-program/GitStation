@@ -31,11 +31,11 @@ this crate calls the check commands (`tests/decided_callers.rs`).
   for one project** — review fix 1).
 - `unreportable(project, &[CheckName])`: the required names no active service account may
   report on that project (`forge/` names forge does not report itself — X2 reports
-  `forge/spec-drift` — and `ci/` / `kanflow/` without a granted active reporter there) — the merge rule's `unreportable_checks`.
+  `forge/spec-drift` and (X7) `forge/risk` — and `ci/` / `kanflow/` without a granted active reporter there) — the merge rule's `unreportable_checks`.
 - `reporters(&Db)`: active reporters per namespace (doctor `checks.reporters`).
 - `validate::{parse_name, validate}`: the rules of docs/api/checks.md.
 - `spec_refs::{read_repo_config, follow, Reader, Followed}` (X1 / X2), `spec_drift::{SpecDrift,
-  assess}` (X2).
+  assess}` (X2), `risk::{Risk, assess, record_error, Limits}` (X7).
 
 **forge's own check (M3 X2, ADR-0023 Amendment X2)**: `spec_drift::SpecDrift` evaluates
 `forge/spec-drift` for one `check.spec_drift` job (a merge request version's head; the job is
@@ -50,7 +50,18 @@ repository's tags (`forge_core::spec_version`) and records the run with
 reading and following shared with forge-web's `GET …/repository/spec-refs` (M3 X1, moved here
 by X2: `Reader::Proof` for the route's reader, `Reader::EveryPerson` for the job).
 
-**Owned error codes**: FG-REVIEW-0020 CheckPayloadInvalid (422), FG-REVIEW-0021
+**forge's risk check (M3 X7, ADR-0023 Amendment X7)**: `risk::Risk` evaluates `forge/risk` for one
+`check.risk` job (the same head; enqueued by forge-db's `risk` subscriber): the target branches of the
+open merge requests that have the head as a version (`forge_db::checks::risk::risk_targets`), then per target
+the diff from the merge base (`forge_git::risk_inputs`, renames paired), the pure rules of
+`forge_core::risk` (paths, new migrations' SQL, deploy files, mass deletion against the merge base's tree) and
+the secret scan of `forge_git::secret_scan` over added text files (60 files, 256 KiB each at most). `success` /
+`neutral` (warn, or not fully assessed: FG-REVIEW-0024 / 0025) / `failure` (a stop rule: FG-REVIEW-0023) / `error`
+(`Risk::fail`, and `record_error` for `forge worker`'s `risk_sweep`). A run names rule, path and line, never the
+matched text. 45 s evaluation deadline, 10 s write. No HTTP route: the run is read through the Checks API.
+
+**Owned error codes**: FG-REVIEW-0023 RiskStop, FG-REVIEW-0024 RiskWarn, FG-REVIEW-0025 RiskNotAssessed
+(info notices named in a `forge/risk` run; X7), FG-REVIEW-0020 CheckPayloadInvalid (422), FG-REVIEW-0021
 CheckRunLimitReached (409, from forge-db), FG-DB-0022 CheckRunDataInvalid (500,
 alert; from forge-db), FG-REPO-0027 SpecVersionBehind (info, a `forge/spec-drift`
 notice; X2 — FG-REPO-0024..0026 are forge-core's and the spec refs'). Denials are FG-AUTH-0003 with `reason`

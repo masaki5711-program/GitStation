@@ -227,3 +227,61 @@
       （残るのは「behind だった」という 1 ビットとパスだけで、パスは参照する側のファイル自身の文字）。
     - **LOW**: 参照先のタグの一覧の git の失敗は、その項目の `undecided` にせず、run の失敗として返す（busy・時間切れはやり直し、最後は `error`）。
       `undecided` は一覧が上限で切れたときだけ。版の形でない固定（`stable`、`v1.2.3.4.5`、`v2.0-rc1`）は `success` のまま、notice の注釈で知らせる。
+
+## Amendment 2026-11-06 — X7: `forge/risk`（計画 11 §5.7 の X7、計画 04 M-6 の層 1）
+
+計画の推奨（決定的な規則を MR の差分に当て、forge 自身の check run として残す。`gstn risk check` は任意）に沿い、開いていた点を次のとおり決めた。
+
+1. **範囲**: M-6 の **層 1（決定的な規則）** と、その結果の `forge/risk` run だけ。含めないもの: ローカル AI の層（層 2。LLM ゲートウェイと並行）、`.forge/risk.yml`
+   （プロジェクトが規則を足す・既定の規則を Owner の承認で外す）、解除（Maintainer の承認と警告の ID。M4 の自動マージと同時）、個人情報の列名の登録、
+   検出率・誤検知率の画面と評価セット。いずれも規則表（下の 5）に足す形で後から入れられる。**`conditional` / `full` は層 2 が動くまで実効にならない**（M-5）ので、
+   この MR は自動マージを有効にしない。
+2. **いつ評価するか**: MR の版ごと（`merge_request.pushed`。開いたときの最初の版も同じ）。購読者 `risk`（`independent`、forge-db `checks::risk`）が
+   ジョブ `check.risk`（payload は `project_id` と `head_sha`、重複の鍵 `risk:<project>:<head>`、90 秒、5 回）を積み、`forge worker` が forge-checks の `Risk` で評価する。
+   同じ head は 1 回だけ（成功したジョブが鍵を持つ）。run は head の時点の記録で、target が進んでも評価し直さない（M4 の自動マージは、マージの直前に
+   target の先頭に対する判定を使う。ここでは作らない）。
+3. **何と比べるか**: head を版に持つ **開いている MR の target ブランチごと**（ジョブの実行時に forge-db `risk_targets` が読む。重複なし、名前順、`MAX_TARGETS` = 4。
+   超えたら `targets_not_assessed`）。各 target の先頭と head の **merge base から head まで** の差分を `git diff-tree -M -r -z --raw --numstat` で取る
+   （forge-git `risk_inputs`。引数ベクトル、リビジョンは object id だけ、20 秒、出力の上限）。**改名は 1 件**にまとめ（削除に数えない。計画 04 M-6）、編集を伴う改名も
+   類似度（git 既定の 50 %）で対にする。MR が開いていない head、target が無い、履歴が共通でない、パスが UTF-8 でない、は **`success` にしない**
+   （`neutral`、`FG-REVIEW-0025`、規則 `no_open_merge_request` / `target_missing` / `no_common_history` / `non_utf8_path`）。結果は複数の target のうち **最悪**。
+4. **結論**: `ok` → `success`（要約に「何と比べたか・何ファイル見たか」）、`warn` → `neutral`（`FG-REVIEW-0024`）、`stop` → **`failure`**（`FG-REVIEW-0023`）。
+   `failure` は、保護ブランチが `forge/risk` を必須にしたとき条件を満たさない（`neutral` も満たさない。ADR-0024 §10）。必須にしない限り手動のマージは止めない
+   （計画 04 M-5: 止めるのは自動マージ）。M4 の自動マージは `failure` の head を **どの方式でも** マージしない（このコミットでは契約として記録するだけで、
+   自動マージ自体は M4）。run の要約には、規則の id・パス・行・固定の理由・コードを並べ、**一致した文字列は決して書かない**（秘密や表名を、プロジェクトの読み手全員が見る
+   run に写さない）。注釈は最悪のものから 50 件まで（`failure` / `warning`）、要約は 64 KiB で切る（拒否しない）。注釈に載せられないパス（バックスラッシュ・制御文字など）は要約だけに出す。
+5. **規則（forge-core `risk::RULES`。純粋関数、AI で下げられない）**:
+   - `stop`: `applied_migration_changed`（`migrations` / `migrate` の下の `.sql` の変更・削除・型の変更・改名）、`sql_drop`（`DROP TABLE|SCHEMA|DATABASE`、`ALTER TABLE … DROP [COLUMN]`）、
+     `sql_truncate`、`sql_unbounded_write`（`WHERE` のない `DELETE FROM` / `UPDATE`、`WHERE TRUE` / `WHERE 1 = 1` も同じ）、`sql_column_change`（列の型の変更、`RENAME`）、
+     `sql_drop_constraint`、`sql_disable_guard`（`DISABLE TRIGGER` / `ROW LEVEL SECURITY`）、`deploy_rollback`（CI・デプロイのファイルの `migrate revert` / `db:rollback` / `dropdb` / `DROP DATABASE`）、
+     `secret_file`（`.env`（`.example` 等を除く）、`id_rsa` など、`.htpasswd`、`.netrc`、`.p12` / `.pfx` / `.jks`。削除は除く）、`secret_in_content`（X8 の `forge_git::secret_scan` と同じ規則。
+     `forge:allow-secret` のあるファイルは除く）、`data_lifecycle_job`（ファイル名に `backup` / `restore` / `retention`。文書・テストは除く）、
+     `mass_deletion_lines`（削除行 500 以上かつ target の text 行の 30 % 以上）、`mass_deletion_files`（削除ファイル 20 以上かつ 30 % 以上）、`too_many_changes`（5000 ファイル超）。
+   - `warn`: `new_migration`、`sql_drop_object`、`sql_privilege`、`auth_change`（パスの語が auth / permission / acl / rbac / oidc / ldap / codeowners など。文書・テストは除く）、
+     `ci_deploy_config`、`dependency_change`、`special_entry`（シンボリックリンク・サブモジュール）、`content_not_scanned`（読めなかったファイルがある）。
+   - 大量削除は計画の仮置きの数字のとおり（行は numstat の削除行の合計で、編集内の削除も数える。バイナリは行でなくファイル数。生成物・ロックファイルも例外にしない）。
+     割合の分母は **merge base の tree**（`diff-tree --numstat` を空の木に当てて数える。20 万ファイルで打ち切り、`truncated` のときは分母が小さい側に誤る = `stop` に倒れる）。
+     分母は絶対値の閾値（500 行 / 20 ファイル）に届いたときだけ数える。
+6. **読む量の上限**: 本文を読むのは新しい migration と CI・デプロイのファイル（SQL・ロールバックの検査）と、行が増えたテキストのファイル（秘密の検査）。
+   優先はこの順で **60 ファイルまで、1 ファイル 256 KiB まで**。読めなかった数は `content_not_scanned`（`neutral`）に出す（黙って通さない。push の時点では X8 が同じ規則で拒否している）。
+   SQL は注釈・文字列を除いて文に分け（`;` と `$$` で区切る）、文ごとの先頭の語と並びで見る（`WHERE` の有無は文のどこかの `WHERE` で判定。副問い合わせの `WHERE` で通る限界がある）。
+   評価全体は 45 秒（超えたら `FG-WEB-0002 operation=risk`、やり直す）、書き込みは 10 秒。
+7. **失敗を黙らせない**: X2 と同じ構造。評価の失敗は何も書かずジョブへ返し（git / DB / 準備中はやり直し）、最後の試みで `error` の run（要約に FG コードと request id）を書いてからジョブを死なせる。
+   handler が答えられずに死んだジョブ（worker の落ち、reaper）は、worker の新しいタスク `risk_sweep`（60 秒ごと、50 件まで。forge-db `checks::risk::unanswered_dead_jobs`、
+   既存の部分索引 `jobs_dead_kind` は kind を問わないので **マイグレーションは足さない**）が `error` で答える。プロジェクトが消えていれば何も書かない（`forge.risk.project_gone`）。
+8. **forge 自身の run の扱い（X2 の 7・8 を改める）**: `FORGE_REPORTED_CHECKS` は `forge/spec-drift` と `forge/risk` の 2 つ。
+   1 コミットの読み取りの上限 `MAX_STORED_CHECK_RUNS_PER_COMMIT` は 100 + 2 = 102。報告者の 100 件の上限には、forge の名前は数えない・当たらない。
+   `forge/risk` は forge が報告するので、マージの規則の `unreportable_checks` と doctor の `checks.reporters` に **入れない**（X2 の 8 が「入る」とした例を `forge/risk` から別の `forge/` の名前に改める）。
+   HTTP の `CheckWrite` は従来どおり `forge/` を全員に拒否する。`record_forge_check_run` の呼び出しは forge-checks だけ（`tests/decided_callers.rs`）。
+9. **エラーコード**: `FG-REVIEW-0023` RiskStop、`FG-REVIEW-0024` RiskWarn、`FG-REVIEW-0025` RiskNotAssessed（いずれも info、HTTP には出ない通知。run の要約・注釈が名指す。
+   アラートなしなので Runbook は不要）。run が書けない・git が失敗する、は既存のコード（`FG-GIT-*`、`FG-DB-*`、`FG-REPO-0016`、`FG-WEB-0002`）。
+10. **置き場所**: 規則は forge-core `risk`（純粋。`gstn` と同じ実装を共有できる形）、git の入力は forge-git `risk_inputs`、job・購読者・target の問い合わせ・sweep の問い合わせは
+    forge-db `checks::risk`、評価と run の組み立ては forge-checks `risk`、worker は forge-cli の `risk` と `risk_sweep`。新しいクレートは作らない。
+    **新しい HTTP のルートは作らない**（読み取りは既存の `GET /api/v1/projects/{id}/commits/{sha}/checks`、認可は `CheckRead` = `RepoBrowse` のまま。したがって認可の matrix の行は増えない）。
+    **新しい EventType は作らない**（`check.completed` が結論の変化で出る）。
+11. **`gstn risk check` は作らない（任意の項目）**: `gstn`（forge-client）は forge-core に依存しない（forge-errors だけ）ので、同じ規則を共有するには依存の向きを変える必要がある。
+    push の前の手元の確認は、X8 の pre-receive（秘密・大きなファイル）と、MR を開いた直後の `gstn checks list --project <id> --sha <head>`（`forge/risk` の run）で足りる。
+    手元の差分を検査するコマンドが要る証拠が出たら、規則の crate を `gstn` から使える形に切り出して足す（forge-core の `risk` は I/O を持たないので移せる）。
+12. **既知の限界（評価のケースとして足す）**: 個人情報の列をログ・API・読み取り用ロールに出す変更、新しい外部の送り先、ルートの認証・認可の検査の削除、公開範囲を広げる変更は、
+    文字列の規則では確実に拾えない。層 2（ローカル AI。`warn` / `stop` に上げることだけができる）と `.forge/risk.yml`（列名の登録）に残す。
+    本文を読まない `auth_change` 等はパスの語だけで判定するので誤検知する（`warn` なので進む）。`data_lifecycle_job` は `stop` で、GitStation 自身の保持期間のジョブの変更も止まる（計画 04 M-6 の例のとおり）。
