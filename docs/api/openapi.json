@@ -770,34 +770,6 @@
         ],
         "type": "object"
       },
-      "ChangeBody": {
-        "additionalProperties": false,
-        "description": "One requirement's change.",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "description": "`added`, `changed`, `removed` or `deprecated`.",
-            "type": "string"
-          },
-          "line": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "path": {
-            "description": "Where it is in `to` (in `from` when removed).",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "kind",
-          "path",
-          "line"
-        ],
-        "type": "object"
-      },
       "ChangeMember": {
         "additionalProperties": false,
         "description": "`PATCH …/members/{user_id}`: the member's new direct role.",
@@ -2339,54 +2311,6 @@
         ],
         "type": "object"
       },
-      "DocumentBody": {
-        "additionalProperties": false,
-        "description": "One specification document.",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "problems": {
-            "description": "Rules the document breaks (they are in `problems`).",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "requirements": {
-            "description": "Requirement blocks read.",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "spec": {
-            "description": "`spec:` (`null` when the front matter cannot be used).",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "status": {
-            "description": "`draft`, `review`, `approved` or `deprecated`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "path",
-          "spec",
-          "title",
-          "status",
-          "requirements",
-          "problems"
-        ],
-        "type": "object"
-      },
       "EntryBody": {
         "additionalProperties": false,
         "description": "One tree entry.",
@@ -2837,25 +2761,6 @@
           "items",
           "next_cursor",
           "has_more"
-        ],
-        "type": "object"
-      },
-      "IncompleteBody": {
-        "additionalProperties": false,
-        "description": "A bound the index hit.",
-        "properties": {
-          "error_code": {
-            "description": "`FG-REPO-0031`.",
-            "type": "string"
-          },
-          "reason": {
-            "description": "`spec_files`, `spec_bytes` or `tag_lines`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "error_code",
-          "reason"
         ],
         "type": "object"
       },
@@ -4032,41 +3937,6 @@
         ],
         "type": "object"
       },
-      "ProblemBody": {
-        "additionalProperties": false,
-        "description": "One rule broken.",
-        "properties": {
-          "detail": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "error_code": {
-            "description": "`FG-REPO-0028`.",
-            "type": "string"
-          },
-          "line": {
-            "description": "1-based; 0 for the whole file.",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "path": {
-            "type": "string"
-          },
-          "rule": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error_code",
-          "path",
-          "line",
-          "rule",
-          "detail"
-        ],
-        "type": "object"
-      },
       "ProjectBody": {
         "additionalProperties": false,
         "description": "A project as the API shows it.",
@@ -4632,119 +4502,6 @@
         ],
         "type": "object"
       },
-      "RequirementBody": {
-        "additionalProperties": false,
-        "description": "One requirement.",
-        "properties": {
-          "body": {
-            "description": "The block's text.",
-            "type": "string"
-          },
-          "deprecated": {
-            "type": "boolean"
-          },
-          "id": {
-            "type": "string"
-          },
-          "line": {
-            "description": "The opening line (1-based).",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "path": {
-            "type": "string"
-          },
-          "priority": {
-            "description": "`must`, `should`, `could`, `wont`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "spec": {
-            "description": "The document's `spec:`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "path",
-          "line",
-          "priority",
-          "deprecated",
-          "spec",
-          "body"
-        ],
-        "type": "object"
-      },
-      "RequirementsBody": {
-        "additionalProperties": false,
-        "description": "`GET …/specs/requirements`.",
-        "properties": {
-          "config": {
-            "description": "`.forge/repo.yml`: `absent`, `valid` or `invalid`.",
-            "type": "string"
-          },
-          "dirs": {
-            "description": "The own specification directories read.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "documents": {
-            "items": {
-              "$ref": "#/components/schemas/DocumentBody"
-            },
-            "type": "array"
-          },
-          "incomplete": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/IncompleteBody"
-              }
-            ]
-          },
-          "problems": {
-            "description": "The documents' rules (duplicates included; a broken `@req`\nreference needs the tags: forge/spec-lint and the trace), at most 200.",
-            "items": {
-              "$ref": "#/components/schemas/ProblemBody"
-            },
-            "type": "array"
-          },
-          "ref": {
-            "$ref": "#/components/schemas/RevBody"
-          },
-          "requirements": {
-            "description": "By id (the first definition of an id defined twice).",
-            "items": {
-              "$ref": "#/components/schemas/RequirementBody"
-            },
-            "type": "array"
-          },
-          "truncated": {
-            "description": "More requirements matched than `limit`.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "ref",
-          "config",
-          "dirs",
-          "documents",
-          "requirements",
-          "truncated",
-          "problems",
-          "incomplete"
-        ],
-        "type": "object"
-      },
       "Resolution": {
         "additionalProperties": false,
         "description": "Which namespace a path names. Exactly one of `project_id`, `group_id`,\n`user_id` is present, by `kind`.",
@@ -5251,6 +5008,138 @@
         ],
         "type": "object"
       },
+      "SpecChangeBody": {
+        "additionalProperties": false,
+        "description": "One requirement's change.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`added`, `changed`, `removed` or `deprecated`.",
+            "type": "string"
+          },
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Where it is in `to` (in `from` when removed).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "path",
+          "line"
+        ],
+        "type": "object"
+      },
+      "SpecDiffBody": {
+        "additionalProperties": false,
+        "description": "`GET …/specs/diff`.",
+        "properties": {
+          "changes": {
+            "description": "By id.",
+            "items": {
+              "$ref": "#/components/schemas/SpecChangeBody"
+            },
+            "type": "array"
+          },
+          "from": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody",
+                "description": "Either revision's index hit a bound."
+              }
+            ]
+          },
+          "to": {
+            "$ref": "#/components/schemas/RevBody"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "changes",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "SpecDocumentBody": {
+        "additionalProperties": false,
+        "description": "One specification document.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "problems": {
+            "description": "Rules the document breaks (they are in `problems`).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requirements": {
+            "description": "Requirement blocks read.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "spec": {
+            "description": "`spec:` (`null` when the front matter cannot be used).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`draft`, `review`, `approved` or `deprecated`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "spec",
+          "title",
+          "status",
+          "requirements",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "SpecIncompleteBody": {
+        "additionalProperties": false,
+        "description": "A bound the index hit.",
+        "properties": {
+          "error_code": {
+            "description": "`FG-REPO-0031`.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "`spec_files`, `spec_bytes` or `tag_lines`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "reason"
+        ],
+        "type": "object"
+      },
       "SpecPinBody": {
         "additionalProperties": false,
         "description": "How a referenced repository's version is fixed.",
@@ -5272,6 +5161,41 @@
           "type",
           "name",
           "ref_name"
+        ],
+        "type": "object"
+      },
+      "SpecProblemBody": {
+        "additionalProperties": false,
+        "description": "One rule broken.",
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "description": "`FG-REPO-0028`.",
+            "type": "string"
+          },
+          "line": {
+            "description": "1-based; 0 for the whole file.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "path",
+          "line",
+          "rule",
+          "detail"
         ],
         "type": "object"
       },
@@ -5402,6 +5326,314 @@
           "config",
           "problem",
           "specs"
+        ],
+        "type": "object"
+      },
+      "SpecRequirementBody": {
+        "additionalProperties": false,
+        "description": "One requirement.",
+        "properties": {
+          "body": {
+            "description": "The block's text.",
+            "type": "string"
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "line": {
+            "description": "The opening line (1-based).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "priority": {
+            "description": "`must`, `should`, `could`, `wont`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spec": {
+            "description": "The document's `spec:`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "line",
+          "priority",
+          "deprecated",
+          "spec",
+          "body"
+        ],
+        "type": "object"
+      },
+      "SpecRequirementsBody": {
+        "additionalProperties": false,
+        "description": "`GET …/specs/requirements`.",
+        "properties": {
+          "config": {
+            "description": "`.forge/repo.yml`: `absent`, `valid` or `invalid`.",
+            "type": "string"
+          },
+          "dirs": {
+            "description": "The own specification directories read.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/SpecDocumentBody"
+            },
+            "type": "array"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody"
+              }
+            ]
+          },
+          "problems": {
+            "description": "The documents' rules (duplicates included; a broken `@req`\nreference needs the tags: forge/spec-lint and the trace), at most 200.",
+            "items": {
+              "$ref": "#/components/schemas/SpecProblemBody"
+            },
+            "type": "array"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "requirements": {
+            "description": "By id (the first definition of an id defined twice).",
+            "items": {
+              "$ref": "#/components/schemas/SpecRequirementBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More requirements matched than `limit`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "config",
+          "dirs",
+          "documents",
+          "requirements",
+          "truncated",
+          "problems",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "SpecTestPlaceBody": {
+        "additionalProperties": false,
+        "description": "Where a test is.",
+        "properties": {
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "line"
+        ],
+        "type": "object"
+      },
+      "SpecTraceBody": {
+        "additionalProperties": false,
+        "description": "`GET …/specs/trace`.",
+        "properties": {
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody",
+                "description": "An index (this revision's or a reference's) hit a bound."
+              }
+            ]
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "references": {
+            "description": "`repo:` entries in file order (none when the file cannot be used).",
+            "items": {
+              "$ref": "#/components/schemas/SpecTraceReferenceBody"
+            },
+            "type": "array"
+          },
+          "requirements": {
+            "description": "The own specification's requirements by id, then each followed\nreference's in file order.",
+            "items": {
+              "$ref": "#/components/schemas/SpecTraceRowBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "requirements",
+          "references",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "SpecTraceReferenceBody": {
+        "additionalProperties": false,
+        "description": "One `repo:` entry of the trace.",
+        "properties": {
+          "error_code": {
+            "description": "`FG-REPO-0025` / `FG-REPO-0026`; `null` when resolved.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "Its line in `.forge/repo.yml`.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "As written.",
+            "type": "string"
+          },
+          "requirements": {
+            "description": "Its requirements within the entry's scope.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "description": "`resolved`, `version_not_found` or `unavailable`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "repo",
+          "status",
+          "error_code",
+          "requirements"
+        ],
+        "type": "object"
+      },
+      "SpecTraceRowBody": {
+        "additionalProperties": false,
+        "description": "One requirement with the tests naming it.",
+        "properties": {
+          "deprecated": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "In its source repository.",
+            "type": "string"
+          },
+          "source": {
+            "description": "The own directory (`spec/`) or the `repo:` path as written.",
+            "type": "string"
+          },
+          "status": {
+            "description": "`tested` or `untested`.",
+            "type": "string"
+          },
+          "test_count": {
+            "description": "Every `@req` tag of this repository naming it.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tests": {
+            "description": "The first 20 of them.",
+            "items": {
+              "$ref": "#/components/schemas/SpecTestPlaceBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "path",
+          "line",
+          "deprecated",
+          "status",
+          "test_count",
+          "tests"
+        ],
+        "type": "object"
+      },
+      "SpecVersionBody": {
+        "additionalProperties": false,
+        "description": "One version tag.",
+        "properties": {
+          "commit": {
+            "description": "The commit it peels to.",
+            "type": "string"
+          },
+          "full_name": {
+            "description": "`refs/tags/…`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The tag (`v1.5`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "full_name",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "SpecVersionsBody": {
+        "additionalProperties": false,
+        "description": "`GET …/specs/versions`.",
+        "properties": {
+          "truncated": {
+            "description": "More versions than one answer lists, or more refs than one listing\nkeeps.",
+            "type": "boolean"
+          },
+          "versions": {
+            "description": "Newest first within a series (`v` / `spec-v`), series by name.",
+            "items": {
+              "$ref": "#/components/schemas/SpecVersionBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "versions",
+          "truncated"
         ],
         "type": "object"
       },
@@ -5700,24 +5932,6 @@
         ],
         "type": "object"
       },
-      "TestPlaceBody": {
-        "additionalProperties": false,
-        "description": "Where a test is.",
-        "properties": {
-          "line": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path",
-          "line"
-        ],
-        "type": "object"
-      },
       "TokenBody": {
         "additionalProperties": false,
         "description": "One token as the API shows it (never the secret or its hash).",
@@ -5785,137 +5999,6 @@
         },
         "required": [
           "items"
-        ],
-        "type": "object"
-      },
-      "TraceBody": {
-        "additionalProperties": false,
-        "description": "`GET …/specs/trace`.",
-        "properties": {
-          "incomplete": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/IncompleteBody",
-                "description": "An index (this revision's or a reference's) hit a bound."
-              }
-            ]
-          },
-          "ref": {
-            "$ref": "#/components/schemas/RevBody"
-          },
-          "references": {
-            "description": "`repo:` entries in file order (none when the file cannot be used).",
-            "items": {
-              "$ref": "#/components/schemas/TraceReferenceBody"
-            },
-            "type": "array"
-          },
-          "requirements": {
-            "description": "The own specification's requirements by id, then each followed\nreference's in file order.",
-            "items": {
-              "$ref": "#/components/schemas/TraceRowBody"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "ref",
-          "requirements",
-          "references",
-          "incomplete"
-        ],
-        "type": "object"
-      },
-      "TraceReferenceBody": {
-        "additionalProperties": false,
-        "description": "One `repo:` entry of the trace.",
-        "properties": {
-          "error_code": {
-            "description": "`FG-REPO-0025` / `FG-REPO-0026`; `null` when resolved.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "line": {
-            "description": "Its line in `.forge/repo.yml`.",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "repo": {
-            "description": "As written.",
-            "type": "string"
-          },
-          "requirements": {
-            "description": "Its requirements within the entry's scope.",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "status": {
-            "description": "`resolved`, `version_not_found` or `unavailable`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "line",
-          "repo",
-          "status",
-          "error_code",
-          "requirements"
-        ],
-        "type": "object"
-      },
-      "TraceRowBody": {
-        "additionalProperties": false,
-        "description": "One requirement with the tests naming it.",
-        "properties": {
-          "deprecated": {
-            "type": "boolean"
-          },
-          "id": {
-            "type": "string"
-          },
-          "line": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "path": {
-            "description": "In its source repository.",
-            "type": "string"
-          },
-          "source": {
-            "description": "The own directory (`spec/`) or the `repo:` path as written.",
-            "type": "string"
-          },
-          "status": {
-            "description": "`tested` or `untested`.",
-            "type": "string"
-          },
-          "test_count": {
-            "description": "Every `@req` tag of this repository naming it.",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "tests": {
-            "description": "The first 20 of them.",
-            "items": {
-              "$ref": "#/components/schemas/TestPlaceBody"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "id",
-          "source",
-          "path",
-          "line",
-          "deprecated",
-          "status",
-          "test_count",
-          "tests"
         ],
         "type": "object"
       },
@@ -6354,25 +6437,55 @@
       },
       "VersionBody": {
         "additionalProperties": false,
-        "description": "One version tag.",
+        "description": "One version of a merge request.",
         "properties": {
-          "commit": {
-            "description": "The commit it peels to.",
+          "base_sha": {
+            "description": "The target's tip when the version was recorded (`null` until the\nversion job recorded it, or when the target was missing).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
             "type": "string"
           },
-          "full_name": {
-            "description": "`refs/tags/…`.",
+          "head_sha": {
             "type": "string"
           },
-          "name": {
-            "description": "The tag (`v1.5`).",
-            "type": "string"
+          "merge_base_sha": {
+            "description": "The merge base of the head and `base_sha` (`null`: not recorded, or\nno common history). The version's diff starts here.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pushed_by": {
+            "description": "The pusher whose push made the version (`null` for the first\nversion of a new or reopened merge request).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "refs_purged": {
+            "description": "The version's refs were removed (secret removal): its diff is no\nlonger served.",
+            "type": "boolean"
+          },
+          "version": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [
-          "name",
-          "full_name",
-          "commit"
+          "version",
+          "head_sha",
+          "base_sha",
+          "merge_base_sha",
+          "pushed_by",
+          "created_at",
+          "refs_purged"
         ],
         "type": "object"
       },
@@ -6497,14 +6610,14 @@
       },
       "VersionsBody": {
         "additionalProperties": false,
-        "description": "`GET …/specs/versions`.",
+        "description": "A merge request's versions, oldest first.",
         "properties": {
-          "truncated": {
-            "description": "More versions than one answer lists, or more refs than one listing\nkeeps.",
-            "type": "boolean"
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
           },
           "versions": {
-            "description": "Newest first within a series (`v` / `spec-v`), series by name.",
             "items": {
               "$ref": "#/components/schemas/VersionBody"
             },
@@ -6512,8 +6625,8 @@
           }
         },
         "required": [
-          "versions",
-          "truncated"
+          "iid",
+          "versions"
         ],
         "type": "object"
       },
@@ -6819,13 +6932,7 @@
         "scheme": "bearer",
         "type": "http"
       }
-    },
-    "x-forge-schema-conflicts": [
-      "VersionsBody",
-      "VersionBody",
-      "DiffBody",
-      "DiffBody"
-    ]
+    }
   },
   "info": {
     "title": "GitStation API",
@@ -11925,7 +12032,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DiffBody"
+                  "$ref": "#/components/schemas/SpecDiffBody"
                 }
               }
             },
@@ -11995,7 +12102,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RequirementsBody"
+                  "$ref": "#/components/schemas/SpecRequirementsBody"
                 }
               }
             },
@@ -12045,7 +12152,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TraceBody"
+                  "$ref": "#/components/schemas/SpecTraceBody"
                 }
               }
             },
@@ -12086,7 +12193,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VersionsBody"
+                  "$ref": "#/components/schemas/SpecVersionsBody"
                 }
               }
             },

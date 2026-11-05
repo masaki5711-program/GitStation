@@ -1063,7 +1063,7 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
             routes::specs::REQUIREMENTS_OF,
             routes::specs::requirements,
         )
-        .responds::<routes::specs::RequirementsBody>(Verb::Get, routes::specs::REQUIREMENTS)
+        .responds::<routes::specs::SpecRequirementsBody>(Verb::Get, routes::specs::REQUIREMENTS)
         .queries(
             Verb::Get,
             routes::specs::REQUIREMENTS,
@@ -1077,7 +1077,7 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
             routes::specs::VERSIONS_OF,
             routes::specs::versions,
         )
-        .responds::<routes::specs::VersionsBody>(Verb::Get, routes::specs::VERSIONS)
+        .responds::<routes::specs::SpecVersionsBody>(Verb::Get, routes::specs::VERSIONS)
         .route_with(
             Verb::Get,
             routes::specs::DIFF,
@@ -1086,7 +1086,7 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
             routes::specs::DIFF_OF,
             routes::specs::diff_route,
         )
-        .responds::<routes::specs::DiffBody>(Verb::Get, routes::specs::DIFF)
+        .responds::<routes::specs::SpecDiffBody>(Verb::Get, routes::specs::DIFF)
         .queries(Verb::Get, routes::specs::DIFF, routes::specs::DIFF_QUERY)
         .route_with(
             Verb::Get,
@@ -1096,7 +1096,7 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
             routes::specs::TRACE_OF,
             routes::specs::trace,
         )
-        .responds::<routes::specs::TraceBody>(Verb::Get, routes::specs::TRACE)
+        .responds::<routes::specs::SpecTraceBody>(Verb::Get, routes::specs::TRACE)
         .queries(Verb::Get, routes::specs::TRACE, routes::specs::TRACE_QUERY)
 }
 

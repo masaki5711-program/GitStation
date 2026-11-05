@@ -120,7 +120,7 @@ pub const TRACE_QUERY: &[QueryParam] = &[REF_PARAM];
 /// A bound the index hit.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct IncompleteBody {
+pub struct SpecIncompleteBody {
     /// `FG-REPO-0031`.
     pub error_code: String,
     /// `spec_files`, `spec_bytes` or `tag_lines`.
@@ -130,7 +130,7 @@ pub struct IncompleteBody {
 /// One specification document.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct DocumentBody {
+pub struct SpecDocumentBody {
     pub path: String,
     /// `spec:` (`null` when the front matter cannot be used).
     #[schema(required = true)]
@@ -149,7 +149,7 @@ pub struct DocumentBody {
 /// One requirement.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct RequirementBody {
+pub struct SpecRequirementBody {
     pub id: String,
     pub path: String,
     /// The opening line (1-based).
@@ -168,7 +168,7 @@ pub struct RequirementBody {
 /// One rule broken.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ProblemBody {
+pub struct SpecProblemBody {
     /// `FG-REPO-0028`.
     pub error_code: String,
     pub path: String,
@@ -182,29 +182,29 @@ pub struct ProblemBody {
 /// `GET …/specs/requirements`.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct RequirementsBody {
+pub struct SpecRequirementsBody {
     #[serde(rename = "ref")]
     pub rev: RevBody,
     /// `.forge/repo.yml`: `absent`, `valid` or `invalid`.
     pub config: String,
     /// The own specification directories read.
     pub dirs: Vec<String>,
-    pub documents: Vec<DocumentBody>,
+    pub documents: Vec<SpecDocumentBody>,
     /// By id (the first definition of an id defined twice).
-    pub requirements: Vec<RequirementBody>,
+    pub requirements: Vec<SpecRequirementBody>,
     /// More requirements matched than `limit`.
     pub truncated: bool,
     /// The documents' rules (duplicates included; a broken `@req`
     /// reference needs the tags: forge/spec-lint and the trace), at most 200.
-    pub problems: Vec<ProblemBody>,
+    pub problems: Vec<SpecProblemBody>,
     #[schema(required = true)]
-    pub incomplete: Option<IncompleteBody>,
+    pub incomplete: Option<SpecIncompleteBody>,
 }
 
 /// One version tag.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct VersionBody {
+pub struct SpecVersionBody {
     /// The tag (`v1.5`).
     pub name: String,
     /// `refs/tags/…`.
@@ -216,9 +216,9 @@ pub struct VersionBody {
 /// `GET …/specs/versions`.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct VersionsBody {
+pub struct SpecVersionsBody {
     /// Newest first within a series (`v` / `spec-v`), series by name.
-    pub versions: Vec<VersionBody>,
+    pub versions: Vec<SpecVersionBody>,
     /// More versions than one answer lists, or more refs than one listing
     /// keeps.
     pub truncated: bool,
@@ -227,7 +227,7 @@ pub struct VersionsBody {
 /// One requirement's change.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ChangeBody {
+pub struct SpecChangeBody {
     pub id: String,
     /// `added`, `changed`, `removed` or `deprecated`.
     pub kind: String,
@@ -239,20 +239,20 @@ pub struct ChangeBody {
 /// `GET …/specs/diff`.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct DiffBody {
+pub struct SpecDiffBody {
     pub from: RevBody,
     pub to: RevBody,
     /// By id.
-    pub changes: Vec<ChangeBody>,
+    pub changes: Vec<SpecChangeBody>,
     /// Either revision's index hit a bound.
     #[schema(required = true)]
-    pub incomplete: Option<IncompleteBody>,
+    pub incomplete: Option<SpecIncompleteBody>,
 }
 
 /// Where a test is.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct TestPlaceBody {
+pub struct SpecTestPlaceBody {
     pub path: String,
     pub line: usize,
 }
@@ -260,7 +260,7 @@ pub struct TestPlaceBody {
 /// One requirement with the tests naming it.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct TraceRowBody {
+pub struct SpecTraceRowBody {
     pub id: String,
     /// The own directory (`spec/`) or the `repo:` path as written.
     pub source: String,
@@ -273,13 +273,13 @@ pub struct TraceRowBody {
     /// Every `@req` tag of this repository naming it.
     pub test_count: usize,
     /// The first 20 of them.
-    pub tests: Vec<TestPlaceBody>,
+    pub tests: Vec<SpecTestPlaceBody>,
 }
 
 /// One `repo:` entry of the trace.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct TraceReferenceBody {
+pub struct SpecTraceReferenceBody {
     /// Its line in `.forge/repo.yml`.
     pub line: usize,
     /// As written.
@@ -296,23 +296,23 @@ pub struct TraceReferenceBody {
 /// `GET …/specs/trace`.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct TraceBody {
+pub struct SpecTraceBody {
     #[serde(rename = "ref")]
     pub rev: RevBody,
     /// The own specification's requirements by id, then each followed
     /// reference's in file order.
-    pub requirements: Vec<TraceRowBody>,
+    pub requirements: Vec<SpecTraceRowBody>,
     /// `repo:` entries in file order (none when the file cannot be used).
-    pub references: Vec<TraceReferenceBody>,
+    pub references: Vec<SpecTraceReferenceBody>,
     /// An index (this revision's or a reference's) hit a bound.
     #[schema(required = true)]
-    pub incomplete: Option<IncompleteBody>,
+    pub incomplete: Option<SpecIncompleteBody>,
 }
 
 // ── the handlers ───────────────────────────────────────────────────────
 
-fn incomplete(reason: Option<&'static str>) -> Option<IncompleteBody> {
-    reason.map(|r| IncompleteBody {
+fn incomplete(reason: Option<&'static str>) -> Option<SpecIncompleteBody> {
+    reason.map(|r| SpecIncompleteBody {
         error_code: ErrorCode::SpecIndexIncomplete.id().to_owned(),
         reason: r.to_owned(),
     })
@@ -462,7 +462,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                     )
                 })
                 .collect();
-            let matching: Vec<RequirementBody> = indexed
+            let matching: Vec<SpecRequirementBody> = indexed
                 .index
                 .requirements()
                 .into_iter()
@@ -472,7 +472,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                             || l.requirement.body.to_lowercase().contains(n)
                     })
                 })
-                .map(|l| RequirementBody {
+                .map(|l| SpecRequirementBody {
                     id: l.requirement.id.as_str().to_owned(),
                     path: l.path.to_owned(),
                     line: l.requirement.line,
@@ -486,7 +486,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
             let problems = lint(&indexed.index, &ExternalScope::everything())
                 .into_iter()
                 .take(MAX_PROBLEMS)
-                .map(|f| ProblemBody {
+                .map(|f| SpecProblemBody {
                     error_code: ErrorCode::SpecLintProblem.id().to_owned(),
                     path: f.path,
                     line: f.line,
@@ -498,7 +498,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                 .index
                 .documents
                 .iter()
-                .map(|d| DocumentBody {
+                .map(|d| SpecDocumentBody {
                     path: d.path.clone(), // clone: the answer owns its strings
                     spec: d.doc.meta.as_ref().map(|m| m.spec.clone()), // clone: as above
                     title: d.doc.meta.as_ref().map(|m| m.title.clone()), // clone: as above
@@ -507,7 +507,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                     problems: d.doc.problems.len() + d.doc.problems_dropped,
                 })
                 .collect();
-            Ok(RequirementsBody {
+            Ok(SpecRequirementsBody {
                 rev: rev_body(&rev),
                 config: config_word(&indexed.config).to_owned(),
                 dirs: indexed.dirs.clone(), // clone: the answer owns its strings
@@ -531,7 +531,7 @@ pub async fn versions(state: AppState, request: Dispatched<ProjectCtx>) -> Respo
         |_, request, t| async move {
             let _params = query(request.raw_query(), &[])?;
             let list = t.smart.browse.refs(t.repository.id).await?;
-            let mut found: Vec<(SpecVersion, VersionBody)> = list
+            let mut found: Vec<(SpecVersion, SpecVersionBody)> = list
                 .refs
                 .iter()
                 .filter(|r| r.kind == RefKind::Tag)
@@ -540,7 +540,7 @@ pub async fn versions(state: AppState, request: Dispatched<ProjectCtx>) -> Respo
                     let v = SpecVersion::parse(r.short())?;
                     Some((
                         v,
-                        VersionBody {
+                        SpecVersionBody {
                             name: r.short().to_owned(),
                             full_name: r.name.as_str().to_owned(),
                             commit,
@@ -557,7 +557,7 @@ pub async fn versions(state: AppState, request: Dispatched<ProjectCtx>) -> Respo
                     .then_with(|| bn.name.cmp(&an.name))
             });
             let truncated = list.truncated || found.len() > MAX_VERSIONS;
-            Ok(VersionsBody {
+            Ok(SpecVersionsBody {
                 versions: found
                     .into_iter()
                     .take(MAX_VERSIONS)
@@ -580,14 +580,14 @@ pub async fn diff_route(state: AppState, request: Dispatched<ProjectCtx>) -> Res
         let after = index(&t, &to, Tags::Skip).await?;
         let changes = diff(&before.index, &after.index)
             .into_iter()
-            .map(|c| ChangeBody {
+            .map(|c| SpecChangeBody {
                 id: c.id.as_str().to_owned(),
                 kind: c.kind.as_str().to_owned(),
                 path: c.path,
                 line: c.line,
             })
             .collect();
-        Ok(DiffBody {
+        Ok(SpecDiffBody {
             from: rev_body(&from),
             to: rev_body(&to),
             changes,
@@ -597,8 +597,11 @@ pub async fn diff_route(state: AppState, request: Dispatched<ProjectCtx>) -> Res
     .await
 }
 
-fn trace_rows(source: &str, rows: Vec<TraceTableRow>) -> impl Iterator<Item = TraceRowBody> + '_ {
-    rows.into_iter().map(move |r| TraceRowBody {
+fn trace_rows(
+    source: &str,
+    rows: Vec<TraceTableRow>,
+) -> impl Iterator<Item = SpecTraceRowBody> + '_ {
+    rows.into_iter().map(move |r| SpecTraceRowBody {
         id: r.id.as_str().to_owned(),
         source: source.to_owned(),
         path: r.path,
@@ -614,7 +617,7 @@ fn trace_rows(source: &str, rows: Vec<TraceTableRow>) -> impl Iterator<Item = Tr
         tests: r
             .tests
             .into_iter()
-            .map(|(path, line)| TestPlaceBody { path, line })
+            .map(|(path, line)| SpecTestPlaceBody { path, line })
             .collect(),
     })
 }
@@ -632,7 +635,7 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
             let rev = revision(&t, take(&params, "ref")).await?;
             let own = index(&t, &rev, Tags::Read).await?;
             let mut reason = own.index.incomplete;
-            let mut requirements: Vec<TraceRowBody> = trace_rows(
+            let mut requirements: Vec<SpecTraceRowBody> = trace_rows(
                 &own.dirs.join(", "),
                 trace_table(&own.index, None, &own.index, MAX_TESTS_PER_ROW),
             )
@@ -674,7 +677,7 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
                             Vec::new(),
                         ),
                     };
-                    references.push(TraceReferenceBody {
+                    references.push(SpecTraceReferenceBody {
                         line: entry.line,
                         repo: written.clone(), // clone: the answer owns its strings
                         status: status.to_owned(),
@@ -684,7 +687,7 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
                     requirements.extend(trace_rows(written, rows));
                 }
             }
-            Ok(TraceBody {
+            Ok(SpecTraceBody {
                 rev: rev_body(&rev),
                 requirements,
                 references,
