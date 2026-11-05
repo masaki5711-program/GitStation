@@ -1862,3 +1862,10 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   `a_work_item_link_condition_round_trips_and_is_audited`（forge-db）、`a_work_item_link_blocks_only_when_required` と組み合わせの表（proptest）、
   `a_work_item_link_merge_rule_is_set_and_shown_in_the_status`（forge-web）、`merge_rule_set_sets_the_work_item_link_condition`（gstn）。
   Runbook `merge-blocked` に対処を書いた。
+- **この条件が何を保証するか**（I1d の独立レビュー、security MEDIUM）: `require_work_item_link` は **追跡のための条件**（MR がどの
+  PBI のためのものかが分かること）であり、**人の承認でも「Ready の PBI」の確認でもない**。満たすのは、今の結びつけの作業項目への
+  **どの** 開いたリンクでもよい: タイトル・ソースブランチからの自動のリンク、人のリンク、エージェントのトークン・ボット・
+  サービスアカウントによるリンク（I1b の `WorkItemLink` の権限は人に限らない）。PBI が kanflow で Ready か・受け入れ条件を満たすかは
+  この条件では判定しない（計画 02 F-5 は kanflow の checks の提供者 `kanflow/work-item` などの必須のチェックで行う、§10）。
+  したがって、完全な自動マージを既定とする構成でも、この条件を **人の承認の代わりに数えてはならない**（人の判断が要るなら承認の
+  ルール・保護ブランチの最低の承認数・CODEOWNERS を使う）。
