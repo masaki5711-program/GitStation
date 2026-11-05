@@ -12,6 +12,7 @@ import { useApi } from '../../api/context';
 import { Loading } from '../../components/Loading';
 import { MovedNotice } from '../../components/MovedNotice';
 import { encodePath } from '../../features/repoUrls';
+import { useSession } from '../../session/session';
 import { rememberProject } from '../../hooks/recent';
 import { NotFound } from '../NotFound';
 import { BlameScreen } from './BlameScreen';
@@ -26,11 +27,14 @@ import { parseIid } from '../../api/mergeRequests';
 import { MergeRequestScreen } from './mr/MergeRequestScreen';
 import { MergeRequestsScreen } from './mr/MergeRequestsScreen';
 import { NewMergeRequestScreen } from './mr/NewMergeRequestScreen';
+import { DeliveriesScreen } from '../webhooks/DeliveriesScreen';
+import { WebhooksScreen } from '../webhooks/WebhooksScreen';
+import { parseHookId } from '../webhooks/common';
 import { MembersScreen } from '../settings/Members';
 import { ProjectSettings } from '../settings/ProjectSettings';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks'];
 
 export function RepoViews({
   projectId,
@@ -45,6 +49,7 @@ export function RepoViews({
 }) {
   const { t } = useTranslation();
   const api = useApi();
+  const isAdmin = useSession().user.is_admin;
   const word = view[0] ?? '';
   const tail = view.slice(1);
   const info = useQuery({
@@ -127,6 +132,18 @@ export function RepoViews({
     case 'members':
       screen = <MembersScreen scope={{ kind: 'project', id: projectId }} />;
       break;
+    case 'webhooks': {
+      const hookId = tail.length === 2 && tail[1] === 'deliveries' ? parseHookId(tail[0] ?? '') : null;
+      screen =
+        tail.length === 0 ? (
+          <WebhooksScreen projectId={projectId} project={project} />
+        ) : hookId !== null ? (
+          <DeliveriesScreen projectId={projectId} project={project} hookId={hookId} />
+        ) : (
+          <NotFound />
+        );
+      break;
+    }
     case 'branches':
       screen = <RefsScreen projectId={projectId} project={project} type="branch" />;
       break;
@@ -135,6 +152,9 @@ export function RepoViews({
   }
 
   const base = `/${encodePath(project)}`;
+  // Webhooks are for a Maintainer or above; the server decides again.
+  const role = info.data.role;
+  const canManageHooks = role === 'maintainer' || role === 'owner' || isAdmin;
   const items = [
     { words: ['tree', 'blob', 'blame'], to: `${base}/-/tree`, label: t('repo.files') },
     { words: ['commits', 'commit'], to: `${base}/-/commits`, label: t('repo.commits') },
@@ -143,6 +163,9 @@ export function RepoViews({
     { words: ['compare'], to: `${base}/-/compare`, label: t('repo.compare') },
     { words: ['pulls', 'pull'], to: `${base}/-/pulls`, label: t('repo.pulls') },
     { words: ['members'], to: `${base}/-/members`, label: t('members.title') },
+    ...(canManageHooks
+      ? [{ words: ['webhooks'], to: `${base}/-/webhooks`, label: t('webhooks.title') }]
+      : []),
     { words: ['settings'], to: `${base}/-/settings`, label: t('settings.title') },
   ];
   return (

@@ -20,9 +20,10 @@ import { SESSION_KEY, useSession } from '../../session/session';
 import { AdminUsers } from './AdminUsers';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
+import { Notifications } from './Notifications';
 import { Tokens } from './Tokens';
 
-type Tab = 'tokens' | 'sessions' | 'trash' | 'admin';
+type Tab = 'tokens' | 'sessions' | 'notifications' | 'trash' | 'admin';
 
 export function Account({ path }: { path: string }) {
   const { t } = useTranslation();
@@ -30,13 +31,14 @@ export function Account({ path }: { path: string }) {
   const [params] = useSearchParams();
   const wanted = params.get('tab');
   const tab: Tab =
-    wanted === 'sessions' || wanted === 'trash' || (wanted === 'admin' && session.user.is_admin)
+    wanted === 'sessions' || wanted === 'notifications' || wanted === 'trash' || (wanted === 'admin' && session.user.is_admin)
       ? wanted
       : 'tokens';
   const base = `/${path}/-/settings`;
   const tabs: { id: Tab; label: string }[] = [
     { id: 'tokens', label: t('tokens.title') },
     { id: 'sessions', label: t('sessions.title') },
+    { id: 'notifications', label: t('notifications.title') },
     { id: 'trash', label: t('trash.title') },
     ...(session.user.is_admin ? [{ id: 'admin' as const, label: t('admin.title') }] : []),
   ];
@@ -62,6 +64,7 @@ export function Account({ path }: { path: string }) {
       </nav>
       {tab === 'tokens' && <Tokens />}
       {tab === 'sessions' && <Sessions />}
+      {tab === 'notifications' && <Notifications />}
       {tab === 'trash' && <Trash />}
       {tab === 'admin' && <AdminUsers />}
     </>
