@@ -38,6 +38,7 @@ fn ready() -> MergeFacts {
         approvals: ApprovalInputs::nothing_required(),
         checks: Vec::new(),
         discussions: None,
+        work_item_link: None,
     }
 }
 
@@ -123,6 +124,36 @@ fn unresolved_discussions_block_only_when_required() {
     .expect_err("blocked");
     assert_eq!(open, [BlockReason::UnresolvedDiscussions { count: 3 }]);
     assert_eq!(open[0].detail().as_deref(), Some("count=3"));
+}
+
+/// M3 I1d: a missing work item link blocks only when the merge rule asks
+/// for one (`None`: not required); a link clears it. It ranks after the
+/// discussions and before the configuration rule (ADR-0024 §7).
+#[test]
+fn a_work_item_link_blocks_only_when_required() {
+    assert!(evaluate_merge(&ready()).is_ok());
+    assert!(evaluate_merge(&MergeFacts {
+        work_item_link: Some(true),
+        ..ready()
+    })
+    .is_ok());
+    let missing = evaluate_merge(&MergeFacts {
+        work_item_link: Some(false),
+        ..ready()
+    })
+    .expect_err("blocked");
+    assert_eq!(missing, [BlockReason::WorkItemLinkMissing]);
+    assert_eq!(missing[0].as_str(), "work_item_link_missing");
+    assert_eq!(missing[0].detail(), None);
+    let both = MergeFacts {
+        discussions: Some(2),
+        work_item_link: Some(false),
+        ..ready()
+    };
+    assert_eq!(
+        names(&both),
+        ["unresolved_discussions", "work_item_link_missing"]
+    );
 }
 
 /// A draft is blocked with every other reason it has too (ADR-0024 §7:
@@ -257,6 +288,9 @@ fn expected(facts: &MergeFacts, minimum: u32) -> Vec<&'static str> {
     if facts.discussions.is_some_and(|n| n > 0) {
         push(13, "unresolved_discussions");
     }
+    if facts.work_item_link == Some(false) {
+        push(14, "work_item_link_missing");
+    }
     out.into_values().flatten().collect()
 }
 
@@ -278,6 +312,7 @@ proptest! {
         minimum in 0u32..3,
         checks in arb_checks(),
         discussions in proptest::option::of(0u32..3),
+        work_item_link in proptest::option::of(any::<bool>()),
     ) {
         let facts = MergeFacts {
             state,
@@ -290,6 +325,7 @@ proptest! {
             approvals: ApprovalInputs { minimum, ..ApprovalInputs::nothing_required() },
             checks,
             discussions,
+            work_item_link,
         };
         let want = expected(&facts, minimum);
         match evaluate_merge(&facts) {
@@ -321,6 +357,7 @@ fn the_reason_order_is_fixed() {
     let every = [
         BlockReason::ChangedPathsUnknown { reason: "timeout" },
         BlockReason::ConfigChangeNeedsMaintainerApproval,
+        BlockReason::WorkItemLinkMissing,
         BlockReason::UnresolvedDiscussions { count: 1 },
         BlockReason::RequiredCheckNotSuccessful {
             name: name("ci/b"),
@@ -370,17 +407,18 @@ fn the_reason_order_is_fixed() {
             "required_check_missing",
             "required_check_not_successful",
             "unresolved_discussions",
+            "work_item_link_missing",
             "config_change_needs_maintainer_approval",
             "changed_paths_unknown",
         ]
     );
     let ranks: Vec<u8> = sorted.iter().map(BlockReason::rank).collect();
-    assert_eq!(ranks, (0..16).collect::<Vec<u8>>(), "one rank each");
+    assert_eq!(ranks, (0..17).collect::<Vec<u8>>(), "one rank each");
 }
 
 /// The order agrees with ADR-0024 §7's list (the names it lists appear in
-/// the same order; `nothing_to_merge` is R4's addition and
-/// `work_item_link_missing` waits for I1).
+/// the same order; `nothing_to_merge` is R4's addition; M3 I1d brought
+/// `work_item_link_missing`).
 #[test]
 fn the_reason_order_agrees_with_the_adr() {
     let adr =
@@ -401,6 +439,7 @@ fn the_reason_order_agrees_with_the_adr() {
         "required_check_missing",
         "required_check_not_successful",
         "unresolved_discussions",
+        "work_item_link_missing",
         "config_change_needs_maintainer_approval",
         "changed_paths_unknown",
     ];

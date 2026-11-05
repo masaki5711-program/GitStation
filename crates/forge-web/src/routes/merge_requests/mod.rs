@@ -97,7 +97,7 @@ pub use settings::{
 pub use status::{
     status, MergeRequestStatusBody, StatusApprovalBody, StatusApprovalsBody, StatusCheckBody,
     StatusCodeownerBody, StatusCodeownersBody, StatusDiscussionsBody, StatusReasonBody,
-    StatusReasonName, StatusRuleBody, StatusViewerBody, STATUS, STATUS_OF,
+    StatusReasonName, StatusRuleBody, StatusViewerBody, StatusWorkItemLinkBody, STATUS, STATUS_OF,
 };
 pub use versions::{
     compare, version_diff, versions, VersionBody, VersionCompareBody, VersionDiffBody,

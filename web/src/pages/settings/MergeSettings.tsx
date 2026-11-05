@@ -1003,10 +1003,14 @@ function parseChecks(raw: string): string[] | null {
 /** What a protected branch's merge conditions do that a person must know. */
 function BranchWarnings({ rule }: { rule: ProtectedRef }) {
   const { t } = useTranslation();
-  if (!rule.warnings.includes('required_checks_unreportable')) return null;
+  const unreportable = rule.warnings.includes('required_checks_unreportable');
+  // M3 I1d: a link condition on a project without a Kanflow binding.
+  const unbound = rule.warnings.includes('work_item_link_unbound');
+  if (!unreportable && !unbound) return null;
   return (
     <div role="note" className={styles.warning}>
-      <p>{t('settings.conditions.unreportable')}</p>
+      {unreportable && <p>{t('settings.conditions.unreportable')}</p>}
+      {unbound && <p data-testid="merge-warning-work-item-unbound">{t('settings.conditions.workItemUnbound')}</p>}
       {rule.merge_rule?.direct_push_forbidden === true && <p>{t('settings.conditions.frozen')}</p>}
     </div>
   );
@@ -1129,6 +1133,9 @@ function Conditions({ rule }: { rule: ProtectedRef }) {
   }
   if (m.require_resolved_discussions) lines.push(t('settings.conditions.resolved'));
   if (m.direct_push_forbidden) lines.push(t('settings.conditions.noPush'));
+  if (m.require_work_item_link) {
+    lines.push(<span data-testid="merge-condition-work-item">{t('settings.conditions.workItem')}</span>);
+  }
   return (
     <ul className={styles.plainList}>
       {lines.map((line, i) => (
@@ -1158,6 +1165,7 @@ function ConditionsDialog({
   const [checks, setChecks] = useState((m?.required_checks ?? []).join('\n'));
   const [resolved, setResolved] = useState(m?.require_resolved_discussions ?? false);
   const [noPush, setNoPush] = useState(m?.direct_push_forbidden ?? false);
+  const [link, setLink] = useState(m?.require_work_item_link ?? false);
   const [attempt, setAttempt] = useState(0);
   const required = parseCount(count, 0, 20);
   const names = parseChecks(checks);
@@ -1173,13 +1181,15 @@ function ConditionsDialog({
     save.mutate(
       {
         ruleId: rule.id,
-        // These four (the work-item link is not offered before I1) and the
-        // merge rule as read, verbatim (null: none yet, create only).
+        // Every field (a PUT replaces the merge rule: the work item link of
+        // M3 I1d is sent too, never dropped) and the merge rule as read,
+        // verbatim (null: none yet, create only).
         body: {
           required_approvals: required,
           required_checks: names,
           require_resolved_discussions: resolved,
           direct_push_forbidden: noPush,
+          require_work_item_link: link,
           expected_updated_at: m?.updated_at ?? null,
         },
       },
@@ -1219,10 +1229,13 @@ function ConditionsDialog({
         />
         <Check label={t('settings.conditions.resolved')} checked={resolved} onChange={setResolved} />
         <Check label={t('settings.conditions.noPushLabel')} checked={noPush} onChange={setNoPush} />
+        <Check label={t('settings.conditions.workItemLabel')} checked={link} onChange={setLink} />
         {/* Stays mounted: a warning that appears while typing is read out. */}
-        <div role="status" className={blocking ? styles.warning : undefined}>
+        <div role="status" className={blocking || link ? styles.warning : undefined}>
           {blocking && <p>{t('settings.conditions.unreportable')}</p>}
           {blocking && noPush && <p>{t('settings.conditions.frozen')}</p>}
+          {/* Review I1d: what the link condition costs without a binding. */}
+          {link && <p>{t('settings.conditions.workItemDialog')}</p>}
         </div>
         {save.isError && (
           <SaveError

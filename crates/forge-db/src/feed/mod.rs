@@ -47,8 +47,15 @@ use crate::roles::CAP;
 use crate::work_items::WORK_ITEM_SYNC;
 use crate::{query_error, read_query_error, Db};
 
+mod dev_status;
 #[cfg(test)]
 mod tests;
+
+pub use dev_status::{
+    DevCheckRun, DevItemStatus, DevMergeRequest, DevStatusRead, DevWorkItem, MrStateFilter,
+    DEFAULT_DEV_STATUS_LIMIT, MAX_DEV_STATUS_LIMIT, MAX_MERGE_REQUESTS_PER_ITEM,
+    MAX_PAGE_MERGE_REQUESTS,
+};
 
 /// The most events one page holds (plan 02 §11.2).
 pub const MAX_LIMIT: usize = 500;

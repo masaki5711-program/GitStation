@@ -43,6 +43,9 @@ use crate::namespace_resolver::ProjectAccess;
 
 /// The purpose a feed cursor is sealed for ([`CursorKeys::encode`]).
 pub const CURSOR_PURPOSE: &str = "integration.events";
+/// The purpose a development-status page cursor is sealed for (M3 I1d):
+/// another purpose than the feed's, so neither passes for the other.
+pub const DEV_STATUS_CURSOR_PURPOSE: &str = "integration.dev_status";
 /// The bytes of a digest and of an epoch.
 pub const DIGEST_BYTES: usize = 16;
 const PAYLOAD_VERSION: u8 = 1;
@@ -143,6 +146,32 @@ impl VisibleSet {
     pub fn shows_nothing(&self) -> bool {
         self.projects.is_empty() || self.event_types.is_empty()
     }
+
+    /// M3 I1d: the development status shows merge requests (some visible
+    /// project, and the allowlist admits a `merge_request.*` type).
+    /// I1d review: a merge request's check runs (with merge requests, when
+    /// the allowlist admits `check.completed`).
+    pub fn shows_checks(&self) -> bool {
+        self.shows_merge_requests() && self.event_types.contains(&EventType::CheckCompleted)
+    }
+
+    /// I1d review: a merge request's approvals (with merge requests, when
+    /// the allowlist admits `merge_request.approved` or `.unapproved`).
+    pub fn shows_approvals(&self) -> bool {
+        self.shows_merge_requests()
+            && (self.event_types.contains(&EventType::MergeRequestApproved)
+                || self
+                    .event_types
+                    .contains(&EventType::MergeRequestUnapproved))
+    }
+
+    pub fn shows_merge_requests(&self) -> bool {
+        !self.projects.is_empty()
+            && self
+                .event_types
+                .iter()
+                .any(|t| t.as_str().starts_with("merge_request."))
+    }
 }
 
 /// The integration-class event types `allowlist` admits (`*` every one,
@@ -208,26 +237,57 @@ fn invalid(rule: &str, integration: IntegrationId) -> ForgeError {
         .with_context("integration_id", integration.get())
 }
 
+/// `cursor` opened for `purpose`: `FG-INT-0008` with the decoder's `rule`,
+/// or `FG-INT-0007 reason=retention rule=expired` past `max_age`.
+fn open_payload(
+    keys: &CursorKeys,
+    purpose: &str,
+    integration: IntegrationId,
+    cursor: &str,
+    max_age: Duration,
+) -> Result<Vec<u8>, ForgeError> {
+    keys.decode(purpose, cursor, max_age).map_err(|e| {
+        let rule = e
+            .context()
+            .iter()
+            .find(|(k, _)| *k == "rule")
+            .map_or("invalid", |(_, v)| v.as_str());
+        if rule == "expired" {
+            ForgeError::new(ErrorCode::FeedCursorExpired)
+                .with_context("reason", "retention")
+                .with_context("rule", "expired")
+                .with_context("integration_id", integration.get())
+        } else {
+            invalid(rule, integration)
+        }
+    })
+}
+
+/// A non-negative `i64` as its big-endian `u64` (`FG-SYS-0001` otherwise).
+fn unsigned(value: i64, field: &'static str) -> Result<[u8; 8], ForgeError> {
+    u64::try_from(value).map(u64::to_be_bytes).map_err(|_| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "feed_position_negative")
+            .with_context(field, value)
+    })
+}
+
 impl FeedPosition {
-    /// The cursor text (sealed with the newest key).
-    pub fn seal(&self, keys: &CursorKeys) -> Result<String, ForgeError> {
-        let seq = u64::try_from(self.seq).map_err(|_| {
-            ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "feed_position_negative")
-                .with_context("seq", self.seq)
-        })?;
-        let integration = u64::try_from(self.integration.get()).map_err(|_| {
-            ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "feed_position_negative")
-                .with_context("integration_id", self.integration.get())
-        })?;
+    /// The payload bytes (the feed cursor's, and the head of a
+    /// development-status cursor's).
+    fn payload(&self) -> Result<Vec<u8>, ForgeError> {
         let mut payload = Vec::with_capacity(PAYLOAD_BYTES);
         payload.push(PAYLOAD_VERSION);
-        payload.extend_from_slice(&integration.to_be_bytes());
+        payload.extend_from_slice(&unsigned(self.integration.get(), "integration_id")?);
         payload.extend_from_slice(&self.epoch);
         payload.extend_from_slice(&self.visible_set);
-        payload.extend_from_slice(&seq.to_be_bytes());
-        keys.encode(CURSOR_PURPOSE, &payload)
+        payload.extend_from_slice(&unsigned(self.seq, "seq")?);
+        Ok(payload)
+    }
+
+    /// The cursor text (sealed with the newest key).
+    pub fn seal(&self, keys: &CursorKeys) -> Result<String, ForgeError> {
+        keys.encode(CURSOR_PURPOSE, &self.payload()?)
     }
 
     /// Open a cursor `integration` was given. A malformed, tampered or
@@ -239,21 +299,7 @@ impl FeedPosition {
         cursor: &str,
         max_age: Duration,
     ) -> Result<Self, ForgeError> {
-        let payload = keys.decode(CURSOR_PURPOSE, cursor, max_age).map_err(|e| {
-            let rule = e
-                .context()
-                .iter()
-                .find(|(k, _)| *k == "rule")
-                .map_or("invalid", |(_, v)| v.as_str());
-            if rule == "expired" {
-                ForgeError::new(ErrorCode::FeedCursorExpired)
-                    .with_context("reason", "retention")
-                    .with_context("rule", "expired")
-                    .with_context("integration_id", integration.get())
-            } else {
-                invalid(rule, integration)
-            }
-        })?;
+        let payload = open_payload(keys, CURSOR_PURPOSE, integration, cursor, max_age)?;
         Self::parse(&payload, integration)
     }
 
@@ -281,6 +327,58 @@ impl FeedPosition {
             epoch,
             visible_set,
             seq,
+        })
+    }
+}
+
+/// Where a paged development-status read continues (M3 I1d,
+/// `GET /api/v1/integrations/{id}/dev-status?cursor=…`): the feed position
+/// its **first** page was read at (`as_of_seq`, with the epoch and the
+/// visible set's digest — a later page checks them like the feed does)
+/// and the last work item returned. Sealed for
+/// [`DEV_STATUS_CURSOR_PURPOSE`]; the payload is the feed position's
+/// followed by `after_work_item:u64`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DevStatusPosition {
+    pub feed: FeedPosition,
+    /// Every work item with `id <= after_work_item` was returned.
+    pub after_work_item: i64,
+}
+
+impl DevStatusPosition {
+    /// The cursor text (sealed with the newest key).
+    pub fn seal(&self, keys: &CursorKeys) -> Result<String, ForgeError> {
+        let mut payload = self.feed.payload()?;
+        payload.extend_from_slice(&unsigned(self.after_work_item, "after_work_item")?);
+        keys.encode(DEV_STATUS_CURSOR_PURPOSE, &payload)
+    }
+
+    /// Open a page cursor `integration` was given (the errors of
+    /// [`FeedPosition::open`]).
+    pub fn open(
+        keys: &CursorKeys,
+        integration: IntegrationId,
+        cursor: &str,
+        max_age: Duration,
+    ) -> Result<Self, ForgeError> {
+        let payload = open_payload(
+            keys,
+            DEV_STATUS_CURSOR_PURPOSE,
+            integration,
+            cursor,
+            max_age,
+        )?;
+        let bad = || invalid("payload", integration);
+        if payload.len() != PAYLOAD_BYTES + 8 {
+            return Err(bad());
+        }
+        let (head, tail) = payload.split_at(PAYLOAD_BYTES);
+        let feed = FeedPosition::parse(head, integration)?;
+        let raw: [u8; 8] = tail.try_into().map_err(|_| bad())?;
+        let after_work_item = i64::try_from(u64::from_be_bytes(raw)).map_err(|_| bad())?;
+        Ok(Self {
+            feed,
+            after_work_item,
         })
     }
 }

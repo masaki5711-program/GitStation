@@ -1250,6 +1250,44 @@ fn codeowners_enforcement_suspends_for_a_bounded_time() {
     assert_eq!(srv.seen().len(), before);
 }
 
+/// M3 I1d: `merge-rule set --work-item-link true|false` sets the work item
+/// link condition; left out, the stored value is kept. The answer's
+/// `work_item_link_unbound` warning is spelled out.
+#[test]
+fn merge_rule_set_sets_the_work_item_link_condition() {
+    let rule = r#"{"id":2,"pattern":"refs/heads/main","push_min_role":"maintainer","created_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z","merge_rule":{"required_approvals":0,"required_checks":[],"require_resolved_discussions":false,"direct_push_forbidden":false,"require_work_item_link":true,"updated_at":"2026-11-03T00:00:01.654321Z"},"warnings":["work_item_link_unbound"],"unreportable_checks":[]}"#;
+    let srv = Mock::start(move |r| {
+        if r.method == "GET" {
+            ok(&format!(r#"{{"rules":[{rule}]}}"#))
+        } else {
+            ok(rule)
+        }
+    });
+    let sb = Sandbox::new();
+    let set = |extra: &[&str]| {
+        let mut args = vec!["merge-rule", "set", "--project", "7", "--rule-id", "2"];
+        args.extend_from_slice(extra);
+        gstn(&sb, &srv, &args)
+    };
+    let o = set(&["--approvals", "1"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("work item link required"), "{}", o.stdout);
+    assert!(
+        o.stdout
+            .contains("warning: the project has no integration binding"),
+        "{}",
+        o.stdout
+    );
+    let body: Value =
+        serde_json::from_str(&srv.seen().pop().expect("a request").body).expect("json");
+    assert_eq!(body["require_work_item_link"], true, "kept: {body}");
+    let o = set(&["--work-item-link", "false"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let body: Value =
+        serde_json::from_str(&srv.seen().pop().expect("a request").body).expect("json");
+    assert_eq!(body["require_work_item_link"], false, "{body}");
+}
+
 /// `merge-rule set` PUTs the whole merge rule with the `updated_at` it
 /// read (U2 follow-up); `remove` needs `--yes`.
 #[test]
@@ -1303,6 +1341,7 @@ fn merge_rule_commands_call_their_routes() {
         serde_json::from_str::<Value>(&r.body).expect("json"),
         json!({"required_approvals": 2, "required_checks": ["ci/gates"],
                "require_resolved_discussions": true, "direct_push_forbidden": false,
+               "require_work_item_link": false,
                "expected_updated_at": "2026-11-03T00:00:01.654321Z"})
     );
     let o = gstn(

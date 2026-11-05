@@ -727,3 +727,251 @@ async fn a_concurrent_feed_read_answers_429_with_retry_after() {
     );
     w.t.drop_now().await;
 }
+
+// ── M3 I1d: the development status routes ─────────────────────────────
+
+fn dev_status_uri(integration: i64, reference: &str) -> String {
+    format!("/api/v1/integrations/{integration}/work-items/{reference}/dev-status")
+}
+
+fn dev_status_all_uri(integration: i64) -> String {
+    format!("/api/v1/integrations/{integration}/dev-status")
+}
+
+/// The development status is decided like the feed (ADR-0016 Amendment
+/// I1d): its own service account reads both routes (read_api, api);
+/// another integration's account, people (administrators included) and a
+/// missing integration are 404; an agent's token, `Forge-Act-As` and a
+/// disabled integration 403.
+#[tokio::test]
+async fn dev_status_principal_must_be_the_integrations_service_account() {
+    let w = world().await;
+    let db = &w.t.db;
+    let uris = [
+        dev_status_uri(w.integration, "PBI-1"),
+        dev_status_all_uri(w.integration),
+    ];
+    for scopes in [READ, &[Scope::Api]] {
+        for uri in &uris {
+            let ok = call(db, "GET", uri, sa_token(w.sa, scopes), None).await;
+            assert_eq!(ok.status, StatusCode::OK, "{uri}: {}", ok.json);
+            assert_eq!(ok.json["schema_version"], 1);
+        }
+    }
+    let other_sa = create_account(&w.t, w.root, w.alice.user_id, "kanflow-other").await;
+    let _other = create_integration(&w.t, w.root, other_sa).await;
+    for uri in &uris {
+        for who in [
+            sa_token(other_sa, READ),
+            session(w.root, true),
+            token(w.root, true, &[Scope::Api, Scope::Admin]),
+            token(w.alice.user_id, false, &[Scope::Api]),
+        ] {
+            let refused = call(db, "GET", uri, who, None).await;
+            assert_eq!(
+                refused.status,
+                StatusCode::NOT_FOUND,
+                "{uri}: {}",
+                refused.json
+            );
+            assert_eq!(refused.code(), "FG-REPO-0005");
+        }
+        let agent = call(db, "GET", uri, sa_token(w.sa, READ).as_agent(true), None).await;
+        assert_eq!(agent.code(), "FG-AUTH-0003", "{uri}: {}", agent.json);
+        let act_as = call_with(
+            db,
+            "GET",
+            uri,
+            sa_token(w.sa, READ),
+            None,
+            &[("Forge-Act-As", "alice")],
+        )
+        .await;
+        assert_eq!(
+            act_as.status,
+            StatusCode::FORBIDDEN,
+            "{uri}: {}",
+            act_as.json
+        );
+        assert_eq!(act_as.code(), "FG-AUTH-0003");
+    }
+    let missing = call(
+        db,
+        "GET",
+        &dev_status_all_uri(w.integration + 1000),
+        sa_token(w.sa, READ),
+        None,
+    )
+    .await;
+    assert_eq!(missing.code(), "FG-REPO-0005", "{}", missing.json);
+    let disabled = call(
+        db,
+        "PATCH",
+        &format!("/api/v1/admin/integrations/{}", w.integration),
+        session(w.root, true),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(disabled.status, StatusCode::OK, "{}", disabled.json);
+    for uri in &uris {
+        let refused = call(db, "GET", uri, sa_token(w.sa, READ), None).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::FORBIDDEN,
+            "{uri}: {}",
+            refused.json
+        );
+    }
+    w.t.drop_now().await;
+}
+
+/// Parameters are checked strictly (FG-WEB-0006); a malformed reference is
+/// 400 only for the integration's own account (the decision comes first).
+#[tokio::test]
+async fn dev_status_parameters_are_checked() {
+    let w = world().await;
+    let db = &w.t.db;
+    for uri in [
+        dev_status_uri(w.integration, "PBI-012"),
+        dev_status_uri(w.integration, "pbi-1"),
+        format!("{}?state=draft", dev_status_uri(w.integration, "PBI-1")),
+        format!(
+            "{}?project_id=kf%201",
+            dev_status_uri(w.integration, "PBI-1")
+        ),
+        format!("{}?cursor=x", dev_status_uri(w.integration, "PBI-1")),
+        format!("{}?limit=0", dev_status_all_uri(w.integration)),
+        format!("{}?limit=101", dev_status_all_uri(w.integration)),
+        format!("{}?cursor=", dev_status_all_uri(w.integration)),
+        format!("{}?after=1", dev_status_all_uri(w.integration)),
+    ] {
+        let refused = call(db, "GET", &uri, sa_token(w.sa, READ), None).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::BAD_REQUEST,
+            "{uri}: {}",
+            refused.json
+        );
+        assert_eq!(refused.code(), "FG-WEB-0006", "{uri}");
+    }
+    let foreign = call(
+        db,
+        "GET",
+        &dev_status_uri(w.integration, "PBI-012"),
+        session(w.root, true),
+        None,
+    )
+    .await;
+    assert_eq!(foreign.code(), "FG-REPO-0005", "{}", foreign.json);
+    let tampered = call(
+        db,
+        "GET",
+        &format!("{}?cursor=AAAA", dev_status_all_uri(w.integration)),
+        sa_token(w.sa, READ),
+        None,
+    )
+    .await;
+    assert_eq!(
+        tampered.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        tampered.json
+    );
+    assert_eq!(tampered.code(), "FG-INT-0008");
+    w.t.drop_now().await;
+}
+
+/// Plan 11 `unbound_ref_is_404` over HTTP: a kanflow project no visible
+/// binding has is 404 FG-REPO-0005 with the standard body only.
+#[tokio::test]
+async fn unbound_ref_is_404() {
+    let w = world().await;
+    let refused = call(
+        &w.t.db,
+        "GET",
+        &format!(
+            "{}?project_id=kf-other",
+            dev_status_uri(w.integration, "PBI-1")
+        ),
+        sa_token(w.sa, READ),
+        None,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.json);
+    assert_eq!(refused.code(), "FG-REPO-0005");
+    assert_eq!(
+        keys_of(&refused.json),
+        ["error_code", "request_id", "user_message"]
+    );
+    let bound = call(
+        &w.t.db,
+        "GET",
+        &format!("{}?project_id=kf-1", dev_status_uri(w.integration, "PBI-1")),
+        sa_token(w.sa, READ),
+        None,
+    )
+    .await;
+    assert_eq!(bound.status, StatusCode::OK, "{}", bound.json);
+    assert_eq!(bound.json["work_items"][0]["merge_requests"], json!([]));
+    w.t.drop_now().await;
+}
+
+/// The answers have the golden example's shape (docs/api/dev-status.example.json,
+/// kanflow's fake GitStation): the same fields at the top, the work item
+/// and the page level (a merge request's fields: the unit test
+/// `a_merge_request_has_the_golden_fields`).
+#[tokio::test]
+async fn the_dev_status_answers_the_golden_example_shape() {
+    let w = world().await;
+    push(&w, "feature/PBI-12-login-form").await;
+    drain(&w.t).await;
+    let golden: Value =
+        serde_json::from_str(include_str!("../../../docs/api/dev-status.example.json"))
+            .expect("golden example");
+    let one = call(
+        &w.t.db,
+        "GET",
+        &dev_status_uri(w.integration, "PBI-12"),
+        sa_token(w.sa, READ),
+        None,
+    )
+    .await;
+    assert_eq!(one.status, StatusCode::OK, "{}", one.json);
+    assert_eq!(keys_of(&one.json), keys_of(&golden["work_item"]));
+    assert_eq!(
+        keys_of(&one.json["work_items"][0]),
+        keys_of(&golden["work_item"]["work_items"][0])
+    );
+    assert_eq!(one.json["work_items"][0]["ref"], "PBI-12");
+    assert_eq!(one.json["work_items"][0]["project_id"], "kf-1");
+    let page = call(
+        &w.t.db,
+        "GET",
+        &format!("{}?limit=1", dev_status_all_uri(w.integration)),
+        sa_token(w.sa, READ),
+        None,
+    )
+    .await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.json);
+    assert_eq!(keys_of(&page.json), keys_of(&golden["page"]));
+    assert_eq!(
+        keys_of(&page.json["work_items"][0]),
+        keys_of(&golden["page"]["work_items"][0])
+    );
+    // The feed cursor it names reads the feed.
+    let cursor = page.json["feed_cursor"].as_str().expect("feed_cursor");
+    let feed = call(
+        &w.t.db,
+        "GET",
+        &format!("{}?cursor={cursor}", events_uri(w.integration)),
+        sa_token(w.sa, READ),
+        None,
+    )
+    .await;
+    assert_eq!(feed.status, StatusCode::OK, "{}", feed.json);
+    assert_eq!(
+        keys_of(&golden["not_found"]),
+        ["error_code", "request_id", "user_message"]
+    );
+    w.t.drop_now().await;
+}

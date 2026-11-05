@@ -6,8 +6,8 @@
 //!
 //! The ask's checks here (`FG-WEB-0006` unless noted): at most 20
 //! approvals and 20 checks, every check `<namespace>/<name>`, never `ext/`
-//! (`FG-REVIEW-0016`), and no work item link condition until I1
-//! (ADR-0024 §11: `rule=unavailable_until_i1`).
+//! (`FG-REVIEW-0016`). M3 I1d: the work item link condition
+//! (`require_work_item_link`) is accepted (ADR-0024 §11 and its I1d note).
 
 use forge_auth::{Action, Authorized, LoadedProtection, RefProtectionCtx};
 use forge_core::merge_conditions::{MAX_REQUIRED_APPROVALS, MAX_REQUIRED_CHECKS};
@@ -27,7 +27,8 @@ pub struct MergeRuleAsk {
     pub required_checks: Vec<String>,
     pub require_resolved_discussions: bool,
     pub direct_push_forbidden: bool,
-    /// Refused while `true` (no work items before I1).
+    /// M3 I1d: an open link to a work item of the project's binding is
+    /// required (`work_item_link_missing` otherwise).
     pub require_work_item_link: bool,
 }
 
@@ -41,12 +42,6 @@ fn param_invalid(param: &'static str, rule: &'static str) -> ForgeError {
 impl MergeRuleAsk {
     /// The merge rule, or why it cannot be one.
     pub fn to_rule(&self) -> Result<MergeRule, ForgeError> {
-        if self.require_work_item_link {
-            return Err(param_invalid(
-                "require_work_item_link",
-                "unavailable_until_i1",
-            ));
-        }
         if self.required_approvals > MAX_REQUIRED_APPROVALS {
             return Err(param_invalid("required_approvals", "range"));
         }
@@ -72,6 +67,7 @@ impl MergeRuleAsk {
             required_checks,
             require_resolved_discussions: self.require_resolved_discussions,
             direct_push_forbidden: self.direct_push_forbidden,
+            require_work_item_link: self.require_work_item_link,
         })
     }
 }
@@ -219,14 +215,16 @@ mod tests {
                 .map(|(_, v)| v.clone())
                 .unwrap_or_default()
         };
-        // ADR-0024 §11: no work item link before I1.
-        assert_eq!(
-            rule_of(MergeRuleAsk {
-                require_work_item_link: true,
-                ..MergeRuleAsk::default()
-            }),
-            "unavailable_until_i1"
-        );
+        // M3 I1d (ADR-0024 §11): the work item link condition is
+        // configurable now that I1b brought the links.
+        let linked = MergeRuleAsk {
+            require_work_item_link: true,
+            ..MergeRuleAsk::default()
+        }
+        .to_rule()
+        .expect("a work item link may be required");
+        assert!(linked.require_work_item_link);
+        assert!(!ok.require_work_item_link);
         assert_eq!(
             rule_of(MergeRuleAsk {
                 required_approvals: 21,

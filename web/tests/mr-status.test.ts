@@ -28,6 +28,7 @@ function status(
     approvals: null,
     checks: [],
     discussions: null,
+    work_item_link: null,
     codeowners: { enforced: true, suspended_until: null },
     viewer: {
       can_approve: false,
@@ -86,6 +87,8 @@ describe('blockedReason: plain reasons', () => {
     ['ff_not_possible', 'mr.status.ffNotPossible', 'push'],
     ['nothing_to_merge', 'mr.status.nothingToMerge', 'none'],
     ['config_change_needs_maintainer_approval', 'mr.status.configChange', 'wait'],
+    // M3 I1d: nothing on this screen links a work item; the hint says how.
+    ['work_item_link_missing', 'mr.status.workItemLinkMissing', 'none'],
   ];
   it.each(cases)('%s -> %s, next %s', (reason, key, next) => {
     expect(plain(reason)).toEqual({ key, values: {}, next });
@@ -239,6 +242,7 @@ describe('statusHint / statusTone (U1 review: name what is waited for)', () => {
     ['not_open', 'mr.status.hint.notOpen'],
     ['codeowners_invalid', 'mr.status.hint.codeowners'],
     ['nothing_to_merge', 'mr.status.hint.nothing'],
+    ['work_item_link_missing', 'mr.status.hint.workItem'],
     ['mergeability_unknown', null],
     ['conflict', null],
     ['unresolved_discussions', null],
@@ -253,7 +257,7 @@ describe('statusHint / statusTone (U1 review: name what is waited for)', () => {
   it('every wait and none reason has a hint (nothing to press is never silent)', () => {
     const names = [
       'not_open', 'draft', 'merge_in_progress', 'nothing_to_merge', 'codeowners_invalid',
-      'config_change_needs_maintainer_approval', 'changed_paths_unknown',
+      'config_change_needs_maintainer_approval', 'changed_paths_unknown', 'work_item_link_missing',
     ];
     for (const n of names) expect(statusHint(status([{ reason: n, detail: null }]))).not.toBeNull();
     expect(statusHint(status([{ reason: 'approvals_missing', detail: 'rule=r required=1 counted=0' }]))).not.toBeNull();

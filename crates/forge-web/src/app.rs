@@ -438,9 +438,11 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    check_routes(feed_routes(integration_routes(service_account_routes(
-        account_routes(history_routes(browse_routes(git_routes(shell_routes(
-            merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
+    check_routes(dev_status_routes(feed_routes(integration_routes(
+        service_account_routes(account_routes(history_routes(browse_routes(git_routes(
+            shell_routes(merge_request_routes(member_routes(move_routes(
+                hosting_routes(fixed),
+            )))),
         ))))),
     ))))
 }
@@ -790,6 +792,34 @@ fn feed_routes(registry: Registry<AppState>) -> Registry<AppState> {
             f::cursor,
         )
         .responds::<f::FeedCursorBody>(Verb::Get, f::CURSOR)
+}
+
+/// The development status of an integration's work items (M3 I1d, plan
+/// 02 §5.2, §11.2, docs/api/dev-status.md): decided like the feed (only
+/// the integration's own service account), on the feed's visible set.
+fn dev_status_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::integration_dev_status as d;
+    registry
+        .route_with(
+            Verb::Get,
+            d::WORK_ITEM,
+            Action::IntegrationDevStatusRead,
+            "One work item's development status: the merge requests linked to PBI-<n> across the integration's bound projects, open, merged and closed (state=all by default), with approvals, the head's checks and as_of_seq / feed_cursor (the integration's own service account; read_api; FG-REPO-0005 for a reference of no bound kanflow project)",
+            d::DEV_STATUS_WORK_ITEM,
+            d::work_item,
+        )
+        .responds::<d::DevStatusBody>(Verb::Get, d::WORK_ITEM)
+        .queries(Verb::Get, d::WORK_ITEM, d::WORK_ITEM_QUERY)
+        .route_with(
+            Verb::Get,
+            d::ALL,
+            Action::IntegrationDevStatusRead,
+            "Every work item's development status, page by page (the resync after a 410: take GET …/events/cursor, read these pages, then the feed from that cursor or feed_cursor; FG-INT-0007 410 when the walk cannot continue)",
+            d::DEV_STATUS_ALL,
+            d::all,
+        )
+        .responds::<d::DevStatusPageBody>(Verb::Get, d::ALL)
+        .queries(Verb::Get, d::ALL, d::ALL_QUERY)
 }
 
 /// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015

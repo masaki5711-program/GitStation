@@ -473,7 +473,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "merge-rule set",
-        summary: "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). A required check no active service account may report blocks every merge (the answer warns `required_checks_unreportable` and names them in `unreportable_checks`; grant the namespace with admin service-account grant-checks). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten.",
+        summary: "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, the direct-push ban (merges still land), and (M3 I1d) a work item link (warns `work_item_link_unbound` on a project without an integration binding). A required check no active service account may report blocks every merge (the answer warns `required_checks_unreportable` and names them in `unreportable_checks`; grant the namespace with admin service-account grant-checks). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten.",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--rule-id", "option", true, "The protection rule's id (from protected-ref list)."),
@@ -482,11 +482,12 @@ pub const COMMANDS: &[CommandSpec] = &[
             arg("--clear-checks", "flag", false, "Require no check."),
             arg("--resolved-discussions", "option", false, "true / false: every discussion must be resolved."),
             arg("--direct-push-forbidden", "option", false, "true / false: forbid direct pushes to the branch (FG-GIT-0017)."),
+            arg("--work-item-link", "option", false, "true / false: require an open link to a work item (PBI-<n>) of the project's integration binding (work_item_link_missing)."),
         ],
-        examples: &["gstn merge-rule set --project 7 --rule-id 2 --approvals 1 --resolved-discussions true --direct-push-forbidden true"],
+        examples: &["gstn merge-rule set --project 7 --rule-id 2 --approvals 1 --resolved-discussions true --direct-push-forbidden true", "gstn merge-rule set --project 7 --rule-id 2 --work-item-link true"],
         scopes: &["api"],
         routes: &["GET /api/v1/projects/{id}/protected-refs", "PUT /api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule"],
-        output: r#"{"type":"object","required":["id","pattern","push_min_role","merge_rule","warnings"],"properties":{"merge_rule":{"type":"object","required":["required_approvals","required_checks","require_resolved_discussions","direct_push_forbidden","updated_at"]}}}"#,
+        output: r#"{"type":"object","required":["id","pattern","push_min_role","merge_rule","warnings"],"properties":{"merge_rule":{"type":"object","required":["required_approvals","required_checks","require_resolved_discussions","direct_push_forbidden","require_work_item_link","updated_at"]}}}"#,
     },
     CommandSpec {
         name: "merge-rule remove",
@@ -1134,6 +1135,34 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["read_api"],
         routes: &["GET /api/v1/integrations/{id}/events/cursor"],
         output: r#"{"type":"object","required":["schema_version","cursor"],"properties":{"schema_version":{"const":1},"cursor":{"type":"string"}}}"#,
+    },
+    CommandSpec {
+        name: "integration dev-status",
+        summary: "One work item's development status (M3 I1d): the merge requests linked to PBI-<n> across the integration's bound projects — open, merged and closed — with approvals, the head's checks (checks_state none is no run, never success) and as_of_seq / feed_cursor (the integration's own service account token, read_api; FG-REPO-0005 for a reference of no bound kanflow project).",
+        args: &[
+            arg("id", "positional", true, "The integration id."),
+            arg("--ref", "option", true, "The work item, PBI-<n>."),
+            arg("--project-id", "option", false, "The kanflow project id of the binding (default: every bound one)."),
+            arg("--state", "option", false, "all (default), open, merged or closed."),
+        ],
+        examples: &["gstn integration dev-status 3 --ref PBI-12 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/integrations/{id}/work-items/{ref}/dev-status"],
+        output: r#"{"type":"object","required":["schema_version","as_of_seq","feed_cursor","work_items"],"properties":{"schema_version":{"const":1},"work_items":{"type":"array","items":{"type":"object","required":["provider","project_id","ref","merge_requests","merge_requests_truncated"]}}}}"#,
+    },
+    CommandSpec {
+        name: "integration dev-status-list",
+        summary: "One page of every work item's development status (M3 I1d; the resync after a 410: integration cursor first, then these pages until next_cursor is null, then integration events from that cursor or feed_cursor; FG-INT-0007 410 when the walk cannot continue).",
+        args: &[
+            arg("id", "positional", true, "The integration id."),
+            arg("--cursor", "option", false, "The previous page's next_cursor."),
+            arg("--limit", "option", false, "Work items per page, 1 to 100 (default 50)."),
+            arg("--state", "option", false, "all (default), open, merged or closed."),
+        ],
+        examples: &["gstn integration dev-status-list 3 --cursor <next_cursor> --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/integrations/{id}/dev-status"],
+        output: r#"{"type":"object","required":["schema_version","as_of_seq","feed_cursor","work_items","next_cursor","has_more"],"properties":{"schema_version":{"const":1},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#,
     },
     CommandSpec {
         name: "integration-binding list",

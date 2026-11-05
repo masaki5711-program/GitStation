@@ -1848,3 +1848,40 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
 - **LOW**: スケジューラーの `maintenance_run_lost` は回ごとの `request_id` を持ち、`failures ≥ 2` で error（`start` の経路も同じ）。
   `last_success_at` の埋め戻しを新しいマイグレーション 20261117100200 で（`outcome = 'succeeded'` の行に `last_finished_at`）。doctor の
   ロックの見回りは最初の stat の失敗を詳細に残す。`fsck_unusable` は `fatal:` も要る。`stale_running` の一時的な誤報を Runbook に書いた。
+
+## 実装で決めたこと（I1d `feat/cross-work-item-dev-status`、2026-11-04）— 作業項目のリンクのマージの条件
+
+§7・§11 と R6 の「作業項目のリンクの列は作らない（I1 で列と条件を一緒に足す）」を閉じた。I1b が `merge_request_work_items` を入れたので、
+保護ブランチのマージの条件で **作業項目のリンクを必須にできる**。
+
+- **表**（追記のマイグレーション `20261119100000`）: `protected_ref_merge_rules.require_work_item_link boolean NOT NULL DEFAULT false`。
+  監査される表なので `audited_change_present` を新しい列を含めて作り直した（列だけの変更にも `protected_ref.merge_rule_put` の監査の行が要る）。
+  `MergeRule.require_work_item_link`、`MergeRule::strictest` はどれかのルールが on なら on（ルールを足して緩むことはない）。監査の
+  `merge_rule` にも出す。
+- **条件**: 「MR に、プロジェクトの **今の** 連携の結びつけの作業項目への開いたリンク（`unlinked_at IS NULL`）がある」。forge-db
+  `work_items::LINKED_SQL`（リンク → 作業項目 → `integration_bindings` を連携と外部プロジェクトで結合）。結びつけの無いプロジェクトは満たせない。
+  結びつけの解除はリンクを終わらせる（I1b）ので、解除・付け替えの後は（同じ参照でも）満たさない。人のリンクも自動のリンクも数える。
+- **逸脱**: §11 は「`forge-core` に trait を足して入れる」としたが、リンクは forge-integ ではなく forge-db の表（I1b）にあるので、
+  `unresolved_discussions` と同じく forge-db から直接読む（trait は不要。forge-review → forge-db の向きは既存）。マージの要求とジョブは
+  `MergeGate.work_item_linked`（ロックの下の同じトランザクション、条件が求めるときだけ）、状態の取得は `work_items::work_item_linked`
+  （読み取りのプール）。同じ SQL。
+- **`BlockReason::WorkItemLinkMissing`**（`work_item_link_missing`、detail なし）。順位は §7 の並びどおり `unresolved_discussions` の後・
+  `config_change_needs_maintainer_approval` の前（14。後ろの 2 つを 15・16 にずらした）。`MergeFacts.work_item_link: Option<bool>`
+  （`None` は求めない）。状態の API（`docs/api/merge-status.md`、schema_version 1 のまま欄を足す）に `work_item_link: {linked} | null`。
+- **設定**: `PUT …/merge-rule` の `require_work_item_link: true` を受ける（FG-WEB-0006 `rule=unavailable_until_i1` は消えた）。
+  結びつけの無いプロジェクトでは答えに `warnings: ["work_item_link_unbound"]`（すべてのマージが止まる）。一覧と答えの `merge_rule` に
+  `require_work_item_link`。gstn `merge-rule set --work-item-link true|false`（省けば今の値を保つ）。画面の「マージの条件」に
+  チェックボックスと 1 行（保存で黙って外さない）。MR の画面の止まっている理由の 1 行は `mr.status.workItemLinkMissing`、次の操作は
+  画面に無い（タイトル・ブランチ名・gstn）ので `next = none` と、どうすればよいかのヒント `mr.status.hint.workItem`（ja / en / id）。
+- **テスト**: `a_work_item_link_rule_blocks_until_a_work_item_is_linked`、`a_link_to_a_work_item_of_an_unbound_project_fails_the_condition`、
+  `the_merge_job_decides_the_work_item_link_again`（forge-review、実際のリポジトリ）、`the_link_condition_sees_only_open_links_of_the_current_binding`、
+  `a_work_item_link_condition_round_trips_and_is_audited`（forge-db）、`a_work_item_link_blocks_only_when_required` と組み合わせの表（proptest）、
+  `a_work_item_link_merge_rule_is_set_and_shown_in_the_status`（forge-web）、`merge_rule_set_sets_the_work_item_link_condition`（gstn）。
+  Runbook `merge-blocked` に対処を書いた。
+- **この条件が何を保証するか**（I1d の独立レビュー、security MEDIUM）: `require_work_item_link` は **追跡のための条件**（MR がどの
+  PBI のためのものかが分かること）であり、**人の承認でも「Ready の PBI」の確認でもない**。満たすのは、今の結びつけの作業項目への
+  **どの** 開いたリンクでもよい: タイトル・ソースブランチからの自動のリンク、人のリンク、エージェントのトークン・ボット・
+  サービスアカウントによるリンク（I1b の `WorkItemLink` の権限は人に限らない）。PBI が kanflow で Ready か・受け入れ条件を満たすかは
+  この条件では判定しない（計画 02 F-5 は kanflow の checks の提供者 `kanflow/work-item` などの必須のチェックで行う、§10）。
+  したがって、完全な自動マージを既定とする構成でも、この条件を **人の承認の代わりに数えてはならない**（人の判断が要るなら承認の
+  ルール・保護ブランチの最低の承認数・CODEOWNERS を使う）。

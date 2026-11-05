@@ -480,6 +480,10 @@
       "resolved": "Threads must be resolved",
       "noPush": "Direct pushes are forbidden",
       "noPushLabel": "Forbid direct pushes (merges only)",
+      "workItem": "A linked work item (PBI) is needed",
+      "workItemLabel": "Require a linked work item (PBI)",
+      "workItemUnbound": "This project is not connected to Kanflow, so no merge request can link a work item and every merge into this branch is blocked. Ask a maintainer to connect the project, or turn this condition off.",
+      "workItemDialog": "Every merge into this branch needs a linked PBI. On a project not connected to Kanflow, nothing can link one, so every merge stops.",
       "unreportable": "No reporter can send some of the required checks, so every merge into this branch is blocked. Ask an administrator to let a service account report them, or remove those checks.",
       "frozen": "Direct pushes are forbidden too, so this branch cannot change at all.",
       "change": "Change",
@@ -571,6 +575,7 @@
       "checkMissing": "The required check \"{{name}}\" has not reported yet",
       "checkFailed": "The required check \"{{name}}\" did not succeed ({{status}} / {{conclusion}})",
       "unresolved": "Unresolved threads: {{n}}",
+      "workItemLinkMissing": "No work item (PBI) is linked",
       "next": {
         "firstUnresolved": "Open the first unresolved thread",
         "changes": "See the changes",
@@ -588,7 +593,8 @@
         "draft": "The author takes it out of draft when it is ready.",
         "notOpen": "To propose more changes, create a new merge request.",
         "codeowners": "It cannot be merged until the CODEOWNERS file is fixed.",
-        "nothing": "The target already has these changes."
+        "nothing": "The target already has these changes.",
+        "workItem": "Put a PBI number (for example PBI-123) in the title or the branch name, or link one with gstn mr link-work-item."
       }
     },
     "number": "!{{iid}}",

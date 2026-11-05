@@ -123,6 +123,15 @@ impl Hosting {
         .await
     }
 
+    /// Whether `project` has an integration binding (M3 I1d: the merge-rule
+    /// write's `work_item_link_unbound` warning; the caller already holds
+    /// the merge-rule proof on the project).
+    pub async fn project_is_bound(&self, project: ProjectId) -> Result<bool, ForgeError> {
+        Ok(!integrations::project_bindings(&self.db, project)
+            .await?
+            .is_empty())
+    }
+
     /// The binding of a project the caller may read (`ProjectRead` on the
     /// project route, decided by the registry); none or one.
     pub async fn project_integration_bindings(

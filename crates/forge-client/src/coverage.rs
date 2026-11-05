@@ -136,6 +136,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/integrations/{id}/events/cursor",
         Coverage::Command("integration cursor"),
     ),
+    // M3 I1d: the development status (the integration's own service account).
+    (
+        "GET",
+        "/api/v1/integrations/{id}/dev-status",
+        Coverage::Command("integration dev-status-list"),
+    ),
+    (
+        "GET",
+        "/api/v1/integrations/{id}/work-items/{ref}/dev-status",
+        Coverage::Command("integration dev-status"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/integration-bindings",

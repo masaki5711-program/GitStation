@@ -258,6 +258,15 @@ actions! {
     /// current head as a cursor (the first step of a resync). Decided like
     /// `IntegrationEventRead`.
     IntegrationEventCursorRead,
+    /// `GET /api/v1/integrations/{id}/work-items/{ref}/dev-status` and
+    /// `GET /api/v1/integrations/{id}/dev-status` (M3 I1d, plan 02 §5.2,
+    /// §8.2, §11.2): the development status of a work item, or of every
+    /// work item page by page (the resync after a 410). Decided like
+    /// `IntegrationEventRead` (the integration's own service account only,
+    /// `read_api`; the same denials) and on the same visible set
+    /// (`prove_visible`): the linked merge requests of the bound projects
+    /// it may see.
+    IntegrationDevStatusRead,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -445,6 +454,7 @@ impl Action {
             | Action::IntegrationRead
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
+            | Action::IntegrationDevStatusRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate

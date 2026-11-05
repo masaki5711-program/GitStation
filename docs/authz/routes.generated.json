@@ -312,6 +312,14 @@
     "word": "fixed"
   },
   {
+    "action": "IntegrationDevStatusRead",
+    "method": "GET",
+    "path": "/api/v1/integrations/{id}/dev-status",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "IntegrationEventRead",
     "method": "GET",
     "path": "/api/v1/integrations/{id}/events",
@@ -323,6 +331,14 @@
     "action": "IntegrationEventCursorRead",
     "method": "GET",
     "path": "/api/v1/integrations/{id}/events/cursor",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "IntegrationDevStatusRead",
+    "method": "GET",
+    "path": "/api/v1/integrations/{id}/work-items/{ref}/dev-status",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

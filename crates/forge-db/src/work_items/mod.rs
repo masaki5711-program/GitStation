@@ -336,3 +336,44 @@ pub async fn event_work_items(db: &Db, seq: i64) -> Result<Vec<i64>, ForgeError>
 
 #[cfg(test)]
 mod tests;
+
+/// Whether merge request `$1` has an open link to a work item of its
+/// project's **current** binding (M3 I1d: the merge rule's
+/// `require_work_item_link`, ADR-0024 §7 / §11). A link to a work item of
+/// another integration or another external project — none survives an
+/// unbind (I1b), but the join is the condition itself — never counts; a
+/// project without a binding never has one.
+pub(crate) const LINKED_SQL: &str = "SELECT EXISTS (SELECT 1 \
+     FROM forge.merge_request_work_items AS l \
+     JOIN forge.work_items AS w ON w.id = l.work_item_id \
+     JOIN forge.integration_bindings AS b ON b.project_id = l.project_id \
+       AND b.integration_id = w.integration_id \
+       AND b.external_project_id = w.external_project_id \
+     WHERE l.merge_request_id = $1 AND l.unlinked_at IS NULL)";
+
+/// [`LINKED_SQL`] inside the caller's transaction (the merge gate: the
+/// request and every gate of the job).
+pub(crate) async fn linked_on(
+    conn: &mut PgConnection,
+    merge_request: MergeRequestId,
+) -> Result<bool, ForgeError> {
+    sqlx::query_scalar(LINKED_SQL)
+        .bind(merge_request.get())
+        .fetch_one(conn)
+        .await
+        .map_err(|e| query_error("work_items.linked", e))
+}
+
+/// [`LINKED_SQL`] on the read pool (the merge status).
+pub async fn work_item_linked(db: &Db, merge_request: MergeRequestId) -> Result<bool, ForgeError> {
+    const QUERY: &str = "work_items.linked_read";
+    db.within(QUERY, async {
+        let mut conn = db.acquire().await?;
+        sqlx::query_scalar(LINKED_SQL)
+            .bind(merge_request.get())
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+    })
+    .await
+}

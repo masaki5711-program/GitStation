@@ -81,8 +81,11 @@ pub struct ProtectedRefBody {
     /// M3 R6: the rule's merge conditions (`null`: none).
     #[schema(required = true)]
     pub merge_rule: Option<MergeRuleBody>,
-    /// Things to know about the answer (M3 R6 review). Today only
-    /// `required_checks_unreportable` (M3 C1: narrowed): the merge rule
+    /// Things to know about the answer (M3 R6 review). M3 I1d:
+    /// `work_item_link_unbound` — the merge rule requires a work item link
+    /// and the project has no integration binding, so no merge request can
+    /// satisfy it (bind the project, or turn the condition off; runbook
+    /// merge-blocked). `required_checks_unreportable` (M3 C1: narrowed): the merge rule
     /// requires a check no active service account may report (its
     /// namespace is granted to none, or it is `forge/`, whose own checks
     /// arrive later), so every merge into the branch is blocked
@@ -99,6 +102,9 @@ pub struct ProtectedRefBody {
 /// The warning of a merge rule requiring a check no active service account
 /// may report (M3 C1; `unreportable_checks` names them).
 pub const REQUIRED_CHECKS_UNREPORTABLE: &str = "required_checks_unreportable";
+/// The warning of a merge rule requiring a work item link on a project
+/// without an integration binding (M3 I1d).
+pub const WORK_ITEM_LINK_UNBOUND: &str = "work_item_link_unbound";
 
 // Built only by `merge_rule_body`; its doc comment is the schema description.
 /// The merge conditions of a protected branch (M3 R6, ADR-0024 §12): the
@@ -115,6 +121,9 @@ pub struct MergeRuleBody {
     pub require_resolved_discussions: bool,
     /// Pushes may not create or move the branch (merges may).
     pub direct_push_forbidden: bool,
+    /// M3 I1d: the merge request must have an open link to a work item of
+    /// the project's integration binding (`work_item_link_missing`).
+    pub require_work_item_link: bool,
     /// UTC, RFC 3339 to the microsecond (U2 follow-up): an opaque token —
     /// send it back verbatim as the merge-rule write's
     /// `expected_updated_at`.
@@ -131,6 +140,7 @@ pub(crate) fn merge_rule_body(rule: &forge_core::MergeRule, updated_at: &str) ->
             .collect(),
         require_resolved_discussions: rule.require_resolved_discussions,
         direct_push_forbidden: rule.direct_push_forbidden,
+        require_work_item_link: rule.require_work_item_link,
         updated_at: updated_at.to_owned(),
     }
 }

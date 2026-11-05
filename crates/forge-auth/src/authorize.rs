@@ -986,13 +986,17 @@ pub fn authorize(
         // --- the integrations' event feed (M3 I1c, ADR-0016 §7) ---
         // The route: the integration's own service account only.
         (
-            Action::IntegrationEventRead | Action::IntegrationEventCursorRead,
+            Action::IntegrationEventRead
+            | Action::IntegrationEventCursorRead
+            | Action::IntegrationDevStatusRead,
             Resource::IntegrationFeed(feed),
         ) => integration_feed(principal, feed).map_err(|e| e.with_context("action", action.name())),
         // One bound project's events of one class (`prove_visible`):
         // visibility and pending deletion were decided above.
         (
-            Action::IntegrationEventRead | Action::IntegrationEventCursorRead,
+            Action::IntegrationEventRead
+            | Action::IntegrationEventCursorRead
+            | Action::IntegrationDevStatusRead,
             Resource::ProjectEvents { project, class },
         ) => project_events(principal, project, *class)
             .map_err(|e| e.with_context("action", action.name())),
@@ -1077,6 +1081,7 @@ pub fn authorize(
             | Action::IntegrationBindingManage
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
+            | Action::IntegrationDevStatusRead
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }

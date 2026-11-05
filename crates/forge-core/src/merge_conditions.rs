@@ -135,9 +135,9 @@ impl std::fmt::Display for CheckName {
 /// combine to the strictest ([`MergeRule::strictest`]), like the minimum
 /// push roles (adding a rule never loosens a branch).
 ///
-/// The work item link condition (`work_item_link_missing`) has no field:
-/// it cannot be configured until I1 brings `work_items` (ADR-0024 §11;
-/// the settings API refuses it).
+/// M3 I1d: [`MergeRule::require_work_item_link`] is the work item link
+/// condition (`work_item_link_missing`), configurable since I1b brought the
+/// links (ADR-0024 §11 and its I1d note).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MergeRule {
     /// The minimum counted approvals of a merge into the branch (0: none),
@@ -151,6 +151,10 @@ pub struct MergeRule {
     /// Pushes may not create or move the branch: it changes through merge
     /// requests only (`MergeRequestMerge` is not affected, ADR-0024 §4.3).
     pub direct_push_forbidden: bool,
+    /// M3 I1d: the merge request must have an open link to a work item of
+    /// its project's current integration binding (`work_item_link_missing`
+    /// otherwise; a project without a binding can never satisfy it).
+    pub require_work_item_link: bool,
 }
 
 impl MergeRule {
@@ -170,6 +174,7 @@ impl MergeRule {
                 .extend(rule.required_checks.iter().cloned()); // clone: the combination owns its names
             out.require_resolved_discussions |= rule.require_resolved_discussions;
             out.direct_push_forbidden |= rule.direct_push_forbidden;
+            out.require_work_item_link |= rule.require_work_item_link;
         }
         out.required_checks.sort();
         out.required_checks.dedup();
@@ -200,6 +205,7 @@ fn merge_rule_json(rule: &MergeRule) -> serde_json::Value {
         "required_checks": rule.required_checks.iter().map(CheckName::as_str).collect::<Vec<_>>(),
         "require_resolved_discussions": rule.require_resolved_discussions,
         "direct_push_forbidden": rule.direct_push_forbidden,
+        "require_work_item_link": rule.require_work_item_link,
     })
 }
 
@@ -372,6 +378,7 @@ mod tests {
             required_checks: vec![CheckName::parse("ci/gates").expect("name")],
             require_resolved_discussions: false,
             direct_push_forbidden: true,
+            require_work_item_link: false,
         };
         let b = MergeRule {
             required_approvals: 2,
@@ -381,6 +388,7 @@ mod tests {
             ],
             require_resolved_discussions: true,
             direct_push_forbidden: false,
+            require_work_item_link: false,
         };
         let both = MergeRule::strictest([&a, &b]);
         assert_eq!(both.required_approvals, 2);
@@ -393,5 +401,29 @@ mod tests {
         );
         assert!(both.require_resolved_discussions && both.direct_push_forbidden);
         assert!(MergeRule::strictest([]).is_empty());
+    }
+
+    /// M3 I1d: one rule asking for a work item link is enough (adding a
+    /// rule never loosens a branch).
+    #[test]
+    fn a_work_item_link_required_by_any_rule_is_required() {
+        let plain = MergeRule::default();
+        let linked = MergeRule {
+            require_work_item_link: true,
+            ..MergeRule::default()
+        };
+        assert!(MergeRule::strictest([&plain, &linked]).require_work_item_link);
+        assert!(!MergeRule::strictest([&plain]).require_work_item_link);
+        assert!(!linked.is_empty());
+        let change = MergeRuleChange::Put {
+            rule: ProtectedRefId::new(3),
+            pattern: RefPattern::parse("refs/heads/main").expect("pattern"),
+            merge_rule: linked,
+            created: true,
+        };
+        assert_eq!(
+            change.to_value()["merge_rule"]["require_work_item_link"],
+            true
+        );
     }
 }

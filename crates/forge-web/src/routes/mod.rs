@@ -27,6 +27,7 @@ pub mod service_accounts;
 // M3 I1a: integrations and project bindings.
 pub mod integrations;
 // M3 I1c: the event feed of an integration.
+pub mod integration_dev_status;
 pub mod integration_feed;
 pub mod session;
 pub mod shell;

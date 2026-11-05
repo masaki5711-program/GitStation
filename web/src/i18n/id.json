@@ -480,6 +480,10 @@
       "resolved": "Thread harus diselesaikan",
       "noPush": "Push langsung dilarang",
       "noPushLabel": "Larang push langsung (hanya merge)",
+      "workItem": "Perlu item kerja (PBI) yang ditautkan",
+      "workItemLabel": "Wajibkan item kerja (PBI) yang ditautkan",
+      "workItemUnbound": "Proyek ini belum terhubung ke Kanflow, jadi tidak ada merge request yang bisa menautkan item kerja dan semua merge ke branch ini terhenti. Minta maintainer menghubungkan proyek, atau matikan syarat ini.",
+      "workItemDialog": "Setiap merge ke branch ini perlu PBI yang ditautkan. Pada proyek yang belum terhubung ke Kanflow, tidak ada yang bisa menautkannya, jadi semua merge terhenti.",
       "unreportable": "Beberapa pemeriksaan wajib tidak dapat dilaporkan oleh siapa pun, jadi setiap merge ke branch ini terblokir. Minta administrator mengizinkan akun layanan melaporkannya, atau hapus pemeriksaan itu.",
       "frozen": "Push langsung juga dilarang, jadi branch ini sama sekali tidak dapat berubah.",
       "change": "Ubah",
@@ -557,6 +561,7 @@
       "mergeabilityUnknown": "Menunggu pemeriksaan. Push akan memperbaruinya",
       "conflict": "Bertabrakan dengan perubahan lain",
       "unresolved": "Utas belum selesai: {{n}}",
+      "workItemLinkMissing": "Belum ada item kerja (PBI) yang ditautkan",
       "next": {
         "firstUnresolved": "Buka utas pertama yang belum selesai",
         "changes": "Lihat perubahan",
@@ -588,7 +593,8 @@
         "draft": "Pembuatnya akan mengeluarkannya dari draf saat siap.",
         "notOpen": "Untuk mengusulkan perubahan lain, buat merge request baru.",
         "codeowners": "Tidak bisa digabung sampai berkas CODEOWNERS diperbaiki.",
-        "nothing": "Tujuan sudah berisi perubahan ini."
+        "nothing": "Tujuan sudah berisi perubahan ini.",
+        "workItem": "Tulis nomor PBI (misalnya PBI-123) di judul atau nama branch, atau tautkan dengan gstn mr link-work-item."
       }
     },
     "number": "!{{iid}}",
