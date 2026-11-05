@@ -3717,7 +3717,7 @@
       },
       "PutMergeRule": {
         "additionalProperties": false,
-        "description": "`PUT …/merge-rule` (absent fields: off / 0).",
+        "description": "`PUT …/merge-rule` (absent fields: off / 0, except\n`require_work_item_link` and `expected_updated_at`: required).",
         "properties": {
           "direct_push_forbidden": {
             "description": "Pushes may not create or move the branch; merges still may.",
@@ -3735,7 +3735,7 @@
             "type": "boolean"
           },
           "require_work_item_link": {
-            "description": "M3 I1d: a merge request merges only with an open link to a work item\nof the project's integration binding (`work_item_link_missing`). On\na project without a binding the answer warns\n`work_item_link_unbound`.",
+            "description": "M3 I1d: a merge request merges only with an open link to a work item\nof the project's integration binding (`work_item_link_missing`). On\na project without a binding the answer warns\n`work_item_link_unbound`. Required (I1d review): a client that does\nnot know the field must not turn the condition off by leaving it out\n(FG-WEB-0006 `reason=missing_field`).",
             "type": "boolean"
           },
           "required_approvals": {
@@ -3753,6 +3753,7 @@
           }
         },
         "required": [
+          "require_work_item_link",
           "expected_updated_at"
         ],
         "type": "object"

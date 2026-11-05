@@ -997,6 +997,9 @@ async fn the_merge_rule_routes_and_the_status_contract() {
     // U2 follow-up: every put names the merge rule it read (`null`: none).
     let put = |who: Caller, mut body: Value| {
         body["expected_updated_at"] = Value::Null;
+        if body.get("require_work_item_link").is_none() {
+            body["require_work_item_link"] = Value::Bool(false);
+        }
         send(w.router.clone(), "PUT", &uri, who, Some(body))
     };
     let (status, body) = put(olga.clone(), json!({"required_checks": ["ext/sonar"]})).await;
@@ -1806,7 +1809,9 @@ async fn stale_merge_rule_put_is_409() {
             "PUT",
             &uri,
             who,
-            Some(json!({"required_approvals": approvals, "expected_updated_at": expected})),
+            Some(
+                json!({"required_approvals": approvals, "require_work_item_link": false, "expected_updated_at": expected}),
+            ),
         )
     };
     let read_merge_rule = || async {
@@ -2055,7 +2060,7 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
         "PUT",
         &rule_uri,
         olga.clone(),
-        Some(json!({"required_checks": ["ci/gates", "forge/risk"], "expected_updated_at": null})),
+        Some(json!({"required_checks": ["ci/gates", "forge/risk"], "require_work_item_link": false, "expected_updated_at": null})),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -2140,7 +2145,7 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
         "PUT",
         &rule_uri,
         olga.clone(),
-        Some(json!({"required_checks": ["ci/gates"], "expected_updated_at": current})),
+        Some(json!({"required_checks": ["ci/gates"], "require_work_item_link": false, "expected_updated_at": current})),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -2345,6 +2350,63 @@ async fn the_largest_report_fits_the_body_cap_and_one_byte_more_is_413() {
     assert_eq!(
         events,
         [json!({"dedup_key": format!("check_completed:{id}:1")})]
+    );
+    w.t.drop_now().await;
+}
+
+/// I1d review (security MEDIUM): `require_work_item_link` is required on a
+/// merge-rule write, like `expected_updated_at` — an older client that does
+/// not know the field must not silently turn the condition off.
+#[tokio::test]
+async fn a_merge_rule_write_without_require_work_item_link_is_missing_field() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let (status, created) = send(
+        w.router.clone(),
+        "POST",
+        &w.project_uri("/protected-refs"),
+        olga.clone(),
+        Some(json!({"pattern": "refs/heads/main", "push_min_role": "developer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let rule = created["id"].as_i64().expect("rule id");
+    let uri = w.project_uri(&format!("/protected-refs/{rule}/merge-rule"));
+    let logs = Captured::default();
+    let guard = logs.install();
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &uri,
+        olga.clone(),
+        Some(json!({"required_approvals": 1, "expected_updated_at": null})),
+    )
+    .await;
+    drop(guard);
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006"),
+        "{body}"
+    );
+    let line = logs
+        .events()
+        .into_iter()
+        .find(|e| e["error_code"] == "FG-WEB-0006")
+        .unwrap_or_else(|| panic!("the refusal is logged: {:?}", logs.events()))
+        .to_string();
+    assert!(line.contains("missing_field"), "{line}");
+    assert!(line.contains("require_work_item_link"), "{line}");
+    let (_, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri("/protected-refs"),
+        olga,
+        None,
+    )
+    .await;
+    assert!(
+        list["rules"][0]["merge_rule"].is_null(),
+        "nothing written: {list}"
     );
     w.t.drop_now().await;
 }

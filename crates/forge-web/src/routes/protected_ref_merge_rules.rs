@@ -29,7 +29,8 @@ pub const MERGE_RULE: &str = "/api/v1/projects/{id}/protected-refs/{rule_id}/mer
 /// The body cap (20 check names of at most 108 bytes, JSON-escaped).
 pub const MAX_BODY: usize = 8 * 1024;
 
-/// `PUT …/merge-rule` (absent fields: off / 0).
+/// `PUT …/merge-rule` (absent fields: off / 0, except
+/// `require_work_item_link` and `expected_updated_at`: required).
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PutMergeRule {
@@ -50,8 +51,9 @@ pub struct PutMergeRule {
     /// M3 I1d: a merge request merges only with an open link to a work item
     /// of the project's integration binding (`work_item_link_missing`). On
     /// a project without a binding the answer warns
-    /// `work_item_link_unbound`.
-    #[serde(default)]
+    /// `work_item_link_unbound`. Required (I1d review): a client that does
+    /// not know the field must not turn the condition off by leaving it out
+    /// (FG-WEB-0006 `reason=missing_field`).
     pub require_work_item_link: bool,
     /// The merge rule's `updated_at` the caller read, echoed verbatim (an
     /// opaque string), or `null` when the branch has none (create only).

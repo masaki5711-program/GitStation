@@ -170,6 +170,8 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   そのまま送る。**`null` は「この名前の規則はまだ無い」（作るだけ）** の意味で、同じ名前の規則が既にあれば置き換えずに
   `409 FG-REVIEW-0018`（`reason=rule_exists`）。値が違えば `stale_rule`、読んだ後に消されていれば `rule_gone`（黙って作り直さない）。
   どれも何も書かない。欄が無い要求は `FG-WEB-0006`。
+- M3 I1d: `PUT …/merge-rule` は **`require_work_item_link` も必須**（`expected_updated_at` と同じく、欄が無ければ `FG-WEB-0006`
+  `reason=missing_field`。その欄を知らない古いクライアントが条件を黙って外さないため）。
 - `GET /api/v1/projects/{id}/protected-refs` の `merge_rule` と `PUT …/protected-refs/{rule_id}/merge-rule` の答えの
   `merge_rule` に `updated_at` を足した。`PUT …/merge-rule` も **`expected_updated_at` が必須**（`null` はマージの規則がまだ
   無いとき）。違えば `409 FG-REVIEW-0019`（`reason` は上と同じ 3 つ）。

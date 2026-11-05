@@ -2907,7 +2907,10 @@ export interface components {
              */
             for_minutes?: number | null;
         };
-        /** @description `PUT …/merge-rule` (absent fields: off / 0). */
+        /**
+         * @description `PUT …/merge-rule` (absent fields: off / 0, except
+         *     `require_work_item_link` and `expected_updated_at`: required).
+         */
         PutMergeRule: {
             /** @description Pushes may not create or move the branch; merges still may. */
             direct_push_forbidden?: boolean;
@@ -2925,9 +2928,11 @@ export interface components {
              * @description M3 I1d: a merge request merges only with an open link to a work item
              *     of the project's integration binding (`work_item_link_missing`). On
              *     a project without a binding the answer warns
-             *     `work_item_link_unbound`.
+             *     `work_item_link_unbound`. Required (I1d review): a client that does
+             *     not know the field must not turn the condition off by leaving it out
+             *     (FG-WEB-0006 `reason=missing_field`).
              */
-            require_work_item_link?: boolean;
+            require_work_item_link: boolean;
             /**
              * Format: int32
              * @description The minimum counted approvals of a merge into the branch, 0..=20.
