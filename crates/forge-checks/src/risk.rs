@@ -588,15 +588,15 @@ impl Risk {
         head: &ObjectId,
         files: &[ChangedFile],
     ) -> Result<Vec<Finding>, ForgeError> {
-        // Migrations and deploy files first, then every other text file
-        // that gained lines (a secret is added, not removed).
+        // Migrations and deploy files first, then every other file that
+        // gained lines. A binary file (git prints `-`: one NUL byte is
+        // enough) is a candidate too: the scans run on bytes.
         let mut candidates: Vec<(&ChangedFile, Option<ContentKind>)> = files
             .iter()
             .filter(|f| {
                 matches!(f.new_mode, 0o100_644 | 0o100_755)
                     && f.status != ChangeStatus::Deleted
                     && f.added != Some(0)
-                    && f.added.is_some()
             })
             .map(|f| (f, content_kind(f)))
             .collect();
@@ -607,13 +607,25 @@ impl Risk {
         });
         let mut found = Vec::new();
         let mut unread = 0usize;
+        let mut unread_critical = 0usize;
         for (index, (file, kind)) in candidates.into_iter().enumerate() {
+            // A file that cannot be shown safe: a new migration or a CI /
+            // deploy file is a `stop`, any other is only counted.
+            let mut unread_file = |found: &mut Vec<Finding>| -> Result<(), ForgeError> {
+                if kind.is_some() {
+                    unread_critical += 1;
+                    found.push(rule("critical_content_unread")?.at(&file.path));
+                } else {
+                    unread += 1;
+                }
+                Ok(())
+            };
             if index >= self.limits.max_content_files {
-                unread += 1;
+                unread_file(&mut found)?;
                 continue;
             }
             let Ok(path) = RepoPath::parse(&file.path) else {
-                unread += 1;
+                unread_file(&mut found)?;
                 continue;
             };
             let bytes = match self
@@ -622,13 +634,12 @@ impl Risk {
                 .await?
             {
                 SmallFile::Found(bytes) => bytes,
-                SmallFile::TooLarge => {
-                    unread += 1;
+                SmallFile::TooLarge | SmallFile::Absent | SmallFile::NotAFile => {
+                    unread_file(&mut found)?;
                     continue;
                 }
-                SmallFile::Absent | SmallFile::NotAFile => continue,
             };
-            if let SecretScan::Found(_) = secret_scan::scan(&bytes) {
+            if let SecretScan::Found(_) = secret_scan::scan_bytes(&bytes) {
                 found.push(rule("secret_in_content")?.at(&file.path));
             }
             if let Some(kind) = kind {
@@ -636,15 +647,18 @@ impl Risk {
                 found.extend(content_findings(kind, &file.path, &text));
             }
         }
-        if unread > 0 {
+        if unread > 0 || unread_critical > 0 {
             tracing::info!(
                 target: "forge_checks",
                 event = "forge.risk.content_not_scanned",
                 repo_id = repo.get(),
                 head_sha = head.as_str(),
                 unread,
+                unread_critical,
                 "some changed files were not read for the risk rules"
             );
+        }
+        if unread > 0 {
             found.push(rule("content_not_scanned")?);
         }
         Ok(found)

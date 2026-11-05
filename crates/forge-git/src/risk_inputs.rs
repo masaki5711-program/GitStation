@@ -117,10 +117,13 @@ pub(crate) fn parse_risk_diff(stdout: &[u8], max: usize) -> Result<RiskDiff, For
             } else {
                 path.to_owned()
             };
-            if let Some(file) = by_path.get(&path).and_then(|i| files.get_mut(*i)) {
-                file.added = added.parse::<u64>().ok();
-                file.deleted = deleted.parse::<u64>().ok();
-            }
+            // A count for an entry that was never listed: git said more than
+            // this parser understands, and the file would be passed over.
+            let Some(file) = by_path.get(&path).and_then(|i| files.get_mut(*i)) else {
+                return Err(unexpected("numstat_unmatched"));
+            };
+            file.added = added.parse::<u64>().ok();
+            file.deleted = deleted.parse::<u64>().ok();
         }
     }
     Ok(RiskDiff::Complete(files))
@@ -128,15 +131,13 @@ pub(crate) fn parse_risk_diff(stdout: &[u8], max: usize) -> Result<RiskDiff, For
 
 /// The empty tree's id for the hash of `like` (git knows it without the
 /// object being stored): the base of a "whole tree" `diff-tree`.
-pub(crate) fn empty_tree(like: &ObjectId) -> ObjectId {
+pub(crate) fn empty_tree(like: &ObjectId) -> Result<ObjectId, ForgeError> {
     let id = if like.as_str().len() == 64 {
         "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
     } else {
         "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     };
-    // A constant that is a valid object id; the fallback is `like` itself
-    // (an empty diff), never a panic.
-    ObjectId::parse(id).unwrap_or_else(|_| like.clone()) // clone: the fallback owns its id
+    ObjectId::parse(id).map_err(|_| unexpected("empty_tree_id"))
 }
 
 /// Count the `--numstat -z` records of a whole-tree diff: files, and the
@@ -221,7 +222,7 @@ impl Git {
             .arg("-r")
             .arg("-z")
             .arg("--numstat")
-            .revision(Revision::object_id(empty_tree(commit).as_str())?)
+            .revision(Revision::object_id(empty_tree(commit)?.as_str())?)
             .revision(Revision::object_id(commit.as_str())?)
             .repo(&repo)
             .timeout(timeout)

@@ -656,3 +656,133 @@ async fn a_head_of_a_gone_project_records_nothing() {
     assert!(matches!(ran, Ran::ProjectGone), "{ran:?}");
     w.t.drop_now().await;
 }
+
+// ── review X7 ──
+
+/// HIGH: git prints `-` for a file with a NUL byte; it is still read.
+#[tokio::test]
+async fn a_nul_byte_does_not_hide_a_destructive_migration_or_a_secret() {
+    let (w, base) = world_with_main().await;
+    let head = w.commit(
+        &with(&[("db/migrations/0002_drop.sql", "DROP TABLE x;\n\0")]),
+        Some(&base),
+    );
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("sql_drop"), "{}", run.summary);
+
+    let key = "AKIAQWERTYUIOPASDFGH";
+    let blob = format!("\0\0data {key}\n");
+    let head = w.commit(&with(&[("data/dump.dat", blob.as_str())]), Some(&base));
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("secret_in_content"), "{}", run.summary);
+    assert!(!run.summary.contains(key), "{}", run.summary);
+    w.t.drop_now().await;
+}
+
+/// MEDIUM: a migration or deploy file that was not read is a stop, not a
+/// warn; they are read first.
+#[tokio::test]
+async fn an_unread_migration_or_deploy_file_is_a_stop() {
+    let (w, base) = world_with_main().await;
+    let big = format!("SELECT 1;\n{}", "-- padding\n".repeat(40));
+    let head = w.commit(
+        &with(&[("db/migrations/0002_big.sql", big.as_str())]),
+        Some(&base),
+    );
+    let small = w.risk.clone().with_limits(Limits {
+        max_file_bytes: 64,
+        ..Limits::default()
+    });
+    let targets = RiskTargets {
+        targets: vec![RefName::parse("refs/heads/main").expect("branch")],
+        more: false,
+    };
+    small
+        .run_against(&w.request(&head), &targets, &request_id("req-big"))
+        .await
+        .expect("run");
+    let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&head).expect("sha"))
+        .await
+        .expect("runs");
+    assert_eq!(
+        runs[0].conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        runs[0].summary
+    );
+    assert!(
+        runs[0].summary.contains("critical_content_unread"),
+        "{}",
+        runs[0].summary
+    );
+
+    // Past the read limit: ordinary files are skipped before migrations.
+    let extra: Vec<(&str, &str)> = vec![
+        ("a.txt", "a\n"),
+        ("b.txt", "b\n"),
+        ("deploy/run.sh", "echo ok\n"),
+    ];
+    let head = w.commit(&with(&extra), Some(&base));
+    let one = w.risk.clone().with_limits(Limits {
+        max_content_files: 1,
+        ..Limits::default()
+    });
+    one.run_against(&w.request(&head), &targets, &request_id("req-one"))
+        .await
+        .expect("run");
+    let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&head).expect("sha"))
+        .await
+        .expect("runs");
+    // The deploy file is the one read; only the plain files are unread.
+    assert_eq!(
+        runs[0].conclusion,
+        Some(CheckConclusion::Neutral),
+        "{}",
+        runs[0].summary
+    );
+    assert!(
+        !runs[0].summary.contains("critical_content_unread"),
+        "{}",
+        runs[0].summary
+    );
+    assert!(
+        runs[0].summary.contains("content_not_scanned"),
+        "{}",
+        runs[0].summary
+    );
+
+    let two = w.commit(
+        &with(&[("deploy/a.sh", "echo a\n"), ("deploy/b.sh", "echo b\n")]),
+        Some(&base),
+    );
+    one.run_against(&w.request(&two), &targets, &request_id("req-two"))
+        .await
+        .expect("run");
+    let runs = check_runs(&w.t.db, w.project, &ObjectId::parse(&two).expect("sha"))
+        .await
+        .expect("runs");
+    assert_eq!(
+        runs[0].conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        runs[0].summary
+    );
+    assert!(
+        runs[0].summary.contains("critical_content_unread"),
+        "{}",
+        runs[0].summary
+    );
+    w.t.drop_now().await;
+}

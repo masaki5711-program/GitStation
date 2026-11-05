@@ -11,7 +11,8 @@ use super::{
 use crate::change::{Actor, ChangeContext};
 use crate::projects::{self, CreatedProject, NewProject};
 use crate::review::{
-    close_mr_decided, open_mr_decided, record_mr_version, NewMergeRequest, StoredMergeRequest,
+    close_mr_decided, edit_mr_decided, open_mr_decided, record_mr_version, reopen_mr_decided,
+    MergeRequestPatch, NewMergeRequest, StoredMergeRequest,
 };
 use crate::subscribers::{self, Progress, Start, Subscriber};
 use crate::test_support::*;
@@ -109,12 +110,12 @@ fn the_payload_round_trips_and_refuses_anything_else() {
         project: ProjectId::new(7),
         head: sha('d'),
     };
-    let job = risk_job(&request, RequestId::generate(), Some(3)).expect("job");
+    let job = risk_job(&request, "mr5", RequestId::generate(), Some(3)).expect("job");
     assert_eq!(job.kind.as_str(), RISK_JOB);
     assert_eq!(RISK_JOB, "check.risk");
     assert_eq!(
         job.dedup_key.as_ref().map(crate::jobs::DedupKey::as_str),
-        Some(format!("risk:7:{}", sha('d').as_str()).as_str())
+        Some(format!("risk:7:{}:mr5", sha('d').as_str()).as_str())
     );
     assert_eq!(risk_payload(&job.payload).expect("parse"), request);
     for bad in [
@@ -163,7 +164,112 @@ async fn every_merge_request_version_enqueues_one_risk_job_of_its_head() {
         })
         .collect();
     assert_eq!(heads, [sha('a').as_str(), sha('b').as_str()]);
-    assert_eq!(jobs[0].0, format!("risk:{}:{}", p.get(), sha('a').as_str()));
+    assert_eq!(
+        jobs[0].0,
+        format!("risk:{}:{}:mr{}", p.get(), sha('a').as_str(), mr.id.get())
+    );
+    t.drop_now().await;
+}
+
+async fn risk_keys(t: &FreshDb) -> Vec<String> {
+    sqlx::query_scalar("SELECT dedup_key FROM forge.jobs WHERE kind = $1 ORDER BY id")
+        .bind(RISK_JOB)
+        .fetch_all(&mut t.superuser().await)
+        .await
+        .expect("keys")
+}
+
+/// Review X7 (HIGH): a head already assessed for one merge request is
+/// assessed again for another merge request into another target.
+#[tokio::test]
+async fn the_same_head_in_another_merge_request_is_assessed_again() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let subscriber = RiskRequests;
+    subscribers::register(&t.db, &subscriber, Start::Head)
+        .await
+        .expect("register");
+    let head = sha('a');
+    let to_dev = open(&t, p, alice, "one", "dev").await;
+    record_mr_version(&t.db, &system("req-v1"), to_dev.id, &head, Some(alice))
+        .await
+        .expect("version");
+    drain(&t, &subscriber).await;
+    let to_main = open(&t, p, alice, "two", "main").await;
+    record_mr_version(&t.db, &system("req-v2"), to_main.id, &head, Some(alice))
+        .await
+        .expect("version");
+    drain(&t, &subscriber).await;
+    assert_eq!(risk_keys(&t).await.len(), 2, "{:?}", risk_keys(&t).await);
+    t.drop_now().await;
+}
+
+/// Review X7 (HIGH): a retarget and a reopen ask again, for the head the
+/// merge request has now.
+#[tokio::test]
+async fn a_retarget_and_a_reopen_enqueue_the_current_head_again() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let subscriber = RiskRequests;
+    subscribers::register(&t.db, &subscriber, Start::Head)
+        .await
+        .expect("register");
+    let head = sha('a');
+    let mr = open(&t, p, alice, "feature", "dev").await;
+    record_mr_version(&t.db, &system("req-v1"), mr.id, &head, Some(alice))
+        .await
+        .expect("version");
+    drain(&t, &subscriber).await;
+    assert_eq!(risk_keys(&t).await.len(), 1);
+    let user = |r: &str| ChangeContext::new(Actor::User(alice), RequestId::parse(r).expect("id"));
+    let patch = MergeRequestPatch {
+        target_branch: Some(RefName::parse("refs/heads/main").expect("branch")),
+        ..MergeRequestPatch::default()
+    };
+    let _ = edit_mr_decided(
+        &t.db,
+        &user("req-retarget"),
+        p,
+        mr.iid,
+        alice,
+        &patch,
+        |_| Ok(()),
+    )
+    .await
+    .expect("retarget");
+    drain(&t, &subscriber).await;
+    let keys = risk_keys(&t).await;
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert!(keys[1].starts_with(&format!(
+        "risk:{}:{}:mr{}:e",
+        p.get(),
+        head.as_str(),
+        mr.id.get()
+    )));
+    // A title edit is no retarget.
+    let title = MergeRequestPatch {
+        title: Some("Another".to_owned()),
+        ..MergeRequestPatch::default()
+    };
+    let _ = edit_mr_decided(&t.db, &user("req-title"), p, mr.iid, alice, &title, |_| {
+        Ok(())
+    })
+    .await
+    .expect("title");
+    drain(&t, &subscriber).await;
+    assert_eq!(risk_keys(&t).await.len(), 2);
+    let _closed = close_mr_decided(&t.db, &user("req-close"), p, mr.iid, alice, |_| Ok(()))
+        .await
+        .expect("close");
+    let _ = reopen_mr_decided(&t.db, &user("req-reopen"), p, mr.iid, alice, None, |_| {
+        Ok(())
+    })
+    .await
+    .expect("reopen");
+    drain(&t, &subscriber).await;
+    assert_eq!(risk_keys(&t).await.len(), 3, "{:?}", risk_keys(&t).await);
     t.drop_now().await;
 }
 
@@ -243,12 +349,13 @@ async fn a_dead_risk_job_without_a_run_is_unanswered() {
     };
     let job = risk_job(
         &request,
+        "mr1",
         RequestId::parse("req-risk-dead").expect("id"),
         None,
     )
     .expect("job");
     crate::jobs::enqueue(&t.db, &job).await.expect("enqueue");
-    assert!(unanswered_dead_jobs(&t.db, 10)
+    assert!(unanswered_dead_jobs(&t.db, 0, 10)
         .await
         .expect("none")
         .is_empty());
@@ -257,7 +364,9 @@ async fn a_dead_risk_job_without_a_run_is_unanswered() {
          last_error_code = 'FG-DB-0007' WHERE kind = 'check.risk'",
     )
     .await;
-    let found = unanswered_dead_jobs(&t.db, 10).await.expect("unanswered");
+    let found = unanswered_dead_jobs(&t.db, 0, 10)
+        .await
+        .expect("unanswered");
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].request, request);
     assert_eq!(found[0].origin_request_id, "req-risk-dead");
@@ -278,9 +387,72 @@ async fn a_dead_risk_job_without_a_run_is_unanswered() {
     )
     .await
     .expect("answer");
-    assert!(unanswered_dead_jobs(&t.db, 10)
+    assert!(unanswered_dead_jobs(&t.db, 0, 10)
         .await
         .expect("answered")
         .is_empty());
+    t.drop_now().await;
+}
+
+/// Review X7 (MEDIUM): a dead job of a soft-deleted project (its answer can
+/// never be written) is not listed, and the cursor skips what was seen, so
+/// one job that keeps failing cannot starve the others.
+#[tokio::test]
+async fn the_sweep_query_skips_deleted_projects_and_honours_its_cursor() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let namespace: i64 =
+        sqlx::query_scalar("SELECT id FROM forge.namespaces WHERE kind = 'user' AND owner_id = $1")
+            .bind(alice.get())
+            .fetch_one(&mut t.superuser().await)
+            .await
+            .expect("namespace");
+    let other = projects::create(
+        &t.db,
+        &system("req-project-other"),
+        &NewProject::new(
+            "other",
+            forge_core::NamespaceId::new(namespace),
+            "Other",
+            alice,
+        ),
+    )
+    .await
+    .expect("other");
+    for (project, head) in [
+        (web.project_id, 'a'),
+        (other.project_id, 'b'),
+        (web.project_id, 'c'),
+    ] {
+        let request = RiskRequest {
+            project,
+            head: sha(head),
+        };
+        let job = risk_job(&request, "mr1", RequestId::generate(), None).expect("job");
+        crate::jobs::enqueue(&t.db, &job).await.expect("enqueue");
+    }
+    t.exec_superuser(
+        "UPDATE forge.jobs SET state = 'dead', finished_at = now(), \
+         last_error_code = 'FG-DB-0007' WHERE kind = 'check.risk'",
+    )
+    .await;
+    let all = unanswered_dead_jobs(&t.db, 0, 10).await.expect("all");
+    assert_eq!(all.len(), 3);
+    assert!(all.windows(2).all(|w| w[0].job_id < w[1].job_id), "by id");
+    let later = unanswered_dead_jobs(&t.db, all[0].job_id, 10)
+        .await
+        .expect("later");
+    assert_eq!(later.len(), 2);
+    t.commit_audited(
+        ("project", other.project_id.get()),
+        &[format!(
+            "UPDATE forge.projects SET deleted_at = now(), purge_after = now() + interval '1 day' WHERE id = {}",
+            other.project_id.get()
+        )],
+    )
+    .await;
+    let live = unanswered_dead_jobs(&t.db, 0, 10).await.expect("live");
+    assert_eq!(live.len(), 2);
+    assert!(live.iter().all(|j| j.request.project == web.project_id));
     t.drop_now().await;
 }

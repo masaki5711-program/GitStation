@@ -142,6 +142,11 @@ pub const RULES: &[Rule] = &[
         "20 or more files are deleted, 30 % or more of the target's files",
     ),
     rule(
+        "critical_content_unread",
+        RiskLevel::Stop,
+        "a new migration or a CI / deploy file could not be read (too large, or past the read limit), so it cannot be shown safe",
+    ),
+    rule(
         "too_many_changes",
         RiskLevel::Stop,
         "more than 5000 files changed; the change is too large to assess file by file",
@@ -498,10 +503,32 @@ fn is_secret_file(path: &str) -> bool {
     extension(&lower).is_some_and(|e| matches!(e, "p12" | "pfx" | "jks" | "keystore"))
 }
 
+const JOB_EXTENSIONS: &[&str] = &[
+    "sh", "bash", "zsh", "ps1", "bat", "cmd", "py", "rb", "pl", "sql", "service", "timer", "cron",
+    "crontab", "yml", "yaml", "toml", "ini", "conf", "cfg", "json",
+];
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "go", "java", "ts", "tsx", "js", "jsx", "c", "cc", "cpp", "h", "cs", "kt",
+];
+const JOB_DIRS: &[&str] = &["ops", "scripts", "deploy", "cron", "systemd", "jobs"];
+
+/// A backup, restore or retention job: a script or job / unit / config file
+/// by name, or any non-source file in an operations directory. Application
+/// source code (a worker module that happens to be named for retention) is
+/// no job file: a change there is the code review's, not a stop.
 fn is_lifecycle_job(path: &str) -> bool {
     let name = basename(path);
     let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
-    words(stem).any(|w| matches!(w.as_str(), "backup" | "backups" | "restore" | "retention"))
+    if !words(stem).any(|w| matches!(w.as_str(), "backup" | "backups" | "restore" | "retention")) {
+        return false;
+    }
+    let ext = extension(name).map(str::to_ascii_lowercase);
+    let ext = ext.as_deref().unwrap_or("");
+    JOB_EXTENSIONS.contains(&ext)
+        || (!SOURCE_EXTENSIONS.contains(&ext)
+            && components(path)
+                .take_while(|c| *c != name)
+                .any(|c| JOB_DIRS.contains(&c)))
 }
 
 fn add(findings: &mut Vec<Finding>, id: &'static str, path: &str) {
@@ -731,13 +758,7 @@ fn has_real_where(tokens: &[Tok]) -> bool {
 fn sql_findings(path: &str, content: &str) -> Vec<Finding> {
     let mut found: Vec<Finding> = Vec::new();
     for statement in sql_statements(content) {
-        let mut tokens: &[Tok] = &statement;
-        // A plpgsql body starts with its block keyword (spelled in two parts:
-        // the db-write-boundary gate reads a plain string literal of it as a
-        // transaction statement).
-        if word(tokens, 0) == PLPGSQL_BLOCK {
-            tokens = tokens.get(1..).unwrap_or(&[]);
-        }
+        let tokens = skip_control_flow(&statement);
         let Some(first) = tokens.first() else {
             continue;
         };
@@ -754,19 +775,65 @@ fn sql_findings(path: &str, content: &str) -> Vec<Finding> {
                 _ => hit("sql_drop_object"),
             },
             "TRUNCATE" => hit("sql_truncate"),
-            "DELETE" if word(tokens, 1) == "FROM" && !has_real_where(tokens) => {
-                hit("sql_unbounded_write");
-            }
-            "UPDATE" if !has_real_where(tokens) => hit("sql_unbounded_write"),
             "GRANT" | "REVOKE" => hit("sql_privilege"),
             "ALTER" if word(tokens, 1) == "TABLE" => alter_table(tokens, &mut hit),
             _ => {}
+        }
+        for (i, t) in tokens.iter().enumerate() {
+            let starts_statement = i == 0 || word(tokens, i - 1) == "(";
+            let dml = starts_statement
+                && match t.text.as_str() {
+                    "DELETE" => word(tokens, i + 1) == "FROM",
+                    "UPDATE" => true,
+                    _ => false,
+                };
+            if dml && !has_real_where(dml_segment(tokens, i)) {
+                hit("sql_unbounded_write");
+            }
         }
         if found.len() >= MAX_FINDINGS_PER_FILE {
             break;
         }
     }
     found
+}
+
+/// The statement without its leading control flow: a block keyword (spelled
+/// in two parts: the db-write-boundary gate reads a plain string literal of
+/// it as a transaction statement), `ELSE` / `LOOP` / `THEN`, and an
+/// `IF … THEN` / `WHILE … LOOP` condition (plpgsql bodies read as statements).
+fn skip_control_flow(tokens: &[Tok]) -> &[Tok] {
+    let mut rest = tokens;
+    loop {
+        match word(rest, 0) {
+            w if w == PLPGSQL_BLOCK || matches!(w, "ELSE" | "LOOP" | "THEN") => {
+                rest = rest.get(1..).unwrap_or(&[]);
+            }
+            "IF" | "ELSIF" | "ELSEIF" | "WHILE" => {
+                let end = rest
+                    .iter()
+                    .position(|t| matches!(t.text.as_str(), "THEN" | "LOOP"))
+                    .map_or(rest.len(), |p| p + 1);
+                rest = rest.get(end..).unwrap_or(&[]);
+            }
+            _ => return rest,
+        }
+    }
+}
+
+/// The tokens of the data-modifying command that starts at `from`: up to the
+/// parenthesis that closes the one it sits in (a CTE), else the statement.
+fn dml_segment(tokens: &[Tok], from: usize) -> &[Tok] {
+    let mut depth = 0usize;
+    for (offset, t) in tokens.iter().enumerate().skip(from) {
+        match t.text.as_str() {
+            "(" => depth += 1,
+            ")" if depth == 0 => return tokens.get(from..offset).unwrap_or(&[]),
+            ")" => depth -= 1,
+            _ => {}
+        }
+    }
+    tokens.get(from..).unwrap_or(&[])
 }
 
 /// The sub-commands of one `ALTER TABLE` statement.

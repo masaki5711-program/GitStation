@@ -123,7 +123,7 @@ fn credential_files_by_name_are_a_stop_but_examples_and_fixtures_are_not() {
 fn a_backup_restore_or_retention_job_is_a_stop_unless_it_is_a_test_or_a_doc() {
     for p in [
         "ops/backup.sh",
-        "crates/app/src/events_retention.rs",
+        "deploy/events_retention.sh",
         "scripts/restore_db.py",
     ] {
         assert!(
@@ -456,4 +456,84 @@ fn every_rule_has_a_stable_reason() {
     let ids: std::collections::BTreeSet<_> = RULES.iter().map(|r| r.id).collect();
     assert_eq!(ids.len(), RULES.len(), "rule ids are unique");
     assert!(Finding::for_rule("nope").is_none());
+}
+
+// ── review X7: control flow, CTEs, narrowed lifecycle jobs, unread files ──
+
+#[test]
+fn a_destructive_statement_after_control_flow_keywords_is_still_read() {
+    for (body, rule) in [
+        (
+            "DO $$ BEGIN IF true THEN TRUNCATE t; END IF; END $$;",
+            "sql_truncate",
+        ),
+        (
+            "DO $$ BEGIN IF a THEN SELECT 1; ELSE DELETE FROM t; END IF; END $$;",
+            "sql_unbounded_write",
+        ),
+        (
+            "DO $$ BEGIN LOOP DROP TABLE t; END LOOP; END $$;",
+            "sql_drop",
+        ),
+    ] {
+        assert_eq!(rules(&sql(body)), vec![(rule, RiskLevel::Stop)], "{body}");
+    }
+    assert!(sql("DO $$ BEGIN IF a THEN SELECT 1; END IF; END $$;").is_empty());
+}
+
+#[test]
+fn data_modifying_ctes_are_read() {
+    for body in [
+        "WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d;",
+        "WITH u AS (UPDATE t SET a = 1 RETURNING a) SELECT * FROM u;",
+    ] {
+        assert_eq!(
+            rules(&sql(body)),
+            vec![("sql_unbounded_write", RiskLevel::Stop)],
+            "{body}"
+        );
+    }
+    for body in [
+        "WITH d AS (DELETE FROM t WHERE id = 1 RETURNING *) SELECT * FROM d;",
+        "WITH s AS (SELECT 1) SELECT * FROM s;",
+        "SELECT * FROM t FOR UPDATE;",
+        "CREATE TABLE c (id int REFERENCES t ON UPDATE CASCADE ON DELETE CASCADE);",
+    ] {
+        assert!(sql(body).is_empty(), "{body}: {:?}", sql(body));
+    }
+}
+
+#[test]
+fn lifecycle_jobs_are_scripts_and_job_files_not_application_source() {
+    for p in [
+        "ops/backup.sh",
+        "scripts/restore_db.py",
+        "deploy/retention.timer",
+        "config/backup.yml",
+        "ops/backup_job.ps1",
+    ] {
+        assert!(
+            rules(&path_findings(&file(p, ChangeStatus::Modified)))
+                .contains(&("data_lifecycle_job", RiskLevel::Stop)),
+            "{p}"
+        );
+    }
+    for p in [
+        "crates/app/src/events_retention.rs",
+        "web/src/restore.ts",
+        "ops/runbooks/backup.md",
+    ] {
+        assert!(
+            !path_findings(&file(p, ChangeStatus::Modified))
+                .iter()
+                .any(|f| f.rule == "data_lifecycle_job"),
+            "{p}"
+        );
+    }
+}
+
+#[test]
+fn an_unread_migration_or_deploy_file_is_a_stop_rule() {
+    let f = Finding::for_rule("critical_content_unread").expect("rule");
+    assert_eq!(f.level, RiskLevel::Stop);
 }

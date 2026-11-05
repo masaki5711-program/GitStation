@@ -255,8 +255,8 @@
      `sql_truncate`、`sql_unbounded_write`（`WHERE` のない `DELETE FROM` / `UPDATE`、`WHERE TRUE` / `WHERE 1 = 1` も同じ）、`sql_column_change`（列の型の変更、`RENAME`）、
      `sql_drop_constraint`、`sql_disable_guard`（`DISABLE TRIGGER` / `ROW LEVEL SECURITY`）、`deploy_rollback`（CI・デプロイのファイルの `migrate revert` / `db:rollback` / `dropdb` / `DROP DATABASE`）、
      `secret_file`（`.env`（`.example` 等を除く）、`id_rsa` など、`.htpasswd`、`.netrc`、`.p12` / `.pfx` / `.jks`。削除は除く）、`secret_in_content`（X8 の `forge_git::secret_scan` と同じ規則。
-     `forge:allow-secret` のあるファイルは除く）、`data_lifecycle_job`（ファイル名に `backup` / `restore` / `retention`。文書・テストは除く）、
-     `mass_deletion_lines`（削除行 500 以上かつ target の text 行の 30 % 以上）、`mass_deletion_files`（削除ファイル 20 以上かつ 30 % 以上）、`too_many_changes`（5000 ファイル超）。
+     `forge:allow-secret` のあるファイルは除く）、`data_lifecycle_job`（ファイル名に `backup` / `restore` / `retention`。スクリプト・ジョブ・設定のファイル、または運用のディレクトリの非ソースのファイルだけ。アプリケーションのソース（`events_retention.rs` など）・文書・テストは除く。X7 レビューで狭めた）、
+     `mass_deletion_lines`（削除行 500 以上かつ target の text 行の 30 % 以上）、`mass_deletion_files`（削除ファイル 20 以上かつ 30 % 以上）、`too_many_changes`（5000 ファイル超）、`critical_content_unread`（新しい migration か CI・デプロイのファイルを読めなかった。X7 レビュー）。
    - `warn`: `new_migration`、`sql_drop_object`、`sql_privilege`、`auth_change`（パスの語が auth / permission / acl / rbac / oidc / ldap / codeowners など。文書・テストは除く）、
      `ci_deploy_config`、`dependency_change`、`special_entry`（シンボリックリンク・サブモジュール）、`content_not_scanned`（読めなかったファイルがある）。
    - 大量削除は計画の仮置きの数字のとおり（行は numstat の削除行の合計で、編集内の削除も数える。バイナリは行でなくファイル数。生成物・ロックファイルも例外にしない）。
@@ -284,4 +284,22 @@
     手元の差分を検査するコマンドが要る証拠が出たら、規則の crate を `gstn` から使える形に切り出して足す（forge-core の `risk` は I/O を持たないので移せる）。
 12. **既知の限界（評価のケースとして足す）**: 個人情報の列をログ・API・読み取り用ロールに出す変更、新しい外部の送り先、ルートの認証・認可の検査の削除、公開範囲を広げる変更は、
     文字列の規則では確実に拾えない。層 2（ローカル AI。`warn` / `stop` に上げることだけができる）と `.forge/risk.yml`（列名の登録）に残す。
-    本文を読まない `auth_change` 等はパスの語だけで判定するので誤検知する（`warn` なので進む）。`data_lifecycle_job` は `stop` で、GitStation 自身の保持期間のジョブの変更も止まる（計画 04 M-6 の例のとおり）。
+    本文を読まない `auth_change` 等はパスの語だけで判定するので誤検知する（`warn` なので進む）。`data_lifecycle_job` は `stop` だが、アプリケーションのソース（GitStation 自身の `events_retention.rs` など）には当てない（X7 レビュー）。
+
+### X7 の独立レビュー（2026-11-06、security・rust。BLOCK）で直したこと
+
+- **バイナリ判定で素通りしない（security HIGH）**: git が `-`（NUL バイトが 1 つあるだけで付く）と出したファイルも本文の候補にし、SQL・デプロイ・秘密の検査はバイト列に対して走る
+  （forge-git `secret_scan::scan_bytes`。push の検査 X8 の `scan` は従来どおりバイナリを読まない）。numstat の行が raw の行と対応しない場合は
+  `GitProcessFailed`（`reason=numstat_unmatched`）の失敗にする（黙って落とさない）。読めなかった（大きい・上限の外・存在しない・通常のファイルでない）新しい migration と
+  CI・デプロイのファイルは `stop`（`critical_content_unread`）。ほかのファイルは数えて `content_not_scanned`（`neutral`）。migration とデプロイのファイルを先に読む。
+- **同じ head の再評価（rust HIGH）**: 重複の鍵は `risk:<project>:<head>:mr<MR の id>`（版）と `risk:<project>:<head>:mr<id>:e<event seq>`（付け替え・再オープン）。
+  購読者 `risk` は `merge_request.pushed` に加え、target を変えた `merge_request.updated` と `merge_request.reopened` でも、その MR の今の head のジョブを積む
+  （head がまだ無ければ最初の版が積む）。別の MR が同じ head を別の target に持っても、先のジョブに潰されない。run は head ごとに 1 つで、評価のたびに
+  その時点の開いている MR のすべての target で描き直す。
+- **SQL（MEDIUM）**: 文頭の制御構文（`BEGIN` / `IF … THEN` / `ELSE` / `LOOP`）を読み飛ばし、CTE の中の `DELETE FROM` / `UPDATE`（括弧の中の始まり）も `WHERE` を見る
+  （`FOR UPDATE`、`ON UPDATE CASCADE`、`DO UPDATE SET` は命令ではない）。
+- **掃除（MEDIUM）**: `risk_sweep` は死んだジョブを id の順に、カーソルで 50 件ずつ歩き、終わったら先頭に戻る（答えを書けないジョブが後ろを止めない）。
+  論理削除されたプロジェクトのジョブは一覧に出さない（run を書けない）。request id が読めないときは新しい id で答え、warn `forge.worker.risk_sweep_request_id_replaced` を出す。
+- **既知の限界（security LOW）**: 評価は head の版・付け替え・再オープンの時点の target の先頭に対して行い、**target が進んだだけでは評価し直さない**。
+  merge base が変われば差分も変わるので、`failure` / `success` は「その時点」の判定である。**M4 の自動マージは、マージの直前にその target の先頭に対して
+  もう一度評価する（または評価の時点の target の先頭が今と同じことを確かめる）こと**。この MR では自動マージを作らない。

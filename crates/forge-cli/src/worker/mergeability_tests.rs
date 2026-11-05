@@ -864,6 +864,7 @@ fn missing_head_risk_job(w: &World, attempts: u8, request: &str) -> forge_db::jo
             project: w.project,
             head: oid(&"c".repeat(40)),
         },
+        "mr1",
         RequestId::parse(request).expect("id"),
         None,
     )
@@ -976,9 +977,10 @@ async fn the_risk_sweep_answers_a_reaped_job_with_error_once() {
     let reaped = forge_db::jobs::reap(&w.t.db).await.expect("reap");
     assert_eq!(reaped.len(), 1);
     assert!(risk_runs(&w).await.is_empty(), "the reaper writes no run");
-    let answered = crate::worker::risk_sweep::run_risk_sweep(&w.t.db)
-        .await
-        .expect("sweep");
+    let answered =
+        crate::worker::risk_sweep::sweep(&w.t.db, &std::sync::atomic::AtomicI64::new(0), 50)
+            .await
+            .expect("sweep");
     assert_eq!(answered, crate::worker::supervise::Next::AfterPeriod);
     let runs = risk_runs(&w).await;
     assert_eq!(runs.len(), 1, "{runs:?}");
@@ -994,9 +996,55 @@ async fn the_risk_sweep_answers_a_reaped_job_with_error_once() {
         runs[0].summary
     );
     // Answered: the next sweep writes nothing more.
-    crate::worker::risk_sweep::run_risk_sweep(&w.t.db)
+    crate::worker::risk_sweep::sweep(&w.t.db, &std::sync::atomic::AtomicI64::new(0), 50)
         .await
         .expect("sweep again");
     assert_eq!(risk_runs(&w).await[0].revision, 1);
+    w.t.drop_now().await;
+}
+
+/// Review X7 (MEDIUM): the sweep walks the dead jobs by id with a cursor, a
+/// batch at a time, and wraps at the end; a job it cannot answer does not
+/// keep the later ones waiting.
+#[tokio::test]
+async fn the_risk_sweep_walks_its_cursor_through_more_jobs_than_a_batch() {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    let w = World::new().await;
+    for (i, head) in ['1', '2', '3'].iter().enumerate() {
+        let mut job = forge_db::checks::risk::risk_job(
+            &forge_db::checks::risk::RiskRequest {
+                project: w.project,
+                head: oid(&head.to_string().repeat(40)),
+            },
+            "mr1",
+            RequestId::parse(&format!("req-walk-{i}")).expect("id"),
+            None,
+        )
+        .expect("job");
+        job.max_attempts = forge_db::jobs::MaxAttempts::new(1).expect("attempts");
+        forge_db::jobs::enqueue(&w.t.db, &job)
+            .await
+            .expect("enqueue");
+    }
+    w.t.exec_superuser(
+        "UPDATE forge.jobs SET state = 'dead', finished_at = now(), \
+         last_error_code = 'FG-DB-0007' WHERE kind = 'check.risk'",
+    )
+    .await;
+    let cursor = AtomicI64::new(0);
+    let first = crate::worker::risk_sweep::sweep(&w.t.db, &cursor, 2)
+        .await
+        .expect("sweep");
+    assert_eq!(first, crate::worker::supervise::Next::Immediately);
+    assert!(cursor.load(Ordering::Relaxed) > 0, "the cursor moved on");
+    let second = crate::worker::risk_sweep::sweep(&w.t.db, &cursor, 2)
+        .await
+        .expect("sweep");
+    assert_eq!(second, crate::worker::supervise::Next::AfterPeriod);
+    assert_eq!(cursor.load(Ordering::Relaxed), 0, "wrapped");
+    let answered =
+        w.t.json_rows("SELECT count(*) AS n FROM forge.check_runs WHERE name = 'forge/risk'")
+            .await;
+    assert_eq!(answered[0]["n"], 3, "{answered:?}");
     w.t.drop_now().await;
 }

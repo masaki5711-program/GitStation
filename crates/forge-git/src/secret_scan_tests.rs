@@ -109,3 +109,18 @@ fn binary_content_is_not_scanned() {
     content.insert(0, 0);
     assert_eq!(scan(&content), SecretScan::Binary);
 }
+
+/// Review X7: the risk check scans binary content too (a NUL byte must not
+/// hide a token); the push check keeps skipping it.
+#[test]
+fn scan_bytes_reads_content_the_push_check_calls_binary() {
+    let mut content = b"\0key = AKIAQWERTYUIOPASDFGH\n".to_vec();
+    assert_eq!(scan(&content), SecretScan::Binary);
+    assert_eq!(scan_bytes(&content), SecretScan::Found("aws_access_key_id"));
+    content.extend_from_slice(b"forge:allow-secret\n");
+    assert_eq!(
+        scan_bytes(&content),
+        SecretScan::Allowed("aws_access_key_id")
+    );
+    assert_eq!(scan_bytes(b"\0\0plain\n"), SecretScan::Clean);
+}

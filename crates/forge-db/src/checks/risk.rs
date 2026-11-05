@@ -5,11 +5,15 @@
 //! `forge worker` through forge-checks, which writes the run with
 //! [`super::record_forge_check_run`].
 //!
-//! One job per (project, head): the dedup key `risk:<project>:<head>` is
-//! held by a queued, running or succeeded job, so a head that comes back (a
-//! force push to an earlier version, a reopen) is not evaluated twice; a
-//! dead job does not hold it (ADR-0016 §7), and its head's run says
-//! `error` (the worker's `risk_sweep`, [`unanswered_dead_jobs`]).
+//! One job per (project, head, trigger): the dedup key is
+//! `risk:<project>:<head>:mr<merge request>` for a version (`merge_request.pushed`),
+//! and `…:mr<id>:e<event seq>` for a retarget (`merge_request.updated` with a
+//! new target) or a reopen (review X7: the same head in another merge request,
+//! or into another target, is assessed again — a succeeded job of one
+//! merge request never stands for another's). A queued, running or
+//! succeeded job holds its key, so a version that comes back is not
+//! evaluated twice; a dead job does not hold it (ADR-0016 §7), and its head's
+//! run says `error` (the worker's `risk_sweep`, [`unanswered_dead_jobs`]).
 //!
 //! What the head is compared with is the target branch of each open merge
 //! request that has it as a version ([`risk_targets`]), read when the job
@@ -45,13 +49,18 @@ fn invalid_job(reason: &'static str) -> ForgeError {
         .with_context("kind", RISK_JOB)
 }
 
-/// The job evaluating `request`.
+/// The job evaluating `request` (`trigger`: what asked, part of the dedup key).
 pub fn risk_job(
     request: &RiskRequest,
+    trigger: &str,
     origin_request_id: RequestId,
     origin_event_seq: Option<i64>,
 ) -> Result<NewJob, ForgeError> {
-    let key = format!("risk:{}:{}", request.project.get(), request.head.as_str());
+    let key = format!(
+        "risk:{}:{}:{trigger}",
+        request.project.get(),
+        request.head.as_str()
+    );
     Ok(NewJob {
         kind: JobKind::parse(RISK_JOB).ok_or_else(|| invalid_job("invalid_job_kind"))?,
         payload: serde_json::json!({
@@ -152,11 +161,17 @@ pub struct UnansweredJob {
 /// How far back the sweep looks for dead jobs.
 pub const UNANSWERED_WINDOW_DAYS: i32 = 7;
 
-/// At most `limit` [`UnansweredJob`]s, the oldest first: dead within
-/// [`UNANSWERED_WINDOW_DAYS`], of a project that still exists, with no
-/// `forge/risk` run on their head. A payload this build cannot read is
+/// At most `limit` [`UnansweredJob`]s with an id above `after_job_id`, by id
+/// (the sweep walks the ids with a cursor, so a job whose answer keeps
+/// failing cannot starve the others): dead within [`UNANSWERED_WINDOW_DAYS`],
+/// of a project that exists and is not soft-deleted (its run can never be
+/// written), with no `forge/risk` run on their head. A payload this build cannot read is
 /// passed over (logged at warn: forge wrote it).
-pub async fn unanswered_dead_jobs(db: &Db, limit: i64) -> Result<Vec<UnansweredJob>, ForgeError> {
+pub async fn unanswered_dead_jobs(
+    db: &Db,
+    after_job_id: i64,
+    limit: i64,
+) -> Result<Vec<UnansweredJob>, ForgeError> {
     const QUERY: &str = "checks.risk_unanswered";
     let rows: Vec<(i64, serde_json::Value, String, Option<String>)> = db
         .within(QUERY, async {
@@ -165,16 +180,18 @@ pub async fn unanswered_dead_jobs(db: &Db, limit: i64) -> Result<Vec<UnansweredJ
                  FROM forge.jobs j JOIN forge.projects p ON p.id = CASE \
                  WHEN j.payload->>'project_id' ~ '^[0-9]{1,18}$' \
                  THEN (j.payload->>'project_id')::bigint END \
-                 WHERE j.kind = $1 AND j.state = 'dead' \
+                 WHERE j.kind = $1 AND j.state = 'dead' AND j.id > $5 \
+                 AND p.deleted_at IS NULL \
                  AND j.finished_at > now() - make_interval(days => $2) \
                  AND NOT EXISTS (SELECT 1 FROM forge.check_runs r WHERE r.project_id = p.id \
                  AND r.head_sha = j.payload->>'head_sha' AND r.name = $3) \
-                 ORDER BY j.finished_at, j.id LIMIT $4",
+                 ORDER BY j.id LIMIT $4",
             )
             .bind(RISK_JOB)
             .bind(UNANSWERED_WINDOW_DAYS)
             .bind(forge_core::checks::RISK_CHECK)
             .bind(limit)
+            .bind(after_job_id)
             .fetch_all(db.pool().executor())
             .await
             .map_err(|e| read_query_error(QUERY, e))
@@ -226,9 +243,59 @@ impl RiskRequests {
             .and_then(serde_json::Value::as_str)
             .and_then(|raw| ObjectId::parse(raw).ok())
             .ok_or_else(|| bad_payload(event, "head_sha"))?;
+        let mr = event
+            .payload
+            .get("merge_request_id")
+            .and_then(serde_json::Value::as_i64)
+            .filter(|id| *id > 0)
+            .ok_or_else(|| bad_payload(event, "merge_request_id"))?;
         let origin = event.request_id().unwrap_or_else(RequestId::generate);
-        let job = risk_job(&RiskRequest { project, head }, origin, Some(event.seq))?;
-        // Deduped: a retried step, or a head evaluated before.
+        let job = risk_job(
+            &RiskRequest { project, head },
+            &format!("mr{mr}"),
+            origin,
+            Some(event.seq),
+        )?;
+        // Deduped: a retried step, or a version of this merge request
+        // evaluated before.
+        let _enqueued = enqueue_on(tx.conn(), &job).await?;
+        Ok(())
+    }
+
+    /// A retarget or a reopen: the merge request's current head is
+    /// assessed against its (new) target. Nothing to ask while it has no
+    /// head yet (its first version asks).
+    async fn on_target_change(
+        event: &SourceEvent,
+        tx: &mut DerivedTx<'_>,
+    ) -> Result<(), ForgeError> {
+        let project = event
+            .project_id
+            .ok_or_else(|| bad_payload(event, "project_id"))?;
+        let mr = event
+            .payload
+            .get("merge_request_id")
+            .and_then(serde_json::Value::as_i64)
+            .filter(|id| *id > 0)
+            .ok_or_else(|| bad_payload(event, "merge_request_id"))?;
+        let head: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT head_sha FROM forge.merge_requests WHERE id = $1 AND project_id = $2",
+        )
+        .bind(mr)
+        .bind(project.get())
+        .fetch_optional(tx.conn())
+        .await
+        .map_err(|e| crate::query_error("checks.risk_head", e))?;
+        let Some(head) = head.flatten().and_then(|raw| ObjectId::parse(&raw).ok()) else {
+            return Ok(());
+        };
+        let origin = event.request_id().unwrap_or_else(RequestId::generate);
+        let job = risk_job(
+            &RiskRequest { project, head },
+            &format!("mr{mr}:e{}", event.seq),
+            origin,
+            Some(event.seq),
+        )?;
         let _enqueued = enqueue_on(tx.conn(), &job).await?;
         Ok(())
     }
@@ -261,6 +328,17 @@ impl Subscriber for RiskRequests {
             };
             match kind {
                 EventType::MergeRequestPushed => Self::on_version(event, tx).await,
+                EventType::MergeRequestReopened => Self::on_target_change(event, tx).await,
+                // Only a retarget (the payload names the new target).
+                EventType::MergeRequestUpdated
+                    if event
+                        .payload
+                        .get("target_branch")
+                        .is_some_and(|t| !t.is_null()) =>
+                {
+                    Self::on_target_change(event, tx).await
+                }
+                EventType::MergeRequestUpdated => Ok(()),
                 EventType::ProjectCreated
                 | EventType::RepositoryCreated
                 | EventType::RepositoryPushed
@@ -280,10 +358,8 @@ impl Subscriber for RiskRequests {
                 | EventType::GroupMoved
                 | EventType::UserRenamed
                 | EventType::MergeRequestOpened
-                | EventType::MergeRequestUpdated
                 | EventType::MergeRequestDraftChanged
                 | EventType::MergeRequestClosed
-                | EventType::MergeRequestReopened
                 | EventType::MergeRequestConflictDetected
                 | EventType::MergeRequestConflictResolved
                 | EventType::MergeRequestConflictPredicted

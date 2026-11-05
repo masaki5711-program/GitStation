@@ -321,11 +321,34 @@ fn the_empty_tree_is_the_one_of_the_hash_length() {
     let sha1 = ObjectId::parse(&"a".repeat(40)).expect("sha1");
     let sha256 = ObjectId::parse(&"a".repeat(64)).expect("sha256");
     assert_eq!(
-        empty_tree(&sha1).as_str(),
+        empty_tree(&sha1).expect("sha1").as_str(),
         "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     );
     assert_eq!(
-        empty_tree(&sha256).as_str(),
+        empty_tree(&sha256).expect("sha256").as_str(),
         "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
     );
+}
+
+/// Review X7: a numstat record that matches no raw record is git speaking
+/// of something this parser does not know: an error, never ignored (the
+/// file would be passed over).
+#[test]
+fn an_unmatched_numstat_record_is_an_error() {
+    let raw = b":100644 100644 1 2 M\0a.rs\0\
+1\t0\tother.rs\0";
+    let err = parse_risk_diff(raw, 10).expect_err("unmatched");
+    assert_eq!(err.code(), forge_errors::ErrorCode::GitProcessFailed);
+    assert!(format!("{err:?}").contains("numstat_unmatched"), "{err:?}");
+}
+
+/// A binary file (git prints `-`) is still an entry with no counts.
+#[test]
+fn a_binary_numstat_record_keeps_its_entry() {
+    let raw = b":000000 100644 1 2 A\0x.sql\0\
+-\t-\tx.sql\0";
+    let RiskDiff::Complete(files) = parse_risk_diff(raw, 10).expect("parse") else {
+        panic!("complete");
+    };
+    assert_eq!((files[0].added, files[0].deleted), (None, None));
 }
