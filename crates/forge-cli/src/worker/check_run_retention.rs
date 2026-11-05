@@ -38,7 +38,7 @@ pub(crate) async fn run_check_run_retention(db: &Db, days: u32) -> Result<Next, 
     let mut ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: logged below
     ctx.actor_label = Some(ACTOR_LABEL.to_owned());
     let expired = expire_old_runs(db, &ctx, days, RETENTION_BATCH).await?;
-    if expired.runs > 0 {
+    if expired.runs > 0 || expired.skipped_projects > 0 {
         tracing::info!(
             target: "forge_cli",
             task = NAME,
@@ -46,11 +46,16 @@ pub(crate) async fn run_check_run_retention(db: &Db, days: u32) -> Result<Next, 
             runs = expired.runs,
             annotations = expired.annotations,
             projects = expired.projects,
+            skipped_locked_projects = expired.skipped_projects,
             older_than_days = days,
             "forge.worker.check_runs_expired"
         );
     }
-    if expired.runs >= i64::from(RETENTION_BATCH) {
+    // More is due when the batch filled, or when projects were skipped
+    // while others made progress (a run with no progress waits the period).
+    if expired.runs >= i64::from(RETENTION_BATCH)
+        || (expired.runs > 0 && expired.skipped_projects > 0)
+    {
         // A short pause between full batches: reports and the merge gate
         // get the database between them.
         tokio::time::sleep(BATCH_PAUSE).await;

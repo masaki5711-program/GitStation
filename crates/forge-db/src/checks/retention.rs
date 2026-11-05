@@ -37,6 +37,9 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle, MAX_AFFECTED};
 use crate::{query_error, read_query_error, Db};
 
+/// The most projects one batch looks at.
+const MAX_PROJECTS: i64 = 200;
+
 /// The most runs one batch deletes.
 pub const RETENTION_BATCH: u32 = 1000;
 
@@ -49,6 +52,9 @@ pub struct Expired {
     pub annotations: i64,
     /// Projects they belonged to (= `check_run.retention` rows written).
     pub projects: i64,
+    /// Projects with due runs that the merge gate or a purge held, left for
+    /// the next pass.
+    pub skipped_projects: i64,
 }
 
 /// Due runs this build counts at most (a bounded read).
@@ -124,14 +130,17 @@ pub async fn expire_old_runs(
         .ok_or_else(|| refused("retention_days_out_of_range"))?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        // 1. Who has due runs (oldest first), then lock those projects.
+        // 1. The projects with due runs, the one with the oldest run first
+        //    (at most MAX_PROJECTS), then lock them. Choosing projects, not
+        //    runs, keeps a locked project's old runs from filling the batch
+        //    and starving every other project.
         let candidates: Vec<i64> = tx
             .step(|c| async move {
                 sqlx::query_scalar(
-                    "SELECT DISTINCT project_id FROM (                        SELECT r.project_id FROM forge.check_runs r                        WHERE r.updated_at < now() - make_interval(days => $1)                          AND NOT EXISTS (SELECT 1 FROM forge.merge_requests m                               WHERE m.project_id = r.project_id AND m.state = 'open'                                 AND m.head_sha = r.head_sha)                        ORDER BY r.updated_at, r.id LIMIT $2) due                      ORDER BY project_id",
+                    "SELECT project_id FROM (                        SELECT r.project_id, min(r.updated_at) AS oldest                          FROM forge.check_runs r                         WHERE r.updated_at < now() - make_interval(days => $1)                           AND NOT EXISTS (SELECT 1 FROM forge.merge_requests m                                WHERE m.project_id = r.project_id AND m.state = 'open'                                  AND m.head_sha = r.head_sha)                         GROUP BY r.project_id ORDER BY oldest, r.project_id LIMIT $2) due                      ORDER BY project_id",
                 )
                 .bind(days)
-                .bind(i64::from(batch))
+                .bind(MAX_PROJECTS)
                 .fetch_all(c)
                 .await
                 .map_err(|e| query_error("checks.retention.candidates", e))
@@ -140,6 +149,7 @@ pub async fn expire_old_runs(
         if candidates.is_empty() {
             return Ok(Settle::Discard(Expired::default()));
         }
+        let candidate_count = i64::try_from(candidates.len()).unwrap_or(i64::MAX);
         let locked: Vec<i64> = tx
             .step(|c| async move {
                 sqlx::query_scalar(
@@ -152,8 +162,13 @@ pub async fn expire_old_runs(
                 .map_err(|e| query_error("checks.retention.lock_projects", e))
             })
             .await?;
+        let skipped_projects =
+            candidate_count - i64::try_from(locked.len()).unwrap_or(i64::MAX);
         if locked.is_empty() {
-            return Ok(Settle::Discard(Expired::default()));
+            return Ok(Settle::Discard(Expired {
+                skipped_projects,
+                ..Expired::default()
+            }));
         }
         // 2. The due runs of the locked projects, rows a report holds skipped.
         let victims: Vec<(i64, i64)> = tx
@@ -171,7 +186,10 @@ pub async fn expire_old_runs(
             })
             .await?;
         if victims.is_empty() {
-            return Ok(Settle::Discard(Expired::default()));
+            return Ok(Settle::Discard(Expired {
+                skipped_projects,
+                ..Expired::default()
+            }));
         }
         let ids: Vec<i64> = victims.iter().map(|(id, _)| *id).collect();
         // 3. Annotations first (the foreign key), then the runs.
@@ -234,6 +252,7 @@ pub async fn expire_old_runs(
                 .with_context("projects", per_project.len()));
         }
         let expired = Expired {
+            skipped_projects,
             runs: i64::try_from(ids.len()).unwrap_or(i64::MAX),
             annotations: i64::try_from(annotated.len()).unwrap_or(i64::MAX),
             projects: i64::try_from(per_project.len()).unwrap_or(i64::MAX),

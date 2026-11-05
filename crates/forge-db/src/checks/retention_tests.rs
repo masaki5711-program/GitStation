@@ -229,7 +229,8 @@ async fn old_runs_go_with_their_annotations_and_recent_ones_stay() {
         Expired {
             runs: 1,
             annotations: 3,
-            projects: 1
+            projects: 1,
+            skipped_projects: 0,
         }
     );
     assert_eq!(w.run_ids().await, vec![edge, recent], "old {old} is gone");
@@ -273,7 +274,8 @@ async fn a_batch_writes_one_counts_only_audit_row_per_project() {
         Expired {
             runs: 3,
             annotations: 3,
-            projects: 2
+            projects: 2,
+            skipped_projects: 0,
         }
     );
     let rows = w.retention_rows().await;
@@ -399,7 +401,13 @@ async fn the_retention_does_not_wait_behind_the_merge_gate() {
     .await
     .expect("never waits for the gate")
     .expect("expire");
-    assert_eq!(during, Expired::default());
+    assert_eq!(
+        during,
+        Expired {
+            skipped_projects: 1,
+            ..Expired::default()
+        }
+    );
     assert_eq!(w.run_ids().await.len(), 1, "kept while the gate runs");
     tx.rollback().await.expect("rollback");
     let after = expire_old_runs(&w.t.db, &system("req-after"), DAYS, RETENTION_BATCH)
@@ -487,5 +495,44 @@ async fn the_backlog_counts_what_the_worker_is_late_with() {
         retention_backlog(&w.t.db, DAYS).await.expect("after"),
         RetentionBacklog::default()
     );
+    w.t.drop_now().await;
+}
+
+/// Head-of-line: the oldest due runs belong to a project the merge gate
+/// holds; the other projects' due runs are still deleted in the same pass,
+/// and the skipped project is counted.
+#[tokio::test]
+async fn a_locked_project_with_the_oldest_runs_does_not_starve_the_others() {
+    let w = world().await;
+    let api = w.second_project().await;
+    for i in 0..3u8 {
+        w.aged_run(&nth_sha('a', i), "ci/a", 0, 900).await;
+    }
+    let api_run = w.aged_run_in(api, &sha('c'), "ci/c", 1, 200).await;
+    let mut gate = w.t.superuser().await;
+    let mut tx = sqlx::Connection::begin(&mut gate).await.expect("begin");
+    sqlx::query("SELECT id FROM forge.projects WHERE id = $1 FOR UPDATE")
+        .bind(w.project().get())
+        .execute(&mut *tx)
+        .await
+        .expect("gate lock");
+    let done = tokio::time::timeout(
+        Duration::from_secs(10),
+        expire_old_runs(&w.t.db, &system("req-hol"), DAYS, 2),
+    )
+    .await
+    .expect("never waits for the gate")
+    .expect("expire");
+    assert_eq!(
+        done,
+        Expired {
+            runs: 1,
+            annotations: 1,
+            projects: 1,
+            skipped_projects: 1
+        }
+    );
+    tx.rollback().await.expect("rollback");
+    assert_eq!(w.run_ids().await.len(), 3, "api run {api_run} is gone");
     w.t.drop_now().await;
 }
