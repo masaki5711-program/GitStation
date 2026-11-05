@@ -449,7 +449,10 @@ async function main() {
       problems.push('merge conditions: the "branch cannot change" warning is missing');
     }
     // M3 I1d: the link condition is offered, but this save did not set it.
-    if (/linked work item \(PBI\) is needed|not connected to Kanflow/i.test(await page.locator('main').innerText())) {
+    const linkShown =
+      (await page.getByTestId('merge-condition-work-item').count()) +
+      (await page.getByTestId('merge-warning-work-item-unbound').count());
+    if (linkShown > 0) {
       problems.push('merge conditions show a work item link that was not asked for');
     }
     await check('24d-merge-sections');

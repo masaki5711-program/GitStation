@@ -478,6 +478,10 @@ describe('merge conditions of protected branches', () => {
     let dialog = await screen.findByRole('dialog');
     const box = within(dialog).getByLabelText<HTMLInputElement>('Require a linked work item (PBI)');
     expect(box.checked).toBe(true);
+    // Review I1d: while ticked, the dialog's status region says what it
+    // costs on a project not connected to Kanflow (the box stays enabled).
+    expect(within(dialog).getByText(/not connected to Kanflow, nothing can link one/)).toBeTruthy();
+    expect(box.disabled).toBe(false);
     fireEvent.change(within(dialog).getByLabelText('Approvals needed'), { target: { value: '2' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save the conditions' }));
     await waitFor(() => {
@@ -487,6 +491,7 @@ describe('merge conditions of protected branches', () => {
     expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)[0]?.body).toMatchObject({
       required_approvals: 2,
       require_work_item_link: true,
+      expected_updated_at: STAMP,
     });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -494,6 +499,7 @@ describe('merge conditions of protected branches', () => {
     fireEvent.click(within(conditions).getByRole('button', { name: 'Change the conditions of refs/heads/main' }));
     dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByLabelText('Require a linked work item (PBI)'));
+    expect(within(dialog).queryByText(/not connected to Kanflow, nothing can link one/)).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save the conditions' }));
     await waitFor(() => {
       expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)).toHaveLength(2);

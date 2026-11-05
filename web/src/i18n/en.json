@@ -483,6 +483,7 @@
       "workItem": "A linked work item (PBI) is needed",
       "workItemLabel": "Require a linked work item (PBI)",
       "workItemUnbound": "This project is not connected to Kanflow, so no merge request can link a work item and every merge into this branch is blocked. Ask a maintainer to connect the project, or turn this condition off.",
+      "workItemDialog": "Every merge into this branch needs a linked PBI. On a project not connected to Kanflow, nothing can link one, so every merge stops.",
       "unreportable": "No reporter can send some of the required checks, so every merge into this branch is blocked. Ask an administrator to let a service account report them, or remove those checks.",
       "frozen": "Direct pushes are forbidden too, so this branch cannot change at all.",
       "change": "Change",

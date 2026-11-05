@@ -483,6 +483,7 @@
       "workItem": "Perlu item kerja (PBI) yang ditautkan",
       "workItemLabel": "Wajibkan item kerja (PBI) yang ditautkan",
       "workItemUnbound": "Proyek ini belum terhubung ke Kanflow, jadi tidak ada merge request yang bisa menautkan item kerja dan semua merge ke branch ini terhenti. Minta maintainer menghubungkan proyek, atau matikan syarat ini.",
+      "workItemDialog": "Setiap merge ke branch ini perlu PBI yang ditautkan. Pada proyek yang belum terhubung ke Kanflow, tidak ada yang bisa menautkannya, jadi semua merge terhenti.",
       "unreportable": "Beberapa pemeriksaan wajib tidak dapat dilaporkan oleh siapa pun, jadi setiap merge ke branch ini terblokir. Minta administrator mengizinkan akun layanan melaporkannya, atau hapus pemeriksaan itu.",
       "frozen": "Push langsung juga dilarang, jadi branch ini sama sekali tidak dapat berubah.",
       "change": "Ubah",

@@ -1010,7 +1010,7 @@ function BranchWarnings({ rule }: { rule: ProtectedRef }) {
   return (
     <div role="note" className={styles.warning}>
       {unreportable && <p>{t('settings.conditions.unreportable')}</p>}
-      {unbound && <p>{t('settings.conditions.workItemUnbound')}</p>}
+      {unbound && <p data-testid="merge-warning-work-item-unbound">{t('settings.conditions.workItemUnbound')}</p>}
       {rule.merge_rule?.direct_push_forbidden === true && <p>{t('settings.conditions.frozen')}</p>}
     </div>
   );
@@ -1133,7 +1133,9 @@ function Conditions({ rule }: { rule: ProtectedRef }) {
   }
   if (m.require_resolved_discussions) lines.push(t('settings.conditions.resolved'));
   if (m.direct_push_forbidden) lines.push(t('settings.conditions.noPush'));
-  if (m.require_work_item_link) lines.push(t('settings.conditions.workItem'));
+  if (m.require_work_item_link) {
+    lines.push(<span data-testid="merge-condition-work-item">{t('settings.conditions.workItem')}</span>);
+  }
   return (
     <ul className={styles.plainList}>
       {lines.map((line, i) => (
@@ -1229,9 +1231,11 @@ function ConditionsDialog({
         <Check label={t('settings.conditions.noPushLabel')} checked={noPush} onChange={setNoPush} />
         <Check label={t('settings.conditions.workItemLabel')} checked={link} onChange={setLink} />
         {/* Stays mounted: a warning that appears while typing is read out. */}
-        <div role="status" className={blocking ? styles.warning : undefined}>
+        <div role="status" className={blocking || link ? styles.warning : undefined}>
           {blocking && <p>{t('settings.conditions.unreportable')}</p>}
           {blocking && noPush && <p>{t('settings.conditions.frozen')}</p>}
+          {/* Review I1d: what the link condition costs without a binding. */}
+          {link && <p>{t('settings.conditions.workItemDialog')}</p>}
         </div>
         {save.isError && (
           <SaveError
