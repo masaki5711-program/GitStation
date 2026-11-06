@@ -46,8 +46,8 @@ pub(crate) async fn sweep(db: &Db, cursor: &AtomicI64, batch: i64) -> Result<Nex
     let mut answered = 0usize;
     for job in &jobs {
         let request_id = match RequestId::parse(&job.origin_request_id) {
-            Ok(id) => id,
-            Err(_) => {
+            Some(id) => id,
+            None => {
                 let fresh = RequestId::generate();
                 tracing::warn!(
                     target: "forge_cli",
