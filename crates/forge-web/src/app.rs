@@ -121,6 +121,8 @@ pub struct AppState {
     pub spec_refs_budget: Duration,
     /// M3 X4: the spec API's requests per caller (`FG-WEB-0010`).
     pub spec_index_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X4 review: the spec API's requests running per caller.
+    pub spec_index_in_flight: Arc<routes::specs::InFlight>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -167,6 +169,7 @@ impl AppState {
             spec_refs_limiter: Arc::new(routes::spec_refs::limiter()),
             spec_refs_budget: routes::spec_refs::BUDGET,
             spec_index_limiter: Arc::new(routes::specs::limiter()),
+            spec_index_in_flight: Arc::default(),
         }
     }
 
@@ -174,6 +177,13 @@ impl AppState {
     #[must_use]
     pub fn with_spec_refs_limiter(mut self, limiter: routes::namespaces::CallerLimiter) -> Self {
         self.spec_refs_limiter = Arc::new(limiter);
+        self
+    }
+
+    /// The spec API's limiter (M3 X4; tests set a small one).
+    #[must_use]
+    pub fn with_spec_index_limiter(mut self, limiter: routes::namespaces::CallerLimiter) -> Self {
+        self.spec_index_limiter = Arc::new(limiter);
         self
     }
 

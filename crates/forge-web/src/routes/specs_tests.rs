@@ -155,6 +155,10 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
+    fixture_with(|s| s).await
+}
+
+async fn fixture_with(tweak: impl FnOnce(AppState) -> AppState) -> Fixture {
     let home = tempfile::tempdir().expect("home");
     let root = tempfile::tempdir().expect("root");
     let git = Git::new(GitConfig::new("git", home.path()));
@@ -199,8 +203,10 @@ async fn fixture() -> Fixture {
     };
     let smart = SmartHttp::new(git, storage, GitHttpLimits::default())
         .with_browse_limits(BrowseLimits::default());
-    let state = AppState::new("test", Vec::new(), crate::tests::no_tokens(), lookups)
-        .with_smart_http(smart);
+    let state = tweak(
+        AppState::new("test", Vec::new(), crate::tests::no_tokens(), lookups)
+            .with_smart_http(smart),
+    );
     let router = build(crate::app::registry(), state, AppConfig::default()).expect("router");
     Fixture {
         _root: root,
@@ -391,4 +397,44 @@ async fn the_spec_api_needs_read_api_and_a_readable_project() {
     assert_eq!(other.status, StatusCode::NOT_FOUND);
     let anonymous = send(f.router.clone(), "GET", &format!("{API}/versions"), None).await;
     assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+}
+
+/// Review X4 (MEDIUM f): the limit counts the work, not the requests — a
+/// trace costs one index for the revision and one per followed reference
+/// (here 1 + 2), a diff two.
+#[tokio::test]
+async fn the_limit_counts_every_index_a_request_runs() {
+    let f = fixture_with(|s| {
+        s.with_spec_index_limiter(crate::routes::namespaces::CallerLimiter::new(
+            "spec_index",
+            3,
+            std::time::Duration::from_secs(60),
+        ))
+    })
+    .await;
+    let _ = ok_body(&get(&f, "trace", person()).await);
+    let refused = get(&f, "versions", person()).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{:?}",
+        refused.json()
+    );
+    assert_eq!(refused.json()["error_code"], "FG-WEB-0010");
+}
+
+/// Review X4 (MEDIUM f): at most two spec requests of one caller run at
+/// once; a third is refused until one ends.
+#[test]
+fn at_most_two_spec_requests_of_a_caller_run_at_once() {
+    let gate = super::InFlight::new(2);
+    let first = gate.enter(READER).expect("first");
+    let _second = gate.enter(READER).expect("second");
+    assert!(gate.enter(READER).is_none(), "a third waits for one to end");
+    assert!(
+        gate.enter(UserId::new(6)).is_some(),
+        "another caller is not held up"
+    );
+    drop(first);
+    assert!(gate.enter(READER).is_some());
 }

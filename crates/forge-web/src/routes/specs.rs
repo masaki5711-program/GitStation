@@ -345,8 +345,8 @@ where
         Err(err) => return ctx.fail(err.with_context("route", route)).into_response(),
     };
     let ids = (target.project.get(), target.repository.id.get());
-    let limited = match request.proof().principal().user() {
-        Some(user) => state.spec_index_limiter.check(user, Instant::now()),
+    let caller = match request.proof().principal().user() {
+        Some(user) => user,
         None => {
             return ctx
                 .fail(
@@ -357,15 +357,22 @@ where
                 .into_response()
         }
     };
-    if let Err(retry) = limited {
+    // Review X4 (MEDIUM f): at most `MAX_IN_FLIGHT` of a caller's spec
+    // requests at once, and the limit counts every index a request runs
+    // (one here; `charge` adds the rest).
+    let Some(_running) = state.spec_index_in_flight.enter(caller) else {
         return ctx
             .fail(
-                state
-                    .spec_index_limiter
-                    .refused(retry)
-                    .with_context("route", route),
+                ForgeError::new(ErrorCode::RateLimited)
+                    .with_context("route", route)
+                    .with_context("reason", "in_flight")
+                    .with_context("limit", MAX_IN_FLIGHT)
+                    .with_context(crate::error::RETRY_AFTER_CONTEXT, 1u64),
             )
             .into_response();
+    };
+    if let Err(err) = charge(&state, caller, 1) {
+        return ctx.fail(err.with_context("route", route)).into_response();
     }
     let ran = match tokio::time::timeout(BUDGET, work(state.clone(), request, target)).await {
         Ok(ran) => ran,
@@ -390,6 +397,90 @@ where
                     .with_context("repo_id", ids.1),
             )
             .into_response(),
+    }
+}
+
+/// Count `n` more indexes of `caller`'s request against the limit
+/// (`FG-WEB-0010` past it).
+fn charge(state: &AppState, caller: forge_core::UserId, n: usize) -> Result<(), ForgeError> {
+    for _ in 0..n {
+        if let Err(retry) = state.spec_index_limiter.check(caller, Instant::now()) {
+            return Err(state.spec_index_limiter.refused(retry));
+        }
+    }
+    Ok(())
+}
+
+/// The caller of a request (every spec route needs a signed-in one).
+fn caller_of(request: &Dispatched<ProjectCtx>) -> Result<forge_core::UserId, ForgeError> {
+    request.proof().principal().user().ok_or_else(|| {
+        ForgeError::new(ErrorCode::Internal).with_context("reason", "spec_index_without_user")
+    })
+}
+
+/// At most this many spec requests of one caller run at once.
+pub const MAX_IN_FLIGHT: usize = 2;
+
+/// The spec requests each caller has running (review X4, MEDIUM f): an
+/// index is git work, so one caller cannot hold the repository slots.
+#[derive(Debug)]
+pub struct InFlight {
+    max: usize,
+    running: std::sync::Mutex<std::collections::HashMap<i64, usize>>,
+}
+
+/// One running request; ends on drop.
+#[derive(Debug)]
+pub struct Running<'a> {
+    gate: &'a InFlight,
+    caller: i64,
+}
+
+impl InFlight {
+    pub fn new(max: usize) -> Self {
+        Self {
+            max,
+            running: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// A place for one more of `caller`'s requests, or `None` at the cap.
+    pub fn enter(&self, caller: forge_core::UserId) -> Option<Running<'_>> {
+        let mut running = self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let n = running.entry(caller.get()).or_insert(0);
+        if *n >= self.max {
+            return None;
+        }
+        *n += 1;
+        Some(Running {
+            gate: self,
+            caller: caller.get(),
+        })
+    }
+}
+
+impl Default for InFlight {
+    fn default() -> Self {
+        Self::new(MAX_IN_FLIGHT)
+    }
+}
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        let mut running = self
+            .gate
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(n) = running.get_mut(&self.caller) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                running.remove(&self.caller);
+            }
+        }
     }
 }
 
@@ -572,28 +663,35 @@ pub async fn versions(state: AppState, request: Dispatched<ProjectCtx>) -> Respo
 
 /// `GET /api/v1/projects/{id}/specs/diff`.
 pub async fn diff_route(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
-    respond(state, request, "specs_diff", |_, request, t| async move {
-        let params = query(request.raw_query(), &["from", "to"])?;
-        let from = revision(&t, Some(required(&params, "from")?)).await?;
-        let to = revision(&t, Some(required(&params, "to")?)).await?;
-        let before = index(&t, &from, Tags::Skip).await?;
-        let after = index(&t, &to, Tags::Skip).await?;
-        let changes = diff(&before.index, &after.index)
-            .into_iter()
-            .map(|c| SpecChangeBody {
-                id: c.id.as_str().to_owned(),
-                kind: c.kind.as_str().to_owned(),
-                path: c.path,
-                line: c.line,
+    respond(
+        state,
+        request,
+        "specs_diff",
+        |state, request, t| async move {
+            let params = query(request.raw_query(), &["from", "to"])?;
+            // Two revisions: one more index.
+            charge(&state, caller_of(&request)?, 1)?;
+            let from = revision(&t, Some(required(&params, "from")?)).await?;
+            let to = revision(&t, Some(required(&params, "to")?)).await?;
+            let before = index(&t, &from, Tags::Skip).await?;
+            let after = index(&t, &to, Tags::Skip).await?;
+            let changes = diff(&before.index, &after.index)
+                .into_iter()
+                .map(|c| SpecChangeBody {
+                    id: c.id.as_str().to_owned(),
+                    kind: c.kind.as_str().to_owned(),
+                    path: c.path,
+                    line: c.line,
+                })
+                .collect();
+            Ok(SpecDiffBody {
+                from: rev_body(&from),
+                to: rev_body(&to),
+                changes,
+                incomplete: incomplete(before.index.incomplete.or(after.index.incomplete)),
             })
-            .collect();
-        Ok(SpecDiffBody {
-            from: rev_body(&from),
-            to: rev_body(&to),
-            changes,
-            incomplete: incomplete(before.index.incomplete.or(after.index.incomplete)),
-        })
-    })
+        },
+    )
     .await
 }
 
@@ -642,6 +740,13 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
             .collect();
             let mut references = Vec::new();
             if let RepoConfigRead::Valid(config) = &own.config {
+                // One more index per reference followed.
+                let refs = config
+                    .specs
+                    .iter()
+                    .filter(|e| matches!(e.source, SpecSource::Repo { .. }))
+                    .count();
+                charge(&state, caller_of(&request)?, refs)?;
                 for entry in &config.specs {
                     let SpecSource::Repo { written, repo, pin } = &entry.source else {
                         continue;
