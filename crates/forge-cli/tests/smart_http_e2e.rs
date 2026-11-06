@@ -1658,14 +1658,31 @@ fn a_push_the_database_cannot_record_logs_fg_git_0012_with_its_list() {
         "push",
     );
     assert_eq!(s.refs().get("refs/heads/down"), Some(&tip));
+    // The sink is the whole process's (the tests of this binary may run as
+    // threads) and a finished test's database is dropped while its push is
+    // still being recorded, which logs FG-GIT-0012 for *that* push. So the
+    // alert is ours only under the request id of the push that created
+    // `refs/heads/down` at `tip`.
     let deadline = Instant::now() + Duration::from_secs(30);
     let failed = loop {
         let events = logs.events();
-        if let Some(i) = events
-            .iter()
-            .position(|e| e["error_code"] == ErrorCode::PushRecordFailed.id())
-        {
-            break (events, i);
+        let ours = events.iter().find(|e| {
+            e["event"] == "forge.git.push_applied"
+                && forge_core::PushApplied::from_log_line(&e.to_string())
+                    .ok()
+                    .flatten()
+                    .is_some_and(|p| {
+                        p.updates
+                            .iter()
+                            .any(|u| u.name == "refs/heads/down" && u.new == tip)
+                    })
+        });
+        if let Some(id) = ours.map(|e| e["request_id"].clone()) {
+            if let Some(i) = events.iter().position(|e| {
+                e["error_code"] == ErrorCode::PushRecordFailed.id() && e["request_id"] == id
+            }) {
+                break (events, i);
+            }
         }
         assert!(Instant::now() < deadline, "no FG-GIT-0012: {events:?}");
         std::thread::sleep(Duration::from_millis(200));

@@ -208,7 +208,12 @@ async fn world() -> World {
         calls: AtomicUsize::new(0),
         delay_ms: AtomicU64::new(0),
     });
-    let review = Review::new(t.db.clone(), browser).with_diffs(diffs.clone());
+    // The read's deadline is wall-clock: with the default 8 s a loaded
+    // machine cuts `one_read_runs_at_most_the_diff_cap` (20 real git diffs)
+    // short of the cap. Only the test about the deadline sets a short one.
+    let review = Review::new(t.db.clone(), browser)
+        .with_diffs(diffs.clone())
+        .with_outdated_budget(Duration::from_secs(120));
     let proof = open_proof(
         &t,
         &session(alice),
