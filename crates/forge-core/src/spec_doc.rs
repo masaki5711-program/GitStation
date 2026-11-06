@@ -25,8 +25,10 @@
 //!   `...`). Its YAML is read by `repo_config`'s tree builder (no anchors,
 //!   aliases, tags, duplicate keys, a second document; at most
 //!   [`MAX_FRONT_MATTER_BYTES`]). Keys: `spec`, `title`, `status`
-//!   (required) and `owners` (a list of at most [`MAX_OWNERS`]); any other
-//!   key is refused.
+//!   (required), `owners` (a list of at most [`MAX_OWNERS`]) and
+//!   `confidential` (`true` / `false`, M3 X5: plan 06 D-5 — the context
+//!   API never hands the document to an AI agent; see
+//!   [`SpecDocument::confidential`]); any other key is refused.
 //! - **Blocks**: a line `::: req <ID> [key=value …]` opens a requirement,
 //!   a line `:::` closes the innermost container. Other containers
 //!   (`::: note`) nest and close the same way but are no requirements.
@@ -190,6 +192,8 @@ pub struct SpecMeta {
     pub title: String,
     pub status: SpecStatus,
     pub owners: Vec<String>,
+    /// `confidential: true` (M3 X5, plan 06 D-5).
+    pub confidential: bool,
 }
 
 /// One requirement block.
@@ -225,6 +229,8 @@ pub struct SpecDocument {
     /// Problems past the cap (counted, not kept).
     pub problems_dropped: usize,
     spec: bool,
+    /// The file opens with a front matter (read or not).
+    front_matter: bool,
 }
 
 impl SpecDocument {
@@ -232,6 +238,21 @@ impl SpecDocument {
     /// matter or a requirement block, or could not be read as text).
     pub fn is_spec(&self) -> bool {
         self.spec
+    }
+
+    /// Whether an AI agent must not be given the document (M3 X5, plan 06
+    /// D-5): `confidential: true`, and — failing closed — a front matter
+    /// that could not be read (the mark may be in it) or a file that is no
+    /// text. A document without a front matter carries no mark.
+    pub fn confidential(&self) -> bool {
+        match &self.meta {
+            Some(meta) => meta.confidential,
+            None => self.front_matter || self.not_text(),
+        }
+    }
+
+    fn not_text(&self) -> bool {
+        self.problems.iter().any(|p| p.rule == "not_utf8")
     }
 
     fn problem(&mut self, line: usize, rule: &'static str) {
@@ -284,6 +305,7 @@ fn front_matter(lines: &[&str], doc: &mut SpecDocument) -> usize {
         return 0;
     }
     doc.spec = true;
+    doc.front_matter = true;
     let Some(close) = lines
         .iter()
         .skip(1)
@@ -331,6 +353,7 @@ fn meta_of(root: &Node, shift: impl Fn(usize) -> usize, doc: &mut SpecDocument) 
     let mut title = None;
     let mut status = None;
     let mut owners = Vec::new();
+    let mut confidential = false;
     let mut ok = true;
     let mut bad = |doc: &mut SpecDocument, line: usize, rule: &'static str| {
         doc.problem(shift(line), rule);
@@ -357,6 +380,11 @@ fn meta_of(root: &Node, shift: impl Fn(usize) -> usize, doc: &mut SpecDocument) 
                 Some(list) => owners = list,
                 None => bad(doc, f.line, "owners_invalid"),
             },
+            "confidential" => match text(f.value, f.line, "confidential_invalid") {
+                Ok("true") => confidential = true,
+                Ok("false") => confidential = false,
+                _ => bad(doc, f.line, "confidential_invalid"),
+            },
             _ => bad(doc, f.line, "front_matter_unknown_key"),
         }
     }
@@ -381,6 +409,7 @@ fn meta_of(root: &Node, shift: impl Fn(usize) -> usize, doc: &mut SpecDocument) 
         title,
         status,
         owners,
+        confidential,
     });
 }
 

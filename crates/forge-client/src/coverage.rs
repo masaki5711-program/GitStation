@@ -368,6 +368,22 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/specs/trace",
         Coverage::Command("spec trace"),
     ),
+    // M3 X5: the context API (plan 03 §6).
+    (
+        "GET",
+        "/api/v1/projects/{id}/context/work-item",
+        Coverage::Command("context work-item"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/context/requirement",
+        Coverage::Command("context requirement"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/context",
+        Coverage::Command("context merge-request"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/protected-refs",

@@ -25,6 +25,9 @@ this crate calls the check commands (`tests/decided_callers.rs`).
   (`created`, `completed_event`: `check.completed` only when the conclusion changed).
 - `list(&Authorized<ProjectCtx>, repo, &ObjectId) -> Vec<StoredCheckRun>`
   (`CheckRead`; by name, with annotations).
+- `merge_request_head_runs(&Authorized<MergeRequestCtx>, &ObjectId)` (`MergeRequestRead`,
+  M3 X5): the runs on a merge request's stored head, for the context API (no branch
+  reachability: the version ref keeps the head).
 - `granted(user, project, namespace)` (the route loader), `grants_of(user)` (by project),
   `change_grant(request, &Authorized<CheckNamespaceGrantCtx>, grant) -> GrantOutcome`
   (`CheckNamespaceGrantManage`: administrators, people only; `ci` / `kanflow`; **a grant is

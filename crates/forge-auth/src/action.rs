@@ -53,6 +53,13 @@ actions! {
     /// arm, `read_api`); the trace decides every referenced project again
     /// with the reader's own principal (`prove_spec_ref`).
     SpecRead,
+    /// The context API (M3 X5, plan 03 §6, ADR-0023 Amendment X5): `GET
+    /// /api/v1/projects/{id}/context/{work-item,requirement}` — a work
+    /// item's or a requirement's context with its provenance. Decided like
+    /// `RepoBrowse` (the same arm, `read_api`). What is marked confidential
+    /// is withheld from an AI agent after the decision
+    /// (`Principal::is_agent_audience`, plan 06 D-5).
+    ContextRead,
     // --- REST API: projects ---
     ProjectRead,
     /// `GET /api/v1/projects`: may the caller list at all (any active
@@ -512,6 +519,7 @@ impl Action {
             | Action::RepoBrowse
             | Action::SpecRefRead
             | Action::SpecRead
+            | Action::ContextRead
             | Action::ProjectList
             | Action::MemberList
             | Action::ProtectedRefList
@@ -665,6 +673,8 @@ impl Action {
             | Action::ActAsAssertionClaim
             | Action::SpecRefRead
             | Action::SpecRead
+            // M3 X5: the context API is no act-as read (ADR-0025 §4).
+            | Action::ContextRead
             | Action::NotificationPreferencesRead
             | Action::NotificationPreferencesWrite
             | Action::WebhookRead

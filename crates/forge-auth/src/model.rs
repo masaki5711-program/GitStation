@@ -155,6 +155,17 @@ impl Principal {
         self.agent
     }
 
+    /// Whether the caller is an AI agent for the confidential boundary of
+    /// plan 06 D-5 (M3 X5, ADR-0023 Amendment X5): a credential issued
+    /// with `is_agent`, or an account that is no person (a service account
+    /// or a bot, whatever its credential). The context and spec APIs never
+    /// hand such a caller a work item or a specification marked
+    /// confidential. Not an authorization decision: the caller was allowed
+    /// to read the project; this only narrows what one answer carries.
+    pub fn is_agent_audience(&self) -> bool {
+        self.agent || self.kind != AccountKind::Human
+    }
+
     pub fn user(&self) -> Option<UserId> {
         self.user
     }

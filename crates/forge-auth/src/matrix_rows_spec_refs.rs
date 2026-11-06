@@ -125,3 +125,52 @@ pub(crate) const SPEC_READ_ROWS: &[Row] = &[
     row(A::SpecRead, W::ServiceAccountGuestTokenRead, F::PrivateProject, deny(E::Forbidden)),
     row(A::SpecRead, W::BotNonMemberTokenReadApi, F::InternalProject, Allow),
 ];
+
+/// M3 X5 (`ContextRead`: `GET /api/v1/projects/{id}/context/…`, plan 03
+/// §6): the same rule again, so every `RepoBrowse` row has its twin here
+/// too (`the_context_api_mirrors_every_browse_row`). The confidential
+/// boundary of plan 06 D-5 is no decision: an agent is allowed here and
+/// only the answer leaves the marked items out.
+#[rustfmt::skip]
+pub(crate) const CONTEXT_READ_ROWS: &[Row] = &[
+    row(A::ContextRead, W::Reporter, F::PrivateProject, Allow),
+    row(A::ContextRead, W::Developer, F::PrivateProject, Allow),
+    row(A::ContextRead, W::Maintainer, F::PrivateProject, Allow),
+    row(A::ContextRead, W::Owner, F::PrivateProject, Allow),
+    row(A::ContextRead, W::Admin, F::PrivateProject, Allow),
+    row(A::ContextRead, W::NonMember, F::InternalProject, Allow),
+    row(A::ContextRead, W::Guest, F::InternalProject, Allow),
+    row(A::ContextRead, W::DevTokenApi, F::PrivateProject, Allow),
+    row(A::ContextRead, W::OwnerTokenReadApi, F::PrivateProject, Allow),
+    row(A::ContextRead, W::AgentTokenReadApi, F::PrivateProject, Allow),
+    row(A::ContextRead, W::AdminTokenAdmin, F::PrivateProject, Allow),
+    row(A::ContextRead, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+    row(A::ContextRead, W::Anonymous, F::InternalProject, deny(E::Unauthenticated)),
+    // a Guest of a private project resolves it but reads no content
+    row(A::ContextRead, W::Guest, F::PrivateProject, deny(E::Forbidden)),
+    // a private project the reader is no member of: the same 404 as absent
+    row(A::ContextRead, W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    row(A::ContextRead, W::NonMemberTokenReadApi, F::PrivateProject, deny(E::NotFound)),
+    row(A::ContextRead, W::NonMemberTokenReadApi, F::InternalProject, Allow),
+    row(A::ContextRead, W::GuestTokenReadApi, F::PrivateProject, deny(E::Forbidden)),
+    row(A::ContextRead, W::GuestTokenReadApi, F::InternalProject, Allow),
+    row(A::ContextRead, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
+    row(A::ContextRead, W::Disabled, F::InternalProject, deny(E::AccountDisabled)),
+    row(A::ContextRead, W::DisabledAdmin, F::PrivateProject, deny(E::AccountDisabled)),
+    // a git-only token reads no JSON API
+    row(A::ContextRead, W::DevTokenReadRepository, F::PrivateProject, deny(E::InsufficientScope)),
+    row(A::ContextRead, W::DevTokenWriteRepository, F::PrivateProject, deny(E::InsufficientScope)),
+    row(A::ContextRead, W::DevTokenReadRepository, F::InternalProject, deny(E::InsufficientScope)),
+    // an administrator's token without the admin scope has no admin rights
+    row(A::ContextRead, W::AdminTokenApi, F::PrivateProject, deny(E::NotFound)),
+    row(A::ContextRead, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::ContextRead, W::Admin, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::ContextRead, W::NonMember, F::DeletedProject, deny(E::NotFound)),
+    row(A::ContextRead, W::NonMember, F::InternalDeletedProject, deny(E::PendingDeletion)),
+    row(A::ContextRead, W::Developer, F::Absent, deny(E::NotFound)),
+    row(A::ContextRead, W::Admin, F::Absent, deny(E::NotFound)),
+    // a service account reads member projects only (M3 S0), a bot like a person
+    row(A::ContextRead, W::ServiceAccountNonMemberTokenReadApi, F::InternalProject, deny(E::NotFound)),
+    row(A::ContextRead, W::ServiceAccountGuestTokenRead, F::PrivateProject, deny(E::Forbidden)),
+    row(A::ContextRead, W::BotNonMemberTokenReadApi, F::InternalProject, Allow),
+];

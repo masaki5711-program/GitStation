@@ -96,4 +96,24 @@ impl Review {
     pub async fn work_item_links(&self, id: MergeRequestId) -> Result<Links, ForgeError> {
         work_items::links(&self.db, id).await
     }
+
+    /// One work item of `project`'s binding with its mark and the
+    /// project's merge requests openly linked to it (M3 X5; the route
+    /// proved `ContextRead` on the project). `None`: not bound.
+    pub async fn work_item_context(
+        &self,
+        project: forge_core::ProjectId,
+        reference: &forge_core::WorkItemRef,
+        limit: usize,
+    ) -> Result<Option<work_items::WorkItemContext>, ForgeError> {
+        work_items::work_item_context(&self.db, project, reference, limit).await
+    }
+
+    /// Which of `ids` kanflow marked confidential (M3 X5, plan 06 D-5).
+    pub async fn confidential_work_items(
+        &self,
+        ids: &[i64],
+    ) -> Result<std::collections::BTreeSet<i64>, ForgeError> {
+        work_items::confidential_work_items(&self.db, ids).await
+    }
 }
