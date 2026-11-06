@@ -40,12 +40,20 @@ pub const MAX_PAGE_ROWS: u32 = 10_000;
 /// from the segments, top first). The caller's `SELECT` joins the rest.
 macro_rules! page_scan {
     ($table:literal, $kind:literal) => {
+        page_scan!(
+            @page [
+                "page AS (SELECT id FROM ",
+                $table,
+                " WHERE id > $1 ORDER BY id LIMIT $4), "
+            ],
+            $kind
+        )
+    };
+    (@page [$($page:tt)*], $kind:literal) => {
         concat!(
-            "WITH RECURSIVE \
-               page AS (SELECT id FROM ",
-            $table,
-            " WHERE id > $1 ORDER BY id LIMIT $4), \
-               chain (anchor, id, parent_id, kind, owner_id, segment, step, anchor_kind) AS ( \
+            "WITH RECURSIVE ",
+            $($page)*,
+            "chain (anchor, id, parent_id, kind, owner_id, segment, step, anchor_kind) AS ( \
                  SELECT pg.id, n.id, n.parent_id, n.kind, n.owner_id, n.segment, 1, n.kind \
                  FROM page pg JOIN forge.namespaces n ON n.kind = '",
             $kind,
@@ -86,6 +94,110 @@ pub(crate) const PROJECT_PAGE_SQL: &str = concat!(
      LEFT JOIN forge.repositories r ON r.project_id = p.id \
      ORDER BY p.id"
 );
+
+/// The repository search (M3 X3, `GET /api/v1/repositories?q=`): `$1` the
+/// `LIKE` pattern (lowercase, escaped with `\`), `$2` the viewer, `$3` the
+/// chain cap, `$4` the most rows. The live projects whose full path or
+/// display name contains the text (ASCII case folded), by path; the
+/// columns of [`PROJECT_PAGE_SQL`]. Nothing here filters by visibility:
+/// forge-web decides every row with `authorize()`.
+pub(crate) const PROJECT_SEARCH_SQL: &str = concat!(
+    page_scan!(
+        @page ["page AS (SELECT p.id FROM forge.projects p \
+                 JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id \
+                 WHERE p.deleted_at IS NULL \
+                   AND (lower(n.full_path) LIKE $1 ESCAPE '\\' \
+                        OR lower(p.display_name) LIKE $1 ESCAPE '\\') \
+                 ORDER BY n.full_path, p.id LIMIT $4), "],
+        "project"
+    ),
+    "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
+       a.steps, a.truncs, a.roles, \
+       n.id AS namespace_id, n.full_path, \
+       (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
+       p.display_name, p.description, r.id AS repository_id, r.state AS repository_state, \
+       to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
+     FROM page pg JOIN forge.projects p ON p.id = pg.id \
+     LEFT JOIN agg a ON a.anchor = p.id \
+     LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id \
+     LEFT JOIN forge.repositories r ON r.project_id = p.id \
+     ORDER BY n.full_path, p.id"
+);
+
+/// The longest search text (characters).
+pub const MAX_SEARCH_CHARS: usize = 100;
+
+/// The `LIKE` pattern of `q`: lowercase (ASCII), `%`, `_` and `\` escaped.
+fn like_pattern(q: &str) -> String {
+    let mut out = String::with_capacity(q.len() + 2);
+    out.push('%');
+    for c in q.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out.push('%');
+    out
+}
+
+/// The repository search's candidates for `viewer` (M3 X3): at most
+/// `max_rows` live projects whose path or name contains `q`, by path, each
+/// with `viewer`'s access facts (read as [`project_page`] reads its rows).
+/// `q` must be 1..=[`MAX_SEARCH_CHARS`] characters without control
+/// characters (`FG-WEB-0006 param=q` otherwise). One statement on the read
+/// pool under [`Db::within`].
+pub async fn project_search(
+    db: &Db,
+    viewer: UserId,
+    q: &str,
+    max_rows: u32,
+) -> Result<Vec<ProjectRecord>, ForgeError> {
+    let chars = q.chars().count();
+    if chars == 0 || chars > MAX_SEARCH_CHARS || q.chars().any(char::is_control) {
+        return Err(ForgeError::new(ErrorCode::RequestInvalid)
+            .with_context("reason", "param_invalid")
+            .with_context("param", "q")
+            .with_context("rule", "length_or_control"));
+    }
+    let limit = rows_param(max_rows)?;
+    let pattern = like_pattern(q);
+    let rows: Vec<ProjectAccessRow> = db
+        .within("projects.search", async {
+            sqlx::query_as(PROJECT_SEARCH_SQL)
+                .bind(&pattern)
+                .bind(viewer.get())
+                .bind(CAP)
+                .bind(limit)
+                .fetch_all(db.pool().executor())
+                .await
+                .map_err(|e| read_query_error("projects.search", e))
+        })
+        .await?;
+    records(rows, viewer)
+}
+
+/// The rows of a project scan read as `resolve::load_project` reads its
+/// row.
+fn records(rows: Vec<ProjectAccessRow>, viewer: UserId) -> Result<Vec<ProjectRecord>, ForgeError> {
+    let mut records = Vec::with_capacity(rows.len());
+    for row in rows {
+        // The scan joins projects: every row has its id.
+        let id = row.project_id().ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "page_row_without_id")
+        })?;
+        let project = ProjectId::new(id);
+        match interpret_project(row, project, Some(viewer))? {
+            Some(record) => records.push(record),
+            None => {
+                return Err(ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "page_row_without_project")
+                    .with_context("project_id", id))
+            }
+        }
+    }
+    Ok(records)
+}
 
 /// As [`PROJECT_PAGE_SQL`], for groups: the group's row, its namespace and
 /// the viewer's chain.
@@ -155,23 +267,7 @@ pub async fn project_page(
                 .map_err(|e| read_query_error("projects.page", e))
         })
         .await?;
-    let mut records = Vec::with_capacity(rows.len());
-    for row in rows {
-        // The page joins projects: every row has its id.
-        let id = row.project_id().ok_or_else(|| {
-            ForgeError::new(ErrorCode::Internal).with_context("reason", "page_row_without_id")
-        })?;
-        let project = ProjectId::new(id);
-        match interpret_project(row, project, Some(viewer))? {
-            Some(record) => records.push(record),
-            None => {
-                return Err(ForgeError::new(ErrorCode::Internal)
-                    .with_context("reason", "page_row_without_project")
-                    .with_context("project_id", id))
-            }
-        }
-    }
-    Ok(records)
+    records(rows, viewer)
 }
 
 /// As [`project_page`], for groups: one [`GROUP_PAGE_SQL`] round trip.

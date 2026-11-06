@@ -543,14 +543,26 @@ pub struct ClaimBody {
     /// `Forge-Act-As: user:<sub.user_id>`. Returned only by this answer.
     pub assertion: String,
     pub sub: ClaimSubBody,
+    /// `approve`, `unapprove`, `binding_set`, `binding_remove`.
     pub intent: String,
+    /// The project (a binding intent's repository).
     #[schema(minimum = 1)]
     pub project_id: i64,
-    #[schema(minimum = 1)]
-    pub iid: i64,
-    pub head_sha: String,
+    /// The merge request (`approve` / `unapprove`; `null` for a binding
+    /// intent, M3 X3).
+    #[schema(required = true, minimum = 1)]
+    pub iid: Option<i64>,
+    #[schema(required = true)]
+    pub head_sha: Option<String>,
     /// `refs/heads/…`.
-    pub target_ref: String,
+    #[schema(required = true)]
+    pub target_ref: Option<String>,
+    /// The kanflow project (binding intents; `null` otherwise).
+    #[schema(required = true)]
+    pub kanflow_project_id: Option<String>,
+    /// The setting confirmed (`binding_set`; `null` otherwise).
+    #[schema(required = true)]
+    pub resolves_work_items: Option<bool>,
     /// UTC, RFC 3339 (five minutes after the confirmation).
     pub expires_at: String,
 }
@@ -606,6 +618,22 @@ pub async fn claim(
         let answer = act_as(&state)?
             .claim(&w.proof, &w.ctx.request_id, w.credential_id, &w.input.state)
             .await?;
+        let (head_sha, target_ref, kanflow_project_id, resolves_work_items) = match answer.subject {
+            forge_integ::ClaimedSubject::MergeRequest {
+                head_sha,
+                target_ref,
+                ..
+            } => (
+                Some(head_sha),
+                Some(target_ref.as_str().to_owned()),
+                None,
+                None,
+            ),
+            forge_integ::ClaimedSubject::Binding {
+                external_project_id,
+                resolves_work_items,
+            } => (None, None, Some(external_project_id), resolves_work_items),
+        };
         json(ClaimBody {
             assertion: answer.assertion.reveal(),
             sub: ClaimSubBody {
@@ -615,8 +643,10 @@ pub async fn claim(
             intent: answer.intent.as_str().to_owned(),
             project_id: answer.project.get(),
             iid: answer.iid,
-            head_sha: answer.head_sha,
-            target_ref: answer.target_ref,
+            head_sha,
+            target_ref,
+            kanflow_project_id,
+            resolves_work_items,
             expires_at: answer.expires_at,
         })
     }

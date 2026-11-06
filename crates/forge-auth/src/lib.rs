@@ -26,6 +26,7 @@ mod matrix_review;
 mod matrix_rows;
 mod matrix_rows_act_as;
 mod matrix_rows_approval;
+mod matrix_rows_bindings;
 mod matrix_rows_checks;
 mod matrix_rows_conditions;
 mod matrix_rows_dev_status;
@@ -51,7 +52,7 @@ mod spec_ref;
 // ── end M3 X1 ──
 
 pub use act_as::{act_as_admission, act_as_route};
-pub use act_as_ctx::{ActAsConfirmCtx, LoadedConfirmIntegration};
+pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action};
 pub use authorize::authorize;
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
@@ -60,10 +61,11 @@ pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
-    AssertionFacts, CodeownersToggle, Credential, IntegrationFeedView, MembershipChange,
-    MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView, Principal, ProjectView,
-    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, ServiceAccountView,
-    TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility,
+    AssertionFacts, AssertionSubject, BindingSubject, CodeownersToggle, Credential,
+    IntegrationFeedView, MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState,
+    NamespaceView, Principal, ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia,
+    Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
+    ViaView, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,

@@ -126,6 +126,10 @@ pub enum IntegrationChange {
         external_project_id: String,
         service_account: UserId,
         granted_membership: bool,
+        /// The binding's id (`integration_bindings.generation`, M3 X3).
+        binding: i64,
+        /// The binding resolves `PBI-123` in the project (M3 X3).
+        resolves_work_items: bool,
     },
     /// `integration.unbound`, on (`project`, id): whether the membership the
     /// binding granted was removed with it.
@@ -138,6 +142,20 @@ pub enum IntegrationChange {
         /// The project's open work item links to this binding's work items
         /// the unbinding ended (`unlink_source = unbound`, M3 I1b review).
         work_item_links_ended: i64,
+        /// The binding's id (M3 X3).
+        binding: i64,
+        /// Another binding of the integration on the project took over the
+        /// membership this one had granted (M3 X3: a shared spec project).
+        grant_moved_to: Option<i64>,
+    },
+    /// `integration.binding_changed`, on (`project`, id) (M3 X3): a
+    /// binding's settings after the change.
+    BindingChanged {
+        integration: IntegrationId,
+        project: ProjectId,
+        binding: i64,
+        external_project_id: String,
+        resolves_work_items: bool,
     },
 }
 
@@ -148,14 +166,18 @@ impl IntegrationChange {
             Self::Updated { .. } => "integration.updated",
             Self::Bound { .. } => "integration.bound",
             Self::Unbound { .. } => "integration.unbound",
+            Self::BindingChanged { .. } => "integration.binding_changed",
         }
     }
 
     /// Created `{"integration_id","kind","service_account_id","event_types"}`,
     /// Updated `{"integration_id","fields","enabled","event_types"}`,
     /// Bound `{"integration_id","project_id","external_project_id",
-    /// "service_account_id","granted_membership"}`, Unbound the same with
-    /// `"membership_removed"` and `"work_item_links_ended"`.
+    /// "service_account_id","granted_membership","binding_id",
+    /// "resolves_work_items"}`, Unbound the ids with `"membership_removed"`,
+    /// `"work_item_links_ended"`, `"binding_id"` and `"grant_moved_to"`,
+    /// BindingChanged `{"integration_id","project_id","binding_id",
+    /// "external_project_id","resolves_work_items"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Created {
@@ -186,12 +208,16 @@ impl IntegrationChange {
                 external_project_id,
                 service_account,
                 granted_membership,
+                binding,
+                resolves_work_items,
             } => serde_json::json!({
                 "integration_id": integration.get(),
                 "project_id": project.get(),
                 "external_project_id": external_project_id,
                 "service_account_id": service_account.get(),
                 "granted_membership": granted_membership,
+                "binding_id": binding,
+                "resolves_work_items": resolves_work_items,
             }),
             Self::Unbound {
                 integration,
@@ -200,6 +226,8 @@ impl IntegrationChange {
                 service_account,
                 membership_removed,
                 work_item_links_ended,
+                binding,
+                grant_moved_to,
             } => serde_json::json!({
                 "integration_id": integration.get(),
                 "project_id": project.get(),
@@ -207,6 +235,21 @@ impl IntegrationChange {
                 "service_account_id": service_account.get(),
                 "membership_removed": membership_removed,
                 "work_item_links_ended": work_item_links_ended,
+                "binding_id": binding,
+                "grant_moved_to": grant_moved_to,
+            }),
+            Self::BindingChanged {
+                integration,
+                project,
+                binding,
+                external_project_id,
+                resolves_work_items,
+            } => serde_json::json!({
+                "integration_id": integration.get(),
+                "project_id": project.get(),
+                "binding_id": binding,
+                "external_project_id": external_project_id,
+                "resolves_work_items": resolves_work_items,
             }),
         }
     }

@@ -137,23 +137,49 @@ fn caller<R: ResourceCtx>(proof: &Authorized<R>) -> Result<UserId, ForgeError> {
 /// The change context of a write by `principal`: actor `user`, or
 /// `service_account` when the caller's account is one (S0 review: the audit
 /// row names what wrote it), the request id, the token and its scopes.
-/// (Act-as arrives with kanflow, I1.)
+/// M3 X3 (ADR-0025 §6): a service account acting for a person (the binding
+/// commands, the only ones here an act-as request reaches) is audited as
+/// `user_via_service_account` with its token and assertion.
 fn change_context(request: &WriteRequest, principal: &Principal, user: UserId) -> ChangeContext {
     let mut ctx = ChangeContext::new(actor_of(principal, user), request.request_id.clone());
-    ctx.credential_id = request.credential_id;
-    // An act-as principal never reaches these commands (ADR-0025 §4: no
-    // allowed action of theirs); its token's scopes all the same.
+    ctx.credential_id = match principal.act_as_credential() {
+        Some(c) => Some(c.via_token),
+        None => request.credential_id,
+    };
     ctx.effective_scope = principal.scope_names();
     ctx
 }
 
 /// The audit actor of `principal` (`user`): `service_account` for a
-/// service account, `user` for a person or a bot (ADR-0019 Addendum S0).
+/// service account, `user` for a person or a bot (ADR-0019 Addendum S0),
+/// `user_via_service_account` acting for a person (ADR-0025 §6).
 fn actor_of(principal: &Principal, user: UserId) -> Actor {
+    if let Some(c) = principal.act_as_credential() {
+        return Actor::UserViaServiceAccount {
+            user,
+            via: c.via,
+            credential_id: c.via_token,
+            act_as_claimed: c.claimed_mac.clone(), // clone: the audit row owns it
+            act_as_key_id: c.claimed_key_id,
+            via_assertion_id: c.assertion.as_ref().map(|a| a.public_id.clone()),
+        };
+    }
     match principal.account_kind() {
         forge_auth::AccountKind::ServiceAccount => Actor::ServiceAccount(user),
         forge_auth::AccountKind::Human | forge_auth::AccountKind::Bot => Actor::User(user),
     }
+}
+
+/// The assertion an act-as change consumes (`None` otherwise).
+fn act_as_use(principal: &Principal) -> Option<forge_db::act_as::ActAsUse> {
+    let c = principal.act_as_credential()?;
+    let a = c.assertion.as_ref()?;
+    Some(forge_db::act_as::ActAsUse {
+        assertion: a.id,
+        public_id: a.public_id.clone(), // clone: the use owns it
+        integration: c.integration,
+        via: c.via,
+    })
 }
 
 fn account(a: Account) -> AccountFacts {

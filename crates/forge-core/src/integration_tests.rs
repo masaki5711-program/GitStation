@@ -79,6 +79,8 @@ fn integration_audit_details_name_their_action_and_publish_no_event() {
         external_project_id: "P1".to_owned(),
         service_account: UserId::new(4),
         granted_membership: true,
+        binding: 21,
+        resolves_work_items: false,
     });
     assert_eq!(bound.action(), "integration.bound");
     assert_eq!(bound.event_type(), None);
@@ -90,6 +92,8 @@ fn integration_audit_details_name_their_action_and_publish_no_event() {
             "external_project_id": "P1",
             "service_account_id": 4,
             "granted_membership": true,
+            "binding_id": 21,
+            "resolves_work_items": false,
         })
     );
     let unbound = AuditDetails::Integration(IntegrationChange::Unbound {
@@ -99,10 +103,23 @@ fn integration_audit_details_name_their_action_and_publish_no_event() {
         service_account: UserId::new(4),
         membership_removed: false,
         work_item_links_ended: 3,
+        binding: 21,
+        grant_moved_to: Some(22),
     });
     assert_eq!(unbound.action(), "integration.unbound");
     assert_eq!(unbound.to_value()["membership_removed"], false);
     assert_eq!(unbound.to_value()["work_item_links_ended"], 3);
+    assert_eq!(unbound.to_value()["grant_moved_to"], 22);
+    let changed = AuditDetails::Integration(IntegrationChange::BindingChanged {
+        integration: IntegrationId::new(3),
+        project: ProjectId::new(9),
+        binding: 21,
+        external_project_id: "P1".to_owned(),
+        resolves_work_items: true,
+    });
+    assert_eq!(changed.action(), "integration.binding_changed");
+    assert_eq!(changed.event_type(), None);
+    assert_eq!(changed.to_value()["resolves_work_items"], true);
     let created = AuditDetails::Integration(IntegrationChange::Created {
         integration: IntegrationId::new(3),
         kind: IntegrationKind::Kanflow,

@@ -71,10 +71,25 @@ pub struct AssertionFacts {
     pub public_id: String,
     pub intent: Intent,
     pub project: ProjectId,
-    pub merge_request: MergeRequestId,
-    pub head_sha: String,
-    pub target_ref: RefName,
-    pub target_sha: String,
+    pub subject: AssertionSubject,
+}
+
+/// The intent's own part of [`AssertionFacts`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssertionSubject {
+    /// `approve` / `unapprove`: the merge request, its head and target.
+    MergeRequest {
+        merge_request: MergeRequestId,
+        head_sha: String,
+        target_ref: RefName,
+        target_sha: String,
+    },
+    /// `binding_set` / `binding_remove` (M3 X3): the kanflow project and,
+    /// for `binding_set`, the setting confirmed.
+    Binding {
+        external_project_id: String,
+        resolves_work_items: Option<bool>,
+    },
 }
 
 /// Who is asking. Built only through the constructors, which take every
@@ -579,6 +594,22 @@ pub struct ActAsView {
     /// What an assertion is compared with (merge request routes); `None`
     /// where there is nothing to bind (reads).
     pub subject: Option<ActAsSubject>,
+    /// What a binding assertion is compared with (the integration binding
+    /// routes, M3 X3); `None` elsewhere.
+    pub binding: Option<BindingSubject>,
+}
+
+/// The binding an act-as change acts on, as the request names it (M3 X3,
+/// ADR-0025 Amendment X3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingSubject {
+    /// The integration of the route's path (must be the request's own).
+    pub integration: IntegrationId,
+    pub project: ProjectId,
+    pub external_project_id: String,
+    /// The setting the request writes (`binding_set`); `None` for a
+    /// removal.
+    pub resolves_work_items: Option<bool>,
 }
 
 /// The integration's service account on a project (ADR-0025 §3).
@@ -608,11 +639,14 @@ pub struct ActAsSubject {
 /// See [`Resource::ActAsConfirm`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActAsConfirmView {
-    /// The merge request as seen by the person (`Resource::MergeRequest`).
-    pub merge_request: Resource,
+    /// What the intent acts on as seen by the person: the merge request
+    /// (`Resource::MergeRequest`) for `approve` / `unapprove`, the project
+    /// (`Resource::Project`) for the binding intents (M3 X3).
+    pub target: Resource,
     pub intent: Intent,
     pub integration_enabled: bool,
-    /// The integration is bound to the merge request's project.
+    /// The integration is bound to the target's project (for
+    /// `binding_remove`: to the named kanflow project).
     pub bound: bool,
 }
 

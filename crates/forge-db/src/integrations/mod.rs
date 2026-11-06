@@ -5,17 +5,22 @@
 //!   kind, the service account it acts as (fixed for its life), whether it
 //!   is enabled and its event type allowlist; one `integration.created` /
 //!   `integration.updated` audit row on (`integration`, id), no event.
-//! - [`bind_decided`] / [`unbind_decided`]: bind a project to an external
-//!   (kanflow) project of an integration, or unbind it, decided inside the
-//!   transaction (forge-hosting: `Authorized::reconfirm`). Binding makes
+//! - [`bind_decided`] / [`bind_as_decided`] / [`unbind_decided`] /
+//!   [`unbind_binding_decided`] / [`update_binding_decided`]: bind a
+//!   project to an external (kanflow) project of an integration, change a
+//!   binding's setting, or unbind it, decided inside the transaction
+//!   (forge-hosting: `Authorized::reconfirm`; an act-as request's assertion
+//!   consumed in the same transaction, M3 X3). A project has one binding
+//!   that resolves work items, or any number that do not (a shared spec
+//!   repository, plan 03 §7.1; `bind.rs`). Binding makes
 //!   the service account a Reporter of the project when it is no member
 //!   yet (`granted_membership`); unbinding removes that membership only if
 //!   the binding granted it and it is still Reporter (a membership someone
 //!   gave or changed by hand is kept). One `integration.bound` /
 //!   `integration.unbound` audit row on the project, plus the membership's
 //!   own `member.added` / `member.removed` audit row and event.
-//! - [`get`], [`list`], [`bindings`], [`project_bindings`]: reads on the
-//!   read pool.
+//! - [`get`], [`list`], [`bindings`], [`project_bindings`], [`binding`],
+//!   [`external_bindings`]: reads on the read pool.
 //!
 //! Lock order of a bind or unbind (that of `projects::member_writes`): the
 //! project row `FOR UPDATE` (with its deletion), the caller's membership
@@ -46,8 +51,10 @@ mod tests;
 
 pub use admin::{create, update};
 pub(crate) use bind::clear_grant;
-pub use bind::{bind_decided, unbind_decided};
-pub use read::{bindings, get, list, project_bindings};
+pub use bind::{
+    bind_as_decided, bind_decided, unbind_binding_decided, unbind_decided, update_binding_decided,
+};
+pub use read::{binding, bindings, external_bindings, get, list, project_bindings};
 
 /// The most projects one integration may be bound to (ADR-0016 §1: the
 /// feed decides every bound project on every read). `FG-INT-0012` beyond.
@@ -115,15 +122,51 @@ pub struct Listed {
 /// One binding of a project to an external project.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
+    /// The binding's id (`integration_bindings.generation`, M3 X3).
+    pub id: i64,
     pub integration: IntegrationId,
     pub kind: IntegrationKind,
     pub project: ProjectId,
     pub external_project_id: String,
     /// The binding made the service account a Reporter of the project.
     pub granted_membership: bool,
+    /// The binding resolves `PBI-123` in the project's branches and merge
+    /// requests (M3 X3; `false`: a shared spec repository).
+    pub resolves_work_items: bool,
     pub created_by: Option<UserId>,
     /// RFC 3339, UTC.
     pub created_at: String,
+}
+
+/// A binding with its project's path and name (the integration's list of
+/// its kanflow project's repositories, M3 X3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundRepository {
+    pub binding: Binding,
+    /// The project's full path (`group/name`); `None` while the namespace
+    /// row is missing (never for a live project).
+    pub path: Option<String>,
+    pub display_name: String,
+}
+
+/// What a bind asks for (M3 X3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewBinding<'a> {
+    pub integration: IntegrationId,
+    pub external_project_id: &'a str,
+    /// `false`: a shared spec repository (several kanflow projects).
+    pub resolves_work_items: bool,
+}
+
+/// What a binding's change did (M3 X3).
+#[must_use = "Unchanged wrote nothing; callers report it differently"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingUpdate {
+    /// One `integration.binding_changed` row.
+    Updated,
+    /// The binding had that setting already: nothing written (an act-as
+    /// request's assertion is still consumed).
+    Unchanged,
 }
 
 /// What a bind did.
@@ -133,8 +176,9 @@ pub enum BindOutcome {
     /// Written: one `integration.bound` row, and when `granted_membership`
     /// the service account's `member.added` row and event.
     Bound { granted_membership: bool },
-    /// The project was bound to that external project already: nothing
-    /// written.
+    /// The project was bound to that external project already, with that
+    /// setting: nothing written (an act-as request's assertion is still
+    /// consumed).
     Unchanged,
 }
 

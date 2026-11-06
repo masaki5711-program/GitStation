@@ -55,6 +55,8 @@ pub mod webhooks;
 // ── end M3 I2 ──
 
 pub use act_as::{ActAs, ActAsParts, ClaimAnswer, SWEEP_INTERVAL};
+/// What a claimed assertion is bound to (M3 X3: a merge request or a binding).
+pub use forge_db::act_as::AssertedSubject as ClaimedSubject;
 
 pub use dev_status::{
     checks_state, CheckConclusion, CheckStatus, DevMergeRequest, DevStatus, PageQuery,

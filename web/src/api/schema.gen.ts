@@ -90,6 +90,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/confirm/projects/{id}/integration-bindings/assertions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The person confirms binding_set (with the setting) or binding_remove of a repository for one kanflow project: a pending assertion for the integration to claim (a person's web session, Maintainer; CSRF; 30 per 10 minutes) */
+        post: operations["post_confirm_projects_id_integration_bindings_assertions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/-/confirm/projects/{id}/merge-requests/{iid}/assertions": {
         parameters: {
             query?: never;
@@ -439,6 +456,42 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/{id}/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The repositories bound to the integration, to one kanflow project when kanflow_project_id is given (the integration's own service account; read_api) */
+        get: operations["get_api_v1_integrations_id_bindings"];
+        put?: never;
+        /** Bind a repository to a kanflow project of the integration: a repository with code to one kanflow project only, a shared spec repository (resolves_work_items false) to several (acting for a Maintainer with a binding_set assertion, or a Maintainer's own; api) */
+        post: operations["post_api_v1_integrations_id_bindings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/{id}/bindings/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a binding: its work item links end, the membership it granted moves to the integration's next binding of the repository or is removed (acting for a Maintainer with a binding_remove assertion, or a Maintainer's own; api) */
+        delete: operations["delete_api_v1_integrations_id_bindings_binding_id"];
+        options?: never;
+        head?: never;
+        /** Change a binding's setting: resolves_work_items from false to true when it is the repository's only binding (acting for a Maintainer with a binding_set assertion, or a Maintainer's own; api) */
+        patch: operations["patch_api_v1_integrations_id_bindings_binding_id"];
         trace?: never;
     };
     "/api/v1/integrations/{id}/dev-status": {
@@ -1549,6 +1602,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The repositories the caller (or the person acted for, no assertion) may bind, whose path or name contains q: each decided with authorize(), nothing said about the rest (read_api) */
+        get: operations["get_api_v1_repositories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session": {
         parameters: {
             query?: never;
@@ -1938,6 +2008,32 @@ export interface components {
              */
             external_project_id: string;
         };
+        /** @description A repository as the binding routes name it. */
+        BindableRepository: {
+            display_name: string;
+            /** Format: int64 */
+            id: number;
+            /** @description The full path (`group/name`). */
+            path: string;
+        };
+        /** @description `GET /api/v1/repositories`. */
+        BindableRepositoryList: {
+            items: components["schemas"]["BindableRepository"][];
+        };
+        /** @description `POST …/integration-bindings/assertions` → `201`. */
+        BindingAssertionIssued: {
+            /** @description Always `issued`. */
+            status: string;
+        };
+        /** @description A binding's settings. */
+        BindingSettings: {
+            /**
+             * @description Resolve `PBI-123` in this repository's branches and merge requests
+             *     (a repository with code: one kanflow project only). `false`: a
+             *     shared spec repository, bound to several kanflow projects.
+             */
+            resolves_work_items: boolean;
+        };
         /** @description A blamed file. */
         BlameBody: {
             /** @description NUL bytes or not UTF-8: no hunks (download it through the raw route). */
@@ -2036,6 +2132,10 @@ export interface components {
         ChangeProtectedRef: {
             push_min_role: components["schemas"]["RoleName"];
         };
+        /** @description `PATCH /api/v1/integrations/{id}/bindings/{binding_id}`. */
+        ChangeRepositoryBinding: {
+            settings: components["schemas"]["BindingSettings"];
+        };
         /**
          * @description A grant change's answer: the grants now, and whether the change wrote
          *     anything (`false`: the grant already was, or was not, there).
@@ -2092,15 +2192,27 @@ export interface components {
             assertion: string;
             /** @description UTC, RFC 3339 (five minutes after the confirmation). */
             expires_at: string;
-            head_sha: string;
-            /** Format: int64 */
-            iid: number;
+            head_sha: string | null;
+            /**
+             * Format: int64
+             * @description The merge request (`approve` / `unapprove`; `null` for a binding
+             *     intent, M3 X3).
+             */
+            iid: number | null;
+            /** @description `approve`, `unapprove`, `binding_set`, `binding_remove`. */
             intent: string;
-            /** Format: int64 */
+            /** @description The kanflow project (binding intents; `null` otherwise). */
+            kanflow_project_id: string | null;
+            /**
+             * Format: int64
+             * @description The project (a binding intent's repository).
+             */
             project_id: number;
+            /** @description The setting confirmed (`binding_set`; `null` otherwise). */
+            resolves_work_items: boolean | null;
             sub: components["schemas"]["ClaimSubBody"];
             /** @description `refs/heads/…`. */
-            target_ref: string;
+            target_ref: string | null;
         };
         /** @description Who confirmed. */
         ClaimSubBody: {
@@ -2925,6 +3037,24 @@ export interface components {
              */
             state: string;
         };
+        /** @description `POST /-/confirm/projects/{id}/integration-bindings/assertions`. */
+        IssueBindingAssertion: {
+            /** Format: int64 */
+            integration: number;
+            /** @description `binding_set` or `binding_remove`. */
+            intent: string;
+            kanflow_project_id: string;
+            /**
+             * @description The setting confirmed: required for `binding_set`, absent for
+             *     `binding_remove`.
+             */
+            resolves_work_items?: boolean | null;
+            /**
+             * @description The integration's state from the screen's URL (22..=128 of
+             *     `[A-Za-z0-9_-]`; only its SHA-256 is kept).
+             */
+            state: string;
+        };
         /** @description `POST /api/v1/admin/service-accounts/{id}/tokens`. */
         IssueServiceAccountToken: {
             /**
@@ -3283,6 +3413,17 @@ export interface components {
              */
             tombstones: number;
         };
+        /** @description `POST /api/v1/integrations/{id}/bindings`. */
+        NewRepositoryBinding: {
+            /** @description The kanflow project (1..=100 of `A-Z a-z 0-9 . _ : -`). */
+            kanflow_project_id: string;
+            /**
+             * Format: int64
+             * @description The repository's id (`GET /api/v1/repositories` answers it).
+             */
+            repository_id: number;
+            settings?: null | components["schemas"]["BindingSettings"];
+        };
         /** @description One note of a discussion. */
         NoteBody: {
             /** @description The author's names (read with the note). */
@@ -3613,6 +3754,38 @@ export interface components {
             /** Format: int64 */
             id: number;
             username: string | null;
+        };
+        /** @description One binding of a repository to a kanflow project. */
+        RepositoryBindingBody: {
+            /** Format: int64 */
+            binding_id: number;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** Format: int64 */
+            created_by: number | null;
+            /** @description The binding made the integration's service account a Reporter. */
+            granted_membership: boolean;
+            /** Format: int64 */
+            integration_id: number;
+            kanflow_project_id: string;
+            /** Format: int64 */
+            repository_id: number;
+            /**
+             * @description `null` only when the repository's path cannot be read (never for a
+             *     live one).
+             */
+            repository_path: string | null;
+            settings: components["schemas"]["BindingSettings"];
+        };
+        /** @description `GET /api/v1/integrations/{id}/bindings`. */
+        RepositoryBindingList: {
+            items: components["schemas"]["RepositoryBindingBody"][];
+        };
+        /** @description What a bind or a change did, and the binding as stored. */
+        RepositoryBindingOutcome: {
+            binding: components["schemas"]["RepositoryBindingBody"];
+            /** @description `bound` / `updated`, or `unchanged` (nothing written). */
+            outcome: string;
         };
         /**
          * @description Which namespace a path names. Exactly one of `project_id`, `group_id`,
@@ -4593,6 +4766,41 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_confirm_projects_id_integration_bindings_assertions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueBindingAssertion"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BindingAssertionIssued"];
+                };
+            };
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {
@@ -5613,6 +5821,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClaimBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_integrations_id_bindings: {
+        parameters: {
+            query?: {
+                /** @description Only the bindings of this kanflow project (1..=100 of A-Z a-z 0-9 . _ : -) */
+                kanflow_project_id?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryBindingList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_integrations_id_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRepositoryBinding"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryBindingOutcome"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_integrations_id_bindings_binding_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    patch_api_v1_integrations_id_bindings_binding_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeRepositoryBinding"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryBindingOutcome"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -8456,6 +8799,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RotatedWebhookSecret"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_repositories: {
+        parameters: {
+            query?: {
+                /** @description Text in the repository's path or name, 1..=100 characters (ASCII case folded) */
+                q?: string;
+                /** @description At most this many repositories, 1..=50 (default 20) */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BindableRepositoryList"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

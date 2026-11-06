@@ -317,8 +317,11 @@ impl FeedSnapshot {
                 return Ok(None);
             };
             let bound: Vec<(i64, i64)> = sqlx::query_as(
-                "SELECT project_id, generation FROM forge.integration_bindings \
-                 WHERE integration_id = $1 ORDER BY project_id LIMIT $2",
+                // One entry per bound project (M3 X3: a shared spec project
+                // may have several bindings): its newest binding's
+                // generation, so a rebind still changes the visible set.
+                "SELECT project_id, max(generation) FROM forge.integration_bindings \
+                 WHERE integration_id = $1 GROUP BY project_id ORDER BY project_id LIMIT $2",
             )
             .bind(integration.get())
             .bind(MAX_BINDINGS)

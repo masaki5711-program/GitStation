@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 27] = [
+const GROUPS: [[Row; 2]; 28] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -96,6 +96,8 @@ const GROUPS: [[Row; 2]; 27] = [
     both!(A::IntegrationManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Instance),
     both!(A::IntegrationRead, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Instance),
     both!(A::IntegrationBindingManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    // M3 X3: removing one binding (as binding).
+    both!(A::IntegrationBindingRemove, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // M3 I2: managing a webhook and redelivering are a Maintainer's (a
     // person's); a delivery is decided for its owner, a person too.
     both!(A::WebhookManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),

@@ -14,6 +14,18 @@ fn ring(lines: &[String]) -> ActAsKeys {
     ActAsKeys::parse(&lines.join("\n")).expect("ring")
 }
 
+const HEAD: &str = "1111111111111111111111111111111111111111";
+const TIP: &str = "2222222222222222222222222222222222222222";
+
+fn mr<'a>(id: i64, head: &'a str, target_ref: &'a str, tip: &'a str) -> SealedSubject<'a> {
+    SealedSubject::MergeRequest {
+        merge_request_id: id,
+        head_sha: head,
+        target_ref,
+        target_sha: tip,
+    }
+}
+
 fn binding(target_ref: &str) -> AssertionBinding<'_> {
     AssertionBinding {
         public_id: "0123456789abcdef",
@@ -21,11 +33,23 @@ fn binding(target_ref: &str) -> AssertionBinding<'_> {
         user_id: 7,
         intent: Intent::Approve,
         project_id: 11,
-        merge_request_id: 13,
-        head_sha: "1111111111111111111111111111111111111111",
-        target_ref,
-        target_sha: "2222222222222222222222222222222222222222",
+        subject: mr(13, HEAD, target_ref, TIP),
         expires_at_micros: 1_790_000_000_000_000,
+    }
+}
+
+fn set_binding(external: &str, resolves: Option<bool>) -> AssertionBinding<'_> {
+    AssertionBinding {
+        intent: if resolves.is_some() {
+            Intent::BindingSet
+        } else {
+            Intent::BindingRemove
+        },
+        subject: SealedSubject::Binding {
+            external_project_id: external,
+            resolves_work_items: resolves,
+        },
+        ..binding("refs/heads/main")
     }
 }
 
@@ -164,16 +188,26 @@ fn every_bound_field_changes_the_mac() {
             ..base.clone()
         },
         AssertionBinding {
-            merge_request_id: 14,
+            subject: mr(14, HEAD, "refs/heads/main", TIP),
             ..base.clone()
         },
         AssertionBinding {
-            head_sha: "3333333333333333333333333333333333333333",
+            subject: mr(
+                13,
+                "3333333333333333333333333333333333333333",
+                "refs/heads/main",
+                TIP,
+            ),
             ..base.clone()
         },
         binding("refs/heads/release"),
         AssertionBinding {
-            target_sha: "4444444444444444444444444444444444444444",
+            subject: mr(
+                13,
+                HEAD,
+                "refs/heads/main",
+                "4444444444444444444444444444444444444444",
+            ),
             ..base.clone()
         },
         AssertionBinding {
@@ -196,16 +230,67 @@ fn every_bound_field_changes_the_mac() {
     // Length-prefixed: moving bytes between fields changes the input.
     assert_ne!(
         binding_bytes(&AssertionBinding {
-            head_sha: "ab",
-            target_ref: "c",
+            subject: mr(13, "ab", "c", TIP),
             ..base.clone()
         }),
         binding_bytes(&AssertionBinding {
-            head_sha: "a",
-            target_ref: "bc",
+            subject: mr(13, "a", "bc", TIP),
             ..base
         })
     );
+}
+
+/// M3 X3: the binding intents seal the kanflow project and the setting; a
+/// merge request's bytes are those of S2.
+#[test]
+fn a_binding_assertion_seals_its_external_project_and_setting() {
+    let keys = ring(&[key_line(1, 7, "active")]);
+    let secret = [9u8; 32];
+    let base = set_binding("P1", Some(false));
+    let (kid, mac) = keys.seal(&secret, &base).expect("seal");
+    assert_eq!(keys.verify(kid, &secret, &base, &mac), Ok(()));
+    for v in [
+        set_binding("P2", Some(false)),
+        set_binding("P1", Some(true)),
+        AssertionBinding {
+            intent: Intent::BindingSet,
+            ..set_binding("P1", None)
+        },
+        AssertionBinding {
+            project_id: 12,
+            ..base.clone()
+        },
+    ] {
+        assert_eq!(
+            keys.verify(kid, &secret, &v, &mac),
+            Err(MacRefusal::MacMismatch),
+            "{v:?}"
+        );
+    }
+    // The S2 layout of a merge request assertion: one more field after
+    // the project, never one of the binding shape.
+    let bytes = binding_bytes(&binding("refs/heads/main"));
+    let mut expected = Vec::new();
+    for f in [
+        "0123456789abcdef".as_bytes().to_vec(),
+        3i64.to_be_bytes().to_vec(),
+        7i64.to_be_bytes().to_vec(),
+        b"approve".to_vec(),
+        11i64.to_be_bytes().to_vec(),
+        13i64.to_be_bytes().to_vec(),
+        HEAD.as_bytes().to_vec(),
+        b"refs/heads/main".to_vec(),
+        TIP.as_bytes().to_vec(),
+        1_790_000_000_000_000i64.to_be_bytes().to_vec(),
+    ] {
+        expected.extend_from_slice(&u32::try_from(f.len()).expect("len").to_be_bytes());
+        expected.extend_from_slice(&f);
+    }
+    assert_eq!(bytes, expected);
+    assert!(Intent::ALL
+        .iter()
+        .all(|i| Intent::parse(i.as_str()) == Some(*i)));
+    assert!(!Intent::BindingSet.is_merge_request());
 }
 
 #[test]

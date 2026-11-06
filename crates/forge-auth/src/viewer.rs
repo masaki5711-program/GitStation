@@ -196,10 +196,12 @@ impl MergeRequestCtx {
                 public_id: "trial".to_owned(),
                 intent,
                 project: subject.project,
-                merge_request: subject.merge_request,
-                head_sha: head.clone(), // clone: the trial owns its facts
-                target_ref: subject.target_ref.clone(),
-                target_sha: tip.clone(),
+                subject: crate::model::AssertionSubject::MergeRequest {
+                    merge_request: subject.merge_request,
+                    head_sha: head.clone(), // clone: the trial owns its facts
+                    target_ref: subject.target_ref.clone(),
+                    target_sha: tip.clone(),
+                },
             });
             let p = Principal::act_as(
                 person,
@@ -268,9 +270,9 @@ impl MergeRequestCtx {
     pub fn act_as_tip_gate(&self, principal: &Principal, action: Action) -> ActAsTipGate {
         match action.act_as_rule() {
             crate::ActAsRule::RequiresAssertion(_) => {}
-            crate::ActAsRule::ReadWithoutAssertion | crate::ActAsRule::Denied => {
-                return ActAsTipGate::Skip(None)
-            }
+            crate::ActAsRule::ReadWithoutAssertion
+            | crate::ActAsRule::ListAsPerson
+            | crate::ActAsRule::Denied => return ActAsTipGate::Skip(None),
         }
         let assertion = principal
             .act_as_credential()
@@ -278,7 +280,13 @@ impl MergeRequestCtx {
         let (Some(assertion), Some((via, Some(subject)))) = (assertion, self.act_as()) else {
             return ActAsTipGate::Skip(None);
         };
-        let assumed = Some(assertion.target_sha.clone()); // clone: the trial owns its facts
+        let crate::model::AssertionSubject::MergeRequest { target_sha, .. } = &assertion.subject
+        else {
+            // A binding assertion on a merge request route: refused by the
+            // decision (`wrong_action`), never a git read.
+            return ActAsTipGate::Skip(None);
+        };
+        let assumed = Some(target_sha.clone()); // clone: the trial owns its facts
         let trial = MergeRequestCtx::new(self.loaded_project(), self.merge_request().clone()) // clone: as above
             .acting(
                 *via,

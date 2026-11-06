@@ -539,6 +539,74 @@
         ],
         "type": "object"
       },
+      "BindableRepository": {
+        "additionalProperties": false,
+        "description": "A repository as the binding routes name it.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The full path (`group/name`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "BindableRepositoryList": {
+        "additionalProperties": false,
+        "description": "`GET /api/v1/repositories`.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BindableRepository"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "BindingAssertionIssued": {
+        "additionalProperties": false,
+        "description": "`POST …/integration-bindings/assertions` → `201`.",
+        "properties": {
+          "status": {
+            "description": "Always `issued`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "BindingSettings": {
+        "additionalProperties": false,
+        "description": "A binding's settings.",
+        "properties": {
+          "resolves_work_items": {
+            "description": "Resolve `PBI-123` in this repository's branches and merge requests\n(a repository with code: one kanflow project only). `false`: a\nshared spec repository, bound to several kanflow projects.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "resolves_work_items"
+        ],
+        "type": "object"
+      },
       "BlameBody": {
         "additionalProperties": false,
         "description": "A blamed file.",
@@ -796,6 +864,19 @@
         ],
         "type": "object"
       },
+      "ChangeRepositoryBinding": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/integrations/{id}/bindings/{binding_id}`.",
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/BindingSettings"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "type": "object"
+      },
       "CheckGrantChange": {
         "additionalProperties": false,
         "description": "A grant change's answer: the grants now, and whether the change wrote\nanything (`false`: the grant already was, or was not, there).",
@@ -972,27 +1053,53 @@
             "type": "string"
           },
           "head_sha": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "iid": {
+            "description": "The merge request (`approve` / `unapprove`; `null` for a binding\nintent, M3 X3).",
             "format": "int64",
             "minimum": 1,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "intent": {
+            "description": "`approve`, `unapprove`, `binding_set`, `binding_remove`.",
             "type": "string"
           },
+          "kanflow_project_id": {
+            "description": "The kanflow project (binding intents; `null` otherwise).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "project_id": {
+            "description": "The project (a binding intent's repository).",
             "format": "int64",
             "minimum": 1,
             "type": "integer"
+          },
+          "resolves_work_items": {
+            "description": "The setting confirmed (`binding_set`; `null` otherwise).",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "sub": {
             "$ref": "#/components/schemas/ClaimSubBody"
           },
           "target_ref": {
             "description": "`refs/heads/…`.",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1003,6 +1110,8 @@
           "iid",
           "head_sha",
           "target_ref",
+          "kanflow_project_id",
+          "resolves_work_items",
           "expires_at"
         ],
         "type": "object"
@@ -3126,6 +3235,42 @@
         ],
         "type": "object"
       },
+      "IssueBindingAssertion": {
+        "additionalProperties": false,
+        "description": "`POST /-/confirm/projects/{id}/integration-bindings/assertions`.",
+        "properties": {
+          "integration": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "intent": {
+            "description": "`binding_set` or `binding_remove`.",
+            "type": "string"
+          },
+          "kanflow_project_id": {
+            "type": "string"
+          },
+          "resolves_work_items": {
+            "description": "The setting confirmed: required for `binding_set`, absent for\n`binding_remove`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "The integration's state from the screen's URL (22..=128 of\n`[A-Za-z0-9_-]`; only its SHA-256 is kept).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intent",
+          "integration",
+          "kanflow_project_id",
+          "state"
+        ],
+        "type": "object"
+      },
       "IssueServiceAccountToken": {
         "additionalProperties": false,
         "description": "`POST /api/v1/admin/service-accounts/{id}/tokens`.",
@@ -3994,6 +4139,38 @@
         ],
         "type": "object"
       },
+      "NewRepositoryBinding": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/integrations/{id}/bindings`.",
+        "properties": {
+          "kanflow_project_id": {
+            "description": "The kanflow project (1..=100 of `A-Z a-z 0-9 . _ : -`).",
+            "type": "string"
+          },
+          "repository_id": {
+            "description": "The repository's id (`GET /api/v1/repositories` answers it).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "settings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BindingSettings",
+                "description": "Default `{\"resolves_work_items\": true}`."
+              }
+            ]
+          }
+        },
+        "required": [
+          "kanflow_project_id",
+          "repository_id"
+        ],
+        "type": "object"
+      },
       "NoteBody": {
         "additionalProperties": false,
         "description": "One note of a discussion.",
@@ -4712,6 +4889,101 @@
         "required": [
           "id",
           "username"
+        ],
+        "type": "object"
+      },
+      "RepositoryBindingBody": {
+        "additionalProperties": false,
+        "description": "One binding of a repository to a kanflow project.",
+        "properties": {
+          "binding_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "granted_membership": {
+            "description": "The binding made the integration's service account a Reporter.",
+            "type": "boolean"
+          },
+          "integration_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kanflow_project_id": {
+            "type": "string"
+          },
+          "repository_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "repository_path": {
+            "description": "`null` only when the repository's path cannot be read (never for a\nlive one).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settings": {
+            "$ref": "#/components/schemas/BindingSettings"
+          }
+        },
+        "required": [
+          "binding_id",
+          "integration_id",
+          "kanflow_project_id",
+          "repository_id",
+          "repository_path",
+          "settings",
+          "granted_membership",
+          "created_by",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "RepositoryBindingList": {
+        "additionalProperties": false,
+        "description": "`GET /api/v1/integrations/{id}/bindings`.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryBindingBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "RepositoryBindingOutcome": {
+        "additionalProperties": false,
+        "description": "What a bind or a change did, and the binding as stored.",
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/RepositoryBindingBody"
+          },
+          "outcome": {
+            "description": "`bound` / `updated`, or `unchanged` (nothing written).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "binding"
         ],
         "type": "object"
       },
@@ -7324,6 +7596,58 @@
         "x-forge-action": "SessionLogout"
       }
     },
+    "/-/confirm/projects/{id}/integration-bindings/assertions": {
+      "post": {
+        "operationId": "post_confirm_projects_id_integration_bindings_assertions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueBindingAssertion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindingAssertionIssued"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The person confirms binding_set (with the setting) or binding_remove of a repository for one kanflow project: a pending assertion for the integration to claim (a person's web session, Maintainer; CSRF; 30 per 10 minutes)",
+        "x-forge-action": "ActAsAssertionIssue",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
     "/-/confirm/projects/{id}/merge-requests/{iid}/assertions": {
       "post": {
         "operationId": "post_confirm_projects_id_merge_requests_iid_assertions",
@@ -8773,6 +9097,210 @@
         },
         "summary": "The integration claims a confirmed assertion by its state: the assertion is created and returned once (the integration's own service account; act_as; 120 a minute)",
         "x-forge-action": "ActAsAssertionClaim",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/integrations/{id}/bindings": {
+      "get": {
+        "operationId": "get_api_v1_integrations_id_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only the bindings of this kanflow project (1..=100 of A-Z a-z 0-9 . _ : -)",
+            "in": "query",
+            "name": "kanflow_project_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBindingList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The repositories bound to the integration, to one kanflow project when kanflow_project_id is given (the integration's own service account; read_api)",
+        "x-forge-action": "IntegrationBindingList"
+      },
+      "post": {
+        "operationId": "post_api_v1_integrations_id_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRepositoryBinding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBindingOutcome"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Bind a repository to a kanflow project of the integration: a repository with code to one kanflow project only, a shared spec repository (resolves_work_items false) to several (acting for a Maintainer with a binding_set assertion, or a Maintainer's own; api)",
+        "x-forge-action": "IntegrationBindingManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/integrations/{id}/bindings/{binding_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_integrations_id_bindings_binding_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a binding: its work item links end, the membership it granted moves to the integration's next binding of the repository or is removed (acting for a Maintainer with a binding_remove assertion, or a Maintainer's own; api)",
+        "x-forge-action": "IntegrationBindingRemove"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_integrations_id_bindings_binding_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRepositoryBinding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBindingOutcome"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a binding's setting: resolves_work_items from false to true when it is the repository's only binding (acting for a Maintainer with a binding_set assertion, or a Maintainer's own; api)",
+        "x-forge-action": "IntegrationBindingManage",
         "x-forge-max-body-bytes": 4096
       }
     },
@@ -13243,6 +13771,57 @@
         },
         "summary": "Replace a webhook's secret, shown once; the previous one still signs for 24 hours (people only; Maintainer)",
         "x-forge-action": "WebhookManage"
+      }
+    },
+    "/api/v1/repositories": {
+      "get": {
+        "operationId": "get_api_v1_repositories",
+        "parameters": [
+          {
+            "description": "Text in the repository's path or name, 1..=100 characters (ASCII case folded)",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many repositories, 1..=50 (default 20)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindableRepositoryList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The repositories the caller (or the person acted for, no assertion) may bind, whose path or name contains q: each decided with authorize(), nothing said about the rest (read_api)",
+        "x-forge-action": "RepositorySearch"
       }
     },
     "/api/v1/session": {

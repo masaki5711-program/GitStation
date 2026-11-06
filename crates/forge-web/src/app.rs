@@ -522,13 +522,83 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    act_as_routes(webhook_routes(notification_routes(check_routes(
-        dev_status_routes(feed_routes(integration_routes(service_account_routes(
-            account_routes(history_routes(browse_routes(git_routes(shell_routes(
-                merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
+    binding_routes(act_as_routes(webhook_routes(notification_routes(
+        check_routes(dev_status_routes(feed_routes(integration_routes(
+            service_account_routes(account_routes(history_routes(browse_routes(git_routes(
+                shell_routes(merge_request_routes(member_routes(move_routes(
+                    hosting_routes(fixed),
+                )))),
             ))))),
         )))),
     ))))
+}
+
+/// A kanflow project's repositories (M3 X3, plan 03 §7.1, ADR-0016
+/// Amendment X3, ADR-0025 Amendment X3): the search of what the person may
+/// bind, the integration's list, the binding writes (acting for a person
+/// with an assertion, or a Maintainer's own) and the person's confirmation.
+fn binding_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::integration_bindings as b;
+    registry
+        .route_with(
+            Verb::Get,
+            b::SEARCH,
+            Action::RepositorySearch,
+            "The repositories the caller (or the person acted for, no assertion) may bind, whose path or name contains q: each decided with authorize(), nothing said about the rest (read_api)",
+            b::SearchOf,
+            b::search,
+        )
+        .responds::<b::BindableRepositoryList>(Verb::Get, b::SEARCH)
+        .queries(Verb::Get, b::SEARCH, b::SEARCH_QUERY)
+        .route_with(
+            Verb::Get,
+            b::BINDINGS,
+            Action::IntegrationBindingList,
+            "The repositories bound to the integration, to one kanflow project when kanflow_project_id is given (the integration's own service account; read_api)",
+            b::ListOf,
+            b::list,
+        )
+        .responds::<b::RepositoryBindingList>(Verb::Get, b::BINDINGS)
+        .queries(Verb::Get, b::BINDINGS, b::BINDINGS_QUERY)
+        .route_with_body(
+            Verb::Post,
+            b::BINDINGS,
+            Action::IntegrationBindingManage,
+            "Bind a repository to a kanflow project of the integration: a repository with code to one kanflow project only, a shared spec repository (resolves_work_items false) to several (acting for a Maintainer with a binding_set assertion, or a Maintainer's own; api)",
+            b::MAX_BODY,
+            b::NewBindingOf,
+            b::bind,
+        )
+        .responds::<b::RepositoryBindingOutcome>(Verb::Post, b::BINDINGS)
+        .route_with_body(
+            Verb::Patch,
+            b::BINDING,
+            Action::IntegrationBindingManage,
+            "Change a binding's setting: resolves_work_items from false to true when it is the repository's only binding (acting for a Maintainer with a binding_set assertion, or a Maintainer's own; api)",
+            b::MAX_BODY,
+            b::BindingOf,
+            b::change,
+        )
+        .responds::<b::RepositoryBindingOutcome>(Verb::Patch, b::BINDING)
+        .route_with(
+            Verb::Delete,
+            b::BINDING,
+            Action::IntegrationBindingRemove,
+            "Remove a binding: its work item links end, the membership it granted moves to the integration's next binding of the repository or is removed (acting for a Maintainer with a binding_remove assertion, or a Maintainer's own; api)",
+            b::BindingOf,
+            b::remove,
+        )
+        .responds_no_content(Verb::Delete, b::BINDING)
+        .route_with_body(
+            Verb::Post,
+            b::CONFIRM,
+            Action::ActAsAssertionIssue,
+            "The person confirms binding_set (with the setting) or binding_remove of a repository for one kanflow project: a pending assertion for the integration to claim (a person's web session, Maintainer; CSRF; 30 per 10 minutes)",
+            b::MAX_BODY,
+            b::ConfirmOf,
+            b::confirm,
+        )
+        .responds_created::<b::BindingAssertionIssued>(Verb::Post, b::CONFIRM)
 }
 
 /// Every route of the product. The `gen-authz` binary and the tests read the

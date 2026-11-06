@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use forge_core::act_as::{
     assertion_invalid, ActAsKeys, ActAsTarget, AssertionBinding, AssertionToken, Intent,
-    TargetRefusal,
+    SealedSubject, TargetRefusal,
 };
 use forge_core::ids::{IntegrationId, MergeRequestId, ProjectId, UserId};
 use forge_core::{RefName, Role};
@@ -173,13 +173,15 @@ pub(crate) async fn via_on(
             .with_context("reason", "via_disabled")
             .with_context("user", via.get()));
     }
-    let bound: Option<i64> = sqlx::query_scalar(
-        "SELECT project_id FROM forge.integration_bindings \
-         WHERE integration_id = $1 AND project_id = $2 FOR SHARE",
+    // Every binding of the integration on the project (M3 X3: a shared
+    // spec project may have several), locked against an unbind.
+    let bound: Vec<i64> = sqlx::query_scalar(
+        "SELECT generation FROM forge.integration_bindings \
+         WHERE integration_id = $1 AND project_id = $2 ORDER BY generation FOR SHARE",
     )
     .bind(integration.get())
     .bind(project.get())
-    .fetch_optional(&mut *conn)
+    .fetch_all(&mut *conn)
     .await
     .map_err(|e| query_error("act_as.via_bound_lock", e))?;
     let role = roles::lock_roles(conn, RoleAnchor::Project(project), via)
@@ -187,7 +189,7 @@ pub(crate) async fn via_on(
         .native;
     Ok(ViaFacts {
         role,
-        bound: bound.is_some(),
+        bound: !bound.is_empty(),
     })
 }
 
@@ -210,14 +212,148 @@ pub struct NewAssertion<'a> {
     pub user: UserId,
     pub intent: Intent,
     pub project: ProjectId,
-    pub merge_request: MergeRequestId,
-    pub head_sha: &'a str,
-    pub target_ref: &'a RefName,
-    pub target_sha: &'a str,
+    pub subject: NewSubject<'a>,
     /// Kanflow's state (never stored: its SHA-256 only).
     pub state: &'a str,
     /// [`LIFETIME`] in production (at most; tests ask for less).
     pub lifetime: Duration,
+}
+
+/// The intent's own part of a [`NewAssertion`] (the shape must match the
+/// intent: CHECK `act_as_assertions_subject`).
+#[derive(Debug, Clone)]
+pub enum NewSubject<'a> {
+    /// `approve` / `unapprove`.
+    MergeRequest {
+        merge_request: MergeRequestId,
+        head_sha: &'a str,
+        target_ref: &'a RefName,
+        target_sha: &'a str,
+    },
+    /// `binding_set` (`resolves_work_items` given) / `binding_remove`
+    /// (`None`), M3 X3.
+    Binding {
+        external_project_id: &'a str,
+        resolves_work_items: Option<bool>,
+    },
+}
+
+/// The intent's own part of a claimed or verified assertion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssertedSubject {
+    MergeRequest {
+        merge_request: MergeRequestId,
+        head_sha: String,
+        target_ref: RefName,
+        target_sha: String,
+    },
+    Binding {
+        external_project_id: String,
+        resolves_work_items: Option<bool>,
+    },
+}
+
+/// The subject columns of a row (`merge_request_id`, `head_sha`,
+/// `target_ref`, `target_sha`, `external_project_id`,
+/// `resolves_work_items`).
+type SubjectColumns = (
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<bool>,
+);
+
+/// The subject of a stored row, read for `intent` (`FG-SYS-0001
+/// reason=stored_assertion_invalid` for a shape the CHECK refuses).
+fn subject_of(
+    intent: Intent,
+    id: i64,
+    cols: SubjectColumns,
+) -> Result<AssertedSubject, ForgeError> {
+    let broken = || {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "stored_assertion_invalid")
+            .with_context("assertion_id", id)
+    };
+    match (intent.is_merge_request(), cols) {
+        (true, (Some(mr), Some(head), Some(target), Some(tip), None, None)) => {
+            Ok(AssertedSubject::MergeRequest {
+                merge_request: MergeRequestId::new(mr),
+                head_sha: head,
+                target_ref: RefName::parse(&target).map_err(|_| broken())?,
+                target_sha: tip,
+            })
+        }
+        (false, (None, None, None, None, Some(external), resolves)) => {
+            if (intent == Intent::BindingSet) != resolves.is_some() {
+                return Err(broken());
+            }
+            Ok(AssertedSubject::Binding {
+                external_project_id: external,
+                resolves_work_items: resolves,
+            })
+        }
+        _ => Err(broken()),
+    }
+}
+
+impl AssertedSubject {
+    /// The MAC's view of it.
+    fn sealed(&self) -> SealedSubject<'_> {
+        match self {
+            Self::MergeRequest {
+                merge_request,
+                head_sha,
+                target_ref,
+                target_sha,
+            } => SealedSubject::MergeRequest {
+                merge_request_id: merge_request.get(),
+                head_sha,
+                target_ref: target_ref.as_str(),
+                target_sha,
+            },
+            Self::Binding {
+                external_project_id,
+                resolves_work_items,
+            } => SealedSubject::Binding {
+                external_project_id,
+                resolves_work_items: *resolves_work_items,
+            },
+        }
+    }
+
+    /// Add the audit's subject fields to `details`: the merge request and
+    /// its head, or the kanflow project and the setting.
+    fn audit_fields(&self, details: &mut serde_json::Value) {
+        let Some(map) = details.as_object_mut() else {
+            return;
+        };
+        match self {
+            Self::MergeRequest {
+                merge_request,
+                head_sha,
+                ..
+            } => {
+                map.insert("merge_request_id".to_owned(), merge_request.get().into());
+                map.insert("head_sha".to_owned(), head_sha.as_str().into());
+            }
+            Self::Binding {
+                external_project_id,
+                resolves_work_items,
+            } => {
+                map.insert(
+                    "external_project_id".to_owned(),
+                    external_project_id.as_str().into(),
+                );
+                map.insert(
+                    "resolves_work_items".to_owned(),
+                    (*resolves_work_items).into(),
+                );
+            }
+        }
+    }
 }
 
 fn audit(
@@ -239,10 +375,13 @@ fn audit(
 
 /// Issue a `pending` assertion for the person of `ctx` (their session):
 /// the binding and the state's hash, no secret, no public id, no MAC; one
-/// `act_as_assertion.issued` audit row. The merge request is locked
-/// `FOR SHARE` and must still have `head_sha` and `target_ref`
-/// (`FG-REVIEW-0008 reason=stale_view` otherwise). A malformed state is
-/// `FG-WEB-0006 param=state`.
+/// `act_as_assertion.issued` audit row. A merge request intent's merge
+/// request is locked `FOR SHARE` and must still have `head_sha` and
+/// `target_ref` (`FG-REVIEW-0008 reason=stale_view` otherwise); a binding
+/// intent's subject is the kanflow project (`FG-WEB-0006
+/// field=external_project_id` when malformed). An intent with a subject of
+/// the other shape is `FG-SYS-0001 reason=assertion_subject_mismatch`. A
+/// malformed state is `FG-WEB-0006 param=state`.
 pub async fn issue(
     db: &Db,
     ctx: &ChangeContext,
@@ -254,52 +393,118 @@ pub async fn issue(
             .with_context("param", "state")
             .with_context("rule", "format"));
     }
+    let shape_ok = match &new.subject {
+        NewSubject::MergeRequest { .. } => new.intent.is_merge_request(),
+        NewSubject::Binding {
+            resolves_work_items,
+            ..
+        } => {
+            !new.intent.is_merge_request()
+                && (new.intent == Intent::BindingSet) == resolves_work_items.is_some()
+        }
+    };
+    if !shape_ok {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "assertion_subject_mismatch")
+            .with_context("intent", new.intent.as_str()));
+    }
+    if let NewSubject::Binding {
+        external_project_id,
+        ..
+    } = &new.subject
+    {
+        if !forge_core::integration::external_project_id_ok(external_project_id) {
+            return Err(ForgeError::new(ErrorCode::RequestInvalid)
+                .with_context("reason", "field_invalid")
+                .with_context("field", "external_project_id")
+                .with_context("rule", "format"));
+        }
+    }
     let lifetime = new.lifetime.min(LIFETIME).as_secs_f64().max(0.001);
     let hash = state_hash(new.state);
     let request = ctx.request_id.as_str().to_owned();
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let (mr, project) = (new.merge_request, new.project);
-        let current: Option<(Option<String>, String)> = tx
-            .step(|c| async move {
-                sqlx::query_as(
-                    "SELECT head_sha, target_branch FROM forge.merge_requests \
-                     WHERE id = $1 AND project_id = $2 FOR SHARE",
-                )
-                .bind(mr.get())
-                .bind(project.get())
-                .fetch_optional(c)
-                .await
-                .map_err(|e| query_error("act_as.issue.merge_request", e))
-            })
-            .await?;
-        let Some((head, target)) = current else {
-            return Err(ForgeError::new(ErrorCode::NotFound)
-                .with_context("resource", "merge_request")
-                .with_context("reason", "absent"));
-        };
-        if head.as_deref() != Some(new.head_sha) || target != new.target_ref.as_str() {
-            return Err(ForgeError::new(ErrorCode::HeadChanged)
-                .with_context("reason", "stale_view")
-                .with_context("merge_request_id", mr.get()));
+        let project = new.project;
+        if let NewSubject::MergeRequest {
+            merge_request,
+            head_sha,
+            target_ref,
+            ..
+        } = &new.subject
+        {
+            let mr = *merge_request;
+            let current: Option<(Option<String>, String)> = tx
+                .step(|c| async move {
+                    sqlx::query_as(
+                        "SELECT head_sha, target_branch FROM forge.merge_requests \
+                         WHERE id = $1 AND project_id = $2 FOR SHARE",
+                    )
+                    .bind(mr.get())
+                    .bind(project.get())
+                    .fetch_optional(c)
+                    .await
+                    .map_err(|e| query_error("act_as.issue.merge_request", e))
+                })
+                .await?;
+            let Some((head, target)) = current else {
+                return Err(ForgeError::new(ErrorCode::NotFound)
+                    .with_context("resource", "merge_request")
+                    .with_context("reason", "absent"));
+            };
+            if head.as_deref() != Some(*head_sha) || target != target_ref.as_str() {
+                return Err(ForgeError::new(ErrorCode::HeadChanged)
+                    .with_context("reason", "stale_view")
+                    .with_context("merge_request_id", mr.get()));
+            }
         }
-        let (hash_ref, request_ref) = (&hash, &request);
+        let cols: SubjectColumns = match &new.subject {
+            NewSubject::MergeRequest {
+                merge_request,
+                head_sha,
+                target_ref,
+                target_sha,
+            } => (
+                Some(merge_request.get()),
+                Some((*head_sha).to_owned()),
+                Some(target_ref.as_str().to_owned()),
+                Some((*target_sha).to_owned()),
+                None,
+                None,
+            ),
+            NewSubject::Binding {
+                external_project_id,
+                resolves_work_items,
+            } => (
+                None,
+                None,
+                None,
+                None,
+                Some((*external_project_id).to_owned()),
+                *resolves_work_items,
+            ),
+        };
+        let subject = subject_of(new.intent, 0, cols.clone())?; // clone: the insert binds the columns
+        let (hash_ref, request_ref, cols_ref) = (&hash, &request, &cols);
         let id: i64 = tx
             .step(|c| async move {
                 sqlx::query_scalar(
                     "INSERT INTO forge.act_as_assertions (integration_id, user_id, intent, \
-                     project_id, merge_request_id, head_sha, target_ref, target_sha, state_hash, \
+                     project_id, merge_request_id, head_sha, target_ref, target_sha, \
+                     external_project_id, resolves_work_items, state_hash, \
                      expires_at, issued_request_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, \
-                     now() + make_interval(secs => $10), $11) RETURNING id",
+                     $10, $11, now() + make_interval(secs => $12), $13) RETURNING id",
                 )
                 .bind(new.integration.get())
                 .bind(new.user.get())
                 .bind(new.intent.as_str())
                 .bind(project.get())
-                .bind(mr.get())
-                .bind(new.head_sha)
-                .bind(new.target_ref.as_str())
-                .bind(new.target_sha)
+                .bind(cols_ref.0)
+                .bind(cols_ref.1.as_deref())
+                .bind(cols_ref.2.as_deref())
+                .bind(cols_ref.3.as_deref())
+                .bind(cols_ref.4.as_deref())
+                .bind(cols_ref.5)
                 .bind(hash_ref.as_slice())
                 .bind(lifetime)
                 .bind(request_ref.as_str())
@@ -322,12 +527,11 @@ pub async fn issue(
                 })
             })
             .await?;
-        let details = serde_json::json!({
+        let mut details = serde_json::json!({
             "intent": new.intent.as_str(),
             "integration_id": new.integration.get(),
-            "merge_request_id": mr.get(),
-            "head_sha": new.head_sha,
         });
+        subject.audit_fields(&mut details);
         let record = ChangeRecord {
             audit: audit("act_as_assertion.issued", id, project, details),
             affected: Vec::new(),
@@ -350,10 +554,9 @@ pub struct Claimed {
     pub employee_number: Option<String>,
     pub intent: Intent,
     pub project: ProjectId,
-    pub merge_request: MergeRequestId,
-    pub iid: i64,
-    pub head_sha: String,
-    pub target_ref: String,
+    pub subject: AssertedSubject,
+    /// The merge request's `iid` (merge request intents only).
+    pub iid: Option<i64>,
     /// RFC 3339, UTC.
     pub expires_at: String,
 }
@@ -365,10 +568,12 @@ type ClaimRow = (
     i64,
     String,
     i64,
-    i64,
-    String,
-    String,
-    String,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<bool>,
     i64,
     String,
     Option<String>,
@@ -411,6 +616,7 @@ pub async fn claim(
                 sqlx::query_as(concat!(
                     "SELECT a.id, a.state, a.expires_at <= now(), a.user_id, a.intent, ",
                     "a.project_id, a.merge_request_id, a.head_sha, a.target_ref, a.target_sha, ",
+                    "a.external_project_id, a.resolves_work_items, ",
                     "(extract(epoch FROM a.expires_at) * 1000000)::bigint, ",
                     "to_char(a.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), ",
                     "u.employee_number, m.iid ",
@@ -437,6 +643,8 @@ pub async fn claim(
             head_sha,
             target_ref,
             target_sha,
+            external,
+            resolves,
             micros,
             expires_at,
             employee_number,
@@ -451,11 +659,16 @@ pub async fn claim(
         if expired {
             return Err(assertion_invalid("claim_expired").with_context("assertion_id", id));
         }
-        let Some(iid) = iid else {
+        let intent = intent_of(&intent, id)?;
+        if intent.is_merge_request() && iid.is_none() {
             // The merge request was purged since the confirmation.
             return Err(assertion_invalid("claim_unknown").with_context("assertion_id", id));
-        };
-        let intent = intent_of(&intent, id)?;
+        }
+        let subject = subject_of(
+            intent,
+            id,
+            (mr, head_sha, target_ref, target_sha, external, resolves),
+        )?;
         let token = AssertionToken::generate()?;
         let binding = AssertionBinding {
             public_id: token.public_id(),
@@ -463,10 +676,7 @@ pub async fn claim(
             user_id: user,
             intent,
             project_id: project,
-            merge_request_id: mr,
-            head_sha: &head_sha,
-            target_ref: &target_ref,
-            target_sha: &target_sha,
+            subject: subject.sealed(),
             expires_at_micros: micros,
         };
         let (kid, mac) = keys.seal(token.secret(), &binding)?;
@@ -488,13 +698,12 @@ pub async fn claim(
         })
         .await?;
         let project = ProjectId::new(project);
-        let details = serde_json::json!({
+        let mut details = serde_json::json!({
             "public_id": public_id,
             "intent": intent.as_str(),
             "integration_id": integration.get(),
-            "merge_request_id": mr,
-            "head_sha": head_sha,
         });
+        subject.audit_fields(&mut details);
         let record = ChangeRecord {
             audit: audit("act_as_assertion.claimed", id, project, details),
             affected: Vec::new(),
@@ -508,10 +717,8 @@ pub async fn claim(
                 employee_number,
                 intent,
                 project,
-                merge_request: MergeRequestId::new(mr),
+                subject,
                 iid,
-                head_sha,
-                target_ref,
                 expires_at,
             },
         ))
@@ -530,10 +737,7 @@ pub struct VerifiedAssertion {
     pub public_id: String,
     pub intent: Intent,
     pub project: ProjectId,
-    pub merge_request: MergeRequestId,
-    pub head_sha: String,
-    pub target_ref: RefName,
-    pub target_sha: String,
+    pub subject: AssertedSubject,
 }
 
 type VerifyRow = (
@@ -545,10 +749,12 @@ type VerifyRow = (
     i64,
     String,
     i64,
-    i64,
-    String,
-    String,
-    String,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<bool>,
     i64,
     bool,
 );
@@ -568,7 +774,8 @@ pub async fn verify_assertion(
     let public_id = presented.public_id().to_owned();
     let row: Option<VerifyRow> = sqlx::query_as(concat!(
         "SELECT id, state, mac, key_id, integration_id, user_id, intent, project_id, ",
-        "merge_request_id, head_sha, target_ref, target_sha, ",
+        "merge_request_id, head_sha, target_ref, target_sha, external_project_id, ",
+        "resolves_work_items, ",
         "(extract(epoch FROM expires_at) * 1000000)::bigint, expires_at <= now() ",
         "FROM forge.act_as_assertions WHERE public_id = $1"
     ))
@@ -591,6 +798,8 @@ pub async fn verify_assertion(
         head_sha,
         target_ref,
         target_sha,
+        external,
+        resolves,
         micros,
         expired,
     )) = row
@@ -604,16 +813,24 @@ pub async fn verify_assertion(
         return Err(refused("unknown"));
     };
     let intent = intent_of(&intent, id)?;
+    let subject = match subject_of(
+        intent,
+        id,
+        (mr, head_sha, target_ref, target_sha, external, resolves),
+    ) {
+        Ok(subject) => subject,
+        Err(e) => {
+            keys.dummy_verify(presented.secret());
+            return Err(e);
+        }
+    };
     let binding = AssertionBinding {
         public_id: &public_id,
         integration_id: row_integration,
         user_id: user,
         intent,
         project_id: project,
-        merge_request_id: mr,
-        head_sha: &head_sha,
-        target_ref: &target_ref,
-        target_sha: &target_sha,
+        subject: subject.sealed(),
         expires_at_micros: micros,
     };
     keys.verify(kid, presented.secret(), &binding, &mac)
@@ -630,20 +847,12 @@ pub async fn verify_assertion(
     if user != person.get() {
         return Err(refused("wrong_user"));
     }
-    let target_ref = RefName::parse(&target_ref).map_err(|_| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "stored_target_ref_invalid")
-            .with_context("assertion_id", id)
-    })?;
     Ok(VerifiedAssertion {
         id,
         public_id,
         intent,
         project: ProjectId::new(project),
-        merge_request: MergeRequestId::new(mr),
-        head_sha,
-        target_ref,
-        target_sha,
+        subject,
     })
 }
 
@@ -667,13 +876,14 @@ pub(crate) async fn consume_on(
     request: &str,
 ) -> Result<AuditEntry, ForgeError> {
     let id = using.assertion;
-    let row: Option<(i64, String, i64, String)> = tx
+    type Row = (i64, String, Option<i64>, Option<String>, Option<String>);
+    let row: Option<Row> = tx
         .step(|c| async move {
             sqlx::query_as(
                 "UPDATE forge.act_as_assertions SET state = 'consumed', finished_at = now(), \
                  finished_request_id = $2 WHERE id = $1 AND state = 'claimed' \
                  AND expires_at > now() \
-                 RETURNING project_id, intent, merge_request_id, head_sha",
+                 RETURNING project_id, intent, merge_request_id, head_sha, external_project_id",
             )
             .bind(id)
             .bind(request)
@@ -682,7 +892,7 @@ pub(crate) async fn consume_on(
             .map_err(|e| query_error("act_as.consume", e))
         })
         .await?;
-    let Some((project, intent, mr, head_sha)) = row else {
+    let Some((project, intent, mr, head_sha, external)) = row else {
         return Err(assertion_invalid("consumed")
             .with_context("assertion_public_id", using.public_id.clone()));
     };
@@ -690,14 +900,39 @@ pub(crate) async fn consume_on(
         "act_as_assertion.consumed",
         id,
         ProjectId::new(project),
-        serde_json::json!({
-            "public_id": using.public_id,
-            "intent": intent,
-            "integration_id": using.integration.get(),
-            "merge_request_id": mr,
-            "head_sha": head_sha,
-        }),
+        finished_details(
+            serde_json::json!({
+                "public_id": using.public_id,
+                "intent": intent,
+                "integration_id": using.integration.get(),
+            }),
+            mr,
+            head_sha,
+            external,
+        ),
     ))
+}
+
+/// The subject fields of an ended assertion's audit row: the merge
+/// request and its head, or the kanflow project.
+fn finished_details(
+    mut details: serde_json::Value,
+    mr: Option<i64>,
+    head_sha: Option<String>,
+    external: Option<String>,
+) -> serde_json::Value {
+    if let Some(map) = details.as_object_mut() {
+        match external {
+            Some(external) => {
+                map.insert("external_project_id".to_owned(), external.into());
+            }
+            None => {
+                map.insert("merge_request_id".to_owned(), mr.into());
+                map.insert("head_sha".to_owned(), head_sha.into());
+            }
+        }
+    }
+    details
 }
 
 /// Reject a claimed assertion that was verified but not used (ADR-0025
@@ -714,14 +949,23 @@ pub async fn reject(
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let request_ref = &request;
-        let row: Option<(i64, String, i64, i64, String, Option<String>)> = tx
+        type Row = (
+            i64,
+            String,
+            i64,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let row: Option<Row> = tx
             .step(|c| async move {
                 sqlx::query_as(
                     "UPDATE forge.act_as_assertions SET state = 'rejected', reject_reason = $2, \
                      finished_at = now(), finished_request_id = $3 \
                      WHERE id = $1 AND state = 'claimed' \
                      RETURNING project_id, intent, integration_id, merge_request_id, head_sha, \
-                     public_id",
+                     public_id, external_project_id",
                 )
                 .bind(assertion)
                 .bind(reason)
@@ -731,17 +975,20 @@ pub async fn reject(
                 .map_err(|e| query_error("act_as.reject", e))
             })
             .await?;
-        let Some((project, intent, integration, mr, head_sha, public_id)) = row else {
+        let Some((project, intent, integration, mr, head_sha, public_id, external)) = row else {
             return Ok(Settle::Discard(false));
         };
-        let details = serde_json::json!({
-            "public_id": public_id,
-            "intent": intent,
-            "integration_id": integration,
-            "merge_request_id": mr,
-            "head_sha": head_sha,
-            "reject_reason": reason,
-        });
+        let details = finished_details(
+            serde_json::json!({
+                "public_id": public_id,
+                "intent": intent,
+                "integration_id": integration,
+                "reject_reason": reason,
+            }),
+            mr,
+            head_sha,
+            external,
+        );
         let record = ChangeRecord {
             audit: audit(
                 "act_as_assertion.rejected",
@@ -766,7 +1013,16 @@ pub async fn sweep_expired(db: &Db, ctx: &ChangeContext, max: i64) -> Result<u64
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let request_ref = &request;
-        let rows: Vec<(i64, i64, String, i64, i64, String)> = tx
+        type Row = (
+            i64,
+            i64,
+            String,
+            i64,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        );
+        let rows: Vec<Row> = tx
             .step(|c| async move {
                 sqlx::query_as(
                     "UPDATE forge.act_as_assertions SET state = 'rejected', \
@@ -774,7 +1030,8 @@ pub async fn sweep_expired(db: &Db, ctx: &ChangeContext, max: i64) -> Result<u64
                      WHERE id IN (SELECT id FROM forge.act_as_assertions \
                                   WHERE state = 'pending' AND expires_at <= now() \
                                   ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED) \
-                     RETURNING id, project_id, intent, integration_id, merge_request_id, head_sha",
+                     RETURNING id, project_id, intent, integration_id, merge_request_id, head_sha, \
+                     external_project_id",
                 )
                 .bind(max)
                 .bind(request_ref.as_str())
@@ -785,20 +1042,25 @@ pub async fn sweep_expired(db: &Db, ctx: &ChangeContext, max: i64) -> Result<u64
             .await?;
         let mut entries = rows
             .into_iter()
-            .map(|(id, project, intent, integration, mr, head_sha)| {
-                audit(
-                    "act_as_assertion.rejected",
-                    id,
-                    ProjectId::new(project),
-                    serde_json::json!({
-                        "intent": intent,
-                        "integration_id": integration,
-                        "merge_request_id": mr,
-                        "head_sha": head_sha,
-                        "reject_reason": "expired",
-                    }),
-                )
-            })
+            .map(
+                |(id, project, intent, integration, mr, head_sha, external)| {
+                    audit(
+                        "act_as_assertion.rejected",
+                        id,
+                        ProjectId::new(project),
+                        finished_details(
+                            serde_json::json!({
+                                "intent": intent,
+                                "integration_id": integration,
+                                "reject_reason": "expired",
+                            }),
+                            mr,
+                            head_sha,
+                            external,
+                        ),
+                    )
+                },
+            )
             .collect::<Vec<_>>();
         if entries.is_empty() {
             return Ok(Settle::Discard(0));

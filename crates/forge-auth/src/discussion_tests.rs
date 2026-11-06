@@ -330,6 +330,7 @@ fn only_people_only_actions_refuse_by_account_kind() {
                                         | Action::IntegrationEventCursorRead
                                         | Action::IntegrationDevStatusRead
                                         | Action::ActAsAssertionClaim
+                                        | Action::IntegrationBindingList
                                 )
                         }
                         // M3 S2 (ADR-0025 §1): an act-as request acts for

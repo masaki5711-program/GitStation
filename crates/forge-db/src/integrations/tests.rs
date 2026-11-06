@@ -276,7 +276,8 @@ async fn binding_checks_refuse_raw_rows_by_constraint_name() {
             "{bad:?}"
         );
     }
-    // One binding per project, whatever the integration.
+    // One resolving binding per project, whatever the integration (M3 X3:
+    // a raw row resolves by default).
     let other_sa = service_account(&w.t, "kanflow-two", w.alice.user_id).await;
     let other = kanflow(&w.t, other_sa, w.alice.user_id).await;
     let first = row("P1", w.web.get());
@@ -290,7 +291,7 @@ async fn binding_checks_refuse_raw_rows_by_constraint_name() {
         refusal(&mut su, &first, &second).await,
         Some((
             "23505".into(),
-            "integration_bindings_one_per_project".into()
+            "integration_bindings_one_resolving_per_project".into()
         ))
     );
     // A raw row that passes every check is refused at COMMIT by the
@@ -1225,3 +1226,42 @@ async fn enabling_an_integration_of_a_disabled_account_is_refused() {
     );
     w.t.drop_now().await;
 }
+
+/// M3 X3 (plan 03 §7.1, ADR-0016 Amendment X3): a binding that does not
+/// resolve work items (a shared spec repository) may be one of several of
+/// its project; one that resolves is the only resolving binding of its
+/// project; one external project once per (integration, project).
+#[tokio::test]
+async fn binding_rows_share_a_spec_project_but_resolve_once() {
+    let w = world().await;
+    let mut su = w.t.superuser().await;
+    let row = |external: &str, resolves: bool| {
+        format!(
+            "INSERT INTO forge.integration_bindings (integration_id, project_id, \
+             external_project_id, granted_membership, resolves_work_items) \
+             VALUES ({}, {}, '{external}', false, {resolves})",
+            w.integration.get(),
+            w.web.get()
+        )
+    };
+    let shared = format!("{}; {}", row("P1", false), row("P2", false));
+    assert_eq!(refusal(&mut su, "", &shared).await, None);
+    assert_eq!(
+        refusal(&mut su, &row("P1", true), &row("P2", true)).await,
+        Some((
+            "23505".into(),
+            "integration_bindings_one_resolving_per_project".into()
+        ))
+    );
+    assert_eq!(
+        refusal(&mut su, &row("P1", false), &row("P1", true)).await,
+        Some((
+            "23505".into(),
+            "integration_bindings_one_per_external_project".into()
+        ))
+    );
+    w.t.drop_now().await;
+}
+
+#[path = "multi_tests.rs"]
+mod multi;

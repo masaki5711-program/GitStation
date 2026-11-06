@@ -160,21 +160,43 @@ pub fn assertion_invalid(reason: &'static str) -> ForgeError {
 }
 
 /// What an assertion lets the person's integration do (ADR-0025 §4: one
-/// intent per action; X3 adds the binding intents).
+/// intent per action; the binding intents since M3 X3, ADR-0025 Amendment
+/// X3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Intent {
     Approve,
     Unapprove,
+    /// Bind a repository to a kanflow project, or change a binding's
+    /// settings (`IntegrationBindingManage`).
+    BindingSet,
+    /// Remove a binding (`IntegrationBindingRemove`).
+    BindingRemove,
 }
 
 impl Intent {
-    pub const ALL: &'static [Intent] = &[Self::Approve, Self::Unapprove];
+    pub const ALL: &'static [Intent] = &[
+        Self::Approve,
+        Self::Unapprove,
+        Self::BindingSet,
+        Self::BindingRemove,
+    ];
 
     /// The stored and requested name (the CHECK of `act_as_assertions.intent`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Approve => "approve",
             Self::Unapprove => "unapprove",
+            Self::BindingSet => "binding_set",
+            Self::BindingRemove => "binding_remove",
+        }
+    }
+
+    /// An intent on a merge request (`approve`, `unapprove`); the others
+    /// act on an integration binding.
+    pub fn is_merge_request(self) -> bool {
+        match self {
+            Self::Approve | Self::Unapprove => true,
+            Self::BindingSet | Self::BindingRemove => false,
         }
     }
 
@@ -245,12 +267,28 @@ pub struct AssertionBinding<'a> {
     pub user_id: i64,
     pub intent: Intent,
     pub project_id: i64,
-    pub merge_request_id: i64,
-    pub head_sha: &'a str,
-    pub target_ref: &'a str,
-    pub target_sha: &'a str,
+    pub subject: SealedSubject<'a>,
     /// `expires_at` in microseconds since the Unix epoch, as stored.
     pub expires_at_micros: i64,
+}
+
+/// The intent's own part of an [`AssertionBinding`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SealedSubject<'a> {
+    /// `approve` / `unapprove`: the merge request, its head, its target and
+    /// the target's tip (the bytes of S2, unchanged).
+    MergeRequest {
+        merge_request_id: i64,
+        head_sha: &'a str,
+        target_ref: &'a str,
+        target_sha: &'a str,
+    },
+    /// `binding_set` / `binding_remove` (M3 X3): the kanflow project and,
+    /// for `binding_set`, the setting confirmed (`None` for a removal).
+    Binding {
+        external_project_id: &'a str,
+        resolves_work_items: Option<bool>,
+    },
 }
 
 /// The length-prefixed concatenation of the binding (the only function
@@ -268,10 +306,32 @@ pub fn binding_bytes(b: &AssertionBinding<'_>) -> Vec<u8> {
     field(&b.user_id.to_be_bytes());
     field(b.intent.as_str().as_bytes());
     field(&b.project_id.to_be_bytes());
-    field(&b.merge_request_id.to_be_bytes());
-    field(b.head_sha.as_bytes());
-    field(b.target_ref.as_bytes());
-    field(b.target_sha.as_bytes());
+    // The intent is sealed above, so the two shapes never collide.
+    match &b.subject {
+        SealedSubject::MergeRequest {
+            merge_request_id,
+            head_sha,
+            target_ref,
+            target_sha,
+        } => {
+            field(&merge_request_id.to_be_bytes());
+            field(head_sha.as_bytes());
+            field(target_ref.as_bytes());
+            field(target_sha.as_bytes());
+        }
+        SealedSubject::Binding {
+            external_project_id,
+            resolves_work_items,
+        } => {
+            field(external_project_id.as_bytes());
+            let setting: u8 = match resolves_work_items {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            };
+            field(&[setting]);
+        }
+    }
     field(&b.expires_at_micros.to_be_bytes());
     out
 }

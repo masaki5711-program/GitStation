@@ -1003,12 +1003,28 @@ pub fn authorize(
             people_only()?;
             admin_only()
         }
-        // Binding a project: people only, Maintainer (visibility and
-        // pending deletion were decided above: FG-REPO-0005 / FG-REPO-0006).
-        (Action::IntegrationBindingManage, Resource::Project(p)) => {
+        // Binding a project, changing or removing a binding (M3 X3): people
+        // only, Maintainer (visibility and pending deletion were decided
+        // above: FG-REPO-0005 / FG-REPO-0006). The integration's service
+        // account never binds on its own (people only); acting for a
+        // person it needs the person's assertion (act-as arm).
+        (
+            Action::IntegrationBindingManage | Action::IntegrationBindingRemove,
+            Resource::Project(p),
+        ) => {
             people_only()?;
             need(Role::Maintainer, p.role)
         }
+        // The repositories bound to an integration (M3 X3): its own
+        // service account only, as its feed.
+        (Action::IntegrationBindingList, Resource::IntegrationFeed(feed)) => {
+            integration_feed(principal, feed).map_err(|e| e.with_context("action", action.name()))
+        }
+        // The repository search (M3 X3): the route for any active caller
+        // (the scope was checked above); each candidate only when the
+        // caller could bind it (Maintainer; visibility was decided above).
+        (Action::RepositorySearch, Resource::Instance) => Ok(()),
+        (Action::RepositorySearch, Resource::Project(p)) => need(Role::Maintainer, p.role),
 
         // --- the integrations' event feed (M3 I1c, ADR-0016 §7) ---
         // The route: the integration's own service account only.
@@ -1033,21 +1049,31 @@ pub fn authorize(
         // above as session-only) that sees the merge request, for an
         // enabled integration bound to its project, and whose session may
         // perform the intent's action on it now.
+        // M3 X3: a binding intent's confirmation is on the project (read
+        // like the project); `binding_set` needs no binding yet.
         (Action::ActAsConfirmView | Action::ActAsAssertionIssue, Resource::ActAsConfirm(c)) => {
+            use forge_core::act_as::Intent;
             people_only()?;
-            authorize(principal, Action::MergeRequestRead, &c.merge_request)
+            let read = if c.intent.is_merge_request() {
+                Action::MergeRequestRead
+            } else {
+                Action::ProjectRead
+            };
+            authorize(principal, read, &c.target)
                 .map_err(|e| e.with_context("action", action.name()))?;
             if !c.integration_enabled {
                 return Err(refused("integration_disabled"));
             }
-            if !c.bound {
+            if !c.bound && c.intent != Intent::BindingSet {
                 return Err(refused("act_as_unbound"));
             }
             let intended = match c.intent {
-                forge_core::act_as::Intent::Approve => Action::MergeRequestApprove,
-                forge_core::act_as::Intent::Unapprove => Action::MergeRequestUnapprove,
+                Intent::Approve => Action::MergeRequestApprove,
+                Intent::Unapprove => Action::MergeRequestUnapprove,
+                Intent::BindingSet => Action::IntegrationBindingManage,
+                Intent::BindingRemove => Action::IntegrationBindingRemove,
             };
-            authorize(principal, intended, &c.merge_request).map_err(|e| {
+            authorize(principal, intended, &c.target).map_err(|e| {
                 e.with_context("action", action.name())
                     .with_context("intent", c.intent.as_str())
             })
@@ -1170,6 +1196,9 @@ pub fn authorize(
             | Action::IntegrationManage
             | Action::IntegrationRead
             | Action::IntegrationBindingManage
+            | Action::IntegrationBindingRemove
+            | Action::IntegrationBindingList
+            | Action::RepositorySearch
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
             | Action::IntegrationDevStatusRead

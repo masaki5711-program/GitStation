@@ -134,6 +134,7 @@ impl ResourceCtx for MergeRequestCtx {
         match &self.act_as {
             None => inner,
             Some((via, subject)) => Resource::ActAs(Box::new(ActAsView {
+                binding: None,
                 inner,
                 via: *via,
                 subject: subject.clone(), // clone: the resource owns its facts

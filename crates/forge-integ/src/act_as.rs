@@ -16,8 +16,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use forge_auth::{
-    act_as_admission, ActAsConfirmCtx, ActAsCredential, AssertionFacts, Authorized, Credential,
-    IntegrationFeedCtx, LoadedConfirmIntegration, LoadedIntegrationFeed, Principal, Scope, ViaView,
+    act_as_admission, ActAsBindingConfirmCtx, ActAsConfirmCtx, ActAsCredential, AssertionFacts,
+    AssertionSubject, Authorized, Credential, IntegrationFeedCtx, LoadedConfirmIntegration,
+    LoadedIntegrationFeed, Principal, Scope, ViaView,
 };
 use forge_core::act_as::{ActAsKeys, ActAsTarget, AssertionToken, Intent};
 use forge_core::{IntegrationId, MergeRequestId, ProjectId, RefName, RequestId, UserId};
@@ -60,10 +61,36 @@ pub struct ClaimAnswer {
     pub employee_number: Option<String>,
     pub intent: Intent,
     pub project: ProjectId,
-    pub iid: i64,
-    pub head_sha: String,
-    pub target_ref: String,
+    /// What the assertion is bound to (a merge request or, M3 X3, a
+    /// binding).
+    pub subject: db::AssertedSubject,
+    /// The merge request's `iid` (merge request intents only).
+    pub iid: Option<i64>,
     pub expires_at: String,
+}
+
+/// forge-auth's view of a verified assertion's subject.
+fn subject_facts(subject: db::AssertedSubject) -> AssertionSubject {
+    match subject {
+        db::AssertedSubject::MergeRequest {
+            merge_request,
+            head_sha,
+            target_ref,
+            target_sha,
+        } => AssertionSubject::MergeRequest {
+            merge_request,
+            head_sha,
+            target_ref,
+            target_sha,
+        },
+        db::AssertedSubject::Binding {
+            external_project_id,
+            resolves_work_items,
+        } => AssertionSubject::Binding {
+            external_project_id,
+            resolves_work_items,
+        },
+    }
 }
 
 fn refused(reason: &'static str) -> ForgeError {
@@ -136,10 +163,7 @@ impl ActAs {
                     public_id: v.public_id,
                     intent: v.intent,
                     project: v.project,
-                    merge_request: v.merge_request,
-                    head_sha: v.head_sha,
-                    target_ref: v.target_ref,
-                    target_sha: v.target_sha,
+                    subject: subject_facts(v.subject),
                 })
             }
         };
@@ -224,6 +248,28 @@ impl ActAs {
         }))
     }
 
+    /// A binding confirmation's integration as loaded (M3 X3): enabled,
+    /// and `bound` when it is bound to `project` for kanflow project
+    /// `external` (`None`: absent — the same 404 as an invisible project).
+    pub async fn confirm_binding_integration(
+        &self,
+        integration: IntegrationId,
+        project: ProjectId,
+        external: &str,
+    ) -> Result<Option<LoadedConfirmIntegration>, ForgeError> {
+        let Some(found) = forge_db::integrations::get(&self.db, integration).await? else {
+            return Ok(None);
+        };
+        let bindings = forge_db::integrations::project_bindings(&self.db, project).await?;
+        Ok(Some(LoadedConfirmIntegration {
+            integration: found.id,
+            enabled: found.enabled,
+            bound: bindings
+                .iter()
+                .any(|b| b.integration == integration && b.external_project_id == external),
+        }))
+    }
+
     /// What the confirmation screen names as the receiving integration:
     /// its kind and its service account's username, as stored (`None`:
     /// absent).
@@ -281,10 +327,50 @@ impl ActAs {
                 user: person,
                 intent: proof.ctx().intent(),
                 project,
-                merge_request,
-                head_sha,
-                target_ref: &target,
-                target_sha,
+                subject: db::NewSubject::MergeRequest {
+                    merge_request,
+                    head_sha,
+                    target_ref: &target,
+                    target_sha,
+                },
+                state,
+                lifetime: db::LIFETIME,
+            },
+        )
+        .await
+    }
+
+    /// `POST /-/confirm/projects/{id}/integration-bindings/assertions`
+    /// (`ActAsAssertionIssue` on a binding intent, M3 X3): write the
+    /// `pending` assertion for the person, bound to the project, kanflow
+    /// project `external` and (`binding_set`) the setting `resolves`.
+    pub async fn issue_binding(
+        &self,
+        proof: &Authorized<ActAsBindingConfirmCtx>,
+        request_id: &RequestId,
+        session: Option<i64>,
+        external: &str,
+        resolves: Option<bool>,
+        state: &str,
+    ) -> Result<i64, ForgeError> {
+        let (project, integration) = *proof.id();
+        let person = proof.principal().user().ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "proof_without_user")
+        })?;
+        self.keys()?;
+        let ctx = context(Actor::User(person), request_id, session);
+        db::issue(
+            &self.db,
+            &ctx,
+            &db::NewAssertion {
+                integration,
+                user: person,
+                intent: proof.ctx().intent(),
+                project,
+                subject: db::NewSubject::Binding {
+                    external_project_id: external,
+                    resolves_work_items: resolves,
+                },
                 state,
                 lifetime: db::LIFETIME,
             },
@@ -319,9 +405,8 @@ impl ActAs {
             employee_number: claimed.employee_number.filter(|_| employee),
             intent: claimed.intent,
             project: claimed.project,
+            subject: claimed.subject,
             iid: claimed.iid,
-            head_sha: claimed.head_sha,
-            target_ref: claimed.target_ref,
             expires_at: claimed.expires_at,
         })
     }

@@ -709,10 +709,17 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                         "external_project_id",
                         "granted_membership",
                         "created_by",
+                        // M3 X3 (20261129100000).
+                        "resolves_work_items",
                     ],
                 ),
-                // Column-level since 20261114100200 (re-review).
-                columns("forge_app", "UPDATE", &["granted_membership"]),
+                // Column-level since 20261114100200 (re-review);
+                // resolves_work_items since M3 X3 (20261129100000).
+                columns(
+                    "forge_app",
+                    "UPDATE",
+                    &["granted_membership", "resolves_work_items"],
+                ),
             ]
             .concat(),
         ),
@@ -839,6 +846,9 @@ const ACT_AS_APP_INSERT: &[&str] = &[
     "head_sha",
     "target_ref",
     "target_sha",
+    // M3 X3: the binding intents (20261129100000).
+    "external_project_id",
+    "resolves_work_items",
     "state_hash",
     "expires_at",
     "issued_request_id",
@@ -872,6 +882,8 @@ const ACT_AS_RO: &[&str] = &[
     "head_sha",
     "target_ref",
     "target_sha",
+    "external_project_id",
+    "resolves_work_items",
     "issued_at",
     "expires_at",
     "claimed_at",

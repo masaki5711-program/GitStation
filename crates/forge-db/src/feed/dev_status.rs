@@ -191,7 +191,7 @@ impl FeedSnapshot {
     fn visible_externals_sql() -> &'static str {
         "SELECT DISTINCT b.external_project_id, i.kind FROM forge.integration_bindings b \
          JOIN forge.integrations i ON i.id = b.integration_id \
-         WHERE b.integration_id = $1 AND b.project_id = ANY($2) \
+         WHERE b.integration_id = $1 AND b.project_id = ANY($2) AND b.resolves_work_items \
          ORDER BY b.external_project_id"
     }
 
@@ -285,7 +285,8 @@ impl FeedSnapshot {
                  WHERE w.integration_id = $1 AND w.id > $3 \
                    AND w.external_project_id IN (SELECT b.external_project_id \
                      FROM forge.integration_bindings b \
-                     WHERE b.integration_id = $1 AND b.project_id = ANY($2)) \
+                     WHERE b.integration_id = $1 AND b.project_id = ANY($2) \
+                       AND b.resolves_work_items) \
                    AND (EXISTS (SELECT 1 FROM forge.merge_request_work_items l \
                          WHERE l.work_item_id = w.id AND l.unlinked_at IS NULL \
                            AND l.project_id = ANY($2)) \
@@ -366,6 +367,7 @@ impl FeedSnapshot {
                    JOIN forge.integration_bindings b ON b.project_id = m.project_id \
                      AND b.integration_id = w.integration_id \
                      AND b.external_project_id = w.external_project_id \
+                     AND b.resolves_work_items \
                    WHERE l.work_item_id = ANY($1) AND l.unlinked_at IS NULL \
                      AND w.integration_id = $2 AND m.project_id = ANY($3) \
                      AND ($4::text IS NULL OR m.state = $4) \

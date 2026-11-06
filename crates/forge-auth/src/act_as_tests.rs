@@ -86,10 +86,23 @@ fn every_unasserted_act_as_action_is_a_read() {
         .iter()
         .filter_map(|a| match a.act_as_rule() {
             ActAsRule::RequiresAssertion(i) => Some(i),
-            ActAsRule::ReadWithoutAssertion | ActAsRule::Denied => None,
+            ActAsRule::ReadWithoutAssertion | ActAsRule::ListAsPerson | ActAsRule::Denied => None,
         })
         .collect();
-    assert_eq!(intents, vec![Intent::Approve, Intent::Unapprove]);
+    let mut sorted = intents.clone(); // clone: compared with the original order
+    sorted.dedup();
+    assert_eq!(sorted.len(), intents.len(), "one action per intent");
+    for i in Intent::ALL {
+        assert!(intents.contains(i), "{i:?} has no action");
+    }
+    // M3 X3: the one listing acted for is the repository search, a read.
+    for &a in Action::ALL {
+        if a.act_as_rule() == ActAsRule::ListAsPerson {
+            assert_eq!(a, Action::RepositorySearch);
+            assert_eq!(a.required_scope(), Some(Scope::ReadApi));
+            assert!(!a.is_people_only());
+        }
+    }
 }
 
 #[test]
@@ -105,7 +118,8 @@ fn act_as_merge_is_not_allowed() {
         Action::WorkItemLink,
         Action::CheckWrite,
         Action::IntegrationEventRead,
-        Action::IntegrationBindingManage,
+        Action::IntegrationBindingList,
+        Action::IntegrationRead,
     ] {
         assert_eq!(
             decide(a, approver(), scene(REPORTER, true, MR, Drift::None)),
@@ -373,15 +387,24 @@ fn act_as_admission_checks_the_token_before_any_lookup() {
 fn act_as_allow_rows_have_an_allowed_session_twin() {
     let mut twins = 0;
     for r in ROWS.iter().filter(|r| r.expect == Expect::Allow) {
-        let (Actor::ActAs(v), Fixture::ActAs(s)) = (r.actor, r.fixture) else {
+        let Actor::ActAs(v) = r.actor else {
+            continue;
+        };
+        let person = if let Fixture::ActAs(s) = r.fixture {
+            s.person_resource(v.person)
+        } else if let Fixture::ActAsBinding(s) = r.fixture {
+            // M3 X3: the binding rows' person view.
+            s.person_resource(v.person)
+        } else {
             continue;
         };
         let session =
             Principal::authenticated(ME, false, true, Credential::Session, AccountKind::Human);
         assert!(
-            authorize(&session, r.action, &s.person_resource(v.person)).is_ok(),
-            "{:?} {v:?} {s:?}: the person's own session must be allowed",
-            r.action
+            authorize(&session, r.action, &person).is_ok(),
+            "{:?} {v:?} {:?}: the person's own session must be allowed",
+            r.action,
+            r.fixture
         );
         twins += 1;
     }

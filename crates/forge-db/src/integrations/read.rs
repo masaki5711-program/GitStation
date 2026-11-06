@@ -4,7 +4,7 @@ use forge_core::ids::{IntegrationId, ProjectId, UserId};
 use forge_core::IntegrationKind;
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::{Binding, Integration, Listed, MAX_BINDINGS, MAX_LISTED};
+use super::{Binding, BoundRepository, Integration, Listed, MAX_BINDINGS, MAX_LISTED};
 use crate::{read_query_error, Db};
 
 /// The columns of [`get`] and [`list`].
@@ -109,24 +109,46 @@ pub async fn list(db: &Db) -> Result<Listed, ForgeError> {
     Ok(Listed { items, truncated })
 }
 
-/// The columns of [`bindings`] and [`project_bindings`].
+/// The columns of the binding reads.
 const BINDING_SELECT: &str = concat!(
-    "SELECT b.integration_id, i.kind, b.project_id, b.external_project_id, ",
-    "b.granted_membership, b.created_by, ",
+    "SELECT b.generation, b.integration_id, i.kind, b.project_id, b.external_project_id, ",
+    "b.granted_membership, b.resolves_work_items, b.created_by, ",
     "to_char(b.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') ",
     "FROM forge.integration_bindings b JOIN forge.integrations i ON i.id = b.integration_id "
 );
 
-type BindingRow = (i64, String, i64, String, bool, Option<i64>, String);
+type BindingRow = (
+    i64,
+    i64,
+    String,
+    i64,
+    String,
+    bool,
+    bool,
+    Option<i64>,
+    String,
+);
 
-fn binding(row: BindingRow) -> Result<Binding, ForgeError> {
-    let (integration, kind, project, external_project_id, granted, created_by, created_at) = row;
+fn binding_of_row(row: BindingRow) -> Result<Binding, ForgeError> {
+    let (
+        id,
+        integration,
+        kind,
+        project,
+        external_project_id,
+        granted,
+        resolves,
+        created_by,
+        created_at,
+    ) = row;
     Ok(Binding {
+        id,
         integration: IntegrationId::new(integration),
         kind: kind_of(integration, &kind)?,
         project: ProjectId::new(project),
         external_project_id,
         granted_membership: granted,
+        resolves_work_items: resolves,
         created_by: created_by.map(UserId::new),
         created_at,
     })
@@ -138,7 +160,9 @@ async fn binding_rows(
     filter: &str,
     id: i64,
 ) -> Result<Vec<Binding>, ForgeError> {
-    let sql = format!("{BINDING_SELECT} WHERE {filter} = $1 ORDER BY b.project_id LIMIT $2");
+    let sql = format!(
+        "{BINDING_SELECT} WHERE {filter} = $1 ORDER BY b.project_id, b.generation LIMIT $2"
+    );
     let rows: Vec<BindingRow> = db
         .within(query, async {
             let mut conn = db.acquire().await?;
@@ -150,11 +174,11 @@ async fn binding_rows(
                 .map_err(|e| read_query_error(query, e))
         })
         .await?;
-    rows.into_iter().map(binding).collect()
+    rows.into_iter().map(binding_of_row).collect()
 }
 
-/// The projects bound to `integration` (at most [`MAX_BINDINGS`]), by
-/// project id.
+/// The bindings of `integration` (at most [`MAX_BINDINGS`]), by project
+/// id and binding id.
 pub async fn bindings(db: &Db, integration: IntegrationId) -> Result<Vec<Binding>, ForgeError> {
     binding_rows(
         db,
@@ -165,7 +189,8 @@ pub async fn bindings(db: &Db, integration: IntegrationId) -> Result<Vec<Binding
     .await
 }
 
-/// The binding of `project` (none or one).
+/// The bindings of `project`: none, its one resolving binding, or its
+/// shared ones (M3 X3), by binding id.
 pub async fn project_bindings(db: &Db, project: ProjectId) -> Result<Vec<Binding>, ForgeError> {
     binding_rows(
         db,
@@ -174,4 +199,75 @@ pub async fn project_bindings(db: &Db, project: ProjectId) -> Result<Vec<Binding
         project.get(),
     )
     .await
+}
+
+/// Binding `id` of `integration` (`None`: absent, or another
+/// integration's).
+pub async fn binding(
+    db: &Db,
+    integration: IntegrationId,
+    id: i64,
+) -> Result<Option<Binding>, ForgeError> {
+    const QUERY: &str = "integrations.binding";
+    let sql = format!("{BINDING_SELECT} WHERE b.generation = $1 AND b.integration_id = $2");
+    let row: Option<BindingRow> = db
+        .within(QUERY, async {
+            let mut conn = db.acquire().await?;
+            sqlx::query_as(&sql)
+                .bind(id)
+                .bind(integration.get())
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    row.map(binding_of_row).transpose()
+}
+
+/// The repositories bound to `integration` — only those of external
+/// project `external` when given — with their paths (at most
+/// [`MAX_BINDINGS`]), by path then binding id (M3 X3, plan 03 §7.1).
+pub async fn external_bindings(
+    db: &Db,
+    integration: IntegrationId,
+    external: Option<&str>,
+) -> Result<Vec<BoundRepository>, ForgeError> {
+    const QUERY: &str = "integrations.external_bindings";
+    let sql = format!(
+        "SELECT x.*, n.full_path, p.display_name FROM ({BINDING_SELECT}          WHERE b.integration_id = $1 AND ($2::text IS NULL OR b.external_project_id = $2))          AS x (generation, integration_id, kind, project_id, external_project_id,          granted_membership, resolves_work_items, created_by, created_at)          JOIN forge.projects p ON p.id = x.project_id          LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = x.project_id          ORDER BY n.full_path, x.generation LIMIT $3"
+    );
+    type Row = (
+        i64,
+        i64,
+        String,
+        i64,
+        String,
+        bool,
+        bool,
+        Option<i64>,
+        String,
+        Option<String>,
+        String,
+    );
+    let rows: Vec<Row> = db
+        .within(QUERY, async {
+            let mut conn = db.acquire().await?;
+            sqlx::query_as(&sql)
+                .bind(integration.get())
+                .bind(external)
+                .bind(MAX_BINDINGS)
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    rows.into_iter()
+        .map(|(a, b, c, d, e, f, g, h, i, path, display_name)| {
+            Ok(BoundRepository {
+                binding: binding_of_row((a, b, c, d, e, f, g, h, i))?,
+                path,
+                display_name,
+            })
+        })
+        .collect()
 }
