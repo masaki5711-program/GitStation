@@ -778,9 +778,27 @@ a project's binding; the member removals and role changes clear `granted_members
 (`integrations_service_account_kind`, `integrations_service_account_fixed`),
 `integrations_kind_known`, `integrations_event_types_count`,
 `integrations_event_types_entries` (20261114100100),
-`integrations_one_per_service_account`, `integration_bindings_one_per_project`,
+`integrations_one_per_service_account`,
 `integration_bindings_external_project_id_format`. Tests
 `src/integrations/tests.rs`.
+
+**Multi-repository bindings (M3 X3, migration `20261129100000`, ADR-0016
+Amendment X3)**: a binding has an id (`generation`, the primary key) and a
+setting `resolves_work_items`. A resolving binding (a repository with code) is
+its project's only one; shared bindings (a spec repository, `false`) may be
+several, to several kanflow projects (FG-INT-0016 reasons
+`bound_to_other_*`, `shared_bindings_present`, `bound_with_other_setting`,
+`resolution_fixed`). `bind_as_decided` / `update_binding_decided` (false →
+true only) / `unbind_binding_decided` take the act-as assertion and consume it
+in the same transaction; unbinding moves a granted membership to the
+integration's next binding of the project. Reads `binding`,
+`external_bindings` (with paths). Work item detection, `LINKED_SQL` and the
+dev status read resolving bindings only; the feed's visible set takes one
+generation per project (`max`). Backstops `integration_bindings_one_resolving_per_project`,
+`integration_bindings_one_per_external_project`. `lists::project_search`: the
+repository search's candidates (`PROJECT_SEARCH_SQL`). `act_as`: the binding
+intents' subject (`NewSubject` / `AssertedSubject`, CHECK
+`act_as_assertions_subject`). Tests `src/integrations/multi_tests.rs`.
 
 **Work items (M3 I1b, migration `20261116100000`, ADR-0016 Amendment I1b)**:
 `forge.work_items` (one per integration, external project and `PBI-<n>`),

@@ -391,3 +391,28 @@ kanflow の画面で本人が「承認」/「取り消し」を押す
 - runbook 追加: `act-as`（§9 の内容と 2 つの残る危険の注記）。
 - runbook 更新: `backup-restore`（代理の鍵の入れ替え）、`service-accounts`（`act_as` スコープは連携のアカウントだけ、エージェントの印と同時に持てない）、`integrations`（代理を止める手順への参照）、`user-offboarding`（無効化しても社員番号は残ること）。
 - doctor: `act_as.keys`（鍵の有無・`active` の数・`retired` の鍵の数、代理のスコープを持つ有効なトークンがあるのに鍵が無い）。
+
+## Amendment（2026-11-06、M3 X3 `feat/cross-multi-repo-bindings`: 結びつけの代理）
+
+§4 の「X3 で足すもの」を実装し、**許可リストを明示的に広げた**（閉じた既定を変える決定。結びつけの規則は ADR-0016 Amendment X3）。
+
+1. **Action と intent を 1 対 1 に保つ**: §4 は `IntegrationBindingManage` に `binding_set` / `binding_remove` の 2 つを書いたが、§5.1 の
+   「intent は Action と 1 対 1」を守るため、解除を新しい Action **`IntegrationBindingRemove`**（人だけ、Maintainer、`api`）に分けた。
+   `IntegrationBindingManage` = `RequiresAssertion(binding_set)`（結ぶ・設定を変える）、`IntegrationBindingRemove` = `RequiresAssertion(binding_remove)`。
+2. **範囲**: 結ぶ先はまだ結びついていないことがあるので、`via_bound` の代わりに **経路の連携 = 要求の連携**（違えば `FG-REPO-0005
+   reason=act_as_other_integration`、forge-db のロックの下でも主張の連携とサービスアカウントを確かめる）。ロールは **本人の** `native_role()`
+   （Maintainer 以上、管理者の権限は通さない）。サービスアカウントの所属は見ない（`ViaView` は読み込まない）。
+3. **主張の結びつけ**（追記のマイグレーション `20261129100000`）: `act_as_assertions` に `external_project_id` と `resolves_work_items` を足し、
+   MR の列は binding の intent では NULL（CHECK `act_as_assertions_subject`）。MAC の入力（`binding_bytes`）は MR の intent では S2 と同じ
+   バイト列、binding の intent では kanflow のプロジェクトと設定（`None`/`false`/`true`）。`authorize()` は intent・プロジェクト・kanflow の
+   プロジェクト（`wrong_resource`）・設定（**`setting_mismatch`**、新しい `reason`）を比べる。本人が確認したのと違う設定では使えない。
+4. **確認と claim**: `POST /-/confirm/projects/{id}/integration-bindings/assertions` `{intent, integration, kanflow_project_id,
+   resolves_work_items?, state}`（`ActAsAssertionIssue`、本人の Web セッション、CSRF、本人ごとの流量は §5.3 と共有）。`binding_set` は未結合でも可、
+   `binding_remove` はその kanflow のプロジェクトに結びついているときだけ。claim の答えの `iid`・`head_sha`・`target_ref` は binding の intent で
+   `null`、`kanflow_project_id`・`resolves_work_items` を足した。確認の画面（GET の表示のデータ）は U3 で足す。
+5. **一覧の代理（新しい規則 `ListAsPerson`）**: `RepositorySearch` は主張なし、**本人として** 判定する（経路は `Resource::Instance`、候補は
+   1 件ずつ素の `Resource::Project`）。§3 の min の規則では結ぶ前のリポジトリが見えず、登録の画面が作れないため。広がるのは
+   「本人が Maintainer 以上のリポジトリの ID・パス・表示名」だけ（本人が主張つきで結べるもの）で、内容は読めない。受け入れた残る危険:
+   kanflow のサービスアカウントは、社員番号を順に指して、各人が Maintainer のリポジトリ名を列挙できる（kanflow は社員の一覧を既に持つ。
+   失敗した解決の流量 §1 は効かない: 解決は成功するため）。
+6. 不変条件のテストを更新: intent はすべてちょうど 1 つの Action に属する、`ListAsPerson` は `RepositorySearch` だけで `read_api`、人だけではない。
