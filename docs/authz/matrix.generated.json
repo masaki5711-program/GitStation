@@ -4,6 +4,7 @@
   { "action": "RepoBrowse", "allow": 14, "deny": 22, "public": false, "git_operation": false },
   { "action": "SpecRefRead", "allow": 14, "deny": 22, "public": false, "git_operation": false },
   { "action": "SpecRead", "allow": 14, "deny": 22, "public": false, "git_operation": false },
+  { "action": "ContextRead", "allow": 14, "deny": 22, "public": false, "git_operation": false },
   { "action": "ProjectRead", "allow": 18, "deny": 30, "public": false, "git_operation": false },
   { "action": "ProjectList", "allow": 6, "deny": 6, "public": false, "git_operation": false },
   { "action": "ProjectCreate", "allow": 11, "deny": 22, "public": false, "git_operation": false },

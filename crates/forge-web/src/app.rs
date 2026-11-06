@@ -1240,6 +1240,39 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<routes::specs::SpecTraceBody>(Verb::Get, routes::specs::TRACE)
         .queries(Verb::Get, routes::specs::TRACE, routes::specs::TRACE_QUERY)
+        // M3 X5: the context API (plan 03 §6); what is marked confidential
+        // is withheld from an AI agent (plan 06 D-5).
+        .route_with(
+            Verb::Get,
+            routes::context::WORK_ITEM,
+            Action::ContextRead,
+            "A kanflow work item's context: the project's linked merge requests and the @req tests of its acceptance criteria, each with its source",
+            routes::context::WORK_ITEM_OF,
+            routes::context::work_item,
+        )
+        .responds::<routes::context::ContextWorkItemBody>(Verb::Get, routes::context::WORK_ITEM)
+        .queries(
+            Verb::Get,
+            routes::context::WORK_ITEM,
+            routes::context::WORK_ITEM_QUERY,
+        )
+        .route_with(
+            Verb::Get,
+            routes::context::REQUIREMENT,
+            Action::ContextRead,
+            "A requirement's context: its text and document, the @req tests naming it and its state in the newest versions, each with its source",
+            routes::context::REQUIREMENT_OF,
+            routes::context::requirement,
+        )
+        .responds::<routes::context::ContextRequirementBody>(
+            Verb::Get,
+            routes::context::REQUIREMENT,
+        )
+        .queries(
+            Verb::Get,
+            routes::context::REQUIREMENT,
+            routes::context::REQUIREMENT_QUERY,
+        )
 }
 
 /// The history half of the browse API (`RepoBrowse`, `read_api`; M2 MR8):
@@ -1586,6 +1619,20 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::conflicts,
         )
         .responds::<mr::ConflictsBody>(Verb::Get, mr::CONFLICTS)
+        // M3 X5 (plan 03 §6): a merge request's review context, read like
+        // the merge request itself.
+        .route_with(
+            Verb::Get,
+            routes::context::MERGE_REQUEST,
+            Action::MergeRequestRead,
+            "A merge request's review context: its changed files, the requirements it changes, its work items and the check runs on its head, each with its source (as the repository browse API)",
+            routes::context::MERGE_REQUEST_OF,
+            routes::context::merge_request,
+        )
+        .responds::<routes::context::ContextMergeRequestBody>(
+            Verb::Get,
+            routes::context::MERGE_REQUEST,
+        )
         // M3 R3 (ADR-0024 §6, §12): discussions — read like the merge
         // request, started and answered as `MergeRequestComment`, resolved
         // as `DiscussionResolve` on the thread.
@@ -2013,6 +2060,16 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 Action::WebShell,
                 "Web UI asset (embedded build; content-hashed, immutable)",
                 routes::assets::asset,
+            )
+            // The act-as confirmation popup (ADR-0025 §5.4, U3): the same
+            // shell bytes; the headers (frame-ancestors, X-Frame-Options,
+            // COOP) come from the one table in `security_headers`.
+            .route(
+                verb,
+                routes::act_as::PAGE,
+                Action::WebShell,
+                "SPA shell: act-as confirmation popup",
+                shell,
             )
             .scoped(
                 RouteScope::Namespace,

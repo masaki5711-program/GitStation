@@ -64,6 +64,22 @@
     "word": "fixed"
   },
   {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/-/confirm/projects/{id}/merge-requests/{iid}",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/confirm/projects/{id}/merge-requests/{iid}",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ActAsAssertionIssue",
     "method": "POST",
     "path": "/-/confirm/projects/{id}/integration-bindings/assertions",
@@ -496,6 +512,22 @@
     "word": "fixed"
   },
   {
+    "action": "ContextRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/context/requirement",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ContextRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/context/work-item",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/integration-bindings",
@@ -627,6 +659,14 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/conflicts",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/context",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

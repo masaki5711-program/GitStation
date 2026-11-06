@@ -32,6 +32,9 @@ pub mod notifications;
 pub mod registry;
 pub mod review;
 pub mod specs;
+// M3 X5: the context API and the MCP server.
+pub mod context;
+pub mod mcp;
 pub mod store;
 // M3 I2: project webhooks.
 pub mod webhooks;

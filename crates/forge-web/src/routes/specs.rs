@@ -144,6 +144,9 @@ pub struct SpecDocumentBody {
     pub requirements: usize,
     /// Rules the document breaks (they are in `problems`).
     pub problems: usize,
+    /// `confidential: true` (or a front matter that cannot be read): never
+    /// listed for an AI agent (M3 X5, plan 06 D-5).
+    pub confidential: bool,
 }
 
 /// One requirement.
@@ -199,6 +202,9 @@ pub struct SpecRequirementsBody {
     pub problems: Vec<SpecProblemBody>,
     #[schema(required = true)]
     pub incomplete: Option<SpecIncompleteBody>,
+    /// What an AI agent's answer left out (M3 X5, plan 06 D-5).
+    #[schema(required = true)]
+    pub withheld: Option<crate::routes::context::ContextWithheldBody>,
 }
 
 /// One version tag.
@@ -247,6 +253,9 @@ pub struct SpecDiffBody {
     /// Either revision's index hit a bound.
     #[schema(required = true)]
     pub incomplete: Option<SpecIncompleteBody>,
+    /// What an AI agent's answer left out (M3 X5, plan 06 D-5).
+    #[schema(required = true)]
+    pub withheld: Option<crate::routes::context::ContextWithheldBody>,
 }
 
 /// Where a test is.
@@ -307,11 +316,14 @@ pub struct SpecTraceBody {
     /// An index (this revision's or a reference's) hit a bound.
     #[schema(required = true)]
     pub incomplete: Option<SpecIncompleteBody>,
+    /// What an AI agent's answer left out (M3 X5, plan 06 D-5).
+    #[schema(required = true)]
+    pub withheld: Option<crate::routes::context::ContextWithheldBody>,
 }
 
 // ── the handlers ───────────────────────────────────────────────────────
 
-fn incomplete(reason: Option<&'static str>) -> Option<SpecIncompleteBody> {
+pub(crate) fn incomplete(reason: Option<&'static str>) -> Option<SpecIncompleteBody> {
     reason.map(|r| SpecIncompleteBody {
         error_code: ErrorCode::SpecIndexIncomplete.id().to_owned(),
         reason: r.to_owned(),
@@ -328,15 +340,16 @@ fn config_word(c: &RepoConfigRead) -> &'static str {
 
 /// Run `work` for a signed-in caller under the limit and the budget, and
 /// answer it (or its error with the route and the target's ids).
-async fn respond<T, F, Fut>(
+pub(crate) async fn respond<R, T, F, Fut>(
     state: AppState,
-    request: Dispatched<ProjectCtx>,
+    request: Dispatched<R>,
     route: &'static str,
     work: F,
 ) -> Response
 where
+    R: forge_auth::ResourceCtx,
     T: Serialize,
-    F: FnOnce(AppState, Dispatched<ProjectCtx>, Target) -> Fut,
+    F: FnOnce(AppState, Dispatched<R>, Target) -> Fut,
     Fut: std::future::Future<Output = Result<T, ForgeError>>,
 {
     let ctx = request.ctx().clone(); // clone: the error path outlives the request
@@ -402,7 +415,11 @@ where
 
 /// Count `n` more indexes of `caller`'s request against the limit
 /// (`FG-WEB-0010` past it).
-fn charge(state: &AppState, caller: forge_core::UserId, n: usize) -> Result<(), ForgeError> {
+pub(crate) fn charge(
+    state: &AppState,
+    caller: forge_core::UserId,
+    n: usize,
+) -> Result<(), ForgeError> {
     for _ in 0..n {
         if let Err(retry) = state.spec_index_limiter.check(caller, Instant::now()) {
             return Err(state.spec_index_limiter.refused(retry));
@@ -412,7 +429,9 @@ fn charge(state: &AppState, caller: forge_core::UserId, n: usize) -> Result<(), 
 }
 
 /// The caller of a request (every spec route needs a signed-in one).
-fn caller_of(request: &Dispatched<ProjectCtx>) -> Result<forge_core::UserId, ForgeError> {
+pub(crate) fn caller_of<R: forge_auth::ResourceCtx>(
+    request: &Dispatched<R>,
+) -> Result<forge_core::UserId, ForgeError> {
     request.proof().principal().user().ok_or_else(|| {
         ForgeError::new(ErrorCode::Internal).with_context("reason", "spec_index_without_user")
     })
@@ -485,7 +504,7 @@ impl Drop for Running<'_> {
 }
 
 /// The revision `name` names, or the default branch.
-async fn revision(t: &Target, name: Option<&str>) -> Result<ResolvedRev, ForgeError> {
+pub(crate) async fn revision(t: &Target, name: Option<&str>) -> Result<ResolvedRev, ForgeError> {
     let browse = &t.smart.browse;
     let repo = t.repository.id;
     match name {
@@ -504,7 +523,11 @@ async fn revision(t: &Target, name: Option<&str>) -> Result<ResolvedRev, ForgeEr
     }
 }
 
-async fn index(t: &Target, rev: &ResolvedRev, tags: Tags) -> Result<Indexed, ForgeError> {
+pub(crate) async fn index(
+    t: &Target,
+    rev: &ResolvedRev,
+    tags: Tags,
+) -> Result<Indexed, ForgeError> {
     index_commit(
         &t.smart.browse,
         t.repository.id,
@@ -532,8 +555,9 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
         state,
         request,
         "specs_requirements",
-        |_, request, t| async move {
+        |state, request, t| async move {
             let params = query(request.raw_query(), &["ref", "q", "limit"])?;
+            let audience = crate::routes::context::audience(&request)?;
             let limit = limit_param(&params)?;
             let needle = match take(&params, "q") {
                 Some(q) if q.len() > MAX_QUERY_BYTES => return Err(param_invalid("q", "too_long")),
@@ -542,6 +566,33 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
             };
             let rev = revision(&t, take(&params, "ref")).await?;
             let indexed = index(&t, &rev, Tags::Skip).await?;
+            // Plan 06 D-5: an agent is not given a confidential document.
+            let secret: std::collections::BTreeSet<String> = if audience.is_agent() {
+                // The default tip's marks too (review X5 MEDIUM a).
+                charge(&state, caller_of(&request)?, 1)?;
+                crate::routes::context::marked_paths(
+                    &t.smart.browse,
+                    t.repository.id,
+                    &t.principal,
+                    &[(rev.commit.as_str(), &indexed.index)],
+                    &[],
+                )
+                .await?
+            } else {
+                std::collections::BTreeSet::new()
+            };
+            let withheld_requirements = indexed
+                .index
+                .requirements()
+                .iter()
+                .filter(|l| secret.contains(l.path))
+                .count();
+            let withheld_documents = indexed
+                .index
+                .documents
+                .iter()
+                .filter(|d| secret.contains(&d.path))
+                .count();
             let specs: BTreeMap<&str, Option<&str>> = indexed
                 .index
                 .documents
@@ -557,6 +608,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                 .index
                 .requirements()
                 .into_iter()
+                .filter(|l| !secret.contains(l.path))
                 .filter(|l| {
                     needle.as_ref().is_none_or(|n| {
                         l.requirement.id.as_str().to_lowercase().contains(n)
@@ -576,6 +628,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
             let truncated = matching.len() > limit;
             let problems = lint(&indexed.index, &ExternalScope::everything())
                 .into_iter()
+                .filter(|f| !secret.contains(f.path.as_str()))
                 .take(MAX_PROBLEMS)
                 .map(|f| SpecProblemBody {
                     error_code: ErrorCode::SpecLintProblem.id().to_owned(),
@@ -589,6 +642,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                 .index
                 .documents
                 .iter()
+                .filter(|d| !secret.contains(d.path.as_str()))
                 .map(|d| SpecDocumentBody {
                     path: d.path.clone(), // clone: the answer owns its strings
                     spec: d.doc.meta.as_ref().map(|m| m.spec.clone()), // clone: as above
@@ -596,8 +650,17 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                     status: d.doc.meta.as_ref().map(|m| m.status.as_str().to_owned()),
                     requirements: d.doc.requirements.len(),
                     problems: d.doc.problems.len() + d.doc.problems_dropped,
+                    confidential: d.doc.confidential(),
                 })
                 .collect();
+            let withheld = crate::routes::context::withheld(
+                &request,
+                "specs_requirements",
+                audience,
+                withheld_documents,
+                withheld_requirements,
+                0,
+            );
             Ok(SpecRequirementsBody {
                 rev: rev_body(&rev),
                 config: config_word(&indexed.config).to_owned(),
@@ -607,6 +670,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                 truncated,
                 problems,
                 incomplete: incomplete(indexed.index.incomplete),
+                withheld,
             })
         },
     )
@@ -669,13 +733,43 @@ pub async fn diff_route(state: AppState, request: Dispatched<ProjectCtx>) -> Res
         "specs_diff",
         |state, request, t| async move {
             let params = query(request.raw_query(), &["from", "to"])?;
+            let audience = crate::routes::context::audience(&request)?;
             // Two revisions: one more index.
             charge(&state, caller_of(&request)?, 1)?;
             let from = revision(&t, Some(required(&params, "from")?)).await?;
             let to = revision(&t, Some(required(&params, "to")?)).await?;
             let before = index(&t, &from, Tags::Skip).await?;
             let after = index(&t, &to, Tags::Skip).await?;
-            let changes = diff(&before.index, &after.index)
+            let secret: std::collections::BTreeSet<String> = if audience.is_agent() {
+                charge(&state, caller_of(&request)?, 1)?;
+                crate::routes::context::marked_paths(
+                    &t.smart.browse,
+                    t.repository.id,
+                    &t.principal,
+                    &[
+                        (from.commit.as_str(), &before.index),
+                        (to.commit.as_str(), &after.index),
+                    ],
+                    &[],
+                )
+                .await?
+            } else {
+                std::collections::BTreeSet::new()
+            };
+            let all = diff(&before.index, &after.index);
+            let (hidden, shown): (Vec<_>, Vec<_>) =
+                all.into_iter().partition(|c| secret.contains(&c.path));
+            let hidden_docs: std::collections::BTreeSet<&str> =
+                hidden.iter().map(|c| c.path.as_str()).collect();
+            let withheld = crate::routes::context::withheld(
+                &request,
+                "specs_diff",
+                audience,
+                hidden_docs.len(),
+                hidden.len(),
+                0,
+            );
+            let changes = shown
                 .into_iter()
                 .map(|c| SpecChangeBody {
                     id: c.id.as_str().to_owned(),
@@ -689,6 +783,7 @@ pub async fn diff_route(state: AppState, request: Dispatched<ProjectCtx>) -> Res
                 to: rev_body(&to),
                 changes,
                 incomplete: incomplete(before.index.incomplete.or(after.index.incomplete)),
+                withheld,
             })
         },
     )
@@ -728,16 +823,65 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
         "specs_trace",
         |state, request, t| async move {
             let params = query(request.raw_query(), &["ref"])?;
+            let audience = crate::routes::context::audience(&request)?;
             let request_id = request.ctx().request_id.clone(); // clone: logged after awaits
             let proof = request.proof();
             let rev = revision(&t, take(&params, "ref")).await?;
             let own = index(&t, &rev, Tags::Read).await?;
             let mut reason = own.index.incomplete;
-            let mut requirements: Vec<SpecTraceRowBody> = trace_rows(
-                &own.dirs.join(", "),
+            // Plan 06 D-5: an agent is not given a confidential document's
+            // rows (own or referenced).
+            let mut hidden_docs = 0;
+            let mut hidden_rows = 0;
+            // A reference's or the own repository's marks: at the revision
+            // read and at the default tip (review X5 MEDIUM a).
+            let marks = |repo: forge_core::RepoId,
+                         commit: &str,
+                         index: &forge_core::spec_index::SpecIndex| {
+                let browse = &t.smart.browse;
+                let principal = t.principal.as_str();
+                let commit = commit.to_owned();
+                let index = index.clone(); // clone: the future owns its index
+                async move {
+                    if !audience.is_agent() {
+                        return Ok(std::collections::BTreeSet::new());
+                    }
+                    crate::routes::context::marked_paths(
+                        browse,
+                        repo,
+                        principal,
+                        &[(commit.as_str(), &index)],
+                        &[],
+                    )
+                    .await
+                }
+            };
+            let mut visible = |secret: &std::collections::BTreeSet<String>,
+                               rows: Vec<TraceTableRow>|
+             -> Vec<TraceTableRow> {
+                if !audience.is_agent() {
+                    return rows;
+                }
+                let (hidden, shown): (Vec<_>, Vec<_>) =
+                    rows.into_iter().partition(|r| secret.contains(&r.path));
+                hidden_docs += hidden
+                    .iter()
+                    .map(|r| r.path.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len();
+                hidden_rows += hidden.len();
+                shown
+            };
+            if audience.is_agent() {
+                charge(&state, caller_of(&request)?, 1)?;
+            }
+            let own_marks = marks(t.repository.id, &rev.commit, &own.index).await?;
+            let own_rows = visible(
+                &own_marks,
                 trace_table(&own.index, None, &own.index, MAX_TESTS_PER_ROW),
-            )
-            .collect();
+            );
+            let mut requirements: Vec<SpecTraceRowBody> =
+                trace_rows(&own.dirs.join(", "), own_rows).collect();
             let mut references = Vec::new();
             if let RepoConfigRead::Valid(config) = &own.config {
                 // One more index per reference followed.
@@ -767,8 +911,14 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
                             .await?;
                             reason = reason.or(theirs.index.incomplete);
                             let scope = (!entry.scope.is_empty()).then_some(entry.scope.as_slice());
-                            let rows =
-                                trace_table(&theirs.index, scope, &own.index, MAX_TESTS_PER_ROW);
+                            if audience.is_agent() {
+                                charge(&state, caller_of(&request)?, 1)?;
+                            }
+                            let their_marks = marks(repository, &commit, &theirs.index).await?;
+                            let rows = visible(
+                                &their_marks,
+                                trace_table(&theirs.index, scope, &own.index, MAX_TESTS_PER_ROW),
+                            );
                             ("resolved", None, rows)
                         }
                         Followed::VersionNotFound { .. } => (
@@ -792,11 +942,20 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
                     requirements.extend(trace_rows(written, rows));
                 }
             }
+            let withheld = crate::routes::context::withheld(
+                &request,
+                "specs_trace",
+                audience,
+                hidden_docs,
+                hidden_rows,
+                0,
+            );
             Ok(SpecTraceBody {
                 rev: rev_body(&rev),
                 requirements,
                 references,
                 incomplete: incomplete(reason),
+                withheld,
             })
         },
     )
@@ -834,4 +993,4 @@ async fn follow_one(
 
 #[cfg(test)]
 #[path = "specs_tests.rs"]
-mod tests;
+pub(crate) mod tests;

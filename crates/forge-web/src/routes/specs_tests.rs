@@ -45,8 +45,8 @@ fn access(role: Option<Role>) -> ProjectAccess {
     }
 }
 
-struct World {
-    calls: Mutex<Vec<(String, Option<UserId>)>>,
+pub(crate) struct World {
+    pub(crate) calls: Mutex<Vec<(String, Option<UserId>)>>,
 }
 
 impl forge_core::NamespaceResolver for World {
@@ -98,7 +98,7 @@ impl forge_core::ProjectAccessLoader for World {
 }
 
 /// A commit of nested `files`.
-fn commit(repo: &Path, files: &[(&str, &str)], parent: Option<&str>) -> String {
+pub(crate) fn commit(repo: &Path, files: &[(&str, &str)], parent: Option<&str>) -> String {
     use std::collections::BTreeMap;
     #[derive(Default)]
     struct Dir {

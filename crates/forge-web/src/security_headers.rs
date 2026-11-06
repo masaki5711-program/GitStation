@@ -14,7 +14,10 @@
 //! | other (health, redirects, every error not from a marked handler) | as the API | `Cache-Control: no-store` unless the route set one |
 //! | Smart HTTP | none (git clients read no CSP; unchanged) | none |
 //!
-//! Every class but Smart HTTP also gets `X-Content-Type-Options: nosniff`,
+//! Every class but Smart HTTP and raw also gets `X-Frame-Options: DENY`
+//! (the old-browser twin of `frame-ancestors 'none'`; the act-as
+//! confirmation popup is a clickjacking target, ADR-0025 §5.4). Raw files
+//! stay frameable (sandboxed). Every class but Smart HTTP also gets `X-Content-Type-Options: nosniff`,
 //! `Referrer-Policy: same-origin`, `Cross-Origin-Opener-Policy:
 //! same-origin`, the `Permissions-Policy` below and, when configured,
 //! `Strict-Transport-Security`.
@@ -28,7 +31,7 @@ use std::time::Duration;
 use axum::extract::{Request, State};
 use axum::http::header::{
     HeaderName, HeaderValue, CACHE_CONTROL, CONTENT_SECURITY_POLICY, REFERRER_POLICY,
-    STRICT_TRANSPORT_SECURITY, VARY, X_CONTENT_TYPE_OPTIONS,
+    STRICT_TRANSPORT_SECURITY, VARY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::HeaderMap;
 use axum::middleware::Next;
@@ -176,6 +179,9 @@ fn apply(config: &SecurityHeaders, class: ResponseClass, headers: &mut HeaderMap
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(REFERRER_POLICY, HeaderValue::from_static("same-origin"));
     headers.insert(COOP, HeaderValue::from_static("same-origin"));
+    if class != ResponseClass::Raw {
+        headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
     headers.insert(PERMISSIONS_POLICY, HeaderValue::from_static(PERMISSIONS));
     if let Some(hsts) = &config.hsts {
         headers.insert(STRICT_TRANSPORT_SECURITY, hsts.clone());

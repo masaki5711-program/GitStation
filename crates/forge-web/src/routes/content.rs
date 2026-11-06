@@ -160,6 +160,7 @@ async fn raw_inner(
 ) -> Result<Response, ForgeError> {
     let (smart, repository) = ready(state, &request)?;
     let smart = Arc::clone(smart);
+    let audience = crate::routes::context::audience(&request)?;
     let (project_id, repo_id) = (request.proof().id().get(), repository.id.get());
     let ids = move |e: ForgeError| {
         e.with_context("project_id", project_id)
@@ -173,6 +174,17 @@ async fn raw_inner(
         .map_err(ids)?;
     let commit = spec.rev.commit.clone(); // clone: logged with a failure
     let path: RepoPath = spec.path;
+    // M3 X5 (plan 06 D-5): no confidential specification for an agent.
+    crate::routes::context::refuse_marked_path(
+        audience,
+        &smart.browse,
+        repository.id,
+        &principal,
+        &commit,
+        path.as_str(),
+    )
+    .await
+    .map_err(ids)?;
     let name = path.file_name().unwrap_or("download").to_owned();
     let head = *request.method() == Method::HEAD;
     let browse = &smart.browse;

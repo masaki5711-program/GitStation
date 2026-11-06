@@ -328,3 +328,22 @@ fn the_trace_table_lists_each_requirement_with_its_tests_within_scope() {
     let scoped = trace_table(&spec_index, Some(&scope), &tags, 2);
     assert_eq!(scoped.len(), 2);
 }
+
+/// M3 X5 (plan 06 D-5): the paths of the documents an AI agent is not
+/// given.
+#[test]
+fn confidential_paths_lists_the_withheld_documents() {
+    let i = index(
+        &[
+            ("spec/open.md", spec("a/open", "::: req APP-A-1\nx\n:::\n")),
+            (
+                "spec/secret.md",
+                "---\nspec: a/secret\ntitle: t\nstatus: approved\nconfidential: true\n---\n::: req APP-A-2\ny\n:::\n"
+                    .to_owned(),
+            ),
+        ],
+        &[],
+    );
+    let paths: Vec<&str> = i.confidential_paths().into_iter().collect();
+    assert_eq!(paths, ["spec/secret.md"]);
+}

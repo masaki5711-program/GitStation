@@ -120,3 +120,6 @@ mod viewer_tests;
 mod act_as_tests;
 #[cfg(test)]
 mod webhook_tests;
+// M3 X5: the context API's action and the agent audience (plan 06 D-5).
+#[cfg(test)]
+mod context_tests;

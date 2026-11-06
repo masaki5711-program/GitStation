@@ -831,6 +831,10 @@ detected one the subscriber's progress; DELETE only while the repository is
 `linked_by_kind` / `unlinked_by_kind` (only a `human`'s manual unlink stops
 detection); unbinding ends the binding's open links (`unbound`). Tests
 `src/work_items/tests.rs`.
+M3 X5 (ADR-0023 Amendment X5): `forge.work_items.confidential` (kanflow's mark, plan 06
+D-5; migration `20261128100000`, nothing writes it yet) and the context API's reads
+`work_items::work_item_context` (one work item of a project's binding with the project's
+openly linked merge requests, bounded) and `work_items::confidential_work_items`.
 
 **Webhooks (M3 I2, migration `20261120200000`, ADR-0016 Amendment I2)**:
 `webhooks::{create_webhook,update_webhook,delete_webhook,rotate_webhook_secret,redeliver_webhook}_decided` (decided in

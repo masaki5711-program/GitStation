@@ -277,6 +277,7 @@ pub fn authorize(
             | Action::RepoBrowse
             | Action::SpecRefRead
             | Action::SpecRead
+            | Action::ContextRead
             | Action::ProjectRead,
             Resource::Project(p),
         ) => need(Role::Reporter, read_role(p)),
@@ -1132,6 +1133,7 @@ pub fn authorize(
             | Action::RepoBrowse
             | Action::SpecRefRead
             | Action::SpecRead
+            | Action::ContextRead
             | Action::ProjectRead
             | Action::ProjectList
             | Action::ProjectCreate

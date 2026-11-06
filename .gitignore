@@ -11,3 +11,6 @@
 .env
 .env.*
 !.env.example
+
+# M3 test environment secrets and runtime files (ops/test-env/test-env.mjs)
+/ops/test-env/.local/

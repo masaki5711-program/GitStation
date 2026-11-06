@@ -117,6 +117,16 @@ impl SpecIndex {
         self.incomplete.get_or_insert(reason);
     }
 
+    /// The documents an AI agent is not given (M3 X5, plan 06 D-5:
+    /// [`SpecDocument::confidential`]), by path.
+    pub fn confidential_paths(&self) -> std::collections::BTreeSet<&str> {
+        self.documents
+            .iter()
+            .filter(|d| d.doc.confidential())
+            .map(|d| d.path.as_str())
+            .collect()
+    }
+
     /// Each requirement id with its first definition, by id.
     pub fn requirements(&self) -> Vec<Located<'_>> {
         self.by_id().into_values().collect()

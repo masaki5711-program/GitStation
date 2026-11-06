@@ -17,7 +17,8 @@
     "i18n:report": "node scripts/i18n-report.mjs",
     "licenses": "node scripts/check-licenses.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "journey": "node scripts/journey.mjs"
+    "journey": "node scripts/journey.mjs && node scripts/journey-keycloak.mjs",
+    "journey:keycloak": "node scripts/journey-keycloak.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "5.104.4",

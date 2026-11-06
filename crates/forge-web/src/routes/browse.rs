@@ -540,8 +540,10 @@ pub async fn tree(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
 
 /// `GET /api/v1/projects/{id}/repository/blob?ref=&path=`.
 pub async fn blob(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let audience = crate::routes::context::audience(&request);
     answer(state, request, "repository_blob", |t, q| async move {
         let params = query(q.as_deref(), &["ref", "path"])?;
+        let audience = audience?;
         let rev_name = required(&params, "ref")?;
         let path = path_param(&params)?;
         let repo = t.repository.id;
@@ -550,6 +552,16 @@ pub async fn blob(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
             .browse
             .resolve_ref(repo, rev_name, &t.principal)
             .await?;
+        // M3 X5 (plan 06 D-5): no confidential specification for an agent.
+        crate::routes::context::refuse_marked_path(
+            audience,
+            &t.smart.browse,
+            repo,
+            &t.principal,
+            &rev.commit,
+            path.as_str(),
+        )
+        .await?;
         let blob = t
             .smart
             .browse
