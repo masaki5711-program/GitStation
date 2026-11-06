@@ -63,6 +63,9 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     // ── M3 I1b review: a person's link is audited, a detected one the
     // subscriber's (20261116100100) ──
     "forge.merge_request_work_items_audited()",
+    // ── M3 S2: employee numbers kept; assertions move forward (20261125100000) ──
+    "forge.users_employee_number_kept_when_disabled()",
+    "forge.act_as_assertions_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -172,6 +175,22 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "user_identities_human_guard",
         "CREATE TRIGGER user_identities_human_guard BEFORE INSERT OR UPDATE OF user_id ON \
          forge.user_identities FOR EACH ROW EXECUTE FUNCTION forge.user_identities_human_guard()",
+    ),
+    // ── M3 S2: a disabled user keeps its employee number (20261125100000) ──
+    (
+        "users",
+        "users_employee_number_kept_when_disabled",
+        "CREATE TRIGGER users_employee_number_kept_when_disabled BEFORE UPDATE OF \
+         employee_number, state ON forge.users FOR EACH ROW EXECUTE FUNCTION \
+         forge.users_employee_number_kept_when_disabled()",
+    ),
+    // ── M3 S2: an assertion only moves forward (20261125100000) ──
+    (
+        "act_as_assertions",
+        "act_as_assertions_forward",
+        "CREATE TRIGGER act_as_assertions_forward BEFORE INSERT OR UPDATE ON \
+         forge.act_as_assertions FOR EACH ROW EXECUTE FUNCTION \
+         forge.act_as_assertions_guard()",
     ),
     // ── M3 I1a: an integration acts as one service account (20261114100000) ──
     (
@@ -769,6 +788,18 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             "forge.retention_policy",
             plain(&["forge_app:SELECT", "forge_ro:SELECT", "forge_purge:SELECT"]),
         ),
+        // ── M3 S2: the assertions — no DELETE, INSERT and UPDATE by column,
+        // the read pool without mac / state_hash (20261125100000) ──
+        (
+            "forge.act_as_assertions",
+            [
+                plain(&["forge_app:SELECT"]),
+                columns("forge_app", "INSERT", ACT_AS_APP_INSERT),
+                columns("forge_app", "UPDATE", ACT_AS_APP_UPDATE),
+                columns("forge_ro", "SELECT", ACT_AS_RO),
+            ]
+            .concat(),
+        ),
         // ── M3 I2: webhooks (the read pool without the sealed secrets) and
         // their deliveries (20261120200000) ──
         (
@@ -797,6 +828,59 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ),
     ]
 }
+
+/// The columns forge_app may insert into forge.act_as_assertions.
+const ACT_AS_APP_INSERT: &[&str] = &[
+    "integration_id",
+    "user_id",
+    "intent",
+    "project_id",
+    "merge_request_id",
+    "head_sha",
+    "target_ref",
+    "target_sha",
+    "state_hash",
+    "expires_at",
+    "issued_request_id",
+];
+
+/// The columns forge_app may update on forge.act_as_assertions.
+const ACT_AS_APP_UPDATE: &[&str] = &[
+    "state",
+    "public_id",
+    "mac",
+    "key_id",
+    "claimed_at",
+    "finished_at",
+    "reject_reason",
+    "claimed_request_id",
+    "finished_request_id",
+];
+
+/// The columns forge_ro may read on forge.act_as_assertions (not mac,
+/// state_hash).
+const ACT_AS_RO: &[&str] = &[
+    "id",
+    "state",
+    "public_id",
+    "key_id",
+    "integration_id",
+    "user_id",
+    "intent",
+    "project_id",
+    "merge_request_id",
+    "head_sha",
+    "target_ref",
+    "target_sha",
+    "issued_at",
+    "expires_at",
+    "claimed_at",
+    "finished_at",
+    "reject_reason",
+    "issued_request_id",
+    "claimed_request_id",
+    "finished_request_id",
+];
 
 /// The read pool's columns of forge.webhooks (tables.toml `ro_columns`):
 /// not secret_ciphertext, secret_prev_ciphertext or url (I2 review).
@@ -992,6 +1076,8 @@ const LATER_TABLES: &[&str] = &[
     "retention_policy",
     // ── M3 O3: the maintenance ledger (migration 20261117100000) ──
     "repository_maintenance",
+    // ── M3 S2: acting for a person (migration 20261125100000) ──
+    "act_as_assertions",
     // ── M3 I2: webhooks (migration 20261120200000) ──
     "webhooks",
     "webhook_deliveries",

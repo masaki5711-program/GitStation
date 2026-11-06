@@ -79,6 +79,11 @@ pub fn authorize(
 ) -> Result<(), ForgeError> {
     let deny = |code: ErrorCode| ForgeError::new(code).with_context("action", action.name());
 
+    // Acting for a person (M3 S2, ADR-0025): its own arm, before anything
+    // else (a public action included: no act-as principal reaches one).
+    if let Credential::ActAs(credential) = principal.credential() {
+        return crate::act_as::decide(principal, credential, action, resource);
+    }
     if action.is_public() {
         return Ok(());
     }
@@ -1023,6 +1028,38 @@ pub fn authorize(
         ) => project_events(principal, project, *class)
             .map_err(|e| e.with_context("action", action.name())),
 
+        // --- acting for a person (M3 S2, ADR-0025 §5) ---
+        // The confirmation: a person's web session (a token was refused
+        // above as session-only) that sees the merge request, for an
+        // enabled integration bound to its project, and whose session may
+        // perform the intent's action on it now.
+        (Action::ActAsConfirmView | Action::ActAsAssertionIssue, Resource::ActAsConfirm(c)) => {
+            people_only()?;
+            authorize(principal, Action::MergeRequestRead, &c.merge_request)
+                .map_err(|e| e.with_context("action", action.name()))?;
+            if !c.integration_enabled {
+                return Err(refused("integration_disabled"));
+            }
+            if !c.bound {
+                return Err(refused("act_as_unbound"));
+            }
+            let intended = match c.intent {
+                forge_core::act_as::Intent::Approve => Action::MergeRequestApprove,
+                forge_core::act_as::Intent::Unapprove => Action::MergeRequestUnapprove,
+            };
+            authorize(principal, intended, &c.merge_request).map_err(|e| {
+                e.with_context("action", action.name())
+                    .with_context("intent", c.intent.as_str())
+            })
+        }
+        // The claim: the integration's own service account (as its feed).
+        (Action::ActAsAssertionClaim, Resource::IntegrationFeed(feed)) => {
+            integration_feed(principal, feed).map_err(|e| e.with_context("action", action.name()))
+        }
+        // Only the act-as arm (returned above) reads an act-as resource.
+        (_, Resource::ActAs(_)) => {
+            Err(deny(ErrorCode::Forbidden).with_context("reason", "act_as_resource_without_act_as"))
+        }
         // --- webhooks (M3 I2, ADR-0016 §8, plan 11 §4.3) ---
         // A project's Maintainers (visibility and pending deletion were
         // decided above: FG-REPO-0005 / FG-REPO-0006). Managing and
@@ -1136,6 +1173,9 @@ pub fn authorize(
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
             | Action::IntegrationDevStatusRead
+            | Action::ActAsConfirmView
+            | Action::ActAsAssertionIssue
+            | Action::ActAsAssertionClaim
             | Action::WebhookRead
             | Action::WebhookManage
             | Action::WebhookDeliveryRead
@@ -1168,7 +1208,8 @@ pub fn authorize(
             | Resource::ServiceAccountTokenRequest { .. }
             | Resource::CheckRun { .. }
             | Resource::IntegrationFeed(_)
-            | Resource::ProjectEvents { .. },
+            | Resource::ProjectEvents { .. }
+            | Resource::ActAsConfirm(_),
         ) => wrong_resource(),
     }
 }
@@ -1244,7 +1285,11 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Tombstone(_)
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
-        | Resource::IntegrationFeed(_) => None,
+        | Resource::IntegrationFeed(_)
+        // Decided in their own arms (the act-as arm; the confirmation
+        // decides visibility on its merge request).
+        | Resource::ActAs(_)
+        | Resource::ActAsConfirm(_) => None,
     }
 }
 
@@ -1298,7 +1343,9 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::CheckRun { .. }
         | Resource::IntegrationFeed(_)
-        | Resource::ProjectEvents { .. } => None,
+        | Resource::ProjectEvents { .. }
+        | Resource::ActAs(_)
+        | Resource::ActAsConfirm(_) => None,
     }
 }
 

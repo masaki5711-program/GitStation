@@ -197,3 +197,7 @@ gstn mr unlink-work-item --project <project_id> --iid <iid> --ref PBI-43
 
 - 監査の行（`integration.created` / `updated` / `bound` / `unbound`）が残っていることを確かめる（Diagnose 6）。
 - 連携をやめたときは、サービスアカウントのトークンも失効させる（Runbook service-accounts）。連携の行は消さない（無効にするだけ）。
+
+## 代理実行を止める（M3 S2、ADR-0025）
+
+kanflow が本人として承認する経路（代理実行）は、連携を無効化すると止まる（代理の要求は `FG-AUTH-0003 reason=integration_disabled`）。今すぐすべてを止めるにはサービスアカウントを無効化する。手順・診断・鍵の入れ替えは runbook act-as。

@@ -133,6 +133,13 @@ pub(crate) enum Actor {
     /// A disabled service account that is a Developer member, with a
     /// `read_api` token (M3 I1c).
     ServiceAccountDisabledTokenReadApi,
+    /// An integration's service account with an `act_as` token (M3 S2:
+    /// the claim), and its agent twin.
+    ServiceAccountTokenActAs,
+    ServiceAccountAgentTokenActAs,
+    /// A service account acting for the person `ME` (M3 S2, ADR-0025):
+    /// `matrix_rows_act_as.rs`.
+    ActAs(crate::matrix_rows_act_as::Via),
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -351,6 +358,11 @@ pub(crate) enum Fixture {
         class: forge_core::VisibilityClass,
         project: crate::matrix_review::MrProject,
     },
+    /// A resource as an act-as request reaches it (M3 S2):
+    /// `matrix_rows_act_as.rs`.
+    ActAs(crate::matrix_rows_act_as::Scene),
+    /// The act-as confirmation of a merge request (M3 S2).
+    Confirm(crate::matrix_rows_act_as::ConfirmScene),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -482,6 +494,13 @@ impl Actor {
                 Credential::Token(vec![Scope::ReadApi]),
                 AccountKind::ServiceAccount,
             ),
+            Actor::ServiceAccountTokenActAs => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::ActAs])
+            }
+            Actor::ServiceAccountAgentTokenActAs => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::ActAs]).as_agent(true)
+            }
+            Actor::ActAs(via) => via.principal(),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -519,6 +538,10 @@ impl Actor {
             | Actor::ServiceAccountTokenReadApi
             | Actor::ServiceAccountAgentTokenReadApi
             | Actor::ServiceAccountDisabledTokenReadApi => Some(Role::Developer),
+            Actor::ServiceAccountTokenActAs | Actor::ServiceAccountAgentTokenActAs => {
+                Some(Role::Reporter)
+            }
+            Actor::ActAs(via) => via.person,
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -616,7 +639,10 @@ impl Actor {
             | Actor::ServiceAccountTokenReadApi
             | Actor::ServiceAccountReporterTokenApi
             | Actor::ServiceAccountAgentTokenReadApi
-            | Actor::ServiceAccountDisabledTokenReadApi => None,
+            | Actor::ServiceAccountDisabledTokenReadApi
+            | Actor::ServiceAccountTokenActAs
+            | Actor::ServiceAccountAgentTokenActAs
+            | Actor::ActAs(_) => None,
         }
     }
 
@@ -961,6 +987,8 @@ impl Fixture {
                 class,
             },
             Fixture::Mr(mr) => mr.resource(role),
+            Fixture::ActAs(scene) => scene.resource(role),
+            Fixture::Confirm(scene) => scene.resource(role),
             Fixture::Discussion(d) => d.resource(role),
             Fixture::ServiceAccountTarget { human, active } => {
                 Resource::ServiceAccount(service_account_view(human, active))
@@ -1024,6 +1052,9 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_work_items::WORK_ITEM_ROWS,
         crate::matrix_rows_feed::FEED_ROWS,
         crate::matrix_rows_dev_status::DEV_STATUS_ROWS,
+        crate::matrix_rows_act_as::ACT_AS_ROWS,
+        crate::matrix_rows_act_as::CONFIRM_ROWS,
+        &crate::matrix_rows_act_as::generated_denies(),
         crate::matrix_rows_webhooks::WEBHOOK_ROWS.as_slice(),
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,

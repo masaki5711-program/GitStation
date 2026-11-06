@@ -31,8 +31,8 @@
 use std::sync::Arc;
 
 use forge_auth::{
-    authorize, AccountFacts, Action, Authorized, Credential, LoadedProject, Principal, ProjectCtx,
-    ProjectView, Resource, WebhookCtx, WebhookDeliveryCtx,
+    authorize, AccountFacts, Action, Authorized, LoadedProject, Principal, ProjectCtx, ProjectView,
+    Resource, WebhookCtx, WebhookDeliveryCtx,
 };
 use forge_core::webhook::{
     webhook_event_types, TargetPolicy, WebhookSecret, WebhookSecretKeys, WebhookUrl,
@@ -135,10 +135,8 @@ fn change_context(request: &WebhookRequest, principal: &Principal, user: UserId)
     // Managing a webhook is a person's (`people_only`): always a user.
     let mut ctx = ChangeContext::new(Actor::User(user), request.request_id.clone()); // clone: the context owns it
     ctx.credential_id = request.credential_id;
-    ctx.effective_scope = match principal.credential() {
-        Credential::Session => Vec::new(),
-        Credential::Token(scopes) => scopes.iter().map(|s| s.as_str().to_owned()).collect(),
-    };
+    // Never an act-as principal (webhooks are not acted for, ADR-0025 §4).
+    ctx.effective_scope = principal.scope_names();
     ctx
 }
 

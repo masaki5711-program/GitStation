@@ -68,6 +68,10 @@ guarded_functions = [
     # M3 I1b review: a person's link carries its audit row, a detected one
     # the subscriber's progress (deferred, 20261116100100).
     "merge_request_work_items_audited",
+    # M3 S2 (ADR-0025): a disabled user keeps its employee number; an
+    # assertion only moves forward, for a person, its binding fixed.
+    "users_employee_number_kept_when_disabled",
+    "act_as_assertions_guard",
 ]
 
 [tables.events]
@@ -537,6 +541,26 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 # ── end M3 I1c ──
+
+# ── M3 S2: acting for a person (ADR-0025 §5.1, migration 20261125100000) ──
+# One confirmation: pending (issued) -> claimed (the secret created and
+# returned once; only its keyed MAC stored) -> consumed / rejected.
+# act_as_assertion.issued / .claimed / .consumed / .rejected on the row.
+[tables.act_as_assertions]
+guarded = false
+kind = "audited"
+# Not mac or state_hash.
+ro_columns = [
+    "id", "state", "public_id", "key_id", "integration_id", "user_id", "intent", "project_id",
+    "merge_request_id", "head_sha", "target_ref", "target_sha", "issued_at", "expires_at",
+    "claimed_at", "finished_at", "reject_reason", "issued_request_id", "claimed_request_id",
+    "finished_request_id",
+]
+audit_resource = "act_as_assertion"
+audit_id_column = "id"
+unaudited_columns = []
+txn_audited_columns = []
+# ── end M3 S2 ──
 
 # ── M3 I2: webhooks (ADR-0016 §8, Amendment I2) ──
 # A project's push receivers; the delivery counters are unaudited. Not the

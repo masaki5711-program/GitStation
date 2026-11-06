@@ -102,6 +102,7 @@ impl World {
             &as_user(who, request),
             (self.web.project_id, self.mr.iid),
             who,
+            None,
             |_| Ok(()),
             |_, facts, id| {
                 assert!(facts.approvals.iter().any(|a| a.approval.id == id));
@@ -228,6 +229,7 @@ async fn an_approver_withdraws_only_their_own_approval() {
         &as_user(w.bob, "req-unapprove"),
         (w.web.project_id, w.mr.iid),
         w.bob,
+        None,
         |_| Ok(()),
     )
     .await
@@ -245,6 +247,7 @@ async fn an_approver_withdraws_only_their_own_approval() {
         &as_user(w.bob, "req-unapprove-again"),
         (w.web.project_id, w.mr.iid),
         w.bob,
+        None,
         |_| Ok(()),
     )
     .await
@@ -330,6 +333,7 @@ async fn an_approval_past_the_cap_is_refused() {
         &as_user(w.bob, "req-approve"),
         (w.web.project_id, w.mr.iid),
         w.bob,
+        None,
         |_| Ok(()),
         |_, _, _| (true, None),
     )

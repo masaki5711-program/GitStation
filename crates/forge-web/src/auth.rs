@@ -314,11 +314,38 @@ pub(crate) const CLEAR_SESSION_COOKIE: &str =
     "__Host-gstn_session=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax";
 
 /// Per-route middleware (fixed routes: the API surface, before the guard).
-pub(crate) async fn authenticate(mut req: Request, next: Next) -> Response {
-    match authenticate_request(&mut req, Surface::Api).await {
-        Ok(()) => next.run(req).await,
+/// `action` is the route's: an act-as request is decided against it
+/// before anything is looked up (M3 S2, [`crate::act_as`]).
+pub(crate) async fn authenticate(
+    axum::extract::State(action): axum::extract::State<forge_auth::Action>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    match authenticate_request_acting(&mut req, Surface::Api, Some(action)).await {
+        Ok(None) => next.run(req).await,
+        Ok(Some(accepted)) => {
+            let res = next.run(req).await;
+            crate::act_as::finish(accepted, crate::act_as::answered(&res)).await;
+            res
+        }
         Err(res) => *res,
     }
+}
+
+/// [`authenticate_request`], then the act-as step (`Forge-Act-As`, M3 S2):
+/// an accepted act-as request comes back for [`crate::act_as::finish`].
+pub(crate) async fn authenticate_request_acting(
+    req: &mut Request,
+    surface: Surface,
+    action: Option<forge_auth::Action>,
+) -> Result<Option<crate::act_as::Accepted>, Box<Response>> {
+    authenticate_request(req, surface).await?;
+    let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
+    let Some(request_id) = req.extensions().get::<RequestId>().cloned() else {
+        // authenticate_request refused a request without one already.
+        return Ok(None);
+    };
+    crate::act_as::admit(req, surface, action, &request_id, lang).await
 }
 
 /// The id of the personal access token a request authenticated with (a

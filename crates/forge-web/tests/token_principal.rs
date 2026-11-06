@@ -138,6 +138,7 @@ async fn whoami(_: AppState, request: Dispatched<InstanceCtx>) -> Response {
     let scopes: Vec<&str> = match principal.credential() {
         Credential::Token(scopes) => scopes.iter().map(|s| s.as_str()).collect(),
         Credential::Session => vec!["<session>"],
+        Credential::ActAs(_) => vec!["<act_as>"],
     };
     Json(json!({
         "user": principal.user().map(|u| u.get()),
@@ -155,6 +156,7 @@ async fn whoami_raw(_: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let scopes: Vec<&str> = match principal.credential() {
         Credential::Token(scopes) => scopes.iter().map(|s| s.as_str()).collect(),
         Credential::Session => vec!["<session>"],
+        Credential::ActAs(_) => vec!["<act_as>"],
     };
     Json(json!({
         "user": principal.user().map(|u| u.get()),
