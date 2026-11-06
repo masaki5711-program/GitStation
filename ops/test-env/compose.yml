@@ -1,0 +1,74 @@
+# M3 test environment (plan 11 §7, P5). SYNTHETIC data only; loopback only.
+# Do not run this file directly: `node ops/test-env/test-env.mjs up` generates
+# the secrets (ops/test-env/.local/, gitignored) and passes them with
+# --env-file. Project name `gs-m3-test`: tear down only with
+#   docker compose -p gs-m3-test -f ops/test-env/compose.yml --env-file ops/test-env/.local/compose.env down
+# (add -v only to discard the test data of THIS project).
+name: gs-m3-test
+services:
+  gs-test-pg:
+    image: timescale/timescaledb:2.28.1-pg16
+    command: ["postgres", "-c", "max_connections=100"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${GS_PG_SUPERUSER_PASSWORD:?run test-env.mjs init}
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:25432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - gs-test-pg-data:/var/lib/postgresql/data
+  kc-test-pg:
+    image: timescale/timescaledb:2.28.1-pg16
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KC_PG_PASSWORD:?run test-env.mjs init}
+      POSTGRES_DB: keycloak
+    ports:
+      - "127.0.0.1:25433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - kc-test-pg-data:/var/lib/postgresql/data
+  keycloak:
+    # `start` (production mode), not start-dev. The test host has no TLS
+    # terminator, so HTTP is enabled explicitly and the public hostname is the
+    # loopback URL; GitStation accepts an http issuer only on a loopback host
+    # (auth.oidc.issuer, ADR-0021 §13). The real environment uses https.
+    image: quay.io/keycloak/keycloak:26.4.2
+    command: ["start", "--import-realm"]
+    depends_on:
+      kc-test-pg:
+        condition: service_healthy
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://kc-test-pg:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_PG_PASSWORD}
+      KC_HOSTNAME: http://127.0.0.1:28180
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_PORT: "8080"
+      KC_BOOTSTRAP_ADMIN_USERNAME: synthetic-admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?run test-env.mjs init}
+      # Substituted into the realm file on import (no secret in git).
+      GITSTATION_CLIENT_SECRET: ${GITSTATION_CLIENT_SECRET}
+      KANFLOW_TEST_CLIENT_SECRET: ${KANFLOW_TEST_CLIENT_SECRET}
+    ports:
+      - "127.0.0.1:28180:8080"
+    volumes:
+      - ./keycloak/realm-forge-m3-test.json:/opt/keycloak/data/import/realm-forge-m3-test.json:ro
+  mailpit:
+    image: axllent/mailpit:v1.31.4
+    ports:
+      - "127.0.0.1:28025:1025" # SMTP (notify.smtp_host, smtp_tls = none)
+      - "127.0.0.1:28026:8025" # web UI
+volumes:
+  gs-test-pg-data:
+  kc-test-pg-data:
