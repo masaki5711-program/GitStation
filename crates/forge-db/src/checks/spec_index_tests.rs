@@ -195,12 +195,11 @@ async fn every_version_and_every_link_change_asks_for_one_spec_index_job() {
     let heads: Vec<&str> = found.iter().map(|(_, r)| r.head.as_str()).collect();
     // v3 went back to head `a` (no new version, no event): two jobs.
     assert_eq!(heads, [sha('a').as_str(), sha('b').as_str()]);
-    assert_eq!(
-        found[0].0,
-        format!("spec_index:{}:{}:{}", p.get(), mr.iid, sha('a').as_str())
-    );
+    let prefix = format!("spec_index:{}:{}:{}:", p.get(), mr.iid, sha('a').as_str());
+    assert!(found[0].0.starts_with(&prefix), "{}", found[0].0);
     assert_eq!(found[0].1.iid, mr.iid);
-    // A link now: the current head again, once per event.
+    // A link once those ran: the current head again, in its new state.
+    finish_queued(&t).await;
     link(&t, alice, (p, mr.iid), "req-link-late", "PBI-2").await;
     drain(&t, &SpecIndexRequests).await;
     let found = jobs(&t).await;
@@ -210,7 +209,7 @@ async fn every_version_and_every_link_change_asks_for_one_spec_index_job() {
     assert_eq!(again.head, sha('a'), "the merge request's current head");
     assert!(
         key.starts_with(&format!(
-            "spec_index:{}:{}:{}:seq:",
+            "spec_index:{}:{}:{}:",
             p.get(),
             mr.iid,
             sha('a').as_str()
@@ -230,10 +229,10 @@ fn the_payload_round_trips_and_refuses_anything_else() {
     let job = spec_index_job(&request, None, RequestId::generate(), Some(3)).expect("job");
     assert_eq!(job.kind.as_str(), SPEC_INDEX_JOB);
     assert_eq!(spec_index_payload(&job.payload).expect("parse"), request);
-    let again = spec_index_job(&request, Some(42), RequestId::generate(), Some(42)).expect("job");
+    let again = spec_index_job(&request, Some("0f"), RequestId::generate(), Some(42)).expect("job");
     assert_eq!(
         again.dedup_key.expect("key").as_str(),
-        format!("spec_index:7:3:{}:seq:42", sha('d').as_str())
+        format!("spec_index:7:3:{}:0f", sha('d').as_str())
     );
     for bad in [
         serde_json::json!({}),
@@ -245,4 +244,117 @@ fn the_payload_round_trips_and_refuses_anything_else() {
         let err = spec_index_payload(&bad).expect_err("bad payload");
         assert_reason(&err, ErrorCode::Internal, "invalid_job_payload");
     }
+}
+
+/// Run every queued `check.spec_index` job to success (a worker that
+/// claimed and finished them): their keys are then held by succeeded jobs.
+async fn finish_queued(t: &FreshDb) {
+    let kind = crate::jobs::JobKind::parse(SPEC_INDEX_JOB).expect("kind");
+    let worker = crate::jobs::WorkerId::generate();
+    while let Some(job) = crate::jobs::claim(&t.db, &worker, std::slice::from_ref(&kind))
+        .await
+        .expect("claim")
+    {
+        let _done = crate::jobs::complete(&t.db, &job).await.expect("complete");
+    }
+}
+
+/// Review X4 (HIGH-1): a retarget changes the merge base, so the current
+/// head is evaluated again — once per target, even after the head's job
+/// succeeded.
+#[tokio::test]
+async fn a_retarget_asks_for_the_current_head_again() {
+    let (t, alice, p) = world().await;
+    let user = ChangeContext::new(
+        Actor::User(alice),
+        RequestId::parse("req-open").expect("id"),
+    );
+    let mr = open_mr_decided(&t.db, &user, p, alice, &new_mr("feature"), |_| Ok(()))
+        .await
+        .map(|(stored, ())| stored)
+        .expect("open");
+    record_mr_version(&t.db, &system("req-v1"), mr.id, &sha('a'), Some(alice))
+        .await
+        .expect("version");
+    drain(&t, &SpecIndexRequests).await;
+    finish_queued(&t).await;
+    assert_eq!(jobs(&t).await.len(), 1);
+    let retarget = crate::review::MergeRequestPatch {
+        title: None,
+        description: None,
+        draft: None,
+        target_branch: Some(RefName::parse("refs/heads/release").expect("branch")),
+    };
+    let ctx = ChangeContext::new(
+        Actor::User(alice),
+        RequestId::parse("req-retarget").expect("id"),
+    );
+    let _edited =
+        crate::review::edit_mr_decided(&t.db, &ctx, p, mr.iid, alice, &retarget, |_| Ok(()))
+            .await
+            .expect("retarget");
+    // A title edit is no retarget: nothing asked.
+    let retitle = crate::review::MergeRequestPatch {
+        title: Some("Renamed".to_owned()),
+        description: None,
+        draft: None,
+        target_branch: None,
+    };
+    let ctx = ChangeContext::new(
+        Actor::User(alice),
+        RequestId::parse("req-retitle").expect("id"),
+    );
+    let _edited =
+        crate::review::edit_mr_decided(&t.db, &ctx, p, mr.iid, alice, &retitle, |_| Ok(()))
+            .await
+            .expect("retitle");
+    drain(&t, &SpecIndexRequests).await;
+    let found = jobs(&t).await;
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(found[1].1.head, sha('a'));
+    assert_ne!(found[0].0, found[1].0, "another target is another key");
+    t.drop_now().await;
+}
+
+/// Review X4 (MEDIUM d, e): the key carries the merge request's target and
+/// open links, so the same head with other links is evaluated again; and a
+/// flood of link changes while a job of that head is still queued asks for
+/// nothing more (the queued job reads the links when it runs).
+#[tokio::test]
+async fn link_changes_coalesce_while_queued_and_a_new_link_state_is_a_new_key() {
+    let (t, alice, p) = world().await;
+    let user = ChangeContext::new(
+        Actor::User(alice),
+        RequestId::parse("req-open").expect("id"),
+    );
+    let mr = open_mr_decided(&t.db, &user, p, alice, &new_mr("feature"), |_| Ok(()))
+        .await
+        .map(|(stored, ())| stored)
+        .expect("open");
+    record_mr_version(&t.db, &system("req-v1"), mr.id, &sha('a'), Some(alice))
+        .await
+        .expect("version");
+    for (n, raw) in ["PBI-1", "PBI-2", "PBI-3", "PBI-4"].iter().enumerate() {
+        link(&t, alice, (p, mr.iid), &format!("req-flood-{n}"), raw).await;
+    }
+    drain(&t, &SpecIndexRequests).await;
+    assert_eq!(jobs(&t).await.len(), 1, "coalesced into the queued job");
+    finish_queued(&t).await;
+    link(&t, alice, (p, mr.iid), "req-link-5", "PBI-5").await;
+    drain(&t, &SpecIndexRequests).await;
+    let found = jobs(&t).await;
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(found[1].1.head, sha('a'));
+    assert_ne!(found[0].0, found[1].0);
+    assert!(
+        found[1].0.starts_with(&format!(
+            "spec_index:{}:{}:{}:",
+            p.get(),
+            mr.iid,
+            sha('a').as_str()
+        )),
+        "{}",
+        found[1].0
+    );
+    t.drop_now().await;
 }

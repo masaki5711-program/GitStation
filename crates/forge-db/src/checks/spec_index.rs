@@ -6,14 +6,22 @@
 //!
 //! When a job is asked for:
 //! - `merge_request.pushed` (every version, the first of an open included):
-//!   one job per (project, merge request, head) — the dedup key
-//!   `spec_index:<project>:<iid>:<head>` is held by a queued, running or
-//!   succeeded job, so a head that comes back is not evaluated twice;
-//! - `work_item.linked` / `work_item.unlinked`: spec-trace covers the merge
-//!   request's linked work items, so its current head is evaluated again
-//!   (key `spec_index:<project>:<iid>:<head>:seq:<seq>`, one per event). A
-//!   merge request without a version yet is passed over: its first
-//!   `merge_request.pushed` evaluates it with the links of that time.
+//!   the version's head;
+//! - `work_item.linked` / `work_item.unlinked` (spec-trace covers the linked
+//!   work items) and a retarget (`merge_request.updated` with
+//!   `target_branch`: the merge base moves): the merge request's **current**
+//!   head. A merge request without a version yet is passed over: its first
+//!   `merge_request.pushed` evaluates it with the state of that time.
+//!
+//! The dedup key is `spec_index:<project>:<iid>:<head>:<state>`, `state`
+//! the md5 of the target branch and the open links' work item ids (review
+//! X4, MEDIUM d): what the runs depend on besides the commits. It is held by
+//! a queued, running or succeeded job, so the same head in the same state
+//! is evaluated once, and the same head in another state (a link changed,
+//! another target) again. **Coalesced** (review X4, MEDIUM e): while a job
+//! of the same (project, merge request, head) is still queued nothing more
+//! is asked — it reads the links and target when it runs — so a flood of
+//! link changes is one evaluation.
 //!
 //! A dead job does not hold its key (ADR-0016 §7); its head's runs say
 //! `error` (the handler's last attempt, or the worker's sweep:
@@ -51,11 +59,11 @@ fn invalid_job(reason: &'static str) -> ForgeError {
         .with_context("kind", SPEC_INDEX_JOB)
 }
 
-/// The job evaluating `request`; `again` (an event's seq) when the head is
-/// evaluated again after a work item link changed.
+/// The job evaluating `request` in `state` (the md5 of the target and the
+/// open links: module docs; `None` for a job asked for by hand).
 pub fn spec_index_job(
     request: &SpecIndexRequest,
-    again: Option<i64>,
+    state: Option<&str>,
     origin_request_id: RequestId,
     origin_event_seq: Option<i64>,
 ) -> Result<NewJob, ForgeError> {
@@ -65,8 +73,9 @@ pub fn spec_index_job(
         request.iid,
         request.head.as_str()
     );
-    if let Some(seq) = again {
-        key.push_str(&format!(":seq:{seq}"));
+    if let Some(state) = state {
+        key.push(':');
+        key.push_str(state);
     }
     Ok(NewJob {
         kind: JobKind::parse(SPEC_INDEX_JOB).ok_or_else(|| invalid_job("invalid_job_kind"))?,
@@ -200,7 +209,73 @@ fn iid_of(event: &SourceEvent) -> Result<i64, ForgeError> {
         .ok_or_else(|| bad_payload(event, "iid"))
 }
 
+/// The merge request's current head (`None`: no version yet) and state
+/// digest (module docs), read in the subscriber's transaction. `None`: the
+/// merge request is gone.
+async fn current(
+    tx: &mut DerivedTx<'_>,
+    project: ProjectId,
+    iid: i64,
+) -> Result<Option<(Option<String>, String)>, ForgeError> {
+    sqlx::query_as(
+        "SELECT m.head_sha, pg_catalog.md5(m.target_branch || '|' || coalesce((\
+         SELECT pg_catalog.string_agg(l.work_item_id::text, ',' ORDER BY l.work_item_id) \
+         FROM forge.merge_request_work_items l \
+         WHERE l.merge_request_id = m.id AND l.unlinked_at IS NULL), '')) \
+         FROM forge.merge_requests m WHERE m.project_id = $1 AND m.iid = $2",
+    )
+    .bind(project.get())
+    .bind(iid)
+    .fetch_optional(tx.conn())
+    .await
+    .map_err(|e| query_error("checks.spec_index_state", e))
+}
+
 impl SpecIndexRequests {
+    /// Ask for `head` of `iid` in its current state, unless a job of that
+    /// head is still queued (module docs).
+    async fn ask(
+        event: &SourceEvent,
+        tx: &mut DerivedTx<'_>,
+        (project, iid): (ProjectId, i64),
+        head: Option<ObjectId>,
+    ) -> Result<(), ForgeError> {
+        let Some((current_head, state)) = current(tx, project, iid).await? else {
+            // The merge request is gone: nothing to evaluate.
+            return Ok(());
+        };
+        let Some(head) = head.or_else(|| current_head.and_then(|h| ObjectId::parse(&h).ok()))
+        else {
+            // No version yet: its first version is evaluated then.
+            return Ok(());
+        };
+        let queued: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM forge.jobs WHERE kind = $1 AND state = 'queued' \
+             AND payload->>'project_id' = $2 AND payload->>'iid' = $3 \
+             AND payload->>'head_sha' = $4)",
+        )
+        .bind(SPEC_INDEX_JOB)
+        .bind(project.get().to_string())
+        .bind(iid.to_string())
+        .bind(head.as_str())
+        .fetch_one(tx.conn())
+        .await
+        .map_err(|e| query_error("checks.spec_index_queued", e))?;
+        if queued {
+            return Ok(());
+        }
+        let origin = event.request_id().unwrap_or_else(RequestId::generate);
+        let job = spec_index_job(
+            &SpecIndexRequest { project, iid, head },
+            Some(&state),
+            origin,
+            Some(event.seq),
+        )?;
+        // Deduped: a retried step, or this head in this state evaluated before.
+        let _enqueued = enqueue_on(tx.conn(), &job).await?;
+        Ok(())
+    }
+
     async fn on_version(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
         let project = event
             .project_id
@@ -212,49 +287,29 @@ impl SpecIndexRequests {
             .and_then(serde_json::Value::as_str)
             .and_then(|raw| ObjectId::parse(raw).ok())
             .ok_or_else(|| bad_payload(event, "head_sha"))?;
-        let origin = event.request_id().unwrap_or_else(RequestId::generate);
-        let job = spec_index_job(
-            &SpecIndexRequest { project, iid, head },
-            None,
-            origin,
-            Some(event.seq),
-        )?;
-        // Deduped: a retried step, or a head evaluated before.
-        let _enqueued = enqueue_on(tx.conn(), &job).await?;
-        Ok(())
+        Self::ask(event, tx, (project, iid), Some(head)).await
     }
 
-    /// A link changed: evaluate the merge request's current head again.
-    async fn on_link(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
+    /// A link changed, or the merge request was retargeted: its current
+    /// head again.
+    async fn on_change(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
         let project = event
             .project_id
             .ok_or_else(|| bad_payload(event, "project_id"))?;
         let iid = iid_of(event)?;
-        let head: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT head_sha FROM forge.merge_requests WHERE project_id = $1 AND iid = $2",
-        )
-        .bind(project.get())
-        .bind(iid)
-        .fetch_optional(tx.conn())
-        .await
-        .map_err(|e| query_error("checks.spec_index_head", e))?;
-        let Some(head) = head
-            .and_then(|(h,)| h)
-            .and_then(|raw| ObjectId::parse(&raw).ok())
-        else {
-            // No version yet (or the merge request is gone): its first
-            // version is evaluated with the links of that time.
+        Self::ask(event, tx, (project, iid), None).await
+    }
+
+    /// `merge_request.updated`: only a retarget moves the merge base.
+    async fn on_update(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
+        let retargeted = event
+            .payload
+            .get("target_branch")
+            .is_some_and(|t| !t.is_null());
+        if !retargeted {
             return Ok(());
-        };
-        let origin = event.request_id().unwrap_or_else(RequestId::generate);
-        let job = spec_index_job(
-            &SpecIndexRequest { project, iid, head },
-            Some(event.seq),
-            origin,
-            Some(event.seq),
-        )?;
-        let _enqueued = enqueue_on(tx.conn(), &job).await?;
-        Ok(())
+        }
+        Self::on_change(event, tx).await
     }
 }
 
@@ -285,8 +340,10 @@ impl Subscriber for SpecIndexRequests {
             match kind {
                 EventType::MergeRequestPushed => Self::on_version(event, tx).await,
                 EventType::WorkItemLinked | EventType::WorkItemUnlinked => {
-                    Self::on_link(event, tx).await
+                    Self::on_change(event, tx).await
                 }
+                // Review X4 (HIGH-1): a retarget moves the merge base.
+                EventType::MergeRequestUpdated => Self::on_update(event, tx).await,
                 EventType::ProjectCreated
                 | EventType::RepositoryCreated
                 | EventType::RepositoryPushed
@@ -306,7 +363,6 @@ impl Subscriber for SpecIndexRequests {
                 | EventType::GroupMoved
                 | EventType::UserRenamed
                 | EventType::MergeRequestOpened
-                | EventType::MergeRequestUpdated
                 | EventType::MergeRequestDraftChanged
                 | EventType::MergeRequestClosed
                 | EventType::MergeRequestReopened
