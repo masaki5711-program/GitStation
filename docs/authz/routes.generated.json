@@ -64,6 +64,14 @@
     "word": "fixed"
   },
   {
+    "action": "ActAsAssertionIssue",
+    "method": "POST",
+    "path": "/-/confirm/projects/{id}/integration-bindings/assertions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "WebShell",
     "method": "GET",
     "path": "/-/confirm/projects/{id}/merge-requests/{iid}",
@@ -76,14 +84,6 @@
     "method": "HEAD",
     "path": "/-/confirm/projects/{id}/merge-requests/{iid}",
     "public": true,
-    "scope": "fixed",
-    "word": "fixed"
-  },
-  {
-    "action": "ActAsAssertionIssue",
-    "method": "POST",
-    "path": "/-/confirm/projects/{id}/integration-bindings/assertions",
-    "public": false,
     "scope": "fixed",
     "word": "fixed"
   },
