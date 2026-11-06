@@ -136,6 +136,13 @@ pub fn scan(content: &[u8]) -> SecretScan {
     if probe.contains(&0) {
         return SecretScan::Binary;
     }
+    scan_bytes(content)
+}
+
+/// Scan content whatever it holds, binary included (review X7: the risk
+/// check must not let a NUL byte hide a token; the push check keeps
+/// skipping binary blobs through [`scan`]).
+pub fn scan_bytes(content: &[u8]) -> SecretScan {
     let Some(rule) = first_rule(content) else {
         return SecretScan::Clean;
     };
