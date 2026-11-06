@@ -1,0 +1,99 @@
+.page {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: var(--gs-space-4);
+}
+
+.title {
+  margin: 0 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-xl);
+  color: var(--gs-brand-navy);
+}
+
+.lead {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-lg);
+}
+
+.hint {
+  margin: 0 0 var(--gs-space-4);
+  color: var(--gs-color-text-muted);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--gs-space-2) var(--gs-space-4);
+  margin: 0 0 var(--gs-space-4);
+  padding: var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.summary dt {
+  color: var(--gs-color-text-muted);
+}
+
+.summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mrTitle {
+  font-weight: bold;
+}
+
+.sha {
+  word-break: break-all;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-3);
+  margin: 0 0 var(--gs-space-3);
+}
+
+/* Not pressable yet (the wait of ADR-0025 §5.4): aria-disabled keeps it
+   focusable and announced, the handler ignores the click. */
+.buttons [aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.small {
+  margin: var(--gs-space-2) 0 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.notice,
+.done,
+.canceled {
+  padding: var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.notice {
+  border-color: var(--gs-color-danger-border);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.notice .small {
+  color: inherit;
+}
+
+.done {
+  border-color: var(--gs-color-success-text);
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.noticeTitle {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-lg);
+}
