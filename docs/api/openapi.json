@@ -1315,6 +1315,690 @@
         ],
         "type": "object"
       },
+      "ContextCheckBody": {
+        "additionalProperties": false,
+        "description": "One check run on the head.",
+        "properties": {
+          "conclusion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceBody",
+            "description": "The head it is about (`commit`)."
+          },
+          "status": {
+            "description": "`queued`, `in_progress` or `completed`.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "At most 4 KiB.",
+            "type": "string"
+          },
+          "summary_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "conclusion",
+          "summary",
+          "summary_truncated",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextDocumentBody": {
+        "additionalProperties": false,
+        "description": "The document a requirement is defined in.",
+        "properties": {
+          "confidential": {
+            "description": "Never given to an AI agent (plan 06 D-5).",
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "spec": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "spec",
+          "title",
+          "status",
+          "confidential"
+        ],
+        "type": "object"
+      },
+      "ContextFileBody": {
+        "additionalProperties": false,
+        "description": "One changed file.",
+        "properties": {
+          "old_path": {
+            "description": "The path before a rename or copy.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceBody",
+            "description": "At the head (`path`; the old path for a deleted file)."
+          },
+          "status": {
+            "description": "`added`, `modified`, `deleted`, `renamed`, `copied`, `type_changed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "old_path",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextLinkedMergeRequestBody": {
+        "additionalProperties": false,
+        "description": "A merge request linked to the work item.",
+        "properties": {
+          "draft": {
+            "type": "boolean"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "link_source": {
+            "description": "`auto` (named in the title or branch) or `manual`.",
+            "type": "string"
+          },
+          "linked_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceBody",
+            "description": "The merge request's head (`commit`; `null` before its first version)."
+          },
+          "source_branch": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`open`, `merged` or `closed`.",
+            "type": "string"
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "title",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "link_source",
+          "linked_at",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextLinkedWorkItemBody": {
+        "additionalProperties": false,
+        "description": "A work item linked to the merge request.",
+        "properties": {
+          "confidential": {
+            "description": "kanflow marked it confidential (shown to people only).",
+            "type": "boolean"
+          },
+          "integration_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kanflow_project_id": {
+            "type": "string"
+          },
+          "link_source": {
+            "description": "`auto` or `manual`.",
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceBody",
+            "description": "The link's project (no revision)."
+          }
+        },
+        "required": [
+          "ref",
+          "integration_id",
+          "kanflow_project_id",
+          "link_source",
+          "confidential",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextMergeRequestBody": {
+        "additionalProperties": false,
+        "description": "`GET …/merge-requests/{iid}/context`.",
+        "properties": {
+          "checks": {
+            "description": "By name.",
+            "items": {
+              "$ref": "#/components/schemas/ContextCheckBody"
+            },
+            "type": "array"
+          },
+          "files": {
+            "description": "`merge_base_sha..head`, at most 300.",
+            "items": {
+              "$ref": "#/components/schemas/ContextFileBody"
+            },
+            "type": "array"
+          },
+          "files_truncated": {
+            "type": "boolean"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody"
+              }
+            ]
+          },
+          "merge_request": {
+            "$ref": "#/components/schemas/ContextMergeRequestItemBody"
+          },
+          "requirements": {
+            "description": "The own specification's changes between the merge base and the\nhead, at most 100.",
+            "items": {
+              "$ref": "#/components/schemas/ContextRequirementChangeBody"
+            },
+            "type": "array"
+          },
+          "requirements_truncated": {
+            "type": "boolean"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "What an AI agent is not given (plan 06 D-5)."
+              }
+            ]
+          },
+          "work_items": {
+            "description": "The open links.",
+            "items": {
+              "$ref": "#/components/schemas/ContextLinkedWorkItemBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "merge_request",
+          "files",
+          "files_truncated",
+          "requirements",
+          "requirements_truncated",
+          "work_items",
+          "checks",
+          "withheld",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "ContextMergeRequestItemBody": {
+        "additionalProperties": false,
+        "description": "The merge request.",
+        "properties": {
+          "description": {
+            "description": "At most 4 KiB.",
+            "type": "string"
+          },
+          "description_truncated": {
+            "type": "boolean"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "merge_base_sha": {
+            "description": "The merge base of the newest version (its diff is\n`merge_base_sha..head`); `null` before the first version or without\na common history.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceBody",
+            "description": "The head (`commit`)."
+          },
+          "source_branch": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`open`, `merged` or `closed`.",
+            "type": "string"
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "title",
+          "description",
+          "description_truncated",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "merge_base_sha",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextRequirementBody": {
+        "additionalProperties": false,
+        "description": "`GET …/context/requirement`.",
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/ContextDocumentBody"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody"
+              }
+            ]
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "requirement": {
+            "$ref": "#/components/schemas/ContextRequirementItemBody"
+          },
+          "test_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tests": {
+            "description": "The `@req` tags naming it, at most 50.",
+            "items": {
+              "$ref": "#/components/schemas/ContextTestBody"
+            },
+            "type": "array"
+          },
+          "versions": {
+            "description": "The newest version tags (at most 5), newest first within a series.",
+            "items": {
+              "$ref": "#/components/schemas/ContextVersionBody"
+            },
+            "type": "array"
+          },
+          "versions_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "requirement",
+          "document",
+          "tests",
+          "test_count",
+          "versions",
+          "versions_truncated",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "ContextRequirementChangeBody": {
+        "additionalProperties": false,
+        "description": "One requirement the merge request adds, changes, removes or deprecates.",
+        "properties": {
+          "body": {
+            "description": "The text at the head (`null` when removed).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`added`, `changed`, `removed` or `deprecated`.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceBody",
+            "description": "At the head (at the merge base when removed)."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "body",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextRequirementItemBody": {
+        "additionalProperties": false,
+        "description": "The requirement.",
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "priority": {
+            "description": "`must`, `should`, `could`, `wont`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceBody"
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "priority",
+          "deprecated",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextSourceBody": {
+        "additionalProperties": false,
+        "description": "Where an item came from.",
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "1-based.",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "The project's path now.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "description": "The branch or tag read (`main`, `v1.5`); the commit id when a\ncommit was asked for; `null` for an item of no revision.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "project",
+          "version",
+          "commit",
+          "path",
+          "line"
+        ],
+        "type": "object"
+      },
+      "ContextTestBody": {
+        "additionalProperties": false,
+        "description": "One `@req` test.",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/ContextSourceBody"
+          },
+          "target": {
+            "description": "What the tag names: a requirement id or `PBI-<n>/AC-<m>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextVersionBody": {
+        "additionalProperties": false,
+        "description": "The requirement in one version tag.",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "name": {
+            "description": "The tag (`v1.5`).",
+            "type": "string"
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextSourceBody",
+                "description": "Where it was then (`null` when absent)."
+              }
+            ]
+          },
+          "status": {
+            "description": "Against the revision asked for: `same`, `changed` (text, priority or\ndeprecation) or `absent`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "commit",
+          "status",
+          "source"
+        ],
+        "type": "object"
+      },
+      "ContextWithheldBody": {
+        "additionalProperties": false,
+        "description": "What an agent's list left out (plan 06 D-5).",
+        "properties": {
+          "documents": {
+            "description": "Specification documents marked `confidential: true` (or with a\nfront matter that cannot be read).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error_code": {
+            "description": "`FG-AUTH-0020`.",
+            "type": "string"
+          },
+          "requirements": {
+            "description": "Their requirements.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "work_items": {
+            "description": "Work items kanflow marked confidential.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error_code",
+          "documents",
+          "requirements",
+          "work_items"
+        ],
+        "type": "object"
+      },
+      "ContextWorkItemBody": {
+        "additionalProperties": false,
+        "description": "`GET …/context/work-item`.",
+        "properties": {
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody"
+              }
+            ]
+          },
+          "merge_requests": {
+            "description": "Newest first, at most 50.",
+            "items": {
+              "$ref": "#/components/schemas/ContextLinkedMergeRequestBody"
+            },
+            "type": "array"
+          },
+          "merge_requests_truncated": {
+            "type": "boolean"
+          },
+          "ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RevBody",
+                "description": "The default branch the tests were read at (`null`: the repository\nhas none yet)."
+              }
+            ]
+          },
+          "test_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tests": {
+            "description": "The `@req PBI-<n>/AC-<m>` tags, at most 50.",
+            "items": {
+              "$ref": "#/components/schemas/ContextTestBody"
+            },
+            "type": "array"
+          },
+          "work_item": {
+            "$ref": "#/components/schemas/ContextWorkItemRefBody"
+          }
+        },
+        "required": [
+          "work_item",
+          "merge_requests",
+          "merge_requests_truncated",
+          "ref",
+          "tests",
+          "test_count",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "ContextWorkItemRefBody": {
+        "additionalProperties": false,
+        "description": "The work item.",
+        "properties": {
+          "first_seen_at": {
+            "description": "UTC, RFC 3339: when forge first saw it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "integration_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kanflow_project_id": {
+            "description": "The bound kanflow project.",
+            "type": "string"
+          },
+          "known": {
+            "description": "forge saw the reference once (a merge request named or linked it).",
+            "type": "boolean"
+          },
+          "ref": {
+            "description": "`PBI-<n>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "integration_id",
+          "kanflow_project_id",
+          "known",
+          "first_seen_at"
+        ],
+        "type": "object"
+      },
       "CreateGroup": {
         "additionalProperties": false,
         "description": "`POST /api/v1/groups` and `…/{id}/subgroups`.",
@@ -5063,13 +5747,25 @@
           },
           "to": {
             "$ref": "#/components/schemas/RevBody"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "What an AI agent's answer left out (M3 X5, plan 06 D-5)."
+              }
+            ]
           }
         },
         "required": [
           "from",
           "to",
           "changes",
-          "incomplete"
+          "incomplete",
+          "withheld"
         ],
         "type": "object"
       },
@@ -5077,6 +5773,10 @@
         "additionalProperties": false,
         "description": "One specification document.",
         "properties": {
+          "confidential": {
+            "description": "`confidential: true` (or a front matter that cannot be read): never\nlisted for an AI agent (M3 X5, plan 06 D-5).",
+            "type": "boolean"
+          },
           "path": {
             "type": "string"
           },
@@ -5117,7 +5817,8 @@
           "title",
           "status",
           "requirements",
-          "problems"
+          "problems",
+          "confidential"
         ],
         "type": "object"
       },
@@ -5428,6 +6129,17 @@
           "truncated": {
             "description": "More requirements matched than `limit`.",
             "type": "boolean"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "What an AI agent's answer left out (M3 X5, plan 06 D-5)."
+              }
+            ]
           }
         },
         "required": [
@@ -5438,7 +6150,8 @@
           "requirements",
           "truncated",
           "problems",
-          "incomplete"
+          "incomplete",
+          "withheld"
         ],
         "type": "object"
       },
@@ -5491,13 +6204,25 @@
               "$ref": "#/components/schemas/SpecTraceRowBody"
             },
             "type": "array"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "What an AI agent's answer left out (M3 X5, plan 06 D-5)."
+              }
+            ]
           }
         },
         "required": [
           "ref",
           "requirements",
           "references",
-          "incomplete"
+          "incomplete",
+          "withheld"
         ],
         "type": "object"
       },
@@ -9210,6 +9935,115 @@
         "x-forge-max-body-bytes": 65536
       }
     },
+    "/api/v1/projects/{id}/context/requirement": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_context_requirement",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The requirement id (ZEVA-CFG-012) of the project's own specification",
+            "in": "query",
+            "name": "id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextRequirementBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A requirement's context: its text and document, the @req tests naming it and its state in the newest versions, each with its source",
+        "x-forge-action": "ContextRead"
+      }
+    },
+    "/api/v1/projects/{id}/context/work-item": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_context_work_item",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The kanflow work item, canonical PBI-<n> (of the project's binding)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextWorkItemBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A kanflow work item's context: the project's linked merge requests and the @req tests of its acceptance criteria, each with its source",
+        "x-forge-action": "ContextRead"
+      }
+    },
     "/api/v1/projects/{id}/integration-bindings": {
       "get": {
         "operationId": "get_api_v1_projects_id_integration_bindings",
@@ -10076,6 +10910,55 @@
           }
         },
         "summary": "A merge request's predicted conflicts with other open merge requests on its target, as last scanned (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/context": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_context",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextMergeRequestBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's review context: its changed files, the requirements it changes, its work items and the check runs on its head, each with its source (as the repository browse API)",
         "x-forge-action": "MergeRequestRead"
       }
     },

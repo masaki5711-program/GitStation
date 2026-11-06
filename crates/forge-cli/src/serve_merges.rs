@@ -130,6 +130,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::RequirementUntested
         | ErrorCode::RequirementTagUnknown
         | ErrorCode::SpecIndexIncomplete
+        // M3 X5: answers of the context API (never a merge's).
+        | ErrorCode::RequirementNotFound
+        | ErrorCode::ContextWithheld
         // M3 X7: notices named in a `forge/risk` run (never a merge's).
         | ErrorCode::RiskStop
         | ErrorCode::RiskWarn

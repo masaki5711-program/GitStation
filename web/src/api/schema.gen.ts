@@ -599,6 +599,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/context/requirement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A requirement's context: its text and document, the @req tests naming it and its state in the newest versions, each with its source */
+        get: operations["get_api_v1_projects_id_context_requirement"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/context/work-item": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A kanflow work item's context: the project's linked merge requests and the @req tests of its acceptance criteria, each with its source */
+        get: operations["get_api_v1_projects_id_context_work_item"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/integration-bindings": {
         parameters: {
             query?: never;
@@ -783,6 +817,23 @@ export interface paths {
         };
         /** A merge request's predicted conflicts with other open merge requests on its target, as last scanned (as the repository browse API) */
         get: operations["get_api_v1_projects_id_merge_requests_iid_conflicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A merge request's review context: its changed files, the requirements it changes, its work items and the check runs on its head, each with its source (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_context"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2170,6 +2221,212 @@ export interface components {
              */
             predictions: components["schemas"]["ConflictPredictionBody"][];
             scan: components["schemas"]["ConflictScanBody"];
+        };
+        /** @description One check run on the head. */
+        ContextCheckBody: {
+            conclusion: string | null;
+            name: string;
+            /** @description The head it is about (`commit`). */
+            source: components["schemas"]["ContextSourceBody"];
+            /** @description `queued`, `in_progress` or `completed`. */
+            status: string;
+            /** @description At most 4 KiB. */
+            summary: string;
+            summary_truncated: boolean;
+        };
+        /** @description The document a requirement is defined in. */
+        ContextDocumentBody: {
+            /** @description Never given to an AI agent (plan 06 D-5). */
+            confidential: boolean;
+            path: string;
+            spec: string | null;
+            status: string | null;
+            title: string | null;
+        };
+        /** @description One changed file. */
+        ContextFileBody: {
+            /** @description The path before a rename or copy. */
+            old_path: string | null;
+            /** @description At the head (`path`; the old path for a deleted file). */
+            source: components["schemas"]["ContextSourceBody"];
+            /** @description `added`, `modified`, `deleted`, `renamed`, `copied`, `type_changed`. */
+            status: string;
+        };
+        /** @description A merge request linked to the work item. */
+        ContextLinkedMergeRequestBody: {
+            draft: boolean;
+            /** Format: int64 */
+            iid: number;
+            /** @description `auto` (named in the title or branch) or `manual`. */
+            link_source: string;
+            /** @description UTC, RFC 3339. */
+            linked_at: string;
+            /** @description The merge request's head (`commit`; `null` before its first version). */
+            source: components["schemas"]["ContextSourceBody"];
+            source_branch: string;
+            /** @description `open`, `merged` or `closed`. */
+            state: string;
+            target_branch: string;
+            title: string;
+        };
+        /** @description A work item linked to the merge request. */
+        ContextLinkedWorkItemBody: {
+            /** @description kanflow marked it confidential (shown to people only). */
+            confidential: boolean;
+            /** Format: int64 */
+            integration_id: number;
+            kanflow_project_id: string;
+            /** @description `auto` or `manual`. */
+            link_source: string;
+            ref: string;
+            /** @description The link's project (no revision). */
+            source: components["schemas"]["ContextSourceBody"];
+        };
+        /** @description `GET …/merge-requests/{iid}/context`. */
+        ContextMergeRequestBody: {
+            /** @description By name. */
+            checks: components["schemas"]["ContextCheckBody"][];
+            /** @description `merge_base_sha..head`, at most 300. */
+            files: components["schemas"]["ContextFileBody"][];
+            files_truncated: boolean;
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            merge_request: components["schemas"]["ContextMergeRequestItemBody"];
+            /**
+             * @description The own specification's changes between the merge base and the
+             *     head, at most 100.
+             */
+            requirements: components["schemas"]["ContextRequirementChangeBody"][];
+            requirements_truncated: boolean;
+            withheld: null | components["schemas"]["ContextWithheldBody"];
+            /** @description The open links. */
+            work_items: components["schemas"]["ContextLinkedWorkItemBody"][];
+        };
+        /** @description The merge request. */
+        ContextMergeRequestItemBody: {
+            /** @description At most 4 KiB. */
+            description: string;
+            description_truncated: boolean;
+            draft: boolean;
+            /** Format: int64 */
+            iid: number;
+            /**
+             * @description The merge base of the newest version (its diff is
+             *     `merge_base_sha..head`); `null` before the first version or without
+             *     a common history.
+             */
+            merge_base_sha: string | null;
+            /** @description The head (`commit`). */
+            source: components["schemas"]["ContextSourceBody"];
+            source_branch: string;
+            /** @description `open`, `merged` or `closed`. */
+            state: string;
+            target_branch: string;
+            title: string;
+        };
+        /** @description `GET …/context/requirement`. */
+        ContextRequirementBody: {
+            document: components["schemas"]["ContextDocumentBody"];
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            ref: components["schemas"]["RevBody"];
+            requirement: components["schemas"]["ContextRequirementItemBody"];
+            test_count: number;
+            /** @description The `@req` tags naming it, at most 50. */
+            tests: components["schemas"]["ContextTestBody"][];
+            /** @description The newest version tags (at most 5), newest first within a series. */
+            versions: components["schemas"]["ContextVersionBody"][];
+            versions_truncated: boolean;
+        };
+        /** @description One requirement the merge request adds, changes, removes or deprecates. */
+        ContextRequirementChangeBody: {
+            /** @description The text at the head (`null` when removed). */
+            body: string | null;
+            id: string;
+            /** @description `added`, `changed`, `removed` or `deprecated`. */
+            kind: string;
+            /** @description At the head (at the merge base when removed). */
+            source: components["schemas"]["ContextSourceBody"];
+        };
+        /** @description The requirement. */
+        ContextRequirementItemBody: {
+            body: string;
+            deprecated: boolean;
+            id: string;
+            /** @description `must`, `should`, `could`, `wont`. */
+            priority: string | null;
+            source: components["schemas"]["ContextSourceBody"];
+        };
+        /** @description Where an item came from. */
+        ContextSourceBody: {
+            commit: string | null;
+            /** @description 1-based. */
+            line: number | null;
+            path: string | null;
+            /** @description The project's path now. */
+            project: string;
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * @description The branch or tag read (`main`, `v1.5`); the commit id when a
+             *     commit was asked for; `null` for an item of no revision.
+             */
+            version: string | null;
+        };
+        /** @description One `@req` test. */
+        ContextTestBody: {
+            source: components["schemas"]["ContextSourceBody"];
+            /** @description What the tag names: a requirement id or `PBI-<n>/AC-<m>`. */
+            target: string;
+        };
+        /** @description The requirement in one version tag. */
+        ContextVersionBody: {
+            commit: string;
+            /** @description The tag (`v1.5`). */
+            name: string;
+            source: null | components["schemas"]["ContextSourceBody"];
+            /**
+             * @description Against the revision asked for: `same`, `changed` (text, priority or
+             *     deprecation) or `absent`.
+             */
+            status: string;
+        };
+        /** @description What an agent's list left out (plan 06 D-5). */
+        ContextWithheldBody: {
+            /**
+             * @description Specification documents marked `confidential: true` (or with a
+             *     front matter that cannot be read).
+             */
+            documents: number;
+            /** @description `FG-AUTH-0020`. */
+            error_code: string;
+            /** @description Their requirements. */
+            requirements: number;
+            /** @description Work items kanflow marked confidential. */
+            work_items: number;
+        };
+        /** @description `GET …/context/work-item`. */
+        ContextWorkItemBody: {
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            /** @description Newest first, at most 50. */
+            merge_requests: components["schemas"]["ContextLinkedMergeRequestBody"][];
+            merge_requests_truncated: boolean;
+            ref: null | components["schemas"]["RevBody"];
+            test_count: number;
+            /** @description The `@req PBI-<n>/AC-<m>` tags, at most 50. */
+            tests: components["schemas"]["ContextTestBody"][];
+            work_item: components["schemas"]["ContextWorkItemRefBody"];
+        };
+        /** @description The work item. */
+        ContextWorkItemRefBody: {
+            /** @description UTC, RFC 3339: when forge first saw it. */
+            first_seen_at: string | null;
+            /** Format: int64 */
+            integration_id: number;
+            /** @description The bound kanflow project. */
+            kanflow_project_id: string;
+            /** @description forge saw the reference once (a merge request named or linked it). */
+            known: boolean;
+            /** @description `PBI-<n>`. */
+            ref: string;
         };
         /** @description `POST /api/v1/groups` and `…/{id}/subgroups`. */
         CreateGroup: {
@@ -3673,9 +3930,15 @@ export interface components {
             from: components["schemas"]["RevBody"];
             incomplete: null | components["schemas"]["SpecIncompleteBody"];
             to: components["schemas"]["RevBody"];
+            withheld: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description One specification document. */
         SpecDocumentBody: {
+            /**
+             * @description `confidential: true` (or a front matter that cannot be read): never
+             *     listed for an AI agent (M3 X5, plan 06 D-5).
+             */
+            confidential: boolean;
             path: string;
             /** @description Rules the document breaks (they are in `problems`). */
             problems: number;
@@ -3788,6 +4051,7 @@ export interface components {
             requirements: components["schemas"]["SpecRequirementBody"][];
             /** @description More requirements matched than `limit`. */
             truncated: boolean;
+            withheld: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description Where a test is. */
         SpecTestPlaceBody: {
@@ -3805,6 +4069,7 @@ export interface components {
              *     reference's in file order.
              */
             requirements: components["schemas"]["SpecTraceRowBody"][];
+            withheld: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description One `repo:` entry of the trace. */
         SpecTraceReferenceBody: {
@@ -5942,6 +6207,76 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_context_requirement: {
+        parameters: {
+            query?: {
+                /** @description The requirement id (ZEVA-CFG-012) of the project's own specification */
+                id?: string;
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextRequirementBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_context_work_item: {
+        parameters: {
+            query?: {
+                /** @description The kanflow work item, canonical PBI-<n> (of the project's binding) */
+                ref?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextWorkItemBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_integration_bindings: {
         parameters: {
             query?: never;
@@ -6473,6 +6808,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConflictsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_context: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextMergeRequestBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

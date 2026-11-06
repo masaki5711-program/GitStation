@@ -24,8 +24,12 @@ use sqlx::postgres::PgConnection;
 
 use crate::{query_error, read_query_error, Db};
 
+mod context;
 mod sync;
 
+pub use context::{
+    confidential_work_items, work_item_context, KnownWorkItem, LinkedMergeRequest, WorkItemContext,
+};
 pub use sync::{WorkItemSync, WORK_ITEM_SYNC};
 
 /// The most work items one merge request is linked to automatically (its

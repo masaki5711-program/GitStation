@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-`PUT` or `DELETE /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}` named a project without an integration binding (`forge.integration_bindings` has no row for it). `PBI-123` is numbered per kanflow project, so without the binding forge cannot tell which work item is meant (02 §2). Nothing was written. Detection (`work-item-sync`) links nothing in such a project either, without an error.
+`PUT` or `DELETE /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}` named a project without an integration binding (`forge.integration_bindings` has no row for it). `PBI-123` is numbered per kanflow project, so without the binding forge cannot tell which work item is meant (02 §2). Nothing was written. Detection (`work-item-sync`) links nothing in such a project either, without an error. M3 X5: `GET /api/v1/projects/{id}/context/work-item?ref=` (the context API) answers the same for a project without a binding: which kanflow project the reference belongs to is the binding's.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason=project_not_bound` and `project_id`, with `action=WorkItemLink`. `GET /api/v1/projects/{id}/integration-bindings` (or `gstn integration-binding list --project <id>`) shows the project's binding.
+The log event carries `reason=project_not_bound` and `project_id`, with `action=WorkItemLink`. `GET /api/v1/projects/{id}/integration-bindings` (or `gstn integration-binding list --project <id>`) shows the project's binding. From the context API the event carries `route=context_work_item` instead (action ContextRead).
 
 ## 対処 (fix)
 

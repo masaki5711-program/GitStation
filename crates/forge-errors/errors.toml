@@ -549,6 +549,19 @@ diagnosis = "The run's summary or the API's `incomplete` names the bound. Count 
 fix = "Keep the specification within the bounds: fewer, smaller Markdown files under the specification directories (split a large one), or list only the specification directories in `.forge/repo.yml` `path:` entries. Nothing to change on the server."
 test = "an_incomplete_index_is_never_a_silent_pass"
 
+[[error]]
+code = "FG-REPO-0032"
+name = "RequirementNotFound"
+http_status = 404
+severity = "info"
+user_message_ja = "その要件 ID は、この版の仕様にありません。ID と版を確かめてください。"
+user_message_en = "That requirement id is not in the specification at this revision. Check the id and the revision."
+user_message_id = "ID persyaratan itu tidak ada dalam spesifikasi pada revisi ini. Periksa ID dan revisinya."
+cause = "`GET /api/v1/projects/{id}/context/requirement?id=…[&ref=…]` (M3 X5, plan 03 §6) looks the id up in the project's own specification at the revision (forge-checks spec_index, the same index as the spec API): no requirement block defines it there. The id may be defined only in a later or earlier version, in another repository (a `repo:` reference: ask that project), or be a kanflow acceptance criterion (`PBI-<n>/AC-<m>`, read with …/context/work-item). Not a server fault."
+diagnosis = "The log event carries `route`, `project_id`, `requirement` and `commit`. List what the revision defines: gstn spec requirements --project <id> --ref <rev> --search <id>. If the answer of that list carries `incomplete` (FG-REPO-0031), the definition may lie past the index's bounds."
+fix = "Use an id the revision defines, or the revision that defines it (gstn spec versions --project <id>)."
+test = "an_unknown_requirement_is_not_found"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]
@@ -804,6 +817,19 @@ diagnosis = "The doctor line carries `expiring_service_accounts` (how many), `us
 fix = "Follow runbook service-accounts (rotation): an administrator issues a new token for the account in the browser session (the service account screen, or POST /api/v1/admin/service-accounts/{id}/tokens; a token can never issue one), the owner puts it into the integration's secret file, the integration is checked, then the old token is revoked (`gstn admin service-account revoke-token <id> <token id> --yes`). Re-run forge doctor: the line is ok once a token expiring later than 14 days exists."
 runbook = "service-accounts"
 test = "doctor_warns_token_expiring_within_14_days"
+
+[[error]]
+code = "FG-AUTH-0020"
+name = "ContextWithheld"
+http_status = 403
+severity = "info"
+user_message_ja = "この項目は機密の印が付いているため、AI エージェントのトークンには渡しません。人のアカウントで開いてください。"
+user_message_en = "This item is marked confidential and is not given to an AI agent's token. Open it with a person's account."
+user_message_id = "Item ini ditandai rahasia dan tidak diberikan kepada token agen AI. Buka dengan akun orang."
+cause = "Plan 06 D-5 (M3 X5, ADR-0023 Amendment X5): what is marked confidential is never handed to an AI agent by the context API. The caller was allowed to read the project (ContextRead / MergeRequestRead decided it), but it is an agent audience — a token issued with `is_agent`, a service account or a bot (`Principal::is_agent_audience`), or the request said `Forge-Context-Audience: agent` (gstn mcp always does) — and the one item asked for is marked: a work item with `forge.work_items.confidential`, or a requirement whose specification document has `confidential: true` in its front matter (or a front matter that cannot be read: the mark may be in it, so it fails closed). Lists (the spec API, a merge request's context) leave such items out and count them in `withheld` instead of refusing. Not a fault."
+diagnosis = "The log event carries `route`, `project_id`, `reason` (`work_item_confidential` or `spec_confidential`), `audience` (`agent_token`, `service_account`, `bot` or `header`) and, by reason, `work_item` or `requirement` and `path`. Read the mark: the document's front matter (gstn browse blob --project <id> --ref <rev> --path <path>), or SELECT confidential FROM forge.work_items WHERE ref = '<PBI-n>'."
+fix = "Expected for an AI agent: a person reads the item with their own session or a token without `is_agent`. If the mark is wrong, correct it where it is set (the document's front matter; the work item's mark comes from kanflow). A front matter that cannot be read is fixed by fixing it (forge/spec-lint names the rule)."
+test = "a_confidential_item_is_withheld_from_an_agent"
 
 [[error]]
 code = "FG-GIT-0007"
@@ -1941,8 +1967,8 @@ severity = "info"
 user_message_ja = "このプロジェクトは連携先（kanflow）のプロジェクトに結びついていないので、作業項目をリンクできません。先にプロジェクトを結びつけてください。"
 user_message_en = "This project is not bound to a project of an integration (kanflow), so work items cannot be linked. Bind the project first."
 user_message_id = "Proyek ini tidak terikat ke proyek integrasi (kanflow), sehingga item kerja tidak dapat ditautkan. Ikat proyek terlebih dahulu."
-cause = "`PUT` or `DELETE /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}` named a project without an integration binding (`forge.integration_bindings` has no row for it). `PBI-123` is numbered per kanflow project, so without the binding forge cannot tell which work item is meant (02 §2). Nothing was written. Detection (`work-item-sync`) links nothing in such a project either, without an error."
-diagnosis = "The log event carries `reason=project_not_bound` and `project_id`, with `action=WorkItemLink`. `GET /api/v1/projects/{id}/integration-bindings` (or `gstn integration-binding list --project <id>`) shows the project's binding."
+cause = "`PUT` or `DELETE /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}` named a project without an integration binding (`forge.integration_bindings` has no row for it). `PBI-123` is numbered per kanflow project, so without the binding forge cannot tell which work item is meant (02 §2). Nothing was written. Detection (`work-item-sync`) links nothing in such a project either, without an error. M3 X5: `GET /api/v1/projects/{id}/context/work-item?ref=` (the context API) answers the same for a project without a binding: which kanflow project the reference belongs to is the binding's."
+diagnosis = "The log event carries `reason=project_not_bound` and `project_id`, with `action=WorkItemLink`. `GET /api/v1/projects/{id}/integration-bindings` (or `gstn integration-binding list --project <id>`) shows the project's binding. From the context API the event carries `route=context_work_item` instead (action ContextRead)."
 fix = "A Maintainer binds the project to its kanflow project (`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`, runbook integrations), then links again. Merge requests that existed before the binding are linked by detection at their next event (an edit, a push, a comment)."
 runbook = "integrations"
 test = "manual_link_on_an_unbound_project_is_int_0018"

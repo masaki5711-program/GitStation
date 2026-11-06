@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use forge_auth::{
     AccountFacts, Action, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, Credential,
-    LoadedProject, Principal, ProjectCtx, ServiceAccountView,
+    LoadedProject, MergeRequestCtx, Principal, ProjectCtx, ServiceAccountView,
 };
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
@@ -255,6 +255,22 @@ impl Checks {
         let project = *proof.id();
         let commit = self.reachable(project, repo, sha, user).await?;
         checks::check_runs(&self.db, project, &commit).await
+    }
+
+    /// Every run on `head` — the current head of the merge request the
+    /// proof is for — of its project, by name (M3 X5: the merge request's
+    /// context, read like the merge request itself). The head is the
+    /// stored one (a version ref keeps it), so no branch reachability is
+    /// asked.
+    pub async fn merge_request_head_runs(
+        &self,
+        proof: &Authorized<MergeRequestCtx>,
+        head: &ObjectId,
+    ) -> Result<Vec<StoredCheckRun>, ForgeError> {
+        require(proof.action(), Action::MergeRequestRead)?;
+        caller(proof.principal(), Action::MergeRequestRead)?;
+        let (project, _) = *proof.id();
+        checks::check_runs(&self.db, project, head).await
     }
 
     /// `PUT` (`grant = true`) / `DELETE …/check-grants/{project_id}/{namespace}`

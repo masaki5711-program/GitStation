@@ -1484,3 +1484,80 @@ async fn the_link_condition_sees_only_open_links_of_the_current_binding() {
     );
     w.t.drop_now().await;
 }
+
+/// M3 X5 (plan 03 §6, ADR-0023 Amendment X5): a work item's context in one
+/// project — the binding, the item and its mark (plan 06 D-5), and the
+/// project's merge requests with an open link to it, newest first, bounded.
+#[tokio::test]
+async fn work_item_context_lists_the_projects_open_links_and_the_mark() {
+    let w = world().await;
+    let detected = open(&w, "Fix (PBI-43)", "fix").await;
+    drain(&w.t).await;
+    let manual = open(&w, "Other", "other").await;
+    drain(&w.t).await;
+    assert_eq!(
+        link(&w, &manual, "PBI-43", "req-link-ctx").await,
+        LinkOutcome::Changed
+    );
+    let got = work_item_context(&w.t.db, w.web.project_id, &reference("PBI-43"), 10)
+        .await
+        .expect("read")
+        .expect("bound");
+    assert_eq!(got.integration, w.integration);
+    assert_eq!(got.external_project_id, "kf-1");
+    let item = got.work_item.clone().expect("known");
+    assert!(!item.confidential);
+    let iids: Vec<i64> = got.merge_requests.iter().map(|m| m.iid).collect();
+    assert_eq!(iids, [manual.iid, detected.iid]);
+    assert_eq!(got.merge_requests[0].link_source, LinkSource::Manual);
+    assert_eq!(got.merge_requests[1].link_source, LinkSource::Auto);
+    assert_eq!(got.merge_requests[1].title, "Fix (PBI-43)");
+    assert!(!got.truncated);
+    let one = work_item_context(&w.t.db, w.web.project_id, &reference("PBI-43"), 1)
+        .await
+        .expect("read")
+        .expect("bound");
+    assert_eq!(one.merge_requests.len(), 1);
+    assert!(one.truncated);
+    // A reference forge never saw: bound, no item, nothing linked.
+    let unseen = work_item_context(&w.t.db, w.web.project_id, &reference("PBI-7"), 10)
+        .await
+        .expect("read")
+        .expect("bound");
+    assert!(unseen.work_item.is_none());
+    assert!(unseen.merge_requests.is_empty());
+    // The mark, as kanflow will set it.
+    assert!(confidential_work_items(&w.t.db, &[item.id])
+        .await
+        .expect("read")
+        .is_empty());
+    w.t.exec_superuser("UPDATE forge.work_items SET confidential = true WHERE ref = 'PBI-43'")
+        .await;
+    let marked = work_item_context(&w.t.db, w.web.project_id, &reference("PBI-43"), 10)
+        .await
+        .expect("read")
+        .expect("bound");
+    assert!(marked.work_item.expect("known").confidential);
+    assert_eq!(
+        confidential_work_items(&w.t.db, &[item.id, item.id + 1000])
+            .await
+            .expect("read")
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [item.id]
+    );
+    // A project without a binding.
+    let api = projects::create(
+        &w.t.db,
+        &system("req-project-api"),
+        &NewProject::new("api", w.namespace, "Api", w.alice),
+    )
+    .await
+    .expect("api");
+    assert!(
+        work_item_context(&w.t.db, api.project_id, &reference("PBI-43"), 10)
+            .await
+            .expect("read")
+            .is_none()
+    );
+}

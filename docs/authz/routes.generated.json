@@ -440,6 +440,22 @@
     "word": "fixed"
   },
   {
+    "action": "ContextRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/context/requirement",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ContextRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/context/work-item",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/integration-bindings",
@@ -563,6 +579,14 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/conflicts",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/context",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
