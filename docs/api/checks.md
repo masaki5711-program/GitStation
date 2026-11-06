@@ -22,7 +22,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | 名前空間 | 書ける主体 |
 |---|---|
 | `ci/`・`kanflow/` | その名前空間を **そのプロジェクトについて** 管理者から割り当てられたサービスアカウントで、そのプロジェクトの **Developer 以上のメンバー**（割り当てはプロジェクトごと。別のプロジェクトの割り当て・`kanflow` だけの割り当ては `ci/` を書けない）。人（管理者を含む）・ボット・エージェントのトークンは拒否（`FG-AUTH-0003`、`reason=not_service_account` / `agent_token`）。割り当てが無い: `reason=namespace_not_granted` |
-| `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。X2 から `forge/spec-drift`、X7 から `forge/risk` を書く（下の「forge 自身のチェック」） |
+| `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。X2 から `forge/spec-drift`、X7 から `forge/risk`、X4 から `forge/spec-lint` と `forge/spec-trace` を書く（下の「forge 自身のチェック」） |
 | `ext/` | C1 では誰も書けない（`reason=ext_namespace_unavailable`）。`ext/` は必須のチェックにもできない（FG-REVIEW-0016） |
 
 - 見えないプロジェクト（サービスアカウントはメンバーのプロジェクトだけが見える）は、存在しないプロジェクトと同じ `FG-REPO-0005`（404）。
@@ -114,7 +114,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 その割り当ても消える。割り当てとは別に、サービスアカウントはそのプロジェクトの Developer 以上のメンバーでなければ報告できない。
 
 保護ブランチのマージの条件の答え（`PUT …/merge-rule`）は、必須のチェックのうち **そのプロジェクトについて報告できる有効なサービスアカウントが 1 つも無い** 名前を
-`unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は、forge 自身が書く名前（`forge/spec-drift`、`forge/risk`）を除いて常にここに入る）。
+`unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は、forge 自身が書く名前（`forge/spec-drift`・`forge/risk`・`forge/spec-lint`・`forge/spec-trace`）を除いて常にここに入る）。
 対処は runbook `checks-reporting`。
 
 ## 保持
@@ -147,4 +147,26 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 - 要約と注釈には **規則の id・パス・行・固定の理由・コード** だけを出す。一致した文字列（秘密、表名）は書かない。注釈は最悪のものから 50 件まで。`reported_by` は `null`。
 - 本文を読むのは 60 ファイル、1 ファイル 256 KiB まで。残りの数は `content_not_scanned`（`neutral`）に出す。評価の締め切りは 45 秒。
 - 必須のチェックにすると `neutral` も `failure` も満たさない（ADR-0024 §10）。必須にしなければ手動のマージは止めない。ローカル AI の層（層 2）と `.forge/risk.yml` は含まない（ADR-0023 Amendment X7）。
-- 1 コミットの一覧は最大 102 件（報告者 100 + forge の名前 2）。
+- 1 コミットの一覧は最大 104 件（報告者 100 + forge の名前 4。X4 で 2 つ増えた）。
+
+### `forge/spec-lint` と `forge/spec-trace`（X4）
+
+| 名前 | いつ | 結論 |
+|---|---|---|
+| `forge/spec-lint` | MR の版ごと（`merge_request.pushed`）と、作業項目の結びつきが変わったとき（`work_item.linked` / `unlinked`）・対象ブランチを変えたとき（`merge_request.updated` の `target_branch`）。後の 2 つはその MR の今の head。同じ head のジョブが待っている間は積まない。1 つのジョブ `check.spec_index` が 2 つの run を書く | `success`: 自分の仕様（`.forge/repo.yml` の `path:`、無ければ `spec/`）の文書と、自分の系列の `@req` が規則を守る。`failure`: 規則違反（`FG-REPO-0028`、要約と注釈に `パス:行 規則`）。`neutral`: 違反は見つからないが索引が上限に達した（`FG-REPO-0031`）。`error`: 評価がやり直しても失敗した |
+| `forge/spec-trace` | 同上 | **助言**（計画 03 §9-4）。`success`: MR が触れる要件（マージベースからの追加・変更、追加した `@req`、結びついた作業項目）にすべて `@req` のテストがある。`neutral`: テストの無い要件・作業項目（`FG-REPO-0029`）、知らない ID・形の崩れたタグ（`FG-REPO-0030`）、索引が上限（`FG-REPO-0031`）。**`failure` にはしない** |
+
+- 比べる相手は head と対象ブランチの先端の **マージベース**（無ければ、head のすべてを新しいものとして数える）。
+- 仕様の文書（自分の仕様のディレクトリの下の Markdown）の中の `@req` はテストに数えない（説明やコード例のため）。
+- `@req <要件 ID>` と `@req PBI-<番号>/AC-<番号>`（kanflow の受入基準）を受け付ける。結びついた作業項目 `PBI-<番号>` は、その受入基準のどれかのテストがあればよい。
+- 要約と注釈に出すのは、このリポジトリ自身の文字（自分の仕様の ID とパス、自分のタグ、MR 自身の作業項目）だけ。参照先の仕様は読まない（`repo:` の `scope:` に当たる ID は「知っている」と数える）。参照先を含めた表は、自分の権限で `gstn spec trace`。
+- M3 ではテストの **有無** だけを見る（パイプラインの結果は M4 の CI から。ADR-0017 §4.1.1）。
+- 上限: 仕様の Markdown 1000 ファイル、合計 8 MiB、1 ファイル 256 KiB（超えると `file_too_large`）、`@req` の `git grep` の出力 8 MiB。評価の締め切り 70 秒、書き込み 10 秒ずつ（2 つの run と 2 つの `error` で 110 秒 < ジョブの 120 秒）。落ちたジョブは 1 分ごとの掃除（`spec_index_sweep`）が両方の run を `error` にする。
+- forge が書く名前（`forge/spec-drift`・`forge/risk`・`forge/spec-lint`・`forge/spec-trace`）は 100 名の上限に数えない（一覧は最大 104 件）。
+
+## 仕様の API（X4）
+
+`GET /api/v1/projects/{id}/specs/{requirements,versions,diff,trace}`（Action `SpecRead`、`read_api`、`RepoBrowse` と同じ判定）。
+自分の仕様の索引を、読む人の権限で返す。`trace` は `.forge/repo.yml` の `repo:` を読む人の権限で辿り（読めないものは `unavailable`、`FG-REPO-0026`）、
+その `scope:` の要件ごとに、このリポジトリの `@req` のテストを数える。上限に達した索引は `incomplete {error_code: FG-REPO-0031, reason}`。
+1 人 1 分に索引 120 回分まで（`requirements`・`versions` は 1、`diff` は 2、`trace` は 1 + 参照の数。`FG-WEB-0010`）、同時に 2 本まで（`reason=in_flight`）、1 回 30 秒まで（`FG-WEB-0002 operation=spec_index`）。`gstn spec requirements|versions|diff|trace`。

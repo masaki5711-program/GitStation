@@ -46,6 +46,13 @@ actions! {
     /// on every referenced project with the reader's own principal
     /// (`prove_spec_ref`).
     SpecRefRead,
+    /// The spec API (M3 X4, plan 03 §7.2, ADR-0023 Amendment X4): `GET
+    /// /api/v1/projects/{id}/specs/{requirements,versions,diff,trace}` —
+    /// the project's requirement index at a revision (its own
+    /// specification and `@req` tags). Decided like `RepoBrowse` (the same
+    /// arm, `read_api`); the trace decides every referenced project again
+    /// with the reader's own principal (`prove_spec_ref`).
+    SpecRead,
     // --- REST API: projects ---
     ProjectRead,
     /// `GET /api/v1/projects`: may the caller list at all (any active
@@ -477,6 +484,7 @@ impl Action {
             Action::ProjectRead
             | Action::RepoBrowse
             | Action::SpecRefRead
+            | Action::SpecRead
             | Action::ProjectList
             | Action::MemberList
             | Action::ProtectedRefList

@@ -207,3 +207,49 @@ fn every_person_reads_an_internal_project_and_no_private_one() {
     deleting.pending_deletion = true;
     assert!(prove_spec_ref_for_every_person(deleting).is_err());
 }
+
+/// M3 X4: the spec API (`SpecRead`) is decided by the same rule, so every
+/// `RepoBrowse` row has its `SpecRead` twin too.
+#[test]
+fn the_spec_api_mirrors_every_browse_row() {
+    use crate::matrix::ROWS;
+    let twins = |action: Action| -> Vec<String> {
+        ROWS.iter()
+            .filter(|r| r.action == action)
+            .map(|r| format!("{:?} {:?} {:?}", r.actor, r.fixture, r.expect))
+            .collect()
+    };
+    let mut browse = twins(Action::RepoBrowse);
+    let mut spec = twins(Action::SpecRead);
+    browse.sort();
+    spec.sort();
+    assert!(!spec.is_empty(), "SpecRead has no rows");
+    assert_eq!(spec, browse, "SpecRead rows must be RepoBrowse's twins");
+}
+
+/// M3 X4: the spec API's trace follows `.forge/repo.yml` references with
+/// the reader's own permissions, decided as `SpecRead` on each referenced
+/// project (the route's proof, never the caller's principal).
+#[test]
+fn a_spec_api_proof_follows_references_for_the_reader() {
+    let me = reader(Credential::Session, AccountKind::Human);
+    let proof = prove(
+        &me,
+        Action::SpecRead,
+        ProjectCtx::new(project(1, Visibility::Private, Some(Role::Maintainer))),
+    )
+    .expect("a Maintainer reads its own project's specification");
+    let ok = prove_spec_ref(
+        &proof,
+        project(2, Visibility::Private, Some(Role::Reporter)),
+    )
+    .expect("followed");
+    assert_eq!(ok.action(), Action::SpecRead);
+    assert_eq!(
+        code(prove_spec_ref(
+            &proof,
+            project(3, Visibility::Private, None)
+        )),
+        Some(ErrorCode::NotFound)
+    );
+}

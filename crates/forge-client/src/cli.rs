@@ -128,6 +128,13 @@ pub enum Command {
         #[command(subcommand)]
         command: BrowseCommand,
     },
+    /// A project's specification (M3 X4): requirements, versions, the
+    /// requirement diff, and the trace to `@req` tests.
+    #[command(disable_help_subcommand = true)]
+    Spec {
+        #[command(subcommand)]
+        command: SpecCommand,
+    },
     /// Users: search by name; administrators: list, disable, sessions, rename.
     #[command(disable_help_subcommand = true)]
     User {
@@ -215,6 +222,13 @@ fn parse_limit(raw: &str) -> Result<u32, String> {
     match raw.parse::<u32>() {
         Ok(n) if (1..=100).contains(&n) => Ok(n),
         _ => Err("--limit is a whole number from 1 to 100".to_string()),
+    }
+}
+
+fn parse_spec_limit(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(n) if (1..=500).contains(&n) => Ok(n),
+        _ => Err("--limit is a whole number from 1 to 500".to_string()),
     }
 }
 
@@ -1639,6 +1653,52 @@ pub enum GitOperation {
     Get,
     Store,
     Erase,
+}
+
+/// `gstn spec` (M3 X4, plan 03 §7.2): the spec API, read with your
+/// permissions.
+#[derive(Subcommand, Debug)]
+pub enum SpecCommand {
+    /// The own specification's requirements at a revision, and the
+    /// documents' problems.
+    Requirements {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+        /// Only requirements whose id or text contains this (case-insensitive).
+        #[arg(long, value_parser = parse_text)]
+        search: Option<String>,
+        /// At most this many requirements, 1..=500 (server default 100).
+        #[arg(long, value_parser = parse_spec_limit)]
+        limit: Option<u32>,
+    },
+    /// The specification's versions (version tags), newest first.
+    Versions {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// The requirements added, changed, removed or deprecated between two revisions.
+    Diff {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The earlier revision: a commit id, a branch or a tag.
+        #[arg(long, value_parser = parse_text)]
+        from: String,
+        /// The later revision: a commit id, a branch or a tag.
+        #[arg(long, value_parser = parse_text)]
+        to: String,
+    },
+    /// Each requirement (own, and every pinned reference you may read)
+    /// with the `@req` tests naming it.
+    Trace {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+    },
 }
 
 #[derive(Args, Debug)]

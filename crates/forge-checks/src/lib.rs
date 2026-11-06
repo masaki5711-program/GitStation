@@ -36,7 +36,9 @@ use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
 pub mod risk;
+pub mod spec_checks;
 pub mod spec_drift;
+pub mod spec_index;
 pub mod spec_refs;
 pub mod validate;
 

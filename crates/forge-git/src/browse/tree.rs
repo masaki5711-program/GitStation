@@ -204,7 +204,7 @@ pub(super) struct ParsedTree {
 
 /// Records [`parse_tree`] left out, said once per call (warn, with the
 /// repository): never silently dropped.
-fn log_skipped(repo: RepoId, parsed: &ParsedTree) {
+pub(super) fn log_skipped(repo: RepoId, parsed: &ParsedTree) {
     if parsed.malformed > 0 || parsed.not_utf8 > 0 {
         tracing::warn!(
             target: "forge_git::browse",

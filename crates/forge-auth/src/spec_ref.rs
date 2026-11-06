@@ -26,23 +26,21 @@ use crate::action::Action;
 use crate::model::{AccountKind, Credential, Principal};
 use crate::prove::{prove, Authorized, LoadedProject, ProjectCtx};
 
-/// Decide `SpecRefRead` on `referenced` for the reader of `proof`. Denies
+/// Decide the proof's action (`SpecRefRead`, or `SpecRead` for the spec
+/// API's trace, M3 X4) on `referenced` for the reader of `proof`. Denies
 /// like `authorize()`; a proof for another action is `FG-SYS-0001
 /// reason=proof_action_mismatch` (a caller bug, never a pass).
 pub fn prove_spec_ref(
     proof: &Authorized<ProjectCtx>,
     referenced: LoadedProject,
 ) -> Result<Authorized<ProjectCtx>, ForgeError> {
-    if proof.action() != Action::SpecRefRead {
+    let action = proof.action();
+    if action != Action::SpecRefRead && action != Action::SpecRead {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "proof_action_mismatch")
-            .with_context("action", proof.action().name()));
+            .with_context("action", action.name()));
     }
-    prove(
-        proof.principal(),
-        Action::SpecRefRead,
-        ProjectCtx::new(referenced),
-    )
+    prove(proof.principal(), action, ProjectCtx::new(referenced))
 }
 
 /// The least reader: a signed-in, active person in a session, no

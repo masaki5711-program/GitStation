@@ -1048,3 +1048,262 @@ async fn the_risk_sweep_walks_its_cursor_through_more_jobs_than_a_batch() {
     assert_eq!(answered[0]["n"], 3, "{answered:?}");
     w.t.drop_now().await;
 }
+
+// ── M3 X4: `forge/spec-lint` and `forge/spec-trace` ──
+
+/// A commit of nested `files` (`dir/name` paths) on top of `parent`.
+fn commit_files(repo: &Path, parent: Option<&str>, files: &[(&str, &str)]) -> String {
+    use std::collections::BTreeMap;
+    #[derive(Default)]
+    struct Dir {
+        files: BTreeMap<String, String>,
+        dirs: BTreeMap<String, Dir>,
+    }
+    fn write(repo: &Path, d: &Dir) -> String {
+        let mut listing = String::new();
+        for (name, sub) in &d.dirs {
+            listing.push_str(&format!("040000 tree {}\t{name}\n", write(repo, sub)));
+        }
+        for (name, blob) in &d.files {
+            listing.push_str(&format!("100644 blob {blob}\t{name}\n"));
+        }
+        plumb(repo, &["mktree"], Some(listing.as_bytes()))
+    }
+    let mut root = Dir::default();
+    for (path, content) in files {
+        let blob = plumb(
+            repo,
+            &["hash-object", "-w", "--stdin"],
+            Some(content.as_bytes()),
+        );
+        let mut segs: Vec<&str> = path.split('/').collect();
+        let name = segs.pop().expect("name");
+        let mut d = &mut root;
+        for s in segs {
+            d = d.dirs.entry(s.to_owned()).or_default();
+        }
+        d.files.insert(name.to_owned(), blob);
+    }
+    let tree = write(repo, &root);
+    let mut args = vec!["commit-tree", tree.as_str(), "-m", "synthetic"];
+    if let Some(p) = parent {
+        args.extend(["-p", p]);
+    }
+    plumb(repo, &args, None)
+}
+
+const SPEC_HEAD: &str = "---\nspec: config\ntitle: Config\nstatus: approved\n---\n";
+
+async fn spec_runs(w: &World, head: &str) -> Vec<forge_db::checks::StoredCheckRun> {
+    forge_db::checks::check_runs(&w.t.db, w.project, &oid(head))
+        .await
+        .expect("runs")
+        .into_iter()
+        .filter(|r| {
+            [
+                forge_core::checks::SPEC_LINT_CHECK,
+                forge_core::checks::SPEC_TRACE_CHECK,
+            ]
+            .contains(&r.name.as_str())
+        })
+        .collect()
+}
+
+/// Every merge request version gets its `forge/spec-lint` and
+/// `forge/spec-trace` runs through the production subscriber
+/// (`spec-index`) and job handler (`check.spec_index`), compared with the
+/// merge base: a changed requirement without a test is `untested`
+/// (advisory: `neutral`), a new one with a tagged test is `tested`.
+#[tokio::test]
+async fn a_merge_request_version_gets_its_spec_lint_and_trace_runs() {
+    let mut w = World::new().await;
+    let base = commit_files(
+        &w.path,
+        None,
+        &[(
+            "spec/config.md",
+            &format!("{SPEC_HEAD}::: req ZEVA-CFG-1\nold\n:::\n"),
+        )],
+    );
+    w.push("main", Some(&base)).await;
+    let head = commit_files(
+        &w.path,
+        Some(&base),
+        &[
+            (
+                "spec/config.md",
+                &format!(
+                    "{SPEC_HEAD}::: req ZEVA-CFG-1\nnew\n:::\n::: req ZEVA-CFG-2\nadded\n:::\n"
+                ),
+            ),
+            ("tests/reload.rs", "// @req ZEVA-CFG-2\nfn t() {}\n"),
+        ],
+    );
+    w.push("feature", Some(&head)).await;
+    let _mr = w.open("feature", "main").await;
+    w.drain().await;
+    let runs = spec_runs(&w, &head).await;
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    let lint = &runs[0];
+    assert_eq!(lint.name.as_str(), forge_core::checks::SPEC_LINT_CHECK);
+    assert_eq!(
+        lint.conclusion,
+        Some(forge_core::CheckConclusion::Success),
+        "{}",
+        lint.summary
+    );
+    assert_eq!(lint.reported_by, None);
+    let trace = &runs[1];
+    assert_eq!(
+        trace.conclusion,
+        Some(forge_core::CheckConclusion::Neutral),
+        "{}",
+        trace.summary
+    );
+    assert!(
+        trace
+            .summary
+            .contains("untested ZEVA-CFG-1 (spec_changed) spec/config.md:6"),
+        "{}",
+        trace.summary
+    );
+    assert!(
+        trace.summary.contains("tested ZEVA-CFG-2"),
+        "{}",
+        trace.summary
+    );
+    assert!(
+        trace.summary.contains(&format!("merge base {base}")),
+        "{}",
+        trace.summary
+    );
+    w.t.drop_now().await;
+}
+
+/// A broken specification fails spec-lint on the head.
+#[tokio::test]
+async fn a_broken_specification_fails_spec_lint() {
+    let mut w = World::new().await;
+    let base = commit_files(&w.path, None, &[("README", "base\n")]);
+    w.push("main", Some(&base)).await;
+    let head = commit_files(
+        &w.path,
+        Some(&base),
+        &[(
+            "spec/config.md",
+            &format!("{SPEC_HEAD}::: req ZEVA-CFG-1\nx\n:::\n::: req ZEVA-CFG-1\ny\n:::\n"),
+        )],
+    );
+    w.push("feature", Some(&head)).await;
+    let _mr = w.open("feature", "main").await;
+    w.drain().await;
+    let runs = spec_runs(&w, &head).await;
+    assert_eq!(
+        runs[0].conclusion,
+        Some(forge_core::CheckConclusion::Failure),
+        "{}",
+        runs[0].summary
+    );
+    assert!(
+        runs[0].summary.contains("duplicate_id"),
+        "{}",
+        runs[0].summary
+    );
+    assert_eq!(runs[0].annotations.len(), 1);
+    w.t.drop_now().await;
+}
+
+fn missing_spec_index_job(w: &World, attempts: u8, request: &str) -> forge_db::jobs::NewJob {
+    let mut job = forge_db::checks::spec_index::spec_index_job(
+        &forge_db::checks::spec_index::SpecIndexRequest {
+            project: w.project,
+            iid: 1,
+            head: oid(&"d".repeat(40)),
+        },
+        None,
+        RequestId::parse(request).expect("id"),
+        None,
+    )
+    .expect("job");
+    job.max_attempts = forge_db::jobs::MaxAttempts::new(attempts).expect("attempts");
+    job
+}
+
+/// The handler's last failure records `error` for both checks; a retried
+/// attempt writes nothing.
+#[tokio::test]
+async fn a_spec_index_job_that_dies_answers_error_for_both_checks() {
+    let mut w = World::new().await;
+    let base = commit_files(&w.path, None, &[("README", "base\n")]);
+    w.push("main", Some(&base)).await;
+    w.push("feature", Some(&base)).await;
+    let _mr = w.open("feature", "main").await;
+    w.drain().await;
+    let job = missing_spec_index_job(&w, 2, "req-index-dies");
+    forge_db::jobs::enqueue(&w.t.db, &job)
+        .await
+        .expect("enqueue");
+    let first = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(
+        matches!(first, forge_db::jobs::Ran::Retrying { .. }),
+        "{first:?}"
+    );
+    assert!(spec_runs(&w, &"d".repeat(40)).await.is_empty());
+    w.t.exec_superuser("UPDATE forge.jobs SET run_after = now() WHERE kind = 'check.spec_index'")
+        .await;
+    let second = w.runner.run_once().await.expect("runner").expect("ran");
+    assert!(
+        matches!(second, forge_db::jobs::Ran::Dead { .. }),
+        "{second:?}"
+    );
+    let runs = spec_runs(&w, &"d".repeat(40)).await;
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    for run in &runs {
+        assert_eq!(run.conclusion, Some(forge_core::CheckConclusion::Error));
+        assert!(run.summary.contains("req-index-dies"), "{}", run.summary);
+    }
+    w.t.drop_now().await;
+}
+
+/// A job the reaper ended has no answer; the sweep writes `error` for both
+/// checks once.
+#[tokio::test]
+async fn the_sweep_answers_a_reaped_spec_index_job_once() {
+    let w = World::new().await;
+    let job = missing_spec_index_job(&w, 1, "req-index-crash");
+    forge_db::jobs::enqueue(&w.t.db, &job)
+        .await
+        .expect("enqueue");
+    let kind = forge_db::jobs::JobKind::parse("check.spec_index").expect("kind");
+    let worker = forge_db::jobs::WorkerId::generate();
+    let claimed = forge_db::jobs::claim(&w.t.db, &worker, &[kind])
+        .await
+        .expect("claim")
+        .expect("a job");
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.jobs SET lease_until = now() - interval '1 second' WHERE id = {}",
+        claimed.lease.job_id.get()
+    ))
+    .await;
+    let reaped = forge_db::jobs::reap(&w.t.db).await.expect("reap");
+    assert_eq!(reaped.len(), 1);
+    assert!(spec_runs(&w, &"d".repeat(40)).await.is_empty());
+    crate::worker::spec_index_sweep::run_spec_index_sweep(&w.t.db)
+        .await
+        .expect("sweep");
+    let runs = spec_runs(&w, &"d".repeat(40)).await;
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    for run in &runs {
+        assert_eq!(run.conclusion, Some(forge_core::CheckConclusion::Error));
+        assert!(run.summary.contains("FG-DB-0007"), "{}", run.summary);
+        assert!(run.summary.contains("req-index-crash"), "{}", run.summary);
+    }
+    crate::worker::spec_index_sweep::run_spec_index_sweep(&w.t.db)
+        .await
+        .expect("sweep again");
+    assert!(spec_runs(&w, &"d".repeat(40))
+        .await
+        .iter()
+        .all(|r| r.revision == 1));
+    w.t.drop_now().await;
+}

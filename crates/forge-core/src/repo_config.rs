@@ -212,13 +212,13 @@ pub fn parse_repo_config(bytes: &[u8]) -> Result<RepoConfig, RepoConfigProblem> 
 // ── the tree (scalars as text; no anchors, aliases or tags) ────────────
 
 #[derive(Debug)]
-struct Node {
-    line: usize,
-    kind: Kind,
+pub(crate) struct Node {
+    pub(crate) line: usize,
+    pub(crate) kind: Kind,
 }
 
 #[derive(Debug)]
-enum Kind {
+pub(crate) enum Kind {
     Text(String),
     /// An empty value, or a plain `~` / `null` (YAML's null): never text.
     Null,
@@ -278,8 +278,9 @@ fn attach(stack: &mut [Open], node: Node) -> Result<Option<Node>, RepoConfigProb
     }
 }
 
-/// The document's root node (`None`: an empty stream).
-fn read_tree(text: &str) -> Result<Option<Node>, RepoConfigProblem> {
+/// The document's root node (`None`: an empty stream). Also the spec
+/// documents' front matter (`spec_doc`, M3 X4): the same refusals.
+pub(crate) fn read_tree(text: &str) -> Result<Option<Node>, RepoConfigProblem> {
     let mut parser = Parser::new_from_str(text);
     let mut stack: Vec<Open> = Vec::new();
     let mut root: Option<Node> = None;
@@ -367,7 +368,7 @@ fn open(stack: &mut Vec<Open>, collection: Open) -> Result<(), RepoConfigProblem
 // ── the format ──────────────────────────────────────────────────────────
 
 /// The entries of a mapping with unique text keys, or the problem.
-fn mapping<'a>(
+pub(crate) fn mapping<'a>(
     node: &'a Node,
     not_a_mapping: &'static str,
 ) -> Result<Vec<Field<'a>>, RepoConfigProblem> {
@@ -393,15 +394,19 @@ fn mapping<'a>(
 }
 
 /// One key of a mapping: its text, its line and its value.
-struct Field<'a> {
-    key: &'a str,
-    line: usize,
-    value: &'a Node,
+pub(crate) struct Field<'a> {
+    pub(crate) key: &'a str,
+    pub(crate) line: usize,
+    pub(crate) value: &'a Node,
 }
 
 /// A value that must be text: `empty` names the field's own rule for an
 /// empty or null value (reported at `at`, the key's line).
-fn text<'a>(node: &'a Node, at: usize, empty: &'static str) -> Result<&'a str, RepoConfigProblem> {
+pub(crate) fn text<'a>(
+    node: &'a Node,
+    at: usize,
+    empty: &'static str,
+) -> Result<&'a str, RepoConfigProblem> {
     match &node.kind {
         Kind::Text(t) => Ok(t),
         Kind::Null => Err(problem(at, empty)),

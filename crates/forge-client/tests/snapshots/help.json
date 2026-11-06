@@ -5024,6 +5024,390 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag (default: the default branch).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Only requirements whose id or text contains this (case-insensitive).",
+          "kind": "option",
+          "name": "--search",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "At most this many requirements, 1..=500 (server default 100).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn spec requirements --project 7",
+        "gstn spec requirements --project 7 --ref v1.4 --search reload --json"
+      ],
+      "name": "spec requirements",
+      "output": {
+        "properties": {
+          "config": {
+            "enum": [
+              "absent",
+              "valid",
+              "invalid"
+            ]
+          },
+          "dirs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "documents": {
+            "items": {
+              "required": [
+                "path",
+                "spec",
+                "title",
+                "status",
+                "requirements",
+                "problems"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "problems": {
+            "items": {
+              "required": [
+                "error_code",
+                "path",
+                "line",
+                "rule",
+                "detail"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "requirements": {
+            "items": {
+              "required": [
+                "id",
+                "path",
+                "line",
+                "priority",
+                "deprecated",
+                "spec",
+                "body"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "config",
+          "dirs",
+          "documents",
+          "requirements",
+          "truncated",
+          "problems",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/specs/requirements"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a revision's own specification: its requirements (searchable), documents and document problems (M3 X4)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn spec versions --project 7"
+      ],
+      "name": "spec versions",
+      "output": {
+        "properties": {
+          "truncated": {
+            "type": "boolean"
+          },
+          "versions": {
+            "items": {
+              "required": [
+                "name",
+                "full_name",
+                "commit"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "versions",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/specs/versions"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List the specification's versions (version tags), newest first (M3 X4)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The earlier revision: a commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--from",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The later revision: a commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--to",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn spec diff --project 7 --from v1.4 --to v1.5"
+      ],
+      "name": "spec diff",
+      "output": {
+        "properties": {
+          "changes": {
+            "items": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "added",
+                    "changed",
+                    "removed",
+                    "deprecated"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "path",
+                "line"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "from": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "to": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "changes",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/specs/diff"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show the requirements added, changed, removed or deprecated between two revisions (M3 X4)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag (default: the default branch).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn spec trace --project 7",
+        "gstn spec trace --project 7 --ref main --json"
+      ],
+      "name": "spec trace",
+      "output": {
+        "properties": {
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "references": {
+            "items": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "resolved",
+                    "version_not_found",
+                    "unavailable"
+                  ]
+                }
+              },
+              "required": [
+                "line",
+                "repo",
+                "status",
+                "error_code",
+                "requirements"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "requirements": {
+            "items": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "tested",
+                    "untested"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "source",
+                "path",
+                "line",
+                "deprecated",
+                "status",
+                "test_count",
+                "tests"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "requirements",
+          "references",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/specs/trace"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show each requirement (own, and every pinned reference you may read) with the @req tests naming it (M3 X4)."
+    },
+    {
+      "args": [
+        {
           "description": "The user id.",
           "kind": "positional",
           "name": "id",

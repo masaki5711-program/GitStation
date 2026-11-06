@@ -1291,6 +1291,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/specs/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The requirements added, changed, removed or deprecated between two revisions */
+        get: operations["get_api_v1_projects_id_specs_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/specs/requirements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A revision's own specification: its documents, requirements (searchable) and document problems */
+        get: operations["get_api_v1_projects_id_specs_requirements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/specs/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Each requirement (own and pinned references, followed for the reader) with the @req tests naming it */
+        get: operations["get_api_v1_projects_id_specs_trace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/specs/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The specification's versions (version tags), newest first */
+        get: operations["get_api_v1_projects_id_specs_versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/transfer": {
         parameters: {
             query?: never;
@@ -3589,6 +3657,43 @@ export interface components {
         SetVisibility: {
             visibility: components["schemas"]["VisibilityName"];
         };
+        /** @description One requirement's change. */
+        SpecChangeBody: {
+            id: string;
+            /** @description `added`, `changed`, `removed` or `deprecated`. */
+            kind: string;
+            line: number;
+            /** @description Where it is in `to` (in `from` when removed). */
+            path: string;
+        };
+        /** @description `GET …/specs/diff`. */
+        SpecDiffBody: {
+            /** @description By id. */
+            changes: components["schemas"]["SpecChangeBody"][];
+            from: components["schemas"]["RevBody"];
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            to: components["schemas"]["RevBody"];
+        };
+        /** @description One specification document. */
+        SpecDocumentBody: {
+            path: string;
+            /** @description Rules the document breaks (they are in `problems`). */
+            problems: number;
+            /** @description Requirement blocks read. */
+            requirements: number;
+            /** @description `spec:` (`null` when the front matter cannot be used). */
+            spec: string | null;
+            /** @description `draft`, `review`, `approved` or `deprecated`. */
+            status: string | null;
+            title: string | null;
+        };
+        /** @description A bound the index hit. */
+        SpecIncompleteBody: {
+            /** @description `FG-REPO-0031`. */
+            error_code: string;
+            /** @description `spec_files`, `spec_bytes` or `tag_lines`. */
+            reason: string;
+        };
         /** @description How a referenced repository's version is fixed. */
         SpecPinBody: {
             /** @description The tag or branch name as written. */
@@ -3597,6 +3702,16 @@ export interface components {
             ref_name: string;
             /** @description `version` (a tag) or `track` (a branch). */
             type: string;
+        };
+        /** @description One rule broken. */
+        SpecProblemBody: {
+            detail: string | null;
+            /** @description `FG-REPO-0028`. */
+            error_code: string;
+            /** @description 1-based; 0 for the whole file. */
+            line: number;
+            path: string;
+            rule: string;
         };
         /** @description One `specs:` entry, resolved for the reader. */
         SpecRefBody: {
@@ -3640,6 +3755,104 @@ export interface components {
             ref: components["schemas"]["RevBody"];
             /** @description In file order; empty unless `valid`. */
             specs: components["schemas"]["SpecRefBody"][];
+        };
+        /** @description One requirement. */
+        SpecRequirementBody: {
+            /** @description The block's text. */
+            body: string;
+            deprecated: boolean;
+            id: string;
+            /** @description The opening line (1-based). */
+            line: number;
+            path: string;
+            /** @description `must`, `should`, `could`, `wont`. */
+            priority: string | null;
+            /** @description The document's `spec:`. */
+            spec: string | null;
+        };
+        /** @description `GET …/specs/requirements`. */
+        SpecRequirementsBody: {
+            /** @description `.forge/repo.yml`: `absent`, `valid` or `invalid`. */
+            config: string;
+            /** @description The own specification directories read. */
+            dirs: string[];
+            documents: components["schemas"]["SpecDocumentBody"][];
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            /**
+             * @description The documents' rules (duplicates included; a broken `@req`
+             *     reference needs the tags: forge/spec-lint and the trace), at most 200.
+             */
+            problems: components["schemas"]["SpecProblemBody"][];
+            ref: components["schemas"]["RevBody"];
+            /** @description By id (the first definition of an id defined twice). */
+            requirements: components["schemas"]["SpecRequirementBody"][];
+            /** @description More requirements matched than `limit`. */
+            truncated: boolean;
+        };
+        /** @description Where a test is. */
+        SpecTestPlaceBody: {
+            line: number;
+            path: string;
+        };
+        /** @description `GET …/specs/trace`. */
+        SpecTraceBody: {
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            ref: components["schemas"]["RevBody"];
+            /** @description `repo:` entries in file order (none when the file cannot be used). */
+            references: components["schemas"]["SpecTraceReferenceBody"][];
+            /**
+             * @description The own specification's requirements by id, then each followed
+             *     reference's in file order.
+             */
+            requirements: components["schemas"]["SpecTraceRowBody"][];
+        };
+        /** @description One `repo:` entry of the trace. */
+        SpecTraceReferenceBody: {
+            /** @description `FG-REPO-0025` / `FG-REPO-0026`; `null` when resolved. */
+            error_code: string | null;
+            /** @description Its line in `.forge/repo.yml`. */
+            line: number;
+            /** @description As written. */
+            repo: string;
+            /** @description Its requirements within the entry's scope. */
+            requirements: number;
+            /** @description `resolved`, `version_not_found` or `unavailable`. */
+            status: string;
+        };
+        /** @description One requirement with the tests naming it. */
+        SpecTraceRowBody: {
+            deprecated: boolean;
+            id: string;
+            line: number;
+            /** @description In its source repository. */
+            path: string;
+            /** @description The own directory (`spec/`) or the `repo:` path as written. */
+            source: string;
+            /** @description `tested` or `untested`. */
+            status: string;
+            /** @description Every `@req` tag of this repository naming it. */
+            test_count: number;
+            /** @description The first 20 of them. */
+            tests: components["schemas"]["SpecTestPlaceBody"][];
+        };
+        /** @description One version tag. */
+        SpecVersionBody: {
+            /** @description The commit it peels to. */
+            commit: string;
+            /** @description `refs/tags/…`. */
+            full_name: string;
+            /** @description The tag (`v1.5`). */
+            name: string;
+        };
+        /** @description `GET …/specs/versions`. */
+        SpecVersionsBody: {
+            /**
+             * @description More versions than one answer lists, or more refs than one listing
+             *     keeps.
+             */
+            truncated: boolean;
+            /** @description Newest first within a series (`v` / `spec-v`), series by name. */
+            versions: components["schemas"]["SpecVersionBody"][];
         };
         /** @description `POST …/discussions`. */
         StartDiscussion: {
@@ -7472,6 +7685,145 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_specs_diff: {
+        parameters: {
+            query?: {
+                /** @description The earlier revision (a commit id, a branch or a tag) */
+                from?: string;
+                /** @description The later revision (a commit id, a branch or a tag) */
+                to?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecDiffBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_specs_requirements: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+                /** @description Only requirements whose id or text contains this (case-insensitive, at most 256 bytes) */
+                q?: string;
+                /** @description At most this many requirements (default 100) */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecRequirementsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_specs_trace: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecTraceBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_specs_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecVersionsBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
