@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import axe from 'axe-core';
 import { chromium } from 'playwright';
 
+import { ACT_AS_HEAD, ACT_AS_STATE, actAsBackend } from './journey-act-as.mjs';
 import { mergeBackend } from './journey-merge.mjs';
 import { mrBackend } from './journey-mr.mjs';
 import { PNG, REFS, browse } from './journey-repo.mjs';
@@ -55,6 +56,7 @@ function backend() {
   const unexpected = [];
   const settings = settingsBackend(CSRF);
   const webhooks = webhooksBackend(CSRF);
+  const actAs = actAsBackend(CSRF, user);
   const serviceAccounts = serviceAccountsBackend(CSRF, user);
   const mergeRequests = mrBackend(CSRF, user);
   const merging = mergeBackend(CSRF, user);
@@ -102,7 +104,7 @@ function backend() {
     }
     // Merge requests first: the settings fake claims every /projects/7/ path.
     // !5 (approve and merge, U2) before the U1 fake, which answers 404 for it.
-    const mr = merging.answer(req, url, body) ?? mergeRequests.answer(req, url, body);
+    const mr = actAs.answer(req, url, body) ?? merging.answer(req, url, body) ?? mergeRequests.answer(req, url, body);
     if (mr !== null) {
       if (mr.error) return sendError(res, mr.status, ...mr.error), true;
       return sendJson(res, mr.status, mr.body), true;
@@ -798,6 +800,35 @@ async function main() {
     await page.getByText('Notification settings were saved.').waitFor();
     await check('72-notifications-saved');
 
+    // 6g. The act-as confirmation popup (U3): no navigation, the button is
+    // dead for the first second and after that until a fresh pointer move,
+    // one press, then "Done". The same state cannot be used twice.
+    const popup = `${base}/-/confirm/projects/7/merge-requests/3?intent=approve&sha=${ACT_AS_HEAD}&integration=4&state=${ACT_AS_STATE}`;
+    await page.goto(popup, { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { level: 1, name: 'Confirm on your behalf' }).waitFor();
+    const approveBtn = page.getByRole('button', { name: 'Approve', exact: true });
+    await approveBtn.waitFor();
+    if ((await approveBtn.getAttribute('aria-disabled')) !== 'true') problems.push('act-as: the button works at once');
+    if ((await page.getByRole('navigation').count()) !== 0) problems.push('act-as: the popup shows navigation');
+    await check('73-act-as-confirm');
+    await page.waitForTimeout(1200);
+    if ((await approveBtn.getAttribute('aria-disabled')) !== 'true') problems.push('act-as: armed without a new pointer action');
+    await page.mouse.move(40, 40);
+    await page.mouse.move(60, 60);
+    if ((await approveBtn.getAttribute('aria-disabled')) !== 'false') problems.push('act-as: not armed after a pointer move');
+    await approveBtn.click();
+    await page.getByRole('heading', { name: 'Done' }).waitFor();
+    await check('74-act-as-done');
+    await page.goto(popup, { waitUntil: 'networkidle' });
+    await approveBtn.waitFor();
+    await page.waitForTimeout(1200);
+    await page.mouse.move(80, 80);
+    await approveBtn.click();
+    const used = page.getByRole('alert').filter({ hasText: 'already used' });
+    await used.waitFor();
+    if (!(await used.innerText()).includes('req-act-as-used')) problems.push('act-as: used-link request id is missing');
+    await check('75-act-as-used');
+
     // 6g. Service accounts (admin). A taken username is refused with its reason
     // and request id; the secret of a new token is announced, focused and shown
     // once with a copy button; a refused issue shows no secret; revoke and
@@ -879,7 +910,7 @@ async function main() {
     await page.getByRole('heading', { name: 'Please sign in' }).waitFor();
     log('signed out');
   } catch (e) {
-    problems.push(`step failed: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+    problems.push(`step failed: ${e instanceof Error ? e.message.split('\n').slice(0, 3).join(' | ') : String(e)}`);
   } finally {
     await browser.close();
     server.close();
