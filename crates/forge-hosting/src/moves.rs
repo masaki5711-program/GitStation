@@ -310,6 +310,8 @@ impl Hosting {
         let admin_scope = match proof.principal().credential() {
             Credential::Session => true,
             Credential::Token(scopes) => scopes.contains(&Scope::Admin),
+            // No administrator right acting for a person (ADR-0025 §3).
+            Credential::ActAs(_) => false,
         };
         with_retry("tombstone_release", || async {
             let (released, ()) = tombstones::release_decided(&self.db, &ctx, id, user, |facts| {

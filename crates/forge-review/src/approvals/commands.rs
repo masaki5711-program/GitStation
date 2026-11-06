@@ -13,8 +13,8 @@ use forge_errors::{ErrorCode, ForgeError};
 use super::{evaluate, ApprovalReport, Asker, Budget, ReviewGit, REQUEST_BUDGET, STATE_BUDGET};
 use crate::merges::request_head_changed;
 use crate::{
-    account, caller, change_context, loaded, locked, ready, require, shape_mismatch, Review,
-    ReviewRequest,
+    account, act_as_use, caller, change_context, fresh_ctx, loaded, ready, require, shape_mismatch,
+    Review, ReviewRequest,
 };
 
 /// What an approve or unapprove did.
@@ -86,7 +86,7 @@ impl Review {
 
     /// The target branch's tip (`None`: absent), through the browse API's
     /// ref list.
-    pub(crate) async fn target_tip(
+    pub async fn target_tip(
         &self,
         project: forge_core::ProjectId,
         repo: ProjectRepository,
@@ -169,13 +169,21 @@ impl Review {
             )
             .await?;
         let ctx = change_context(request, proof.principal(), user);
+        // M3 S2: an act-as approve is bound to the target's tip too; it is
+        // compared again under the lock with the merge request as locked.
+        let using = act_as_use(proof.principal());
+        let tip = match using {
+            Some(_) => self.target_tip(project, repo, user, &current).await?,
+            None => None,
+        };
         let (outcome, approval, ()) = review::approve_mr_decided(
             &self.db,
             &ctx,
             (project, iid),
             user,
+            using.as_ref(),
             |facts| {
-                let fresh = MergeRequestCtx::new(loaded(&facts.project), locked(facts)?);
+                let fresh = fresh_ctx(proof.principal(), facts, tip.as_ref(), Some(sha))?;
                 proof.reconfirm(account(facts.account), fresh).map(drop)?;
                 let stored = facts.merge_request.as_ref().ok_or_else(crate::absent)?;
                 if stored.head_sha.as_deref() != Some(sha.as_str()) {
@@ -217,10 +225,14 @@ impl Review {
 
     /// `POST …/merge-requests/{iid}/unapprove` (`MergeRequestUnapprove`):
     /// withdraw the caller's own approval (none: unchanged).
+    ///
+    /// `repo`: the project's repository, read for an act-as unapprove (the
+    /// assertion is bound to the target's tip, M3 S2).
     pub async fn unapprove(
         &self,
         request: &ReviewRequest,
         proof: &Authorized<MergeRequestCtx>,
+        repo: Option<ProjectRepository>,
     ) -> Result<ApprovalAnswer, ForgeError> {
         require(proof.action(), Action::MergeRequestUnapprove)?;
         let (project, Some(iid)) = *proof.id() else {
@@ -228,12 +240,29 @@ impl Review {
         };
         let user = caller(proof)?;
         let ctx = change_context(request, proof.principal(), user);
-        let (outcome, approval, ()) =
-            review::unapprove_mr_decided(&self.db, &ctx, (project, iid), user, |facts| {
-                let fresh = MergeRequestCtx::new(loaded(&facts.project), locked(facts)?);
+        let using = act_as_use(proof.principal());
+        let tip = match (&using, repo) {
+            (Some(_), Some(repo)) => {
+                let current = self
+                    .merge_request(project, iid)
+                    .await?
+                    .ok_or_else(crate::absent)?;
+                self.target_tip(project, repo, user, &current).await?
+            }
+            (Some(_), None) | (None, _) => None,
+        };
+        let (outcome, approval, ()) = review::unapprove_mr_decided(
+            &self.db,
+            &ctx,
+            (project, iid),
+            user,
+            using.as_ref(),
+            |facts| {
+                let fresh = fresh_ctx(proof.principal(), facts, tip.as_ref(), None)?;
                 proof.reconfirm(account(facts.account), fresh).map(drop)
-            })
-            .await?;
+            },
+        )
+        .await?;
         Ok(ApprovalAnswer { outcome, approval })
     }
 

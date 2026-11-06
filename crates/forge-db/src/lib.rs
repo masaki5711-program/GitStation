@@ -41,6 +41,8 @@
 
 // ── M1 phase 8b MR7a: authorization facts inside a write transaction ──
 pub mod access;
+// M3 S2: acting for a person (ADR-0025).
+pub mod act_as;
 // ── end M1 phase 8b MR7a ──
 #[cfg(test)]
 mod audited_doctor_tests;

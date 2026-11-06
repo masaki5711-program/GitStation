@@ -66,6 +66,30 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/confirm/projects/{id}/merge-requests/{iid}",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/confirm/projects/{id}/merge-requests/{iid}",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ActAsAssertionIssue",
+    "method": "POST",
+    "path": "/-/confirm/projects/{id}/merge-requests/{iid}/assertions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/projects/{id}/{*rest}",
     "public": true,
     "scope": "instance",
@@ -312,6 +336,14 @@
     "word": "fixed"
   },
   {
+    "action": "ActAsAssertionClaim",
+    "method": "POST",
+    "path": "/api/v1/integrations/{id}/act-as/claim",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "IntegrationDevStatusRead",
     "method": "GET",
     "path": "/api/v1/integrations/{id}/dev-status",
@@ -539,6 +571,14 @@
     "action": "MergeRequestUpdate",
     "method": "PATCH",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ActAsConfirmView",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/act-as-confirmation",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

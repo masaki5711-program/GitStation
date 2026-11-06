@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use forge_auth::{
-    AccountFacts, Action, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, Credential,
-    LoadedProject, MergeRequestCtx, Principal, ProjectCtx, ServiceAccountView,
+    AccountFacts, Action, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, LoadedProject,
+    MergeRequestCtx, Principal, ProjectCtx, ServiceAccountView,
 };
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
@@ -132,10 +132,9 @@ fn change_context(request: &ChecksRequest, principal: &Principal, user: UserId) 
     };
     let mut ctx = ChangeContext::new(actor, request.request_id.clone());
     ctx.credential_id = request.credential_id;
-    ctx.effective_scope = match principal.credential() {
-        Credential::Session => Vec::new(),
-        Credential::Token(scopes) => scopes.iter().map(|s| s.as_str().to_owned()).collect(),
-    };
+    // An act-as principal never reaches these commands (ADR-0025 §4: no
+    // allowed action of theirs); its token's scopes all the same.
+    ctx.effective_scope = principal.scope_names();
     ctx
 }
 

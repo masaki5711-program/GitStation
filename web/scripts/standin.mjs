@@ -17,7 +17,7 @@ export function shellCsp() {
   const src = readFileSync(join(root, '../crates/forge-web/src/security_headers.rs'), 'utf8');
   const m = src.match(/const CSP_SHELL_BASE: &str = "([\s\S]*?)";/);
   if (!m) throw new Error('CSP_SHELL_BASE not found in security_headers.rs');
-  return m[1].replace(/\\\n\s*/g, '');
+  return m[1].replace(/\\\r?\n\s*/g, '');
 }
 
 const TYPES = {
@@ -47,6 +47,7 @@ export function standIn(csp, handle) {
       if (
         path.startsWith('/api/') ||
         path.startsWith('/-/auth/') ||
+        (req.method === 'POST' && path.startsWith('/-/confirm/')) ||
         path.includes('/-/raw/') ||
         path.includes('/-/archive/')
       ) {

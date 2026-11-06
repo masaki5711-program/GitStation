@@ -38,6 +38,10 @@ pub struct MergeRequestFacts {
     pub account: Account,
     pub project: ProjectAccessFacts,
     pub merge_request: Option<StoredMergeRequest>,
+    /// The integration's service account on the project, read under the
+    /// lock for an act-as approve / unapprove (M3 S2, ADR-0025 §3);
+    /// `None` for every other change.
+    pub via: Option<crate::act_as::ViaFacts>,
 }
 
 /// What an edit did.
@@ -214,6 +218,7 @@ pub(super) async fn facts(
         account: caller.account,
         project: caller.project,
         merge_request,
+        via: None,
     })
 }
 

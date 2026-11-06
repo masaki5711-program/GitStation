@@ -135,6 +135,8 @@ const SHELL_PATHS: &[&str] = &[
     "/acme/-/members",
     "/-/projects/42",
     "/-/projects/42/-/commits/main",
+    // The act-as confirmation popup (U3): the same shell for everyone.
+    "/-/confirm/projects/42/merge-requests/7",
 ];
 
 #[tokio::test]
@@ -167,6 +169,46 @@ async fn the_shell_is_byte_identical_for_every_path_by_hash() {
     assert_eq!(first.header("content-security-policy"), Some(SHELL_CSP));
     assert_eq!(first.header("cross-origin-resource-policy"), None);
     assert_common(&first, "shell");
+}
+
+/// ADR-0025 §5.4: the confirmation popup cannot be framed - `frame-ancestors
+/// 'none'` (modern) and `X-Frame-Options: DENY` (old browsers), on the page
+/// itself, on HEAD, with a state in the query, and on every other class but
+/// raw and Smart HTTP.
+#[tokio::test]
+async fn the_act_as_confirmation_page_cannot_be_framed() {
+    let page = "/-/confirm/projects/42/merge-requests/7";
+    for (method, query) in [
+        ("GET", ""),
+        ("HEAD", ""),
+        ("GET", "?intent=approve&sha=abc&integration=3&state=s"),
+    ] {
+        let a = send_with(AppConfig::default(), method, &format!("{page}{query}"), &[]).await;
+        assert_eq!(a.status, StatusCode::OK, "{method} {query}");
+        assert_eq!(a.header("x-frame-options"), Some("DENY"), "{method}");
+        let csp = a.header("content-security-policy").expect("csp");
+        assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+        assert_eq!(
+            a.header("cross-origin-opener-policy"),
+            Some("same-origin"),
+            "{method}"
+        );
+        assert_eq!(a.header("cache-control"), Some("no-cache"), "{method}");
+    }
+    // The same bytes as every shell path (the page decides nothing).
+    let a = get(page).await;
+    assert_eq!(sha256(&a.bytes), sha256(crate::ui::shell_html()));
+    // Unframable everywhere else the policy applies, even on an error.
+    for uri in [
+        "/acme",
+        "/api/v1/projects",
+        "/healthz",
+        "/-/unknown",
+        "/-/assets/x.js",
+    ] {
+        let a = get(uri).await;
+        assert_eq!(a.header("x-frame-options"), Some("DENY"), "{uri}");
+    }
 }
 
 #[cfg(not(feature = "embed-ui"))]

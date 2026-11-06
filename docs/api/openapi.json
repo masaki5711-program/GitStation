@@ -945,6 +945,90 @@
         ],
         "type": "object"
       },
+      "ClaimAssertion": {
+        "additionalProperties": false,
+        "description": "`POST …/act-as/claim`.",
+        "properties": {
+          "state": {
+            "description": "The state the integration put into the confirmation's URL.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "ClaimBody": {
+        "additionalProperties": false,
+        "description": "`POST …/act-as/claim` → `200`, once.",
+        "properties": {
+          "assertion": {
+            "description": "`fga_<public_id>_<secret>`: send it as `Forge-Assertion` with\n`Forge-Act-As: user:<sub.user_id>`. Returned only by this answer.",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "UTC, RFC 3339 (five minutes after the confirmation).",
+            "type": "string"
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sub": {
+            "$ref": "#/components/schemas/ClaimSubBody"
+          },
+          "target_ref": {
+            "description": "`refs/heads/…`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assertion",
+          "sub",
+          "intent",
+          "project_id",
+          "iid",
+          "head_sha",
+          "target_ref",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "ClaimSubBody": {
+        "additionalProperties": false,
+        "description": "Who confirmed.",
+        "properties": {
+          "employee_number": {
+            "description": "Only with the `user_employee_number` scope.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "type": "object"
+      },
       "CodeownerStatusBody": {
         "additionalProperties": false,
         "description": "One CODEOWNERS rule the changed paths need.",
@@ -1156,6 +1240,91 @@
           "commits",
           "commits_truncated",
           "diff"
+        ],
+        "type": "object"
+      },
+      "ConfirmationBody": {
+        "additionalProperties": false,
+        "description": "`GET …/act-as-confirmation` (forge's data only: the screen shows no\ntext the integration sent).",
+        "properties": {
+          "head_sha": {
+            "description": "The merge request's head now, all digits (`null`: no version yet).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "integration_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "integration_kind": {
+            "description": "The integration's kind (`kanflow`): who receives the assertion.",
+            "type": "string"
+          },
+          "integration_name": {
+            "description": "The username of the integration's service account (its name in\nforge).",
+            "type": "string"
+          },
+          "intent": {
+            "description": "`approve` or `unapprove`.",
+            "type": "string"
+          },
+          "person_display_name": {
+            "description": "\"<display name> (<username>) として承認します\".",
+            "type": "string"
+          },
+          "person_username": {
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sha_matches": {
+            "description": "`sha` is the head now (otherwise the screen offers no button).",
+            "type": "boolean"
+          },
+          "source_branch": {
+            "description": "Without `refs/heads/`.",
+            "type": "string"
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "target_sha": {
+            "description": "The target's tip now (`null`: the branch is missing).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "iid",
+          "title",
+          "source_branch",
+          "target_branch",
+          "head_sha",
+          "target_sha",
+          "sha_matches",
+          "intent",
+          "integration_id",
+          "integration_kind",
+          "integration_name",
+          "person_display_name",
+          "person_username"
         ],
         "type": "object"
       },
@@ -3628,6 +3797,41 @@
         ],
         "type": "object"
       },
+      "IssueAssertion": {
+        "additionalProperties": false,
+        "description": "`POST /-/confirm/…/assertions`.",
+        "properties": {
+          "integration": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "intent": {
+            "description": "`approve` or `unapprove`.",
+            "type": "string"
+          },
+          "sha": {
+            "description": "The head the screen showed (another is FG-REVIEW-0008 stale_view).",
+            "type": "string"
+          },
+          "state": {
+            "description": "The integration's state from the screen's URL (22..=128 of\n`[A-Za-z0-9_-]`; only its SHA-256 is kept).",
+            "type": "string"
+          },
+          "target_sha": {
+            "description": "The target branch's tip the screen showed (all digits); another tip\nnow is the same `stale_view` refusal as another head.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intent",
+          "sha",
+          "target_sha",
+          "integration",
+          "state"
+        ],
+        "type": "object"
+      },
       "IssueServiceAccountToken": {
         "additionalProperties": false,
         "description": "`POST /api/v1/admin/service-accounts/{id}/tokens`.",
@@ -3664,6 +3868,20 @@
         "required": [
           "name",
           "scopes"
+        ],
+        "type": "object"
+      },
+      "IssuedBody": {
+        "additionalProperties": false,
+        "description": "`POST /-/confirm/…/assertions` → `201`.",
+        "properties": {
+          "status": {
+            "description": "Always `issued`: the screen says \"完了しました。この画面を閉じてください\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
         ],
         "type": "object"
       },
@@ -6404,6 +6622,49 @@
         ],
         "type": "object"
       },
+      "StatusActAsTrialBody": {
+        "additionalProperties": false,
+        "description": "One act-as trial: allowed with a matching confirmation, or why not.",
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "The refusal's reason (`self_approval`, `required_role`, …); `null`\nwhen allowed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "allowed",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "StatusActAsViewerBody": {
+        "additionalProperties": false,
+        "description": "What a person could do through the integration (ADR-0025 §9).",
+        "properties": {
+          "can_approve": {
+            "$ref": "#/components/schemas/StatusActAsTrialBody"
+          },
+          "can_unapprove": {
+            "$ref": "#/components/schemas/StatusActAsTrialBody"
+          },
+          "requires_assertion": {
+            "description": "Always `true`: each needs the person's confirmation in forge\n(`Forge-Assertion`).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_approve",
+          "can_unapprove",
+          "requires_assertion"
+        ],
+        "type": "object"
+      },
       "StatusApprovalBody": {
         "additionalProperties": false,
         "description": "One live approval as counted now.",
@@ -6630,6 +6891,17 @@
         "additionalProperties": false,
         "description": "What the caller could do now (U2): each flag is `authorize()` on the\ncontext the action's route decides on (`forge_auth::MergeRequestViewer`)\n— a hint for the screen, never a permission (the route decides again).",
         "properties": {
+          "act_as": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StatusActAsViewerBody",
+                "description": "M3 S2 (ADR-0025 §9; added within `schema_version` 1): only when a\nservice account acts for a person (`Forge-Act-As`) — what the person\ncould do through it with a confirmation (`can_*` above are then all\n`false`: acting for a person never approves without one)."
+              }
+            ]
+          },
           "approved_by_me": {
             "description": "The caller has a live approval of the merge request.",
             "type": "boolean"
@@ -7797,6 +8069,144 @@
         },
         "summary": "End the caller's own web session and 303 to the identity provider's logout (form post, sessions only)",
         "x-forge-action": "SessionLogout"
+      }
+    },
+    "/-/confirm/projects/{id}/merge-requests/{iid}": {
+      "get": {
+        "operationId": "get_confirm_projects_id_merge_requests_iid",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: act-as confirmation popup",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_confirm_projects_id_merge_requests_iid",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: act-as confirmation popup",
+        "x-forge-action": "WebShell"
+      }
+    },
+    "/-/confirm/projects/{id}/merge-requests/{iid}/assertions": {
+      "post": {
+        "operationId": "post_confirm_projects_id_merge_requests_iid_assertions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueAssertion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The person confirms an act-as approve or unapprove: a pending assertion bound to the merge request, its head and target, for the integration to claim (a person's web session; CSRF; 30 per 10 minutes)",
+        "x-forge-action": "ActAsAssertionIssue",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/admin/integrations": {
@@ -9136,6 +9546,58 @@
         },
         "summary": "Move or rename a group and its subtree (Owner on both sides; the top level: administrators)",
         "x-forge-action": "GroupTransfer",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/integrations/{id}/act-as/claim": {
+      "post": {
+        "operationId": "post_api_v1_integrations_id_act_as_claim",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimAssertion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The integration claims a confirmed assertion by its state: the assertion is created and returned once (the integration's own service account; act_as; 120 a minute)",
+        "x-forge-action": "ActAsAssertionClaim",
         "x-forge-max-body-bytes": 4096
       }
     },
@@ -10650,6 +11112,84 @@
         "summary": "Change a merge request's title, description, draft flag or target (the author or Developer)",
         "x-forge-action": "MergeRequestUpdate",
         "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/act-as-confirmation": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_act_as_confirmation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "approve or unapprove",
+            "in": "query",
+            "name": "intent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the head the integration showed (all digits)",
+            "in": "query",
+            "name": "sha",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the id of the integration that receives the assertion",
+            "in": "query",
+            "name": "integration",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "What the act-as confirmation screen shows: the merge request, its head and the target's tip, whether sha is the head, the receiving integration (a person's web session; the intent's action allowed for them)",
+        "x-forge-action": "ActAsConfirmView"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {

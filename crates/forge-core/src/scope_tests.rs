@@ -1,6 +1,6 @@
 use crate::Scope;
 
-const ALL: [(Scope, &str); 9] = [
+const ALL: [(Scope, &str); 10] = [
     (Scope::ReadRepository, "read_repository"),
     (Scope::WriteRepository, "write_repository"),
     (Scope::ReadApi, "read_api"),
@@ -10,6 +10,7 @@ const ALL: [(Scope, &str); 9] = [
     (Scope::MergeApprove, "merge_approve"),
     (Scope::UserEmail, "user_email"),
     (Scope::UserEmployeeNumber, "user_employee_number"),
+    (Scope::ActAs, "act_as"),
 ];
 
 #[test]
@@ -117,4 +118,18 @@ fn user_employee_number_scope_is_an_addition_only() {
         assert!(!other.satisfies(Scope::UserEmployeeNumber), "{other:?}");
     }
     assert!(Scope::UserEmployeeNumber.satisfies(Scope::UserEmployeeNumber));
+}
+
+/// M3 S2 (ADR-0025 §2): `act_as` satisfies only itself; no other scope —
+/// `api` and `admin` included — satisfies it.
+#[test]
+fn act_as_scope_satisfies_only_itself() {
+    for other in Scope::ALL {
+        if other == Scope::ActAs {
+            continue;
+        }
+        assert!(!Scope::ActAs.satisfies(other), "{other:?}");
+        assert!(!other.satisfies(Scope::ActAs), "{other:?}");
+    }
+    assert!(Scope::ActAs.satisfies(Scope::ActAs));
 }

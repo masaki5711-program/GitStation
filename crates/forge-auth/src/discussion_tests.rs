@@ -280,7 +280,9 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::CheckRun { .. }
         | Resource::IntegrationFeed(_)
-        | Resource::ProjectEvents { .. } => None,
+        | Resource::ProjectEvents { .. }
+        | Resource::ActAs(_)
+        | Resource::ActAsConfirm(_) => None,
     };
     project.is_some_and(|p| p.visibility == Visibility::Internal)
 }
@@ -329,7 +331,17 @@ fn only_people_only_actions_refuse_by_account_kind() {
                                     Action::IntegrationEventRead
                                         | Action::IntegrationEventCursorRead
                                         | Action::IntegrationDevStatusRead
+                                        | Action::ActAsAssertionClaim
                                 )
+                        }
+                        // M3 S2 (ADR-0025 §1): an act-as request acts for
+                        // a person only (the resolution's not_human).
+                        (
+                            AccountKind::ServiceAccount | AccountKind::Bot,
+                            "act_as_target_not_human",
+                        ) => {
+                            e.code() == ErrorCode::Forbidden
+                                && matches!(r.actor, crate::matrix::Actor::ActAs(_))
                         }
                         // A Guest member of an internal project reads by
                         // its own role (a person reads it as a Reporter):

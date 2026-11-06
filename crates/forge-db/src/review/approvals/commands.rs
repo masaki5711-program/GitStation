@@ -15,8 +15,9 @@ use super::{
     approval_columns, approval_facts_on, live_approvals_on, ApprovalFacts, ApprovalRow,
     StoredApproval, MAX_APPROVALS,
 };
+use crate::act_as::{consume_on, via_on, ActAsUse};
 use crate::change::{
-    AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome, Settle,
+    Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome, Settle,
 };
 use crate::query_error;
 use crate::review::commands::{absent, facts, MergeRequestFacts};
@@ -171,12 +172,19 @@ async fn carry_on(
     mr: &StoredMergeRequest,
     head: &ObjectId,
 ) -> Result<(Vec<AuditEntry>, Vec<DomainEvent>), ForgeError> {
+    // M3 S2 (ADR-0025 §4): an approval given acting for a person proves
+    // that person saw the head it was given on — never another. It ends
+    // with `new_commits` whatever the project keeps on push.
+    let act_as = tx
+        .step(|c| async move { end_act_as_on(c, mr).await })
+        .await?;
+    let (mut rows, mut events) = ended_records(mr, act_as, UnapproveReason::NewCommits)?;
     let reason = UnapproveReason::Carried;
     let ended = tx
         .step(|c| async move { end_on(c, mr, reason, None, &[]).await })
         .await?;
-    let mut rows = Vec::with_capacity(ended.len());
-    let mut events = Vec::with_capacity(ended.len());
+    rows.reserve(ended.len());
+    events.reserve(ended.len());
     for old in ended {
         let from = old.id;
         let approver = old.approver;
@@ -184,8 +192,9 @@ async fn carry_on(
             .step(|c| async move {
                 sqlx::query_as(&format!(
                     "INSERT INTO forge.merge_request_approvals (merge_request_id, project_id, \
-                     approver_id, head_sha, target_branch, carried_from) \
-                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING {}",
+                     approver_id, head_sha, target_branch, carried_from, credential_origin) \
+                     VALUES ($1, $2, $3, $4, $5, $6, (SELECT credential_origin FROM \
+                     forge.merge_request_approvals WHERE id = $6)) RETURNING {}",
                     approval_columns()
                 ))
                 .bind(mr.id.get())
@@ -244,6 +253,67 @@ pub(crate) async fn carry_some_on(
     Ok((rows, events))
 }
 
+/// End the live approvals of `mr` that were given acting for a person
+/// (`credential_origin = act_as_assertion`) with `new_commits`, on `conn`.
+async fn end_act_as_on(
+    conn: &mut PgConnection,
+    mr: &StoredMergeRequest,
+) -> Result<Vec<StoredApproval>, ForgeError> {
+    let rows: Vec<ApprovalRow> = sqlx::query_as(&format!(
+        "UPDATE forge.merge_request_approvals SET revoked_at = now(), revoked_reason = $2 \
+         WHERE merge_request_id = $1 AND revoked_at IS NULL \
+         AND credential_origin = 'act_as_assertion' RETURNING {}",
+        approval_columns()
+    ))
+    .bind(mr.id.get())
+    .bind(UnapproveReason::NewCommits.as_str())
+    .fetch_all(conn)
+    .await
+    .map_err(|e| query_error("review.approvals_end_act_as", e))?;
+    let mut ended: Vec<StoredApproval> = rows
+        .into_iter()
+        .map(ApprovalRow::parse)
+        .collect::<Result<_, _>>()?;
+    ended.sort_by_key(|a| a.id.get());
+    Ok(ended)
+}
+
+/// Where an approval written by `ctx` came from (ADR-0017 §4.2): acting
+/// for a person, a token, or a session.
+fn credential_origin(ctx: &ChangeContext) -> &'static str {
+    match (&ctx.actor, ctx.credential_id) {
+        (Actor::UserViaServiceAccount { .. }, _) => "act_as_assertion",
+        (_, Some(_)) => "token",
+        (_, None) => "session",
+    }
+}
+
+/// The act-as facts of an act-as change inside `tx` (`None` otherwise):
+/// the service account's role and binding, locked.
+async fn act_as_facts(
+    tx: &mut ChangeTx,
+    act_as: Option<&ActAsUse>,
+    project: ProjectId,
+) -> Result<Option<crate::act_as::ViaFacts>, ForgeError> {
+    let Some(using) = act_as else {
+        return Ok(None);
+    };
+    let (integration, via) = (using.integration, using.via);
+    tx.step(|c| async move { via_on(c, integration, via, project).await })
+        .await
+        .map(Some)
+}
+
+/// The change that only consumes the assertion (an act-as approve that
+/// found its approval already there, or an unapprove with none to end).
+fn consumed_only(entry: AuditEntry) -> ChangeRecord {
+    ChangeRecord {
+        audit: entry,
+        affected: Vec::new(),
+        events: Vec::new(),
+    }
+}
+
 /// `FG-REVIEW-0015` ApprovalLimitReached.
 fn full(mr: &StoredMergeRequest) -> ForgeError {
     ForgeError::new(ErrorCode::ApprovalLimitReached)
@@ -263,18 +333,30 @@ fn full(mr: &StoredMergeRequest) -> ForgeError {
 /// [`MAX_APPROVALS`] live approvals is `FG-REVIEW-0015`. The new row is
 /// classified by `classify` on the approval facts read after the insert
 /// (`merge_request.approved` carries `counted` / `uncounted_reason`).
+///
+/// M3 S2 (ADR-0025 §5.3): an act-as approve (`act_as`) also reads the
+/// service account's facts under the lock (`MergeRequestFacts::via`, for
+/// `decide`), records `credential_origin = act_as_assertion`, and consumes
+/// the assertion in this transaction (`act_as_assertion.consumed`; a
+/// concurrent second use is `FG-AUTH-0020 consumed` and nothing is
+/// written) — also when the approval was already there.
+#[allow(clippy::too_many_arguments)] // the R5 signature plus the assertion
 pub async fn approve_mr_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
     (project, iid): (ProjectId, i64),
     viewer: UserId,
+    act_as: Option<&ActAsUse>,
     decide: impl FnOnce(&MergeRequestFacts) -> Result<P, ForgeError>,
     classify: impl Classify,
 ) -> Result<(ApproveOutcome, StoredApproval, P), ForgeError> {
     const ACTION: &str = "merge_request.approved";
+    let origin = credential_origin(ctx);
+    let request = ctx.request_id.as_str().to_owned();
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let facts = facts(&mut tx, project, Some(iid), viewer).await?;
+        let mut facts = facts(&mut tx, project, Some(iid), viewer).await?;
+        facts.via = act_as_facts(&mut tx, act_as, project).await?;
         let decided = decide(&facts)?;
         let mr = facts.merge_request.clone().ok_or_else(absent)?; // clone: the facts stay for classify
         let head = mr
@@ -296,11 +378,14 @@ pub async fn approve_mr_decided<P>(
         let mut events = Vec::new();
         if let Some(own) = live.iter().find(|a| a.approver == viewer) {
             if own.head_sha == head && own.target_branch == mr.target_branch {
-                return Ok(Settle::Discard((
-                    ApproveOutcome::Unchanged,
-                    own.clone(),
-                    decided,
-                ))); // clone: the answer
+                let answer = (ApproveOutcome::Unchanged, own.clone(), decided); // clone: the answer
+                return match act_as {
+                    None => Ok(Settle::Discard(answer)),
+                    Some(using) => {
+                        let entry = consume_on(&mut tx, using, &request).await?;
+                        Ok(Settle::Commit(consumed_only(entry), answer))
+                    }
+                };
             }
             let reason = if own.target_branch == mr.target_branch {
                 UnapproveReason::NewCommits
@@ -322,8 +407,8 @@ pub async fn approve_mr_decided<P>(
             .step(|c| async move {
                 sqlx::query_as(&format!(
                     "INSERT INTO forge.merge_request_approvals (merge_request_id, project_id, \
-                     approver_id, head_sha, target_branch) VALUES ($1, $2, $3, $4, $5) \
-                     RETURNING {}",
+                     approver_id, head_sha, target_branch, credential_origin) \
+                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING {}",
                     approval_columns()
                 ))
                 .bind(mr_id.get())
@@ -331,6 +416,7 @@ pub async fn approve_mr_decided<P>(
                 .bind(viewer.get())
                 .bind(head_ref.as_str())
                 .bind(target.as_str())
+                .bind(origin)
                 .fetch_one(c)
                 .await
                 .map_err(|e| query_error("review.approval_insert", e))
@@ -357,6 +443,9 @@ pub async fn approve_mr_decided<P>(
             },
         )?;
         events.insert(0, event);
+        if let Some(using) = act_as {
+            affected.push(consume_on(&mut tx, using, &request).await?);
+        }
         let record = ChangeRecord {
             audit,
             affected,
@@ -381,17 +470,22 @@ pub async fn approve_mr_decided<P>(
 /// Withdraw `viewer`'s live approval of merge request `iid` of `project`
 /// (`reason=unapproved`), after `decide`. None: [`ApproveOutcome::Unchanged`]
 /// and `None`.
+/// An act-as unapprove (`act_as`, M3 S2) consumes its assertion in the
+/// same transaction, also when there was nothing to withdraw.
 pub async fn unapprove_mr_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
     (project, iid): (ProjectId, i64),
     viewer: UserId,
+    act_as: Option<&ActAsUse>,
     decide: impl FnOnce(&MergeRequestFacts) -> Result<P, ForgeError>,
 ) -> Result<(ApproveOutcome, Option<StoredApproval>, P), ForgeError> {
     const ACTION: &str = "merge_request.unapproved";
+    let request = ctx.request_id.as_str().to_owned();
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let facts = facts(&mut tx, project, Some(iid), viewer).await?;
+        let mut facts = facts(&mut tx, project, Some(iid), viewer).await?;
+        facts.via = act_as_facts(&mut tx, act_as, project).await?;
         let decided = decide(&facts)?;
         let mr = facts.merge_request.ok_or_else(absent)?;
         let reason = UnapproveReason::Unapproved;
@@ -401,10 +495,20 @@ pub async fn unapprove_mr_decided<P>(
             .await?;
         // clone: the answer keeps the row
         let Some(first) = ended.first().cloned() else {
-            return Ok(Settle::Discard((ApproveOutcome::Unchanged, None, decided)));
+            let answer = (ApproveOutcome::Unchanged, None, decided);
+            return match act_as {
+                None => Ok(Settle::Discard(answer)),
+                Some(using) => {
+                    let entry = consume_on(&mut tx, using, &request).await?;
+                    Ok(Settle::Commit(consumed_only(entry), answer))
+                }
+            };
         };
         let (mut rows, events) = ended_records(&mr, std::mem::take(&mut ended), reason)?;
         let audit = rows.remove(0);
+        if let Some(using) = act_as {
+            rows.push(consume_on(&mut tx, using, &request).await?);
+        }
         Ok(Settle::Commit(
             ChangeRecord {
                 audit,

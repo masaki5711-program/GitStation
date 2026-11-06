@@ -35,11 +35,17 @@ pub enum Scope {
     /// like [`Scope::UserEmail`]: an addition to `read_api` that satisfies
     /// no other scope and that no other scope satisfies.
     UserEmployeeNumber,
+    /// Act for a person with `Forge-Act-As` (M3 S2, ADR-0025 §2): a
+    /// service account's token of an integration only, never with
+    /// `is_agent`. Satisfies no other scope and no other scope satisfies it
+    /// (`api` and `admin` included); an act-as action needs it **and** the
+    /// action's own scope.
+    ActAs,
 }
 
 impl Scope {
     /// Every scope, in declaration order.
-    pub const ALL: [Scope; 9] = [
+    pub const ALL: [Scope; 10] = [
         Scope::ReadRepository,
         Scope::WriteRepository,
         Scope::ReadApi,
@@ -49,6 +55,7 @@ impl Scope {
         Scope::MergeApprove,
         Scope::UserEmail,
         Scope::UserEmployeeNumber,
+        Scope::ActAs,
     ];
 
     /// The scope named `name` (its `as_str`); `None` for any other string.
@@ -67,6 +74,7 @@ impl Scope {
             Scope::MergeApprove => "merge_approve",
             Scope::UserEmail => "user_email",
             Scope::UserEmployeeNumber => "user_employee_number",
+            Scope::ActAs => "act_as",
         }
     }
 

@@ -159,6 +159,14 @@ impl ApiError {
     }
 }
 
+/// What a failure answered, as a response extension (M3 S2: the act-as
+/// layer's one log line names the route's code and reason). Never sent.
+#[derive(Debug, Clone)]
+pub(crate) struct Failure {
+    pub(crate) code: forge_errors::ErrorCode,
+    pub(crate) reason: Option<String>,
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         // The boundary: log exactly once, with the code and request id.
@@ -175,6 +183,15 @@ impl IntoResponse for ApiError {
             reason: feed_gone_reason(&self.err),
         };
         let mut res = (status, Json(body)).into_response();
+        res.extensions_mut().insert(Failure {
+            code,
+            reason: self
+                .err
+                .context()
+                .iter()
+                .find(|(k, _)| *k == "reason")
+                .map(|(_, v)| v.clone()),
+        });
         res.headers_mut().insert(
             CONTENT_LANGUAGE,
             HeaderValue::from_static(self.lang.as_str()),

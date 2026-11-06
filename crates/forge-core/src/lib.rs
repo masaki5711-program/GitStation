@@ -1,6 +1,7 @@
 //! forge-core: domain primitives and runtime foundations shared by every
 //! server-side crate. Depends only on `forge-errors` (CLAUDE.md §3.9).
 
+pub mod act_as;
 pub mod approval;
 pub mod audit_details;
 pub mod authenticator;

@@ -95,12 +95,50 @@ pub struct OidcConfig {
 pub struct AuthConfig {
     /// `None`: browser sign-in is not configured (ADR-0021 §12).
     pub oidc: Option<OidcConfig>,
+    /// `auth.act_as_hmac_keys_file` (M3 S2, ADR-0025 §5.2; a secret file,
+    /// ADR-0013 name `act_as_hmac_keys`): `None` — acting for a person is
+    /// off (`FG-AUTH-0003 reason=act_as_not_configured`; doctor
+    /// `act_as.keys`). Read by [`AuthConfig::act_as_keys`].
+    pub(super) act_as_keys_file: Option<PathBuf>,
 }
 
+/// Upper bound for the act-as key file (as `api.cursor_keys_file`).
+const MAX_ACT_AS_KEYS_BYTES: u64 = 64 * 1024;
+
 impl AuthConfig {
+    /// Whether `auth.act_as_hmac_keys_file` is configured.
+    pub fn has_act_as_keys(&self) -> bool {
+        self.act_as_keys_file.is_some()
+    }
+
+    /// Read and parse `auth.act_as_hmac_keys_file` now (`None` when it is
+    /// not configured): unreadable, malformed, or not exactly one `active`
+    /// key is `FG-SYS-0002 config_key=auth.act_as_hmac_keys_file`.
+    pub fn act_as_keys(&self) -> Result<Option<crate::act_as::ActAsKeys>, ForgeError> {
+        let Some(path) = self.act_as_keys_file.as_deref() else {
+            return Ok(None);
+        };
+        let key = crate::act_as::KEYS_CONFIG_KEY;
+        let text = secret::read_secret_text(key, path, MAX_ACT_AS_KEYS_BYTES)?;
+        crate::act_as::ActAsKeys::parse(&text)
+            .map(Some)
+            .map_err(|e| e.with_context("path", path.display()))
+    }
+
     pub(super) fn load<'a>(
         get: impl Fn(&str) -> Option<&'a str> + Copy,
     ) -> Result<Self, ForgeError> {
+        let act_as_keys_file = match get(crate::act_as::KEYS_CONFIG_KEY).map(str::trim) {
+            None => None,
+            Some("") => return Err(invalid(crate::act_as::KEYS_CONFIG_KEY, "empty")),
+            Some(p) => Some(database::password_path(crate::act_as::KEYS_CONFIG_KEY, p)?),
+        };
+        let mut config = Self::load_oidc(get)?;
+        config.act_as_keys_file = act_as_keys_file;
+        Ok(config)
+    }
+
+    fn load_oidc<'a>(get: impl Fn(&str) -> Option<&'a str> + Copy) -> Result<Self, ForgeError> {
         let text = |key: &'static str| match get(key).map(str::trim) {
             Some("") => Err(invalid(key, "empty")),
             other => Ok(other),
@@ -110,7 +148,10 @@ impl AuthConfig {
             any |= text(key)?.is_some();
         }
         if !any {
-            return Ok(Self { oidc: None });
+            return Ok(Self {
+                oidc: None,
+                act_as_keys_file: None,
+            });
         }
         let required = |key: &'static str| text(key)?.ok_or_else(|| invalid(key, "missing"));
         let issuer = required(ISSUER)?;
@@ -162,6 +203,7 @@ impl AuthConfig {
             Some(_) => return Err(invalid(AUTO_LINK, "invalid")),
         };
         Ok(Self {
+            act_as_keys_file: None,
             oidc: Some(OidcConfig {
                 issuer: issuer.to_owned(),
                 client_id: client_id.to_owned(),

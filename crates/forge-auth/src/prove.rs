@@ -93,8 +93,8 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::Action;
 use crate::authorize::authorize;
 use crate::model::{
-    NamespaceView, Principal, ProjectView, ResolvedVia, Resource, Role, UnresolvedReason,
-    Visibility,
+    ActAsView, NamespaceView, Principal, ProjectView, ResolvedVia, Resource, Role,
+    UnresolvedReason, ViaView, Visibility,
 };
 
 pub use crate::contexts::{
@@ -268,11 +268,26 @@ pub struct LoadedProject {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectCtx {
     project: LoadedProject,
+    /// The integration's service account on the project, when the request
+    /// acts for a person (M3 S2, ADR-0025 §3): the resource is then
+    /// `Resource::ActAs`.
+    act_as: Option<ViaView>,
 }
 
 impl ProjectCtx {
     pub fn new(project: LoadedProject) -> Self {
-        Self { project }
+        Self {
+            project,
+            act_as: None,
+        }
+    }
+
+    /// The same project as an act-as request reaches it (`via` loaded by
+    /// the route for the request's integration).
+    #[must_use]
+    pub fn acting(mut self, via: ViaView) -> Self {
+        self.act_as = Some(via);
+        self
     }
 
     /// The view `authorize()` decides on.
@@ -294,7 +309,15 @@ impl sealed::Sealed for ProjectCtx {}
 impl ResourceCtx for ProjectCtx {
     type Id = ProjectId;
     fn resource(&self) -> Resource {
-        Resource::Project(self.view())
+        let inner = Resource::Project(self.view());
+        match self.act_as {
+            None => inner,
+            Some(via) => Resource::ActAs(Box::new(ActAsView {
+                inner,
+                via,
+                subject: None,
+            })),
+        }
     }
     fn id(&self) -> ProjectId {
         self.project.id

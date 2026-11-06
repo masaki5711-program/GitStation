@@ -819,6 +819,20 @@ runbook = "service-accounts"
 test = "doctor_warns_token_expiring_within_14_days"
 
 [[error]]
+code = "FG-AUTH-0020"
+name = "ActAsAssertionInvalid"
+http_status = 403
+severity = "warn"
+user_message_ja = "確認の操作が無効か、期限が切れています。GitStation の確認の画面をもう一度開いて、押し直してください。"
+user_message_en = "The confirmation is invalid or has expired. Open the GitStation confirmation screen again and confirm once more."
+user_message_id = "Konfirmasi tidak valid atau sudah kedaluwarsa. Buka lagi layar konfirmasi GitStation dan konfirmasi sekali lagi."
+cause = "A service account (kanflow) acting for a person (`Forge-Act-As`, ADR-0025 §5) sent a `Forge-Assertion` that does not prove the person confirmed exactly this action, or claimed one that cannot be claimed. The assertion (`fga_<public_id>_<secret>`) is issued only when the person presses the confirmation in a forge session, claimed once by the integration (its secret is created at the claim and never stored), used once within 5 minutes, and bound by an HMAC to the intent, the project, the merge request, its head SHA, the target ref and the target's tip. Verification happens before anything is written; an assertion that was verified and then not used (any later refusal or failure) is consumed as `rejected`. Nothing else was written."
+diagnosis = "The log line `forge.auth.act_as` (and the denial) carries `reason`: on the request — multiple_headers, malformed, unexpected (an assertion without Forge-Act-As, or on a read), missing (an approve / unapprove without one), unknown (no claimed assertion with that public id), key_retired, mac_mismatch (the row was changed or written without the key: treat as tampering), expired, consumed (used before, or a concurrent second use), wrong_integration, wrong_user (the person named by Forge-Act-As is not the one who confirmed), wrong_action, wrong_resource, sha_mismatch (the body's sha), head_changed (a push since the confirmation), target_retargeted, target_changed (the target branch moved); on `POST /api/v1/integrations/{id}/act-as/claim` — claim_unknown, claim_expired, claim_repeated. With `assertion_public_id`, `integration_id`, `actor.user`, `actor.via`. SELECT state, intent, reject_reason, issued_at, claimed_at, finished_at FROM forge.act_as_assertions WHERE public_id = '<assertion_public_id>'."
+fix = "Follow runbook act-as: the person opens the confirmation screen again from kanflow and presses it (a new assertion); kanflow sends the head it showed and the sub of the claim as Forge-Act-As. mac_mismatch is a tampering signal: keep the row, check who can write forge.act_as_assertions, and rotate the act-as keys (approved runbook step)."
+runbook = "act-as"
+test = "act_as_approve_without_assertion_is_refused"
+
+[[error]]
 code = "FG-AUTH-0021"
 name = "ContextWithheld"
 http_status = 403
@@ -1999,6 +2013,20 @@ diagnosis = "The log event carries `reason=manual_link_limit`, `limit` (50), `pr
 fix = "Unlink work items the merge request no longer needs (`DELETE …/work-items/{ref}`), or split the change into several merge requests. The limit is fixed in code."
 runbook = "integrations"
 test = "manual_links_past_the_limit_are_int_0019"
+[[error]]
+code = "FG-INT-0006"
+name = "ActAsTargetInvalid"
+http_status = 403
+severity = "info"
+user_message_ja = "指定された利用者として操作できません。連携の設定を確かめてください。"
+user_message_en = "The request cannot act for the named user. Check the integration's settings."
+user_message_id = "Permintaan ini tidak dapat bertindak atas nama pengguna yang disebut. Periksa pengaturan integrasi."
+cause = "A service account (kanflow) named a person to act for with `Forge-Act-As` (ADR-0025 §1) and forge did not resolve it to exactly one active person: the value is not `user:<id>` or `employee:<number>` (or is empty, padded, holds a comma, or is sent twice), names an e-mail address (never a link to a user, ADR-0021), names nobody (also a person who never signed in to forge), names a service account (itself included) or a bot, names a disabled user, or the employee number matched more than one row (the unique index was broken or dropped: forge fails closed and acts for nobody). The answer is the same for every reason. Nothing was read or written. A lack of permission after the person is resolved is not this code (FG-AUTH-0003, FG-REPO-0005, FG-REVIEW-0013)."
+diagnosis = "The log line `forge.auth.act_as` carries `reason` (missing_value, malformed, multiple_headers, email_form, unknown, ambiguous, not_human, disabled), `actor.via` (the service account), `integration_id` and `credential_public_id`; never the header's value or an employee number. `ambiguous` is data corruption: SELECT indexdef FROM pg_indexes WHERE indexname = 'users_employee_number'. Many unknown in a short time (more than 60 a minute per service account answers FG-WEB-0010) mean a misconfigured kanflow or probing."
+fix = "Follow runbook act-as: check kanflow's mapping (it should send the claim's sub.user_id as `user:<id>` for writes and the employee number only for reads), whether the person has signed in to forge once, and whether the account is disabled. For `ambiguous`, restore the unique index users_employee_number and resolve the duplicate (approved runbook step); act-as stays refused for that number until then."
+runbook = "act-as"
+test = "act_as_email_form_is_refused"
+
 
 # ── M3 N1: e-mail notifications (plan 11 §5 N1, ADR-0016 Amendment N1) ──
 [[error]]

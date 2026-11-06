@@ -172,3 +172,9 @@ FROM forge.users WHERE kind = 'service_account';
 - `service_accounts.ownerless` が、持ち主の無効化の記録なしに出る: データが forge-db の外で変えられた疑い。Runbook `append-only-violation` を確かめ、DB の管理者に連絡する。
 - 管理画面ができるまでの作成・発行の手順（ブラウザのコンソール）が使えない環境: 運用の経路 `forge admin token issue --user <username>`（承認した手順。発行者は
   記録されない）で一時的にしのぎ、管理画面の MR を急ぐ。
+
+## 代理実行のスコープ `act_as`（M3 S2、ADR-0025 §2）
+
+- `act_as` は **連携（kanflow）のサービスアカウントのトークンだけ** に付けられる。人のトークンに付けると `FG-AUTH-0008 reason=act_as_requires_service_account`、エージェントと宣言したトークン（`is_agent`）と同時には `FG-AUTH-0008 reason=act_as_agent_token`。何も書かない。
+- `act_as` はほかのどのスコープも満たさず、どのスコープにも満たされない（`api`・`admin` でも）。kanflow の承認には `act_as` と `merge_approve` の両方が要る（`read_api` も、読み取りのため）。
+- 代理の診断・鍵・止め方は runbook act-as。

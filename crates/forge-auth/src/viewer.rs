@@ -151,3 +151,146 @@ impl CodeownersToggleCtx {
         settings_viewer(principal, project, highest)
     }
 }
+
+/// One trial of an act-as action (M3 S2, ADR-0025 §9): whether it would
+/// be allowed with a matching assertion, and the log `reason` when not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActAsTrial {
+    pub allowed: bool,
+    pub reason: Option<String>,
+}
+
+/// What a service account acting for a person could do on a merge request
+/// (the `viewer.act_as` of `GET …/{iid}/status`): approve and unapprove,
+/// each decided by `authorize()` as if the person had confirmed this head
+/// and target. `requires_assertion` is always `true` for these actions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActAsViewer {
+    pub can_approve: ActAsTrial,
+    pub can_unapprove: ActAsTrial,
+    pub requires_assertion: bool,
+}
+
+impl MergeRequestCtx {
+    /// The act-as trials of `principal` (`None` when it does not act for a
+    /// person, or the context was loaded without the act-as facts).
+    pub fn act_as_viewer(&self, principal: &Principal) -> Option<ActAsViewer> {
+        let credential = principal.act_as_credential()?;
+        let (via, subject) = self.act_as()?;
+        let subject = subject.as_ref()?;
+        let person = principal.user()?;
+        let trial = |intent: forge_core::act_as::Intent, action: Action| -> ActAsTrial {
+            // A trial binds the confirmation to the tip as loaded (reads
+            // never read it: none is assumed then, the same for both).
+            let tip = subject.target_sha.clone().unwrap_or_default();
+            let tip = &tip;
+            let Some(head) = subject.head_sha.as_ref() else {
+                return ActAsTrial {
+                    allowed: false,
+                    reason: Some("nothing_to_confirm".to_owned()),
+                };
+            };
+            let mut hypothetical = credential.clone(); // clone: the trial's own credential
+            hypothetical.assertion = Some(crate::model::AssertionFacts {
+                id: 0,
+                public_id: "trial".to_owned(),
+                intent,
+                project: subject.project,
+                merge_request: subject.merge_request,
+                head_sha: head.clone(), // clone: the trial owns its facts
+                target_ref: subject.target_ref.clone(),
+                target_sha: tip.clone(),
+            });
+            let p = Principal::act_as(
+                person,
+                principal.active(),
+                principal.account_kind(),
+                hypothetical,
+            );
+            let ctx = MergeRequestCtx::new(self.loaded_project(), self.merge_request().clone()) // clone: each trial owns its context
+                .acting(
+                    *via,
+                    Some(crate::model::ActAsSubject {
+                        requested_sha: Some(head.clone()), // clone: as above
+                        target_sha: Some(tip.clone()),
+                        ..subject.clone()
+                    }),
+                );
+            match authorize(&p, action, &ctx.resource()) {
+                Ok(()) => ActAsTrial {
+                    allowed: true,
+                    reason: None,
+                },
+                Err(e) => ActAsTrial {
+                    allowed: false,
+                    reason: e
+                        .context()
+                        .iter()
+                        .find(|(k, _)| *k == "reason")
+                        .map(|(_, v)| v.clone())
+                        .or_else(|| Some(e.code().id().to_owned())),
+                },
+            }
+        };
+        Some(ActAsViewer {
+            can_approve: trial(
+                forge_core::act_as::Intent::Approve,
+                Action::MergeRequestApprove,
+            ),
+            can_unapprove: trial(
+                forge_core::act_as::Intent::Unapprove,
+                Action::MergeRequestUnapprove,
+            ),
+            requires_assertion: true,
+        })
+    }
+}
+
+/// Whether an act-as request may read the target's tip for its loader
+/// (M3 S2 review, CRITICAL): git is never reached before the decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActAsTipGate {
+    /// Do not read git; decide with this tip (`None` for a read, which is
+    /// never bound to a tip; the assertion's own tip when the request is
+    /// refused for another reason anyway — the decision is the same).
+    Skip(Option<String>),
+    /// Everything but the tip was allowed (the binding, the person's
+    /// visibility and role, the assertion's intent and resource): read it.
+    Fetch,
+}
+
+impl MergeRequestCtx {
+    /// The tip gate of this context (loaded with the act-as facts and no
+    /// tip) for `principal` on the route's `action`: `authorize()` on that
+    /// action — never the assertion's intent, so a mismatched route is
+    /// refused (`wrong_action`) before any git read — with the assertion's
+    /// own tip assumed. Only a change that needs an assertion reads a tip.
+    pub fn act_as_tip_gate(&self, principal: &Principal, action: Action) -> ActAsTipGate {
+        match action.act_as_rule() {
+            crate::ActAsRule::RequiresAssertion(_) => {}
+            crate::ActAsRule::ReadWithoutAssertion | crate::ActAsRule::Denied => {
+                return ActAsTipGate::Skip(None)
+            }
+        }
+        let assertion = principal
+            .act_as_credential()
+            .and_then(|c| c.assertion.as_ref());
+        let (Some(assertion), Some((via, Some(subject)))) = (assertion, self.act_as()) else {
+            return ActAsTipGate::Skip(None);
+        };
+        let assumed = Some(assertion.target_sha.clone()); // clone: the trial owns its facts
+        let trial = MergeRequestCtx::new(self.loaded_project(), self.merge_request().clone()) // clone: as above
+            .acting(
+                *via,
+                Some(crate::model::ActAsSubject {
+                    target_sha: assumed.clone(),
+                    ..subject.clone()
+                }),
+            );
+        if authorize(principal, action, &trial.resource()).is_ok() {
+            ActAsTipGate::Fetch
+        } else {
+            ActAsTipGate::Skip(assumed)
+        }
+    }
+}

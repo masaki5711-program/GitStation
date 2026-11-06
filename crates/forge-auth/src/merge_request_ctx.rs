@@ -14,7 +14,9 @@
 
 use forge_core::{DiscussionId, MergeRequestState, ProjectId, RefName, UserId};
 
-use crate::model::{MergeRequestEdit, ProjectView, RefProtection, Resource};
+use crate::model::{
+    ActAsSubject, ActAsView, MergeRequestEdit, ProjectView, RefProtection, Resource, ViaView,
+};
 use crate::prove::{sealed, LoadedProject, ResourceCtx};
 
 /// One merge request as loaded (one row): `iid` is `None` for the one a
@@ -40,6 +42,10 @@ pub struct MergeRequestCtx {
     /// The target branch's protection (`MergeRequestMerge`, M3 R4);
     /// `None` for every other action and for an unprotected target.
     target_protection: Option<RefProtection>,
+    /// The integration's service account on the project and the merge
+    /// request as an assertion is compared with, when the request acts
+    /// for a person (M3 S2, ADR-0025 §3, §5.3).
+    act_as: Option<(ViaView, Option<ActAsSubject>)>,
 }
 
 impl MergeRequestCtx {
@@ -50,6 +56,7 @@ impl MergeRequestCtx {
             mr,
             edit: MergeRequestEdit::default(),
             target_protection: None,
+            act_as: None,
         }
     }
 
@@ -60,7 +67,22 @@ impl MergeRequestCtx {
             mr,
             edit,
             target_protection: None,
+            act_as: None,
         }
+    }
+
+    /// The same merge request as an act-as request reaches it: `via` and
+    /// `subject` loaded by the route (or, under the lock, by the command)
+    /// for the request's integration.
+    #[must_use]
+    pub fn acting(mut self, via: ViaView, subject: Option<ActAsSubject>) -> Self {
+        self.act_as = Some((via, subject));
+        self
+    }
+
+    /// The act-as facts this context was loaded with (`None` otherwise).
+    pub fn act_as(&self) -> Option<&(ViaView, Option<ActAsSubject>)> {
+        self.act_as.as_ref()
     }
 
     /// A merge request about to be merged (`MergeRequestMerge`, M3 R4):
@@ -77,6 +99,7 @@ impl MergeRequestCtx {
             mr,
             edit: MergeRequestEdit::default(),
             target_protection,
+            act_as: None,
         }
     }
 
@@ -107,6 +130,24 @@ impl sealed::Sealed for MergeRequestCtx {}
 impl ResourceCtx for MergeRequestCtx {
     type Id = (ProjectId, Option<i64>);
     fn resource(&self) -> Resource {
+        let inner = self.plain_resource();
+        match &self.act_as {
+            None => inner,
+            Some((via, subject)) => Resource::ActAs(Box::new(ActAsView {
+                inner,
+                via: *via,
+                subject: subject.clone(), // clone: the resource owns its facts
+            })),
+        }
+    }
+    fn id(&self) -> (ProjectId, Option<i64>) {
+        (self.project.id, self.mr.iid)
+    }
+}
+
+impl MergeRequestCtx {
+    /// The merge request as the person sees it (no act-as wrapper).
+    fn plain_resource(&self) -> Resource {
         Resource::MergeRequest {
             project: ProjectView {
                 visibility: self.project.visibility,
@@ -122,8 +163,11 @@ impl ResourceCtx for MergeRequestCtx {
             target_protection: self.target_protection,
         }
     }
-    fn id(&self) -> (ProjectId, Option<i64>) {
-        (self.project.id, self.mr.iid)
+
+    /// The merge request as the person sees it, for the confirmation
+    /// (`ActAsConfirmCtx`).
+    pub(crate) fn person_resource(&self) -> Resource {
+        self.plain_resource()
     }
 }
 
