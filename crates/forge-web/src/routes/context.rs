@@ -21,8 +21,16 @@
 //! service account, a bot, or a request with `Forge-Context-Audience:
 //! agent` — `gstn mcp` always sends it), a work item kanflow marked
 //! confidential and a requirement of a document with `confidential: true`
-//! are refused when asked for (`FG-AUTH-0020`) and left out of lists,
-//! counted in `withheld`. A person sees them.
+//! are refused when asked for (`FG-AUTH-0021`) and left out of lists,
+//! counted in `withheld`. A person sees them. A path counts as marked when
+//! it is marked at the revision read **or at the default branch's tip**
+//! (review X5: an agent cannot pick an unmarked revision; history marked
+//! nowhere stays readable). The repository read routes (blob, raw, blame:
+//! refused; compare, a commit, a merge request's diffs: the file left out)
+//! apply the same rule through [`marked_paths`]. This is defense in depth
+//! on the HTTP read APIs: git clone / fetch and archives do not look at the
+//! mark, so a truly confidential specification belongs in a repository the
+//! agent's account cannot read (ADR-0023 Amendment X5).
 
 use std::collections::BTreeSet;
 
@@ -33,9 +41,10 @@ use forge_core::req_tags::TagTarget;
 use forge_core::spec_doc::RequirementId;
 use forge_core::spec_index::{diff, SpecIndex};
 use forge_core::spec_version::SpecVersion;
+use forge_core::RepoId;
 use forge_core::{ObjectId, WorkItemRef};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::browse::{RefKind, ResolvedRev};
+use forge_git::browse::{Browser, Diff, RefKind, ResolvedRev};
 use serde::Serialize;
 
 use crate::app::AppState;
@@ -153,7 +162,7 @@ fn reason_of(audience: Audience) -> &'static str {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContextWithheldBody {
-    /// `FG-AUTH-0020`.
+    /// `FG-AUTH-0021`.
     pub error_code: String,
     /// Specification documents marked `confidential: true` (or with a
     /// front matter that cannot be read).
@@ -162,6 +171,8 @@ pub struct ContextWithheldBody {
     pub requirements: usize,
     /// Work items kanflow marked confidential.
     pub work_items: usize,
+    /// Changed files of such documents (a diff's or a merge request's).
+    pub files: usize,
 }
 
 /// `None` when nothing was left out; logged once when something was.
@@ -173,7 +184,22 @@ pub(crate) fn withheld<R: ResourceCtx>(
     requirements: usize,
     work_items: usize,
 ) -> Option<ContextWithheldBody> {
-    if documents + requirements + work_items == 0 {
+    withheld_with_files(
+        request,
+        route,
+        audience,
+        (documents, requirements, work_items, 0),
+    )
+}
+
+/// [`withheld`] with the files a diff left out.
+pub(crate) fn withheld_with_files<R: ResourceCtx>(
+    request: &Dispatched<R>,
+    route: &'static str,
+    audience: Audience,
+    (documents, requirements, work_items, files): (usize, usize, usize, usize),
+) -> Option<ContextWithheldBody> {
+    if documents + requirements + work_items + files == 0 {
         return None;
     }
     tracing::info!(
@@ -184,6 +210,7 @@ pub(crate) fn withheld<R: ResourceCtx>(
         documents,
         requirements,
         work_items,
+        files,
         error_code = ErrorCode::ContextWithheld.id(),
         "forge.context.withheld"
     );
@@ -192,6 +219,112 @@ pub(crate) fn withheld<R: ResourceCtx>(
         documents,
         requirements,
         work_items,
+        files,
+    })
+}
+
+/// The specification documents an agent audience is not given in `repo`:
+/// marked in one of `indexed` (indexes already read, by commit), at one of
+/// `more`, or at the default branch's tip (review X5 MEDIUM a). Every
+/// commit is indexed at most once.
+pub(crate) async fn marked_paths(
+    browse: &Browser,
+    repo: RepoId,
+    principal: &str,
+    indexed: &[(&str, &SpecIndex)],
+    more: &[&str],
+) -> Result<BTreeSet<String>, ForgeError> {
+    let mut out: BTreeSet<String> = indexed
+        .iter()
+        .flat_map(|(_, i)| i.confidential_paths())
+        .map(str::to_owned)
+        .collect();
+    let mut todo: Vec<String> = more.iter().map(|c| (*c).to_owned()).collect();
+    let list = browse.refs(repo).await?;
+    if let Some(branch) = list.default_branch.as_deref() {
+        match browse
+            .resolve_ref(repo, &format!("refs/heads/{branch}"), principal)
+            .await
+        {
+            Ok(tip) => todo.push(tip.commit),
+            // HEAD names a branch that does not exist yet: no tip.
+            Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => {}
+            Err(e) => return Err(e),
+        }
+    }
+    todo.sort();
+    todo.dedup();
+    todo.retain(|c| !indexed.iter().any(|(done, _)| done == c));
+    for commit in todo {
+        let i = index_commit(browse, repo, &commit, &IndexLimits::default(), Tags::Skip).await?;
+        out.extend(i.index.confidential_paths().into_iter().map(str::to_owned));
+    }
+    Ok(out)
+}
+
+/// For an agent audience: `FG-AUTH-0021` when `path` is a marked
+/// specification document at `commit` (or the default tip).
+pub(crate) async fn refuse_marked_path(
+    audience: Audience,
+    browse: &Browser,
+    repo: RepoId,
+    principal: &str,
+    commit: &str,
+    path: &str,
+) -> Result<(), ForgeError> {
+    if !audience.is_agent() {
+        return Ok(());
+    }
+    let marked = marked_paths(browse, repo, principal, &[], &[commit]).await?;
+    if marked.contains(path) {
+        return Err(refused(audience, "spec_confidential").with_context("path", path));
+    }
+    Ok(())
+}
+
+/// `diff` without the files of `marked` paths (either side of a rename),
+/// and how many it left out.
+pub(crate) fn without_marked(diff: &Diff, marked: &BTreeSet<String>) -> (Diff, usize) {
+    let hit = |p: &Option<String>| p.as_ref().is_some_and(|p| marked.contains(p));
+    let (hidden, shown): (Vec<_>, Vec<_>) = diff
+        .files
+        .iter()
+        .cloned() // clone: the answer owns its files
+        .partition(|f| hit(&f.new_path) || hit(&f.old_path));
+    (
+        Diff {
+            files: shown,
+            truncated: diff.truncated,
+        },
+        hidden.len(),
+    )
+}
+
+/// The withheld files of a diff answer, logged once (an agent's only).
+pub(crate) fn withheld_logged(
+    ctx: &crate::Ctx,
+    route: &'static str,
+    audience: Audience,
+    files: usize,
+) -> Option<ContextWithheldBody> {
+    if files == 0 {
+        return None;
+    }
+    tracing::info!(
+        target: "forge_web::context",
+        request_id = %ctx.request_id,
+        route,
+        audience = reason_of(audience),
+        files,
+        error_code = ErrorCode::ContextWithheld.id(),
+        "forge.context.withheld"
+    );
+    Some(ContextWithheldBody {
+        error_code: ErrorCode::ContextWithheld.id().to_owned(),
+        documents: 0,
+        requirements: 0,
+        work_items: 0,
+        files,
     })
 }
 
@@ -230,14 +363,15 @@ struct Origin {
 }
 
 impl Origin {
-    fn of<R: ResourceCtx>(request: &Dispatched<R>, t: &Target) -> Self {
-        Self {
+    fn of<R: ResourceCtx>(request: &Dispatched<R>, t: &Target) -> Result<Self, ForgeError> {
+        let project = request.project().ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "context_without_project_row")
+        })?;
+        Ok(Self {
             project_id: t.project.get(),
-            project: request
-                .project()
-                .map(|p| p.path.to_string())
-                .unwrap_or_default(),
-        }
+            project: project.path.to_string(),
+        })
     }
 
     fn at(&self, rev: Option<(&str, &str)>, place: Option<(&str, usize)>) -> ContextSourceBody {
@@ -549,7 +683,7 @@ pub async fn work_item(state: AppState, request: Dispatched<ProjectCtx>) -> Resp
                 .filter(|r| r.as_str() == raw)
                 .ok_or_else(|| param_invalid("ref", "format"))?;
             let audience = audience(&request)?;
-            let origin = Origin::of(&request, &t);
+            let origin = Origin::of(&request, &t)?;
             let found = bounded(
                 &state,
                 "context_work_item",
@@ -648,7 +782,7 @@ pub async fn requirement(state: AppState, request: Dispatched<ProjectCtx>) -> Re
             let id = RequirementId::parse(required(&params, "id")?)
                 .ok_or_else(|| param_invalid("id", "format"))?;
             let audience = audience(&request)?;
-            let origin = Origin::of(&request, &t);
+            let origin = Origin::of(&request, &t)?;
             let rev = revision(&t, take(&params, "ref")).await?;
             let indexed = index(&t, &rev, Tags::Read).await?;
             let mut reason = indexed.index.incomplete;
@@ -671,7 +805,21 @@ pub async fn requirement(state: AppState, request: Dispatched<ProjectCtx>) -> Re
                     ForgeError::new(ErrorCode::Internal)
                         .with_context("reason", "requirement_without_document")
                 })?;
-            if audience.is_agent() && doc.doc.confidential() {
+            let marked_at_tip = if audience.is_agent() {
+                charge(&state, caller_of(&request)?, 1)?;
+                marked_paths(
+                    &t.smart.browse,
+                    t.repository.id,
+                    &t.principal,
+                    &[(rev.commit.as_str(), &indexed.index)],
+                    &[],
+                )
+                .await?
+                .contains(located.path)
+            } else {
+                false
+            };
+            if audience.is_agent() && (doc.doc.confidential() || marked_at_tip) {
                 return Err(refused(audience, "spec_confidential")
                     .with_context("requirement", id.as_str())
                     .with_context("path", located.path));
@@ -724,6 +872,13 @@ pub async fn requirement(state: AppState, request: Dispatched<ProjectCtx>) -> Re
                     .requirements()
                     .into_iter()
                     .find(|l| l.requirement.id == id);
+                // Review X5 (LOW): a version whose document was marked is
+                // no history an agent is given.
+                if audience.is_agent()
+                    && found.is_some_and(|l| then.index.confidential_paths().contains(l.path))
+                {
+                    continue;
+                }
                 let (status, source) = match found {
                     None => ("absent", None),
                     Some(l) => {
@@ -783,7 +938,7 @@ pub async fn merge_request(state: AppState, request: Dispatched<MergeRequestCtx>
         |state, request, t| async move {
             let _params = query(request.raw_query(), &[])?;
             let audience = audience(&request)?;
-            let origin = Origin::of(&request, &t);
+            let origin = Origin::of(&request, &t)?;
             let (project, iid) = match *request.proof().id() {
                 (project, Some(iid)) => (project, iid),
                 (_, None) => {
@@ -815,15 +970,40 @@ pub async fn merge_request(state: AppState, request: Dispatched<MergeRequestCtx>
             let mut withheld_docs = BTreeSet::new();
             let mut withheld_requirements = 0;
             let mut reason = None;
+            let mut withheld_files = 0;
             if let (Some(v), Some(base)) = (newest, merge_base) {
                 let head_sha = v.head_sha.as_str();
+                // Two more indexes and the compare (review X5 LOW: weighted).
+                charge(&state, caller_of(&request)?, 2)?;
+                // The stored version's commits (its version ref keeps the
+                // head; no branch reaches it necessarily).
+                let before = index_at(&t, base.as_str(), Tags::Skip).await?;
+                let after = index_at(&t, head_sha, Tags::Skip).await?;
+                reason = before.index.incomplete.or(after.index.incomplete);
+                let secret: BTreeSet<String> = if audience.is_agent() {
+                    charge(&state, caller_of(&request)?, 1)?;
+                    marked_paths(
+                        &t.smart.browse,
+                        t.repository.id,
+                        &t.principal,
+                        &[(base.as_str(), &before.index), (head_sha, &after.index)],
+                        &[],
+                    )
+                    .await?
+                } else {
+                    BTreeSet::new()
+                };
                 let compared = t
                     .smart
                     .browse
                     .compare(t.repository.id, base.as_str(), head_sha)
                     .await?;
-                files_truncated = compared.diff.truncated || compared.diff.files.len() > MAX_FILES;
-                for f in compared.diff.files.iter().take(MAX_FILES) {
+                // Review X5 (MEDIUM b): a marked document is no changed file
+                // for an agent (either side of a rename).
+                let (shown, hidden) = without_marked(&compared.diff, &secret);
+                withheld_files = hidden;
+                files_truncated = shown.truncated || shown.files.len() > MAX_FILES;
+                for f in shown.files.iter().take(MAX_FILES) {
                     let path = f
                         .new_path
                         .as_deref()
@@ -839,19 +1019,6 @@ pub async fn merge_request(state: AppState, request: Dispatched<MergeRequestCtx>
                         source: origin.commit(head_sha, Some((path, 0))).without_line(),
                     });
                 }
-                // Two more indexes.
-                charge(&state, caller_of(&request)?, 1)?;
-                // The stored version's commits (its version ref keeps the
-                // head; no branch reaches it necessarily).
-                let before = index_at(&t, base.as_str(), Tags::Skip).await?;
-                let after = index_at(&t, head_sha, Tags::Skip).await?;
-                reason = before.index.incomplete.or(after.index.incomplete);
-                let secret: BTreeSet<&str> = before
-                    .index
-                    .confidential_paths()
-                    .into_iter()
-                    .chain(after.index.confidential_paths())
-                    .collect();
                 let bodies: std::collections::BTreeMap<&RequirementId, &str> = after
                     .index
                     .requirements()
@@ -939,13 +1106,16 @@ pub async fn merge_request(state: AppState, request: Dispatched<MergeRequestCtx>
                 }
             }
             let (description, description_truncated) = bounded_text(&mr.description);
-            let withheld = withheld(
+            let withheld = withheld_with_files(
                 &request,
                 "context_merge_request",
                 audience,
-                withheld_docs.len(),
-                withheld_requirements,
-                withheld_items,
+                (
+                    withheld_docs.len(),
+                    withheld_requirements,
+                    withheld_items,
+                    withheld_files,
+                ),
             );
             Ok(ContextMergeRequestBody {
                 merge_request: ContextMergeRequestItemBody {

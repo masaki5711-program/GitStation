@@ -217,6 +217,10 @@ pub struct DiffBody {
     /// A cap cut the diff: more files than listed (500), or a patch left
     /// out because of its size.
     pub truncated: bool,
+    /// For an AI agent (M3 X5, plan 06 D-5): the files of confidential
+    /// specification documents left out (absent when none was).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<crate::routes::context::ContextWithheldBody>,
 }
 
 /// One commit with its message and diff.
@@ -329,6 +333,7 @@ pub(crate) fn diff_body(d: &Diff) -> DiffBody {
     DiffBody {
         files: d.files.iter().map(diff_file_body).collect(),
         truncated: d.truncated,
+        withheld: None,
     }
 }
 
@@ -455,12 +460,15 @@ pub async fn commits(state: AppState, request: Dispatched<ProjectCtx>) -> Respon
 /// `GET …/repository/commits/{oid}`.
 pub async fn commit(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let raw_path = request.raw_path().to_owned();
+    let audience = crate::routes::context::audience(&request);
+    let ctx = request.ctx().clone(); // clone: the log of what was withheld
     answer(
         state,
         request,
         "repository_commit",
         |t: Target, q| async move {
             query(q.as_deref(), &[])?;
+            let audience = audience?;
             let oid = oid_param(&raw_path)?;
             let detail = t
                 .smart
@@ -468,10 +476,19 @@ pub async fn commit(state: AppState, request: Dispatched<ProjectCtx>) -> Respons
                 .commit(t.repository.id, &oid, &t.principal)
                 .await
                 .map_err(|e| e.with_context("commit", &oid))?;
+            let diff = guarded(
+                &ctx,
+                "repository_commit",
+                audience,
+                &t,
+                &[&oid],
+                &detail.diff,
+            )
+            .await?;
             Ok(CommitDetailBody {
                 commit: commit_body(&detail.info),
                 message: detail.message,
-                diff: diff_body(&detail.diff),
+                diff,
             })
         },
     )
@@ -480,12 +497,15 @@ pub async fn commit(state: AppState, request: Dispatched<ProjectCtx>) -> Respons
 
 /// `GET …/repository/compare?from=&to=`.
 pub async fn compare(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let audience = crate::routes::context::audience(&request);
+    let ctx = request.ctx().clone(); // clone: the log of what was withheld
     answer(
         state,
         request,
         "repository_compare",
         |t: Target, q| async move {
             let params = query(q.as_deref(), &["from", "to"])?;
+            let audience = audience?;
             let from_name = required(&params, "from")?;
             let to_name = required(&params, "to")?;
             let repo = t.repository.id;
@@ -505,12 +525,21 @@ pub async fn compare(state: AppState, request: Dispatched<ProjectCtx>) -> Respon
                 .compare(repo, &from.commit, &to.commit)
                 .await
                 .map_err(|e| e.with_context("commit", &to.commit))?;
+            let diff = guarded(
+                &ctx,
+                "repository_compare",
+                audience,
+                &t,
+                &[&from.commit, &to.commit],
+                &cmp.diff,
+            )
+            .await?;
             Ok(CompareBody {
                 from: rev_body(&from),
                 to: rev_body(&to),
                 commits: cmp.commits.iter().map(commit_body).collect(),
                 commits_truncated: cmp.commits_truncated,
-                diff: diff_body(&cmp.diff),
+                diff,
             })
         },
     )
@@ -519,12 +548,14 @@ pub async fn compare(state: AppState, request: Dispatched<ProjectCtx>) -> Respon
 
 /// `GET …/repository/blame?ref=&path=`.
 pub async fn blame(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let audience = crate::routes::context::audience(&request);
     answer(
         state,
         request,
         "repository_blame",
         |t: Target, q| async move {
             let params = query(q.as_deref(), &["ref", "path"])?;
+            let audience = audience?;
             let rev_name = required(&params, "ref")?;
             required(&params, "path")?;
             let path = path_param(&params)?;
@@ -534,6 +565,15 @@ pub async fn blame(state: AppState, request: Dispatched<ProjectCtx>) -> Response
                 .browse
                 .resolve_ref(repo, rev_name, &t.principal)
                 .await?;
+            crate::routes::context::refuse_marked_path(
+                audience,
+                &t.smart.browse,
+                repo,
+                &t.principal,
+                &rev.commit,
+                path.as_str(),
+            )
+            .await?;
             let blamed = t
                 .smart
                 .browse
@@ -544,6 +584,33 @@ pub async fn blame(state: AppState, request: Dispatched<ProjectCtx>) -> Response
         },
     )
     .await
+}
+
+/// A diff for `audience` (M3 X5, plan 06 D-5): an agent's leaves out the
+/// confidential specification documents of `commits` and the default tip.
+pub(crate) async fn guarded(
+    ctx: &crate::Ctx,
+    route: &'static str,
+    audience: crate::routes::context::Audience,
+    t: &Target,
+    commits: &[&str],
+    diff: &forge_git::browse::Diff,
+) -> Result<DiffBody, ForgeError> {
+    if !audience.is_agent() {
+        return Ok(diff_body(diff));
+    }
+    let marked = crate::routes::context::marked_paths(
+        &t.smart.browse,
+        t.repository.id,
+        &t.principal,
+        &[],
+        commits,
+    )
+    .await?;
+    let (shown, hidden) = crate::routes::context::without_marked(diff, &marked);
+    let mut body = diff_body(&shown);
+    body.withheld = crate::routes::context::withheld_logged(ctx, route, audience, hidden);
+    Ok(body)
 }
 
 #[cfg(test)]

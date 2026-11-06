@@ -555,7 +555,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
         state,
         request,
         "specs_requirements",
-        |_, request, t| async move {
+        |state, request, t| async move {
             let params = query(request.raw_query(), &["ref", "q", "limit"])?;
             let audience = crate::routes::context::audience(&request)?;
             let limit = limit_param(&params)?;
@@ -567,8 +567,17 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
             let rev = revision(&t, take(&params, "ref")).await?;
             let indexed = index(&t, &rev, Tags::Skip).await?;
             // Plan 06 D-5: an agent is not given a confidential document.
-            let secret = if audience.is_agent() {
-                indexed.index.confidential_paths()
+            let secret: std::collections::BTreeSet<String> = if audience.is_agent() {
+                // The default tip's marks too (review X5 MEDIUM a).
+                charge(&state, caller_of(&request)?, 1)?;
+                crate::routes::context::marked_paths(
+                    &t.smart.browse,
+                    t.repository.id,
+                    &t.principal,
+                    &[(rev.commit.as_str(), &indexed.index)],
+                    &[],
+                )
+                .await?
             } else {
                 std::collections::BTreeSet::new()
             };
@@ -577,6 +586,12 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                 .requirements()
                 .iter()
                 .filter(|l| secret.contains(l.path))
+                .count();
+            let withheld_documents = indexed
+                .index
+                .documents
+                .iter()
+                .filter(|d| secret.contains(&d.path))
                 .count();
             let specs: BTreeMap<&str, Option<&str>> = indexed
                 .index
@@ -642,7 +657,7 @@ pub async fn requirements(state: AppState, request: Dispatched<ProjectCtx>) -> R
                 &request,
                 "specs_requirements",
                 audience,
-                secret.len(),
+                withheld_documents,
                 withheld_requirements,
                 0,
             );
@@ -725,20 +740,25 @@ pub async fn diff_route(state: AppState, request: Dispatched<ProjectCtx>) -> Res
             let to = revision(&t, Some(required(&params, "to")?)).await?;
             let before = index(&t, &from, Tags::Skip).await?;
             let after = index(&t, &to, Tags::Skip).await?;
-            let secret: std::collections::BTreeSet<&str> = if audience.is_agent() {
-                before
-                    .index
-                    .confidential_paths()
-                    .into_iter()
-                    .chain(after.index.confidential_paths())
-                    .collect()
+            let secret: std::collections::BTreeSet<String> = if audience.is_agent() {
+                charge(&state, caller_of(&request)?, 1)?;
+                crate::routes::context::marked_paths(
+                    &t.smart.browse,
+                    t.repository.id,
+                    &t.principal,
+                    &[
+                        (from.commit.as_str(), &before.index),
+                        (to.commit.as_str(), &after.index),
+                    ],
+                    &[],
+                )
+                .await?
             } else {
                 std::collections::BTreeSet::new()
             };
             let all = diff(&before.index, &after.index);
-            let (hidden, shown): (Vec<_>, Vec<_>) = all
-                .into_iter()
-                .partition(|c| secret.contains(c.path.as_str()));
+            let (hidden, shown): (Vec<_>, Vec<_>) =
+                all.into_iter().partition(|c| secret.contains(&c.path));
             let hidden_docs: std::collections::BTreeSet<&str> =
                 hidden.iter().map(|c| c.path.as_str()).collect();
             let withheld = crate::routes::context::withheld(
@@ -813,16 +833,37 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
             // rows (own or referenced).
             let mut hidden_docs = 0;
             let mut hidden_rows = 0;
-            let mut visible = |index: &forge_core::spec_index::SpecIndex,
+            // A reference's or the own repository's marks: at the revision
+            // read and at the default tip (review X5 MEDIUM a).
+            let marks = |repo: forge_core::RepoId,
+                         commit: &str,
+                         index: &forge_core::spec_index::SpecIndex| {
+                let browse = &t.smart.browse;
+                let principal = t.principal.as_str();
+                let commit = commit.to_owned();
+                let index = index.clone(); // clone: the future owns its index
+                async move {
+                    if !audience.is_agent() {
+                        return Ok(std::collections::BTreeSet::new());
+                    }
+                    crate::routes::context::marked_paths(
+                        browse,
+                        repo,
+                        principal,
+                        &[(commit.as_str(), &index)],
+                        &[],
+                    )
+                    .await
+                }
+            };
+            let mut visible = |secret: &std::collections::BTreeSet<String>,
                                rows: Vec<TraceTableRow>|
              -> Vec<TraceTableRow> {
                 if !audience.is_agent() {
                     return rows;
                 }
-                let secret = index.confidential_paths();
-                let (hidden, shown): (Vec<_>, Vec<_>) = rows
-                    .into_iter()
-                    .partition(|r| secret.contains(r.path.as_str()));
+                let (hidden, shown): (Vec<_>, Vec<_>) =
+                    rows.into_iter().partition(|r| secret.contains(&r.path));
                 hidden_docs += hidden
                     .iter()
                     .map(|r| r.path.as_str())
@@ -831,8 +872,12 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
                 hidden_rows += hidden.len();
                 shown
             };
+            if audience.is_agent() {
+                charge(&state, caller_of(&request)?, 1)?;
+            }
+            let own_marks = marks(t.repository.id, &rev.commit, &own.index).await?;
             let own_rows = visible(
-                &own.index,
+                &own_marks,
                 trace_table(&own.index, None, &own.index, MAX_TESTS_PER_ROW),
             );
             let mut requirements: Vec<SpecTraceRowBody> =
@@ -866,8 +911,12 @@ pub async fn trace(state: AppState, request: Dispatched<ProjectCtx>) -> Response
                             .await?;
                             reason = reason.or(theirs.index.incomplete);
                             let scope = (!entry.scope.is_empty()).then_some(entry.scope.as_slice());
+                            if audience.is_agent() {
+                                charge(&state, caller_of(&request)?, 1)?;
+                            }
+                            let their_marks = marks(repository, &commit, &theirs.index).await?;
                             let rows = visible(
-                                &theirs.index,
+                                &their_marks,
                                 trace_table(&theirs.index, scope, &own.index, MAX_TESTS_PER_ROW),
                             );
                             ("resolved", None, rows)

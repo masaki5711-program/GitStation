@@ -5,7 +5,7 @@
 //! `GET …/merge-requests/{iid}/context`. A member reads with provenance on
 //! every item; someone who cannot see the project gets the same 404 as a
 //! missing one; an unbound project is FG-INT-0018; a work item kanflow
-//! marked confidential is refused to an AI agent (FG-AUTH-0020) and left
+//! marked confidential is refused to an AI agent (FG-AUTH-0021) and left
 //! out of a merge request's context for it, while a person sees it (plan 06
 //! D-5). Synthetic data only.
 
@@ -550,7 +550,7 @@ async fn a_confidential_work_item_is_withheld_from_an_agent() {
     w.mark_confidential("PBI-43").await;
     let (status, refused) = w.get(&w.work_item("PBI-43"), agent(w.dev)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    assert_eq!(refused["error_code"], "FG-AUTH-0020");
+    assert_eq!(refused["error_code"], "FG-AUTH-0021");
     let (status, read) = w.get(&w.work_item("PBI-43"), session(w.dev)).await;
     assert_eq!(status, StatusCode::OK, "{read}");
     // The agent's merge request context.
@@ -570,11 +570,34 @@ async fn a_confidential_work_item_is_withheld_from_an_agent() {
         .map(|c| c["id"].as_str().expect("id"))
         .collect();
     assert_eq!(changes, ["WEB-CORE-2"]);
-    assert_eq!(body["withheld"]["error_code"], "FG-AUTH-0020");
+    assert_eq!(body["withheld"]["error_code"], "FG-AUTH-0021");
     assert_eq!(body["withheld"]["work_items"], 1);
     assert_eq!(body["withheld"]["requirements"], 1);
     assert_eq!(body["withheld"]["documents"], 1);
+    // Review X5 (MEDIUM b): the confidential spec file is no changed file
+    // for an agent either.
+    let files: Vec<&str> = body["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .map(|f| f["source"]["path"].as_str().expect("path"))
+        .collect();
+    assert_eq!(files, ["spec/core.md", "src/logout.rs"]);
+    assert_eq!(body["withheld"]["files"], 1);
     assert!(!body.to_string().contains("the secret rule"));
+    // The merge request's version diff gives an agent no patch of it.
+    let (status, diff) = w
+        .get(
+            &format!(
+                "/api/v1/projects/{}/merge-requests/1/versions/1/diff",
+                w.project
+            ),
+            agent(w.dev),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{diff}");
+    assert!(!diff.to_string().contains("the secret rule"));
+    assert_eq!(diff["diff"]["withheld"]["files"], 1);
     // A person sees the mark.
     let (_, person) = w.get(&w.mr(), session(w.dev)).await;
     let marked = person["work_items"]

@@ -41,7 +41,7 @@ use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{Dispatched, QueryParam};
 use crate::routes::browse::{answer, query, required, Target};
-use crate::routes::history::{commit_body, diff_body, CommitBody, DiffBody};
+use crate::routes::history::{commit_body, CommitBody, DiffBody};
 use crate::routes::write::{bounded, json};
 
 /// The path after `{iid}` of [`VERSIONS`].
@@ -244,6 +244,8 @@ pub async fn version_diff(state: AppState, request: Dispatched<MergeRequestCtx>)
     // The version is checked after the decision (the loader parsed it too).
     let version = version_ids(request.raw_path()).map(|(_, _, v)| v);
     let review_state = state.clone(); // clone: cheap handles; the closure owns its copy
+    let audience = crate::routes::context::audience(&request);
+    let ctx = request.ctx().clone(); // clone: the log of what was withheld
     answer(
         state,
         request,
@@ -251,6 +253,7 @@ pub async fn version_diff(state: AppState, request: Dispatched<MergeRequestCtx>)
         |t: Target, q| async move {
             let (project, iid) = ids?;
             query(q.as_deref(), &[])?;
+            let audience = audience?;
             let n = version?;
             let all = versions_of(&review_state, project, iid).await?;
             let v = served(&all, n)?;
@@ -266,13 +269,22 @@ pub async fn version_diff(state: AppState, request: Dispatched<MergeRequestCtx>)
                 .merge_request_compare(t.repository.id, iid, from.as_str(), head, &t.principal)
                 .await
                 .map_err(|e| e.with_context("version", n))?;
+            let diff = crate::routes::history::guarded(
+                &ctx,
+                "merge_request_version_diff",
+                audience,
+                &t,
+                &[from.as_str(), head],
+                &cmp.diff,
+            )
+            .await?;
             Ok(VersionDiffBody {
                 version: version_body(v),
                 from: from.as_str().to_owned(),
                 to: head.to_owned(),
                 commits: cmp.commits.iter().map(commit_body).collect(),
                 commits_truncated: cmp.commits_truncated,
-                diff: diff_body(&cmp.diff),
+                diff,
             })
         },
     )
@@ -289,6 +301,8 @@ fn version_param(params: &[(&'static str, String)], name: &'static str) -> Resul
 pub async fn compare(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
     let ids = proof_ids(&request);
     let review_state = state.clone(); // clone: cheap handles; the closure owns its copy
+    let audience = crate::routes::context::audience(&request);
+    let ctx = request.ctx().clone(); // clone: the log of what was withheld
     answer(
         state,
         request,
@@ -296,6 +310,7 @@ pub async fn compare(state: AppState, request: Dispatched<MergeRequestCtx>) -> R
         |t: Target, q| async move {
             let (project, iid) = ids?;
             let params = query(q.as_deref(), &["from", "to"])?;
+            let audience = audience?;
             let from_n = version_param(&params, "from")?;
             let to_n = version_param(&params, "to")?;
             let all = versions_of(&review_state, project, iid).await?;
@@ -320,7 +335,15 @@ pub async fn compare(state: AppState, request: Dispatched<MergeRequestCtx>) -> R
                 to_sha: to.head_sha.as_str().to_owned(),
                 commits: cmp.commits.iter().map(commit_body).collect(),
                 commits_truncated: cmp.commits_truncated,
-                diff: diff_body(&cmp.diff),
+                diff: crate::routes::history::guarded(
+                    &ctx,
+                    "merge_request_compare",
+                    audience,
+                    &t,
+                    &[from.head_sha.as_str(), to.head_sha.as_str()],
+                    &cmp.diff,
+                )
+                .await?,
             })
         },
     )

@@ -146,6 +146,9 @@ pub enum Command {
     /// get_work_item_context, get_requirement, search_requirements,
     /// get_trace_matrix, get_merge_request_context — with your token, and
     /// never what is marked confidential (plan 06 D-5).
+    ///
+    /// Log in with a token issued with `is_agent` for the agent: a person's
+    /// ordinary token is a person's on every other route.
     Mcp,
     /// Users: search by name; administrators: list, disable, sessions, rename.
     #[command(disable_help_subcommand = true)]

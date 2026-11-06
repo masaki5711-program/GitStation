@@ -45,7 +45,7 @@ fn context_commands_call_their_routes_and_show_sources() {
         Resp::json(
             200,
             &format!(
-                r#"{{"merge_request":{{"iid":12,"title":"Fix","description":"","description_truncated":false,"state":"open","draft":false,"source_branch":"fix","target_branch":"main","merge_base_sha":null,"source":{}}},"files":[],"files_truncated":false,"requirements":[],"requirements_truncated":false,"work_items":[],"checks":[],"withheld":{{"error_code":"FG-AUTH-0020","documents":1,"requirements":2,"work_items":0}},"incomplete":null}}"#,
+                r#"{{"merge_request":{{"iid":12,"title":"Fix","description":"","description_truncated":false,"state":"open","draft":false,"source_branch":"fix","target_branch":"main","merge_base_sha":null,"source":{}}},"files":[],"files_truncated":false,"requirements":[],"requirements_truncated":false,"work_items":[],"checks":[],"withheld":{{"error_code":"FG-AUTH-0021","documents":1,"requirements":2,"work_items":0}},"incomplete":null}}"#,
                 source("", 0)
             ),
         )
@@ -131,7 +131,7 @@ fn mcp_lists_read_only_tools_and_calls_the_api_as_an_agent() {
         if r.target.contains("/context/requirement") {
             return Resp::json(
                 403,
-                r#"{"error_code":"FG-AUTH-0020","user_message":"This item is marked confidential.","request_id":"req-mcp-1"}"#,
+                r#"{"error_code":"FG-AUTH-0021","user_message":"This item is marked confidential.","request_id":"req-mcp-1"}"#,
             );
         }
         if r.target.contains("/specs/requirements") {
@@ -197,13 +197,13 @@ fn mcp_lists_read_only_tools_and_calls_the_api_as_an_agent() {
     // A refusal is a tool result with the code and the request id.
     let refused = &by_id(5)["result"];
     assert_eq!(refused["isError"], true);
-    assert_eq!(refused["structuredContent"]["error_code"], "FG-AUTH-0020");
+    assert_eq!(refused["structuredContent"]["error_code"], "FG-AUTH-0021");
     assert!(refused["content"][0]["text"]
         .as_str()
         .expect("text")
         .contains("req-mcp-1"));
     assert!(
-        o.stderr.contains("get_requirement failed: FG-AUTH-0020"),
+        o.stderr.contains("get_requirement failed: FG-AUTH-0021"),
         "{}",
         o.stderr
     );
@@ -239,4 +239,59 @@ fn mcp_lists_read_only_tools_and_calls_the_api_as_an_agent() {
     );
     assert!(!o.stdout.contains(TOKEN));
     assert!(!o.stderr.contains(TOKEN));
+}
+
+/// Review X5 (rust HIGH-1, e, f): an oversized line, a batch, a non-object,
+/// a bad id and a notification; the server keeps serving after each and
+/// ends cleanly at the end of input.
+#[test]
+fn mcp_refuses_malformed_messages_and_keeps_serving() {
+    let srv = Mock::start(|_| Resp::json(200, &work_item_body()));
+    let sb = Sandbox::new();
+    let mut input = String::new();
+    input.push_str(&"x".repeat(2 * 1024 * 1024));
+    input.push('\n');
+    for m in [
+        json!([{"jsonrpc":"2.0","id":1,"method":"ping"}]),
+        json!("ping"),
+        json!({"jsonrpc":"2.0","id":true,"method":"ping"}),
+        json!({"jsonrpc":"2.0","id":null,"method":"ping"}),
+        json!({"jsonrpc":"2.0","id":{"a":1},"method":"ping"}),
+        json!({"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_trace_matrix","arguments":{"project_id":7}}}),
+        json!({"jsonrpc":"2.0","id":"s-1","method":"ping"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_work_item_context","arguments":{"project_id":7,"ref":"PBI-43"}}}),
+    ] {
+        input.push_str(&format!("{m}\n"));
+    }
+    let o = gstn(&sb, &srv, &["mcp"], &input);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let out = lines(&o.stdout);
+    let codes: Vec<Value> = out.iter().map(|m| m["error"]["code"].clone()).collect();
+    assert_eq!(
+        codes,
+        [
+            json!(-32600),
+            json!(-32600),
+            json!(-32600),
+            json!(-32600),
+            json!(-32600),
+            json!(-32600),
+            Value::Null,
+            Value::Null
+        ],
+        "{}",
+        o.stdout
+    );
+    for refused in &out[..6] {
+        assert_eq!(refused["id"], Value::Null);
+    }
+    assert_eq!(out[6]["id"], "s-1");
+    assert_eq!(out[7]["id"], 2);
+    assert_eq!(out[7]["result"]["isError"], false);
+    // The notification-shaped call sent nothing and got no answer.
+    assert_eq!(srv.seen().len(), 1);
+    assert!(
+        o.stdout.len() < 64 * 1024,
+        "the oversized line was not echoed"
+    );
 }

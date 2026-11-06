@@ -16,10 +16,17 @@
 //! token, the server never hands this process what is marked confidential
 //! (plan 06 D-5). A tool's failure is a tool result with `isError` and the
 //! error's `error_code`, `user_message` and `request_id` (never a crash);
-//! a malformed message is a JSON-RPC error. Diagnostics go to stderr, one
+//! a malformed message is a JSON-RPC error (one object per message: no
+//! batches; an id is a string or a number). Diagnostics go to stderr, one
 //! line each, never the token. stdout carries only protocol messages.
+//!
+//! **Use a token issued with `is_agent`** for an AI agent: the server
+//! recognizes an agent by its token (or a service account / bot); a
+//! person's ordinary token is a person's. The header narrows every answer
+//! here anyway, but only an `is_agent` token keeps the other routes'
+//! answers (and the audit) an agent's.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 
 use forge_errors::ErrorCode;
 use serde_json::{json, Map, Value};
@@ -324,21 +331,41 @@ fn answer(api: &ApiClient, line: &str, stderr: &mut dyn Write) -> Option<Value> 
     let Ok(msg) = serde_json::from_str::<Value>(line) else {
         return Some(error(Value::Null, PARSE_ERROR, "not JSON"));
     };
-    let Some(method) = msg.get("method").and_then(Value::as_str) else {
-        // A response or garbage: nothing this server asked for.
-        return msg
-            .get("id")
-            .map(|id| error(id.clone(), INVALID_REQUEST, "not a request")); // clone: echoed
-    };
-    if msg.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+    // One object per message: a batch (an array) and any other value are
+    // refused (review X5 e; batches are not supported).
+    let Value::Object(fields) = &msg else {
         return Some(error(
-            msg.get("id").cloned().unwrap_or(Value::Null), // clone: echoed
+            Value::Null,
+            INVALID_REQUEST,
+            "a message is one JSON object (no batches)",
+        ));
+    };
+    // An id is a string or a number; any other (null included) is refused
+    // without echoing it.
+    let id = match fields.get("id") {
+        None => None,
+        Some(v @ (Value::String(_) | Value::Number(_))) => Some(v.clone()), // clone: echoed
+        Some(_) => {
+            return Some(error(
+                Value::Null,
+                INVALID_REQUEST,
+                "id is a string or a number",
+            ))
+        }
+    };
+    if fields.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Some(error(
+            id.unwrap_or(Value::Null),
             INVALID_REQUEST,
             "jsonrpc must be 2.0",
         ));
     }
+    let Some(method) = fields.get("method").and_then(Value::as_str) else {
+        // A response or garbage: nothing this server asked for.
+        return id.map(|id| error(id, INVALID_REQUEST, "not a request"));
+    };
     // A notification (no id) is never answered.
-    let id = msg.get("id")?.clone(); // clone: echoed
+    let id = id?;
     let params = msg.get("params").cloned().unwrap_or(Value::Null); // clone: read below
     Some(match method {
         "initialize" => {
@@ -352,7 +379,7 @@ fn answer(api: &ApiClient, line: &str, stderr: &mut dyn Write) -> Option<Value> 
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}},
                     "serverInfo": {"name": "gstn", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": "GitStation's context, read-only, with your token: work items, requirements, the trace matrix and merge requests. Every item carries its source (project, commit, path, line): cite it. What is marked confidential is never returned (`withheld` counts it; asking for it is FG-AUTH-0020).",
+                    "instructions": "GitStation's context, read-only, with your token: work items, requirements, the trace matrix and merge requests. Every item carries its source (project, commit, path, line): cite it. What is marked confidential is never returned (`withheld` counts it; asking for it is FG-AUTH-0021).",
                 }),
             )
         }
@@ -366,41 +393,99 @@ fn answer(api: &ApiClient, line: &str, stderr: &mut dyn Write) -> Option<Value> 
     })
 }
 
+/// What [`read_message`] read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Message {
+    /// One line (with its `\n`, unless the input ended) is in the buffer.
+    Line,
+    /// The line was longer than [`MAX_MESSAGE_BYTES`]: skipped, not kept.
+    TooLarge,
+}
+
+/// Read one line into `buf` (cleared first), never keeping more than
+/// [`MAX_MESSAGE_BYTES`] of it: a longer line is consumed through the
+/// reader's own buffer and dropped (review X5, rust HIGH-1: a multi-GB
+/// line costs no memory). `None` at the end of input.
+pub(crate) fn read_message(
+    reader: &mut impl BufRead,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<Option<Message>> {
+    buf.clear();
+    let mut too_large = false;
+    let mut read_any = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(match (read_any, too_large) {
+                (false, _) => None,
+                (true, true) => Some(Message::TooLarge),
+                (true, false) => Some(Message::Line),
+            });
+        }
+        read_any = true;
+        let (take, done) = match available.iter().position(|b| *b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (available.len(), false),
+        };
+        if !too_large {
+            if buf.len() + take > MAX_MESSAGE_BYTES + 1 {
+                too_large = true;
+                buf.clear();
+                buf.shrink_to_fit();
+            } else {
+                buf.extend_from_slice(available.get(..take).unwrap_or_default());
+            }
+        }
+        reader.consume(take);
+        if done {
+            return Ok(Some(if too_large {
+                Message::TooLarge
+            } else {
+                Message::Line
+            }));
+        }
+    }
+}
+
+/// [`read_message`], with the end of the transport (end of input, a closed
+/// pipe) as `None` and any other read failure as `FG-CLI-0009`.
+pub(crate) fn next_message(
+    reader: &mut impl BufRead,
+    buf: &mut Vec<u8>,
+) -> Result<Option<Message>> {
+    match read_message(reader, buf) {
+        Ok(m) => Ok(m),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(ClientError::local(
+            ErrorCode::CliInputFailed,
+            format!("reason=stdin_unreadable kind={:?}", e.kind()),
+        )),
+    }
+}
+
 /// Serve until stdin ends.
 pub fn serve(cli: &Cli, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     let api = client(cli, env, io)?.with_header(AUDIENCE.0, AUDIENCE.1);
     let mut reader = BufReader::new(&mut *io.stdin);
-    loop {
-        let mut raw = Vec::new();
-        let read = (&mut reader)
-            .take(MAX_MESSAGE_BYTES as u64 + 1)
-            .read_until(b'\n', &mut raw)
-            .map_err(|e| {
-                ClientError::local(
-                    ErrorCode::CliUsageInvalid,
-                    format!("reason=stdin_unreadable kind={:?}", e.kind()),
-                )
-            })?;
-        if read == 0 {
-            return Ok(());
-        }
-        let reply = if raw.len() > MAX_MESSAGE_BYTES && !raw.ends_with(b"\n") {
-            // Skip the rest of the oversized line.
-            let mut rest = Vec::new();
-            reader.read_until(b'\n', &mut rest).map_err(|e| {
-                ClientError::local(
-                    ErrorCode::CliUsageInvalid,
-                    format!("reason=stdin_unreadable kind={:?}", e.kind()),
-                )
-            })?;
-            Some(error(Value::Null, INVALID_REQUEST, "message too large"))
-        } else {
-            let line = String::from_utf8_lossy(&raw);
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+    let mut raw = Vec::new();
+    while let Some(read) = next_message(&mut reader, &mut raw)? {
+        let reply = match read {
+            Message::TooLarge => Some(error(Value::Null, INVALID_REQUEST, "message too large")),
+            Message::Line => {
+                let line = String::from_utf8_lossy(&raw);
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                answer(&api, line, io.stderr)
             }
-            answer(&api, line, io.stderr)
         };
         if let Some(reply) = reply {
             let text = serde_json::to_string(&reply).map_err(|_| {
@@ -418,13 +503,68 @@ pub fn serve(cli: &Cli, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
                 })?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)] // tests may fail loudly
 
+    use std::io::Read as _;
+
     use super::*;
+
+    /// Review X5 (rust HIGH-1): a line far past the limit is skipped
+    /// without being kept — the buffer never grows past the limit plus one
+    /// read — and the next message is read whole.
+    #[test]
+    fn an_oversized_line_is_skipped_in_bounded_memory() {
+        let huge = std::io::repeat(b'x').take(64 * 1024 * 1024);
+        let rest = std::io::Cursor::new(b"\n{\"next\":1}\n".to_vec());
+        let mut reader = std::io::BufReader::new(huge.chain(rest));
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_message(&mut reader, &mut buf).expect("read"),
+            Some(Message::TooLarge)
+        );
+        assert!(
+            buf.capacity() <= MAX_MESSAGE_BYTES + 64 * 1024,
+            "kept {} bytes",
+            buf.capacity()
+        );
+        assert_eq!(
+            read_message(&mut reader, &mut buf).expect("read"),
+            Some(Message::Line)
+        );
+        assert_eq!(buf, b"{\"next\":1}\n");
+        assert_eq!(read_message(&mut reader, &mut buf).expect("read"), None);
+    }
+
+    /// Review X5 (e): a broken input that is no end of input is an input
+    /// failure, never a usage error.
+    #[test]
+    fn a_broken_input_is_an_input_failure() {
+        struct Broken;
+        impl std::io::Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("synthetic"))
+            }
+        }
+        let mut reader = std::io::BufReader::new(Broken);
+        let err = next_message(&mut reader, &mut Vec::new()).expect_err("broken");
+        assert_eq!(err.code_id(), ErrorCode::CliInputFailed.id());
+        struct Gone;
+        impl std::io::Read for Gone {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        let mut gone = std::io::BufReader::new(Gone);
+        assert_eq!(
+            next_message(&mut gone, &mut Vec::new()).expect("ends"),
+            None
+        );
+    }
 
     #[test]
     fn every_tool_has_a_route_and_refuses_unknown_arguments() {

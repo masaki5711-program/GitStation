@@ -67,6 +67,19 @@ async fn fixture() -> Fixture {
     plumb(&app, &["update-ref", "refs/heads/main", &main], None);
     plumb(&app, &["update-ref", "refs/tags/v1.1", &main], None);
     plumb(&app, &["symbolic-ref", "HEAD", "refs/heads/main"], None);
+    // A branch whose copy of the secret document carries no mark (review
+    // X5 MEDIUM a: an agent picks the revision; the default tip marks it).
+    let unmarked_doc = "---\nspec: app/secret\ntitle: Secret\nstatus: approved\n---\n::: req APP-SEC-1\nthe secret rule\n:::\n";
+    let unmarked = commit(
+        &app,
+        &[("spec/core.md", &two), ("spec/secret.md", unmarked_doc)],
+        Some(&main),
+    );
+    plumb(
+        &app,
+        &["update-ref", "refs/heads/unmarked", &unmarked],
+        None,
+    );
     let world = Arc::new(World {
         calls: Mutex::new(Vec::new()),
     });
@@ -238,7 +251,7 @@ async fn a_confidential_item_is_withheld_from_an_agent() {
     ] {
         let a = get_with(&f, &uri, who, header).await;
         assert_eq!(a.status, StatusCode::FORBIDDEN, "{:?}", a.json());
-        assert_eq!(a.code(), "FG-AUTH-0020");
+        assert_eq!(a.code(), "FG-AUTH-0021");
         assert!(!String::from_utf8_lossy(&a.bytes).contains("secret rule"));
     }
     // An open requirement is still given to an agent.
@@ -274,7 +287,7 @@ async fn the_spec_api_leaves_confidential_documents_out_for_an_agent() {
         ["APP-CORE-1", "APP-CORE-2"]
     );
     assert_eq!(ids(&mine["documents"], "path"), ["spec/core.md"]);
-    assert_eq!(mine["withheld"]["error_code"], "FG-AUTH-0020");
+    assert_eq!(mine["withheld"]["error_code"], "FG-AUTH-0021");
     assert_eq!(mine["withheld"]["documents"], 1);
     assert_eq!(mine["withheld"]["requirements"], 1);
     let found = ok_body(&get(&f, &format!("{api}/requirements?q=secret"), agent()).await);
@@ -301,4 +314,137 @@ async fn the_spec_api_leaves_confidential_documents_out_for_an_agent() {
     );
     assert_eq!(ids(&diff["changes"], "id"), ["APP-CORE-1", "APP-CORE-2"]);
     assert_eq!(diff["withheld"]["requirements"], 1);
+}
+
+/// Review X5 (security HIGH-2): the repository read routes give an agent
+/// audience no content of a confidential specification document — blob,
+/// raw and blame refuse it (FG-AUTH-0021), a compare leaves the file out
+/// and counts it — while a person reads it all.
+#[tokio::test]
+async fn the_read_routes_give_an_agent_no_confidential_spec_content() {
+    let f = fixture().await;
+    let blob = "/api/v1/projects/7/repository/blob?ref=main&path=spec/secret.md";
+    ok_body(&get(&f, blob, person()).await);
+    let refused = get(&f, blob, agent()).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::FORBIDDEN,
+        "{:?}",
+        refused.json()
+    );
+    assert_eq!(refused.code(), "FG-AUTH-0021");
+    assert!(!String::from_utf8_lossy(&refused.bytes).contains("secret rule"));
+    // An open document is still read.
+    ok_body(
+        &get(
+            &f,
+            "/api/v1/projects/7/repository/blob?ref=main&path=spec/core.md",
+            agent(),
+        )
+        .await,
+    );
+    // The same refusal through the header.
+    let header = get_with(&f, blob, person(), Some("agent")).await;
+    assert_eq!(header.code(), "FG-AUTH-0021");
+    // Raw (the web route) and blame.
+    let raw = "/acme/app/-/raw/main/spec/secret.md";
+    let person_raw = get(&f, raw, person()).await;
+    assert_eq!(person_raw.status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&person_raw.bytes).contains("secret rule"));
+    // The web route takes a session (tokens are refused): the header.
+    let agent_raw = get_with(&f, raw, person(), Some("agent")).await;
+    assert_eq!(agent_raw.status, StatusCode::FORBIDDEN);
+    assert_eq!(agent_raw.code(), "FG-AUTH-0021");
+    assert!(!String::from_utf8_lossy(&agent_raw.bytes).contains("secret rule"));
+    let blame = get(
+        &f,
+        "/api/v1/projects/7/repository/blame?ref=main&path=spec/secret.md",
+        agent(),
+    )
+    .await;
+    assert_eq!(blame.code(), "FG-AUTH-0021");
+    // A compare leaves the file out for an agent and counts it.
+    let compare = "/api/v1/projects/7/repository/compare?from=v1.0&to=v1.1";
+    let all = ok_body(&get(&f, compare, person()).await);
+    let paths = |b: &Value| -> Vec<String> {
+        b["diff"]["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .map(|d| d["new_path"].as_str().unwrap_or("").to_owned())
+            .collect()
+    };
+    assert!(paths(&all).contains(&"spec/secret.md".to_owned()));
+    assert!(all["diff"].get("withheld").is_none_or(Value::is_null));
+    let mine = ok_body(&get(&f, compare, agent()).await);
+    assert!(!paths(&mine).contains(&"spec/secret.md".to_owned()));
+    assert!(paths(&mine).contains(&"spec/core.md".to_owned()));
+    assert_eq!(mine["diff"]["withheld"]["files"], 1);
+    assert_eq!(mine["diff"]["withheld"]["error_code"], "FG-AUTH-0021");
+    assert!(!mine.to_string().contains("secret rule"));
+}
+
+/// Review X5 (MEDIUM a): an agent cannot pick a revision where the mark is
+/// missing: a path marked at the default branch tip is confidential at
+/// every revision for it.
+#[tokio::test]
+async fn a_path_marked_at_the_default_tip_is_withheld_at_any_revision() {
+    let f = fixture().await;
+    let req = format!("{REQ}?id=APP-SEC-1&ref=unmarked");
+    ok_body(&get(&f, &req, person()).await);
+    assert_eq!(get(&f, &req, agent()).await.code(), "FG-AUTH-0021");
+    let blob = "/api/v1/projects/7/repository/blob?ref=unmarked&path=spec/secret.md";
+    assert_eq!(get(&f, blob, agent()).await.code(), "FG-AUTH-0021");
+    let list = ok_body(
+        &get(
+            &f,
+            "/api/v1/projects/7/specs/requirements?ref=unmarked",
+            agent(),
+        )
+        .await,
+    );
+    assert_eq!(
+        ids(&list["requirements"], "id"),
+        ["APP-CORE-1", "APP-CORE-2"]
+    );
+    assert_eq!(list["withheld"]["documents"], 1);
+}
+
+/// Review X5 (f): the audience header at most once, and a caller without
+/// `read_api` reads no context.
+#[tokio::test]
+async fn the_audience_header_is_strict_and_read_api_is_needed() {
+    let f = fixture().await;
+    let uri = format!("{REQ}?id=APP-CORE-1");
+    let mut req = Request::builder()
+        .method("GET")
+        .uri(uri.as_str())
+        .header("forge-context-audience", "agent")
+        .header("forge-context-audience", "agent")
+        .body(Body::empty())
+        .expect("request");
+    req.extensions_mut().insert(person());
+    let res = f.router.clone().oneshot(req).await.expect("infallible");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let bytes = res.into_body().collect().await.expect("body").to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(body["error_code"], "FG-WEB-0006");
+    let git_only = Principal::authenticated(
+        READER,
+        false,
+        true,
+        Credential::Token(vec![Scope::ReadRepository]),
+        AccountKind::Human,
+    );
+    let refused = get(&f, &uri, git_only).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::FORBIDDEN,
+        "{:?}",
+        refused.json()
+    );
+    assert_eq!(
+        refused.code(),
+        forge_errors::ErrorCode::InsufficientScope.id()
+    );
 }

@@ -1054,7 +1054,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "mcp",
-        summary: "Serve a read-only MCP server on stdin/stdout for an AI agent (tools get_work_item_context, get_requirement, search_requirements, get_trace_matrix, get_merge_request_context), with your token; confidential items are never returned (M3 X5).",
+        summary: "Serve a read-only MCP server on stdin/stdout for an AI agent (tools get_work_item_context, get_requirement, search_requirements, get_trace_matrix, get_merge_request_context), with your token (issue it with is_agent: a person's ordinary token is a person's); confidential items are never returned (M3 X5).",
         args: &[],
         examples: &["gstn mcp", "claude mcp add gitstation -- gstn mcp"],
         scopes: &["read_api"],

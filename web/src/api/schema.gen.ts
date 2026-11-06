@@ -2396,8 +2396,10 @@ export interface components {
              *     front matter that cannot be read).
              */
             documents: number;
-            /** @description `FG-AUTH-0020`. */
+            /** @description `FG-AUTH-0021`. */
             error_code: string;
+            /** @description Changed files of such documents (a diff's or a merge request's). */
+            files: number;
             /** @description Their requirements. */
             requirements: number;
             /** @description Work items kanflow marked confidential. */
@@ -2753,6 +2755,7 @@ export interface components {
              *     out because of its size.
              */
             truncated: boolean;
+            withheld?: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description One changed file of a diff. */
         DiffFileBody: {

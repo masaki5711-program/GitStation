@@ -205,6 +205,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::CliCredentialStoreFailed
         | ErrorCode::CliOutputFailed
         | ErrorCode::CliWaitTimedOut
+        | ErrorCode::CliInputFailed
         | ErrorCode::DuplicateOpenMergeRequest
         | ErrorCode::PurgePreconditionFailed
         | ErrorCode::MergeabilityNotChecked

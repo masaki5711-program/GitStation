@@ -412,11 +412,11 @@
      **機密として扱う**（印がそこにあるかもしれない。fail closed）。前付けの無い文書は印なし）。作業項目は **`forge.work_items.confidential`**（新しいマイグレーション
      `20261128100000_work_item_confidential`、既定 `false`）。この MR では forge にこの列を書く経路は無い（UPDATE の権限も付けない）。kanflow の印を送る経路
      （連携のサービスアカウントからの書き込みと監査の行）は kanflow 側の連携と一緒に足す（計画 02 §12）。
-   - **振る舞い**: 1 件を聞かれたとき（作業項目・要件）は **`FG-AUTH-0020` ContextWithheld**（403）。一覧（MR の文脈、X4 の `specs/requirements`・`diff`・`trace`）からは除き、
+   - **振る舞い**: 1 件を聞かれたとき（作業項目・要件）は **`FG-AUTH-0021` ContextWithheld**（403）。一覧（MR の文脈、X4 の `specs/requirements`・`diff`・`trace`）からは除き、
      `withheld {error_code, documents, requirements, work_items}` に数える（人には `null`）。除いたときは `forge.context.withheld`（info）を 1 回ログに出す。
      MCP の `search_requirements` と `get_trace_matrix` は X4 のルートを使うので、X4 の答えにも同じ除外を入れた（`SpecDocumentBody.confidential` も足した）。
-   - **これは認可ではない**: 認可は `authorize()` のまま（エージェントもプロジェクトを読める）。境界は「文脈 API がまとめて AI に渡さない」ことで、git の clone や browse API の
-     blob は印を見ない。機密の高い仕様は、エージェントのアカウントが読めないリポジトリに置く（D-5 の「Qwen だけ」）。印は二重の守り。
+   - **これは認可ではない**: 認可は `authorize()` のまま（エージェントもプロジェクトを読める）。境界は「文脈 API がまとめて AI に渡さない」ことで、git の clone・fetch・
+     archive は印を見ない（browse の読み取りは 9 で揃えた）。機密の高い仕様は、エージェントのアカウントが読めないリポジトリに置く（D-5 の「Qwen だけ」）。印は二重の守り。
 6. **`gstn context`**: `work-item`・`requirement`・`merge-request`（C-1: 予定のままのルートを残さない）。人の道具なのでヘッダーは送らない（トークンが `is_agent` なら除外される）。
 7. **MCP サーバー `gstn mcp`**（読み取りのみ。forge-client の中、依存は forge-errors だけのまま）: 標準入出力の JSON-RPC 2.0（1 行 1 メッセージ、MCP の stdio）。
    `initialize`（`2025-06-18` / `2025-03-26` / `2024-11-05`）・`ping`・`tools/list`・`tools/call`。道具は計画の 4 つ（`get_work_item_context`・`get_requirement`・
@@ -426,3 +426,24 @@
 8. **採らなかったもの・後に回すもの**: リポジトリをまたぐ要件の検索（保存した索引が要る。X4 の 4 の宿題のまま。M4 の影響の分析で、使う側と一緒に決める）。
    作業項目の文脈にほかのプロジェクトの MR を含めること（3 のとおり、存在の手がかりになるため。要るなら読む人の権限で辿る形で別に決める）。要件と PBI の結びつき
    （kanflow が持つ）。kanflow から機密の印を受け取る経路（5）。
+9. **X5 の独立レビュー（2026-11-06、security・rust。BLOCK）で直したこと**:
+   - **コードの番号（衝突）**: `FG-AUTH-0020` は先に main に入る S2（ADR-0025 の ActAsAssertionInvalid）が使うので、ContextWithheld は **`FG-AUTH-0021`** にした。
+   - **読み取りのルートも同じ境界（security HIGH）**: エージェントの相手には、印の付いた仕様の文書の中身を HTTP の読み取りの API でも渡さない。
+     `GET …/repository/blob`・`{path}/-/raw/…`・`…/repository/blame` は **`FG-AUTH-0021`**（`reason=spec_confidential`、`path`）。`…/repository/compare`・
+     `…/repository/commits/{oid}`・`…/merge-requests/{iid}/versions/{n}/diff`・`…/merge-requests/{iid}/compare` は、その文書のファイルを差分から除き、
+     `diff.withheld {files}` に数える（人には出さない）。**git の clone / fetch と archive は印を見ない**（対象外）。**機密の高い仕様の本当の境界はリポジトリの権限**で、
+     エージェントのアカウント（`is_agent` のトークンの持ち主・サービスアカウント・bot）に、そのリポジトリの読み取りを与えないこと。印は HTTP の読み取りの API の **二重の守り** にすぎない。
+   - **版を選んで印を避けること（MEDIUM a）**: エージェントの相手には、読む版で印が付いているか、**既定のブランチの先端で印が付いている** パスを機密とする
+     （`marked_paths`、先端の索引は 1 回分として上限に数える）。残る穴: どの版にも印の無い古い履歴（印を付ける前の版で、先端でもパスが変わっている・消えている文書）は読める。
+     本当に機密なものは上のとおりリポジトリの権限で守る。
+   - **MR の文脈の `files`（MEDIUM b）**: 印の付いた仕様のファイル（名前を変えた前のパスも）をエージェントには出さず、`withheld.files` に数える。
+   - **`forge.work_items.confidential` を書く経路が無いこと（MEDIUM c）**: 既定の `false` のまま。kanflow の印を受け取る経路は、X3 / kanflow の同期の宿題として後に回す
+     （連携のサービスアカウントからの書き込み、監査の行、`UPDATE (confidential)` の権限）。それまでは作業項目の印は効かない。
+   - **エージェントには `is_agent` のトークンを使う（MEDIUM d）**: 人が `is_agent` なしで発行したトークンをエージェントが使えば、サーバーにとっては **人** である。
+     `gstn mcp` のヘッダーで文脈・仕様・読み取りの API の答えは狭まるが、ほかのルートと監査の上でエージェントとして扱われるのは `is_agent` のトークンだけ。
+     `gstn mcp --help` にも書いた。
+   - **MCP の入力（rust HIGH、MEDIUM e）**: 1 MiB を超える行は、読み手のバッファを通して捨て、ためない（何 GB の行でもメモリは上限 + 1 回の読み取り分）。
+     `-32600` を返して続ける。配列（バッチ。対応しない）・オブジェクトでない値は `-32600`（id は `null`）、id は文字列か数値だけ（ほかは `-32600`）。
+     標準入力の終わり・閉じたパイプはきれいに終わり（終了コード 0）、それ以外の読み取りの失敗は新しいコード **`FG-CLI-0009` CliInputFailed**。
+   - **LOW**: MR の文脈は compare も上限に数える（2 + エージェントは先端の 1）。要件の版の履歴は、エージェントには文書に印のあった版を出さない。
+     `source` の `project` が読めないときは `FG-SYS-0001`（空の文字列にしない）。

@@ -1878,8 +1878,13 @@
             "type": "integer"
           },
           "error_code": {
-            "description": "`FG-AUTH-0020`.",
+            "description": "`FG-AUTH-0021`.",
             "type": "string"
+          },
+          "files": {
+            "description": "Changed files of such documents (a diff's or a merge request's).",
+            "minimum": 0,
+            "type": "integer"
           },
           "requirements": {
             "description": "Their requirements.",
@@ -1896,7 +1901,8 @@
           "error_code",
           "documents",
           "requirements",
-          "work_items"
+          "work_items",
+          "files"
         ],
         "type": "object"
       },
@@ -2778,6 +2784,17 @@
           "truncated": {
             "description": "A cap cut the diff: more files than listed (500), or a patch left\nout because of its size.",
             "type": "boolean"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "For an AI agent (M3 X5, plan 06 D-5): the files of confidential\nspecification documents left out (absent when none was)."
+              }
+            ]
           }
         },
         "required": [

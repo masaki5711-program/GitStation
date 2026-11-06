@@ -819,7 +819,7 @@ runbook = "service-accounts"
 test = "doctor_warns_token_expiring_within_14_days"
 
 [[error]]
-code = "FG-AUTH-0020"
+code = "FG-AUTH-0021"
 name = "ContextWithheld"
 http_status = 403
 severity = "info"
@@ -1680,6 +1680,19 @@ cause = "`gstn … --wait` (M3 R4: `gstn mr merge --wait`, `gstn mr merge-status
 diagnosis = "The detail line carries `reason=merge_not_final` and the last `state`. Read the attempt with `gstn mr merge-status --project ID --iid N --json`; an attempt that stays `executing` is runbook merge-execution."
 fix = "Run `gstn mr merge-status --project ID --iid N --wait` again (or with a longer `--wait-timeout`)."
 test = "merge_wait_that_times_out_is_retryable"
+
+[[error]]
+code = "FG-CLI-0009"
+name = "CliInputFailed"
+http_status = 500
+severity = "info"
+user_message_ja = "入力を読めませんでした。gstn を起動したプログラム（AI エージェントの MCP クライアントなど）を確かめてください。"
+user_message_en = "The input could not be read. Check the program that started gstn (an AI agent's MCP client, for example)."
+user_message_id = "Masukan tidak dapat dibaca. Periksa program yang menjalankan gstn (misalnya klien MCP agen AI)."
+cause = "`gstn mcp` (M3 X5) reads JSON-RPC messages from stdin and the read failed with an I/O error other than the end of input (a closed pipe or an unexpected end of file end the server cleanly with exit 0). The MCP client's transport broke: the process that started gstn went away abnormally, or stdin is something unreadable. Nothing on the server is affected."
+diagnosis = "The detail line carries `reason=stdin_unreadable` and `kind` (the I/O error kind). Look at the MCP client's own log for why its pipe failed; run `gstn mcp < /dev/null` to see that gstn itself starts and ends cleanly."
+fix = "Restart the MCP client. If it keeps failing, check that the client starts gstn with a pipe on stdin (stdio transport), not a terminal or a file it closes."
+test = "a_broken_input_is_an_input_failure"
 
 # ── M3 R1a: merge requests (area REVIEW, ADR-0024; numbers in registration order, plan 11 §11.4) ──
 [[error]]
