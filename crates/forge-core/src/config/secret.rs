@@ -138,7 +138,7 @@ pub(super) fn read_password(key: &'static str, path: &Path) -> Result<Secret, Fo
 /// operator's responsibility, ADR-0013), at most `max_bytes`. The file is
 /// opened once; the permission check and the read use the same handle. The
 /// content never enters an error.
-pub(super) fn read_secret_text(
+pub(crate) fn read_secret_text(
     key: &'static str,
     path: &Path,
     max_bytes: u64,

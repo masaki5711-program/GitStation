@@ -40,6 +40,10 @@ pub struct GitHttpConfig {
     /// command list, the request body forge forwards (default 2 GiB; a
     /// `u32`, so at most 4 GiB − 1).
     pub push_max_bytes: u32,
+    /// `git.http.push_max_blob_bytes`: the largest file (blob) a push may
+    /// bring (M3 X8, the pre-receive push checks; default 100 MiB). A push
+    /// with a larger new blob is refused whole with FG-GIT-0021.
+    pub push_max_blob_bytes: u32,
 }
 
 /// The largest `git.http.fetch_request_max_bytes` (1 GiB).
@@ -58,6 +62,7 @@ impl GitHttpConfig {
         max_streams: 16,
         max_streams_per_principal: 4,
         push_max_bytes: 2 * 1024 * 1024 * 1024,
+        push_max_blob_bytes: 100 * 1024 * 1024,
     };
 
     /// Cross-key rules (each key is already positive).

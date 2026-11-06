@@ -50,6 +50,12 @@ pub const ROUTES_MANIFEST: &str = "docs/authz/routes.generated.json";
 pub const MATRIX_MANIFEST: &str = "docs/authz/matrix.generated.json";
 pub const OPENAPI_DOC: &str = "docs/api/openapi.json";
 
+/// OpenAPI schema names that two different Rust types register in the
+/// product registry (`gen-authz` fails on any).
+pub fn openapi_schema_name_conflicts() -> Vec<String> {
+    registry::schema_name_conflicts(app::registry().defs())
+}
+
 /// The generated documents, as `(path relative to Git/, contents)`.
 pub fn generated_documents(version: &str) -> Vec<(&'static str, String)> {
     let registry = app::registry();

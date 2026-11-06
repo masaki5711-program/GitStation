@@ -299,7 +299,7 @@ async fn a_granted_service_account_reports_and_reads_its_run() {
         .expect("report");
     assert!(reported.created);
     assert!(reported.completed_event);
-    assert_eq!(reported.run.reported_by, w.ci);
+    assert_eq!(reported.run.reported_by, Some(w.ci));
     let read = prove(
         &token(w.ci, AccountKind::ServiceAccount, &[Scope::ReadApi]),
         Action::CheckRead,
@@ -429,13 +429,18 @@ async fn an_invalid_body_is_refused_after_the_decision() {
 #[tokio::test]
 async fn unreportable_names_are_the_ones_without_a_granted_reporter() {
     let w = world().await;
-    let names: Vec<_> = ["ci/gates", "kanflow/work-item", "forge/risk"]
+    // M3 X2: `forge/spec-drift` is reported by forge's own worker, so it is
+    // never unreportable; another `forge/` name has no reporter yet.
+    let drift = parse_name("forge/spec-drift").expect("name");
+    let names: Vec<_> = ["ci/gates", "kanflow/work-item", "forge/deploy-gate"]
         .iter()
         .map(|n| parse_name(n).expect("name"))
         .collect();
+    let mut with_drift = names.clone();
+    with_drift.push(drift);
     assert_eq!(
         w.checks
-            .unreportable(w.project(), &names)
+            .unreportable(w.project(), &with_drift)
             .await
             .expect("all"),
         names

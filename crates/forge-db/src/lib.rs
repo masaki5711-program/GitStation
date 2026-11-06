@@ -93,6 +93,9 @@ pub mod integrations;
 // ── M3 I1b: work items, their links and the work-item-sync subscriber ──
 pub mod work_items;
 // ── end M3 I1b ──
+// ── M3 I2: webhooks and their deliveries (ADR-0016 §8) ──
+pub mod webhooks;
+// ── end M3 I2 ──
 // ── M3 I1c: the event feed of an integration, retention and the epoch ──
 pub mod feed;
 // ── end M3 I1c ──
@@ -132,6 +135,9 @@ pub mod checks;
 // ── M3 O3: the repository maintenance ledger and schedule ──
 pub mod maintenance;
 // ── end M3 O3 ──
+// ── M3 N1: notifications ──
+pub mod notify;
+// ── end M3 N1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

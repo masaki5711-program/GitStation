@@ -443,6 +443,112 @@ diagnosis = "The log event carries `reason`, `project_id`, `repo_id`, `route` an
 fix = "Nothing to fix on the server: correct the ref or the path (gstn browse refs lists the branches and tags). If an existing branch is reported missing right after a push, wait a few seconds (the ref list is cached for at most 5 s and dropped on every push)."
 test = "an_unknown_ref_or_path_is_repository_path_not_resolved"
 
+# ── M3 X1: `.forge/repo.yml` and its spec references (plan 03 §4.4, ADR-0023 Amendment X1) ──
+
+[[error]]
+code = "FG-REPO-0024"
+name = "RepoConfigInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "このリビジョンの .forge/repo.yml を読めません。示された行と理由を見て、ファイルを直してください。"
+user_message_en = "The .forge/repo.yml of this revision cannot be read. Fix the file at the line and for the reason shown."
+user_message_id = "Berkas .forge/repo.yml pada revisi ini tidak dapat dibaca. Perbaiki berkas pada baris dan alasan yang ditampilkan."
+cause = "`GET /api/v1/projects/{id}/repository/spec-refs` (M3 X1, action SpecRefRead) read `.forge/repo.yml` at the requested revision and forge_core::repo_config refused it. Not a server fault: the file is the repository's content. The answer is still 200 with `config: \"invalid\"` and `problem {error_code, line, reason}` (the line is 1-based, 0 for the whole file), so the reader sees what to fix; no reference is resolved from an invalid file (fail closed: never a partial reading). `reason`: syntax (not YAML), not_utf8, too_large (over 64 KiB), not_a_file (a directory, a symlink or a submodule at that path), not_a_mapping, unknown_key (a top-level key other than `specs` and the reserved `review`, or an entry key other than repo / path / version / track / scope — `kind:` was removed by ADR-0023), duplicate_key (in any mapping, read or not), too_many_keys (over 64 keys in one mapping), key_not_text, not_text (a list or mapping where text belongs), multiple_documents, yaml_anchor, yaml_alias, yaml_tag (refused, never expanded), too_deep (collections nested over 16), specs_not_a_list, too_many_specs (over 32 entries), entry_not_a_mapping, neither_repo_nor_path, repo_and_path, no_version, version_and_track, version_on_path, repo_invalid (empty, or not a namespace path ADR-0015 accepts), version_invalid / track_invalid (empty or null, not a short tag / branch name git accepts, a full `refs/...` name, or a component starting with `-`), path_invalid (empty or null, absolute, a `.` / `..` or empty segment, a control character, a backslash, a leading `:` (pathspec magic), a drive letter such as `C:`, or over 4096 bytes), scope_not_a_list, too_many_scopes (over 64), scope_invalid (not upper-case letters, digits and `-`, optionally ending in one `*`), duplicate_repo, duplicate_path."
+diagnosis = "The event `forge.spec_refs.repo_yml_invalid` (info) carries `error_code`, `request_id`, `project_id`, `repo_id`, `commit`, `line` and `reason`; never the file's text. Read the file at that commit (read-only): git --git-dir <storage path of repo_id> show <commit>:.forge/repo.yml | sed -n '<line>p'."
+fix = "Correct `.forge/repo.yml` on the branch (a merge request: `.forge/**` changes need a Maintainer's approval, ADR-0017 §2.7) by the reason and line in the answer. The format is in plan 03 §4.4 and forge_core::repo_config."
+test = "an_invalid_repo_yml_is_repo_config_invalid_with_line_and_reason"
+
+[[error]]
+code = "FG-REPO-0025"
+name = "SpecVersionNotFound"
+http_status = 404
+severity = "info"
+user_message_ja = "参照している仕様のリポジトリに、指定した版（タグ）またはブランチがありません。.forge/repo.yml の version / track を確かめてください。"
+user_message_en = "The referenced specification repository has no such version (tag) or branch. Check version / track in .forge/repo.yml."
+user_message_id = "Repositori spesifikasi yang dirujuk tidak memiliki versi (tag) atau branch tersebut. Periksa version / track di .forge/repo.yml."
+cause = "`GET /api/v1/projects/{id}/repository/spec-refs` (M3 X1): an entry `repo: <path>` with `version: <tag>` (or `track: <branch>`) named a repository the reader may read (SpecRefRead allowed on it with the reader's own permissions), but `refs/tags/<tag>` (`refs/heads/<branch>`) does not exist there or does not name a commit. Reported per entry (`status: \"version_not_found\"`, `error_code`), never for a repository the reader cannot read (that is FG-REPO-0026, so the answer never tells which tags a hidden repository has). The other entries are still resolved."
+diagnosis = "The event `forge.spec_refs.unresolved` (info) carries `error_code`, `request_id`, `project_id` (the referencing project), `referenced_project_id`, `line` (the entry's line in .forge/repo.yml), `pin` (version / track) and `reason` (ref_not_found, not_a_commit); never the tag name. List the referenced repository's tags: gstn browse refs --project <referenced_project_id> --type tag, or on the server git --git-dir <storage path> for-each-ref refs/tags."
+fix = "Publish the tag in the specification repository, or correct `version:` / `track:` in .forge/repo.yml to an existing one. A tag pushed a moment ago may be missing for up to 5 s (the ref list cache)."
+test = "a_missing_spec_version_is_spec_version_not_found"
+
+[[error]]
+code = "FG-REPO-0026"
+name = "SpecRepositoryUnavailable"
+http_status = 404
+severity = "info"
+user_message_ja = "参照している仕様のリポジトリが見つからないか、あなたには読む権限がありません。パスを確かめるか、そのリポジトリの管理者に読む権限を依頼してください。"
+user_message_en = "The referenced specification repository was not found, or you may not read it. Check the path, or ask its maintainers for read access."
+user_message_id = "Repositori spesifikasi yang dirujuk tidak ditemukan, atau Anda tidak berhak membacanya. Periksa jalurnya, atau minta akses baca kepada pengelolanya."
+cause = "`GET /api/v1/projects/{id}/repository/spec-refs` (M3 X1): an entry `repo: <path>` could not be followed for this reader. Every case answers the same (`status: \"unavailable\"`, `error_code`, no project id, no version) so the answer is no existence oracle: nothing lives at the path, the path is a group or a user, the path is a moved or deleted tombstone (a pinned reference is not redirected: update the path), authorize() refused SpecRefRead on the project for the reader's own permissions (not visible, a service account that is not a member, pending deletion, a token without read_api), or the reader may read it but its repository is still provisioning or git could not read it (busy, timed out, a storage failure: shown as unavailable so the status never tells a readable repository from a hidden one). Each lookup costs the same statements whatever the outcome (NamespaceResolver contract). The other entries are still resolved."
+diagnosis = "The event `forge.spec_refs.unresolved` (info) carries `error_code`, `request_id`, `project_id`, `line` and `reason`: absent, not_a_project, moved, tombstone_deleted, denied (with `decision_error_code`: the code authorize() gave — FG-REPO-0005, FG-REPO-0006, FG-AUTH-0002, …), not_ready (with `referenced_project_id`) or git_failed (logged at warn, with `git_error_code` — FG-GIT-0002 timeout, FG-GIT-0004 busy, a storage code — `git_error`, `referenced_project_id` and `referenced_repo_id`; follow that code's own runbook). Never the path itself. For denied: check the reader's membership of the referenced project (gstn member list --project <id>); for moved: GET /api/v1/namespaces/resolve?path=<path> shows the current path."
+fix = "Correct `repo:` in .forge/repo.yml to the repository's current path, or give the readers Reporter on it (an internal project is readable by every signed-in person). A service account must be a member. Nothing to change on the server."
+test = "an_unreadable_spec_repository_is_spec_repository_unavailable"
+
+[[error]]
+code = "FG-REPO-0027"
+name = "SpecVersionBehind"
+http_status = 409
+severity = "info"
+user_message_ja = "このコミットの .forge/repo.yml が固定している仕様の版より新しい版が公開されています。新しい版の変更を確かめ、必要なら version を上げてください。"
+user_message_en = "A later version of a specification this commit's .forge/repo.yml pins has been published. Review its changes and raise version if needed."
+user_message_id = "Versi yang lebih baru dari spesifikasi yang dipatok oleh .forge/repo.yml pada commit ini telah dipublikasikan. Tinjau perubahannya dan naikkan version bila perlu."
+cause = "The check `forge/spec-drift` (M3 X2, plan 03 §5.4, ADR-0023 Amendment X2) evaluated a merge request version's head: an entry `repo: <path>` with `version: <tag>` names a repository every signed-in person may read, and that repository has a later tag of the same series (the same prefix, numbers compared as numbers, a missing part as 0; prerelease tags such as v2.0-rc1 are no versions). A notice, never an HTTP error: the run concludes `neutral` (it never blocks a merge unless a protected branch requires forge/spec-drift, and `neutral` does not satisfy a required check) and its summary and annotation name the line, the pin and the latest version with this code."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/spec-drift; the summary lists every entry with its state). The job's log event `forge.spec_drift.recorded` carries `request_id`, `project_id`, `head_sha`, `conclusion` and `check_run_id`. List the referenced repository's tags: gstn browse refs --project <referenced project> --type tag."
+fix = "Read the later version's changes and raise `version:` in .forge/repo.yml in this merge request, or keep the pin on purpose (the run stays neutral). Nothing to change on the server."
+test = "a_pin_behind_the_latest_version_is_neutral_with_spec_version_behind"
+
+[[error]]
+code = "FG-REPO-0028"
+name = "SpecLintProblem"
+http_status = 422
+severity = "info"
+user_message_ja = "このコミットの仕様の文書か @req の参照が規則に合っていません。forge/spec-lint の一覧のファイルと行を直してください。"
+user_message_en = "A specification document or @req reference at this commit breaks a rule. Fix the files and lines forge/spec-lint lists."
+user_message_id = "Dokumen spesifikasi atau referensi @req pada commit ini melanggar aturan. Perbaiki berkas dan baris yang dicantumkan forge/spec-lint."
+cause = "The check `forge/spec-lint` (M3 X4, plan 03 §5.4, ADR-0023 Amendment X4) indexed a merge request version's head: the Markdown files under the repository's own specification directories (its `.forge/repo.yml` `path:` entries, or `spec/`) and every `@req` tag of its tree. A rule is broken; the run concludes `failure` and its summary and annotations list each `path:line rule`. Document rules (forge_core::spec_doc): not_utf8, file_too_large (over 256 KiB: not read), front_matter_missing (requirement blocks without a front matter), front_matter_unclosed, front_matter_too_large, front_matter_syntax, front_matter_not_a_mapping, front_matter_duplicate_key, front_matter_multiple_documents, front_matter_yaml_feature (anchors, aliases, tags), front_matter_unknown_key (only spec / title / status / owners), spec_missing, spec_invalid, title_missing, title_invalid, status_missing, status_invalid (draft / review / approved / deprecated), owners_invalid (a list of at most 32 short texts), requirement_id_missing, requirement_id_invalid (upper-case letters and digits in two or more `-`-separated segments, first a letter, at most 64 bytes, never the `PBI` family), attribute_invalid (not key=value), attribute_unknown (only priority / status), attribute_duplicate, priority_invalid (must / should / could / wont), requirement_status_invalid (active / deprecated), block_nested (`::: req` inside a requirement), block_unclosed, close_unmatched (a `:::` with nothing open), body_empty, body_too_long (over 16 KiB), too_many_requirements (over 2000 in one file), too_deep (containers nested over 16). Index rules (forge_core::spec_index::lint): duplicate_id (an id defined twice; the detail names the first place), duplicate_spec (a `spec:` name used twice), broken_reference (a tag names an id of one of this repository's own families — the id without its last segment — that it does not define and no `repo:` entry's `scope:` covers). Not a server fault: the files are the repository's content. A block inside a fenced code block is never read."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/spec-lint; the summary lists every problem). The job's log event `forge.spec_index.recorded` carries `request_id`, `project_id`, `iid`, `head_sha`, both conclusions and the document and tag counts. Read the file at that commit (read-only): gstn browse blob --project <id> --ref <head> --path <path>, or check the whole index with gstn spec requirements --project <id> --ref <head>."
+fix = "Correct the document or the tag at the listed line in the merge request. An id is never removed: mark it `status=deprecated` (plan 03 §4.2). Nothing to change on the server."
+test = "a_spec_lint_problem_fails_with_spec_lint_problem_and_an_annotation"
+
+[[error]]
+code = "FG-REPO-0029"
+name = "RequirementUntested"
+http_status = 409
+severity = "info"
+user_message_ja = "この MR が触れる要件か作業項目に、@req の付いたテストがありません。テストに @req <要件 ID> または @req PBI-<番号>/AC-<番号> を付けてください。"
+user_message_en = "A requirement or work item this merge request touches has no @req test. Tag a test with @req <requirement id> or @req PBI-<n>/AC-<m>."
+user_message_id = "Persyaratan atau item kerja yang disentuh merge request ini tidak memiliki tes @req. Tandai tes dengan @req <id persyaratan> atau @req PBI-<n>/AC-<m>."
+cause = "The check `forge/spec-trace` (M3 X4, plan 03 §5.4, plan 06 D-7; advisory, plan 03 §9-4) found a touched subject with no `@req` tag naming it anywhere in the head's tree: a requirement added or changed in this repository's own specification since the merge base with the target branch (a deprecated one is not touched), or a kanflow work item the merge request is linked to (`PBI-<n>`) without any test of one of its acceptance criteria (`@req PBI-<n>/AC-<m>`). A notice, never an HTTP error: the run concludes `neutral` and never `failure` (it blocks a merge only when a protected branch requires forge/spec-trace, and `neutral` does not satisfy a required check). In M3 the check looks for a tagged test, not for its result in a pipeline (that comes with the CI of M4, ADR-0017 §4.1.1)."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/spec-trace; the summary lists every touched subject with `tested` / `untested` / `unknown`, why it is touched — spec_changed, tag_added, work_item_linked — and where). The trace of the whole specification at a revision: gstn spec trace --project <id> --ref <rev>. The work item links: gstn mr work-items --project <id> --iid <iid>."
+fix = "Add or tag a test for the requirement (a comment or a name with `@req <ID>`; any language), or for one of the work item's acceptance criteria (`@req PBI-<n>/AC-<m>`). A requirement that no longer applies is `status=deprecated`. Nothing to change on the server."
+test = "an_untested_touched_requirement_is_a_neutral_trace_never_a_failure"
+
+[[error]]
+code = "FG-REPO-0030"
+name = "RequirementTagUnknown"
+http_status = 422
+severity = "info"
+user_message_ja = "@req のタグが、どの要件にも、参照している仕様の範囲にも当たりません（または形式が違います）。要件 ID か PBI-<番号>/AC-<番号> を確かめてください。"
+user_message_en = "A @req tag names no requirement here or in a referenced specification's scope (or is malformed). Check the requirement id or PBI-<n>/AC-<m>."
+user_message_id = "Tag @req tidak merujuk persyaratan mana pun di sini maupun dalam cakupan spesifikasi yang dirujuk (atau formatnya salah). Periksa id persyaratan atau PBI-<n>/AC-<m>."
+cause = "The check `forge/spec-trace` (M3 X4, advisory) found a `@req` tag the merge request adds (a (path, id) pair not at the merge base) whose id this repository's own specification does not define and no `.forge/repo.yml` `repo:` entry's `scope:` covers (an entry without a scope covers every id), or a tag followed by no requirement id or acceptance criterion at all (malformed: `@req` then text that is neither `<ID>` nor `PBI-<n>/AC-<m>`). The referenced specifications themselves are not read by the check (the run is shown to every reader of the project), so a covered id counts as known. A notice: the run concludes `neutral`, never `failure`."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/spec-trace; `unknown <ID>` and `malformed @req at <path>:<line>` lines, with an annotation on each). Compare with the requirement index: gstn spec requirements --project <id> --ref <head> and the references: gstn browse spec-refs --project <id> --ref <head>."
+fix = "Correct the id in the tag, add the requirement to the specification, or add the referenced specification's id pattern to `scope:` in .forge/repo.yml. Nothing to change on the server."
+test = "spec_trace_counts_added_tags_and_flags_unknown_and_malformed_ones"
+
+[[error]]
+code = "FG-REPO-0031"
+name = "SpecIndexIncomplete"
+http_status = 409
+severity = "info"
+user_message_ja = "仕様の索引が上限に達したため、一部しか読めていません。結果は読めた範囲のものです。仕様のファイルを分けるか小さくしてください。"
+user_message_en = "The specification index hit a bound, so only part of it was read; the results are about what was read. Split or shrink the specification files."
+user_message_id = "Indeks spesifikasi mencapai batas sehingga hanya sebagian yang terbaca; hasilnya hanya untuk bagian yang terbaca. Pecah atau perkecil berkas spesifikasi."
+cause = "Indexing a commit's requirements (M3 X4, forge-checks spec_index: `forge/spec-lint`, `forge/spec-trace` and the spec API `GET /api/v1/projects/{id}/specs/…`) stops at its bounds rather than run unbounded: at most 1000 Markdown files under the specification directories (`spec_files`), at most 8 MiB read in all (`spec_bytes`; a single file over 256 KiB is not read and is the problem file_too_large instead), and at most 8 MiB of `git grep` output for the `@req` tags (`tag_lines`). The first bound hit is named; the answers are about what was read and never claim more: spec-lint concludes `neutral` instead of `success`, spec-trace `neutral`, and the API answers carry `incomplete: <reason>` with this code. Not a server fault."
+diagnosis = "The run's summary or the API's `incomplete` names the bound. Count the files: gstn browse tree --project <id> --ref <rev> --path spec. The job's log event `forge.spec_index.recorded` carries `incomplete` with `request_id`."
+fix = "Keep the specification within the bounds: fewer, smaller Markdown files under the specification directories (split a large one), or list only the specification directories in `.forge/repo.yml` `path:` entries. Nothing to change on the server."
+test = "an_incomplete_index_is_never_a_silent_pass"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]
@@ -908,6 +1014,63 @@ diagnosis = "Two sources: the maintenance job (`event=forge.git.maintenance_lock
 fix = "When no git runs on the repository and the lock is older than the longest push (`git.http.timeout_ms`, default 1 h): [MUTATING — needs approval] move it aside (`mv <path>/packed-refs.lock <path>/packed-refs.lock.stale-<date>`; rollback: move it back), then `git --git-dir=<path> show-ref | head` and `forge admin repo maintain <repo_id>`. Never remove a lock while a git process on that repository is running (runbook repo-maintenance)."
 runbook = "repo-maintenance"
 test = "a_stale_packed_refs_lock_is_reported"
+
+# ── M3 X8: push checks (large files, secrets) in the pre-receive hook ──
+[[error]]
+code = "FG-GIT-0021"
+name = "PushBlobTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "プッシュに上限より大きいファイルが含まれていたため、プッシュ全体を拒否しました。ファイルを履歴から取り除いてからもう一度プッシュしてください。"
+user_message_en = "The push contained a file larger than the limit, so the whole push was refused. Remove the file from the history and push again."
+user_message_id = "Push berisi berkas yang lebih besar dari batas, sehingga seluruh push ditolak. Hapus berkas itu dari riwayat lalu push lagi."
+cause = "The pre-receive hook (`forge hook pre-receive`, M3 X8, ADR-0008 amendment X8) found a blob larger than `git.http.push_max_blob_bytes` (default 100 MiB) among the objects the push brings. The size check reads every object git received for the push (the quarantine's own object directory, streamed: `cat-file --batch-all-objects`), so it is complete whatever the push contains — a blob only an annotated tag names, or one hidden behind padding that stops the secret scan early, is sized all the same; a size check that cannot finish refuses the push (FG-GIT-0023 `size_check_failed`). git refused the whole push (`ng <ref> pre-receive hook declined` for every ref); the quarantined objects are discarded, no ref changed. A blob already in the repository never trips the check."
+diagnosis = "The pusher's terminal shows `remote: FG-GIT-0021 …` with one line per file: its path, its size, the limit and the commit that adds it (never the content). One info log line with `error_code`, `request_id` and in `context`: `event=forge.git.push_checked`, `verdict=refused`, `findings`, `rules`, `first_rule=large_blob`, `first_path`, `first_blob`, `first_commit`, `objects`, `repo_id`. Read-only on the pusher's side: `git rev-list --objects <commit> --not --remotes | git cat-file --batch-check='%(objectsize) %(rest)' | sort -n | tail`."
+fix = "The pusher removes the file from the commits not yet pushed (`git rm --cached <path>` and `git commit --amend`, or `git rebase -i` / `git filter-repo` for an older commit) and pushes again; large binary content belongs in an artifact store, not in git. When the file is legitimate, an administrator raises `git.http.push_max_blob_bytes` (configuration, restart) — runbook push-checks."
+runbook = "push-checks"
+test = "a_push_with_a_large_file_is_refused_with_fg_git_0021"
+
+[[error]]
+code = "FG-GIT-0022"
+name = "PushSecretDetected"
+http_status = 422
+severity = "warn"
+user_message_ja = "プッシュに秘密情報（鍵やトークン）らしい内容が含まれていたため、プッシュ全体を拒否しました。秘密を履歴から取り除き、漏れた可能性のある秘密は失効させてください。"
+user_message_en = "The push contained what looks like a secret (a key or a token), so the whole push was refused. Remove it from the history and revoke any secret that may have leaked."
+user_message_id = "Push berisi sesuatu yang tampak seperti rahasia (kunci atau token), sehingga seluruh push ditolak. Hapus dari riwayat dan cabut rahasia yang mungkin bocor."
+cause = "The pre-receive hook (M3 X8) found a high-confidence secret pattern in a text blob the push brings: `private_key` (a PEM / OpenSSH / PGP private key header), `aws_access_key_id`, `github_token`, `gitlab_token`, `slack_token`, `google_api_key`, `gitstation_token` (`fgp_` / `gss_`) or `gitstation_webhook_secret` (`whsec_`). Placeholder bodies (few distinct characters, `EXAMPLE`) do not match; a file containing the marker `forge:allow-secret` is a reviewed false positive and is accepted (counted as `allowed`; serve logs each waiver as `forge.git.push_check_waived` with `rule`, `path`, `blob`). Blobs above 1 MiB and binary blobs (a NUL in the first 8000 bytes) are not scanned for secrets. git refused the whole push; the quarantined objects are discarded, no ref changed — but the secret has left the pusher's machine."
+diagnosis = "The pusher sees `remote: FG-GIT-0022 …` with one line per finding: the rule, the path and the commit (never the matched value). One warn log line with `error_code`, `request_id` and in `context`: `event=forge.git.push_checked`, `verdict=refused`, `findings`, `rules`, `first_rule`, `first_path`, `first_blob`, `first_commit`, `objects`, `bytes_scanned`, `allowed`, `repo_id` — the value is in no log line."
+fix = "Treat the secret as leaked if it was real: revoke / rotate it first (runbook secret-removal, step 1). Then remove it from the unpushed commits (`git commit --amend`, `git rebase -i`, `git filter-repo --replace-text`) and push again. For a synthetic test fixture, add the marker `forge:allow-secret` to the file (a comment line) — the reviewer sees it in the merge request. Runbook push-checks."
+runbook = "push-checks"
+test = "a_push_with_a_private_key_is_refused_with_fg_git_0022"
+
+[[error]]
+code = "FG-GIT-0023"
+name = "PushCheckFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "プッシュの検査を実行できなかったため、プッシュを拒否しました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The push checks could not run, so the push was refused. Contact the administrator with the request ID."
+user_message_id = "Pemeriksaan push tidak dapat dijalankan, sehingga push ditolak. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The push checks (M3 X8) did not complete as designed. In the hook (`forge hook pre-receive`; the push is refused — fail closed): `reason=env_missing` (no `FORGE_PUSH_CHECK_DIR` / run directory), `policy_unreadable` / `policy_invalid` (the run's policy file written by `forge serve`), `storage` (the repository path from the policy), `quarantine_invalid` (git's `GIT_OBJECT_DIRECTORY` / `GIT_ALTERNATE_OBJECT_DIRECTORIES` are not the repository's quarantine), `stdin_invalid` (git's update lines), `git_failed` (rev-list / cat-file / log failed: `cause_code`), `size_check_failed` (the complete size check of the received objects could not finish — `detail` spawn / git / read / unreadable, `cause_code` FG-GIT-0002 for its 120 s bound; never let through), `result_write` (the result file). In `forge serve` after receive-pack exited: `hook_not_run` (git applied refs but no result of this push's hook exists — the hook was skipped, e.g. the hooks directory was replaced or the binary was not executable; the refs were updated unchecked: an alert), `hook_no_result` (git reported `pre-receive hook declined` without a result: the hook crashed or could not start, e.g. `FORGE_PUSH_CHECK_EXE` not runnable), `hook_unknown` (no result, and the repository could not be read to say whether refs changed — treat as `hook_not_run`), `result_invalid` (unreadable result or another run's nonce), `run_dir` (the run directory could not be created or removed); at start-up `exe_unknown` / `exe_unusable` (`forge serve` could not find its own binary, or its path cannot be run by the hook script: the server does not start). A hooks directory forge did not write (`FG-GIT-0001 reason=hooks_dir`: `push_hook_missing`, `push_hook_mismatch`, `push_hook_not_executable`, `unexpected_entry`) also stops the start, and refuses a push when it changes later. Timeouts and caps are not this code: they make the scan incomplete (FG-GIT-0024)."
+diagnosis = "In `forge serve`'s log: one alert event with `error_code=FG-GIT-0023`, `request_id`, `reason`, `repo_id`, `applied` (refs git updated), and the hook's own `detail` / `cause_code` when it wrote a failed result. The pusher saw `remote: FG-GIT-0023 … (request_id: …)`. Check read-only: the hook script `<storage root>/push-hooks/pre-receive` (exactly the generated three lines, mode 0700), that `forge` (the serve binary, `FORGE_PUSH_CHECK_EXE`) runs `forge hook pre-receive` (it prints FG-GIT-0023 `env_missing` without the run directory), and `<storage root>/push-checks/` for stale run directories."
+fix = "Follow runbook push-checks: fix the cause named by `reason` (restore the hook script by moving the directory aside and letting forge regenerate it, redeploy a binary that runs, fix permissions of the storage root), then ask the pusher to push again. For `hook_not_run`, the pushed refs were not checked: run the checks by hand on the push's range (runbook push-checks, \"unchecked push\") and treat a finding like FG-GIT-0021 / FG-GIT-0022."
+runbook = "push-checks"
+test = "a_hook_without_its_policy_fails_closed"
+
+[[error]]
+code = "FG-GIT-0024"
+name = "PushCheckIncomplete"
+http_status = 500
+severity = "warn"
+user_message_ja = "プッシュは反映されましたが、大きすぎるため一部の内容を検査できませんでした。"
+user_message_en = "The push was applied, but part of it was too large to be checked."
+user_message_id = "Push sudah diterapkan, tetapi sebagian isinya terlalu besar untuk diperiksa."
+cause = "The push checks (M3 X8) stopped at a bound and let the push through (fail open with a warn, ADR-0008 amendment X8): `reason=objects_cap` (more than 500 000 new objects, or the object list did not fit its output cap), `bytes_cap` (more than 256 MiB of text blobs to scan for secrets), `deadline` (the 60 s bound of the secret scan), `large_blob_unscanned` (a text blob over 1 MiB and under the size limit was not scanned for secrets; `skipped_large` counts them). Binary blobs are counted (`skipped_binary`) but do not make it incomplete: the rules are text patterns. Only the secret scan fails open: the size check is always complete (or the push is refused, FG-GIT-0023). A finding made before the bound still refuses the push (FG-GIT-0021 / 0022). Typical for an initial import of a large repository."
+diagnosis = "One warn log line with `error_code=FG-GIT-0024`, `request_id` and in `context`: `event=forge.git.push_checked`, `verdict=accepted`, `incomplete` (the reason), `objects`, `pack_objects`, `blobs_scanned`, `bytes_scanned`, `skipped_large`, `skipped_binary`, `repo_id`. A complete accepted check logs the info event `forge.git.push_checked` instead. The pusher saw `remote: FG-GIT-0024 …`."
+fix = "Nothing is broken. If the push may hold secrets (an import from outside), scan the range by hand (runbook push-checks, \"unchecked push\"). Splitting a huge initial push into several pushes of older history first keeps each one within the bounds."
+runbook = "push-checks"
+test = "a_scan_past_its_byte_cap_is_incomplete_and_accepted"
 
 # --- WEB: the HTTP layer (forge-web) ----------------------------------------
 
@@ -1746,11 +1909,11 @@ code = "FG-INT-0012"
 name = "IntegrationLimitReached"
 http_status = 409
 severity = "info"
-user_message_ja = "この連携に結びつけられるプロジェクトの上限に達しました。使っていない結びつけを解除してから、もう一度試してください。"
-user_message_en = "This integration is bound to the maximum number of projects. Unbind a project it no longer needs, then try again."
-user_message_id = "Integrasi ini sudah terikat ke jumlah proyek maksimum. Lepaskan ikatan proyek yang tidak lagi diperlukan, lalu coba lagi."
-cause = "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}` would bind a 201st project to one integration (ADR-0016 §1, §7: at most 200 bindings per integration, because the event feed decides every bound project on every read). The count is taken under the integration's row lock, so two binds at once cannot both pass. Nothing was written. Webhooks (20 per project, I2) will reuse this code with their own `limit`."
-diagnosis = "The log event carries `reason=binding_limit`, `limit` (200), `integration_id` and `project_id`, with `action=IntegrationBindingManage`. Count the bindings: SELECT count(*) FROM forge.integration_bindings WHERE integration_id = <integration_id>; `GET /api/v1/admin/integrations/{integration_id}/bindings` lists them (administrators)."
+user_message_ja = "上限（連携に結びつけるプロジェクトは 200、プロジェクトの Webhook は 20）に達しました。使っていないものを外してから、もう一度試してください。"
+user_message_en = "The limit is reached (200 projects per integration, 20 webhooks per project). Remove one that is no longer needed, then try again."
+user_message_id = "Batas tercapai (200 proyek per integrasi, 20 webhook per proyek). Hapus yang tidak lagi diperlukan, lalu coba lagi."
+cause = "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}` would bind a 201st project to one integration (ADR-0016 §1, §7: at most 200 bindings per integration, because the event feed decides every bound project on every read). The count is taken under the integration's row lock, so two binds at once cannot both pass. Nothing was written. M3 I2: `POST /api/v1/projects/{id}/webhooks` past 20 webhooks of one project (`reason=webhook_limit`, `limit` 20, counted under a per-project lock)."
+diagnosis = "The log event carries `reason=binding_limit`, `limit` (200), `integration_id` and `project_id`, with `action=IntegrationBindingManage` (webhooks: `reason=webhook_limit`, `project_id`, `action=WebhookManage`; `gstn webhook list --project <id>`). Count the bindings: SELECT count(*) FROM forge.integration_bindings WHERE integration_id = <integration_id>; `GET /api/v1/admin/integrations/{integration_id}/bindings` lists them (administrators)."
 fix = "Unbind projects the integration no longer needs (`DELETE /api/v1/projects/{id}/integration-bindings/{integration_id}`, a Maintainer of that project), or split the work over a second integration with its own service account (runbook integrations). The limit is fixed in code (forge-db `integrations::MAX_BINDINGS`)."
 runbook = "integrations"
 test = "binding_limit_200_is_int_0012"
@@ -1825,6 +1988,21 @@ fix = "Follow runbook act-as: check kanflow's mapping (it should send the claim'
 runbook = "act-as"
 test = "act_as_email_form_is_refused"
 
+
+# ── M3 N1: e-mail notifications (plan 11 §5 N1, ADR-0016 Amendment N1) ──
+[[error]]
+code = "FG-INT-0015"
+name = "SmtpUnavailable"
+http_status = 502
+severity = "warn"
+user_message_ja = "メールを送れませんでした。しばらくしてから、もう一度お試しください。続く場合は管理者に連絡してください。"
+user_message_en = "The e-mail could not be sent. Try again later; if it keeps happening, contact the administrator."
+user_message_id = "E-mail tidak dapat dikirim. Coba lagi nanti; jika terus terjadi, hubungi administrator."
+cause = "The `notification.send` job could not hand a notification to the internal SMTP relay (`notify.smtp_host`). `reason=connect_failed` (refused, unreachable, or not answered within `notify.connect_timeout_ms`), `tls_failed` (STARTTLS refused or the relay's certificate is not signed by `notify.smtp_ca_file`), `auth_failed` (the relay refused the login), `timeout` (a step took longer than `notify.send_timeout_ms` before the message was handed over), `connection_lost` (the relay closed or broke the connection mid-conversation, before the message was handed over), `rejected_temporary` (a 4xx reply: greylisting, a full queue), `rejected_permanent` (a 5xx reply: the sender or recipient address is refused; the notification is `failed` and is not tried again), `tries_used_up` (the last of `notify.max_attempts` tries failed), `outcome_unknown` (the connection broke after the message was handed over: the relay may or may not have it, so it is NOT sent again; the notification is `unknown`). Nothing reaches a person's request: the merge request flow never waits for mail."
+diagnosis = "The log event carries `reason`, `stage` (`connect`, `tls`, `auth`, `mail_from`, `rcpt_to`, `data`, `end_of_data`), `smtp_code` (the relay's reply code, when it replied), `notification_id`, `attempt`, `max_attempts` and the job's `request_id`; never the relay's reply text, the message or the address. Backlog and failures: `forge doctor` check `notify.queue`, and SELECT state, count(*), min(created_at) FROM forge.notifications GROUP BY state; one notification: SELECT state, reason, attempts, created_at, updated_at FROM forge.notifications WHERE id = <notification_id>."
+fix = "Follow runbook notification-email: check the relay (`notify.smtp_host` / `notify.smtp_port` reachable from the worker, its certificate and `notify.smtp_ca_file`, the login), correct the configuration and restart the worker. Notifications still `pending` or `retrying` are sent once the relay answers; `failed` and `unknown` ones are not sent again (they record that no mail went out)."
+runbook = "notification-email"
+test = "smtp_failures_are_int_0015"
 # ── M3 I1c: the event feed of an integration (02 §5.7, §11.2, ADR-0016 §7, Amendment I1c) ──
 [[error]]
 code = "FG-INT-0007"
@@ -1867,6 +2045,62 @@ diagnosis = "The doctor line or the log event carries `reason`, `integration_id`
 fix = "Follow runbook integration-feed-lag: check that kanflow's poller runs and authenticates (the service account's token: runbook service-accounts), that the work-item-sync subscriber is not stuck (doctor subscribers.work-item-sync; it bounds what the feed returns), then let the consumer catch up. A consumer that cannot catch up before retention resyncs after its 410."
 runbook = "integration-feed-lag"
 test = "feed_lag_names_not_reading_and_behind_integrations"
+# ── M3 I2: webhooks (ADR-0016 §8, plan 02 §5.5 / §11.1, ADR-0016 Amendment I2) ──
+[[error]]
+code = "FG-INT-0004"
+name = "WebhookDeadLettered"
+http_status = 500
+severity = "warn"
+user_message_ja = "Webhook の配信が再試行の上限まで失敗しました。配信の履歴を確かめ、受信先を直してから再送してください。"
+user_message_en = "A webhook delivery failed on every retry. Check the delivery history, fix the receiver, then redeliver."
+user_message_id = "Pengiriman webhook gagal pada setiap percobaan ulang. Periksa riwayat pengiriman, perbaiki penerima, lalu kirim ulang."
+cause = "One delivery (one event to one webhook) failed on its last attempt: forge-integ's `webhook.deliver` job tried it `attempts` times (at most 10, backoff 10 s × 4^(n−1) up to 4 h, about 16 h in all) and every attempt failed — the receiver answered a status other than 2xx (a redirect is never followed and counts as a failure), refused or timed out the connection (3 s connect, 10 s in all), failed TLS, the name did not resolve, or the target is no longer allowed. The delivery's row is `state = failed` with the last status and reason; nothing is retried by itself after this. Also (I2 review) `reason=job_failed` when the delivery's job could not run it and will not again (a payload this build cannot read, the job's last run failing on the database: `last_reason = internal`, `cause` the job's code), `reason=stuck` when the worker's sweep failed a delivery left pending without a live job for 10 minutes, and from `forge doctor` (`webhook.deliveries`) `reason=secret_keys_missing` (webhooks exist but webhook.secret_keys_file is not set: nothing is delivered), `pending_too_long` (a stuck delivery, or one pending over 24 hours) and `failed_recently`. Not an alert: the receiver is outside forge, and the event stays readable in the integration feed."
+diagnosis = "The log event carries `webhook_id`, `delivery_id` (the Forge-Delivery value), `event_id`, `event_type`, `attempts`, `last_status` (or `none`), `last_reason` (`status`, `redirect`, `connect`, `connect_timeout`, `timeout`, `tls`, `body`, `request`, `dns`, `target_forbidden`) and `origin` (scheme://host:port only, never the path or query). `gstn webhook deliveries <webhook_id> --project <id>` (or GET /api/v1/projects/{id}/webhooks/{webhook_id}/deliveries) lists them; SELECT state, attempts, last_status, last_reason, last_error_code FROM forge.webhook_deliveries WHERE delivery_uid = '<delivery_id>'."
+fix = "Follow runbook webhook-delivery: make the receiver answer 2xx within 10 s at the configured URL (no redirect), check that `webhook.allowed_targets` still names it, then redeliver (`gstn webhook redeliver <webhook_id> <delivery_id> --project <id>`, a Maintainer). A receiver that missed many events reads them from the integration feed instead."
+runbook = "webhook-delivery"
+test = "a_delivery_out_of_attempts_is_int_0004"
+
+[[error]]
+code = "FG-INT-0010"
+name = "WebhookTargetForbidden"
+http_status = 400
+severity = "warn"
+user_message_ja = "この送り先は許可されていません。"
+user_message_en = "This destination is not allowed."
+user_message_id = "Tujuan ini tidak diizinkan."
+cause = "A webhook URL or delivery was refused before anything was sent (ADR-0016 §8: only the operator's allowlist; SSRF defences resolved at connect time). On a create or update (400): the URL is not an absolute http(s) URL of at most 2048 bytes (`invalid_url`), uses http while `webhook.allow_http` is false (`scheme`), carries user information (`userinfo`) or a fragment (`fragment`), names a host and port that `webhook.allowed_targets` does not list (`not_allowlisted`; the list is empty by default, so nothing can be delivered until the operator adds the internal receivers), or names an address that is always refused whatever the list says (`loopback`, `link_local` — 169.254.169.254 metadata included —, `unspecified`, `multicast`, `broadcast`, `reserved`, `cgnat` (100.64.0.0/10), `benchmarking` (198.18.0.0/15), `ipv4_compatible`, `nat64` (64:ff9b::/96 and 64:ff9b:1::/48), `six_to_four`, `teredo` (2001::/32), `site_local` (fec0::/10); an IPv4-mapped IPv6 address is judged by its IPv4). At delivery time the same checks run again on the addresses the name resolves to now, and the connection is pinned to the checked address (DNS rebinding): `resolved_denied` when any resolved address is in an always-refused range, `resolved_not_allowlisted`, `dns` when the name does not resolve. A delivery is also refused when the webhook's owner (the person who created it, or last changed its URL or event types or rotated its secret) can no longer manage webhooks of the project (`owner_lost`: membership removed, demoted below Maintainer, account disabled, project pending deletion). The user sees only the one sentence; the reason is in the log."
+diagnosis = "The log event carries `reason`, `origin` (scheme://host:port, never the path, query or user information) and, at delivery time, `webhook_id`, `delivery_id` and `address` (the resolved address that was refused); for `owner_lost` `owner_id` and `decision` (the code authorize() answered). Compare with the server's `webhook.allowed_targets` (`forge doctor` prints `webhook.allowed_targets`) and with `nslookup <host>` on the server."
+fix = "If the receiver is a legitimate internal system, the operator adds `host:port` (or `cidr:port`) to `webhook.allowed_targets` and restarts (runbook webhook-delivery); never allowlist loopback, link-local or metadata addresses (they are refused regardless). For `owner_lost`, a Maintainer recreates the webhook under their own name, or the owner's role is restored."
+runbook = "webhook-delivery"
+test = "loopback_target_is_int_0010"
+
+[[error]]
+code = "FG-INT-0011"
+name = "WebhookDisabled"
+http_status = 500
+severity = "warn"
+user_message_ja = "Webhook が失敗し続けたので、自動で無効にしました。受信先を直してから、もう一度有効にしてください。"
+user_message_en = "A webhook kept failing and was disabled automatically. Fix the receiver, then enable it again."
+user_message_id = "Webhook terus gagal sehingga dinonaktifkan secara otomatis. Perbaiki penerima, lalu aktifkan kembali."
+cause = "A webhook's delivery attempts failed 50 times in a row (`reason=failures`) or kept failing without a success for 24 hours (`reason=failing_24h`; ADR-0016 §8). forge disabled it (`webhooks.enabled = false`, `disabled_reason`), wrote the `webhook.disabled` audit row on the project as the system and published the `webhook.disabled` event (maintainer class: the hook point a notification, or another webhook naming the type, can follow). Its pending deliveries end as `skipped` (`webhook_disabled`); new events are not recorded for it until a Maintainer enables it again."
+diagnosis = "The log event carries `webhook_id`, `project_id`, `reason`, `failures` and `failing_since` (RFC 3339, UTC). `gstn webhook view <webhook_id> --project <id>` shows `enabled`, `disabled_reason` and `consecutive_failures`; the deliveries show the last statuses and reasons. SELECT action, details, occurred_at FROM forge.audit_log WHERE action = 'webhook.disabled' ORDER BY id DESC LIMIT 10."
+fix = "Follow runbook webhook-delivery: fix the receiver, then enable the webhook (`gstn webhook update <webhook_id> --project <id> --enable`, a Maintainer; enabling resets the failure count) and redeliver the deliveries that matter, or let the receiver catch up from the integration feed."
+runbook = "webhook-delivery"
+test = "fifty_consecutive_failures_disable_the_webhook"
+
+[[error]]
+code = "FG-INT-0020"
+name = "WebhookAttemptFailed"
+http_status = 502
+severity = "info"
+user_message_ja = "Webhook の配信の 1 回が失敗しました。自動で再試行します。"
+user_message_en = "One webhook delivery attempt failed. It will be retried automatically."
+user_message_id = "Satu percobaan pengiriman webhook gagal. Akan dicoba ulang secara otomatis."
+cause = "One attempt of a webhook delivery failed and another is scheduled: the receiver answered a non-2xx status or a redirect (never followed), the connection was refused, timed out or failed TLS, or the name did not resolve. The delivery stays `pending` with `last_status` / `last_reason`; the next attempt runs after the backoff (10 s × 4^(n−1), at most 4 h). After the last attempt the delivery is `failed` (FG-INT-0004). Each failed attempt counts towards the webhook's automatic disable (FG-INT-0011). Nobody is waiting on it: info."
+diagnosis = "The log event carries `webhook_id`, `delivery_id`, `attempt`, `status` (or `none`), `reason` (as FG-INT-0004's `last_reason`), `retry_in_s`, `consecutive_failures`, `origin` and, when the receiver answered, `response_head` (at most 128 printable characters of the body with long token-like runs replaced by `[redacted]`; the body itself is never stored)."
+fix = "Usually nothing: a receiver that is briefly down catches up with the retries. If one webhook keeps failing, follow runbook webhook-delivery before it is disabled."
+runbook = "webhook-delivery"
+test = "a_failed_attempt_is_retried_with_backoff"
 # ── U2 follow-up: the rules' optimistic concurrency ──────────────────────
 [[error]]
 code = "FG-REVIEW-0018"
@@ -1916,7 +2150,65 @@ severity = "info"
 user_message_ja = "このコミットにはこれ以上の種類のチェックを登録できません（上限 100）。既にある名前で報告してください。"
 user_message_en = "No more kinds of checks can be reported on this commit (the limit is 100). Report under a name it already has."
 user_message_id = "Tidak ada lagi jenis pemeriksaan yang dapat dilaporkan pada commit ini (batasnya 100). Laporkan dengan nama yang sudah ada."
-cause = "A check report named a new check on a commit that already holds 100 check runs in the project (forge_core::MAX_CHECK_RUNS_PER_COMMIT, M3 C1): the cap bounds every read of a commit's runs, the merge gate's included. Reports under a name the commit already has still update their run. Decided under the commit's report lock, so concurrent reports never exceed it. Nothing was written. Not an alert: usually a reporter that puts a run number or a date into the name."
+cause = "A check report named a new check on a commit that already holds 100 check runs of reporters in the project (forge_core::MAX_CHECK_RUNS_PER_COMMIT, M3 C1; the names forge reports itself, `forge/spec-drift`, are neither counted nor capped — M3 X2 review — so reads hold at most MAX_STORED_CHECK_RUNS_PER_COMMIT = 101): the cap bounds every read of a commit's runs, the merge gate's included. Reports under a name the commit already has still update their run. Decided under the commit's report lock, so concurrent reports never exceed it. Nothing was written. Not an alert: usually a reporter that puts a run number or a date into the name."
 diagnosis = "The log event carries `reason=too_many_runs`, `limit`, `project_id` and `head_sha`, with `action=CheckWrite`. The names on the commit: SELECT name, reported_by, updated_at FROM forge.check_runs WHERE project_id = <project_id> AND head_sha = '<head_sha>' ORDER BY name."
 fix = "Report under a stable name per kind of check (for example `ci/gates`, not `ci/gates-<run>`); the details of one run belong in its summary and annotations."
 test = "a_new_name_beyond_the_limit_is_check_run_limit_reached"
+
+# ── M3 X6: conflict prediction between open merge requests (plan 04 C-2,
+# ADR-0024 Amendment X6) ──
+[[error]]
+code = "FG-REVIEW-0022"
+name = "ConflictPredictionIncomplete"
+http_status = 500
+severity = "warn"
+user_message_ja = "ほかのマージリクエストとの衝突の見込みを、すべては確かめられていません。しばらくしてからもう一度確認してください。"
+user_message_en = "Possible conflicts with other merge requests have not all been checked. Check again later."
+user_message_id = "Kemungkinan konflik dengan merge request lain belum semuanya diperiksa. Periksa lagi nanti."
+cause = "The conflict scan of a merge request (M3 X6, plan 04 C-2: the job merge_request.conflict_scan, run after a new head, a retarget or a reopen) did not try every other open merge request on the same target branch. reason=peers_capped: more open merge requests target the branch than the scan considers (50, the most recently updated first). reason=pairs_capped: more pairs change a common path than the scan tries with merge-tree (20). reason=budget_exhausted: the scan's time budget (120 s) ran out before the last candidate. reason=pair_failed: git failed on at least one pair (its own FG-GIT code is logged with the same request_id as forge.review.conflict_pair_failed; the failure is stored on the pair and the worker's sweep re-requests the scan — it is not the job's failure). reason=peer_moved: another merge request moved or closed after the scan read it (its own scan writes the pair). reason=peer_invalid: a peer's stored head is not an object id (never written by forge; that pair is left out). A scan that ends `failed` with reason=no_version, target_missing, unrelated_histories or budget_exhausted (nothing could be predicted for this merge request) is logged at warn with this code too (forge.review.conflict_scanned). The worker's sweep requests scans for open merge requests with a head and no scan (opened before this build, or a version job's request that failed: the version job never fails on it, forge.review.conflict_scan_request_failed) and re-requests retryable failures after 5 minutes, at most 3 times (forge.review.conflict_scan_swept). reason=job_failed: the job failed for good before it stored a result. reason=job_stale: a scan stayed pending or scanning longer than the job's time limit with no queued or running job (the worker's sweep ended it). The pairs it did try are stored and their predictions stand; the ones left out are not predicted (never shown as \"no conflict\"). Never a user request's failure: logged by the worker; `gstn conflicts` shows the scan as `incomplete` or `failed` with the reason."
+diagnosis = "The event `forge.review.conflict_scan_incomplete` (or `forge.review.conflict_scan_not_finished` for job_failed / job_stale, `forge.review.conflict_scanned` status=failed) carries `reason`, `merge_request_id`, `scan_seq`, `peers`, `pairs_tried`, `pairs_skipped` and the job's request_id. For pair_failed, the git failure is logged under its own error_code with the same request_id (`other_merge_request_id`). Read the scan (read-only): SELECT merge_request_id, status, reason, scan_seq, scanned_head_sha, peers, pairs_tried, pairs_skipped, updated_at FROM forge.merge_request_conflict_scans WHERE merge_request_id = <id>; and its pairs: SELECT low_mr_id, high_mr_id, outcome, reason, checked_at FROM forge.merge_request_conflict_pairs WHERE <id> IN (low_mr_id, high_mr_id); and the jobs: SELECT id, state, attempts, last_error_code FROM forge.jobs WHERE kind = 'merge_request.conflict_scan' AND dedup_key LIKE 'mr_conflict_scan:<id>:%' ORDER BY id DESC LIMIT 5."
+fix = "A cap or the budget: expected on a target branch with very many open merge requests — the pairs left out are scanned again when either side gets a new head. pair_failed: fix the cause its FG-GIT code names (its runbook); the job retries. job_failed / job_stale: fix the cause the job's own error code names; the next push, retarget or reopen scans again. Never edit forge.merge_request_conflict_scans or forge.merge_request_conflict_pairs by hand outside an approved runbook step."
+runbook = "merge-request-mergeability"
+test = "a_scan_with_more_candidates_than_the_cap_is_incomplete"
+
+# ── M3 X7: deterministic risk check `forge/risk` (plan 04 M-6, ADR-0023
+# Amendment X7). The three codes below are notices named in a run's summary
+# and annotations, never HTTP errors. ──
+[[error]]
+code = "FG-REVIEW-0023"
+name = "RiskStop"
+http_status = 409
+severity = "info"
+user_message_ja = "この変更は、プログラムの破壊・DB の破壊・機密の流出のおそれがあるため、自動マージされません。チェック forge/risk の理由を確かめてください。"
+user_message_en = "This change may break the program, destroy database data or leak a secret, so it is not merged automatically. Read the reasons in the forge/risk check."
+user_message_id = "Perubahan ini berpotensi merusak program, menghapus data basis data atau membocorkan rahasia, sehingga tidak digabung otomatis. Baca alasannya pada pemeriksaan forge/risk."
+cause = "The check `forge/risk` (M3 X7, plan 04 M-6 layer 1, ADR-0023 Amendment X7) found a deterministic rule of class `stop` in a merge request head's diff against the merge base with its target branch: an applied migration changed or removed, a destructive statement in a new migration (DROP TABLE / COLUMN / SCHEMA / DATABASE, TRUNCATE, DELETE or UPDATE without WHERE, a column type change or rename, a dropped constraint, a disabled trigger), a file that looks like a secret (a credential file by name, a private key or token pattern by content), a backup / restore / retention script or job file changed, a rollback step in a deploy file, a new migration or CI / deploy file that could not be read (too large, or past the read limit), a mass deletion (500 lines and 30 % of the target's text lines, or 20 files and 30 % of its files), or a change too large to assess (more than 5000 files). The run concludes `failure`; it blocks a merge only where a protected branch requires `forge/risk` (a `failure` never satisfies a required check), and M4's auto-merge never merges a head whose run is `failure`. The summary and annotations name the rule, the path and (for SQL) the line, never the matched text."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/risk; the summary lists every finding by rule, path and line; the rules and thresholds are in docs/api/checks.md). The worker's log event `forge.risk.recorded` carries `request_id`, `project_id`, `head_sha`, `level`, `findings` and `check_run_id`."
+fix = "Nothing to change on the server. Read the reasons and fix the change (a migration is append-only: add a new one instead of editing an applied one; remove the secret and rotate it), or ask a maintainer to decide. The rules are fixed in code; a project cannot lower them yet."
+test = "a_change_that_drops_a_table_is_a_failure_with_risk_stop"
+
+[[error]]
+code = "FG-REVIEW-0024"
+name = "RiskWarn"
+http_status = 409
+severity = "info"
+user_message_ja = "この変更には注意が要る点があります（認証・権限、CI やデプロイの設定、依存、新しいマイグレーションなど）。チェック forge/risk を確かめてください。"
+user_message_en = "This change touches something that needs a look (authentication or permissions, CI or deploy configuration, dependencies, a new migration, ...). Read the forge/risk check."
+user_message_id = "Perubahan ini menyentuh hal yang perlu diperhatikan (autentikasi atau izin, konfigurasi CI atau deploy, dependensi, migrasi baru, dan lain-lain). Baca pemeriksaan forge/risk."
+cause = "The check `forge/risk` (M3 X7, plan 04 M-6) found only rules of class `warn` in the diff: authentication / permission code or files by path, CI or deploy configuration, a dependency manifest or lock file, a new migration, a symlink or submodule, an index or object dropped in a migration, a GRANT or REVOKE. The run concludes `neutral`; the merge proceeds as the merge method allows (a `warn` never stops auto-merge), and the warning stays on the commit."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head>. The summary lists each finding by rule and path."
+fix = "Nothing to fix: read the finding and make sure the change is intended. `neutral` does not satisfy a required check; a project that requires `forge/risk` needs a head without findings."
+test = "a_new_migration_and_a_dependency_change_are_neutral_with_risk_warn"
+
+[[error]]
+code = "FG-REVIEW-0025"
+name = "RiskNotAssessed"
+http_status = 409
+severity = "info"
+user_message_ja = "この変更の危険を、すべては確かめられていません。チェック forge/risk の理由を確かめてください。"
+user_message_en = "The risk of this change could not be fully assessed. Read the reasons in the forge/risk check."
+user_message_id = "Risiko perubahan ini belum dapat dinilai sepenuhnya. Baca alasannya pada pemeriksaan forge/risk."
+cause = "The check `forge/risk` (M3 X7) could not assess part of the head: no open merge request has this head any more, the target branch is gone, the target shares no history with the head, a changed path is not UTF-8, or more files changed than the content scan reads (the remainder is counted in the summary). It is a `warn`: the run concludes `neutral`, never `success`, so an unassessed head is never reported as safe. (A change of more than 5000 files is `stop`, FG-REVIEW-0023.)"
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head>; the finding's rule names the reason (`no_open_merge_request`, `target_missing`, `no_common_history`, `non_utf8_path`, `content_not_scanned`). The event `forge.risk.recorded` carries the same."
+fix = "Nothing on the server. For no_open_merge_request / target_missing, open or retarget the merge request: a new head is assessed again. For non_utf8_path rename the path."
+test = "a_head_with_no_open_merge_request_is_neutral_and_not_assessed"

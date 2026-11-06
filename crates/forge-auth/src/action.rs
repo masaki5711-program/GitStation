@@ -39,6 +39,20 @@ actions! {
     /// `read_repository` token (CI clones) does not read the JSON API, and a
     /// `read_api` token still cannot clone.
     RepoBrowse,
+    /// `GET /api/v1/projects/{id}/repository/spec-refs` (M3 X1, plan 03
+    /// §4.4, ADR-0023 Amendment X1): a revision's `.forge/repo.yml` and
+    /// the spec references it pins. Decided like `RepoBrowse` (the same
+    /// arm, `read_api`) on the referencing project by the route, and again
+    /// on every referenced project with the reader's own principal
+    /// (`prove_spec_ref`).
+    SpecRefRead,
+    /// The spec API (M3 X4, plan 03 §7.2, ADR-0023 Amendment X4): `GET
+    /// /api/v1/projects/{id}/specs/{requirements,versions,diff,trace}` —
+    /// the project's requirement index at a revision (its own
+    /// specification and `@req` tags). Decided like `RepoBrowse` (the same
+    /// arm, `read_api`); the trace decides every referenced project again
+    /// with the reader's own principal (`prove_spec_ref`).
+    SpecRead,
     // --- REST API: projects ---
     ProjectRead,
     /// `GET /api/v1/projects`: may the caller list at all (any active
@@ -181,6 +195,13 @@ actions! {
     TokenList,
     /// `DELETE /api/v1/user/tokens/{id}` (M2 MR6).
     TokenRevoke,
+    // --- REST API: notification settings (M3 N1, ADR-0016 Amendment N1) ---
+    /// `GET /api/v1/user/notification-preferences`: one's own mail
+    /// settings (mail on or off, language, muted kinds). Only the person:
+    /// another user's are not found, administrators included.
+    NotificationPreferencesRead,
+    /// `PUT /api/v1/user/notification-preferences`: replace one's own.
+    NotificationPreferencesWrite,
     UserCreate,
     /// `POST /api/v1/admin/users/{id}/disable` (M2 MR6): administrators,
     /// never an agent; the administration guard always holds over HTTP
@@ -286,6 +307,32 @@ actions! {
     /// once. A token with `act_as` only (no person, no agent, no act-as
     /// request, no disabled integration).
     ActAsAssertionClaim,
+    // --- webhooks (M3 I2, ADR-0016 §8, plan 11 §4.3) ---
+    /// `GET /api/v1/projects/{id}/webhooks` and `…/webhooks/{webhook_id}`:
+    /// a project's webhooks (never a secret). Maintainer and above;
+    /// `read_api`.
+    WebhookRead,
+    /// `POST /api/v1/projects/{id}/webhooks`, `PATCH|DELETE
+    /// …/webhooks/{webhook_id}`, `POST …/{webhook_id}/secret` (rotate):
+    /// create, change, delete a webhook, replace its secret. People only (a
+    /// webhook sends the project's events out; its owner answers for it);
+    /// Maintainer and above; `api`. The URL must pass the operator's
+    /// target policy (`FG-INT-0010`), checked after the decision.
+    WebhookManage,
+    /// `GET …/webhooks/{webhook_id}/deliveries`: the delivery history.
+    /// Maintainer and above; `read_api`.
+    WebhookDeliveryRead,
+    /// `POST …/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver`:
+    /// ask for one delivery again (rate-limited). People only; Maintainer
+    /// and above; `api`. The pair is looked up together after the
+    /// decision (a delivery of another webhook is not found).
+    WebhookRedeliver,
+    /// Not a route: whether a webhook's owner may still have one class of
+    /// its project's events delivered (`Resource::ProjectEvents`), decided
+    /// by `prove_webhook_delivery` when an event is dispatched and before
+    /// every attempt. People only; Maintainer of the project; the admin
+    /// class never.
+    WebhookDeliver,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -421,6 +468,9 @@ impl Action {
                 | Action::IntegrationBindingManage
                 | Action::ActAsConfirmView
                 | Action::ActAsAssertionIssue
+                | Action::WebhookManage
+                | Action::WebhookRedeliver
+                | Action::WebhookDeliver
         )
     }
 
@@ -460,12 +510,15 @@ impl Action {
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead
             | Action::RepoBrowse
+            | Action::SpecRefRead
+            | Action::SpecRead
             | Action::ProjectList
             | Action::MemberList
             | Action::ProtectedRefList
             | Action::GroupRead
             | Action::GroupList
             | Action::TokenList
+            | Action::NotificationPreferencesRead
             | Action::AdminSessionList
             | Action::UserSearch
             | Action::UserAdminList
@@ -482,6 +535,9 @@ impl Action {
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
             | Action::IntegrationDevStatusRead
+            | Action::WebhookRead
+            | Action::WebhookDeliveryRead
+            | Action::WebhookDeliver
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -498,6 +554,7 @@ impl Action {
             | Action::NamespaceTombstoneRelease
             | Action::UserRename
             | Action::TokenRevoke
+            | Action::NotificationPreferencesWrite
             | Action::AdminSessionRevoke
             | Action::UserCreate
             | Action::UserDisable
@@ -515,6 +572,8 @@ impl Action {
             | Action::CheckWrite
             | Action::CheckNamespaceGrantManage
             | Action::IntegrationBindingManage
+            | Action::WebhookManage
+            | Action::WebhookRedeliver
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
@@ -604,6 +663,15 @@ impl Action {
             | Action::ActAsConfirmView
             | Action::ActAsAssertionIssue
             | Action::ActAsAssertionClaim
+            | Action::SpecRefRead
+            | Action::SpecRead
+            | Action::NotificationPreferencesRead
+            | Action::NotificationPreferencesWrite
+            | Action::WebhookRead
+            | Action::WebhookManage
+            | Action::WebhookDeliveryRead
+            | Action::WebhookRedeliver
+            | Action::WebhookDeliver
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

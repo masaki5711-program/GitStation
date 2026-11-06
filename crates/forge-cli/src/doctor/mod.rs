@@ -40,6 +40,8 @@ mod checks;
 mod integrations;
 // M3 O3: FG-GIT-0018, FG-GIT-0019, the ref count.
 mod maintenance;
+// M3 N1: FG-INT-0015 (the mail queue and the relay).
+mod notify;
 mod oidc;
 mod render;
 // ── D4 MR3b ──
@@ -54,6 +56,9 @@ mod service_accounts;
 mod subscribers;
 // ── end C5 ──
 mod users;
+// ── M3 I2 ──
+mod webhooks;
+// ── end M3 I2 ──
 
 /// The outcome of one check.
 enum Outcome {
@@ -77,7 +82,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 29] = [
+const DB_CHECKS: [&str; 32] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -124,6 +129,11 @@ const DB_CHECKS: [&str; 29] = [
     "repositories.stale_locks",
     // M3 S2: FG-SYS-0002 (the act-as keys).
     act_as::NAME,
+    // M3 I2: FG-INT-0004 / FG-INT-0011 in the last 24 hours.
+    webhooks::DELIVERIES,
+    // M3 N1: FG-INT-0015 (the mail queue, the relay).
+    notify::NAMES[0],
+    notify::NAMES[1],
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -197,6 +207,8 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
     checks.push(web_ui_check());
     // M2 MR4: the sign-in's provider (needs no database).
     checks.push(oidc::oidc_check(&cfg).await);
+    // M3 I2: the webhook settings (no database).
+    checks.extend(webhooks::config_checks(&cfg));
     checks
 }
 
@@ -262,6 +274,8 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     let stale_locks = maintenance::stale_locks_check(db, root).await;
     let act_as_keys = act_as::keys_check(db, cfg).await;
+    let webhook_deliveries = webhooks::deliveries_check(db, &cfg.webhook).await;
+    let [mail_queue, mail_relay] = notify::notify_checks(db, &cfg.notify).await;
     vec![
         bootstrap,
         connections,
@@ -293,6 +307,9 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         refs,
         stale_locks,
         act_as_keys,
+        webhook_deliveries,
+        mail_queue,
+        mail_relay,
     ]
 }
 

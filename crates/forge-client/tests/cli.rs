@@ -409,7 +409,7 @@ fn api_fields_become_query_for_get_and_json_body_for_post() {
         "",
     );
     let seen = srv.seen();
-    assert_eq!(seen[0].target, "/api/v1/projects?limit=5&q=a+b%26c");
+    assert_eq!(seen[0].target, "/api/v1/projects?limit=5&q=a%20b%26c");
     let body: serde_json::Value = serde_json::from_str(&seen[1].body).unwrap();
     assert_eq!(body, json!({"name": "app", "parent_id": 12, "flag": true}));
     assert_eq!(seen[1].headers["content-type"], "application/json");
@@ -920,6 +920,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "mr discussions",
             "mr comment",
             "mr resolve",
+            "conflicts",
             "namespace resolve",
             "namespace release-path",
             "browse refs",
@@ -930,6 +931,11 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "browse commit",
             "browse compare",
             "browse blame",
+            "browse spec-refs",
+            "spec requirements",
+            "spec versions",
+            "spec diff",
+            "spec trace",
             "user rename",
             "user search",
             "user list",
@@ -938,6 +944,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "user end-sessions",
             "token list",
             "token revoke",
+            "notifications get",
+            "notifications set",
             "admin service-account list",
             "admin service-account view",
             "admin service-account update",
@@ -958,6 +966,15 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "admin service-account revoke-checks",
             "checks report",
             "checks list",
+            "webhook list",
+            "webhook event-types",
+            "webhook view",
+            "webhook create",
+            "webhook update",
+            "webhook delete",
+            "webhook rotate-secret",
+            "webhook deliveries",
+            "webhook redeliver",
             "api",
             "help",
             "schema"

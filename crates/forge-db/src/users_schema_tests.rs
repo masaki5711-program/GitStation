@@ -277,6 +277,19 @@ async fn every_audited_table_has_its_audit_trigger() {
                 ]),
                 txn_audited_columns: vec![],
             },
+            // M3 I2: the delivery counters are unaudited.
+            AuditedTable {
+                name: "webhooks".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: s(&[
+                    "consecutive_failures",
+                    "failing_since",
+                    "last_delivery_at",
+                    "updated_at",
+                ]),
+                txn_audited_columns: vec![],
+            },
         ]
     );
     // The triggers exist as the ledger describes them, and doctor accepts the

@@ -5,7 +5,7 @@ only place repository storage paths are derived (ADR-0009). It also owns the
 Smart HTTP transport (ADR-0007, M1 phase 9): streaming subprocesses,
 pkt-line / side-band framing, gzip decoding and the upload-pack /
 receive-pack command sets, and reads / answers receive-pack requests for the push path
-(M1 phase 9 MR4, ADR-0008 option B). Protected-ref hooks follow in phase 10 (M3).
+(M1 phase 9 MR4, ADR-0008 option B), and the push checks' pre-receive hook (M3 X8). Protected-ref decisions stay outside the hook (option B).
 
 **Public API**
 - `Git::new(GitConfig)` / `Git::command(subcommand) -> GitCommand`. Argument
@@ -118,6 +118,11 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   ChangeListing` (`diff-tree --no-renames -r -z --raw --numstat`: each entry's old / new mode and
   added / deleted lines, `None` for binary; the approval carry's input). Tests
   `review_changes_tests.rs`.
+  M3 X7 (`risk_inputs`, ADR-0023 Amendment X7): `Git::risk_diff(…, base, head, max_entries, timeout) ->
+  RiskDiff` (`diff-tree -M -r -z --raw --numstat`: renames paired with their old path; `TooMany` /
+  `NonUtf8`) and `Git::tree_totals(…, commit, max_entries, timeout) -> TreeTotals` (a whole-tree
+  `--numstat` against the empty tree: files and text lines, `truncated` at the cap); inputs of
+  `forge_core::risk`, no decisions here. Tests `risk_inputs_tests.rs`.
 - **Introduced commits** (`push_introduced`, M3 R5 round 4/5, ADR-0024 §8.3):
   `Git::ref_snapshot(storage, id, principal, timeout) -> RefSnapshot` reads every ref tip before
   receive-pack starts (`for-each-ref`, hidden refs included, tags peeled, symbolic refs skipped,
@@ -296,6 +301,22 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
     existing directory, and a permission-denied `config`), `FG-REPO-0001`,
     `FG-REPO-0002`, `FG-SYS-0002` invalid hooks path, `FG-GIT-0006`.
 
+**Push checks** (M3 X8, ADR-0008 amendment X8)
+- `Git::push_check_run(storage, exe, &PushCheckPolicy) -> PushCheckRun` (serve): writes the hook
+  script `<home>/push-hooks/pre-receive` when missing (a different one refuses: FG-GIT-0001
+  `reason=hooks_dir`), a run directory `<home>/push-checks/<nonce>/policy`;
+  `GitCommand::with_push_checks(&run)` swaps receive-pack's `core.hooksPath` and sets
+  `FORGE_PUSH_CHECK_DIR` / `FORGE_PUSH_CHECK_EXE`; `run.outcome()` reads the hook's `result`
+  (nonce-checked), `run.remove()`.
+- `push_hook::run_pre_receive(HookEnv, stdin) -> HookExit` (the `forge hook pre-receive`
+  process): policy, git's update lines, `Quarantine::from_hook_env`, `Git::scan_push`, the result
+  file and the pusher's lines (rule, path, commit, request id — never content).
+- `Git::scan_push(repo, quarantine, tips, &ScanLimits) -> ScanReport`: new objects only
+  (`rev-list --objects --stdin --not --all`), sizes, secrets of text blobs ≤ 1 MiB, the adding
+  commit of each finding; caps → `incomplete` (fail open), git failures → FG-GIT-0023.
+- `secret_scan::scan(&[u8]) -> SecretScan`: fixed high-confidence rules; `forge:allow-secret`
+  in the file waives its finding.
+
 **Error codes owned**
 
 | Code | When | Runbook |
@@ -311,6 +332,10 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
 | FG-GIT-0015 GitClientDisconnected | stream aborted or dropped (client went away); tree killed | `smart-http` |
 | FG-GIT-0018 RepositoryMaintenanceFailed | a maintenance step's git failed (`step`; M3 O3) | `repo-maintenance` |
 | FG-GIT-0019 RepositoryCorrupt | the maintenance's fsck found a problem (`mode`, `findings`; M3 O3) | `repo-maintenance` |
+| FG-GIT-0021 PushBlobTooLarge | push checks (M3 X8): a new blob over `git.http.push_max_blob_bytes` (`push_scan`) | `push-checks` |
+| FG-GIT-0022 PushSecretDetected | push checks: a secret rule matched a new text blob (`secret_scan`; rule, path, commit — never the value) | `push-checks` |
+| FG-GIT-0023 PushCheckFailed | push checks could not run (`push_hook`: policy, quarantine, git; serve: `hook_not_run`, `hook_no_result`, `result_invalid`, `run_dir`) | `push-checks` |
+| FG-GIT-0024 PushCheckIncomplete | push checks stopped at a bound (`objects_cap`, `bytes_cap`, `deadline`); the push is let through | `push-checks` |
 | FG-REPO-0001 StoragePathRejected | root missing / not a dir / symlink; symlink, non-dir or outside-root entry | `repo-storage` |
 | FG-REPO-0002 StorageMissing | repository directory missing | `repo-storage` |
 | FG-REPO-0003 StorageIoFailed | permission / disk / I/O failure on the storage root | `repo-storage` |

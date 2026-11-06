@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-A check report named a new check on a commit that already holds 100 check runs in the project (forge_core::MAX_CHECK_RUNS_PER_COMMIT, M3 C1): the cap bounds every read of a commit's runs, the merge gate's included. Reports under a name the commit already has still update their run. Decided under the commit's report lock, so concurrent reports never exceed it. Nothing was written. Not an alert: usually a reporter that puts a run number or a date into the name.
+A check report named a new check on a commit that already holds 100 check runs of reporters in the project (forge_core::MAX_CHECK_RUNS_PER_COMMIT, M3 C1; the names forge reports itself, `forge/spec-drift`, are neither counted nor capped — M3 X2 review — so reads hold at most MAX_STORED_CHECK_RUNS_PER_COMMIT = 101): the cap bounds every read of a commit's runs, the merge gate's included. Reports under a name the commit already has still update their run. Decided under the commit's report lock, so concurrent reports never exceed it. Nothing was written. Not an alert: usually a reporter that puts a run number or a date into the name.
 
 ## 調べ方 (diagnosis)
 

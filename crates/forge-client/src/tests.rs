@@ -394,3 +394,19 @@ fn client_depends_only_on_forge_errors() {
         );
     }
 }
+
+/// The wire form of a query value is plain percent-encoding: a space is
+/// `%20`, never the form-encoding `+` (the server decodes `+` literally).
+/// The server side decodes this very string back (forge-web
+/// `browse_tests::query_decodes_what_the_client_encodes`).
+#[test]
+fn query_values_are_percent_encoded_with_space_as_20() {
+    let client = crate::http::ApiClient::new(&cfg("https://forge.example"), None).expect("client");
+    let url = client
+        .url_for(
+            "/api/v1/x",
+            &[("path".to_string(), "a b+c&d=e%f\u{3042}".to_string())],
+        )
+        .expect("url");
+    assert_eq!(url.query(), Some("path=a%20b%2Bc%26d%3De%25f%E3%81%82"));
+}

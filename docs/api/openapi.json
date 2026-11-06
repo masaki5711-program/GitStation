@@ -876,7 +876,15 @@
             "type": "string"
           },
           "reported_by": {
-            "$ref": "#/components/schemas/ReporterBody"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReporterBody",
+                "description": "The account that reported it last; `null` for a `forge/` run\n(forge's own worker, M3 X2)."
+              }
+            ]
           },
           "revision": {
             "description": "Counts the run's reports (1 at creation).",
@@ -915,7 +923,7 @@
         "description": "`GET …/commits/{sha}/checks` (docs/api/checks.md, schema_version 1).",
         "properties": {
           "check_runs": {
-            "description": "By name; at most 100.",
+            "description": "By name; at most 100 reported, plus forge's own (`forge/spec-drift`, `forge/risk`).",
             "items": {
               "$ref": "#/components/schemas/CheckRunBody"
             },
@@ -1320,6 +1328,162 @@
         ],
         "type": "object"
       },
+      "ConflictPredictionBody": {
+        "additionalProperties": false,
+        "description": "One current prediction.",
+        "properties": {
+          "checked_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "conflicts": {
+            "description": "The conflicted paths both change (at most 100;\n`conflicts_truncated` beyond).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "conflicts_truncated": {
+            "type": "boolean"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "description": "The other merge request's head the prediction is about (its current\nhead).",
+            "type": "string"
+          },
+          "iid": {
+            "description": "The other merge request's number in the project.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "outcome": {
+            "description": "`conflict` (predicted) or `failed` (could not be decided).",
+            "type": "string"
+          },
+          "reason": {
+            "description": "`failed`: `unrelated_histories`, `git_timeout`, `git_busy`,\n`git_failed`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "draft",
+          "head_sha",
+          "outcome",
+          "reason",
+          "conflicts",
+          "conflicts_truncated",
+          "checked_at"
+        ],
+        "type": "object"
+      },
+      "ConflictScanBody": {
+        "additionalProperties": false,
+        "description": "The last scan of the merge request.",
+        "properties": {
+          "pairs_skipped": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "pairs_tried": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "peers": {
+            "description": "Other open merge requests considered, trial merges run, candidates\nleft out by a cap or the time budget.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "`incomplete`: `peers_capped`, `pairs_capped`, `budget_exhausted`,\n`pair_failed`; `failed`: `no_version`, `target_missing`,\n`unrelated_histories`, `git_timeout`, `git_busy`, `git_failed`,\n`job_failed`, `job_stale`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned_at": {
+            "description": "UTC, RFC 3339.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned_head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scanned_target_sha": {
+            "description": "The target tip the finished scan read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "description": "The finished scan looked at another head, target branch or target\ntip than the current ones (its predictions about the head still\nstand; a new head is scanned by the version job, a moved target by\nthe next push).",
+            "type": "boolean"
+          },
+          "status": {
+            "description": "`none` (never scanned), `pending`, `scanning`, `scanned`,\n`incomplete` (some pairs were not tried: see `reason`) or `failed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason",
+          "stale",
+          "scanned_head_sha",
+          "scanned_target_sha",
+          "scanned_at",
+          "peers",
+          "pairs_tried",
+          "pairs_skipped"
+        ],
+        "type": "object"
+      },
+      "ConflictsBody": {
+        "additionalProperties": false,
+        "description": "A merge request's predicted conflicts.",
+        "properties": {
+          "head_sha": {
+            "description": "The merge request's current head (`null` before its first version).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "predictions": {
+            "description": "By the other merge request's number; only pairs whose two heads are\nboth merge requests' current heads.",
+            "items": {
+              "$ref": "#/components/schemas/ConflictPredictionBody"
+            },
+            "type": "array"
+          },
+          "scan": {
+            "$ref": "#/components/schemas/ConflictScanBody"
+          }
+        },
+        "required": [
+          "iid",
+          "head_sha",
+          "scan",
+          "predictions"
+        ],
+        "type": "object"
+      },
       "CreateGroup": {
         "additionalProperties": false,
         "description": "`POST /api/v1/groups` and `…/{id}/subgroups`.",
@@ -1539,6 +1703,30 @@
         ],
         "type": "object"
       },
+      "CreateWebhook": {
+        "additionalProperties": false,
+        "description": "`POST …/webhooks`.",
+        "properties": {
+          "event_types": {
+            "description": "`*` (every integration-class event, the default), a family\n(`merge_request.*`) of the integration class, or an exact type name;\na maintainer- or deployment-class type only by its name; 1..=64.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "An absolute `https` URL (`http` only where the operator allows it)\nof at most 2048 bytes, without user information or a fragment, whose\nhost and port the operator's allowlist names.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
       "CreatedToken": {
         "additionalProperties": false,
         "description": "A created token: the secret, shown this once.",
@@ -1582,6 +1770,24 @@
         ],
         "type": "object"
       },
+      "CreatedWebhook": {
+        "additionalProperties": false,
+        "description": "A created webhook and its secret (shown this once).",
+        "properties": {
+          "secret": {
+            "description": "`whsec_…`: the HMAC-SHA256 key of `Forge-Signature`. Never shown\nagain.",
+            "type": "string"
+          },
+          "webhook": {
+            "$ref": "#/components/schemas/WebhookBody"
+          }
+        },
+        "required": [
+          "webhook",
+          "secret"
+        ],
+        "type": "object"
+      },
       "DeletionBody": {
         "additionalProperties": false,
         "description": "`DELETE /api/v1/projects/{id}`: when the grace period began and when\nthe purge may start.",
@@ -1604,6 +1810,130 @@
           "id",
           "deleted_at",
           "purge_after"
+        ],
+        "type": "object"
+      },
+      "DeliveryBody": {
+        "additionalProperties": false,
+        "description": "One delivery (never the body sent or the answer's body).",
+        "properties": {
+          "attempts": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "delivery_id": {
+            "description": "The `Forge-Delivery` value.",
+            "type": "string"
+          },
+          "event_id": {
+            "description": "`evt_…` (the feed's id).",
+            "type": "string"
+          },
+          "event_seq": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_duration_ms": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_reason": {
+            "description": "`status`, `redirect`, `connect`, `timeout`, `tls`, `dns`,\n`target_forbidden`, … (docs/api/webhooks.md).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_status": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "redeliveries": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "state": {
+            "description": "`pending`, `succeeded`, `failed` or `skipped`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "delivery_id",
+          "event_seq",
+          "event_id",
+          "event_type",
+          "state",
+          "attempts",
+          "last_status",
+          "last_reason",
+          "last_error_code",
+          "last_duration_ms",
+          "redeliveries",
+          "created_at",
+          "last_attempt_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "DeliveryList": {
+        "additionalProperties": false,
+        "description": "A page of the delivery history.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryBody"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "description": "Pass as `before` for the next (older) page; `null`: no more.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_before"
         ],
         "type": "object"
       },
@@ -2210,6 +2540,68 @@
           "error_code",
           "user_message",
           "request_id"
+        ],
+        "type": "object"
+      },
+      "EventClassBody": {
+        "additionalProperties": false,
+        "description": "One class of event types and whether the caller may subscribe to it.",
+        "properties": {
+          "class": {
+            "description": "`integration` (also what `*` and `<family>.*` name), `maintainer`\nor `deployment` (the last two only by exact type name).",
+            "type": "string"
+          },
+          "subscribable": {
+            "description": "`false` for a credential that may read but not subscribe (an agent's\ntoken, a service account): create and update would refuse it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "class",
+          "subscribable"
+        ],
+        "type": "object"
+      },
+      "EventTypeBody": {
+        "additionalProperties": false,
+        "description": "One event type a webhook may name.",
+        "properties": {
+          "class": {
+            "description": "`integration`, `maintainer` or `deployment` (the admin class is never\nlisted).",
+            "type": "string"
+          },
+          "name": {
+            "description": "The exact name (`merge_request.opened`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "class"
+        ],
+        "type": "object"
+      },
+      "EventTypeList": {
+        "additionalProperties": false,
+        "description": "The event types a webhook may name.",
+        "properties": {
+          "classes": {
+            "items": {
+              "$ref": "#/components/schemas/EventClassBody"
+            },
+            "type": "array"
+          },
+          "items": {
+            "description": "Sorted by name.",
+            "items": {
+              "$ref": "#/components/schemas/EventTypeBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "classes"
         ],
         "type": "object"
       },
@@ -3694,6 +4086,70 @@
         ],
         "type": "object"
       },
+      "PreferencesBody": {
+        "additionalProperties": false,
+        "description": "The caller's settings.",
+        "properties": {
+          "email_enabled": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "description": "Every kind of notification there is.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muted_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "email_enabled",
+          "language",
+          "muted_kinds",
+          "kinds"
+        ],
+        "type": "object"
+      },
+      "PreferencesInput": {
+        "additionalProperties": false,
+        "description": "`PUT /api/v1/user/notification-preferences`.",
+        "properties": {
+          "email_enabled": {
+            "description": "`false` stops every mail.",
+            "type": "boolean"
+          },
+          "language": {
+            "description": "`ja`, `en` or `id`; `null` (or absent) for the instance default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muted_kinds": {
+            "description": "Kinds to stop (`GET`'s `kinds` lists them).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "email_enabled",
+          "muted_kinds"
+        ],
+        "type": "object"
+      },
       "ProjectBody": {
         "additionalProperties": false,
         "description": "A project as the API shows it.",
@@ -4030,6 +4486,20 @@
         ],
         "type": "object"
       },
+      "RedeliveryQueued": {
+        "additionalProperties": false,
+        "description": "A redelivery was queued.",
+        "properties": {
+          "outcome": {
+            "description": "`queued`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
       "RefBody": {
         "additionalProperties": false,
         "description": "One branch or tag.",
@@ -4148,6 +4618,31 @@
         },
         "required": [
           "username"
+        ],
+        "type": "object"
+      },
+      "RepoConfigProblemBody": {
+        "additionalProperties": false,
+        "description": "Why `.forge/repo.yml` cannot be used.",
+        "properties": {
+          "error_code": {
+            "description": "`FG-REPO-0024`.",
+            "type": "string"
+          },
+          "line": {
+            "description": "1-based; 0 for the whole file.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "The rule broken (`FG-REPO-0024` lists them).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "line",
+          "reason"
         ],
         "type": "object"
       },
@@ -4341,6 +4836,29 @@
           "owner"
         ],
         "type": "string"
+      },
+      "RotatedWebhookSecret": {
+        "additionalProperties": false,
+        "description": "A rotated secret (shown this once).",
+        "properties": {
+          "previous_secret_valid_until": {
+            "description": "The previous secret still signs until then (UTC, RFC 3339).",
+            "type": "string"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "secret_version": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "secret",
+          "secret_version",
+          "previous_secret_valid_until"
+        ],
+        "type": "object"
       },
       "RuleStatusBody": {
         "additionalProperties": false,
@@ -4700,6 +5218,635 @@
         },
         "required": [
           "visibility"
+        ],
+        "type": "object"
+      },
+      "SpecChangeBody": {
+        "additionalProperties": false,
+        "description": "One requirement's change.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`added`, `changed`, `removed` or `deprecated`.",
+            "type": "string"
+          },
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Where it is in `to` (in `from` when removed).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "path",
+          "line"
+        ],
+        "type": "object"
+      },
+      "SpecDiffBody": {
+        "additionalProperties": false,
+        "description": "`GET …/specs/diff`.",
+        "properties": {
+          "changes": {
+            "description": "By id.",
+            "items": {
+              "$ref": "#/components/schemas/SpecChangeBody"
+            },
+            "type": "array"
+          },
+          "from": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody",
+                "description": "Either revision's index hit a bound."
+              }
+            ]
+          },
+          "to": {
+            "$ref": "#/components/schemas/RevBody"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "changes",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "SpecDocumentBody": {
+        "additionalProperties": false,
+        "description": "One specification document.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "problems": {
+            "description": "Rules the document breaks (they are in `problems`).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requirements": {
+            "description": "Requirement blocks read.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "spec": {
+            "description": "`spec:` (`null` when the front matter cannot be used).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`draft`, `review`, `approved` or `deprecated`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "spec",
+          "title",
+          "status",
+          "requirements",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "SpecIncompleteBody": {
+        "additionalProperties": false,
+        "description": "A bound the index hit.",
+        "properties": {
+          "error_code": {
+            "description": "`FG-REPO-0031`.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "`spec_files`, `spec_bytes` or `tag_lines`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "SpecPinBody": {
+        "additionalProperties": false,
+        "description": "How a referenced repository's version is fixed.",
+        "properties": {
+          "name": {
+            "description": "The tag or branch name as written.",
+            "type": "string"
+          },
+          "ref_name": {
+            "description": "`refs/tags/…` or `refs/heads/…`.",
+            "type": "string"
+          },
+          "type": {
+            "description": "`version` (a tag) or `track` (a branch).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "name",
+          "ref_name"
+        ],
+        "type": "object"
+      },
+      "SpecProblemBody": {
+        "additionalProperties": false,
+        "description": "One rule broken.",
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "description": "`FG-REPO-0028`.",
+            "type": "string"
+          },
+          "line": {
+            "description": "1-based; 0 for the whole file.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "path",
+          "line",
+          "rule",
+          "detail"
+        ],
+        "type": "object"
+      },
+      "SpecRefBody": {
+        "additionalProperties": false,
+        "description": "One `specs:` entry, resolved for the reader.",
+        "properties": {
+          "commit": {
+            "description": "The pinned commit (`resolved`), or the read commit (`local`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "description": "`FG-REPO-0025` (`version_not_found`), `FG-REPO-0026`\n(`unavailable`); `null` otherwise.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "The entry's line in `.forge/repo.yml` (1-based).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The directory as written (`path` entries).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pin": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecPinBody",
+                "description": "The pin (`repo` entries)."
+              }
+            ]
+          },
+          "project_id": {
+            "description": "The referenced project, when the reader may read it.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "The repository path as written (`repo` entries).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "description": "The requirement id patterns this repository covers.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "`resolved`, `version_not_found`, `unavailable` (`repo` entries) or\n`local` (`path` entries).",
+            "type": "string"
+          },
+          "type": {
+            "description": "`repo` (another repository) or `path` (this one's directory).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "type",
+          "repo",
+          "path",
+          "pin",
+          "scope",
+          "status",
+          "error_code",
+          "project_id",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "SpecRefsBody": {
+        "additionalProperties": false,
+        "description": "A revision's `.forge/repo.yml` and its spec references.",
+        "properties": {
+          "config": {
+            "description": "`absent`, `valid` or `invalid`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "`.forge/repo.yml`.",
+            "type": "string"
+          },
+          "problem": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RepoConfigProblemBody",
+                "description": "Why the file cannot be used (`invalid` only)."
+              }
+            ]
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody",
+            "description": "The revision read."
+          },
+          "specs": {
+            "description": "In file order; empty unless `valid`.",
+            "items": {
+              "$ref": "#/components/schemas/SpecRefBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "config",
+          "problem",
+          "specs"
+        ],
+        "type": "object"
+      },
+      "SpecRequirementBody": {
+        "additionalProperties": false,
+        "description": "One requirement.",
+        "properties": {
+          "body": {
+            "description": "The block's text.",
+            "type": "string"
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "line": {
+            "description": "The opening line (1-based).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "priority": {
+            "description": "`must`, `should`, `could`, `wont`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spec": {
+            "description": "The document's `spec:`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "line",
+          "priority",
+          "deprecated",
+          "spec",
+          "body"
+        ],
+        "type": "object"
+      },
+      "SpecRequirementsBody": {
+        "additionalProperties": false,
+        "description": "`GET …/specs/requirements`.",
+        "properties": {
+          "config": {
+            "description": "`.forge/repo.yml`: `absent`, `valid` or `invalid`.",
+            "type": "string"
+          },
+          "dirs": {
+            "description": "The own specification directories read.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/SpecDocumentBody"
+            },
+            "type": "array"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody"
+              }
+            ]
+          },
+          "problems": {
+            "description": "The documents' rules (duplicates included; a broken `@req`\nreference needs the tags: forge/spec-lint and the trace), at most 200.",
+            "items": {
+              "$ref": "#/components/schemas/SpecProblemBody"
+            },
+            "type": "array"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "requirements": {
+            "description": "By id (the first definition of an id defined twice).",
+            "items": {
+              "$ref": "#/components/schemas/SpecRequirementBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More requirements matched than `limit`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "config",
+          "dirs",
+          "documents",
+          "requirements",
+          "truncated",
+          "problems",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "SpecTestPlaceBody": {
+        "additionalProperties": false,
+        "description": "Where a test is.",
+        "properties": {
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "line"
+        ],
+        "type": "object"
+      },
+      "SpecTraceBody": {
+        "additionalProperties": false,
+        "description": "`GET …/specs/trace`.",
+        "properties": {
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpecIncompleteBody",
+                "description": "An index (this revision's or a reference's) hit a bound."
+              }
+            ]
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "references": {
+            "description": "`repo:` entries in file order (none when the file cannot be used).",
+            "items": {
+              "$ref": "#/components/schemas/SpecTraceReferenceBody"
+            },
+            "type": "array"
+          },
+          "requirements": {
+            "description": "The own specification's requirements by id, then each followed\nreference's in file order.",
+            "items": {
+              "$ref": "#/components/schemas/SpecTraceRowBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "requirements",
+          "references",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "SpecTraceReferenceBody": {
+        "additionalProperties": false,
+        "description": "One `repo:` entry of the trace.",
+        "properties": {
+          "error_code": {
+            "description": "`FG-REPO-0025` / `FG-REPO-0026`; `null` when resolved.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "Its line in `.forge/repo.yml`.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "As written.",
+            "type": "string"
+          },
+          "requirements": {
+            "description": "Its requirements within the entry's scope.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "description": "`resolved`, `version_not_found` or `unavailable`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "repo",
+          "status",
+          "error_code",
+          "requirements"
+        ],
+        "type": "object"
+      },
+      "SpecTraceRowBody": {
+        "additionalProperties": false,
+        "description": "One requirement with the tests naming it.",
+        "properties": {
+          "deprecated": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "description": "In its source repository.",
+            "type": "string"
+          },
+          "source": {
+            "description": "The own directory (`spec/`) or the `repo:` path as written.",
+            "type": "string"
+          },
+          "status": {
+            "description": "`tested` or `untested`.",
+            "type": "string"
+          },
+          "test_count": {
+            "description": "Every `@req` tag of this repository naming it.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tests": {
+            "description": "The first 20 of them.",
+            "items": {
+              "$ref": "#/components/schemas/SpecTestPlaceBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "path",
+          "line",
+          "deprecated",
+          "status",
+          "test_count",
+          "tests"
+        ],
+        "type": "object"
+      },
+      "SpecVersionBody": {
+        "additionalProperties": false,
+        "description": "One version tag.",
+        "properties": {
+          "commit": {
+            "description": "The commit it peels to.",
+            "type": "string"
+          },
+          "full_name": {
+            "description": "`refs/tags/…`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The tag (`v1.5`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "full_name",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "SpecVersionsBody": {
+        "additionalProperties": false,
+        "description": "`GET …/specs/versions`.",
+        "properties": {
+          "truncated": {
+            "description": "More versions than one answer lists, or more refs than one listing\nkeeps.",
+            "type": "boolean"
+          },
+          "versions": {
+            "description": "Newest first within a series (`v` / `spec-v`), series by name.",
+            "items": {
+              "$ref": "#/components/schemas/SpecVersionBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "versions",
+          "truncated"
         ],
         "type": "object"
       },
@@ -5347,6 +6494,36 @@
         },
         "type": "object"
       },
+      "UpdateWebhook": {
+        "additionalProperties": false,
+        "description": "`PATCH …/webhooks/{webhook_id}`: the fields to change.",
+        "properties": {
+          "enabled": {
+            "description": "`true` enables it again and clears its failure count.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "event_types": {
+            "description": "Replaces the allowlist (the rules of `CreateWebhook`).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "UpdatedIntegration": {
         "additionalProperties": false,
         "description": "What an update changed.",
@@ -5396,6 +6573,32 @@
           "outcome",
           "fields",
           "service_account"
+        ],
+        "type": "object"
+      },
+      "UpdatedWebhook": {
+        "additionalProperties": false,
+        "description": "What an update changed.",
+        "properties": {
+          "fields": {
+            "description": "`url`, `event_types`, `enabled`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "description": "`updated`, or `unchanged` (nothing was written).",
+            "type": "string"
+          },
+          "webhook": {
+            "$ref": "#/components/schemas/WebhookBody"
+          }
+        },
+        "required": [
+          "outcome",
+          "fields",
+          "webhook"
         ],
         "type": "object"
       },
@@ -5701,6 +6904,116 @@
           "internal"
         ],
         "type": "string"
+      },
+      "WebhookBody": {
+        "additionalProperties": false,
+        "description": "One webhook (never a secret).",
+        "properties": {
+          "consecutive_failures": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "disabled_reason": {
+            "description": "`manual`, `failures` (50 failed attempts in a row) or `failing_24h`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "event_types": {
+            "description": "Sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "failing_since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_delivery_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "`scheme://host:port` of the URL. The full URL is write-only: its\npath or query may hold the receiver's token (I2 review).",
+            "type": "string"
+          },
+          "owner_id": {
+            "description": "The person who answers for it: who created it, or last changed its\nURL or event types or rotated its secret. Deliveries stop when they\ncan no longer manage the project's webhooks.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "previous_secret_valid_until": {
+            "description": "The previous secret still signs until then (UTC, RFC 3339).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "secret_version": {
+            "description": "The version of the current secret (`Forge-Signature-Kid`).",
+            "format": "int32",
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "owner_id",
+          "origin",
+          "event_types",
+          "enabled",
+          "disabled_reason",
+          "secret_version",
+          "previous_secret_valid_until",
+          "consecutive_failures",
+          "failing_since",
+          "last_delivery_at",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "WebhookList": {
+        "additionalProperties": false,
+        "description": "A project's webhooks.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebhookBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
       },
       "WorkItemBody": {
         "additionalProperties": false,
@@ -9174,6 +10487,55 @@
         "x-forge-action": "MergeRequestRead"
       }
     },
+    "/api/v1/projects/{id}/merge-requests/{iid}/conflicts": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_conflicts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's predicted conflicts with other open merge requests on its target, as last scanned (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
     "/api/v1/projects/{id}/merge-requests/{iid}/discussions": {
       "get": {
         "operationId": "get_api_v1_projects_id_merge_requests_iid_discussions",
@@ -10939,6 +12301,56 @@
         "x-forge-action": "RepoBrowse"
       }
     },
+    "/api/v1/projects/{id}/repository/spec-refs": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_spec_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecRefsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A revision's .forge/repo.yml and its pinned spec references, each resolved for the reader (unreadable ones are unavailable)",
+        "x-forge-action": "SpecRefRead"
+      }
+    },
     "/api/v1/projects/{id}/repository/tree": {
       "get": {
         "operationId": "get_api_v1_projects_id_repository_tree",
@@ -11037,6 +12449,226 @@
         },
         "summary": "Restore a project pending deletion (Owner)",
         "x-forge-action": "ProjectRestore"
+      }
+    },
+    "/api/v1/projects/{id}/specs/diff": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_specs_diff",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The earlier revision (a commit id, a branch or a tag)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The later revision (a commit id, a branch or a tag)",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecDiffBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The requirements added, changed, removed or deprecated between two revisions",
+        "x-forge-action": "SpecRead"
+      }
+    },
+    "/api/v1/projects/{id}/specs/requirements": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_specs_requirements",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only requirements whose id or text contains this (case-insensitive, at most 256 bytes)",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many requirements (default 100)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecRequirementsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A revision's own specification: its documents, requirements (searchable) and document problems",
+        "x-forge-action": "SpecRead"
+      }
+    },
+    "/api/v1/projects/{id}/specs/trace": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_specs_trace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecTraceBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Each requirement (own and pinned references, followed for the reader) with the @req tests naming it",
+        "x-forge-action": "SpecRead"
+      }
+    },
+    "/api/v1/projects/{id}/specs/versions": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_specs_versions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecVersionsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The specification's versions (version tags), newest first",
+        "x-forge-action": "SpecRead"
       }
     },
     "/api/v1/projects/{id}/transfer": {
@@ -11143,6 +12775,476 @@
         "x-forge-max-body-bytes": 16384
       }
     },
+    "/api/v1/projects/{id}/webhooks": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_webhooks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's webhooks, never a secret (Maintainer)",
+        "x-forge-action": "WebhookRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_webhooks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhook"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedWebhook"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a webhook owned by the caller; its URL must be on the operator's allowlist (400 FG-INT-0010); the secret is shown once (people only; Maintainer; at most 20)",
+        "x-forge-action": "WebhookManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/event-types": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_webhooks_event_types",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventTypeList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The event types a webhook may name, each with its class, and per class whether the caller may subscribe to it (Maintainer)",
+        "x-forge-action": "WebhookRead"
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/{webhook_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_webhooks_webhook_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a webhook and its delivery history (people only; Maintainer)",
+        "x-forge-action": "WebhookManage"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id_webhooks_webhook_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One webhook of the project (Maintainer)",
+        "x-forge-action": "WebhookRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id_webhooks_webhook_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhook"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedWebhook"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a webhook's URL, event types or enabled flag; enabling clears its failure count (people only; Maintainer)",
+        "x-forge-action": "WebhookManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_webhooks_webhook_id_deliveries",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only deliveries with a smaller id (the last id of the previous page)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Deliveries per page, 1..=100 (default 20), newest first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A webhook's delivery history, newest first: state, attempts, the last status and reason (never a body; Maintainer)",
+        "x-forge-action": "WebhookDeliveryRead"
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_webhooks_webhook_id_deliveries_delivery_id_redeliver",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "delivery_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeliveryQueued"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Deliver one delivery again with the same delivery id (people only; Maintainer; 429 while pending or within 60 s of its last attempt)",
+        "x-forge-action": "WebhookRedeliver"
+      }
+    },
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/secret": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_webhooks_webhook_id_secret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotatedWebhookSecret"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Replace a webhook's secret, shown once; the previous one still signs for 24 hours (people only; Maintainer)",
+        "x-forge-action": "WebhookManage"
+      }
+    },
     "/api/v1/session": {
       "get": {
         "operationId": "get_api_v1_session",
@@ -11199,6 +13301,73 @@
         },
         "summary": "The caller's own account (M1 phase 8b MR6)",
         "x-forge-action": "UserSelfRead"
+      }
+    },
+    "/api/v1/user/notification-preferences": {
+      "get": {
+        "operationId": "get_api_v1_user_notification_preferences",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own notification settings: mail on or off, the language of the mail, the kinds muted (nobody else's, administrators included)",
+        "x-forge-action": "NotificationPreferencesRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_user_notification_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencesInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Replace the caller's own notification settings (an unknown language or kind is FG-WEB-0006)",
+        "x-forge-action": "NotificationPreferencesWrite",
+        "x-forge-max-body-bytes": 1024
       }
     },
     "/api/v1/user/sessions": {

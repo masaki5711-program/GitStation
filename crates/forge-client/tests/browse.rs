@@ -250,6 +250,7 @@ fn browse_commands_are_described_for_machines() {
         "browse commit",
         "browse compare",
         "browse blame",
+        "browse spec-refs",
     ] {
         let c = v["commands"]
             .as_array()
@@ -301,7 +302,7 @@ fn browse_commits_pages_with_a_cursor() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
         srv.seen().pop().expect("request").target,
-        "/api/v1/projects/7/repository/commits?ref=main&path=src%2Fa+b.rs&limit=5&cursor=v1.abc"
+        "/api/v1/projects/7/repository/commits?ref=main&path=src%2Fa%20b.rs&limit=5&cursor=v1.abc"
     );
     assert!(
         o.stdout.contains("fix the thing") && o.stdout.contains("more: --cursor v1.next"),
@@ -517,4 +518,56 @@ fn a_binary_blame_says_so() {
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(o.stdout.contains("binary file, 4096 bytes"), "{}", o.stdout);
+}
+
+/// M3 X1: `gstn browse spec-refs` shows each `.forge/repo.yml` reference
+/// as the server resolved it for the caller.
+#[test]
+fn browse_spec_refs_shows_each_reference_and_the_file_problem() {
+    let srv = Mock::start(|r| {
+        if r.target.contains("ref=bad") {
+            return ok(&format!(
+                r#"{{"ref":{{"type":"branch","name":"bad","full_name":"refs/heads/bad","commit":"{C}"}},"path":".forge/repo.yml","config":"invalid","problem":{{"error_code":"FG-REPO-0024","line":4,"reason":"unknown_key"}},"specs":[]}}"#
+            ));
+        }
+        ok(&format!(
+            r#"{{"ref":{{"type":"branch","name":"main","full_name":"refs/heads/main","commit":"{C}"}},"path":".forge/repo.yml","config":"valid","problem":null,"specs":[{{"line":2,"type":"repo","repo":"specs/engine","path":null,"pin":{{"type":"version","name":"v1.4","ref_name":"refs/tags/v1.4"}},"scope":["ZEVA-CFG-*"],"status":"resolved","error_code":null,"project_id":8,"commit":"{C}"}},{{"line":5,"type":"repo","repo":"specs/secret","path":null,"pin":{{"type":"version","name":"v1","ref_name":"refs/tags/v1"}},"scope":[],"status":"unavailable","error_code":"FG-REPO-0026","project_id":null,"commit":null}},{{"line":7,"type":"path","repo":null,"path":"spec/","pin":null,"scope":[],"status":"local","error_code":null,"project_id":null,"commit":"{C}"}}]}}"#
+        ))
+    });
+    let sb = Sandbox::new();
+    let o = gstn(&sb, &srv, &["browse", "spec-refs", "--project", "7"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        srv.seen().pop().expect("request").target,
+        "/api/v1/projects/7/repository/spec-refs"
+    );
+    assert!(o.stdout.contains("specs/engine"), "{}", o.stdout);
+    assert!(o.stdout.contains("resolved"), "{}", o.stdout);
+    assert!(o.stdout.contains("FG-REPO-0026"), "{}", o.stdout);
+    assert!(o.stdout.contains("spec/"), "{}", o.stdout);
+
+    let o = gstn(
+        &sb,
+        &srv,
+        &["browse", "spec-refs", "--project", "7", "--ref", "bad"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        srv.seen().pop().expect("request").target,
+        "/api/v1/projects/7/repository/spec-refs?ref=bad"
+    );
+    assert!(o.stdout.contains("invalid"), "{}", o.stdout);
+    assert!(
+        o.stdout.contains("FG-REPO-0024")
+            && o.stdout.contains("line 4")
+            && o.stdout.contains("unknown_key"),
+        "{}",
+        o.stdout
+    );
+    let j = gstn(
+        &sb,
+        &srv,
+        &["browse", "spec-refs", "--project", "7", "--json"],
+    );
+    assert_eq!(j.json()["specs"][0]["project_id"], 8);
 }

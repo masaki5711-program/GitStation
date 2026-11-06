@@ -296,6 +296,9 @@ pub struct QueryParam {
 #[derive(Clone, Copy)]
 pub struct SchemaDoc {
     pub name: fn() -> String,
+    /// The Rust type behind the schema (`std::any::type_name`), to tell two
+    /// different types that register one name apart.
+    pub type_name: fn() -> &'static str,
     /// The type's schema and the schemas it references.
     pub schemas: fn() -> Vec<(String, RefOr<Schema>)>,
 }
@@ -312,6 +315,7 @@ impl SchemaDoc {
         }
         Self {
             name: name::<T>,
+            type_name: std::any::type_name::<T>,
             schemas: schemas::<T>,
         }
     }
@@ -1405,6 +1409,39 @@ pub fn routes_json_with(
         )
         .collect();
     pretty(&Value::Array(list))
+}
+
+/// Schema names that two different Rust types register (one would silently
+/// overwrite the other in `openapi.json`), as `"<name>: <type> vs <type>"`.
+/// `gen-authz` fails when this is not empty, even if the shapes are equal.
+pub fn schema_name_conflicts(defs: &[RouteDef]) -> Vec<String> {
+    let mut seen: BTreeMap<String, &'static str> = BTreeMap::new();
+    let mut found: BTreeSet<String> = BTreeSet::new();
+    for d in defs {
+        let docs = d
+            .request
+            .iter()
+            .map(|(doc, _)| doc)
+            .chain(d.response.iter().map(|(doc, _)| doc));
+        for doc in docs {
+            let (name, ty) = ((doc.name)(), (doc.type_name)());
+            match seen.get(&name) {
+                Some(first) if *first != ty => {
+                    let (a, b) = if *first <= ty {
+                        (*first, ty)
+                    } else {
+                        (ty, *first)
+                    };
+                    found.insert(format!("{name}: {a} vs {b}"));
+                }
+                Some(_) => {}
+                None => {
+                    seen.insert(name, ty);
+                }
+            }
+        }
+    }
+    found.into_iter().collect()
 }
 
 /// `Git/docs/api/openapi.json` (OpenAPI 3.1): the fixed routes only — a

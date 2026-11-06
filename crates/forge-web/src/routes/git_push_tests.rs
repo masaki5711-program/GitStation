@@ -100,6 +100,8 @@ fn receiver(dir: &std::path::Path, recorder: Arc<dyn PushRecorder>) -> Receiver 
         bytes_in: 0,
         before: Ok(RefSnapshot::default()),
         snapshot_ms: 0,
+        checks: None,
+        hook_declined: false,
     }
 }
 
@@ -483,4 +485,146 @@ async fn a_stalled_record_keeps_the_audit_row_without_the_commits() {
     assert!(events
         .iter()
         .any(|e| e["message"] == "forge.git.push_recorded" && e["push_commits_dropped"] == true));
+}
+
+// ── M3 X8: what the push check run decided, logged once by serve ─────
+
+/// A run for the fixture's repository (the hook script and the policy;
+/// whether the hook then writes a result is up to the test).
+fn check_run(r: &Receiver) -> forge_git::push_hook::PushCheckRun {
+    r.smart.git.install_push_hook().expect("hook");
+    r.smart
+        .git
+        .push_check_run(
+            &r.smart.storage,
+            &std::env::current_exe().expect("exe"),
+            &PushCheckPolicy {
+                request_id: "req-push-unit".to_owned(),
+                lang: Lang::En,
+                repo_id: RepoId::new(9),
+                limits: ScanLimits::new(1),
+            },
+        )
+        .expect("run")
+}
+
+/// git applied refs but the hook left no result: git skipped it. One
+/// FG-GIT-0023 alert (`hook_not_run`), and the run directory is gone.
+#[tokio::test]
+async fn refs_applied_without_a_hook_result_is_hook_not_run() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    let run = check_run(&r);
+    let run_dir = run.dir().to_path_buf();
+    r.checks = Some(run);
+    let (buf, _guard) = capture();
+    r.push_checked(Some(2));
+    let events = buf.events();
+    let failed: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["error_code"] == ErrorCode::PushCheckFailed.id())
+        .collect();
+    assert_eq!(failed.len(), 1, "{events:?}");
+    let context = failed[0]["context"].as_str().unwrap_or_default();
+    assert!(context.contains("reason=hook_not_run"), "{context}");
+    assert!(context.contains("applied=2"), "{context}");
+    assert!(!run_dir.exists());
+
+    // Nothing applied and git did not run the hook (an unpack error):
+    // nothing to say.
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    r.checks = Some(check_run(&r));
+    let (buf, _guard) = capture();
+    r.push_checked(Some(0));
+    assert!(buf.events().is_empty());
+    // git said the hook declined, but no result: it never got that far.
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    r.checks = Some(check_run(&r));
+    r.hook_declined = true;
+    let (buf, _guard) = capture();
+    r.push_checked(Some(0));
+    let events = buf.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["error_code"] == ErrorCode::PushCheckFailed.id()
+                && e["context"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("reason=hook_no_result")),
+        "{events:?}"
+    );
+    // The repository could not say which refs changed (reconciliation
+    // failed) and there is no result: never counted as "nothing applied".
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    r.checks = Some(check_run(&r));
+    let (buf, _guard) = capture();
+    r.push_checked(None);
+    let events = buf.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["error_code"] == ErrorCode::PushCheckFailed.id()
+                && e["context"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("reason=hook_unknown")),
+        "{events:?}"
+    );
+}
+
+/// A refusal the hook wrote is logged with its first finding's code, the
+/// rule and the path — never content.
+#[tokio::test]
+async fn a_refused_check_is_logged_with_its_first_finding() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    let run = check_run(&r);
+    let result = format!(
+        "version\t1\nnonce\t{}\nverdict\trefused\nreason\t-\ndetail\t-\ncause_code\t-\n\
+         incomplete\t-\nobjects\t3\nblobs_scanned\t1\nbytes_scanned\t40\nallowed\t0\n\
+         total_findings\t1\npack_objects\t3\nskipped_large\t0\nskipped_binary\t0\n\
+         finding\tsecret\tprivate_key\t{}\t{}\tdeploy/id_rsa\n",
+        run.dir()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("nonce"),
+        "c".repeat(40),
+        "d".repeat(40),
+    );
+    std::fs::write(run.dir().join("result"), result).expect("result");
+    r.checks = Some(run);
+    let (buf, _guard) = capture();
+    r.push_checked(Some(0));
+    let events = buf.events();
+    let found: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["error_code"] == ErrorCode::PushSecretDetected.id())
+        .collect();
+    assert_eq!(found.len(), 1, "{events:?}");
+    let context = found[0]["context"].as_str().unwrap_or_default();
+    for part in [
+        "event=forge.git.push_checked",
+        "verdict=refused",
+        "first_rule=private_key",
+        "first_path=deploy/id_rsa",
+        "findings=1",
+    ] {
+        assert!(context.contains(part), "{part}: {context}");
+    }
+}
+
+/// A recorder the check tests never reach.
+struct DownRecorderForChecks;
+
+impl PushRecorder for DownRecorderForChecks {
+    fn record_push<'a>(
+        &'a self,
+        _: &'a Pusher,
+        _: &'a PushRecord,
+    ) -> LookupFuture<'a, PushRecorded> {
+        Box::pin(async {
+            Err(ForgeError::new(ErrorCode::Internal).with_context("reason", "unused"))
+        })
+    }
 }

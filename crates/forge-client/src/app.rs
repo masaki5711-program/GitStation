@@ -210,14 +210,20 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
             crate::mr_conditions::merge_rule_cmd(cli, command, env, io)
         }
         Command::Checks { command } => crate::checks::checks(cli, command, env, io),
+        Command::Webhook { command } => crate::webhooks::webhook(cli, command, env, io),
         Command::Integration { command } => crate::integrations::feed(cli, command, env, io),
         Command::IntegrationBinding { command } => {
             crate::integrations::binding(cli, command, env, io)
         }
         Command::Mr { command } => crate::review::mr(cli, command, env, io),
+        Command::Conflicts(args) => crate::conflicts::conflicts(cli, args, env, io),
+        Command::Spec { command } => crate::specs::spec(cli, command, env, io),
         Command::Namespace { command } => hosting::namespace(cli, command, env, io),
         Command::User { command } => hosting::user(cli, command, env, io),
         Command::Token { command } => hosting::token(cli, command, env, io),
+        Command::Notifications { command } => {
+            crate::notifications::notifications(cli, command, env, io)
+        }
         Command::Admin { command } => crate::admin::admin(cli, command, env, io),
         Command::Browse { command } => crate::browse::browse(cli, command, env, io),
         Command::Api(a) => api(cli, a, env, io),

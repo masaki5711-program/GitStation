@@ -29,6 +29,52 @@ pub const MAX_CHECK_SUMMARY_BYTES: usize = 64 * 1024;
 /// The longest `details_url` of a check run, in bytes (2 KiB).
 pub const MAX_CHECK_DETAILS_URL_BYTES: usize = 2 * 1024;
 
+/// `forge/spec-drift` (M3 X2, plan 03 §5.4): whether the specification
+/// versions a commit's `.forge/repo.yml` pins are the latest published
+/// (`success`) or not (`neutral`). Reported by forge's worker only.
+pub const SPEC_DRIFT_CHECK: &str = "forge/spec-drift";
+
+/// `forge/risk` (M3 X7, plan 04 M-6 layer 1): the deterministic risk rules
+/// ([`crate::risk`]) applied to a merge request head's diff. `success` — no
+/// finding; `neutral` — only warnings (or part of the head could not be
+/// assessed); `failure` — a `stop` rule. Reported by forge's worker only.
+pub const RISK_CHECK: &str = "forge/risk";
+
+/// The `forge/` names forge's own worker reports (never over HTTP: the
+/// `CheckWrite` route refuses `forge/` to everyone, ADR-0024 §10). A
+/// required `forge/` name outside this list has no reporter.
+pub const FORGE_REPORTED_CHECKS: &[&str] = &[
+    SPEC_DRIFT_CHECK,
+    RISK_CHECK,
+    SPEC_LINT_CHECK,
+    SPEC_TRACE_CHECK,
+];
+
+/// `forge/spec-lint` (M3 X4, plan 03 §5.4): whether the commit's own
+/// specification documents and the `@req` tags of its families keep the
+/// rules (`success`) or not (`failure`; `neutral` when the index hit a
+/// bound). Reported by forge's worker only.
+pub const SPEC_LINT_CHECK: &str = "forge/spec-lint";
+
+/// `forge/spec-trace` (M3 X4, plan 03 §5.4, ADR-0017 §4.1.1 started as
+/// advice — plan 03 §9-4): whether every requirement a merge request
+/// touches has a `@req` test at its head (`success`) or not (`neutral`,
+/// never `failure` while advisory). Reported by forge's worker only.
+pub const SPEC_TRACE_CHECK: &str = "forge/spec-trace";
+
+/// The most runs one commit holds in all: the reporters' cap
+/// ([`MAX_CHECK_RUNS_PER_COMMIT`], which counts no `forge/` name) plus one
+/// per name forge reports itself (review X2: other reporters can never
+/// crowd forge's own run out). Every read of a commit's runs is bounded by
+/// it.
+pub const MAX_STORED_CHECK_RUNS_PER_COMMIT: usize =
+    MAX_CHECK_RUNS_PER_COMMIT + FORGE_REPORTED_CHECKS.len();
+
+/// Whether forge's own worker reports `name` ([`FORGE_REPORTED_CHECKS`]).
+pub fn forge_reports(name: &CheckName) -> bool {
+    FORGE_REPORTED_CHECKS.contains(&name.as_str())
+}
+
 /// A check run's status (ADR-0024 §10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CheckStatus {

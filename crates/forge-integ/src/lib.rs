@@ -50,6 +50,9 @@ use forge_errors::{ErrorCode, ForgeError};
 
 mod act_as;
 mod dev_status;
+// ── M3 I2: webhooks (ADR-0016 §8) ──
+pub mod webhooks;
+// ── end M3 I2 ──
 
 pub use act_as::{ActAs, ActAsParts, ClaimAnswer, SWEEP_INTERVAL};
 

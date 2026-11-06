@@ -254,4 +254,4 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261121100000, "guarded_changes": ["forge.users_employee_number_kept_when_disabled", "forge.users.users_employee_number_kept_when_disabled", "forge.act_as_assertions_guard", "forge.act_as_assertions.act_as_assertions_forward", "forge.act_as_assertions.audited_change_present", "forge.merge_request_approvals_guard", "forge.merge_request_approvals.audited_change_present"]}');
+    '{"version": 20261125100000, "guarded_changes": ["forge.users_employee_number_kept_when_disabled", "forge.users.users_employee_number_kept_when_disabled", "forge.act_as_assertions_guard", "forge.act_as_assertions.act_as_assertions_forward", "forge.act_as_assertions.audited_change_present", "forge.merge_request_approvals_guard", "forge.merge_request_approvals.audited_change_present"]}');

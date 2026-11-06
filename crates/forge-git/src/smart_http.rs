@@ -266,7 +266,32 @@ fn ensure_empty_dir(dir: &Path) -> Result<(), ForgeError> {
     }
 }
 
-fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+/// A real directory (no symlink), created with mode 0700 when missing, not
+/// writable by group or others (Unix). Its content is not checked (the
+/// push checks' run and hooks directories, M3 X8).
+pub(crate) fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
+    let meta = match std::fs::symlink_metadata(dir) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            create_private_dir(dir)?;
+            std::fs::symlink_metadata(dir)?
+        }
+        Err(e) => return Err(e),
+    };
+    if !meta.is_dir() {
+        return Err(std::io::Error::other("not a real directory"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if meta.permissions().mode() & 0o022 != 0 {
+            return Err(std::io::Error::other("writable by group or others"));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
     }

@@ -372,6 +372,22 @@ connection, mapping driver errors to registered codes, migrations
   the warn, stale running, no success within twice the interval; `None` before the migration). The project purge deletes the rows. `review::merges::
   try_lock_merges` takes the merge lock without waiting (`None` while a merge holds it: the
   maintenance's pack-refs); `REPO_MAINT_LOCK_PREFIX` (`repo_maint:`) is reserved for O1.
+- **Conflict predictions** (`review/conflicts/`, M3 X6, plan 04 C-2, ADR-0024 Amendment X6): the
+  derived tables `merge_request_conflict_scans` (one row per merge request: `status` pending /
+  scanning / scanned / incomplete / failed, `reason`, `scan_seq`, what the last scan looked at and
+  its counts) and `merge_request_conflict_pairs` (one row per unordered pair `low_mr_id <
+  high_mr_id`: the two heads, the target, `outcome` no_overlap / clean / conflict / failed, the
+  conflicted paths, `prediction_seq`; migration 20261123100000). `request_scan_on` (the retarget
+  and the reopen, in their transaction), `request_scan` / `request_scan_for_head` (the version
+  job: unless a `pending` scan or a finished one of this head and target with a non-retryable
+  reason answers), the job `merge_request.conflict_scan` (dedup `mr_conflict_scan:<id>:<seq>`),
+  `begin_scan`, `scan_peers`, `record_scan` (under the scan row's lock; each pair row created,
+  locked and updated in (low, high) order; a pair that enters `conflict` writes
+  `merge_request.conflict_predicted` for both sides, one audit row each, actor `system`),
+  `fail_scan` / `reap_stale_scans` (`job_failed` / `job_stale`, FG-REVIEW-0022), reads
+  `conflict_scan` and `conflict_predictions` (only pairs whose two heads are current, both open,
+  same target). Purged with the project. The notification kind `mr_conflict_predicted`
+  (migration 20261123100100).
 - **Mergeability** (`review/mergeability.rs`, M3 R2, ADR-0024 §3): the derived table
   `merge_request_mergeability` (one row per merge request: `status` unchecked / checking /
   can_be_merged / cannot_be_merged / check_failed, `reason`, `check_seq`, the checked
@@ -798,6 +814,21 @@ detected one the subscriber's progress; DELETE only while the repository is
 detection); unbinding ends the binding's open links (`unbound`). Tests
 `src/work_items/tests.rs`.
 
+**Webhooks (M3 I2, migration `20261120200000`, ADR-0016 Amendment I2)**:
+`webhooks::{create_webhook,update_webhook,delete_webhook,rotate_webhook_secret,redeliver_webhook}_decided` (decided in
+the transaction: project `FOR SHARE`, the caller's roles and account, then the
+per-project advisory lock or the webhook row `FOR UPDATE`; one `webhook.*`
+audit row on the project; 20 per project, `FG-INT-0012 reason=webhook_limit`),
+the subscriber's `enabled_on` / `material` / `record_delivery` (one
+`webhook_deliveries` row per (webhook, event) and its first `webhook.deliver`
+job), the job's `delivery_task` / `record_attempt` (one transaction: the
+delivery's state, the webhook's failure count, the next attempt through
+`jobs::enqueue_after_on`, and at 50 failures in a row or 24 h of failures the
+system's `webhook.disabled` audit row and event), the reads `list` / `get` /
+`deliveries` / `health` (the read pool cannot read the sealed secrets) and the
+retention `purge_deliveries`. The project purge deletes a project's webhooks
+and deliveries.
+
 **The integration feed (M3 I1c, migration `20261118100000`, ADR-0016 Amendment
 I1c)**: `feed::open` starts a `REPEATABLE READ READ ONLY` snapshot on the read
 pool (`FeedSnapshot`): `state` (epoch, `high_seq`, `retained_from`, the
@@ -821,3 +852,7 @@ write it); `Db::connect_maint` + `new_epoch` run `forge.feed_new_epoch`
 never chosen nor updated by forge_app) makes a rebind a new visible set.
 `tokens_scopes_known` gains `user_employee_number`. Tests `src/feed/tests.rs`
 (the visible set decided with forge-auth, a dev-dependency).
+
+## notify (M3 N1)
+
+`forge_db::notify` (ADR-0016 Amendment N1, migration `20261120100000`): a person's settings (`forge.notification_preferences`: `preferences` / `set_preferences`, no row = the defaults) and the delivery records (`forge.notifications`, derived, one row per source event and recipient). `enqueue` (called by the `notify` subscriber with its `DerivedTx`) writes the row and, for `Initial::Queue`, the `notification.send` job (dedup key `notification:<id>`); the send job walks the state machine: `begin_send` (row lock, `pending|retrying` → `sending`, run number recorded; a row still `sending` means the previous run died: `unknown` / `interrupted`, never sent again), `finish` (fenced by the run number: `sent`, `retrying`, `failed`, `unknown`, `skipped`, `suppressed`, each with a short reason code). `recipient` and `backlog` feed the mail and `forge doctor` (`notify.queue`). No foreign key to projects or events (the purge and the retention delete them).

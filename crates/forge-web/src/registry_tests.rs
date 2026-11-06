@@ -680,3 +680,72 @@ fn the_product_openapi_is_strict_and_deterministic() {
         "#/components/schemas/ProjectBody"
     );
 }
+
+mod other_change {
+    /// Same OpenAPI name and same shape as the outer `Change`: the silent case.
+    #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+    #[serde(deny_unknown_fields)]
+    #[schema(as = Change)]
+    pub struct Change {
+        #[allow(dead_code)] // read by serde only
+        pub name: String,
+    }
+}
+
+async fn other_change(
+    _: AppState,
+    _: Dispatched<InstanceCtx, other_change::Change>,
+) -> &'static str {
+    "changed"
+}
+
+/// Two different Rust types registering one OpenAPI schema name must be
+/// reported with both type names (gen-authz fails on it), even when their
+/// shapes happen to be equal; one type used twice is fine.
+#[test]
+fn two_types_with_one_schema_name_are_reported_with_both_names() {
+    let same_twice = body_route(Verb::Post, Action::UserSelfRead, 1024)
+        .responds::<Change>(Verb::Post, "/api/v1/x");
+    assert!(schema_name_conflicts(same_twice.defs()).is_empty());
+
+    let clash = body_route(Verb::Post, Action::UserSelfRead, 1024).route_with_body(
+        Verb::Post,
+        "/api/v1/y",
+        Action::UserSelfRead,
+        "y",
+        1024,
+        NoOtherBodyLoad,
+        other_change,
+    );
+    let found = schema_name_conflicts(clash.defs());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].contains("Change"), "{found:?}");
+    assert!(found[0].contains("registry::tests::Change"), "{found:?}");
+    assert!(
+        found[0].contains("registry::tests::other_change::Change"),
+        "{found:?}"
+    );
+}
+
+struct NoOtherBodyLoad;
+
+impl BodyLoader<AppState, other_change::Change> for NoOtherBodyLoad {
+    type Ctx = InstanceCtx;
+    fn load<'a>(
+        &'a self,
+        _: &'a AppState,
+        _: &'a Parts,
+        _: &'a other_change::Change,
+        _: Option<UserId>,
+    ) -> LoadFuture<'a, InstanceCtx> {
+        Box::pin(async {
+            Ok(Lookup::Found {
+                ctx: InstanceCtx,
+                canonical: None,
+                tombstone: None,
+                project: None,
+                group: None,
+            })
+        })
+    }
+}

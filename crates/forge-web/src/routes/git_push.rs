@@ -77,7 +77,9 @@ use forge_core::{
     PushUpdateKind, PushedRef, Pusher, RefName, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError, Lang};
+use forge_git::push_hook::{HookOutcome, PushCheckPolicy, PushCheckRun, Verdict};
 use forge_git::push_introduced::RefSnapshot;
+use forge_git::push_scan::ScanLimits;
 use forge_git::receive_report::{refusal_report, ReportRewriter, RewriteTexts};
 use forge_git::receive_request::{
     check_unambiguous, CommandParser, Parsed, ReceivePackRequest, MAX_COMMAND_SECTION,
@@ -119,6 +121,8 @@ const ANSWER_QUEUE: usize = 256;
 const CHUNK: usize = 64 * 1024;
 /// The most bytes of git's withheld texts put into one log line.
 const WITHHELD_LOG_MAX: usize = 16 * 1024;
+/// git's `ng` reason when the pre-receive hook refused the push.
+const HOOK_DECLINED: &str = "pre-receive hook declined";
 /// The longest `User-Agent` kept for the record.
 const MAX_USER_AGENT: usize = 512;
 
@@ -315,6 +319,25 @@ async fn receive_pack_inner(
         .await;
     let snapshot_ms = u64::try_from(snapshot_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+    // 4b. The push checks (M3 X8): one run of the pre-receive hook.
+    let checks = match &smart.push_checks {
+        Some(checks) => Some(
+            smart.git.push_check_run(
+                &smart.storage,
+                &checks.exe,
+                &PushCheckPolicy {
+                    request_id: log.request_id.to_string(),
+                    lang: log.lang,
+                    repo_id: repository.id,
+                    limits: checks
+                        .limits
+                        .unwrap_or_else(|| ScanLimits::new(limits.push_max_blob_bytes)),
+                },
+            )?,
+        ),
+        None => None,
+    };
+
     // 4. receive-pack gets the original bytes (`atomic` added above).
     let mut cmd = smart.git.receive_pack(
         &smart.storage,
@@ -325,6 +348,9 @@ async fn receive_pack_inner(
     )?;
     if deny_nff {
         cmd = cmd.deny_non_fast_forwards();
+    }
+    if let Some(run) = &checks {
+        cmd = cmd.with_push_checks(run);
     }
     let mut stream = cmd
         .idle_timeout(limits.idle_timeout)
@@ -370,6 +396,8 @@ async fn receive_pack_inner(
         bytes_in: 0,
         before,
         snapshot_ms,
+        checks,
+        hook_declined: false,
     };
     // Counted before the spawn: `wait_idle` never sees 0 in between.
     let guard = smart.push_tasks.start();
@@ -655,6 +683,10 @@ struct Receiver {
     before: Result<RefSnapshot, ForgeError>,
     /// How long the snapshot took.
     snapshot_ms: u64,
+    /// This push's pre-receive check run (M3 X8), read once git exited.
+    checks: Option<PushCheckRun>,
+    /// git reported `pre-receive hook declined`.
+    hook_declined: bool,
 }
 
 impl Receiver {
@@ -778,6 +810,7 @@ impl Receiver {
                     .with_context("refs", report.rewritten.len()),
             );
         }
+        self.hook_declined = report.ng.iter().any(|(_, reason)| reason == HOOK_DECLINED);
         let applied: Vec<(String, String, String)> = self
             .commands
             .iter()
@@ -786,6 +819,126 @@ impl Receiver {
             .collect();
         self.served(applied.len(), report.ng.len(), report.unpack_ok, "report");
         self.after_push(applied, "report").await;
+    }
+
+    /// What this push's pre-receive check decided (M3 X8), logged once,
+    /// then its run directory removed. `applied`: the refs git updated, or
+    /// `None` when the repository could not say (reconciliation failed).
+    /// No result of this run while refs changed means git skipped the
+    /// hook: `FG-GIT-0023 reason=hook_not_run` (the refs were not checked);
+    /// unknown refs and no result: `reason=hook_unknown` (the same alert,
+    /// never hidden as "nothing applied").
+    fn push_checked(&mut self, applied: Option<usize>) {
+        let Some(run) = self.checks.take() else {
+            return;
+        };
+        let applied_text = applied.map_or_else(|| "unknown".to_owned(), |n| n.to_string());
+        let fail = |reason: &'static str| {
+            ForgeError::new(ErrorCode::PushCheckFailed)
+                .with_context("reason", reason)
+                .with_context("event", "forge.git.push_checked")
+                .with_context("applied", &applied_text)
+        };
+        match (run.outcome(), applied) {
+            (Ok(Some(outcome)), _) => self.log_checked(&outcome, &applied_text),
+            (Ok(None), None) => self.log.failure(fail("hook_unknown")),
+            (Ok(None), Some(n)) if n > 0 => self.log.failure(fail("hook_not_run")),
+            (Ok(None), Some(_)) if self.hook_declined => {
+                self.log.failure(fail("hook_no_result"));
+            }
+            // git stopped before the hook (an unpack error): nothing ran.
+            (Ok(None), Some(_)) => {}
+            (Err(err), _) => self.log.failure(err.with_context("applied", &applied_text)),
+        }
+        if let Err(err) = run.remove() {
+            self.log.failure(err);
+        }
+    }
+
+    fn log_checked(&self, outcome: &HookOutcome, applied: &str) {
+        let r = &outcome.report;
+        // Every waived finding, with its path (X8 review): a marker that
+        // hides a real secret is found from the log, not only from review.
+        for w in &r.waivers {
+            tracing::info!(
+                target: "forge_web::git",
+                request_id = %self.log.request_id,
+                project_id = self.log.project_id.get(),
+                repo_id = self.log.repo_id,
+                rule = %w.rule,
+                blob = %w.blob,
+                path = %w.path,
+                "forge.git.push_check_waived"
+            );
+        }
+        let with_counts = |err: ForgeError| {
+            err.with_context("event", "forge.git.push_checked")
+                .with_context("verdict", format!("{:?}", outcome.verdict).to_lowercase())
+                .with_context("applied", applied)
+                .with_context("objects", r.objects)
+                .with_context("blobs_scanned", r.blobs_scanned)
+                .with_context("bytes_scanned", r.bytes_scanned)
+                .with_context("allowed", r.allowed)
+                .with_context("pack_objects", r.pack_objects)
+                .with_context("skipped_large", r.skipped_large)
+                .with_context("skipped_binary", r.skipped_binary)
+        };
+        match outcome.verdict {
+            Verdict::Refused => {
+                let Some(first) = r.findings.first() else {
+                    self.log.failure(with_counts(
+                        ForgeError::new(ErrorCode::PushCheckFailed)
+                            .with_context("reason", "result_invalid")
+                            .with_context("detail", "refused_without_findings"),
+                    ));
+                    return;
+                };
+                let rules: BTreeSet<&str> = r.findings.iter().map(|f| f.kind.rule()).collect();
+                let rules: Vec<&str> = rules.into_iter().collect();
+                self.log.failure(with_counts(
+                    ForgeError::new(first.kind.code())
+                        .with_context("findings", r.total_findings)
+                        .with_context("rules", rules.join(","))
+                        .with_context("first_rule", first.kind.rule())
+                        .with_context("first_path", &first.path)
+                        .with_context("first_blob", &first.blob)
+                        .with_context("first_commit", first.commit.as_deref().unwrap_or("-")),
+                ));
+            }
+            Verdict::Failed => {
+                let mut err = ForgeError::new(ErrorCode::PushCheckFailed).with_context(
+                    "reason",
+                    outcome.reason.as_deref().unwrap_or("internal").to_owned(),
+                );
+                if let Some(detail) = &outcome.detail {
+                    err = err.with_context("detail", detail);
+                }
+                if let Some(cause) = &outcome.cause_code {
+                    err = err.with_context("cause_code", cause);
+                }
+                self.log.failure(with_counts(err));
+            }
+            Verdict::Accepted => match r.incomplete {
+                Some(reason) => self.log.failure(with_counts(
+                    ForgeError::new(ErrorCode::PushCheckIncomplete)
+                        .with_context("incomplete", reason),
+                )),
+                None => tracing::info!(
+                    target: "forge_web::git",
+                    request_id = %self.log.request_id,
+                    project_id = self.log.project_id.get(),
+                    repo_id = self.log.repo_id,
+                    verdict = "accepted",
+                    objects = r.objects,
+                    blobs_scanned = r.blobs_scanned,
+                    bytes_scanned = r.bytes_scanned,
+                    allowed = r.allowed,
+                    pack_objects = r.pack_objects,
+                    skipped_binary = r.skipped_binary,
+                    "forge.git.push_checked"
+                ),
+            },
+        }
     }
 
     /// git's texts forge did not pass on (`receive_report`), logged once.
@@ -834,7 +987,7 @@ impl Receiver {
     /// reported ones (`source=<reason>`). When the repository cannot be read
     /// either, every command is logged once with `FG-GIT-0012`
     /// (`reason=reconcile_failed`) — the operator compares by hand.
-    async fn reconcile(self, reason: &'static str) {
+    async fn reconcile(mut self, reason: &'static str) {
         let names: Vec<RefName> = self
             .commands
             .iter()
@@ -853,6 +1006,9 @@ impl Receiver {
         {
             Ok(values) => values,
             Err(err) => {
+                // Unknown whether a ref changed: an absent hook result
+                // counts as a skipped hook only when one did.
+                self.push_checked(None);
                 let commands: Vec<String> = self
                     .commands
                     .iter()
@@ -911,6 +1067,7 @@ impl Receiver {
     /// Step 6, for the updates git applied (`source`: `report`, or the
     /// reconciliation's reason).
     async fn after_push(mut self, applied: Vec<(String, String, String)>, source: &'static str) {
+        self.push_checked(Some(applied.len()));
         if applied.is_empty() {
             return;
         }

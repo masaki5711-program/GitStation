@@ -120,6 +120,20 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PurgeBatchIncomplete
         | ErrorCode::NamespaceMoveContended
         | ErrorCode::RepositoryPathNotResolved
+        // M3 X1 / X2: content outcomes of the spec references (never a merge's).
+        | ErrorCode::RepoConfigInvalid
+        | ErrorCode::SpecVersionNotFound
+        | ErrorCode::SpecRepositoryUnavailable
+        | ErrorCode::SpecVersionBehind
+        // M3 X4: content outcomes of the spec index (never a merge's).
+        | ErrorCode::SpecLintProblem
+        | ErrorCode::RequirementUntested
+        | ErrorCode::RequirementTagUnknown
+        | ErrorCode::SpecIndexIncomplete
+        // M3 X7: notices named in a `forge/risk` run (never a merge's).
+        | ErrorCode::RiskStop
+        | ErrorCode::RiskWarn
+        | ErrorCode::RiskNotAssessed
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden
@@ -216,6 +230,11 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::FeedCursorInvalid
         | ErrorCode::FeedConsumerLag
         | ErrorCode::FeedEpochChanged
+        // M3 I2: the webhook codes never reach the merge job.
+        | ErrorCode::WebhookDeadLettered
+        | ErrorCode::WebhookTargetForbidden
+        | ErrorCode::WebhookDisabled
+        | ErrorCode::WebhookAttemptFailed
         | ErrorCode::ApprovalRuleChanged
         | ErrorCode::MergeRuleChanged
         // M3 C1: a stored run this build cannot read stays unreadable;
@@ -223,10 +242,19 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::CheckRunDataInvalid
         | ErrorCode::CheckPayloadInvalid
         | ErrorCode::CheckRunLimitReached
+        // M3 X6: the conflict scan's own code never reaches a merge.
+        | ErrorCode::ConflictPredictionIncomplete
         // M3 O3: the maintenance job's own codes never reach a merge.
         | ErrorCode::RepositoryMaintenanceFailed
         | ErrorCode::RepositoryCorrupt
-        | ErrorCode::RepositoryRefLockStale => false,
+        | ErrorCode::RepositoryRefLockStale
+        // M3 X8: the push checks run in a push's hook, never in a merge.
+        | ErrorCode::PushBlobTooLarge
+        | ErrorCode::PushSecretDetected
+        | ErrorCode::PushCheckFailed
+        | ErrorCode::PushCheckIncomplete
+        // M3 N1: the mail job's own code never reaches a merge.
+        | ErrorCode::SmtpUnavailable => false,
     }
 }
 

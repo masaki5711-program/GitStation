@@ -54,8 +54,8 @@ mod runner;
 
 pub use doctor::{health, ExpiredLease, JobsHealth, KindDepth, NewestDead};
 pub use doctor::{DEAD_WINDOW, LEASE_GRACE, QUEUE_DEPTH_ALERT, QUEUE_WAIT_ALERT};
-pub(crate) use queue::enqueue_on;
 pub use queue::{claim, complete, enqueue, fail, reap, release, REAP_BATCH};
+pub(crate) use queue::{enqueue_after_on, enqueue_on};
 pub use reports::{Ran, Reported};
 pub use runner::{JobFuture, JobHandler, JobRunner, ABORT_WAIT, RELEASE_TIMEOUT};
 

@@ -136,6 +136,7 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.pushed",
             "merge_request.conflict_detected",
             "merge_request.conflict_resolved",
+            "merge_request.conflict_predicted",
             "merge_request.commented",
             "merge_request.merged",
             "merge_request.source_branch_deleted",
@@ -338,6 +339,46 @@ fn conflict_flips_are_transitions_with_ids_and_shas_only() {
         assert_eq!(details.action(), event.as_str());
         assert_eq!(details.event_payload(), details.to_value());
     }
+}
+
+/// M3 X6 (plan 04 C-2): a predicted conflict is one change per side, with
+/// its own transition, event type and dedup prefix; the payload names the
+/// other merge request and counts the paths (never lists them).
+#[test]
+fn a_predicted_conflict_names_the_other_merge_request() {
+    use crate::ObjectId;
+    let predicted = MergeRequestChange::ConflictPredicted {
+        merge_request: MergeRequestId::new(9),
+        iid: 3,
+        other_merge_request: MergeRequestId::new(11),
+        other_iid: 4,
+        head_sha: ObjectId::parse(&"c".repeat(40)).expect("oid"),
+        other_head_sha: ObjectId::parse(&"e".repeat(40)).expect("oid"),
+        target_branch: RefName::parse("refs/heads/main").expect("ref"),
+        prediction_seq: 2,
+        conflict_files: 1,
+        files_truncated: false,
+    };
+    assert_eq!(
+        predicted.transition(),
+        MergeRequestTransition::ConflictPredict
+    );
+    assert_eq!(predicted.dedup_prefix(), "merge_request_conflict_predicted");
+    assert_eq!(predicted.merge_request(), MergeRequestId::new(9));
+    assert_eq!(
+        predicted.to_value(),
+        json!({"merge_request_id": 9, "iid": 3, "other_merge_request_id": 11, "other_iid": 4,
+               "head_sha": "c".repeat(40), "other_head_sha": "e".repeat(40),
+               "target_branch": "refs/heads/main", "prediction_seq": 2,
+               "conflict_files": 1, "files_truncated": false})
+    );
+    let details = AuditDetails::MergeRequest(predicted);
+    assert_eq!(
+        details.event_type(),
+        Some(EventType::MergeRequestConflictPredicted)
+    );
+    assert_eq!(details.action(), "merge_request.conflict_predicted");
+    assert_eq!(details.event_payload(), details.to_value());
 }
 
 /// M3 R2: the bases of a version are an audit-only change.

@@ -48,6 +48,7 @@ export const VIEW_WORDS = [
   'members',
   'pulls',
   'pull',
+  'webhooks',
   'docs',
 ] as const;
 

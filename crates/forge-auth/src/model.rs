@@ -447,6 +447,11 @@ pub enum Resource {
     Token {
         owner: UserId,
     },
+    /// The notification settings of `owner` (`NotificationPreferencesRead`
+    /// / `…Write`, M3 N1): only the person's own.
+    NotificationPreferences {
+        owner: UserId,
+    },
     /// The web sessions of `owner` (`SessionList` / `SessionRevoke` on the
     /// user's own route, `AdminSessionList` / `AdminSessionRevoke` on the
     /// administration's; M2 MR6, ADR-0021 §17).

@@ -19,10 +19,18 @@ forge-errors.workspace = true
 # The events' stored `data` (jsonb), passed through.
 serde_json.workspace = true
 tracing.workspace = true
+# ── M3 I2: webhooks (ADR-0016 §8) ──
+# The delivery's HTTP client: rustls with only webhook.ca_file's roots, no
+# proxy, no redirect (the same 0.12 as forge-oidc). MIT OR Apache-2.0.
+reqwest.workspace = true
+# The name's resolution at connect time and the attempt's deadline.
+tokio.workspace = true
+uuid.workspace = true
+# ── end M3 I2 ──
 
 [dev-dependencies]
+forge-core = { workspace = true, features = ["test-support"] }
 forge-db = { workspace = true, features = ["test-support"] }
-tokio.workspace = true
 sqlx.workspace = true
 tracing-subscriber.workspace = true
 

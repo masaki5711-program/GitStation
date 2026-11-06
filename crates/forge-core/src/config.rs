@@ -24,11 +24,17 @@ mod git_http;
 mod hosting;
 mod keys;
 mod maintenance;
+// ── M3 N1: `notify.*` ──
+mod notify;
+// ── end M3 N1 ──
 mod review;
 mod secret;
 mod server_limits;
 mod tls;
 mod web;
+// ── M3 I2 ──
+mod webhook;
+// ── end M3 I2 ──
 
 pub use api::ApiConfig;
 pub(crate) use audit::decode_hex;
@@ -40,11 +46,14 @@ pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
+pub use notify::{valid_mailbox, NotifyConfig, SmtpConfig, SmtpTls};
 pub use review::ReviewConfig;
+pub(crate) use secret::read_secret_text;
 pub use secret::{DatabaseUrl, Secret};
 pub use server_limits::ServerLimitsConfig;
 pub use tls::TlsMode;
 pub use web::{BaseUrl, WebConfig};
+pub use webhook::WebhookConfig;
 
 /// Environment prefixes owned by the configuration: an unknown variable
 /// under one of them is a typo. Other `FORGE_*` variables (for example the
@@ -63,6 +72,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_FEED_",
     // M3 O3: `maintenance.*`.
     "FORGE_MAINTENANCE_",
+    // M3 N1: `notify.*`.
+    "FORGE_NOTIFY_",
     // M2 MR3 / MR4 (ADR-0021 §12): `web.*` and `auth.oidc.*`.
     "FORGE_WEB_",
     "FORGE_AUTH_",
@@ -157,10 +168,14 @@ pub struct Config {
     pub feed: FeedConfig,
     /// `maintenance.*` (the repository maintenance, M3 O3).
     pub maintenance: MaintenanceConfig,
+    /// `notify.*` (e-mail notifications, M3 N1).
+    pub notify: NotifyConfig,
     /// `web.*` (the base URL, the session keys and lifetimes, M2 MR3).
     pub web: WebConfig,
     /// `auth.oidc.*` (the browser sign-in, M2 MR4).
     pub auth: AuthConfig,
+    /// `webhook.*` (the targets, the secret keys and the CA, M3 I2).
+    pub webhook: WebhookConfig,
 }
 
 impl Config {
@@ -402,12 +417,14 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         review: ReviewConfig::load(get)?,
         feed: FeedConfig::load(get)?,
         maintenance: MaintenanceConfig::load(get)?,
+        notify: NotifyConfig::load(get)?,
         web: WebConfig::load(
             get,
             text("web.base_url")?,
             password_path("web.session_key_file")?,
         )?,
         auth: AuthConfig::load(get)?,
+        webhook: WebhookConfig::load(get)?,
     }
     .validate_across()
 }
@@ -473,6 +490,7 @@ fn git_http<'a>(get: impl Fn(&str) -> Option<&'a str> + Copy) -> Result<GitHttpC
             d.max_streams_per_principal,
         )?,
         push_max_bytes: positive(get, "git.http.push_max_bytes", d.push_max_bytes)?,
+        push_max_blob_bytes: positive(get, "git.http.push_max_blob_bytes", d.push_max_blob_bytes)?,
     }
     .validate()
 }

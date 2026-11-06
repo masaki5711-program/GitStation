@@ -233,6 +233,10 @@ fn people_only_rows_are_allowed_for_the_human_twin() {
 const INTERNAL_READS: &[Action] = &[
     Action::RepoRead,
     Action::RepoBrowse,
+    // M3 X1: decided in RepoBrowse's arm.
+    Action::SpecRefRead,
+    // M3 X4: decided in RepoBrowse's arm.
+    Action::SpecRead,
     Action::ProjectRead,
     Action::MemberList,
     Action::ProtectedRefList,
@@ -261,6 +265,7 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::RefProtectionChange { .. }
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
+        | Resource::NotificationPreferences { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

@@ -22,7 +22,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | 名前空間 | 書ける主体 |
 |---|---|
 | `ci/`・`kanflow/` | その名前空間を **そのプロジェクトについて** 管理者から割り当てられたサービスアカウントで、そのプロジェクトの **Developer 以上のメンバー**（割り当てはプロジェクトごと。別のプロジェクトの割り当て・`kanflow` だけの割り当ては `ci/` を書けない）。人（管理者を含む）・ボット・エージェントのトークンは拒否（`FG-AUTH-0003`、`reason=not_service_account` / `agent_token`）。割り当てが無い: `reason=namespace_not_granted` |
-| `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。forge のチェックは後の MR（X2） |
+| `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。X2 から `forge/spec-drift`、X7 から `forge/risk`、X4 から `forge/spec-lint` と `forge/spec-trace` を書く（下の「forge 自身のチェック」） |
 | `ext/` | C1 では誰も書けない（`reason=ext_namespace_unavailable`）。`ext/` は必須のチェックにもできない（FG-REVIEW-0016） |
 
 - 見えないプロジェクト（サービスアカウントはメンバーのプロジェクトだけが見える）は、存在しないプロジェクトと同じ `FG-REPO-0005`（404）。
@@ -93,7 +93,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | `summary` | 文字列 | 書かれたまま（サーバーは描画しない） |
 | `details_url` | 文字列 / null | 正規化した URL |
 | `annotations[]` | 配列 | `{ "path", "start_line", "end_line", "level", "message", "title" }`（`title` は null 可） |
-| `reported_by` | オブジェクト | 最後に報告した主体 `{ "id", "username" }` |
+| `reported_by` | オブジェクト / `null` | 最後に報告した主体 `{ "id", "username" }`。`forge/` の run は `null`（forge 自身の worker。X2） |
 | `revision` | 整数 | 報告の回数（作成で 1） |
 | `created_at` / `updated_at` / `completed_at` | 文字列 / null | UTC、RFC 3339、マイクロ秒まで。`completed_at` はその結論になった最初の `completed` の報告の時刻（同じ結論の報告を繰り返しても変わらない） |
 
@@ -114,7 +114,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 その割り当ても消える。割り当てとは別に、サービスアカウントはそのプロジェクトの Developer 以上のメンバーでなければ報告できない。
 
 保護ブランチのマージの条件の答え（`PUT …/merge-rule`）は、必須のチェックのうち **そのプロジェクトについて報告できる有効なサービスアカウントが 1 つも無い** 名前を
-`unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は X2 まで常にここに入る）。
+`unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は、forge 自身が書く名前（`forge/spec-drift`・`forge/risk`・`forge/spec-lint`・`forge/spec-trace`）を除いて常にここに入る）。
 対処は runbook `checks-reporting`。
 
 ## 保持
@@ -123,3 +123,50 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 （既定 180 日、30〜3650）より古く、**開いている MR の今の head のコミットでない** もの（注釈は実行と一緒に、1 回に最大 1 000 件、古い順）。
 消した批ごとにプロジェクトの監査に `check_run.retention`（個数だけ）が残る。プロジェクトの完全削除でも消える。消えた実行は
 「報告なし」と同じに読まれる（`required_check_missing`）ので、必要なら報告し直す。runbook `checks-reporting` の E。
+
+## forge 自身のチェック（X2、X7）
+
+| 名前 | いつ | 結論 |
+|---|---|---|
+| `forge/spec-drift` | MR の版ごと（`merge_request.pushed`、開いたときの最初の版を含む）。その head のコミットに 1 回 | `success`: `.forge/repo.yml` が無い、または固定したすべての版が同じ系列の最新・`track:`・版の形でない。`neutral`: 新しい版がある（`FG-REPO-0027`）、版が無い（`FG-REPO-0025`）、参照先をサインインした全員が読めない・無い（`FG-REPO-0026`）、タグを数えきれない、ファイルを使えない（`FG-REPO-0024`）。`error`: 評価がやり直しても失敗した（要約に FG コードと request id） |
+
+- 参照先は **サインインした全員** の権限で辿る（内部公開のプロジェクトだけ）。run はプロジェクトを読める全員に見えるので、一人でも読めない参照先の版は出さない。自分の権限での確認は `gstn browse spec-refs`。
+- 版はタグ。`v1.10` > `v1.9`、`v1.5` = `v1.5.0`、接頭辞（`v`、`spec-v`）ごとの系列で比べ、`v2.0-rc1` のような付き物のタグは版にしない。
+- 要約と注釈（`.forge/repo.yml` の行）に行ごとの状態を出す。参照先のタグの名前と新しい版の数は出さない（run はサービスアカウントにも見えるため。最新の版は自分の権限で `gstn browse refs` / `gstn browse spec-refs`）。版の形でない固定は notice の注釈。`reported_by` は `null`。
+- forge が書く名前は 1 コミット 100 名の上限（`FG-REVIEW-0021`）に数えない。ほかの報告者が 100 件書いても forge の run は書ける（一覧は最大 102 件）。
+- 評価が締め切り（30 秒）までに終わらない・やり直しても失敗したときは `error`。worker が落ちて答えられなかったジョブも、1 分ごとの掃除が `error` にする。
+
+### `forge/risk`（X7、計画 04 M-6 の層 1。決定的な規則）
+
+| 名前 | いつ | 結論 |
+|---|---|---|
+| `forge/risk` | MR の版ごと。その head のコミットに 1 回。head を版に持つ **開いている MR の target ごと** に、merge base から head までの差分（改名は 1 件）を調べ、最悪を採る | `success`: 見つからない。`neutral`: `warn` だけ（`FG-REVIEW-0024`）、または一部を調べられなかった（`FG-REVIEW-0025`: 開いている MR が無い・target が無い・履歴が共通でない・パスが UTF-8 でない・読めなかったファイルがある）。`failure`: `stop` の規則に当たった（`FG-REVIEW-0023`）。`error`: 評価がやり直しても失敗した |
+
+- `stop`（どの方式の自動マージでも止める。M4 の自動マージは `failure` の head をマージしない）: 適用済みの migration の変更・削除・改名、migration の `DROP TABLE|COLUMN|SCHEMA|DATABASE`・`TRUNCATE`・`WHERE` のない `DELETE` / `UPDATE`・列の型の変更・`RENAME`・制約の削除・`DISABLE TRIGGER`、CI・デプロイのファイルの `migrate revert` など、認証情報のファイル名（`.env`、`id_rsa`、`.p12` など）、秘密鍵・トークンらしき本文（push の検査 X8 と同じ規則）、backup / restore / retention のジョブ、大量削除（削除 500 行以上かつ target の text 行の 30 % 以上、または削除 20 ファイル以上かつ 30 % 以上）、5000 ファイルを超える変更。
+- `warn`（進む。警告が残る）: 新しい migration、`DROP INDEX` など、`GRANT` / `REVOKE`、認証・権限のコード（パスの語）、CI・デプロイ・インフラの設定、依存の定義・ロックファイル、シンボリックリンク・サブモジュール。
+- 要約と注釈には **規則の id・パス・行・固定の理由・コード** だけを出す。一致した文字列（秘密、表名）は書かない。注釈は最悪のものから 50 件まで。`reported_by` は `null`。
+- 本文を読むのは 60 ファイル、1 ファイル 256 KiB まで。残りの数は `content_not_scanned`（`neutral`）に出す。評価の締め切りは 45 秒。
+- 必須のチェックにすると `neutral` も `failure` も満たさない（ADR-0024 §10）。必須にしなければ手動のマージは止めない。ローカル AI の層（層 2）と `.forge/risk.yml` は含まない（ADR-0023 Amendment X7）。
+- 1 コミットの一覧は最大 104 件（報告者 100 + forge の名前 4。X4 で 2 つ増えた）。
+
+### `forge/spec-lint` と `forge/spec-trace`（X4）
+
+| 名前 | いつ | 結論 |
+|---|---|---|
+| `forge/spec-lint` | MR の版ごと（`merge_request.pushed`）と、作業項目の結びつきが変わったとき（`work_item.linked` / `unlinked`）・対象ブランチを変えたとき（`merge_request.updated` の `target_branch`）。後の 2 つはその MR の今の head。同じ head のジョブが待っている間は積まない。1 つのジョブ `check.spec_index` が 2 つの run を書く | `success`: 自分の仕様（`.forge/repo.yml` の `path:`、無ければ `spec/`）の文書と、自分の系列の `@req` が規則を守る。`failure`: 規則違反（`FG-REPO-0028`、要約と注釈に `パス:行 規則`）。`neutral`: 違反は見つからないが索引が上限に達した（`FG-REPO-0031`）。`error`: 評価がやり直しても失敗した |
+| `forge/spec-trace` | 同上 | **助言**（計画 03 §9-4）。`success`: MR が触れる要件（マージベースからの追加・変更、追加した `@req`、結びついた作業項目）にすべて `@req` のテストがある。`neutral`: テストの無い要件・作業項目（`FG-REPO-0029`）、知らない ID・形の崩れたタグ（`FG-REPO-0030`）、索引が上限（`FG-REPO-0031`）。**`failure` にはしない** |
+
+- 比べる相手は head と対象ブランチの先端の **マージベース**（無ければ、head のすべてを新しいものとして数える）。
+- 仕様の文書（自分の仕様のディレクトリの下の Markdown）の中の `@req` はテストに数えない（説明やコード例のため）。
+- `@req <要件 ID>` と `@req PBI-<番号>/AC-<番号>`（kanflow の受入基準）を受け付ける。結びついた作業項目 `PBI-<番号>` は、その受入基準のどれかのテストがあればよい。
+- 要約と注釈に出すのは、このリポジトリ自身の文字（自分の仕様の ID とパス、自分のタグ、MR 自身の作業項目）だけ。参照先の仕様は読まない（`repo:` の `scope:` に当たる ID は「知っている」と数える）。参照先を含めた表は、自分の権限で `gstn spec trace`。
+- M3 ではテストの **有無** だけを見る（パイプラインの結果は M4 の CI から。ADR-0017 §4.1.1）。
+- 上限: 仕様の Markdown 1000 ファイル、合計 8 MiB、1 ファイル 256 KiB（超えると `file_too_large`）、`@req` の `git grep` の出力 8 MiB。評価の締め切り 70 秒、書き込み 10 秒ずつ（2 つの run と 2 つの `error` で 110 秒 < ジョブの 120 秒）。落ちたジョブは 1 分ごとの掃除（`spec_index_sweep`）が両方の run を `error` にする。
+- forge が書く名前（`forge/spec-drift`・`forge/risk`・`forge/spec-lint`・`forge/spec-trace`）は 100 名の上限に数えない（一覧は最大 104 件）。
+
+## 仕様の API（X4）
+
+`GET /api/v1/projects/{id}/specs/{requirements,versions,diff,trace}`（Action `SpecRead`、`read_api`、`RepoBrowse` と同じ判定）。
+自分の仕様の索引を、読む人の権限で返す。`trace` は `.forge/repo.yml` の `repo:` を読む人の権限で辿り（読めないものは `unavailable`、`FG-REPO-0026`）、
+その `scope:` の要件ごとに、このリポジトリの `@req` のテストを数える。上限に達した索引は `incomplete {error_code: FG-REPO-0031, reason}`。
+1 人 1 分に索引 120 回分まで（`requirements`・`versions` は 1、`diff` は 2、`trace` は 1 + 参照の数。`FG-WEB-0010`）、同時に 2 本まで（`reason=in_flight`）、1 回 30 秒まで（`FG-WEB-0002 operation=spec_index`）。`gstn spec requirements|versions|diff|trace`。

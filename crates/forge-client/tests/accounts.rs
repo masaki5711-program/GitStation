@@ -79,7 +79,7 @@ fn user_search_and_list_send_their_query() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
         last(&srv),
-        ("GET".into(), "/api/v1/users?search=al+ice".into())
+        ("GET".into(), "/api/v1/users?search=al%20ice".into())
     );
     assert_eq!(o.json()["items"][0]["username"], "alice");
     let o = gstn(

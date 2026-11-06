@@ -41,6 +41,14 @@ mod model;
 mod prove;
 mod ref_updates;
 mod viewer;
+// ── M3 I2 ──
+mod matrix_rows_webhooks;
+mod webhook_ctx;
+// ── end M3 I2 ──
+// ── M3 X1 ──
+mod matrix_rows_spec_refs;
+mod spec_ref;
+// ── end M3 X1 ──
 
 pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsConfirmCtx, LoadedConfirmIntegration};
@@ -61,16 +69,19 @@ pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
     GroupTransferCtx, InstanceCtx, LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent,
     LoadedProject, LoadedProtection, LoadedTarget, LoadedTombstone, LoadedTransferTarget,
-    LoadedUserNamespace, ParentCtx, ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx,
-    ResourceCtx, ServiceAccountCtx, ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx,
-    SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx,
-    UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
+    LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx, ProjectCtx, ProjectMemberCtx,
+    RefProtectionCtx, ResolvedCtx, ResourceCtx, ServiceAccountCtx, ServiceAccountTokenCtx,
+    ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx,
+    TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx, UserTargetCtx,
+    VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
+pub use spec_ref::{prove_spec_ref, prove_spec_ref_for_every_person};
 pub use viewer::{
     ActAsTipGate, ActAsTrial, ActAsViewer, MergeRequestViewer, MergeSettingsViewer,
     TRIAL_SUSPENSION_MINUTES,
 };
+pub use webhook_ctx::{prove_webhook_delivery, WebhookCtx, WebhookDeliveryCtx};
 
 #[cfg(test)]
 #[path = "authorize_tests.rs"]
@@ -97,8 +108,13 @@ mod service_account_tests;
 mod ref_updates_tests;
 
 #[cfg(test)]
+#[path = "spec_ref_tests.rs"]
+mod spec_ref_tests;
+#[cfg(test)]
 #[path = "viewer_tests.rs"]
 mod viewer_tests;
 
 #[cfg(test)]
 mod act_as_tests;
+#[cfg(test)]
+mod webhook_tests;

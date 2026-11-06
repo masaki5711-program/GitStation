@@ -34,6 +34,7 @@ FG-WEB-0007、FG-REPO-0016、FG-WEB-0002（`operation=git_request_body` / `prote
 | `want` の到達性の確認（`git.http.want_check_timeout_ms`） | 30 秒 | `FG-GIT-0002 operation=want_check`（504） |
 | コミット以外の `want` の数（`git.http.max_object_wants`） | 10 000 | `FG-GIT-0014 reason=too_many_wants` |
 | push のパックの大きさ（`git.http.push_max_bytes` → `receive.maxInputSize`） | 2 GiB | git の index-pack が止め、`unpack` の失敗が push の結果に出る |
+| push が持ち込む 1 つのファイル（`git.http.push_max_blob_bytes`、M3 X8 の pre-receive の検査） | 100 MiB | `FG-GIT-0021`（push 全体を拒否、ref は変わらない。runbook push-checks） |
 | push の本文（生と展開後、`push_max_bytes` + 1 MiB） | 2 GiB + 1 MiB | `FG-GIT-0013 limit=push_body`（413、git を止め ref は変わらない） |
 | push のコマンド部（ref の更新の一覧） | 1000 件、1 MiB | `FG-GIT-0014 reason=too_many_commands` / `FG-GIT-0013 limit=command_section` |
 | 拒否した push の本文の読み捨て | 64 MiB | それを超えると接続を閉じる（拒否のログの `drain_error`） |

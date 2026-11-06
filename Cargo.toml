@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ forge-hosting = { path = "crates/forge-hosting" }
 forge-review = { path = "crates/forge-review" }
 forge-checks = { path = "crates/forge-checks" }
 forge-integ = { path = "crates/forge-integ" }
+forge-notify = { path = "crates/forge-notify" }
 forge-oidc = { path = "crates/forge-oidc" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }
@@ -37,6 +38,11 @@ tempfile = "3"
 # already in the tree through sqlx (stringprep), MIT / Apache-2.0.
 unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 proptest = "1"
+# M3 X1: `.forge/repo.yml` (plan 03 §4.4, ADR-0023). Pure Rust, MIT OR
+# Apache-2.0; only its event parser is used (no alias expansion, no type
+# resolution: forge-core builds its own tree and refuses anchors, aliases
+# and tags). Without the default `encoding` feature (input is UTF-8 only).
+yaml-rust2 = { version = "0.13", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 serde_json = "1"
 http-body-util = "0.1"
@@ -99,6 +105,12 @@ subtle = "2"
 # (already in the lock through hyper). MIT OR Apache-2.0.
 httpdate = "1"
 # ── end M2 MR4 ──
+# ── M3 N1: the SMTP client's TLS (forge-notify) ──
+# Same rustls / tokio-rustls / ring that reqwest already brings; no
+# aws-lc-rs. Roots: only notify.smtp_ca_file (required with TLS).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# ── end M3 N1 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

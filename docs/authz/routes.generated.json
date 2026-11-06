@@ -586,6 +586,14 @@
   {
     "action": "MergeRequestRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/conflicts",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions",
     "public": false,
     "scope": "fixed",
@@ -848,6 +856,14 @@
     "word": "fixed"
   },
   {
+    "action": "SpecRefRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/spec-refs",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/tree",
@@ -859,6 +875,38 @@
     "action": "ProjectRestore",
     "method": "POST",
     "path": "/api/v1/projects/{id}/restore",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SpecRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/specs/diff",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SpecRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/specs/requirements",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SpecRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/specs/trace",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SpecRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/specs/versions",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -880,6 +928,78 @@
     "word": "fixed"
   },
   {
+    "action": "WebhookRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/webhooks",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/webhooks",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/webhooks/event-types",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookManage",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookDeliveryRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookRedeliver",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebhookManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/secret",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "SessionRead",
     "method": "GET",
     "path": "/api/v1/session",
@@ -891,6 +1011,22 @@
     "action": "UserSelfRead",
     "method": "GET",
     "path": "/api/v1/user",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NotificationPreferencesRead",
+    "method": "GET",
+    "path": "/api/v1/user/notification-preferences",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NotificationPreferencesWrite",
+    "method": "PUT",
+    "path": "/api/v1/user/notification-preferences",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1322,5 +1458,9 @@
   {
     "action": "SessionContinue",
     "decided_in": "/api/v1/session"
+  },
+  {
+    "action": "WebhookDeliver",
+    "decided_in": "/api/v1/projects/{id}/webhooks"
   }
 ]

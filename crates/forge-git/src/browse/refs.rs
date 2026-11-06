@@ -119,6 +119,17 @@ impl ResolvedRev {
     }
 }
 
+/// A full ref name looked up (M3 X1: a pinned spec version).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefLookup {
+    /// The ref exists and peels to a commit.
+    Commit(ResolvedRev),
+    /// No such ref.
+    Missing,
+    /// The ref names a tree, a blob or a tag of one.
+    NotACommit,
+}
+
 /// A spec split into a revision and a path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSpec {
@@ -274,6 +285,20 @@ impl Browser {
             return Ok(list);
         }
         Ok(Arc::new(self.query_refs(repo, candidates, deadline).await?))
+    }
+
+    /// The full ref `name` (`refs/heads/…` / `refs/tags/…`) as a typed
+    /// outcome (M3 X1): the cached list when complete, else git asked for
+    /// exactly that name; one deadline.
+    pub async fn find_ref(&self, repo: RepoId, name: &RefName) -> Result<RefLookup, ForgeError> {
+        let deadline = Deadline::new(self.limits.timeout);
+        let candidates = [name.clone()]; // clone: the lookup takes a list
+        let list = self.lookup(repo, &candidates, deadline).await?;
+        Ok(match list.find(name.as_str()) {
+            None => RefLookup::Missing,
+            Some(entry) if entry.commit.is_none() => RefLookup::NotACommit,
+            Some(entry) => RefLookup::Commit(Self::rev_of(entry)?),
+        })
     }
 
     /// A `?ref=` value: a full commit id, a full `refs/heads/…` /

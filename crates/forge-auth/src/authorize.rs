@@ -210,6 +210,15 @@ pub fn authorize(
             Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_token"))
         }
     };
+    // Another user's notification settings are answered like missing ones.
+    let own_preferences = |owner| -> Result<(), ForgeError> {
+        if owner == user {
+            Ok(())
+        } else {
+            Err(deny(ErrorCode::NotFound)
+                .with_context("reason", "foreign_notification_preferences"))
+        }
+    };
     // Actions kept for people (ADR-0017 amendments MR7a, MR8, D5): an
     // agent's credential is refused whatever its role, administrators
     // included. Checked after visibility and scope, before roles.
@@ -261,9 +270,16 @@ pub fn authorize(
         // Returned above for every non-public action; kept for exhaustiveness.
         (_, Resource::Unresolved(reason)) => unresolved(*reason),
 
-        (Action::RepoRead | Action::RepoBrowse | Action::ProjectRead, Resource::Project(p)) => {
-            need(Role::Reporter, read_role(p))
-        }
+        // `SpecRefRead` (M3 X1) and `SpecRead` (M3 X4): the project by the
+        // route, and every referenced project again by `prove_spec_ref`.
+        (
+            Action::RepoRead
+            | Action::RepoBrowse
+            | Action::SpecRefRead
+            | Action::SpecRead
+            | Action::ProjectRead,
+            Resource::Project(p),
+        ) => need(Role::Reporter, read_role(p)),
 
         // Before receive-pack starts (no ref is known yet): may this caller
         // push to the project at all? Stops non-developers from uploading
@@ -555,6 +571,12 @@ pub fn authorize(
         // is not found for everyone, administrators included (an
         // administration route for others' tokens is not built yet).
         (Action::TokenRevoke, Resource::Token { owner }) => own_token(*owner),
+        // M3 N1: a person's own mail settings, for nobody else — an
+        // administrator included (support reads the delivery records).
+        (
+            Action::NotificationPreferencesRead | Action::NotificationPreferencesWrite,
+            Resource::NotificationPreferences { owner },
+        ) => own_preferences(*owner),
 
         (Action::UserCreate | Action::UserAdminList | Action::Metrics, Resource::Instance) => {
             admin_only()
@@ -1038,6 +1060,33 @@ pub fn authorize(
         (_, Resource::ActAs(_)) => {
             Err(deny(ErrorCode::Forbidden).with_context("reason", "act_as_resource_without_act_as"))
         }
+        // --- webhooks (M3 I2, ADR-0016 §8, plan 11 §4.3) ---
+        // A project's Maintainers (visibility and pending deletion were
+        // decided above: FG-REPO-0005 / FG-REPO-0006). Managing and
+        // redelivering are people's.
+        (Action::WebhookRead | Action::WebhookDeliveryRead, Resource::Project(p)) => {
+            need(Role::Maintainer, p.role)
+        }
+        (Action::WebhookManage | Action::WebhookRedeliver, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+        // A delivery, for the webhook's owner (`prove_webhook_delivery`):
+        // still a Maintainer of the project; every class but admin (the
+        // maintainer and deployment classes need Maintainer and Developer,
+        // which the owner holds; the webhook names them explicitly).
+        (Action::WebhookDeliver, Resource::ProjectEvents { project, class }) => {
+            people_only()?;
+            need(Role::Maintainer, project.role)?;
+            match class {
+                forge_core::VisibilityClass::Integration
+                | forge_core::VisibilityClass::Maintainer
+                | forge_core::VisibilityClass::Deployment => Ok(()),
+                forge_core::VisibilityClass::Admin => {
+                    Err(refused("class_not_for_webhooks").with_context("class", class.as_str()))
+                }
+            }
+        }
 
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
@@ -1050,6 +1099,8 @@ pub fn authorize(
             Action::RepoRead
             | Action::RepoPush
             | Action::RepoBrowse
+            | Action::SpecRefRead
+            | Action::SpecRead
             | Action::ProjectRead
             | Action::ProjectList
             | Action::ProjectCreate
@@ -1073,6 +1124,8 @@ pub fn authorize(
             | Action::TokenCreate
             | Action::TokenList
             | Action::TokenRevoke
+            | Action::NotificationPreferencesRead
+            | Action::NotificationPreferencesWrite
             | Action::UserCreate
             | Action::UserDisable
             | Action::UserSearch
@@ -1123,6 +1176,11 @@ pub fn authorize(
             | Action::ActAsConfirmView
             | Action::ActAsAssertionIssue
             | Action::ActAsAssertionClaim
+            | Action::WebhookRead
+            | Action::WebhookManage
+            | Action::WebhookDeliveryRead
+            | Action::WebhookRedeliver
+            | Action::WebhookDeliver
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -1137,6 +1195,7 @@ pub fn authorize(
             | Resource::RefProtectionChange { .. }
             | Resource::VisibilityChange { .. }
             | Resource::Token { .. }
+            | Resource::NotificationPreferences { .. }
             | Resource::Session { .. }
             | Resource::TokenRequest { .. }
             | Resource::Admission { .. }
@@ -1217,6 +1276,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Group { .. }
         | Resource::Namespace { .. }
         | Resource::Token { .. }
+        | Resource::NotificationPreferences { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }
@@ -1269,6 +1329,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::RefProtectionChange { .. }
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
+        | Resource::NotificationPreferences { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

@@ -122,6 +122,7 @@ fn all_lists_every_event_type_once() {
             "merge_request.pushed",
             "merge_request.conflict_detected",
             "merge_request.conflict_resolved",
+            "merge_request.conflict_predicted",
             "merge_request.commented",
             "merge_request.merged",
             "merge_request.source_branch_deleted",
@@ -131,7 +132,8 @@ fn all_lists_every_event_type_once() {
             "merge_settings.codeowners_enforcement_restored",
             "check.completed",
             "work_item.linked",
-            "work_item.unlinked"
+            "work_item.unlinked",
+            "webhook.disabled"
         ]
     );
 }
@@ -231,4 +233,15 @@ fn merge_request_events_are_integration_class_one_per_transition() {
             "{t:?} shares its event with another transition"
         );
     }
+}
+
+/// M3 I2 (ADR-0016 Amendment I2): the automatic disable of a webhook is a
+/// maintainer-class event — the hook point of a notification, delivered
+/// only to a webhook that names it.
+#[test]
+fn webhook_disabled_is_maintainer_class() {
+    assert_eq!(
+        EventType::WebhookDisabled.visibility_class(),
+        VisibilityClass::Maintainer
+    );
 }

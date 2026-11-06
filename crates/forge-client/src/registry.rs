@@ -57,7 +57,7 @@ const COMMIT_DETAIL_SCHEMA: &str = r#"{"type":"object","required":["commit","mes
 
 const SA_SCHEMA: &str = r#"{"type":"object","required":["id","username","display_name","state","owner","purpose","created_by","created_at","active_tokens","last_token_expiry"],"properties":{"id":{"type":"integer"},"username":{"type":"string"},"display_name":{"type":"string"},"state":{"enum":["active","disabled"]},"owner":{"type":["object","null"],"required":["id","username","active"]},"purpose":{"type":["string","null"]},"created_by":{"type":["integer","null"]},"created_at":{"type":"string"},"active_tokens":{"type":"integer"},"last_token_expiry":{"type":["string","null"]}}}"#;
 
-const CHECK_RUN_SCHEMA: &str = r#"{"type":"object","required":["id","name","head_sha","status","conclusion","summary","details_url","annotations","reported_by","revision","created_at","updated_at","completed_at"],"properties":{"id":{"type":"integer"},"name":{"type":"string"},"head_sha":{"type":"string"},"status":{"enum":["queued","in_progress","completed"]},"conclusion":{"enum":["success","neutral","failure","error","action_required",null]},"summary":{"type":"string"},"details_url":{"type":["string","null"]},"annotations":{"type":"array","items":{"type":"object","required":["path","start_line","end_line","level","message","title"]}},"reported_by":{"type":"object","required":["id","username"]},"revision":{"type":"integer"},"created_at":{"type":"string"},"updated_at":{"type":"string"},"completed_at":{"type":["string","null"]}}}"#;
+const CHECK_RUN_SCHEMA: &str = r#"{"type":"object","required":["id","name","head_sha","status","conclusion","summary","details_url","annotations","reported_by","revision","created_at","updated_at","completed_at"],"properties":{"id":{"type":"integer"},"name":{"type":"string"},"head_sha":{"type":"string"},"status":{"enum":["queued","in_progress","completed"]},"conclusion":{"enum":["success","neutral","failure","error","action_required",null]},"summary":{"type":"string"},"details_url":{"type":["string","null"]},"annotations":{"type":"array","items":{"type":"object","required":["path","start_line","end_line","level","message","title"]}},"reported_by":{"type":["object","null"],"required":["id","username"]},"revision":{"type":"integer"},"created_at":{"type":"string"},"updated_at":{"type":"string"},"completed_at":{"type":["string","null"]}}}"#;
 const BINDINGS_SCHEMA: &str = r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["integration_id","kind","project_id","external_project_id","granted_membership","created_by","created_at"]}}}}"#;
 
 const REVISION_PATH_SCHEMA: &str = r#"{"type":"object","required":["ref","path"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"],"properties":{"type":{"enum":["branch","tag","commit"]},"name":{"type":"string"},"full_name":{"type":["string","null"]},"commit":{"type":"string"}}},"path":{"type":"string"}}}"#;
@@ -815,6 +815,21 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["id","resolved","resolved_by","resolved_at","notes"]}"#,
     },
     CommandSpec {
+        name: "conflicts",
+        summary: "A merge request's predicted conflicts with the other open merge requests on its target branch, drafts included (M3 X6): the last scan (scanned / incomplete with why / failed) and each merge request whose head conflicts with this one in a file both change, with the files. The server scans after every new head, retarget and reopen; this never starts a scan.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &[
+            "gstn conflicts --project 7 --iid 3",
+            "gstn conflicts --project 7 --iid 3 --json",
+        ],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts"],
+        output: r#"{"type":"object","required":["iid","head_sha","scan","predictions"],"properties":{"scan":{"type":"object","required":["status","reason","stale","scanned_head_sha","scanned_target_sha","scanned_at","peers","pairs_tried","pairs_skipped"],"properties":{"status":{"type":"string","enum":["none","pending","scanning","scanned","incomplete","failed"]}}},"predictions":{"type":"array","items":{"type":"object","required":["iid","draft","head_sha","outcome","reason","conflicts","conflicts_truncated","checked_at"],"properties":{"outcome":{"type":"string","enum":["conflict","failed"]}}}}}}"#,
+    },
+    CommandSpec {
         name: "namespace resolve",
         summary: "Which project, group or user a full path names (and its ids).",
         args: &[arg("path", "positional", true, "The full path, e.g. team/app.")],
@@ -941,6 +956,66 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["ref","path","oid","size","binary","hunks","commits","truncated"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"oid":{"type":"string"},"size":{"type":"integer"},"binary":{"type":"boolean"},"hunks":{"type":"array","items":{"type":"object","required":["commit","start","orig_start","lines"]}},"commits":{"type":"array","items":{"type":"object","required":["oid","author_name","author_email","author_time","author_tz","summary","boundary","path"]}},"truncated":{"type":"boolean"}}}"#,
     },
     CommandSpec {
+        name: "browse spec-refs",
+        summary: "Show a revision's .forge/repo.yml and its spec references, each resolved with your permissions (unreadable ones are unavailable).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", false, "A full commit id, a branch or a tag (default: the default branch)."),
+        ],
+        examples: &["gstn browse spec-refs --project 7", "gstn browse spec-refs --project 7 --ref main --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/spec-refs"],
+        output: r#"{"type":"object","required":["ref","path","config","problem","specs"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"config":{"enum":["absent","valid","invalid"]},"problem":{"type":["object","null"],"required":["error_code","line","reason"]},"specs":{"type":"array","items":{"type":"object","required":["line","type","repo","path","pin","scope","status","error_code","project_id","commit"],"properties":{"type":{"enum":["repo","path"]},"status":{"enum":["resolved","version_not_found","unavailable","local"]}}}}}}"#,
+    },
+    CommandSpec {
+        name: "spec requirements",
+        summary: "List a revision's own specification: its requirements (searchable), documents and document problems (M3 X4).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", false, "A full commit id, a branch or a tag (default: the default branch)."),
+            arg("--search", "option", false, "Only requirements whose id or text contains this (case-insensitive)."),
+            arg("--limit", "option", false, "At most this many requirements, 1..=500 (server default 100)."),
+        ],
+        examples: &["gstn spec requirements --project 7", "gstn spec requirements --project 7 --ref v1.4 --search reload --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/specs/requirements"],
+        output: r#"{"type":"object","required":["ref","config","dirs","documents","requirements","truncated","problems","incomplete"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"config":{"enum":["absent","valid","invalid"]},"dirs":{"type":"array","items":{"type":"string"}},"documents":{"type":"array","items":{"type":"object","required":["path","spec","title","status","requirements","problems"]}},"requirements":{"type":"array","items":{"type":"object","required":["id","path","line","priority","deprecated","spec","body"]}},"truncated":{"type":"boolean"},"problems":{"type":"array","items":{"type":"object","required":["error_code","path","line","rule","detail"]}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
+        name: "spec versions",
+        summary: "List the specification's versions (version tags), newest first (M3 X4).",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn spec versions --project 7"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/specs/versions"],
+        output: r#"{"type":"object","required":["versions","truncated"],"properties":{"versions":{"type":"array","items":{"type":"object","required":["name","full_name","commit"]}},"truncated":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "spec diff",
+        summary: "Show the requirements added, changed, removed or deprecated between two revisions (M3 X4).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--from", "option", true, "The earlier revision: a commit id, a branch or a tag."),
+            arg("--to", "option", true, "The later revision: a commit id, a branch or a tag."),
+        ],
+        examples: &["gstn spec diff --project 7 --from v1.4 --to v1.5"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/specs/diff"],
+        output: r#"{"type":"object","required":["from","to","changes","incomplete"],"properties":{"from":{"type":"object","required":["type","name","full_name","commit"]},"to":{"type":"object","required":["type","name","full_name","commit"]},"changes":{"type":"array","items":{"type":"object","required":["id","kind","path","line"],"properties":{"kind":{"enum":["added","changed","removed","deprecated"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
+        name: "spec trace",
+        summary: "Show each requirement (own, and every pinned reference you may read) with the @req tests naming it (M3 X4).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", false, "A full commit id, a branch or a tag (default: the default branch)."),
+        ],
+        examples: &["gstn spec trace --project 7", "gstn spec trace --project 7 --ref main --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/specs/trace"],
+        output: r#"{"type":"object","required":["ref","requirements","references","incomplete"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"requirements":{"type":"array","items":{"type":"object","required":["id","source","path","line","deprecated","status","test_count","tests"],"properties":{"status":{"enum":["tested","untested"]}}}},"references":{"type":"array","items":{"type":"object","required":["line","repo","status","error_code","requirements"],"properties":{"status":{"enum":["resolved","version_not_found","unavailable"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
         name: "user rename",
         summary: "Rename a user and their personal namespace (administrators). Needs --yes.",
         args: &[
@@ -1030,6 +1105,30 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api"],
         routes: &["DELETE /api/v1/user/tokens/{id}"],
         output: r#"{"type":"object","required":["id","revoked"],"properties":{"id":{"type":"integer"},"revoked":{"const":true}}}"#,
+    },
+    // ── M3 N1: your notification settings ──
+    CommandSpec {
+        name: "notifications get",
+        summary: "Show your notification settings: mail on or off, the language of the mail (null: the instance default) and the kinds muted; kinds lists every kind there is.",
+        args: &[],
+        examples: &["gstn notifications get --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/user/notification-preferences"],
+        output: r#"{"type":"object","required":["email_enabled","language","muted_kinds","kinds"],"properties":{"email_enabled":{"type":"boolean"},"language":{"type":["string","null"]},"muted_kinds":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"type":"string"}}}}"#,
+    },
+    CommandSpec {
+        name: "notifications set",
+        summary: "Change your notification settings; a flag changes only what it names (the rest is kept). Nobody else's can be changed, administrators included.",
+        args: &[
+            arg("--email", "option", false, "on | off: all mail."),
+            arg("--language", "option", false, "ja | en | id | default (the instance's)."),
+            arg("--mute", "option", false, "A kind to stop (repeatable; notifications get lists them)."),
+            arg("--unmute", "option", false, "A kind to receive again (repeatable)."),
+        ],
+        examples: &["gstn notifications set --email off", "gstn notifications set --mute mr_commented --language en"],
+        scopes: &["read_api", "api"],
+        routes: &["GET /api/v1/user/notification-preferences", "PUT /api/v1/user/notification-preferences"],
+        output: r#"{"type":"object","required":["email_enabled","language","muted_kinds","kinds"],"properties":{"email_enabled":{"type":"boolean"},"language":{"type":["string","null"]},"muted_kinds":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"type":"string"}}}}"#,
     },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {
@@ -1264,6 +1363,118 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/commits/{sha}/checks"],
         output: r#"{"type":"object","required":["schema_version","head_sha","check_runs"],"properties":{"schema_version":{"const":1},"head_sha":{"type":"string"},"check_runs":{"type":"array","items":{"type":"object","required":["id","name","status","conclusion","reported_by"]}}}}"#,
+    },
+    // ── M3 I2: project webhooks (docs/api/webhooks.md) ──
+    CommandSpec {
+        name: "webhook list",
+        summary: "A project's webhooks (Maintainer): URL, event types, enabled, the failure count; never a secret.",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn webhook list --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/webhooks"],
+        output: r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","project_id","owner_id","origin","event_types","enabled","secret_version","consecutive_failures"]}}}}"#,
+    },
+    CommandSpec {
+        name: "webhook event-types",
+        summary: "The event types a webhook may name, each with its class (integration, maintainer, deployment), and per class whether you may subscribe (Maintainer).",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn webhook event-types --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/webhooks/event-types"],
+        output: r#"{"type":"object","required":["items","classes"],"properties":{"items":{"type":"array","items":{"type":"object","required":["name","class"]}},"classes":{"type":"array","items":{"type":"object","required":["class","subscribable"]}}}}"#,
+    },
+    CommandSpec {
+        name: "webhook view",
+        summary: "One webhook of a project (Maintainer); disabled_reason says why it is off (manual, failures, failing_24h).",
+        args: &[
+            arg("id", "positional", true, "The webhook id."),
+            arg("--project", "option", true, "The project id."),
+        ],
+        examples: &["gstn webhook view 3 --project 7"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/webhooks/{webhook_id}"],
+        output: r#"{"type":"object","required":["id","project_id","owner_id","origin","event_types","enabled","secret_version","consecutive_failures"]}"#,
+    },
+    CommandSpec {
+        name: "webhook create",
+        summary: "Create a webhook owned by you (a person; Maintainer). The URL must be https and on the operator's allowlist (400 FG-INT-0010 otherwise; loopback, link-local and metadata addresses never). The secret is shown once: give it to the receiver, which verifies Forge-Signature.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--url", "option", true, "The receiver's https URL."),
+            arg("--event", "option", false, "An event type, a family (merge_request.*) or * (repeatable; default *)."),
+        ],
+        examples: &["gstn webhook create --project 7 --url https://kanflow.internal/hooks/forge --event 'merge_request.*'"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/webhooks"],
+        output: r#"{"type":"object","required":["webhook","secret"]}"#,
+    },
+    CommandSpec {
+        name: "webhook update",
+        summary: "Change a webhook's URL or event types (replaced), or enable / disable it; --enable clears the failure count (a person; Maintainer).",
+        args: &[
+            arg("id", "positional", true, "The webhook id."),
+            arg("--project", "option", true, "The project id."),
+            arg("--url", "option", false, "A new https URL (the allowlist again)."),
+            arg("--event", "option", false, "The new event types (repeatable)."),
+            arg("--enable", "flag", false, "Enable it again."),
+            arg("--disable", "flag", false, "Disable it."),
+        ],
+        examples: &["gstn webhook update 3 --project 7 --enable"],
+        scopes: &["api"],
+        routes: &["PATCH /api/v1/projects/{id}/webhooks/{webhook_id}"],
+        output: r#"{"type":"object","required":["outcome","fields","webhook"]}"#,
+    },
+    CommandSpec {
+        name: "webhook delete",
+        summary: "Delete a webhook and its delivery history (a person; Maintainer). Needs --yes.",
+        args: &[
+            arg("id", "positional", true, "The webhook id."),
+            arg("--project", "option", true, "The project id."),
+            arg("--yes", "flag", true, "Confirm."),
+        ],
+        examples: &["gstn webhook delete 3 --project 7 --yes"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/projects/{id}/webhooks/{webhook_id}"],
+        output: r#"{"type":"null"}"#,
+    },
+    CommandSpec {
+        name: "webhook rotate-secret",
+        summary: "Replace a webhook's secret, shown once; the previous secret still signs for 24 hours (two v1 values in Forge-Signature) so the receiver can switch (a person; Maintainer).",
+        args: &[
+            arg("id", "positional", true, "The webhook id."),
+            arg("--project", "option", true, "The project id."),
+        ],
+        examples: &["gstn webhook rotate-secret 3 --project 7"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/webhooks/{webhook_id}/secret"],
+        output: r#"{"type":"object","required":["secret","secret_version","previous_secret_valid_until"]}"#,
+    },
+    CommandSpec {
+        name: "webhook deliveries",
+        summary: "A webhook's delivery history, newest first: state, attempts, the last status, reason and FG code (never a body; Maintainer).",
+        args: &[
+            arg("id", "positional", true, "The webhook id."),
+            arg("--project", "option", true, "The project id."),
+            arg("--before", "option", false, "Only deliveries older than this delivery id."),
+            arg("--limit", "option", false, "1..=100 (default 20)."),
+        ],
+        examples: &["gstn webhook deliveries 3 --project 7 --limit 50 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/webhooks/{webhook_id}/deliveries"],
+        output: r#"{"type":"object","required":["items","next_before"]}"#,
+    },
+    CommandSpec {
+        name: "webhook redeliver",
+        summary: "Deliver one delivery again with the same Forge-Delivery id (a person; Maintainer). 429 while it is pending or within 60 s of its last attempt.",
+        args: &[
+            arg("id", "positional", true, "The webhook id."),
+            arg("delivery", "positional", true, "The delivery id."),
+            arg("--project", "option", true, "The project id."),
+        ],
+        examples: &["gstn webhook redeliver 3 12 --project 7"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver"],
+        output: r#"{"type":"object","required":["outcome"]}"#,
     },
     CommandSpec {
         name: "api",

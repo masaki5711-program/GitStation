@@ -3936,6 +3936,99 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn conflicts --project 7 --iid 3",
+        "gstn conflicts --project 7 --iid 3 --json"
+      ],
+      "name": "conflicts",
+      "output": {
+        "properties": {
+          "predictions": {
+            "items": {
+              "properties": {
+                "outcome": {
+                  "enum": [
+                    "conflict",
+                    "failed"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "iid",
+                "draft",
+                "head_sha",
+                "outcome",
+                "reason",
+                "conflicts",
+                "conflicts_truncated",
+                "checked_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "scan": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "none",
+                  "pending",
+                  "scanning",
+                  "scanned",
+                  "incomplete",
+                  "failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "stale",
+              "scanned_head_sha",
+              "scanned_target_sha",
+              "scanned_at",
+              "peers",
+              "pairs_tried",
+              "pairs_skipped"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "iid",
+          "head_sha",
+          "scan",
+          "predictions"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A merge request's predicted conflicts with the other open merge requests on its target branch, drafts included (M3 X6): the last scan (scanned / incomplete with why / failed) and each merge request whose head conflicts with this one in a file both change, with the files. The server scans after every new head, retarget and reopen; this never starts a scan."
+    },
+    {
+      "args": [
+        {
           "description": "The full path, e.g. team/app.",
           "kind": "positional",
           "name": "path",
@@ -4825,6 +4918,496 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag (default: the default branch).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse spec-refs --project 7",
+        "gstn browse spec-refs --project 7 --ref main --json"
+      ],
+      "name": "browse spec-refs",
+      "output": {
+        "properties": {
+          "config": {
+            "enum": [
+              "absent",
+              "valid",
+              "invalid"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "problem": {
+            "required": [
+              "error_code",
+              "line",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "specs": {
+            "items": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "resolved",
+                    "version_not_found",
+                    "unavailable",
+                    "local"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "repo",
+                    "path"
+                  ]
+                }
+              },
+              "required": [
+                "line",
+                "type",
+                "repo",
+                "path",
+                "pin",
+                "scope",
+                "status",
+                "error_code",
+                "project_id",
+                "commit"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "config",
+          "problem",
+          "specs"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/spec-refs"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show a revision's .forge/repo.yml and its spec references, each resolved with your permissions (unreadable ones are unavailable)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag (default: the default branch).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Only requirements whose id or text contains this (case-insensitive).",
+          "kind": "option",
+          "name": "--search",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "At most this many requirements, 1..=500 (server default 100).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn spec requirements --project 7",
+        "gstn spec requirements --project 7 --ref v1.4 --search reload --json"
+      ],
+      "name": "spec requirements",
+      "output": {
+        "properties": {
+          "config": {
+            "enum": [
+              "absent",
+              "valid",
+              "invalid"
+            ]
+          },
+          "dirs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "documents": {
+            "items": {
+              "required": [
+                "path",
+                "spec",
+                "title",
+                "status",
+                "requirements",
+                "problems"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "problems": {
+            "items": {
+              "required": [
+                "error_code",
+                "path",
+                "line",
+                "rule",
+                "detail"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "requirements": {
+            "items": {
+              "required": [
+                "id",
+                "path",
+                "line",
+                "priority",
+                "deprecated",
+                "spec",
+                "body"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "config",
+          "dirs",
+          "documents",
+          "requirements",
+          "truncated",
+          "problems",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/specs/requirements"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a revision's own specification: its requirements (searchable), documents and document problems (M3 X4)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn spec versions --project 7"
+      ],
+      "name": "spec versions",
+      "output": {
+        "properties": {
+          "truncated": {
+            "type": "boolean"
+          },
+          "versions": {
+            "items": {
+              "required": [
+                "name",
+                "full_name",
+                "commit"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "versions",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/specs/versions"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List the specification's versions (version tags), newest first (M3 X4)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The earlier revision: a commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--from",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The later revision: a commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--to",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn spec diff --project 7 --from v1.4 --to v1.5"
+      ],
+      "name": "spec diff",
+      "output": {
+        "properties": {
+          "changes": {
+            "items": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "added",
+                    "changed",
+                    "removed",
+                    "deprecated"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "path",
+                "line"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "from": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "to": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "changes",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/specs/diff"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show the requirements added, changed, removed or deprecated between two revisions (M3 X4)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag (default: the default branch).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn spec trace --project 7",
+        "gstn spec trace --project 7 --ref main --json"
+      ],
+      "name": "spec trace",
+      "output": {
+        "properties": {
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "references": {
+            "items": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "resolved",
+                    "version_not_found",
+                    "unavailable"
+                  ]
+                }
+              },
+              "required": [
+                "line",
+                "repo",
+                "status",
+                "error_code",
+                "requirements"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "requirements": {
+            "items": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "tested",
+                    "untested"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "source",
+                "path",
+                "line",
+                "deprecated",
+                "status",
+                "test_count",
+                "tests"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "requirements",
+          "references",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/specs/trace"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show each requirement (own, and every pinned reference you may read) with the @req tests naming it (M3 X4)."
+    },
+    {
+      "args": [
+        {
           "description": "The user id.",
           "kind": "positional",
           "name": "id",
@@ -5252,6 +5835,130 @@
         "api"
       ],
       "summary": "Revoke one of your tokens (it may be the one gstn uses). Needs --yes."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn notifications get --json"
+      ],
+      "name": "notifications get",
+      "output": {
+        "properties": {
+          "email_enabled": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muted_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "email_enabled",
+          "language",
+          "muted_kinds",
+          "kinds"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notification-preferences"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show your notification settings: mail on or off, the language of the mail (null: the instance default) and the kinds muted; kinds lists every kind there is."
+    },
+    {
+      "args": [
+        {
+          "description": "on | off: all mail.",
+          "kind": "option",
+          "name": "--email",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "ja | en | id | default (the instance's).",
+          "kind": "option",
+          "name": "--language",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A kind to stop (repeatable; notifications get lists them).",
+          "kind": "option",
+          "name": "--mute",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A kind to receive again (repeatable).",
+          "kind": "option",
+          "name": "--unmute",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn notifications set --email off",
+        "gstn notifications set --mute mr_commented --language en"
+      ],
+      "name": "notifications set",
+      "output": {
+        "properties": {
+          "email_enabled": {
+            "type": "boolean"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "muted_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "email_enabled",
+          "language",
+          "muted_kinds",
+          "kinds"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notification-preferences",
+        "PUT /api/v1/user/notification-preferences"
+      ],
+      "scopes": [
+        "read_api",
+        "api"
+      ],
+      "summary": "Change your notification settings; a flag changes only what it names (the rest is kept). Nobody else's can be changed, administrators included."
     },
     {
       "args": [],
@@ -6429,7 +7136,10 @@
               "id",
               "username"
             ],
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "revision": {
             "type": "integer"
@@ -6530,6 +7240,421 @@
         "read_api"
       ],
       "summary": "Every check run of a commit, by name, with its annotations (as the repository browse API; schema_version 1)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook list --project 7 --json"
+      ],
+      "name": "webhook list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "project_id",
+                "owner_id",
+                "origin",
+                "event_types",
+                "enabled",
+                "secret_version",
+                "consecutive_failures"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/webhooks"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's webhooks (Maintainer): URL, event types, enabled, the failure count; never a secret."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook event-types --project 7 --json"
+      ],
+      "name": "webhook event-types",
+      "output": {
+        "properties": {
+          "classes": {
+            "items": {
+              "required": [
+                "class",
+                "subscribable"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "required": [
+                "name",
+                "class"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "classes"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/webhooks/event-types"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The event types a webhook may name, each with its class (integration, maintainer, deployment), and per class whether you may subscribe (Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook view 3 --project 7"
+      ],
+      "name": "webhook view",
+      "output": {
+        "required": [
+          "id",
+          "project_id",
+          "owner_id",
+          "origin",
+          "event_types",
+          "enabled",
+          "secret_version",
+          "consecutive_failures"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/webhooks/{webhook_id}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "One webhook of a project (Maintainer); disabled_reason says why it is off (manual, failures, failing_24h)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The receiver's https URL.",
+          "kind": "option",
+          "name": "--url",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "An event type, a family (merge_request.*) or * (repeatable; default *).",
+          "kind": "option",
+          "name": "--event",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn webhook create --project 7 --url https://kanflow.internal/hooks/forge --event 'merge_request.*'"
+      ],
+      "name": "webhook create",
+      "output": {
+        "required": [
+          "webhook",
+          "secret"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/webhooks"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create a webhook owned by you (a person; Maintainer). The URL must be https and on the operator's allowlist (400 FG-INT-0010 otherwise; loopback, link-local and metadata addresses never). The secret is shown once: give it to the receiver, which verifies Forge-Signature."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A new https URL (the allowlist again).",
+          "kind": "option",
+          "name": "--url",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new event types (repeatable).",
+          "kind": "option",
+          "name": "--event",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Enable it again.",
+          "kind": "flag",
+          "name": "--enable",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Disable it.",
+          "kind": "flag",
+          "name": "--disable",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn webhook update 3 --project 7 --enable"
+      ],
+      "name": "webhook update",
+      "output": {
+        "required": [
+          "outcome",
+          "fields",
+          "webhook"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/projects/{id}/webhooks/{webhook_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a webhook's URL or event types (replaced), or enable / disable it; --enable clears the failure count (a person; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook delete 3 --project 7 --yes"
+      ],
+      "name": "webhook delete",
+      "output": {
+        "type": "null"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/webhooks/{webhook_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Delete a webhook and its delivery history (a person; Maintainer). Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook rotate-secret 3 --project 7"
+      ],
+      "name": "webhook rotate-secret",
+      "output": {
+        "required": [
+          "secret",
+          "secret_version",
+          "previous_secret_valid_until"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/webhooks/{webhook_id}/secret"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Replace a webhook's secret, shown once; the previous secret still signs for 24 hours (two v1 values in Forge-Signature) so the receiver can switch (a person; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Only deliveries older than this delivery id.",
+          "kind": "option",
+          "name": "--before",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "1..=100 (default 20).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn webhook deliveries 3 --project 7 --limit 50 --json"
+      ],
+      "name": "webhook deliveries",
+      "output": {
+        "required": [
+          "items",
+          "next_before"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/webhooks/{webhook_id}/deliveries"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A webhook's delivery history, newest first: state, attempts, the last status, reason and FG code (never a body; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The webhook id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The delivery id.",
+          "kind": "positional",
+          "name": "delivery",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn webhook redeliver 3 12 --project 7"
+      ],
+      "name": "webhook redeliver",
+      "output": {
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Deliver one delivery again with the same Forge-Delivery id (a person; Maintainer). 429 while it is pending or within 60 s of its last attempt."
     },
     {
       "args": [

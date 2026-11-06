@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`; M3 R6: `merge_settings.codeowners_enforcement_changed`, `.codeowners_enforcement_restored`; M3 C1: `check.completed`; M3 I1b: `work_item.linked`, `.unlinked`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`; M3 R6: `merge_settings.codeowners_enforcement_changed`, `.codeowners_enforcement_restored`; M3 C1: `check.completed`; M3 I1b: `work_item.linked`, `.unlinked`; M3 I2: `webhook.disabled`); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -126,6 +126,16 @@ pub enum EventType {
     /// merged". Deduplicated by
     /// `merge_request_conflict_resolved:<merge_request_id>:<check_seq>`.
     MergeRequestConflictResolved,
+    /// `merge_request.conflict_predicted` (M3 X6, plan 04 C-2, ADR-0024
+    /// Amendment X6): the conflict scan predicts that this merge request
+    /// and another open one on the same target branch (drafts included)
+    /// conflict — they change a common path and `merge-tree` of their two
+    /// heads conflicts there. One event per side (the aggregate is each
+    /// merge request, the payload names the other), written by the scan
+    /// job (actor `system`) only when the pair enters "conflict" (not
+    /// while it stays so). Deduplicated by
+    /// `merge_request_conflict_predicted:<merge_request_id>:<other_id>:<prediction_seq>`.
+    MergeRequestConflictPredicted,
     /// `merge_request.commented` (M3 R3, ADR-0024 §6): a note was added to
     /// a discussion, or a discussion was resolved or unresolved
     /// (`data.action` = `note_added` / `thread_resolved` /
@@ -177,11 +187,18 @@ pub enum EventType {
     /// (history). Deduplicated by `work_item_unlinked:<link_id>`.
     WorkItemUnlinked,
     // ── end M3 I1b ──
+    /// `webhook.disabled` (M3 I2, ADR-0016 Amendment I2; maintainer class):
+    /// the worker disabled a webhook that kept failing (50 attempts in a
+    /// row, or 24 hours without a success). Actor `system`; audited on the
+    /// project. The hook point of a notification (or of another webhook
+    /// naming the type). Deduplicated by
+    /// `webhook_disabled:<webhook_id>:<consecutive_failures>:<µs epoch>`.
+    WebhookDisabled,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 36] = [
+    pub const ALL: [EventType; 38] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -208,6 +225,7 @@ impl EventType {
         EventType::MergeRequestPushed,
         EventType::MergeRequestConflictDetected,
         EventType::MergeRequestConflictResolved,
+        EventType::MergeRequestConflictPredicted,
         EventType::MergeRequestCommented,
         EventType::MergeRequestMerged,
         EventType::MergeRequestSourceBranchDeleted,
@@ -218,6 +236,7 @@ impl EventType {
         EventType::CheckCompleted,
         EventType::WorkItemLinked,
         EventType::WorkItemUnlinked,
+        EventType::WebhookDisabled,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -249,6 +268,7 @@ impl EventType {
             EventType::MergeRequestPushed => "merge_request.pushed",
             EventType::MergeRequestConflictDetected => "merge_request.conflict_detected",
             EventType::MergeRequestConflictResolved => "merge_request.conflict_resolved",
+            EventType::MergeRequestConflictPredicted => "merge_request.conflict_predicted",
             EventType::MergeRequestCommented => "merge_request.commented",
             EventType::MergeRequestMerged => "merge_request.merged",
             EventType::MergeRequestSourceBranchDeleted => "merge_request.source_branch_deleted",
@@ -263,6 +283,7 @@ impl EventType {
             EventType::CheckCompleted => "check.completed",
             EventType::WorkItemLinked => "work_item.linked",
             EventType::WorkItemUnlinked => "work_item.unlinked",
+            EventType::WebhookDisabled => "webhook.disabled",
         }
     }
 
@@ -288,6 +309,7 @@ impl EventType {
             | EventType::MergeRequestPushed
             | EventType::MergeRequestConflictDetected
             | EventType::MergeRequestConflictResolved
+            | EventType::MergeRequestConflictPredicted
             | EventType::MergeRequestCommented
             | EventType::MergeRequestMerged
             | EventType::MergeRequestSourceBranchDeleted
@@ -309,7 +331,8 @@ impl EventType {
             | EventType::ProtectedRefDeleted
             | EventType::ProjectVisibilityChanged
             | EventType::CodeownersEnforcementChanged
-            | EventType::CodeownersEnforcementRestored => VisibilityClass::Maintainer,
+            | EventType::CodeownersEnforcementRestored
+            | EventType::WebhookDisabled => VisibilityClass::Maintainer,
         }
     }
 }

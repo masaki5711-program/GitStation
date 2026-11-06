@@ -23,6 +23,9 @@ pub mod merge_request;
 pub mod move_details;
 pub mod namespace_path;
 pub mod namespace_resolver;
+// ── M3 N1: notification kinds and delivery states ──
+pub mod notification;
+// ── end M3 N1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod path_vectors;
 pub mod push;
@@ -31,16 +34,29 @@ pub mod readiness;
 pub mod ref_name;
 pub mod ref_pattern;
 pub mod ref_protection;
+// ── M3 X1: `.forge/repo.yml` and its spec references ──
+pub mod repo_config;
+// ── end M3 X1 ──
 pub mod repository;
 pub mod request_id;
+pub mod risk;
 pub mod role;
 pub mod scope;
 pub mod session_token;
+pub mod spec_version;
+// ── M3 X4: requirement blocks, `@req` tags, the index, spec-lint and spec-trace ──
+pub mod req_tags;
+pub mod spec_doc;
+pub mod spec_index;
+// ── end M3 X4 ──
 pub mod telemetry;
 pub mod token;
 pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;
+// ── M3 I2: webhooks (ADR-0016 §8) ──
+pub mod webhook;
+// ── end M3 I2 ──
 pub mod work_item;
 
 pub use approval::{ApprovalRuleChange, UnapproveReason, UncountedReason};
@@ -61,7 +77,7 @@ pub use feed::{
 };
 pub use ids::{
     ApprovalId, ApprovalRuleId, DiscussionId, GroupId, IntegrationId, MergeRequestId, NamespaceId,
-    NoteId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,
+    NoteId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId, WebhookDeliveryId, WebhookId,
 };
 pub use integration::{IntegrationChange, IntegrationField, IntegrationKind};
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
@@ -80,6 +96,7 @@ pub use namespace_resolver::{
     GroupRecord, NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess,
     ProjectAccessLoader, ProjectRecord, ProjectRepository, Resolution, Resolved, ResolvedTarget,
 };
+pub use notification::{NotificationKind, NotificationState};
 pub use push::{
     ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedCommits,
     PushedRef, Pusher, MAX_PUSHED_COMMITS, PUSH_RECORD_BUDGET,
@@ -96,6 +113,9 @@ pub use user_kind::UserKind;
 pub use web_path::{
     log_safe_path, parse_positive_id, parse_web_path, GitRoute, InstanceRoute, ParsedPath,
     RouteWord, TailSegments,
+};
+pub use webhook::{
+    DisableReason, WebhookChange, WebhookDeliverySet, WebhookField, WebhookMaterial,
 };
 pub use work_item::{
     find_refs, LinkActorKind, LinkSource, LinkTarget, UnlinkSource, WorkItem, WorkItemChange,
@@ -140,5 +160,7 @@ mod user_kind_tests;
 mod web_keys_tests;
 #[cfg(test)]
 mod web_path_tests;
+#[cfg(test)]
+mod webhook_tests;
 #[cfg(test)]
 mod work_item_tests;

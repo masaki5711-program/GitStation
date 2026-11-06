@@ -332,9 +332,23 @@ fn the_production_registry_starts_the_subscribers_task() {
     let names: Vec<&str> = registry.iter().map(|s| s.name()).collect();
     assert_eq!(
         names,
-        [REFRESH_SUBSCRIBER, forge_db::work_items::WORK_ITEM_SYNC]
+        [
+            REFRESH_SUBSCRIBER,
+            forge_db::work_items::WORK_ITEM_SYNC,
+            // M3 X2: every merge request version asks for its spec drift run.
+            forge_db::checks::spec_drift::SPEC_DRIFT_SUBSCRIBER,
+            // M3 X7: and its risk run.
+            forge_db::checks::risk::RISK_SUBSCRIBER,
+            // M3 X4: and for its spec lint and trace runs.
+            forge_db::checks::spec_index::SPEC_INDEX_SUBSCRIBER,
+        ]
     );
-    let tasks = crate::worker::tasks(&registry, None, None);
+    let tasks = crate::worker::tasks(
+        &registry,
+        None,
+        None,
+        &crate::worker::WebhookLane::default(),
+    );
     assert!(
         tasks.contains(&crate::worker::Task::Subscribers),
         "{tasks:?}"

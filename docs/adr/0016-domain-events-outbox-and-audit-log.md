@@ -1304,3 +1304,187 @@ gstn の `integration_dev_status_commands_read_their_routes`。Runbook `integrat
 
 **受け入れた残り**: (1) `approvals.given` は数えるかを判定しない（判定は git と規則が要る。状態の API を使う）。(2) `project.path` は読む時点の
 パス。(3) 1 回の答えは最大 100 作業項目 × 100 MR を 1 文で読む（上限の中）。
+
+
+## Amendment（2026-11-05、M3 I2 `feat/cross-webhooks`: プロジェクトの Webhook）
+
+計画 11 §5 I2。§8 の Webhook（push）を実装した。§1 の DDL の概略・§7・§8・§11 から変えた点と、実装で決めたこと。
+API の契約は `docs/api/webhooks.md`（配信の本文 schema_version 1、欄は足すだけ）、Runbook は `webhook-delivery`（日本語）。
+
+1. **表**（追記のマイグレーション `20261120200000_webhooks.sql`）:
+   - `forge.webhooks`（`audited`、監査は (`project`, `project_id`)）: §1 の概略に `uid`（秘密の AEAD の関連データ。行の一生で変わらない）、
+     `disabled_reason`（`manual` / `failures` / `failing_24h`、`webhooks_disabled_consistent`: 有効 ⇔ 理由なし）、`secret_version`、
+     `secret_prev_key_id`、`last_delivery_at` を足した。CHECK は URL の形（`webhooks_url_shape`: `http(s)://`、authority に `@` も空白もない、
+     2048 バイトまで。本当の検査は forge-core）、`webhooks_event_types_entries`（1〜64 個、`integrations_event_types_entries` と同じ形）、
+     `webhooks_previous_secret_complete`、`webhooks_failing_since`（連続の失敗 0 ⇔ `failing_since` なし）。配信の計数の列
+     （`consecutive_failures`・`failing_since`・`last_delivery_at`・`updated_at`）は監査しない（`unaudited_columns`）。無効化（人・worker）は監査する。
+     **読み取りのプール（`forge_ro`）は暗号文の 2 列を読めない**（列ごとの GRANT、テスト `the_read_pool_never_reads_a_sealed_secret_and_app_writes_are_audited`）。
+     プロジェクトあたり 20 は、プロジェクトごとの advisory lock の下で数える（`FG-INT-0012 reason=webhook_limit`。I1a の予定どおり同じコード）。
+   - `forge.webhook_deliveries`（`derived`）: (Webhook, イベント) ごとに 1 行（`webhook_deliveries_once`）。`delivery_uid` = `Forge-Delivery`。
+     状態は `pending` / `succeeded` / `failed` / `skipped`、最後の試行の `last_status`・`last_reason`（短いコード）・`last_error_code`・`last_duration_ms`、
+     `redeliveries`。**本文も応答の本文も URL も入れない**。`forge.events` への外部キーは置かない（保持で消える）。Webhook の削除で消え
+     （`ON DELETE CASCADE`、コマンドも先に消す）、プロジェクトの完全削除（purge）も Webhook と一緒に消す（`project.purged` の行が覆う）。
+2. **層**: `forge-integ`（I1c と同じ機能のクレート。他の機能のクレートに依存しない）。SQL は `forge-db` の `webhooks`。
+   - `Webhooks`（経路のコマンドと読み取り）は **2 回判定する**（forge-hosting・forge-checks と同じ）: 経路が `prove()`、`forge-db` の
+     `*_decided` がプロジェクトの行を `FOR SHARE`、呼び出し元のロールとアカウントを `FOR SHARE` で読み、`Authorized::reconfirm` を呼ぶ。
+     `*_decided` を呼ぶのは forge-integ だけ（`tests/decided_callers.rs` の `only_forge_integ_calls_the_webhook_commands`）。
+   - 購読者 `webhook-dispatch`（`independent`）: プロジェクトのあるイベントごとに、そのプロジェクトの有効な Webhook それぞれについて
+     `prove_webhook_delivery()` で判定し、許可リストが種類を認めれば配信の行と最初の `webhook.deliver` ジョブを同じトランザクションで書く。
+     ネットワークには触れない。admin の分類とプロジェクトのないイベントは見ない。知らない種類は warn で飛ばす。
+   - ジョブ `webhook.deliver`（`forge worker` の **Webhook 専用の実行の列**。保守の列（O3）と同じ形で、主の列の 1 件ずつの実行を遅い
+     受信先で塞がない）: 1 回の試行。`webhook.secret_keys_file` が無ければ列も購読者も動かない（doctor `webhook.secret_keys`）。
+3. **判定（§8 の「作成者の権限と分類ごとの権限を投入と配信の両方で」）**: 新しい `Action::WebhookDeliver` を `Resource::ProjectEvents`
+   で判定する（人だけ、Maintainer 以上、admin の分類は常に拒否）。`forge_auth::prove_webhook_delivery(&WebhookMaterial)` が、作成者を
+   セッションの主体として、まず `WebhookManage`（今も Maintainer、有効、削除待ちでない）、次に 4 つの分類を判定し、許された分類と
+   Webhook の `event_types` から `forge_core::WebhookDeliverySet` を作る（構築子 `from_authorized_decisions` を呼ぶのは forge-auth だけ:
+   エージェントモデルの `validate-decided-callers` ゲートと forge-integ のテスト）。失えば `FG-INT-0010 reason=owner_lost`（`decision` に
+   `authorize()` の答えのコード）で、投入なら記録しない、配信なら `skipped`。材料は forge-db が今読む（作成者の行と `PROJECT_ACCESS_SQL`）。
+   `prove_webhook_delivery` を呼ぶのは forge-integ の購読者とジョブだけ（`only_forge_integ_decides_webhook_deliveries`）。
+4. **種類の許可リスト**: `*` と `<家族>.*` は連携の分類だけ、maintainer・deployment の分類は名前の明示だけ、admin の分類は選べない
+   （`forge_core::webhook::webhook_event_types`、`admitted_event_types`）。I1a の連携の許可リスト（連携の分類だけ）とは別の規則。
+5. **Action と権限の表**（`matrix_rows_webhooks.rs`、人だけの双子は `matrix_rows_people.rs`）: `WebhookRead`・`WebhookDeliveryRead`
+   （Maintainer、`read_api`。エージェントのトークンも読める）、`WebhookManage`・`WebhookRedeliver`（人だけ、Maintainer、`api`）、
+   `WebhookDeliver`（上の 3）。deny の行: Developer・Reporter・Guest、メンバーでない（internal は 403、private は 404）、削除待ち、
+   `read_api` だけのトークンでの書き込み、エージェント、サービスアカウント・ボット、`admin` スコープのない管理者のトークン（404）、無効の
+   アカウント、匿名、admin の分類。**IDOR**（別のプロジェクトの Webhook、別の Webhook の配信）は判定の後のコマンドが同じ 404
+   （`resource=webhook` / `webhook_delivery`）で、経路のテスト `another_projects_webhook_is_not_found` が確かめる。許可リスト外の送り先は
+   `authorize()` の判定ではなく、判定の後の forge-core の方針（`FG-INT-0010`）。
+6. **送り先の方針**（`forge_core::webhook::TargetPolicy`、設定 `[webhook]`）: `webhook.allowed_targets`（`host:port`、`a.b.c.d[/len]:port`、
+   `[v6[/len]]:port` を `,` か空白で区切る。既定は空）、`webhook.allow_http`（既定 `false`）、`webhook.secret_keys_file`（`<key_id> <64 桁の 16 進>`、
+   最も大きい `key_id` で封じ、すべてで開く。ADR-0013 の `webhook_secret_keys`）、`webhook.ca_file`（受信先の証明書を検証する CA。
+   公開の CA は使わない）、`webhook.delivery_retention_days`（既定 30、1〜365）。常に拒否は §8 の一覧に、`240.0.0.0/4`（予約）と
+   IPv4 互換の IPv6（`::/96`）を足した。名前が許可リストの `host:port` に一致すれば解決したアドレスは私的な範囲でもよい（運用者がその名前を
+   信頼した）。CIDR で許すときは解決したアドレスの **すべて** が範囲に入ること。解決したアドレスの **どれか** が常に拒否の範囲なら名前ごと拒否
+   （`resolved_denied`）。`localhost` と `*.localhost` は名前の時点で拒否。配信のたびに今の方針と今の解決で検査し直し、検査した最初の
+   アドレスに reqwest の `resolve` で接続を固定する（名前を 2 度引かない）。テストだけの `allowing_loopback_for_tests`（feature
+   `test-support`）はループバックの受信先で配信そのものを試すためで、設定からは決して作れない。
+7. **署名と秘密**: `Forge-Signature: t=<unix秒>,v1=<hex>[,v1=<hex>]`（§8 のとおり `t + "." + delivery_id + "." + body`）に、**鍵の ID**
+   として `Forge-Signature-Kid: <版>[,<前の版>]`（`v1` と同じ順の `secret_version`）を足した。入れ替えは前の秘密を `secret_prev_*` に移し、
+   24 時間（`secret_prev_until`）だけ 2 つ目の `v1` に使う。前の秘密がまだ重なりの中で 2 度入れ替えると、古いほうは捨てる（署名は最大 2 つ）。
+   秘密は 32 バイトの乱数の `whsec_<base64url>` で、作成と入れ替えの答えで 1 回だけ返す。AEAD（AES-256-GCM、関連データ
+   `forge-webhook-secret/1 | uid`）で封じ、別の行の暗号文は開けない。鍵ファイルから消えた鍵の暗号文は `FG-SYS-0002 reason=key_missing`。
+8. **配信と再試行**（§7 の「dead は Webhook の配信なら FG-INT-0004」を、ジョブの dead ではなく配信の状態で表した）: 1 つのジョブが 1 回の試行。
+   ジョブ自身の再試行（3 回）は内部の失敗（DB）だけで、受信先の失敗はジョブを成功で終え、次の試行を **新しいジョブ** として後で投入する
+   （`forge_db::jobs::enqueue_after_on`、重複の鍵 `delivery:<id>:<回>:<試行>`）。待ちは 10 秒 × 4^(n−1)、最大 4 時間、試行は最大 10 回
+   （合計約 16 時間。計画 02 §5.5 の「最大 24 時間」の中）。これで受信先の故障が alert の FG-DB-0006 にならない。試行の失敗は
+   **新しいコード FG-INT-0020** WebhookAttemptFailed（info。計画 11 の 3 つのコードに足した: 各失敗を `error_code` 付きでログに残すため）、
+   最後の失敗は FG-INT-0004（warn）、配信は `failed`。1 回の試行と記録は 1 つのトランザクションで、行の `redeliveries` と状態で古いジョブを
+   捨てる（`Stale`）。
+9. **自動の無効化**: Webhook の試行が 50 回続けて失敗するか、`failing_since` から 24 時間たって失敗したら、同じトランザクションで
+   `enabled = false`、`disabled_reason`、**system の監査の行 `webhook.disabled` と新しいイベント `webhook.disabled`**（maintainer の分類、
+   `EventType::ALL` は 37。重複の鍵 `webhook_disabled:<webhook>:<配信>:<回>:<試行>`）を書き、ログに FG-INT-0011（warn）。このイベントが
+   通知（N1）などの **フックの点**（その種類を明示した別の Webhook にも届く）。待っている配信は次の試行で `skipped`
+   （`webhook_disabled`）。Maintainer が有効に戻すと計数を 0 に戻す。
+10. **再送**: `(webhook, delivery)` の組で探し（IDOR は 404）、同じ `Forge-Delivery` で新しい回（`redeliveries + 1`、試行は 1 から）。
+    配信中と最後の試行から 60 秒以内は `FG-WEB-0010`（`Retry-After`）、無効の Webhook は `FG-WEB-0006 rule=webhook_disabled`。監査 `webhook.redelivered`。
+11. **応答とログ**: 応答は最大 4 KiB だけ読み、保存しない。ログに出すのは最大 128 文字の `response_head`（表示できない文字は `?`、
+    20 文字以上のトークンらしい並びは `[redacted]`）だけ。URL はどこでも `origin`（scheme://host:port）だけ（パスとクエリは受信先の
+    トークンを含みうる）。監査の行も `origin` だけ。
+12. **doctor**: `webhook.allowed_targets`、`webhook.allow_http`（`true` で警告）、`webhook.secret_keys`、`webhook.deliveries`（直近 24 時間の
+    自動の無効化 = FG-INT-0011、`failed` = FG-INT-0004）。`forge worker` の `webhook_delivery_retention`（1 時間ごと）が終わった配信を消す。
+13. **エラーコード**: FG-INT-0004 WebhookDeadLettered（warn）、FG-INT-0010 WebhookTargetForbidden（400、warn）、FG-INT-0011 WebhookDisabled
+    （warn）、FG-INT-0020 WebhookAttemptFailed（info、新規）。FG-INT-0012 の利用者向けの文を Webhook の上限にも合うように直した。
+
+テスト: forge-core `loopback_target_is_int_0010`、`link_local_and_metadata_targets_are_refused`、`userinfo_in_url_is_refused`、
+`the_checked_address_is_the_one_returned`、`signature_is_hmac_sha256_of_t_delivery_and_body`、`a_sealed_secret_round_trips_and_is_bound_to_its_webhook`；
+forge-db `fifty_consecutive_failures_disable_the_webhook`、`failing_for_24_hours_disables_the_webhook`、`a_rotation_keeps_the_previous_secret_signing_for_24_hours`、
+`the_twenty_first_webhook_is_int_0012`、`redelivery_starts_a_new_round_and_is_rate_limited`、`a_purge_removes_the_projects_webhooks_and_deliveries`；
+forge-auth `an_owner_who_lost_the_project_is_int_0010_owner_lost` と権限の表；forge-integ（実際の HTTP）`an_event_is_delivered_once_signed_with_the_secret_shown_at_creation`、
+`a_failed_attempt_is_retried_with_backoff`、`a_delivery_out_of_attempts_is_int_0004`、`redirects_are_never_followed`、
+`a_loopback_receiver_is_refused_at_delivery_by_the_production_policy`、`a_rotation_signs_with_both_secrets_for_the_overlap`、
+`a_webhook_delivers_only_what_its_owner_may_still_see`；forge-web `webhook_routes.rs`；gstn `tests/webhooks.rs`。
+
+### I2 の独立レビュー（2026-11-05）で変えた点
+
+最初のマイグレーション `20261120200000` はまだどこにも適用していないので、そのまま直した（列 `origin` を足し、`forge_ro` から `url` を外した）。
+
+1. **所有者を変更した人に移す**（security HIGH）: URL か `event_types` を変えた人、秘密を入れ替えた人が所有者（`owner_user_id`）になる
+   （`WebhookField::Owner`、監査の `owner_from` / `owner_id`）。変えた人が後で権限を失えば、元の作成者が Maintainer のままでも `owner_lost`。
+   有効・無効の切り替えだけでは所有者は変わらない。テスト `editing_the_target_or_rotating_makes_the_editor_the_owner`、
+   `an_editor_removed_later_gets_deliveries_skipped_owner_lost`。
+2. **`pending` のまま残らない**（silent-failure HIGH）: ジョブが配信を続けられない（読めない payload、最後の実行の DB の失敗）ときは
+   `fail_delivery` で `failed`（`last_reason = internal`、FG-INT-0004 `reason=job_failed`）。生きたジョブのないまま 10 分の `pending` は
+   worker の `webhook_delivery_retention`（5 分ごと）が `sweep_stuck` で `failed`（`stuck`、FG-INT-0004）にする。doctor `webhook.deliveries` は
+   その数（`stuck_pending`）と 24 時間を超えた `pending` を警告する。テスト `a_pending_delivery_without_a_live_job_is_swept_failed`、
+   `a_failed_job_fails_its_pending_delivery`、`a_job_that_cannot_run_fails_its_delivery_with_int_0004`、`stuck_old_or_unkeyed_work_is_a_warning`。
+3. **URL は書き込みだけ**（MEDIUM）: 答えは `origin` だけ、`forge_ro` は `url` を読めない（`the_read_pool_never_reads_the_full_url`）。
+4. **鍵がないのに Webhook がある**（MEDIUM）: doctor が FG-INT-0004 `reason=secret_keys_missing`、worker が `forge.worker.webhook_lane_off` を
+   warn（`error_code=FG-SYS-0002`）で出す。
+5. **送らずに終えた配信をログに残す**（MEDIUM）: `forge.webhooks.skipped`（info、`delivery_id`・`reason`・`request_id`）。
+6. **配信が始まる位置**（MEDIUM）: worker の起動が `webhook-dispatch` を登録し、`forge.worker.webhook_dispatch_from`（`last_seq`）を出す。
+   初めての登録は先頭から（それより前のイベントは配らない）。Runbook に書いた。
+7. **小さな点**（LOW）: 送った後に記録できなかったら `forge.webhooks.attempt_unrecorded`（warn、`delivery_id`・`resend`）。時計が epoch より前なら
+   `t=0` で署名せずに失敗（`clock_before_epoch`）。常に拒否に 100.64.0.0/10（`cgnat`。§8 の「許可リストにあるときだけ」から変えた）、
+   198.18.0.0/15（`benchmarking`）、2001::/32（`teredo`）、64:ff9b:1::/48（`nat64`）、fec0::/10（`site_local`）を足した。
+   `WebhookSecret` は `zeroize` で消す（すでに依存の木にあった）。
+
+**受け入れた残り**: (1) Webhook ごとの同時実行は worker の数まで（M3 は worker 1 つなので 1）。列は 1 件ずつなので、遅い受信先（最大 13 秒）は
+ほかの Webhook の配信を遅らせる。(2) TLS の受信先への配信は自動テストがない（証明書を作るクレートがない）。検証は reqwest の rustls が
+URL の名前で行い、`resolve` の固定はアドレスだけを替える。(3) `work_items` は配信の時点の記録（`work-item-sync` より先に配ることがある。
+履歴 API が正）。(4) 作成者が権限を失った間のイベントは記録しない（ログだけ）。(5) 無効の間のイベントは記録しないので再送できない。
+## Amendment（2026-11-05、M3 N1 `feat/cross-notifications`: メールの通知）
+
+計画 11 §5 N1 と §10 Q6。社内の SMTP の事実（ホスト・送信元・認証）は分かっていない（Q6 の答えは該当の MR に着手する前に利用者に聞く、と
+2026-11-02 に決めた）。**分かっていないものはすべて設定の鍵にし、起動時に検証し、`notify.enabled = true` と中継の名前が揃うまで何も送らない**
+形で実装した。実際のホストには一度も接続していない（試験は同じプロセスの偽の中継）。
+
+1. **通知する範囲（この MR の最小限の集合）**: 計画 11 §3 は「レビューの依頼・承認・マージ・ミラーの失敗」を挙げる。いま発行されているイベントで
+   受け手が決まるものは次の 3 つで、**どれも MR の作者に伝える**。自分の操作は伝えない。
+   | イベント | 種類（`notification_preferences.muted_kinds` の値） | 伝えない場合 |
+   |---|---|---|
+   | `merge_request.approved` | `mr_approved` | 承認した人が作者 |
+   | `merge_request.merged` | `mr_merged` | マージした人（`merged_by`）が作者 |
+   | `merge_request.commented` | `mr_commented` | コメントした人が作者、またはスレッドの解決・再開（`action != note_added`） |
+   **レビューの依頼**: レビュー担当者という概念もイベントも R1〜R6 に無い（`merge_request.review_requested` は 02 §5.8 の一覧にあるが未発行）→ そのイベントを足す
+   MR と一緒に種類を足す。**ミラーの失敗**: O2 のイベントと一緒。**メンション**: コメント本文の解析が無い → 後。種類の追加は
+   `NotificationKind`（forge-core、`EventType` を `_` なしで網羅）と表の CHECK（追記のマイグレーション）を一緒に変える。
+2. **購読者 `notify`（`independent`）**: イベントごと・受け手ごとに 1 行を、購読者の進みと同じトランザクションで `forge.notifications` に書く
+   （`UNIQUE (event_id, user_id)` なので、繰り返された手順は 2 行目を足せない）。書く時点で判断し、理由を残す: `pending`（+ ジョブ `notification.send`）、
+   `skipped`（`muted` / `opted_out`）、`suppressed`（`recipient_inactive` / `recipient_not_person` / `no_address` / `address_invalid` / `not_visible` /
+   `merge_request_gone`）。「なぜメールが来ないのか」は表を見れば答えが出る。未知のイベントの型は警告して通す（`forge.subscribers.unknown_event_type`）。
+   `notify.enabled = false` のワーカーも購読者 `notify` を**登録したまま**にする（`Notify::paused`）: 全イベントを読んで何も記録せずに通す。位置は先頭に追従するので、**無効の間のイベントは後で有効にしても遡って送られず**（無効 → 有効で全期間を一度に送ってしまうのを防ぐ）、購読者の遅れ（`subscribers.lag`）は 0 のまま、イベントの保持も止められない。試験 `turning_mail_off_and_on_again_does_not_mail_the_disabled_period`。最初に購読者を登録するのは最初の起動（先頭から）。
+3. **見える人だけ（送る時にもう一度）**: 可視性は `forge_auth::prove(MergeRequestRead)` を受け手を「セッションの人」として呼ぶ（画面で MR を見せるのと同じ判断。
+   この crate に権限の規則は無い）。**登録時と、メールを作る直前の 2 回**判断する: 間にメンバーから外された・無効にされた・メールを止めた人には送らない
+   （`suppressed` / `skipped` と理由）。プロジェクトの削除待ち・存在しないプロジェクトも「見えない」。
+4. **配信 = ジョブ `notification.send`（ジョブの待ち行列の上）**: 再試行・待ち（10 秒から倍々、上限 1 時間）・鍵・リース・doctor のジョブの健康は待ち行列のもの。
+   `max_attempts` は `notify.max_attempts`。**ワーカーの専用のランナー**（保守のレーンと同じ。中継が遅いと 1 件が `notify.send_timeout_ms` まで塞ぎ、1 つずつしか
+   動かない主のランナーのマージ・作成のジョブを遅らせるため）。ジョブの内容は通知の id だけ。
+5. **二重に送らない（at-most-once）**: 状態機械は forge-db `notify`（`begin_send` が行を `FOR UPDATE` で取って `sending` にし、`finish` は実行の番号で守る）。
+   - 相手が受け取っていないと分かる失敗（接続・TLS・ログイン・時間切れ・4xx）→ `retrying`、ジョブを再試行。最後の試行は `failed`（`tries_used_up`）。**ジョブは成功で終える**
+     （落とすと `dead` = FG-DB-0006 のアラートが SMTP の障害の件数だけ鳴る。結果は通知の行が持つ）。5xx → `failed`（`rejected_permanent`）、再試行しない。
+   - **本文を渡し終えたのに応答が無い**（接続が切れた・時間切れ）→ `unknown`（`outcome_unknown`）。中継が受け取ったかもしれないので**再び送らない**。
+   - 送っている最中に実行が死んだ → 次の実行が `sending` を見つけて `unknown`（`interrupted`）にする。終わった行へのジョブの再実行は何もしない。
+   - 安定した `Message-ID`（`<notification-{id}@…>`）を付ける（人にも中継にも同じ通知と分かる）。
+6. **SMTP の自前のクライアント（`smtp.rs`）— crate を調べた上で**: `lettre` を調べた（MIT、事実上の標準）。依存が 6 つ増え（async-trait・email-encoding・nom・
+   quoted_printable ほか）、**失敗が「本文を渡す前」か「後」かを呼び出し側に教えない**（接続が切れたことしか言わない）。5. の at-most-once はその区別がなければ作れない
+   ので、段階を持つ小さなクライアントを書いた（接続 → TLS → EHLO → STARTTLS → AUTH PLAIN → MAIL → RCPT → DATA → 本文 → QUIT）。段階の失敗は `FG-INT-0015` の
+   `stage` / `reason` / `smtp_code` になる。本文の組み立ては `mail.rs`（ヘッダーは 1 行・RFC 2047、本文は base64、`Auto-Submitted: auto-generated`）。
+   - **接続は `notify.connect_timeout_ms`、会話全体は `notify.send_timeout_ms`**（1 つの締め切りをすべての段階が共有）。応答の行は 2 KiB・64 行まで。
+   - **TLS は設定どおりに必須**: `starttls` で中継が STARTTLS を出さない・拒む場合は clear text で続けない（`tls_failed`、MAIL FROM の前に止まる）。STARTTLS の前に
+     届いていたバイトがあれば拒む（CVE-2011-0411 型）。信頼する根は `notify.smtp_ca_file` の PEM **だけ**（`starttls` / `tls` では必須、無ければ起動時に FG-SYS-0002 `reason=missing`。OS の信頼の保管庫も公開の根の束も使わない。レビュー指摘で保管庫への格下げを削除）（公開の根の束は入れない）。
+     rustls は ring（reqwest が既に使うもの。`aws-lc-rs` は入れない）。
+   - **認証は AUTH PLAIN のみ、TLS の上でだけ**（`tls = none` と認証情報の組は起動時に FG-SYS-0002 `credentials_without_tls`）。パスワードは `notify.smtp_password_file`（0600）。
+     ログにもエラーにも `Debug` にも出ない。
+   - 宛先・送信元はメールボックス 1 つの形だけ通す（`forge_core::config::valid_mailbox`: ASCII、`@` 1 つ、点のあるドメイン）。改行や `>` を含む値は命令にならない。
+7. **メールの中身**: 受け手が GitStation で見られるものだけ（プロジェクトのパス、MR の番号とタイトル、操作した人の表示名、`web.base_url` があればリンク
+   `{origin}/{path}/-/pull/{iid}`）。ブランチ名・コミット・パス・エラー・コードは入れない。タイトルと名前は 1 行にし（制御文字は空白）、長いものは切る。
+   言語は本人の設定、無ければ `notify.default_language`（`ja`）。ja / en / id の 3 つの文と、止め方（`gstn notifications set`）を末尾に書く。
+8. **本人の設定（`notification_preferences`、`GET|PUT /api/v1/user/notification-preferences`）**: メールの入り切り・言語・止める種類。**本人だけ**（ルートに利用者が無く、
+   `Resource::NotificationPreferences { owner }` を他人のものにすると、管理者でも `FG-REPO-0005`）。`Action::NotificationPreferencesRead`（`read_api`）/ `…Write`（`api`）、
+   許可と拒否の行は `matrix_rows.rs`。**管理者の読み取りは作らない**: 利用者の連絡の好みは本人のもので、サポートは通知の行（理由つき）を見れば足りる。
+   エージェントの資格情報は拒まない（`people_only` ではない）。**監査はしない**（誰かのアクセスも他人のデータも変えない。変更はこの表の `updated_at` だけ）。
+   PUT は全体の置き換えで、止める種類は並べ替えて重複を除く。未知の言語・種類は `FG-WEB-0006`（欄の名前はログだけ）で何も変えない。設定は `notify.enabled` に
+   関係なく保存する（後でメールを有効にしたときに効く）。
+9. **失敗・観測**: `FG-INT-0015`（warn、`reason`: `connect_failed` / `connection_lost` / `tls_failed` / `auth_failed` / `timeout` / `rejected_temporary` /
+   `rejected_permanent` / `tries_used_up` / `outcome_unknown`、`stage`、`smtp_code`、`notification_id`、`attempt`）をジョブの境界で 1 回、`request_id` つきで出す。宛先・本文・
+   中継の返事の文はログに出さない。`forge doctor`: `notify.queue`（10 分より古い待ち・24 時間の `failed`・30 日の `unknown` と最も古いものの経過・24 時間の宛先の不備による `suppressed`（`no_address` / `address_invalid`）を人の選択と別に警告。`notify.enabled = false` でも読む）と `notify.relay`（TCP の接続だけ、何も送らない）。
+   Runbook `notification-email`。
+10. **受け入れた残り**: (1) TLS の握手の通し試験は無い（証明書の生成の依存を試験に入れない判断）。設定・CA の読み込み・格下げの拒否・段階の分類は試験している。
+    (2) 通知の行（と設定）の保持期間は決めていない。**プロジェクトの purge も利用者の退職（無効化。利用者の行は消えない）も `notifications` / `notification_preferences` の行を消さない**（`forge_app` に DELETE 権限が無く、プロジェクトへの外部キーも無い）。行が持つのは id・種類・状態・理由だけで、本文・宛先・タイトルは無い。消す仕組みは（1 行 約 200 バイト。アプリ内の通知 U4 が同じ表を使うので、そこで `read_at` と一緒に決める）。
+    (3) 1 通知 = 1 通（ダイジェストなし。計画 08 の「まとめて」は後）。(4) 送るのは 1 件ずつ（レーンのランナーが 1 つ）。
+    (5) 本文の言語は受け手の設定で、操作した人のものではない。
+
+テスト: forge-core の `exactly_the_planned_events_notify`、`notify_*`（設定の検証）。forge-db の `notify::tests`（設定・1 行 1 ジョブ・`begin_send` の 1 回・`unknown`・理由つきの終わり・
+backlog）。forge-notify の `tests/smtp.rs`（偽の中継で配信・段階ごとの失敗の分類・時間切れ・AUTH・格下げの拒否・`smtp_failures_are_int_0015`）、`tests/pipeline.rs`（購読者・見えなくなった人・
+設定・言語・内部の情報が無い・再試行の上限・永続的な拒否・unknown・二重に送らない）。forge-web の `notification_routes`。forge-cli のワーカーの通し試験
+`the_worker_turns_an_approval_event_into_a_mail` と doctor の `notify::tests`。gstn の `tests/notifications.rs`（`get_reads_the_own_settings_route`、`set_changes_only_what_it_is_told_and_keeps_the_rest` ほか）。

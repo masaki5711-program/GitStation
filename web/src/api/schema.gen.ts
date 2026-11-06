@@ -825,6 +825,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A merge request's predicted conflicts with other open merge requests on its target, as last scanned (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_conflicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/discussions": {
         parameters: {
             query?: never;
@@ -1274,6 +1291,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/repository/spec-refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A revision's .forge/repo.yml and its pinned spec references, each resolved for the reader (unreadable ones are unavailable) */
+        get: operations["get_api_v1_projects_id_repository_spec_refs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/repository/tree": {
         parameters: {
             query?: never;
@@ -1302,6 +1336,74 @@ export interface paths {
         put?: never;
         /** Restore a project pending deletion (Owner) */
         post: operations["post_api_v1_projects_id_restore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/specs/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The requirements added, changed, removed or deprecated between two revisions */
+        get: operations["get_api_v1_projects_id_specs_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/specs/requirements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A revision's own specification: its documents, requirements (searchable) and document problems */
+        get: operations["get_api_v1_projects_id_specs_requirements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/specs/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Each requirement (own and pinned references, followed for the reader) with the @req tests naming it */
+        get: operations["get_api_v1_projects_id_specs_trace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/specs/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The specification's versions (version tags), newest first */
+        get: operations["get_api_v1_projects_id_specs_versions"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1342,6 +1444,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's webhooks, never a secret (Maintainer) */
+        get: operations["get_api_v1_projects_id_webhooks"];
+        put?: never;
+        /** Create a webhook owned by the caller; its URL must be on the operator's allowlist (400 FG-INT-0010); the secret is shown once (people only; Maintainer; at most 20) */
+        post: operations["post_api_v1_projects_id_webhooks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/event-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The event types a webhook may name, each with its class, and per class whether the caller may subscribe to it (Maintainer) */
+        get: operations["get_api_v1_projects_id_webhooks_event_types"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/{webhook_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One webhook of the project (Maintainer) */
+        get: operations["get_api_v1_projects_id_webhooks_webhook_id"];
+        put?: never;
+        post?: never;
+        /** Delete a webhook and its delivery history (people only; Maintainer) */
+        delete: operations["delete_api_v1_projects_id_webhooks_webhook_id"];
+        options?: never;
+        head?: never;
+        /** Change a webhook's URL, event types or enabled flag; enabling clears its failure count (people only; Maintainer) */
+        patch: operations["patch_api_v1_projects_id_webhooks_webhook_id"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A webhook's delivery history, newest first: state, attempts, the last status and reason (never a body; Maintainer) */
+        get: operations["get_api_v1_projects_id_webhooks_webhook_id_deliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deliver one delivery again with the same delivery id (people only; Maintainer; 429 while pending or within 60 s of its last attempt) */
+        post: operations["post_api_v1_projects_id_webhooks_webhook_id_deliveries_delivery_id_redeliver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/webhooks/{webhook_id}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace a webhook's secret, shown once; the previous one still signs for 24 hours (people only; Maintainer) */
+        post: operations["post_api_v1_projects_id_webhooks_webhook_id_secret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session": {
         parameters: {
             query?: never;
@@ -1369,6 +1576,24 @@ export interface paths {
         /** The caller's own account (M1 phase 8b MR6) */
         get: operations["get_api_v1_user"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own notification settings: mail on or off, the language of the mail, the kinds muted (nobody else's, administrators included) */
+        get: operations["get_api_v1_user_notification_preferences"];
+        /** Replace the caller's own notification settings (an unknown language or kind is FG-WEB-0006) */
+        put: operations["put_api_v1_user_notification_preferences"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1835,7 +2060,7 @@ export interface components {
             /** Format: int64 */
             id: number;
             name: string;
-            reported_by: components["schemas"]["ReporterBody"];
+            reported_by: null | components["schemas"]["ReporterBody"];
             /**
              * Format: int64
              * @description Counts the run's reports (1 at creation).
@@ -1847,7 +2072,7 @@ export interface components {
         };
         /** @description `GET …/commits/{sha}/checks` (docs/api/checks.md, schema_version 1). */
         CheckRunList: {
-            /** @description By name; at most 100. */
+            /** @description By name; at most 100 reported, plus forge's own (`forge/spec-drift`, `forge/risk`). */
             check_runs: components["schemas"]["CheckRunBody"][];
             head_sha: string;
             /** Format: int32 */
@@ -1983,6 +2208,85 @@ export interface components {
             target_sha: string | null;
             title: string;
         };
+        /** @description One current prediction. */
+        ConflictPredictionBody: {
+            /** @description UTC, RFC 3339. */
+            checked_at: string;
+            /**
+             * @description The conflicted paths both change (at most 100;
+             *     `conflicts_truncated` beyond).
+             */
+            conflicts: string[];
+            conflicts_truncated: boolean;
+            draft: boolean;
+            /**
+             * @description The other merge request's head the prediction is about (its current
+             *     head).
+             */
+            head_sha: string;
+            /**
+             * Format: int64
+             * @description The other merge request's number in the project.
+             */
+            iid: number;
+            /** @description `conflict` (predicted) or `failed` (could not be decided). */
+            outcome: string;
+            /**
+             * @description `failed`: `unrelated_histories`, `git_timeout`, `git_busy`,
+             *     `git_failed`.
+             */
+            reason: string | null;
+        };
+        /** @description The last scan of the merge request. */
+        ConflictScanBody: {
+            /** Format: int32 */
+            pairs_skipped: number;
+            /** Format: int32 */
+            pairs_tried: number;
+            /**
+             * Format: int32
+             * @description Other open merge requests considered, trial merges run, candidates
+             *     left out by a cap or the time budget.
+             */
+            peers: number;
+            /**
+             * @description `incomplete`: `peers_capped`, `pairs_capped`, `budget_exhausted`,
+             *     `pair_failed`; `failed`: `no_version`, `target_missing`,
+             *     `unrelated_histories`, `git_timeout`, `git_busy`, `git_failed`,
+             *     `job_failed`, `job_stale`.
+             */
+            reason: string | null;
+            /** @description UTC, RFC 3339. */
+            scanned_at: string | null;
+            scanned_head_sha: string | null;
+            /** @description The target tip the finished scan read. */
+            scanned_target_sha: string | null;
+            /**
+             * @description The finished scan looked at another head, target branch or target
+             *     tip than the current ones (its predictions about the head still
+             *     stand; a new head is scanned by the version job, a moved target by
+             *     the next push).
+             */
+            stale: boolean;
+            /**
+             * @description `none` (never scanned), `pending`, `scanning`, `scanned`,
+             *     `incomplete` (some pairs were not tried: see `reason`) or `failed`.
+             */
+            status: string;
+        };
+        /** @description A merge request's predicted conflicts. */
+        ConflictsBody: {
+            /** @description The merge request's current head (`null` before its first version). */
+            head_sha: string | null;
+            /** Format: int64 */
+            iid: number;
+            /**
+             * @description By the other merge request's number; only pairs whose two heads are
+             *     both merge requests' current heads.
+             */
+            predictions: components["schemas"]["ConflictPredictionBody"][];
+            scan: components["schemas"]["ConflictScanBody"];
+        };
         /** @description `POST /api/v1/groups` and `…/{id}/subgroups`. */
         CreateGroup: {
             description?: string | null;
@@ -2079,6 +2383,21 @@ export interface components {
              */
             scopes: string[];
         };
+        /** @description `POST …/webhooks`. */
+        CreateWebhook: {
+            /**
+             * @description `*` (every integration-class event, the default), a family
+             *     (`merge_request.*`) of the integration class, or an exact type name;
+             *     a maintainer- or deployment-class type only by its name; 1..=64.
+             */
+            event_types?: string[] | null;
+            /**
+             * @description An absolute `https` URL (`http` only where the operator allows it)
+             *     of at most 2048 bytes, without user information or a fragment, whose
+             *     host and port the operator's allowlist names.
+             */
+            url: string;
+        };
         /** @description A created token: the secret, shown this once. */
         CreatedToken: {
             expires_at: string;
@@ -2090,6 +2409,15 @@ export interface components {
             scopes: string[];
             /** @description The whole token. It is never shown again: store it now. */
             token: string;
+        };
+        /** @description A created webhook and its secret (shown this once). */
+        CreatedWebhook: {
+            /**
+             * @description `whsec_…`: the HMAC-SHA256 key of `Forge-Signature`. Never shown
+             *     again.
+             */
+            secret: string;
+            webhook: components["schemas"]["WebhookBody"];
         };
         /**
          * @description `DELETE /api/v1/projects/{id}`: when the grace period began and when
@@ -2105,6 +2433,46 @@ export interface components {
              *     purge has started).
              */
             purge_after: string;
+        };
+        /** @description One delivery (never the body sent or the answer's body). */
+        DeliveryBody: {
+            /** Format: int32 */
+            attempts: number;
+            created_at: string;
+            /** @description The `Forge-Delivery` value. */
+            delivery_id: string;
+            /** @description `evt_…` (the feed's id). */
+            event_id: string;
+            /** Format: int64 */
+            event_seq: number;
+            event_type: string;
+            finished_at: string | null;
+            /** Format: int64 */
+            id: number;
+            last_attempt_at: string | null;
+            /** Format: int32 */
+            last_duration_ms: number | null;
+            last_error_code: string | null;
+            /**
+             * @description `status`, `redirect`, `connect`, `timeout`, `tls`, `dns`,
+             *     `target_forbidden`, … (docs/api/webhooks.md).
+             */
+            last_reason: string | null;
+            /** Format: int32 */
+            last_status: number | null;
+            /** Format: int32 */
+            redeliveries: number;
+            /** @description `pending`, `succeeded`, `failed` or `skipped`. */
+            state: string;
+        };
+        /** @description A page of the delivery history. */
+        DeliveryList: {
+            items: components["schemas"]["DeliveryBody"][];
+            /**
+             * Format: int64
+             * @description Pass as `before` for the next (older) page; `null`: no more.
+             */
+            next_before: number | null;
         };
         /** @description The approvals given on the head and target now. */
         DevStatusApprovalsBody: {
@@ -2341,6 +2709,35 @@ export interface components {
             error_code: string;
             request_id: string;
             user_message: string;
+        };
+        /** @description One class of event types and whether the caller may subscribe to it. */
+        EventClassBody: {
+            /**
+             * @description `integration` (also what `*` and `<family>.*` name), `maintainer`
+             *     or `deployment` (the last two only by exact type name).
+             */
+            class: string;
+            /**
+             * @description `false` for a credential that may read but not subscribe (an agent's
+             *     token, a service account): create and update would refuse it.
+             */
+            subscribable: boolean;
+        };
+        /** @description One event type a webhook may name. */
+        EventTypeBody: {
+            /**
+             * @description `integration`, `maintainer` or `deployment` (the admin class is never
+             *     listed).
+             */
+            class: string;
+            /** @description The exact name (`merge_request.opened`). */
+            name: string;
+        };
+        /** @description The event types a webhook may name. */
+        EventTypeList: {
+            classes: components["schemas"]["EventClassBody"][];
+            /** @description Sorted by name. */
+            items: components["schemas"]["EventTypeBody"][];
         };
         /** @description The actor of an event. */
         FeedActorBody: {
@@ -2926,6 +3323,23 @@ export interface components {
              */
             version: number;
         };
+        /** @description The caller's settings. */
+        PreferencesBody: {
+            email_enabled: boolean;
+            /** @description Every kind of notification there is. */
+            kinds: string[];
+            language: string | null;
+            muted_kinds: string[];
+        };
+        /** @description `PUT /api/v1/user/notification-preferences`. */
+        PreferencesInput: {
+            /** @description `false` stops every mail. */
+            email_enabled: boolean;
+            /** @description `ja`, `en` or `id`; `null` (or absent) for the instance default. */
+            language?: string | null;
+            /** @description Kinds to stop (`GET`'s `kinds` lists them). */
+            muted_kinds: string[];
+        };
         /** @description A project as the API shows it. */
         ProjectBody: {
             /** @description UTC, RFC 3339. */
@@ -3112,6 +3526,11 @@ export interface components {
              */
             reset_approvals_on_push: boolean;
         };
+        /** @description A redelivery was queued. */
+        RedeliveryQueued: {
+            /** @description `queued`. */
+            outcome: string;
+        };
         /** @description One branch or tag. */
         RefBody: {
             /** @description The commit it peels to; `null` for a tag of a tree or a blob. */
@@ -3155,6 +3574,15 @@ export interface components {
              *     (ADR-0015 rules; not a reserved word).
              */
             username: string;
+        };
+        /** @description Why `.forge/repo.yml` cannot be used. */
+        RepoConfigProblemBody: {
+            /** @description `FG-REPO-0024`. */
+            error_code: string;
+            /** @description 1-based; 0 for the whole file. */
+            line: number;
+            /** @description The rule broken (`FG-REPO-0024` lists them). */
+            reason: string;
         };
         /** @description `POST …/commits/{sha}/checks`. */
         ReportCheckRun: {
@@ -3233,6 +3661,14 @@ export interface components {
          * @enum {string}
          */
         RoleName: "guest" | "reporter" | "developer" | "maintainer" | "owner";
+        /** @description A rotated secret (shown this once). */
+        RotatedWebhookSecret: {
+            /** @description The previous secret still signs until then (UTC, RFC 3339). */
+            previous_secret_valid_until: string;
+            secret: string;
+            /** Format: int32 */
+            secret_version: number;
+        };
         /** @description One approval rule's state on this merge request. */
         RuleStatusBody: {
             /** @description The rule's target pattern matches the merge request's target. */
@@ -3355,6 +3791,203 @@ export interface components {
         /** @description `PUT /api/v1/projects/{id}/visibility`. */
         SetVisibility: {
             visibility: components["schemas"]["VisibilityName"];
+        };
+        /** @description One requirement's change. */
+        SpecChangeBody: {
+            id: string;
+            /** @description `added`, `changed`, `removed` or `deprecated`. */
+            kind: string;
+            line: number;
+            /** @description Where it is in `to` (in `from` when removed). */
+            path: string;
+        };
+        /** @description `GET …/specs/diff`. */
+        SpecDiffBody: {
+            /** @description By id. */
+            changes: components["schemas"]["SpecChangeBody"][];
+            from: components["schemas"]["RevBody"];
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            to: components["schemas"]["RevBody"];
+        };
+        /** @description One specification document. */
+        SpecDocumentBody: {
+            path: string;
+            /** @description Rules the document breaks (they are in `problems`). */
+            problems: number;
+            /** @description Requirement blocks read. */
+            requirements: number;
+            /** @description `spec:` (`null` when the front matter cannot be used). */
+            spec: string | null;
+            /** @description `draft`, `review`, `approved` or `deprecated`. */
+            status: string | null;
+            title: string | null;
+        };
+        /** @description A bound the index hit. */
+        SpecIncompleteBody: {
+            /** @description `FG-REPO-0031`. */
+            error_code: string;
+            /** @description `spec_files`, `spec_bytes` or `tag_lines`. */
+            reason: string;
+        };
+        /** @description How a referenced repository's version is fixed. */
+        SpecPinBody: {
+            /** @description The tag or branch name as written. */
+            name: string;
+            /** @description `refs/tags/…` or `refs/heads/…`. */
+            ref_name: string;
+            /** @description `version` (a tag) or `track` (a branch). */
+            type: string;
+        };
+        /** @description One rule broken. */
+        SpecProblemBody: {
+            detail: string | null;
+            /** @description `FG-REPO-0028`. */
+            error_code: string;
+            /** @description 1-based; 0 for the whole file. */
+            line: number;
+            path: string;
+            rule: string;
+        };
+        /** @description One `specs:` entry, resolved for the reader. */
+        SpecRefBody: {
+            /** @description The pinned commit (`resolved`), or the read commit (`local`). */
+            commit: string | null;
+            /**
+             * @description `FG-REPO-0025` (`version_not_found`), `FG-REPO-0026`
+             *     (`unavailable`); `null` otherwise.
+             */
+            error_code: string | null;
+            /** @description The entry's line in `.forge/repo.yml` (1-based). */
+            line: number;
+            /** @description The directory as written (`path` entries). */
+            path: string | null;
+            pin: null | components["schemas"]["SpecPinBody"];
+            /**
+             * Format: int64
+             * @description The referenced project, when the reader may read it.
+             */
+            project_id: number | null;
+            /** @description The repository path as written (`repo` entries). */
+            repo: string | null;
+            /** @description The requirement id patterns this repository covers. */
+            scope: string[];
+            /**
+             * @description `resolved`, `version_not_found`, `unavailable` (`repo` entries) or
+             *     `local` (`path` entries).
+             */
+            status: string;
+            /** @description `repo` (another repository) or `path` (this one's directory). */
+            type: string;
+        };
+        /** @description A revision's `.forge/repo.yml` and its spec references. */
+        SpecRefsBody: {
+            /** @description `absent`, `valid` or `invalid`. */
+            config: string;
+            /** @description `.forge/repo.yml`. */
+            path: string;
+            problem: null | components["schemas"]["RepoConfigProblemBody"];
+            /** @description The revision read. */
+            ref: components["schemas"]["RevBody"];
+            /** @description In file order; empty unless `valid`. */
+            specs: components["schemas"]["SpecRefBody"][];
+        };
+        /** @description One requirement. */
+        SpecRequirementBody: {
+            /** @description The block's text. */
+            body: string;
+            deprecated: boolean;
+            id: string;
+            /** @description The opening line (1-based). */
+            line: number;
+            path: string;
+            /** @description `must`, `should`, `could`, `wont`. */
+            priority: string | null;
+            /** @description The document's `spec:`. */
+            spec: string | null;
+        };
+        /** @description `GET …/specs/requirements`. */
+        SpecRequirementsBody: {
+            /** @description `.forge/repo.yml`: `absent`, `valid` or `invalid`. */
+            config: string;
+            /** @description The own specification directories read. */
+            dirs: string[];
+            documents: components["schemas"]["SpecDocumentBody"][];
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            /**
+             * @description The documents' rules (duplicates included; a broken `@req`
+             *     reference needs the tags: forge/spec-lint and the trace), at most 200.
+             */
+            problems: components["schemas"]["SpecProblemBody"][];
+            ref: components["schemas"]["RevBody"];
+            /** @description By id (the first definition of an id defined twice). */
+            requirements: components["schemas"]["SpecRequirementBody"][];
+            /** @description More requirements matched than `limit`. */
+            truncated: boolean;
+        };
+        /** @description Where a test is. */
+        SpecTestPlaceBody: {
+            line: number;
+            path: string;
+        };
+        /** @description `GET …/specs/trace`. */
+        SpecTraceBody: {
+            incomplete: null | components["schemas"]["SpecIncompleteBody"];
+            ref: components["schemas"]["RevBody"];
+            /** @description `repo:` entries in file order (none when the file cannot be used). */
+            references: components["schemas"]["SpecTraceReferenceBody"][];
+            /**
+             * @description The own specification's requirements by id, then each followed
+             *     reference's in file order.
+             */
+            requirements: components["schemas"]["SpecTraceRowBody"][];
+        };
+        /** @description One `repo:` entry of the trace. */
+        SpecTraceReferenceBody: {
+            /** @description `FG-REPO-0025` / `FG-REPO-0026`; `null` when resolved. */
+            error_code: string | null;
+            /** @description Its line in `.forge/repo.yml`. */
+            line: number;
+            /** @description As written. */
+            repo: string;
+            /** @description Its requirements within the entry's scope. */
+            requirements: number;
+            /** @description `resolved`, `version_not_found` or `unavailable`. */
+            status: string;
+        };
+        /** @description One requirement with the tests naming it. */
+        SpecTraceRowBody: {
+            deprecated: boolean;
+            id: string;
+            line: number;
+            /** @description In its source repository. */
+            path: string;
+            /** @description The own directory (`spec/`) or the `repo:` path as written. */
+            source: string;
+            /** @description `tested` or `untested`. */
+            status: string;
+            /** @description Every `@req` tag of this repository naming it. */
+            test_count: number;
+            /** @description The first 20 of them. */
+            tests: components["schemas"]["SpecTestPlaceBody"][];
+        };
+        /** @description One version tag. */
+        SpecVersionBody: {
+            /** @description The commit it peels to. */
+            commit: string;
+            /** @description `refs/tags/…`. */
+            full_name: string;
+            /** @description The tag (`v1.5`). */
+            name: string;
+        };
+        /** @description `GET …/specs/versions`. */
+        SpecVersionsBody: {
+            /**
+             * @description More versions than one answer lists, or more refs than one listing
+             *     keeps.
+             */
+            truncated: boolean;
+            /** @description Newest first within a series (`v` / `spec-v`), series by name. */
+            versions: components["schemas"]["SpecVersionBody"][];
         };
         /** @description `POST …/discussions`. */
         StartDiscussion: {
@@ -3589,6 +4222,14 @@ export interface components {
             owner_id?: number | null;
             purpose?: string | null;
         };
+        /** @description `PATCH …/webhooks/{webhook_id}`: the fields to change. */
+        UpdateWebhook: {
+            /** @description `true` enables it again and clears its failure count. */
+            enabled?: boolean | null;
+            /** @description Replaces the allowlist (the rules of `CreateWebhook`). */
+            event_types?: string[] | null;
+            url?: string | null;
+        };
         /** @description What an update changed. */
         UpdatedIntegration: {
             /** @description The fields that changed: `enabled`, `event_types`. */
@@ -3604,6 +4245,14 @@ export interface components {
             /** @description `updated`, or `unchanged` (nothing was written). */
             outcome: string;
             service_account: components["schemas"]["ServiceAccountBody"];
+        };
+        /** @description What an update changed. */
+        UpdatedWebhook: {
+            /** @description `url`, `event_types`, `enabled`. */
+            fields: string[];
+            /** @description `updated`, or `unchanged` (nothing was written). */
+            outcome: string;
+            webhook: components["schemas"]["WebhookBody"];
         };
         /** @description One search match: names only. */
         UserName: {
@@ -3713,6 +4362,47 @@ export interface components {
          * @enum {string}
          */
         VisibilityName: "private" | "internal";
+        /** @description One webhook (never a secret). */
+        WebhookBody: {
+            /** Format: int32 */
+            consecutive_failures: number;
+            created_at: string;
+            /** @description `manual`, `failures` (50 failed attempts in a row) or `failing_24h`. */
+            disabled_reason: string | null;
+            enabled: boolean;
+            /** @description Sorted. */
+            event_types: string[];
+            failing_since: string | null;
+            /** Format: int64 */
+            id: number;
+            last_delivery_at: string | null;
+            /**
+             * @description `scheme://host:port` of the URL. The full URL is write-only: its
+             *     path or query may hold the receiver's token (I2 review).
+             */
+            origin: string;
+            /**
+             * Format: int64
+             * @description The person who answers for it: who created it, or last changed its
+             *     URL or event types or rotated its secret. Deliveries stop when they
+             *     can no longer manage the project's webhooks.
+             */
+            owner_id: number;
+            /** @description The previous secret still signs until then (UTC, RFC 3339). */
+            previous_secret_valid_until: string | null;
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * Format: int32
+             * @description The version of the current secret (`Forge-Signature-Kid`).
+             */
+            secret_version: number;
+            updated_at: string;
+        };
+        /** @description A project's webhooks. */
+        WebhookList: {
+            items: components["schemas"]["WebhookBody"][];
+        };
         /** @description A work item as kanflow names it (02 §5.7's `work_items` entry). */
         WorkItemBody: {
             /** @description The external (kanflow) project of the binding. */
@@ -6029,6 +6719,38 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_merge_requests_iid_conflicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConflictsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_merge_requests_iid_discussions: {
         parameters: {
             query?: never;
@@ -7140,6 +7862,40 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_repository_spec_refs: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecRefsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_repository_tree: {
         parameters: {
             query?: {
@@ -7194,6 +7950,145 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_specs_diff: {
+        parameters: {
+            query?: {
+                /** @description The earlier revision (a commit id, a branch or a tag) */
+                from?: string;
+                /** @description The later revision (a commit id, a branch or a tag) */
+                to?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecDiffBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_specs_requirements: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+                /** @description Only requirements whose id or text contains this (case-insensitive, at most 256 bytes) */
+                q?: string;
+                /** @description At most this many requirements (default 100) */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecRequirementsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_specs_trace: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecTraceBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_specs_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpecVersionsBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -7277,6 +8172,303 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_webhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_webhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWebhook"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedWebhook"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_webhooks_event_types: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventTypeList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_webhooks_webhook_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_webhooks_webhook_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    patch_api_v1_projects_id_webhooks_webhook_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWebhook"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatedWebhook"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_webhooks_webhook_id_deliveries: {
+        parameters: {
+            query?: {
+                /** @description Only deliveries with a smaller id (the last id of the previous page) */
+                before?: number;
+                /** @description Deliveries per page, 1..=100 (default 20), newest first */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_webhooks_webhook_id_deliveries_delivery_id_redeliver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                delivery_id: number;
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeliveryQueued"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_webhooks_webhook_id_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                webhook_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatedWebhookSecret"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_session: {
         parameters: {
             query?: never;
@@ -7322,6 +8514,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserSelf"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_notification_preferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreferencesBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_user_notification_preferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreferencesInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreferencesBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

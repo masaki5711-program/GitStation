@@ -321,11 +321,16 @@ tls_root_cert = "<INTERNAL_CA_PEM>"
 | `api.cursor_keys_file` | `FORGE_API_CURSOR_KEYS_FILE` | 一覧カーソルの鍵 | **serve に必須** | `<SECRETS_DIR>/cursor-keys` |
 | `api.list_max_concurrent` / `list_max_concurrent_per_principal` / `cursor_max_age_s` | `FORGE_API_…` | 一覧の同時実行・カーソルの寿命 | 任意 | 16 / 2 / 86400 |
 | `audit.seal_keys_file` | `FORGE_AUDIT_SEAL_KEYS_FILE` | 監査の封印の鍵 | **worker に必須** | `<SECRETS_DIR>/audit-seal-keys` |
-| `git.http.fetch_request_max_bytes` / `idle_timeout_ms` / `timeout_ms` / `body_timeout_ms` / `max_object_wants` / `want_check_timeout_ms` / `max_streams` / `max_streams_per_principal` / `push_max_bytes` | `FORGE_GIT_HTTP_…` | Smart HTTP の上限 | 任意 | 16 MiB / 60 s / 3600 s / 300 s / 10000 / 30 s / 16 / 4 / 2 GiB |
+| `git.http.fetch_request_max_bytes` / `idle_timeout_ms` / `timeout_ms` / `body_timeout_ms` / `max_object_wants` / `want_check_timeout_ms` / `max_streams` / `max_streams_per_principal` / `push_max_bytes` / `push_max_blob_bytes` | `FORGE_GIT_HTTP_…` | Smart HTTP の上限（`push_max_blob_bytes` は push の検査の 1 ファイルの上限、M3 X8） | 任意 | 16 MiB / 60 s / 3600 s / 300 s / 10000 / 30 s / 16 / 4 / 2 GiB / 100 MiB |
 | `hosting.deletion_grace_days` / `purge_interval_secs` | `FORGE_HOSTING_…` | 削除待ちの日数（1〜365）・purge の周期（10〜86400） | 任意 | 7 / 300 |
 | `review.mergeability_fanout_max` | `FORGE_REVIEW_MERGEABILITY_FANOUT_MAX` | target の 1 回の push でマージできるかを確かめ直す MR の数の上限（1〜500。超えた分は `unchecked`） | 任意 | 50 |
 | `review.check_run_retention_days` | `FORGE_REVIEW_CHECK_RUN_RETENTION_DAYS` | チェックの実行（と注釈）を `updated_at` からこの日数で消す（開いている MR の今の head は残す。30〜3650。Runbook `checks-reporting` の E） | 任意 | 180 |
 | `maintenance.interval_days` / `window_start` / `window_end` / `window_time_zone` / `prune_grace_hours` / `step_timeout_secs` / `fsck_interval_days` / `batch_max` / `refs_warn` | `FORGE_MAINTENANCE_…` | リポジトリの保守（M3 O3、Runbook `repo-maintenance`）: 間隔・夜の窓・猶予（24 時間以上）・1 手順の時間切れ・全体の fsck の間隔・同時に生きている保守のジョブ・ref の数の warn | 任意 | 7 / 02:00 / 05:00 / Asia/Tokyo / 48 / 1800 / 30 / 10 / 100000 |
+| `notify.enabled` | `FORGE_NOTIFY_ENABLED` | メールの通知（M3 N1、Runbook `notification-email`）。`true` でだけ購読者とメールのランナーが動く。社内の SMTP の事実は未定（計画 11 Q6）なので、下の鍵がすべて設定になっている | 任意 | false |
+| `notify.smtp_host` / `smtp_port` / `smtp_tls` / `smtp_ca_file` | `FORGE_NOTIFY_SMTP_…` | 中継の名前・ポート・保護（`none` / `starttls`（必須）/ `tls`）・検証する根の PEM（`starttls` / `tls` では必須。OS の保管庫は使わない）。試験環境は mailpit `127.0.0.1:28025`（`smtp_tls = none`） | `notify.enabled` なら host が必須 | — / 587・465・25 / starttls / — |
+| `notify.smtp_username` / `smtp_password_file` | `FORGE_NOTIFY_SMTP_…` | AUTH PLAIN。両方か、どちらも無し。`none` とは組めない。ファイルは 0600、起動時に読む | 任意 | なし |
+| `notify.from_address` / `from_name` | `FORGE_NOTIFY_FROM_…` | 送信元（`local@domain` の形だけ）と表示名 | `notify.enabled` なら address が必須 | — / GitStation |
+| `notify.default_language` / `connect_timeout_ms` / `send_timeout_ms` / `max_attempts` | `FORGE_NOTIFY_…` | 言語を選んでいない人の言語（ja / en / id）・接続 / 会話全体の時間切れ・1 通あたりの試行回数（1〜25） | 任意 | ja / 5000 / 30000 / 5 |
 | `web.base_url` | `FORGE_WEB_BASE_URL` | 人が開く URL。CSRF の `Origin`・OIDC の `redirect_uri` の元 | **serve に必須** | `https://<TEST_SERVER_HOST>` |
 | `web.session_key_file` | `FORGE_WEB_SESSION_KEY_FILE` | セッション用の鍵 | **`auth.oidc` を使うなら必須** | `<SECRETS_DIR>/web-session-keys` |
 | `web.session_idle_secs` / `session_absolute_secs` | `FORGE_WEB_SESSION_…` | 無操作 / 絶対の寿命（60 以上、idle ≤ absolute ≤ 86400） | 任意 | 14400 / 43200 |

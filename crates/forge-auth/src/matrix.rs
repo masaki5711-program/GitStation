@@ -282,6 +282,9 @@ pub(crate) enum Fixture {
     MakeInternalDeleted,
     OwnToken,
     ForeignToken,
+    /// The caller's own notification settings (M3 N1) or another user's.
+    OwnNotificationPreferences,
+    ForeignNotificationPreferences,
     /// Creating an own token with plain scopes.
     OwnTokenRequest,
     /// Creating an own token that carries the admin scope.
@@ -911,6 +914,10 @@ impl Fixture {
             },
             Fixture::OwnToken => Resource::Token { owner: ME },
             Fixture::ForeignToken => Resource::Token { owner: OTHER },
+            Fixture::OwnNotificationPreferences => Resource::NotificationPreferences { owner: ME },
+            Fixture::ForeignNotificationPreferences => {
+                Resource::NotificationPreferences { owner: OTHER }
+            }
             Fixture::OwnTokenRequest => Resource::TokenRequest {
                 owner: ME,
                 scopes: vec![Scope::ReadRepository],
@@ -1048,6 +1055,9 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_act_as::ACT_AS_ROWS,
         crate::matrix_rows_act_as::CONFIRM_ROWS,
         &crate::matrix_rows_act_as::generated_denies(),
+        crate::matrix_rows_webhooks::WEBHOOK_ROWS.as_slice(),
+        crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
+        crate::matrix_rows_spec_refs::SPEC_READ_ROWS,
     ]
     .concat()
 });

@@ -429,6 +429,22 @@ async fn finish_steps(
             .map_err(|e| query_error("projects.purge.finish.redirects", e))
         })
         .await?;
+    // M3 I2: the project's webhooks and their delivery history (audited
+    // on the project: the project.purged row covers them).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.webhook_deliveries WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.webhook_deliveries",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.webhooks WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.webhooks",
+    )
+    .await?;
     // M3 I1a: the project's integration binding goes with it (the service
     // account's membership goes with the members below).
     delete_rows(
@@ -563,6 +579,21 @@ async fn finish_steps(
         "DELETE FROM forge.merge_request_mergeability WHERE project_id = $1",
         project.get(),
         "projects.purge.finish.merge_request_mergeability",
+    )
+    .await?;
+    // M3 X6: the conflict predictions reference the merge requests.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_conflict_pairs WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_conflict_pairs",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_conflict_scans WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_conflict_scans",
     )
     .await?;
     // M3 I1b: the work item links reference the merge requests (the work

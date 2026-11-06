@@ -2060,14 +2060,14 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
         "PUT",
         &rule_uri,
         olga.clone(),
-        Some(json!({"required_checks": ["ci/gates", "forge/risk"], "require_work_item_link": false, "expected_updated_at": null})),
+        Some(json!({"required_checks": ["ci/gates", "forge/deploy-gate"], "require_work_item_link": false, "expected_updated_at": null})),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["warnings"], json!(["required_checks_unreportable"]));
     assert_eq!(
         body["unreportable_checks"],
-        json!(["ci/gates", "forge/risk"])
+        json!(["ci/gates", "forge/deploy-gate"])
     );
     // The grant: administrators only, for one project; then it narrows the
     // warning to the name without a reporter. A grant on another project

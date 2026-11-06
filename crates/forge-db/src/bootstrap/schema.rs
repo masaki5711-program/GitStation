@@ -63,7 +63,7 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     // ── M3 I1b review: a person's link is audited, a detected one the
     // subscriber's (20261116100100) ──
     "forge.merge_request_work_items_audited()",
-    // ── M3 S2: employee numbers kept; assertions move forward (20261121100000) ──
+    // ── M3 S2: employee numbers kept; assertions move forward (20261125100000) ──
     "forge.users_employee_number_kept_when_disabled()",
     "forge.act_as_assertions_guard()",
 ];
@@ -176,7 +176,7 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER user_identities_human_guard BEFORE INSERT OR UPDATE OF user_id ON \
          forge.user_identities FOR EACH ROW EXECUTE FUNCTION forge.user_identities_human_guard()",
     ),
-    // ── M3 S2: a disabled user keeps its employee number (20261121100000) ──
+    // ── M3 S2: a disabled user keeps its employee number (20261125100000) ──
     (
         "users",
         "users_employee_number_kept_when_disabled",
@@ -184,7 +184,7 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
          employee_number, state ON forge.users FOR EACH ROW EXECUTE FUNCTION \
          forge.users_employee_number_kept_when_disabled()",
     ),
-    // ── M3 S2: an assertion only moves forward (20261121100000) ──
+    // ── M3 S2: an assertion only moves forward (20261125100000) ──
     (
         "act_as_assertions",
         "act_as_assertions_forward",
@@ -654,6 +654,9 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.merge_request_versions", operational()),
         // ── M3 R2: mergeability, DELETE for the purge (20261108100000) ──
         ("forge.merge_request_mergeability", operational()),
+        // ── M3 X6: conflict predictions, DELETE for the purge (20261123100000) ──
+        ("forge.merge_request_conflict_scans", operational()),
+        ("forge.merge_request_conflict_pairs", operational()),
         // ── M3 R3: discussions and notes, DELETE for the purge (20261109100000) ──
         ("forge.merge_request_discussions", operational()),
         ("forge.merge_request_notes", operational()),
@@ -786,7 +789,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             plain(&["forge_app:SELECT", "forge_ro:SELECT", "forge_purge:SELECT"]),
         ),
         // ── M3 S2: the assertions — no DELETE, INSERT and UPDATE by column,
-        // the read pool without mac / state_hash (20261121100000) ──
+        // the read pool without mac / state_hash (20261125100000) ──
         (
             "forge.act_as_assertions",
             [
@@ -796,6 +799,32 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                 columns("forge_ro", "SELECT", ACT_AS_RO),
             ]
             .concat(),
+        ),
+        // ── M3 I2: webhooks (the read pool without the sealed secrets) and
+        // their deliveries (20261120200000) ──
+        (
+            "forge.webhooks",
+            [dml("forge_app"), columns("forge_ro", "SELECT", WEBHOOKS_RO)].concat(),
+        ),
+        ("forge.webhook_deliveries", operational()),
+        // ── M3 N1: notifications (20261120100000) ──
+        (
+            "forge.notification_preferences",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.notifications",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
         ),
     ]
 }
@@ -851,6 +880,28 @@ const ACT_AS_RO: &[&str] = &[
     "issued_request_id",
     "claimed_request_id",
     "finished_request_id",
+];
+
+/// The read pool's columns of forge.webhooks (tables.toml `ro_columns`):
+/// not secret_ciphertext, secret_prev_ciphertext or url (I2 review).
+const WEBHOOKS_RO: &[&str] = &[
+    "id",
+    "uid",
+    "project_id",
+    "owner_user_id",
+    "origin",
+    "event_types",
+    "enabled",
+    "disabled_reason",
+    "secret_key_id",
+    "secret_version",
+    "secret_prev_key_id",
+    "secret_prev_until",
+    "consecutive_failures",
+    "failing_since",
+    "last_delivery_at",
+    "created_at",
+    "updated_at",
 ];
 
 /// The columns forge_app may update on forge.web_sessions.
@@ -992,6 +1043,9 @@ const LATER_TABLES: &[&str] = &[
     "merge_request_versions",
     // ── M3 R2: mergeability (migration 20261108100000) ──
     "merge_request_mergeability",
+    // ── M3 X6: conflict predictions (migration 20261123100000) ──
+    "merge_request_conflict_scans",
+    "merge_request_conflict_pairs",
     // ── M3 R3: discussions and notes (migration 20261109100000) ──
     "merge_request_discussions",
     "merge_request_notes",
@@ -1022,8 +1076,14 @@ const LATER_TABLES: &[&str] = &[
     "retention_policy",
     // ── M3 O3: the maintenance ledger (migration 20261117100000) ──
     "repository_maintenance",
-    // ── M3 S2: acting for a person (migration 20261121100000) ──
+    // ── M3 S2: acting for a person (migration 20261125100000) ──
     "act_as_assertions",
+    // ── M3 I2: webhooks (migration 20261120200000) ──
+    "webhooks",
+    "webhook_deliveries",
+    // ── M3 N1: notifications (migration 20261120100000) ──
+    "notification_preferences",
+    "notifications",
 ];
 
 /// Every table the first migration creates.

@@ -20,7 +20,9 @@ pub mod lists;
 pub mod members;
 pub mod merge_requests;
 pub mod moves;
+// M3 N1: the caller's notification settings.
 pub mod namespaces;
+pub mod notifications;
 pub mod project_writes;
 pub mod projects;
 pub mod protected_ref_merge_rules;
@@ -33,7 +35,13 @@ pub mod integration_dev_status;
 pub mod integration_feed;
 pub mod session;
 pub mod shell;
+// M3 X1: `.forge/repo.yml` and its spec references.
+pub mod spec_refs;
+pub mod specs;
 pub mod tokens;
 pub mod user_sessions;
 pub mod users;
+// ── M3 I2: project webhooks (ADR-0016 §8) ──
+pub mod webhooks;
+// ── end M3 I2 ──
 mod write;

@@ -326,6 +326,19 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 R2 ──
 
+# ── M3 X6: predicted conflicts between open merge requests (plan 04 C-2,
+# ADR-0024 Amendment X6), derived from git ──
+[tables.merge_request_conflict_scans]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.merge_request_conflict_pairs]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 X6 ──
+
 # ── M3 R4: merge attempts (ADR-0024 §4.2), the merge job's operational record;
 # the merge itself is audited on the project (merge_request.merged) ──
 [tables.merge_request_merges]
@@ -529,7 +542,7 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 I1c ──
 
-# ── M3 S2: acting for a person (ADR-0025 §5.1, migration 20261121100000) ──
+# ── M3 S2: acting for a person (ADR-0025 §5.1, migration 20261125100000) ──
 # One confirmation: pending (issued) -> claimed (the secret created and
 # returned once; only its keyed MAC stored) -> consumed / rejected.
 # act_as_assertion.issued / .claimed / .consumed / .rejected on the row.
@@ -548,6 +561,47 @@ audit_id_column = "id"
 unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 S2 ──
+
+# ── M3 I2: webhooks (ADR-0016 §8, Amendment I2) ──
+# A project's push receivers; the delivery counters are unaudited. Not the
+# sealed secrets or the full url (it may hold a receiver token) for the read pool.
+[tables.webhooks]
+guarded = false
+kind = "audited"
+ro_columns = [
+    "id", "uid", "project_id", "owner_user_id", "origin", "event_types", "enabled",
+    "disabled_reason", "secret_key_id", "secret_version", "secret_prev_key_id",
+    "secret_prev_until", "consecutive_failures", "failing_since", "last_delivery_at",
+    "created_at", "updated_at",
+]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["consecutive_failures", "failing_since", "last_delivery_at", "updated_at"]
+txn_audited_columns = []
+
+# One row per (webhook, event), written by the webhook-dispatch subscriber
+# and the webhook.deliver job; never a response body.
+[tables.webhook_deliveries]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 I2 ──
+# ── M3 N1: e-mail notifications (20261120100000, ADR-0016 Amendment N1) ──
+# A person's own notification settings (e-mail on / off, language, muted
+# kinds). Not audited: it changes no one's access and no one else's data.
+[tables.notification_preferences]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# One row per (source event, recipient): the delivery record, written by the
+# notify subscriber in its progress transaction and settled by the
+# notification.send job.
+[tables.notifications]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 N1 ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

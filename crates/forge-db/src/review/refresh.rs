@@ -329,6 +329,7 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::MergeRequestPushed
                 | EventType::MergeRequestConflictDetected
                 | EventType::MergeRequestConflictResolved
+                | EventType::MergeRequestConflictPredicted
                 | EventType::MergeRequestCommented
                 | EventType::MergeRequestMerged
                 | EventType::MergeRequestSourceBranchDeleted
@@ -338,7 +339,8 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::CodeownersEnforcementRestored
                 | EventType::CheckCompleted
                 | EventType::WorkItemLinked
-                | EventType::WorkItemUnlinked => Ok(()),
+                | EventType::WorkItemUnlinked
+                | EventType::WebhookDisabled => Ok(()),
             }
         })
     }

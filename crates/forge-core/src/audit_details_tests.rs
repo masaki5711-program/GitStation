@@ -844,3 +844,80 @@ fn the_check_run_retention_row_is_audit_only_with_counts() {
         json!({"project_id": 7, "runs": 5, "annotations": 12, "older_than_days": 180})
     );
 }
+
+/// M3 I2: webhook changes carry ids, the origin (never the path, query or
+/// user information) and states; only the automatic disable is an event.
+#[test]
+fn webhook_details_name_the_origin_only_and_disable_is_the_event() {
+    use crate::ids::{ProjectId, WebhookDeliveryId, WebhookId};
+    use crate::webhook::{DisableReason, WebhookChange, WebhookField};
+    use crate::EventType;
+    let (webhook, project) = (WebhookId::new(4), ProjectId::new(9));
+    let all = [
+        WebhookChange::Created {
+            webhook,
+            project,
+            origin: "https://kanflow.internal:443".to_owned(),
+            event_types: vec!["*".to_owned()],
+            secret_version: 1,
+        },
+        WebhookChange::Updated {
+            webhook,
+            project,
+            owner_from: crate::ids::UserId::new(5),
+            owner: crate::ids::UserId::new(6),
+            fields: vec![WebhookField::Url, WebhookField::Enabled],
+            origin: "https://kanflow.internal:443".to_owned(),
+            enabled: true,
+            event_types: vec!["*".to_owned()],
+        },
+        WebhookChange::Deleted {
+            webhook,
+            project,
+            origin: "https://kanflow.internal:443".to_owned(),
+        },
+        WebhookChange::SecretRotated {
+            webhook,
+            project,
+            owner_from: crate::ids::UserId::new(6),
+            owner: crate::ids::UserId::new(6),
+            secret_version: 2,
+            previous_valid_until: "2026-11-06T00:00:00Z".to_owned(),
+        },
+        WebhookChange::Disabled {
+            webhook,
+            project,
+            reason: DisableReason::Failures,
+            consecutive_failures: 50,
+            failing_since: Some("2026-11-05T00:00:00Z".to_owned()),
+        },
+        WebhookChange::Redelivered {
+            webhook,
+            project,
+            delivery: WebhookDeliveryId::new(77),
+        },
+    ];
+    for change in all {
+        let details = AuditDetails::Webhook(change.clone()); // clone: compared below
+        let mut found = Vec::new();
+        keys(&details.to_value(), &mut found);
+        for k in &found {
+            assert!(!PII_KEYS.contains(&k.as_str()), "{k} in {details:?}");
+            assert_ne!(k, "url", "{details:?}");
+        }
+        assert_eq!(details.to_value()["webhook_id"], json!(4));
+        assert_eq!(details.action(), change.action());
+        let event = details.event_type();
+        match change {
+            WebhookChange::Disabled { .. } => {
+                assert_eq!(event, Some(EventType::WebhookDisabled));
+                assert_eq!(details.action(), EventType::WebhookDisabled.as_str());
+            }
+            WebhookChange::Created { .. }
+            | WebhookChange::Updated { .. }
+            | WebhookChange::Deleted { .. }
+            | WebhookChange::SecretRotated { .. }
+            | WebhookChange::Redelivered { .. } => assert_eq!(event, None),
+        }
+    }
+}

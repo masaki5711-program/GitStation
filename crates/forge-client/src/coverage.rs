@@ -40,6 +40,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/user/tokens/{id}",
         Coverage::Command("token revoke"),
     ),
+    // M3 N1: your own notification settings.
+    (
+        "GET",
+        "/api/v1/user/notification-preferences",
+        Coverage::Command("notifications get"),
+    ),
+    (
+        "PUT",
+        "/api/v1/user/notification-preferences",
+        Coverage::Command("notifications set"),
+    ),
     (
         "GET",
         "/api/v1/user/sessions",
@@ -330,6 +341,33 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/repository/blame",
         Coverage::Command("browse blame"),
     ),
+    // M3 X1: `.forge/repo.yml` and its spec references.
+    (
+        "GET",
+        "/api/v1/projects/{id}/repository/spec-refs",
+        Coverage::Command("browse spec-refs"),
+    ),
+    // M3 X4: the spec API (plan 03 §7.2).
+    (
+        "GET",
+        "/api/v1/projects/{id}/specs/requirements",
+        Coverage::Command("spec requirements"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/specs/versions",
+        Coverage::Command("spec versions"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/specs/diff",
+        Coverage::Command("spec diff"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/specs/trace",
+        Coverage::Command("spec trace"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/protected-refs",
@@ -401,6 +439,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "GET",
         "/api/v1/projects/{id}/merge-requests/{iid}/mergeability",
         Coverage::Command("mr mergeability"),
+    ),
+    // M3 X6 (plan 04 C-2): predicted conflicts between open merge requests.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/conflicts",
+        Coverage::Command("conflicts"),
     ),
     // M3 R3 (ADR-0024 §6, §12): discussions.
     (
@@ -528,6 +572,52 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "GET",
         "/api/v1/projects/{id}/commits/{sha}/checks",
         Coverage::Command("checks list"),
+    ),
+    // M3 I2 (ADR-0016 §8): project webhooks.
+    (
+        "GET",
+        "/api/v1/projects/{id}/webhooks",
+        Coverage::Command("webhook list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/webhooks",
+        Coverage::Command("webhook create"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/webhooks/event-types",
+        Coverage::Command("webhook event-types"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}",
+        Coverage::Command("webhook view"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}",
+        Coverage::Command("webhook update"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}",
+        Coverage::Command("webhook delete"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}/secret",
+        Coverage::Command("webhook rotate-secret"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries",
+        Coverage::Command("webhook deliveries"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
+        Coverage::Command("webhook redeliver"),
     ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.

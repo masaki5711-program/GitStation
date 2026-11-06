@@ -15,6 +15,7 @@ pub mod browse;
 pub mod checks;
 pub mod cli;
 pub mod config;
+pub mod conflicts;
 pub mod coverage;
 pub mod credential;
 pub mod error;
@@ -27,9 +28,13 @@ pub mod mr_conditions;
 pub mod mr_discussions;
 pub mod mr_merge;
 pub mod mr_work_items;
+pub mod notifications;
 pub mod registry;
 pub mod review;
+pub mod specs;
 pub mod store;
+// M3 I2: project webhooks.
+pub mod webhooks;
 
 #[cfg(test)]
 mod tests;

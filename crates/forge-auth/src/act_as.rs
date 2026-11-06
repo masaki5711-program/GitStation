@@ -178,7 +178,8 @@ fn decide_rule(
         | Resource::CheckRun { .. }
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
-        | Resource::ActAsConfirm(_) => return Err(refused("act_as_facts_missing")),
+        | Resource::ActAsConfirm(_)
+        | Resource::NotificationPreferences { .. } => return Err(refused("act_as_facts_missing")),
     };
     if !view.via.bound {
         return Err(not_found("act_as_unbound"));
@@ -273,7 +274,8 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
-        | Resource::ActAsConfirm(_) => None,
+        | Resource::ActAsConfirm(_)
+        | Resource::NotificationPreferences { .. } => None,
     }
 }
 
@@ -356,6 +358,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
-        | Resource::ActAsConfirm(_) => Resource::Project(view),
+        | Resource::ActAsConfirm(_)
+        | Resource::NotificationPreferences { .. } => Resource::Project(view),
     })
 }

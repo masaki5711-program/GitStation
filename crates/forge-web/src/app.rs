@@ -79,6 +79,14 @@ pub struct AppState {
     /// always sets it; without it the feed routes answer `FG-SYS-0001
     /// reason=feed_unconfigured`).
     pub feed: Option<Arc<forge_integ::Feed>>,
+    /// Project webhooks (M3 I2, ADR-0016 §8; `forge serve` always sets
+    /// them; without them those routes answer `FG-SYS-0001
+    /// reason=webhooks_unconfigured`).
+    pub webhooks: Option<Arc<forge_integ::webhooks::Webhooks>>,
+    /// The caller's notification settings (M3 N1, ADR-0016 Amendment N1;
+    /// `forge serve` always sets it; without it those routes answer
+    /// `FG-SYS-0001 reason=notifications_unconfigured`).
+    pub notifications: Option<Arc<forge_notify::Settings>>,
     /// The list routes' page loaders and cursor keys (M1 phase 8b MR7b;
     /// `forge serve` always sets them, refusing to start without
     /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
@@ -116,6 +124,15 @@ pub struct AppState {
     pub act_as_failures: Arc<routes::namespaces::CallerLimiter>,
     pub act_as_issue_limiter: Arc<routes::namespaces::CallerLimiter>,
     pub act_as_claim_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X1: the spec references followed per caller (`FG-WEB-0010`).
+    pub spec_refs_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X1: one budget for a whole spec-refs request (`FG-WEB-0002
+    /// operation=spec_refs`).
+    pub spec_refs_budget: Duration,
+    /// M3 X4: the spec API's requests per caller (`FG-WEB-0010`).
+    pub spec_index_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X4 review: the spec API's requests running per caller.
+    pub spec_index_in_flight: Arc<routes::specs::InFlight>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -149,6 +166,8 @@ impl AppState {
             review: None,
             checks: None,
             feed: None,
+            webhooks: None,
+            notifications: None,
             lists: None,
             sessions: None,
             web_origin: None,
@@ -161,6 +180,10 @@ impl AppState {
             act_as_failures: Arc::new(crate::act_as::failure_limiter()),
             act_as_issue_limiter: Arc::new(routes::act_as::issue_limiter()),
             act_as_claim_limiter: Arc::new(routes::act_as::claim_limiter()),
+            spec_refs_limiter: Arc::new(routes::spec_refs::limiter()),
+            spec_refs_budget: routes::spec_refs::BUDGET,
+            spec_index_limiter: Arc::new(routes::specs::limiter()),
+            spec_index_in_flight: Arc::default(),
         }
     }
 
@@ -168,6 +191,27 @@ impl AppState {
     #[must_use]
     pub fn with_act_as(mut self, act_as: forge_integ::ActAs) -> Self {
         self.act_as = Some(Arc::new(act_as));
+        self
+    }
+
+    /// The spec-refs limiter (M3 X1; tests set a small one).
+    #[must_use]
+    pub fn with_spec_refs_limiter(mut self, limiter: routes::namespaces::CallerLimiter) -> Self {
+        self.spec_refs_limiter = Arc::new(limiter);
+        self
+    }
+
+    /// The spec API's limiter (M3 X4; tests set a small one).
+    #[must_use]
+    pub fn with_spec_index_limiter(mut self, limiter: routes::namespaces::CallerLimiter) -> Self {
+        self.spec_index_limiter = Arc::new(limiter);
+        self
+    }
+
+    /// The spec-refs request budget (M3 X1; tests set a small one).
+    #[must_use]
+    pub fn with_spec_refs_budget(mut self, budget: Duration) -> Self {
+        self.spec_refs_budget = budget;
         self
     }
 
@@ -212,10 +256,24 @@ impl AppState {
         self
     }
 
+    /// The notification settings commands (M3 N1).
+    #[must_use]
+    pub fn with_notifications(mut self, settings: forge_notify::Settings) -> Self {
+        self.notifications = Some(Arc::new(settings));
+        self
+    }
+
     /// The integrations' event feed (M3 I1c).
     #[must_use]
     pub fn with_feed(mut self, feed: forge_integ::Feed) -> Self {
         self.feed = Some(Arc::new(feed));
+        self
+    }
+
+    /// Project webhooks (M3 I2).
+    #[must_use]
+    pub fn with_webhooks(mut self, webhooks: forge_integ::webhooks::Webhooks) -> Self {
+        self.webhooks = Some(Arc::new(webhooks));
         self
     }
 
@@ -314,9 +372,14 @@ pub const PLANNED: &[Action] = &[Action::UserCreate, Action::AuditRead, Action::
 /// MR5, ADR-0021 §7) is decided by the session authentication of every
 /// cookie-authenticated route when the 5-minute refresh check is due;
 /// `GET /api/v1/session` (which the page reads first) stands for them.
+/// `WebhookDeliver` (M3 I2, ADR-0016 §8) is decided in `POST
+/// …/webhooks` (and a `PATCH` changing the event types) for each class the
+/// creator names, and again by the worker for the owner before every
+/// delivery (`forge_auth::prove_webhook_delivery`).
 pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
     (Action::SessionCreate, routes::auth::CALLBACK_PATH),
     (Action::SessionContinue, routes::session::PATH),
+    (Action::WebhookDeliver, routes::webhooks::COLLECTION),
 ];
 
 /// The words whose page is the SPA shell on a project (ADR-0015 "ルートの
@@ -459,11 +522,11 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    act_as_routes(check_routes(dev_status_routes(feed_routes(
-        integration_routes(service_account_routes(account_routes(history_routes(
-            browse_routes(git_routes(shell_routes(merge_request_routes(
-                member_routes(move_routes(hosting_routes(fixed))),
-            )))),
+    act_as_routes(webhook_routes(notification_routes(check_routes(
+        dev_status_routes(feed_routes(integration_routes(service_account_routes(
+            account_routes(history_routes(browse_routes(git_routes(shell_routes(
+                merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
+            ))))),
         )))),
     ))))
 }
@@ -653,6 +716,31 @@ fn service_account_routes(registry: Registry<AppState>) -> Registry<AppState> {
         .responds_no_content(Verb::Delete, sa::TOKEN)
 }
 
+/// The caller's own notification settings (M3 N1, ADR-0016 Amendment N1).
+fn notification_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::notifications as n;
+    registry
+        .route_with(
+            Verb::Get,
+            n::PREFERENCES,
+            Action::NotificationPreferencesRead,
+            "The caller's own notification settings: mail on or off, the language of the mail, the kinds muted (nobody else's, administrators included)",
+            n::OwnPreferences,
+            n::read,
+        )
+        .responds::<n::PreferencesBody>(Verb::Get, n::PREFERENCES)
+        .route_with_body(
+            Verb::Put,
+            n::PREFERENCES,
+            Action::NotificationPreferencesWrite,
+            "Replace the caller's own notification settings (an unknown language or kind is FG-WEB-0006)",
+            n::MAX_BODY,
+            n::OwnPreferencesChange,
+            n::replace,
+        )
+        .responds::<n::PreferencesBody>(Verb::Put, n::PREFERENCES)
+}
+
 /// The Checks API (M3 C1, ADR-0024 §10, docs/api/checks.md): a commit's
 /// check runs, and the administrators' grants of a check namespace to a
 /// service account.
@@ -786,6 +874,97 @@ fn integration_routes(registry: Registry<AppState>) -> Registry<AppState> {
             i::unbind,
         )
         .responds_no_content(Verb::Delete, i::PROJECT_BINDING)
+}
+
+/// Project webhooks (M3 I2, ADR-0016 §8, docs/api/webhooks.md): a
+/// project's Maintainers read them; managing and redelivering are people's.
+fn webhook_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::webhooks as h;
+    registry
+        .route_with(
+            Verb::Get,
+            h::COLLECTION,
+            Action::WebhookRead,
+            "A project's webhooks, never a secret (Maintainer)",
+            h::WebhooksOf,
+            h::list,
+        )
+        .responds::<h::WebhookList>(Verb::Get, h::COLLECTION)
+        .route_with(
+            Verb::Get,
+            h::EVENT_TYPES,
+            Action::WebhookRead,
+            "The event types a webhook may name, each with its class, and per class whether the caller may subscribe to it (Maintainer)",
+            h::EventTypesOf,
+            h::event_types,
+        )
+        .responds::<h::EventTypeList>(Verb::Get, h::EVENT_TYPES)
+        .route_with_body(
+            Verb::Post,
+            h::COLLECTION,
+            Action::WebhookManage,
+            "Create a webhook owned by the caller; its URL must be on the operator's allowlist (400 FG-INT-0010); the secret is shown once (people only; Maintainer; at most 20)",
+            h::MAX_BODY,
+            h::WebhooksOf,
+            h::create,
+        )
+        .responds_created::<h::CreatedWebhook>(Verb::Post, h::COLLECTION)
+        .route_with(
+            Verb::Get,
+            h::ONE,
+            Action::WebhookRead,
+            "One webhook of the project (Maintainer)",
+            h::WEBHOOK,
+            h::read,
+        )
+        .responds::<h::WebhookBody>(Verb::Get, h::ONE)
+        .route_with_body(
+            Verb::Patch,
+            h::ONE,
+            Action::WebhookManage,
+            "Change a webhook's URL, event types or enabled flag; enabling clears its failure count (people only; Maintainer)",
+            h::MAX_BODY,
+            h::WEBHOOK,
+            h::update,
+        )
+        .responds::<h::UpdatedWebhook>(Verb::Patch, h::ONE)
+        .route_with(
+            Verb::Delete,
+            h::ONE,
+            Action::WebhookManage,
+            "Delete a webhook and its delivery history (people only; Maintainer)",
+            h::WEBHOOK,
+            h::delete,
+        )
+        .responds_no_content(Verb::Delete, h::ONE)
+        .route_with(
+            Verb::Post,
+            h::SECRET,
+            Action::WebhookManage,
+            "Replace a webhook's secret, shown once; the previous one still signs for 24 hours (people only; Maintainer)",
+            h::WEBHOOK_SECRET,
+            h::rotate,
+        )
+        .responds::<h::RotatedWebhookSecret>(Verb::Post, h::SECRET)
+        .route_with(
+            Verb::Get,
+            h::DELIVERIES,
+            Action::WebhookDeliveryRead,
+            "A webhook's delivery history, newest first: state, attempts, the last status and reason (never a body; Maintainer)",
+            h::WEBHOOK_DELIVERIES,
+            h::deliveries,
+        )
+        .responds::<h::DeliveryList>(Verb::Get, h::DELIVERIES)
+        .queries(Verb::Get, h::DELIVERIES, h::DELIVERIES_QUERY)
+        .route_with(
+            Verb::Post,
+            h::REDELIVER,
+            Action::WebhookRedeliver,
+            "Deliver one delivery again with the same delivery id (people only; Maintainer; 429 while pending or within 60 s of its last attempt)",
+            h::RedeliveryOf,
+            h::redeliver,
+        )
+        .responds_accepted::<h::RedeliveryQueued>(Verb::Post, h::REDELIVER)
 }
 
 /// The integrations' event feed (M3 I1c, ADR-0016 §7, plan 02 §11.2,
@@ -926,6 +1105,67 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<b::BlobBody>(Verb::Get, b::BLOB)
         .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+        // M3 X1: `.forge/repo.yml` and its spec references; every referenced
+        // project decided again with the reader's own principal.
+        .route_with(
+            Verb::Get,
+            routes::spec_refs::SPEC_REFS,
+            Action::SpecRefRead,
+            "A revision's .forge/repo.yml and its pinned spec references, each resolved for the reader (unreadable ones are unavailable)",
+            routes::spec_refs::SPEC_REFS_OF,
+            routes::spec_refs::spec_refs,
+        )
+        .responds::<routes::spec_refs::SpecRefsBody>(Verb::Get, routes::spec_refs::SPEC_REFS)
+        .queries(
+            Verb::Get,
+            routes::spec_refs::SPEC_REFS,
+            routes::spec_refs::SPEC_REFS_QUERY,
+        )
+        // M3 X4: the spec API (plan 03 §7.2); a trace's references decided
+        // again with the reader's own principal.
+        .route_with(
+            Verb::Get,
+            routes::specs::REQUIREMENTS,
+            Action::SpecRead,
+            "A revision's own specification: its documents, requirements (searchable) and document problems",
+            routes::specs::REQUIREMENTS_OF,
+            routes::specs::requirements,
+        )
+        .responds::<routes::specs::SpecRequirementsBody>(Verb::Get, routes::specs::REQUIREMENTS)
+        .queries(
+            Verb::Get,
+            routes::specs::REQUIREMENTS,
+            routes::specs::REQUIREMENTS_QUERY,
+        )
+        .route_with(
+            Verb::Get,
+            routes::specs::VERSIONS,
+            Action::SpecRead,
+            "The specification's versions (version tags), newest first",
+            routes::specs::VERSIONS_OF,
+            routes::specs::versions,
+        )
+        .responds::<routes::specs::SpecVersionsBody>(Verb::Get, routes::specs::VERSIONS)
+        .route_with(
+            Verb::Get,
+            routes::specs::DIFF,
+            Action::SpecRead,
+            "The requirements added, changed, removed or deprecated between two revisions",
+            routes::specs::DIFF_OF,
+            routes::specs::diff_route,
+        )
+        .responds::<routes::specs::SpecDiffBody>(Verb::Get, routes::specs::DIFF)
+        .queries(Verb::Get, routes::specs::DIFF, routes::specs::DIFF_QUERY)
+        .route_with(
+            Verb::Get,
+            routes::specs::TRACE,
+            Action::SpecRead,
+            "Each requirement (own and pinned references, followed for the reader) with the @req tests naming it",
+            routes::specs::TRACE_OF,
+            routes::specs::trace,
+        )
+        .responds::<routes::specs::SpecTraceBody>(Verb::Get, routes::specs::TRACE)
+        .queries(Verb::Get, routes::specs::TRACE, routes::specs::TRACE_QUERY)
 }
 
 /// The history half of the browse API (`RepoBrowse`, `read_api`; M2 MR8):
@@ -1261,6 +1501,17 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::mergeability,
         )
         .responds::<mr::MergeabilityBody>(Verb::Get, mr::MERGEABILITY)
+        // M3 X6 (plan 04 C-2): predicted conflicts with other open merge
+        // requests, read like the merge request itself.
+        .route_with(
+            Verb::Get,
+            mr::CONFLICTS,
+            Action::MergeRequestRead,
+            "A merge request's predicted conflicts with other open merge requests on its target, as last scanned (as the repository browse API)",
+            mr::CONFLICTS_OF,
+            mr::conflicts,
+        )
+        .responds::<mr::ConflictsBody>(Verb::Get, mr::CONFLICTS)
         // M3 R3 (ADR-0024 §6, §12): discussions — read like the merge
         // request, started and answered as `MergeRequestComment`, resolved
         // as `DiscussionResolve` on the thread.

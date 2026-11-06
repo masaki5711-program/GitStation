@@ -12,6 +12,13 @@
 //! never succeed, the request is ended as `check_failed reason=job_failed`
 //! (`forge_review::mergeability::fail`) before the job dies.
 //!
+//! The `merge_request.conflict_scan` job handler (M3 X6, plan 04 C-2): one
+//! run of [`forge_review::scan`] — the predicted conflicts of a merge
+//! request with the other open ones on its target, stored only while its
+//! `scan_seq` is the latest. Retried like the mergeability job; on the last
+//! attempt, or a failure that can never succeed, the request is ended as
+//! `failed reason=job_failed` (`forge_review::conflicts::fail`).
+//!
 //! Success is logged once by forge-review (`forge.review.version_refreshed`
 //! with the job's request id); a failure is returned to the job runner,
 //! which logs it once. Retry: git timeouts / busy / process failures (a
@@ -24,10 +31,13 @@
 use std::sync::Arc;
 
 use forge_db::jobs::{ClaimedJob, JobFailure, JobFuture, JobHandler, JobKind};
-use forge_db::review::{mergeability_payload, refresh_payload, MERGEABILITY_JOB, REFRESH_JOB};
+use forge_db::review::{
+    conflict_scan_payload, mergeability_payload, refresh_payload, CONFLICT_SCAN_JOB,
+    MERGEABILITY_JOB, REFRESH_JOB,
+};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
-use forge_review::{Mergeability, VersionRefs};
+use forge_review::{ConflictPredictor, Mergeability, VersionRefs};
 
 use super::provision::Storage;
 
@@ -150,6 +160,66 @@ impl JobHandler for MergeabilityHandler {
             // `checking` (review HIGH). A timeout or crash never gets here;
             // the sweep ends those rows (`job_stale`).
             forge_review::mergeability::fail(&inner.db, request, &request_id, &e).await;
+            Err(if retryable(&e) {
+                JobFailure::retry(e)
+            } else {
+                JobFailure::permanent(e)
+            })
+        })
+    }
+}
+
+/// The handler of `merge_request.conflict_scan` (M3 X6).
+pub(crate) struct ConflictScanHandler {
+    kind: JobKind,
+    inner: Arc<ScanInner>,
+}
+
+struct ScanInner {
+    db: Db,
+    predictor: ConflictPredictor,
+}
+
+impl ConflictScanHandler {
+    pub(crate) fn new(db: &Db, storage: &Storage) -> Result<Self, ForgeError> {
+        let kind = JobKind::parse(CONFLICT_SCAN_JOB).ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "invalid_job_kind")
+                .with_context("kind", CONFLICT_SCAN_JOB)
+        })?;
+        Ok(Self {
+            kind,
+            inner: Arc::new(ScanInner {
+                db: db.clone(), // clone: pool handles
+                // clone: the handler owns its git and storage handles
+                predictor: ConflictPredictor::new(storage.git.clone(), storage.root.clone()),
+            }),
+        })
+    }
+}
+
+impl JobHandler for ConflictScanHandler {
+    fn kind(&self) -> JobKind {
+        self.kind.clone() // clone: the runner keys its map by an owned kind
+    }
+
+    fn run(&self, job: ClaimedJob) -> JobFuture {
+        let inner = Arc::clone(&self.inner);
+        Box::pin(async move {
+            let request = conflict_scan_payload(&job.payload).map_err(JobFailure::permanent)?;
+            let request_id = job.request_id();
+            let ran = forge_review::scan(&inner.db, &inner.predictor, request, &request_id).await;
+            let Err(e) = ran else {
+                return Ok(());
+            };
+            let last = job.lease.attempt >= job.max_attempts;
+            if retryable(&e) && !last {
+                return Err(JobFailure::retry(e));
+            }
+            // Failed for good: never leave the request unfinished. A
+            // timeout or crash never gets here; the sweep ends those rows
+            // (`job_stale`).
+            forge_review::conflicts::fail(&inner.db, request, &request_id, &e).await;
             Err(if retryable(&e) {
                 JobFailure::retry(e)
             } else {

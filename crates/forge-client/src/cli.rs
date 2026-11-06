@@ -87,6 +87,13 @@ pub enum Command {
         #[command(subcommand)]
         command: ChecksCommand,
     },
+    /// A project's webhooks (M3 I2): list, view, create, update, delete,
+    /// rotate-secret, deliveries, redeliver (Maintainers).
+    #[command(disable_help_subcommand = true)]
+    Webhook {
+        #[command(subcommand)]
+        command: WebhookCommand,
+    },
     /// An integration's event feed (M3 I1c): events, cursor — with the
     /// integration's own service account token.
     #[command(disable_help_subcommand = true)]
@@ -106,6 +113,9 @@ pub enum Command {
         #[command(subcommand)]
         command: MrCommand,
     },
+    /// A merge request's predicted conflicts with other open merge requests
+    /// on its target, drafts included (M3 X6; never starts a scan).
+    Conflicts(ConflictsArgs),
     /// Namespace paths.
     #[command(disable_help_subcommand = true)]
     Namespace {
@@ -118,6 +128,13 @@ pub enum Command {
         #[command(subcommand)]
         command: BrowseCommand,
     },
+    /// A project's specification (M3 X4): requirements, versions, the
+    /// requirement diff, and the trace to `@req` tests.
+    #[command(disable_help_subcommand = true)]
+    Spec {
+        #[command(subcommand)]
+        command: SpecCommand,
+    },
     /// Users: search by name; administrators: list, disable, sessions, rename.
     #[command(disable_help_subcommand = true)]
     User {
@@ -129,6 +146,12 @@ pub enum Command {
     Token {
         #[command(subcommand)]
         command: TokenCommand,
+    },
+    /// Your notification settings: mail on or off, language, muted kinds (M3 N1).
+    #[command(disable_help_subcommand = true)]
+    Notifications {
+        #[command(subcommand)]
+        command: NotificationsCommand,
     },
     /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
@@ -199,6 +222,13 @@ fn parse_limit(raw: &str) -> Result<u32, String> {
     match raw.parse::<u32>() {
         Ok(n) if (1..=100).contains(&n) => Ok(n),
         _ => Err("--limit is a whole number from 1 to 100".to_string()),
+    }
+}
+
+fn parse_spec_limit(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(n) if (1..=500).contains(&n) => Ok(n),
+        _ => Err("--limit is a whole number from 1 to 500".to_string()),
     }
 }
 
@@ -1111,6 +1141,15 @@ pub enum BrowseCommand {
         #[arg(long)]
         patch: bool,
     },
+    /// A revision's `.forge/repo.yml` and its spec references, each
+    /// resolved for you (M3 X1).
+    SpecRefs {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+    },
     /// Who last changed each line of a file.
     Blame {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
@@ -1133,6 +1172,34 @@ pub enum TokenCommand {
         /// Confirm (gstn never prompts).
         #[arg(long)]
         yes: bool,
+    },
+}
+
+/// `notifications set --email`.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MailSwitch {
+    On,
+    Off,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum NotificationsCommand {
+    /// Your settings: mail on or off, the language of the mail, the kinds muted.
+    Get,
+    /// Change your settings; a flag changes only what it names.
+    Set {
+        /// Turn all mail on or off.
+        #[arg(long, value_enum)]
+        email: Option<MailSwitch>,
+        /// The language of the mail: ja, en, id, or default (the instance's).
+        #[arg(long, value_parser = ["ja", "en", "id", "default"])]
+        language: Option<String>,
+        /// Stop a kind of notification (repeatable; `notifications get` lists them).
+        #[arg(long, value_parser = parse_text, value_name = "KIND")]
+        mute: Vec<String>,
+        /// Receive a kind again (repeatable).
+        #[arg(long, value_parser = parse_text, value_name = "KIND")]
+        unmute: Vec<String>,
     },
 }
 
@@ -1244,6 +1311,96 @@ pub enum ChecksCommand {
         /// The full commit id (40 or 64 hex digits).
         #[arg(long, value_parser = parse_oid)]
         sha: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WebhookCommand {
+    /// A project's webhooks (never a secret).
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// The event types a webhook may name, by class, and the classes you may subscribe to.
+    EventTypes {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// One webhook: its URL, event types, state and failure count.
+    View {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Create a webhook owned by you; its secret is shown once.
+    Create {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// An https URL whose host and port the operator's allowlist names.
+        #[arg(long, value_parser = parse_text)]
+        url: String,
+        /// An event type, a family (`merge_request.*`) or `*` (repeatable;
+        /// default `*`).
+        #[arg(long = "event", value_parser = parse_text, value_name = "TYPE")]
+        events: Vec<String>,
+    },
+    /// Change a webhook's URL, event types (replaced), or enable / disable it.
+    Update {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_text)]
+        url: Option<String>,
+        /// The new event types (repeatable; replaces them all).
+        #[arg(long = "event", value_parser = parse_text, value_name = "TYPE")]
+        events: Vec<String>,
+        /// Enable it (clears the failure count).
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Delete a webhook and its delivery history.
+    Delete {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Replace the secret (shown once); the previous one signs for 24 hours.
+    #[command(name = "rotate-secret")]
+    RotateSecret {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// The delivery history, newest first.
+    Deliveries {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Only deliveries older than this delivery id.
+        #[arg(long, value_parser = parse_id)]
+        before: Option<i64>,
+        #[arg(long, value_parser = parse_limit)]
+        limit: Option<u32>,
+    },
+    /// Deliver one delivery again (the same delivery id).
+    Redeliver {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The delivery's id (from `webhook deliveries`).
+        #[arg(value_parser = parse_id)]
+        delivery: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
     },
 }
 
@@ -1496,6 +1653,60 @@ pub enum GitOperation {
     Get,
     Store,
     Erase,
+}
+
+/// `gstn spec` (M3 X4, plan 03 §7.2): the spec API, read with your
+/// permissions.
+#[derive(Subcommand, Debug)]
+pub enum SpecCommand {
+    /// The own specification's requirements at a revision, and the
+    /// documents' problems.
+    Requirements {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+        /// Only requirements whose id or text contains this (case-insensitive).
+        #[arg(long, value_parser = parse_text)]
+        search: Option<String>,
+        /// At most this many requirements, 1..=500 (server default 100).
+        #[arg(long, value_parser = parse_spec_limit)]
+        limit: Option<u32>,
+    },
+    /// The specification's versions (version tags), newest first.
+    Versions {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// The requirements added, changed, removed or deprecated between two revisions.
+    Diff {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The earlier revision: a commit id, a branch or a tag.
+        #[arg(long, value_parser = parse_text)]
+        from: String,
+        /// The later revision: a commit id, a branch or a tag.
+        #[arg(long, value_parser = parse_text)]
+        to: String,
+    },
+    /// Each requirement (own, and every pinned reference you may read)
+    /// with the `@req` tests naming it.
+    Trace {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct ConflictsArgs {
+    #[arg(long, value_parser = parse_id, value_name = "ID")]
+    pub project: i64,
+    #[arg(long, value_parser = parse_id, value_name = "IID")]
+    pub iid: i64,
 }
 
 #[derive(Args, Debug)]
