@@ -217,3 +217,38 @@ fn an_annotation_on_a_path_the_table_refuses_stays_in_the_summary_only() {
     );
     assert!(run.annotations.is_empty(), "{:?}", run.annotations);
 }
+
+/// Review X4 (LOW): an incomplete index may have left out the definition a
+/// tag names, so broken references alone are no failure then.
+#[test]
+fn broken_references_alone_in_an_incomplete_index_are_neutral() {
+    let mut head = indexed(
+        &[("spec/a.md", spec("::: req A-1\nx\n:::\n"))],
+        &[("t.rs", 1, "// @req A-9")],
+    );
+    head.index.left_out("spec_files");
+    let run = assess_lint(&head).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Neutral),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("broken_reference"), "{}", run.summary);
+    // A document problem still fails it.
+    let mut broken = indexed(&[("spec/a.md", spec("::: req a-1\nx\n:::\n"))], &[]);
+    broken.index.left_out("spec_files");
+    let run = assess_lint(&broken).expect("run");
+    assert_eq!(run.conclusion, Some(CheckConclusion::Failure));
+}
+
+/// Review X4 (MEDIUM c): the last attempt always answers inside the job's
+/// timeout — the evaluation, both runs' writes and both `error` writes.
+#[test]
+fn the_last_attempt_answers_inside_the_job_timeout() {
+    let worst = super::EVALUATION_BUDGET + super::WRITE_TIMEOUT * 4;
+    assert!(
+        worst < forge_db::checks::spec_index::SPEC_INDEX_TIMEOUT,
+        "{worst:?}"
+    );
+}

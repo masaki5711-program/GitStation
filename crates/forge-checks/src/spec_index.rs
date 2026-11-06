@@ -179,8 +179,19 @@ pub async fn index_commit(
         if hits.truncated {
             index.left_out("tag_lines");
         }
+        // Review X4 (HIGH-2): `@req` in a specification document (its
+        // prose, an example in a code fence) is no test, so Markdown under
+        // the own specification directories is never a tag's place.
+        let prefixes: Vec<String> = dirs
+            .iter()
+            .map(|d| format!("{}/", d.trim_end_matches('/')))
+            .collect();
         for h in &hits.hits {
-            index.add_tag_line(&h.path, h.line, &h.text);
+            let in_spec =
+                is_markdown(&h.path) && prefixes.iter().any(|p| h.path.starts_with(p.as_str()));
+            if !in_spec {
+                index.add_tag_line(&h.path, h.line, &h.text);
+            }
         }
     }
     Ok(Indexed {

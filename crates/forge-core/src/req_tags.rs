@@ -22,7 +22,7 @@ use crate::work_item::WorkItemRef;
 /// The word a tag starts with.
 pub const REQ_TAG: &str = "@req";
 /// A malformed token is reported at most this long.
-pub const MAX_REPORTED_TOKEN_BYTES: usize = 128;
+pub const MAX_REPORTED_TOKEN_BYTES: usize = 80;
 /// At most this many ids per tag (the rest of the line is prose).
 pub const MAX_IDS_PER_TAG: usize = 32;
 /// The largest acceptance criterion number.

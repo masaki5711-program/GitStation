@@ -57,14 +57,15 @@ by X2: `Reader::Proof` for the route's reader, `Reader::EveryPerson` for the job
 `spec_checks::SpecChecks` evaluates both for one `check.spec_index` job (forge-db's `spec-index`
 subscriber: every merge request version, and its current head again after a work item link
 changes). It indexes the head and the merge base with the target branch's tip
-(`spec_index::index_commit`: `.forge/repo.yml`'s `path:` directories or `spec/`, at most 1000
+(`spec_index::index_commit`: `.forge/repo.yml`'s `path:` directories or `spec/` — a `@req` in
+Markdown there is no test (review X4) —, at most 1000
 Markdown files / 8 MiB / 256 KiB each, and `git grep` for `@req` over the tree, at most 8 MiB —
 a bound hit is `incomplete`, never a silent pass), lints the head (`forge_core::spec_index::lint`)
 and traces the merge request (`trace_merge_request`: changed requirements, added tags, linked
 work items' `PBI-<n>/AC-<m>` tests). spec-lint is `success` / `failure` (FG-REPO-0028) /
 `neutral` (FG-REPO-0031); spec-trace is advisory: `success` / `neutral` (FG-REPO-0029, 0030,
 0031), never `failure`. A run shows only the repository's own text. The evaluation's deadline is
-80 s and each write's 10 s (the job: 120 s); `SpecChecks::fail` answers `error` for both on the
+70 s and each write's 10 s (two runs and two `error` writes: 110 s < the job's 120 s); `SpecChecks::fail` answers `error` for both on the
 last attempt and `record_errors` for `forge worker`'s `spec_index_sweep`. forge-web's spec API
 (`GET …/specs/…`) reads the same index with the reader's permissions.
 

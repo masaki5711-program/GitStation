@@ -341,11 +341,15 @@ fn split_batch(out: &[u8]) -> Result<Vec<&[u8]>, ForgeError> {
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| unreadable("batch_header"))?;
         let start = nl + 1;
+        // Review X4 (LOW): a size git never prints cannot overflow here.
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| unreadable("batch_content"))?;
         let content = rest
-            .get(start..start + size)
+            .get(start..end)
             .ok_or_else(|| unreadable("batch_content"))?;
         blobs.push(content);
-        rest = rest.get(start + size + 1..).unwrap_or_default();
+        rest = rest.get(end.saturating_add(1)..).unwrap_or_default();
     }
     Ok(blobs)
 }

@@ -333,3 +333,55 @@ async fn a_failed_job_answers_error_for_both_checks() {
     }
     t.drop_now().await;
 }
+
+/// Review X4 (HIGH-2): `@req` written in a specification document — prose
+/// or an example in a code fence — is no test: tags in Markdown under the
+/// own specification directories are not indexed (a test elsewhere is).
+#[tokio::test]
+async fn tags_in_the_specification_documents_are_no_tests() {
+    let r = repo().await;
+    let c = commit(
+        &r.path,
+        &[
+            (
+                "spec/a.md",
+                b"---
+spec: a
+title: A
+status: approved
+---
+::: req ZEVA-CFG-1
+Test it with `@req ZEVA-CFG-1`.
+:::
+```rust
+// @req ZEVA-CFG-9
+```
+",
+            ),
+            (
+                "spec/notes/guide.md",
+                b"Write @req ZEVA-CFG-1 in a test.
+",
+            ),
+            (
+                "docs/howto.md",
+                b"// @req ZEVA-CFG-1
+",
+            ),
+            (
+                "tests/t.rs",
+                b"// @req ZEVA-CFG-1
+",
+            ),
+        ],
+    );
+    let i = index_commit(&r.browser, r.id, &c, &IndexLimits::default(), Tags::Read)
+        .await
+        .expect("index");
+    let paths: Vec<&str> = i.index.tags.iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(paths, vec!["docs/howto.md", "tests/t.rs"]);
+    assert!(
+        forge_core::spec_index::lint(&i.index, &i.external).is_empty(),
+        "the fenced example names no broken reference"
+    );
+}

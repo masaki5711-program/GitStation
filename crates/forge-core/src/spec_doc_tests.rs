@@ -209,3 +209,42 @@ fn a_body_over_the_limit_is_a_problem() {
     ));
     assert_eq!(rules(&d), vec![(6, "body_too_long")]);
 }
+
+/// Review X4 (MEDIUM a): a backtick fence's info string may not hold a
+/// backtick (CommonMark): such a line is text, and the block after it is
+/// read.
+#[test]
+fn a_backtick_line_with_a_backtick_in_its_info_string_is_no_fence() {
+    let d = doc("---\nspec: a\ntitle: t\nstatus: draft\n---\n``` a`b\n::: req A-1\nx\n:::\n");
+    assert!(d.problems.is_empty(), "{:?}", d.problems);
+    assert_eq!(d.requirements.len(), 1);
+}
+
+/// Review X4 (MEDIUM a): a fence never closed hides every block after it —
+/// never silently: `unclosed_fence` on its line, and a requirement block it
+/// hides still makes the file a specification document.
+#[test]
+fn an_unclosed_fence_is_a_problem_and_never_hides_a_document() {
+    let d = doc("---\nspec: a\ntitle: t\nstatus: draft\n---\n```\n::: req A-1\nx\n:::\n");
+    assert_eq!(rules(&d), vec![(6, "unclosed_fence")]);
+    let bare = doc("# x\n~~~\n::: req A-1\nx\n:::\n");
+    assert!(bare.is_spec());
+    assert_eq!(
+        rules(&bare),
+        vec![(1, "front_matter_missing"), (2, "unclosed_fence")]
+    );
+    // A README with an unclosed fence and no block stays no document.
+    assert!(!doc("# readme\n```\ncode\n").is_spec());
+}
+
+/// Review X4 (MEDIUM b): a UTF-8 byte order mark before the front matter.
+#[test]
+fn a_byte_order_mark_before_the_front_matter_is_skipped() {
+    let d = doc(&format!("\u{feff}{PLAN_EXAMPLE}"));
+    assert!(d.problems.is_empty(), "{:?}", d.problems);
+    assert_eq!(
+        d.meta.as_ref().map(|m| m.spec.as_str()),
+        Some("zeva-engine/config")
+    );
+    assert_eq!(d.requirements[0].line, 10);
+}

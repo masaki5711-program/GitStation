@@ -79,6 +79,8 @@ fn a_long_malformed_token_is_cut_when_reported() {
         "{}",
         raw.len()
     );
+    // Review X4 (LOW): kept short where it is reported.
+    assert_eq!(super::MAX_REPORTED_TOKEN_BYTES, 80);
 }
 
 #[test]

@@ -246,6 +246,8 @@ impl SpecDocument {
 /// Parse one document (module docs).
 pub fn parse_spec_document(bytes: &[u8]) -> SpecDocument {
     let mut doc = SpecDocument::default();
+    // Review X4: an editor's UTF-8 byte order mark before the front matter.
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     let Ok(text) = std::str::from_utf8(bytes) else {
         doc.spec = true;
         doc.problem(0, "not_utf8");
@@ -451,6 +453,11 @@ fn fence_of(line: &str) -> Option<Fence> {
         return None;
     }
     let n = rest.bytes().take_while(|b| *b == c).count();
+    // CommonMark: a backtick fence's info string holds no backtick (review
+    // X4: such a line is text, so it never hides the blocks after it).
+    if c == b'`' && rest.get(n..).is_some_and(|info| info.contains('`')) {
+        return None;
+    }
     (n >= 3).then_some(Fence(c, n))
 }
 
@@ -474,6 +481,10 @@ fn blocks(lines: &[&str], start: usize, doc: &mut SpecDocument) -> bool {
     let mut saw_requirement = false;
     let mut stack: Vec<Open> = Vec::new();
     let mut fence: Option<Fence> = None;
+    // Review X4: where the open fence started, and whether it hides a
+    // requirement block (an unclosed fence is never a silent drop).
+    let mut fence_line = 0usize;
+    let mut req_in_fence = false;
     let mut last_line = start;
     for (i, raw) in lines.iter().enumerate().skip(start) {
         let line = i + 1;
@@ -484,12 +495,16 @@ fn blocks(lines: &[&str], start: usize, doc: &mut SpecDocument) -> bool {
             });
             if closes {
                 fence = None;
+                req_in_fence = false;
+            } else if matches!(container_of(raw), Some(Some(("req", _)))) {
+                req_in_fence = true;
             }
             push_body(&mut stack, raw);
             continue;
         }
         if let Some(f) = fence_of(raw) {
             fence = Some(f);
+            fence_line = line;
             push_body(&mut stack, raw);
             continue;
         }
@@ -525,6 +540,10 @@ fn blocks(lines: &[&str], start: usize, doc: &mut SpecDocument) -> bool {
                 stack.push(open_req(doc, line, attrs));
             }
         }
+    }
+    if fence.is_some() {
+        doc.problem(fence_line, "unclosed_fence");
+        saw_requirement |= req_in_fence;
     }
     // Unclosed containers: a requirement is still kept (its problem says
     // where it opened).

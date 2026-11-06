@@ -61,7 +61,7 @@ use crate::spec_refs::RepoConfigRead;
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// The whole evaluation before the writes (two indexes; each git call is
 /// bounded by the browse limits and `IndexLimits::grep_timeout`).
-pub const EVALUATION_BUDGET: Duration = Duration::from_secs(80);
+pub const EVALUATION_BUDGET: Duration = Duration::from_secs(70);
 /// One write of a run.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -191,7 +191,14 @@ pub fn assess_lint(head: &Indexed) -> Result<NewCheckRun, ForgeError> {
             ErrorCode::SpecLintProblem.id()
         ));
         lines.extend(found.iter().map(finding_line));
-        CheckConclusion::Failure
+        // Review X4 (LOW): an incomplete index may have left out the
+        // definition a tag names; broken references alone are no failure then.
+        let only_references = found.iter().all(|f| f.rule == "broken_reference");
+        if index.incomplete.is_some() && only_references {
+            CheckConclusion::Neutral
+        } else {
+            CheckConclusion::Failure
+        }
     };
     lines.push(sources_line(head));
     if let Some(reason) = index.incomplete {
