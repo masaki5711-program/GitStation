@@ -20,6 +20,10 @@ pub enum Coverage {
     /// A browser-session-only route (`authorize()` refuses every token):
     /// gstn never covers it; the text says why.
     BrowserOnly(&'static str),
+    /// A route for another system's server, never a person's CLI (M3 S2:
+    /// kanflow's claim of an act-as assertion, ADR-0025 §9): gstn has no
+    /// command; the text says why.
+    NotForCli(&'static str),
 }
 
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
@@ -627,6 +631,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/visibility",
         Coverage::Command("project visibility"),
     ),
+    // M3 S2 (ADR-0025 §5): acting for a person.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/act-as-confirmation",
+        Coverage::BrowserOnly("the act-as confirmation screen: a person's web session only; tokens are refused (FG-AUTH-0002 session_required)"),
+    ),
+    (
+        "POST",
+        "/api/v1/integrations/{id}/act-as/claim",
+        Coverage::NotForCli("kanflow's server claims the assertion a person confirmed (an integration's act_as token); gstn never acts for a person"),
+    ),
     (
         "POST",
         "/api/v1/users/{id}/rename",
@@ -638,6 +653,9 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
 pub fn non_api_coverage(path: &str) -> &'static str {
     if path == "/healthz" || path == "/readyz" {
         "api (gstn api GET /healthz)"
+    } else if path.starts_with("/-/confirm/") {
+        // M3 S2: the person presses the act-as confirmation (ADR-0025 §5).
+        "browser only (the act-as confirmation; a web session with CSRF, ADR-0025)"
     } else if path.starts_with("/-/auth/") {
         // M2 MR4: the browser sign-in (OIDC redirects and cookies).
         "browser only (OIDC sign-in; gstn uses a personal access token, ADR-0021)"

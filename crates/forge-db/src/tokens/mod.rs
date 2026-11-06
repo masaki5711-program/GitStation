@@ -207,6 +207,7 @@ fn validate(new: &NewToken) -> Result<(i64, Vec<Scope>), ForgeError> {
 /// `expires_out_of_range`, `scopes_empty`, `name_length`, `nul_character`,
 /// `control_character`,
 /// `owner_bot`, `owner_disabled`, `admin_scope_requires_admin`,
+/// `act_as_requires_service_account`, `act_as_agent_token` (M3 S2),
 /// `active_limit` or (for [`issue_for_service_account`])
 /// `owner_not_service_account`; `FG-REPO-0005` for an unknown owner.
 pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issued, ForgeError> {
@@ -268,6 +269,16 @@ async fn issue_as(
     }
     if scopes.contains(&Scope::Admin) && !is_admin {
         return Err(refuse("admin_scope_requires_admin"));
+    }
+    // M3 S2 (ADR-0025 §2): acting for a person is an integration's service
+    // account's, never an agent's (authorize() checks both again).
+    if scopes.contains(&Scope::ActAs) {
+        if kind != UserKind::ServiceAccount.as_str() {
+            return Err(refuse("act_as_requires_service_account"));
+        }
+        if new.is_agent {
+            return Err(refuse("act_as_agent_token"));
+        }
     }
     let active: i64 = tx
         .step(|c| async move {

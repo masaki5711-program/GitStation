@@ -160,3 +160,7 @@ Owner の移譲を待てないときだけ使う。
 - 強制した無効化の記録がないのに FG-AUTH-0010 が出る: データが forge-db の外で変えられた。`/incident` で事案にし、DB の管理者に連絡する。
 - 漏えいの対応で無効化した: 事案として記録し（`/incident`）、失効したトークンの `public_id` で `forge.audit_log` とログを調べる。
 - 事後: 管理者を常に 2 人以上置く運用にする（最後の管理者の拒否と緊急の `--force` を避けるため）。
+
+## 社員番号は残る（M3 S2、ADR-0025 §1）
+
+無効化した利用者の社員番号（`forge.users.employee_number`）は、NULL にも別の値にもならない（トリガー `users_employee_number_kept_when_disabled`、SQLSTATE 23514）。一意の索引は無効の利用者の行も数えるので、退職者の番号は新しい人に付かない。新しい人の Keycloak の claim が既存の（無効を含む）利用者の番号と衝突したら、サインインは止まり（無効の利用者なら `FG-AUTH-0013 user_disabled`、有効なら `FG-AUTH-0014`）、黙って付け替えない。kanflow の代理（`Forge-Act-As: employee:<番号>`）は無効の利用者を `FG-INT-0006 reason=disabled` で断る。会社として番号を振り直す運用があるかは未確認（ADR-0025 の未決）。runbook act-as。

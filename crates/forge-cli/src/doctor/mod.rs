@@ -33,6 +33,8 @@ use forge_git::{Git, GitConfig, StorageRoot};
 use crate::runtime::block_on;
 
 // M3 C1: required checks have a reporter.
+// M3 S2: the act-as keys.
+mod act_as;
 mod checks;
 // M3 I1c: the integrations' event feed.
 mod integrations;
@@ -80,7 +82,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 31] = [
+const DB_CHECKS: [&str; 32] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -125,6 +127,8 @@ const DB_CHECKS: [&str; 31] = [
     "repositories.refs",
     // M3 O3 review: FG-GIT-0020 (a packed-refs.lock nobody holds).
     "repositories.stale_locks",
+    // M3 S2: FG-SYS-0002 (the act-as keys).
+    act_as::NAME,
     // M3 I2: FG-INT-0004 / FG-INT-0011 in the last 24 hours.
     webhooks::DELIVERIES,
     // M3 N1: FG-INT-0015 (the mail queue, the relay).
@@ -269,6 +273,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let [feed_lag, watermark, retention] = integrations::feed_checks(db).await;
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     let stale_locks = maintenance::stale_locks_check(db, root).await;
+    let act_as_keys = act_as::keys_check(db, cfg).await;
     let webhook_deliveries = webhooks::deliveries_check(db, &cfg.webhook).await;
     let [mail_queue, mail_relay] = notify::notify_checks(db, &cfg.notify).await;
     vec![
@@ -301,6 +306,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         integrity,
         refs,
         stale_locks,
+        act_as_keys,
         webhook_deliveries,
         mail_queue,
         mail_relay,

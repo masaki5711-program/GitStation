@@ -90,6 +90,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/confirm/projects/{id}/merge-requests/{iid}/assertions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The person confirms an act-as approve or unapprove: a pending assertion bound to the merge request, its head and target, for the integration to claim (a person's web session; CSRF; 30 per 10 minutes) */
+        post: operations["post_confirm_projects_id_merge_requests_iid_assertions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/integrations": {
         parameters: {
             query?: never;
@@ -407,6 +424,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/{id}/act-as/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The integration claims a confirmed assertion by its state: the assertion is created and returned once (the integration's own service account; act_as; 120 a minute) */
+        post: operations["post_api_v1_integrations_id_act_as_claim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/{id}/dev-status": {
         parameters: {
             query?: never;
@@ -704,6 +738,23 @@ export interface paths {
         head?: never;
         /** Change a merge request's title, description, draft flag or target (the author or Developer) */
         patch: operations["patch_api_v1_projects_id_merge_requests_iid"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/act-as-confirmation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the act-as confirmation screen shows: the merge request, its head and the target's tip, whether sha is the head, the receiving integration (a person's web session; the intent's action allowed for them) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_act_as_confirmation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {
@@ -2027,6 +2078,37 @@ export interface components {
             /** Format: int32 */
             schema_version: number;
         };
+        /** @description `POST …/act-as/claim`. */
+        ClaimAssertion: {
+            /** @description The state the integration put into the confirmation's URL. */
+            state: string;
+        };
+        /** @description `POST …/act-as/claim` → `200`, once. */
+        ClaimBody: {
+            /**
+             * @description `fga_<public_id>_<secret>`: send it as `Forge-Assertion` with
+             *     `Forge-Act-As: user:<sub.user_id>`. Returned only by this answer.
+             */
+            assertion: string;
+            /** @description UTC, RFC 3339 (five minutes after the confirmation). */
+            expires_at: string;
+            head_sha: string;
+            /** Format: int64 */
+            iid: number;
+            intent: string;
+            /** Format: int64 */
+            project_id: number;
+            sub: components["schemas"]["ClaimSubBody"];
+            /** @description `refs/heads/…`. */
+            target_ref: string;
+        };
+        /** @description Who confirmed. */
+        ClaimSubBody: {
+            /** @description Only with the `user_employee_number` scope. */
+            employee_number?: string | null;
+            /** Format: int64 */
+            user_id: number;
+        };
         /** @description One CODEOWNERS rule the changed paths need. */
         CodeownerStatusBody: {
             /** Format: int32 */
@@ -2091,6 +2173,40 @@ export interface components {
             diff: components["schemas"]["DiffBody"];
             from: components["schemas"]["RevBody"];
             to: components["schemas"]["RevBody"];
+        };
+        /**
+         * @description `GET …/act-as-confirmation` (forge's data only: the screen shows no
+         *     text the integration sent).
+         */
+        ConfirmationBody: {
+            /** @description The merge request's head now, all digits (`null`: no version yet). */
+            head_sha: string | null;
+            /** Format: int64 */
+            iid: number;
+            /** Format: int64 */
+            integration_id: number;
+            /** @description The integration's kind (`kanflow`): who receives the assertion. */
+            integration_kind: string;
+            /**
+             * @description The username of the integration's service account (its name in
+             *     forge).
+             */
+            integration_name: string;
+            /** @description `approve` or `unapprove`. */
+            intent: string;
+            /** @description "<display name> (<username>) として承認します". */
+            person_display_name: string;
+            person_username: string;
+            /** Format: int64 */
+            project_id: number;
+            /** @description `sha` is the head now (otherwise the screen offers no button). */
+            sha_matches: boolean;
+            /** @description Without `refs/heads/`. */
+            source_branch: string;
+            target_branch: string;
+            /** @description The target's tip now (`null`: the branch is missing). */
+            target_sha: string | null;
+            title: string;
         };
         /** @description One current prediction. */
         ConflictPredictionBody: {
@@ -2795,6 +2911,20 @@ export interface components {
             /** @description More than 500 exist (only the first 500 by id are listed). */
             truncated: boolean;
         };
+        /** @description `POST /-/confirm/…/assertions`. */
+        IssueAssertion: {
+            /** Format: int64 */
+            integration: number;
+            /** @description `approve` or `unapprove`. */
+            intent: string;
+            /** @description The head the screen showed (another is FG-REVIEW-0008 stale_view). */
+            sha: string;
+            /**
+             * @description The integration's state from the screen's URL (22..=128 of
+             *     `[A-Za-z0-9_-]`; only its SHA-256 is kept).
+             */
+            state: string;
+        };
         /** @description `POST /api/v1/admin/service-accounts/{id}/tokens`. */
         IssueServiceAccountToken: {
             /**
@@ -2812,6 +2942,11 @@ export interface components {
              *     (M3 I1c: the event feed's actor); never `admin`.
              */
             scopes: string[];
+        };
+        /** @description `POST /-/confirm/…/assertions` → `201`. */
+        IssuedBody: {
+            /** @description Always `issued`: the screen says "完了しました。この画面を閉じてください". */
+            status: string;
         };
         /** @description An issued token: the secret, shown this once. */
         IssuedServiceAccountToken: {
@@ -3860,6 +3995,25 @@ export interface components {
             body: string;
             position?: null | components["schemas"]["PositionBody"];
         };
+        /** @description One act-as trial: allowed with a matching confirmation, or why not. */
+        StatusActAsTrialBody: {
+            allowed: boolean;
+            /**
+             * @description The refusal's reason (`self_approval`, `required_role`, …); `null`
+             *     when allowed.
+             */
+            reason: string | null;
+        };
+        /** @description What a person could do through the integration (ADR-0025 §9). */
+        StatusActAsViewerBody: {
+            can_approve: components["schemas"]["StatusActAsTrialBody"];
+            can_unapprove: components["schemas"]["StatusActAsTrialBody"];
+            /**
+             * @description Always `true`: each needs the person's confirmation in forge
+             *     (`Forge-Assertion`).
+             */
+            requires_assertion: boolean;
+        };
         /** @description One live approval as counted now. */
         StatusApprovalBody: {
             /** Format: int64 */
@@ -3932,6 +4086,7 @@ export interface components {
          *     — a hint for the screen, never a permission (the route decides again).
          */
         StatusViewerBody: {
+            act_as?: null | components["schemas"]["StatusActAsViewerBody"];
             /** @description The caller has a live approval of the merge request. */
             approved_by_me: boolean;
             /** @description `POST …/approve` would be allowed (never for the author). */
@@ -4438,6 +4593,42 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_confirm_projects_id_merge_requests_iid_assertions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueAssertion"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedBody"];
+                };
+            };
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {
@@ -5400,6 +5591,41 @@ export interface operations {
             };
         };
     };
+    post_api_v1_integrations_id_act_as_claim: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaimAssertion"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClaimBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_integrations_id_dev_status: {
         parameters: {
             query?: {
@@ -6304,6 +6530,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_act_as_confirmation: {
+        parameters: {
+            query?: {
+                /** @description approve or unapprove */
+                intent?: string;
+                /** @description the head the integration showed (all digits) */
+                sha?: string;
+                /** @description the id of the integration that receives the assertion */
+                integration?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmationBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

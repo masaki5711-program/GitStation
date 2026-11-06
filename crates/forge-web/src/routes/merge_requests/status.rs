@@ -218,6 +218,41 @@ pub struct StatusViewerBody {
     pub can_mark_ready: bool,
     /// The caller has a live approval of the merge request.
     pub approved_by_me: bool,
+    /// M3 S2 (ADR-0025 §9; added within `schema_version` 1): only when a
+    /// service account acts for a person (`Forge-Act-As`) — what the person
+    /// could do through it with a confirmation (`can_*` above are then all
+    /// `false`: acting for a person never approves without one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub act_as: Option<StatusActAsViewerBody>,
+}
+
+/// One act-as trial: allowed with a matching confirmation, or why not.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatusActAsTrialBody {
+    pub allowed: bool,
+    /// The refusal's reason (`self_approval`, `required_role`, …); `null`
+    /// when allowed.
+    #[schema(required = true)]
+    pub reason: Option<String>,
+}
+
+/// What a person could do through the integration (ADR-0025 §9).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatusActAsViewerBody {
+    pub can_approve: StatusActAsTrialBody,
+    pub can_unapprove: StatusActAsTrialBody,
+    /// Always `true`: each needs the person's confirmation in forge
+    /// (`Forge-Assertion`).
+    pub requires_assertion: bool,
+}
+
+fn trial_body(t: forge_auth::ActAsTrial) -> StatusActAsTrialBody {
+    StatusActAsTrialBody {
+        allowed: t.allowed,
+        reason: t.reason,
+    }
 }
 
 /// `GET …/status` (the stable contract, `schema_version` 1).
@@ -261,6 +296,7 @@ pub(super) fn status_body(
     s: &MergeStatus,
     viewer: MergeRequestViewer,
     caller: Option<UserId>,
+    act_as: Option<forge_auth::ActAsViewer>,
 ) -> MergeRequestStatusBody {
     let approved_by_me = match (&s.approvals, caller) {
         (Some(report), Some(me)) => report.approvals.iter().any(|a| a.approver == me),
@@ -349,6 +385,11 @@ pub(super) fn status_body(
             can_merge: viewer.can_merge,
             can_mark_ready: viewer.can_mark_ready,
             approved_by_me,
+            act_as: act_as.map(|a| StatusActAsViewerBody {
+                can_approve: trial_body(a.can_approve),
+                can_unapprove: trial_body(a.can_unapprove),
+                requires_assertion: a.requires_assertion,
+            }),
         },
     }
 }
@@ -387,7 +428,8 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
         let viewer = protection.map_or(MergeRequestViewer::CLOSED, |p| {
             w.proof.ctx().viewer(principal, p)
         });
-        json(status_body(iid, &answer, viewer, principal.user()))
+        let act_as = w.proof.ctx().act_as_viewer(principal);
+        json(status_body(iid, &answer, viewer, principal.user(), act_as))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)

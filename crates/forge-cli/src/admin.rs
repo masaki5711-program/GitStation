@@ -24,6 +24,29 @@ pub fn repo_path(storage_root: &Path, repo_id: i64) -> Result<String, ForgeError
     Ok(format!("{}\t{state}\n", path.display()))
 }
 
+/// `forge admin act-as claimed-mac --value <v> [--kid <k>]` (M3 S2,
+/// ADR-0025 §5.2): the audit's `act_as_claimed` for a `Forge-Act-As` value,
+/// with the key id it was computed with. The operator's host is the trust
+/// anchor (as ADR-0019 §8); nothing is written. No key file is
+/// `FG-SYS-0002 config_key=auth.act_as_hmac_keys_file reason=missing`.
+pub fn act_as_claimed_mac(
+    cfg: &forge_core::config::Config,
+    value: &str,
+    kid: Option<i16>,
+) -> Result<String, ForgeError> {
+    let keys = cfg.auth.act_as_keys()?.ok_or_else(|| {
+        ForgeError::new(forge_errors::ErrorCode::ConfigInvalid)
+            .with_context("config_key", forge_core::act_as::KEYS_CONFIG_KEY)
+            .with_context("reason", "missing")
+    })?;
+    let (kid, mac) = keys.claimed(value, kid)?;
+    Ok(format!(
+        "act_as_key_id  {kid}
+act_as_claimed {mac}
+"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

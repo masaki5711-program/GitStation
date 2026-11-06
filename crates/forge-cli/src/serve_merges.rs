@@ -153,6 +153,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::LogoutTokenInvalid
         | ErrorCode::LoginNotConfigured
         | ErrorCode::ServiceAccountTokenExpiring
+        | ErrorCode::ActAsAssertionInvalid
+        | ErrorCode::ActAsTargetInvalid
         | ErrorCode::ProtectedRefForcePush
         | ErrorCode::ProtectedRefPushNotAllowed
         | ErrorCode::ProtectedRefDirectPushForbidden

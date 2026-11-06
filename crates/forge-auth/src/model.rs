@@ -9,13 +9,14 @@
 // them); re-exported here so the authorization API is unchanged.
 pub use forge_core::{MergeRequestState, Role, Scope, Visibility};
 
+use forge_core::act_as::Intent;
 /// The kind of the caller's account (ADR-0024 §8.4, M3 R3): `human`,
 /// `service_account` or `bot` — forge-core's `UserKind`, the CHECK of
 /// `forge.users.kind`. Set only by [`Principal::authenticated`] from the
 /// account row, never defaulted and never changed afterwards. The actions
 /// kept for people (`people_only` in `authorize()`) refuse the other two.
 pub use forge_core::UserKind as AccountKind;
-use forge_core::{RefName, UserId};
+use forge_core::{IntegrationId, MergeRequestId, ProjectId, RefName, UserId};
 
 /// How the caller authenticated.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +25,56 @@ pub enum Credential {
     Session,
     /// Personal access token limited to these scopes.
     Token(Vec<Scope>),
+    /// A service account's token acting for a person (`Forge-Act-As`, M3
+    /// S2, ADR-0025): only forge-web's authentication builds it
+    /// ([`Principal::act_as`]); `authorize()` decides it in its own arm
+    /// (`act_as.rs`) and lends no administrator right.
+    ActAs(Box<ActAsCredential>),
+}
+
+/// What an act-as request authenticated with (ADR-0025 §2, §5): the
+/// service account's token, its integration, the verified assertion (if
+/// one was sent) and the audit's keyed HMAC of the claimed person. Built
+/// by forge-web's authentication from the token and forge-db's verified
+/// assertion only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActAsCredential {
+    /// The service account (`actor.via`).
+    pub via: UserId,
+    /// Its account kind as read with the token (`service_account`, or the
+    /// act-as arm refuses `act_as_requires_service_account`).
+    pub via_kind: AccountKind,
+    /// The token's id (`credential_id` of the audit row) and scopes.
+    pub via_token: i64,
+    pub via_scopes: Vec<Scope>,
+    /// The token was issued for an AI agent (refused: `agent_token`).
+    pub via_agent: bool,
+    /// The integration whose service account the token belongs to.
+    pub integration: IntegrationId,
+    pub integration_enabled: bool,
+    /// The verified assertion (`None`: none was sent).
+    pub assertion: Option<AssertionFacts>,
+    /// `hex(HMAC(K, "forge.act_as.claimed.v1" ‖ header))` and its key id
+    /// (the audit's `act_as_claimed` / `act_as_key_id`).
+    pub claimed_mac: String,
+    pub claimed_key_id: i16,
+}
+
+/// A claimed assertion that forge-db verified (its MAC, its state, its
+/// integration and person): what it is bound to, for `authorize()` to
+/// compare with the action and the resource (ADR-0025 §5.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssertionFacts {
+    /// `act_as_assertions.id` (consumed in the action's transaction).
+    pub id: i64,
+    /// Safe to log (`assertion_public_id`, the audit's `via_assertion_id`).
+    pub public_id: String,
+    pub intent: Intent,
+    pub project: ProjectId,
+    pub merge_request: MergeRequestId,
+    pub head_sha: String,
+    pub target_ref: RefName,
+    pub target_sha: String,
 }
 
 /// Who is asking. Built only through the constructors, which take every
@@ -116,14 +167,59 @@ impl Principal {
         &self.credential
     }
 
+    /// A service account acting for `person` (M3 S2, ADR-0025): forge-web's
+    /// authentication builds it after resolving `Forge-Act-As` to exactly
+    /// one active person (`kind` as read with the person's row) and
+    /// verifying the assertion, never anything else (test
+    /// `only_forge_web_builds_act_as_principals`). The person's
+    /// administrator flag is not carried: an act-as principal has no
+    /// administrator rights.
+    pub fn act_as(
+        person: UserId,
+        active: bool,
+        kind: AccountKind,
+        credential: ActAsCredential,
+    ) -> Self {
+        Self {
+            user: Some(person),
+            is_admin: false,
+            active,
+            credential: Credential::ActAs(Box::new(credential)),
+            agent: false,
+            kind,
+        }
+    }
+
+    /// The act-as credential, when the request acts for a person.
+    pub fn act_as_credential(&self) -> Option<&ActAsCredential> {
+        match &self.credential {
+            Credential::ActAs(c) => Some(c),
+            Credential::Session | Credential::Token(_) => None,
+        }
+    }
+
     /// Administrator rights in effect: an administrator in a session, or with
-    /// a token that carries the `admin` scope.
+    /// a token that carries the `admin` scope; never when acting for a
+    /// person (ADR-0025 §3).
     pub fn admin_rights(&self) -> bool {
         self.is_admin
             && match &self.credential {
                 Credential::Session => true,
                 Credential::Token(scopes) => scopes.contains(&Scope::Admin),
+                Credential::ActAs(_) => false,
             }
+    }
+
+    /// The scopes the credential holds, as the audit's `effective_scope`
+    /// (empty for a session; an act-as request's are its service account
+    /// token's).
+    pub fn scope_names(&self) -> Vec<String> {
+        let names = |scopes: &[Scope]| scopes.iter().map(|s| s.as_str().to_owned()).collect();
+        match &self.credential {
+            Credential::Session => Vec::new(),
+            Credential::Token(scopes) => names(scopes),
+            Credential::ActAs(c) => names(&c.via_scopes),
+        }
     }
 }
 
@@ -462,6 +558,62 @@ pub enum Resource {
         project: ProjectView,
         class: forge_core::VisibilityClass,
     },
+    /// A resource as an act-as request reaches it (M3 S2, ADR-0025 §3):
+    /// the resource as seen by the person, the integration's service
+    /// account on its project, and what an assertion is compared with.
+    /// Only the act-as arm reads it; every other principal is refused.
+    ActAs(Box<ActAsView>),
+    /// The confirmation of an act-as action (`ActAsConfirmView`,
+    /// `ActAsAssertionIssue`, ADR-0025 §5): the merge request as seen by
+    /// the person, the intent, and the receiving integration's state.
+    ActAsConfirm(Box<ActAsConfirmView>),
+}
+
+/// See [`Resource::ActAs`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActAsView {
+    /// The resource as seen by the person (their native role).
+    pub inner: Resource,
+    /// The integration's service account on the resource's project.
+    pub via: ViaView,
+    /// What an assertion is compared with (merge request routes); `None`
+    /// where there is nothing to bind (reads).
+    pub subject: Option<ActAsSubject>,
+}
+
+/// The integration's service account on a project (ADR-0025 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViaView {
+    /// Its membership role (a binding makes it a Reporter).
+    pub role: Option<Role>,
+    /// The project is bound to the request's integration (`via_bound`).
+    pub bound: bool,
+}
+
+/// The merge request an act-as change acts on, as loaded (ADR-0025 §5.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActAsSubject {
+    pub project: ProjectId,
+    pub merge_request: MergeRequestId,
+    /// The merge request's head now (`None` before its first version).
+    pub head_sha: Option<String>,
+    /// Its target ref now (`refs/heads/…`).
+    pub target_ref: RefName,
+    /// The target's tip now (`None`: the branch is missing).
+    pub target_sha: Option<String>,
+    /// The `sha` the request's body names (an approve's).
+    pub requested_sha: Option<String>,
+}
+
+/// See [`Resource::ActAsConfirm`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActAsConfirmView {
+    /// The merge request as seen by the person (`Resource::MergeRequest`).
+    pub merge_request: Resource,
+    pub intent: Intent,
+    pub integration_enabled: bool,
+    /// The integration is bound to the merge request's project.
+    pub bound: bool,
 }
 
 /// An integration's feed as the caller reaches it (M3 I1c): whether the

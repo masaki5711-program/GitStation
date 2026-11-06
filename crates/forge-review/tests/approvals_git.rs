@@ -688,7 +688,7 @@ async fn the_merge_job_evaluates_the_approvals_again() {
         .expect("proof");
     let answer = w
         .review
-        .unapprove(&request("req-unapprove"), &proof)
+        .unapprove(&request("req-unapprove"), &proof, None)
         .await
         .expect("unapprove");
     assert_eq!(answer.outcome, ApproveOutcome::Withdrawn);

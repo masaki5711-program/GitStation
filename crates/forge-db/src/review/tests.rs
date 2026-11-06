@@ -565,6 +565,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     &ctx(&request),
                     (p, drafted.iid),
                     alice,
+                    None,
                     |_| Ok(()),
                     |_, _, _| (true, None),
                 )
@@ -578,6 +579,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     &ctx(&request),
                     (p, drafted.iid),
                     alice,
+                    None,
                     |_| Ok(()),
                 )
                 .await
