@@ -265,7 +265,7 @@
    （payload は `project_id`・`iid`・`head_sha`、重複の鍵 `spec_index:<project>:<iid>:<head>`、120 秒、5 回）を積む。spec-trace は作業項目の結びつきを見るので、
    `work_item.linked` / `unlinked` でもその MR の **今の head** をもう一度評価する（鍵に `:seq:<seq>` を足し、イベントごとに 1 回）。版がまだ無い MR は飛ばす
    （最初の版が、その時点の結びつきで評価される）。1 つのジョブが 2 つの run を書く。同じ head を持つ 2 つの MR は、後から書いた方の run が残る（run はコミットのもの）。
-9. **失敗を黙らせない**（X2 と同じ形）: 評価の締め切り 80 秒、書き込みは 1 件 10 秒（80 + 10 + 10 < ジョブの 120 秒）。git / DB / 準備中 / 時間切れはやり直し、
+9. **失敗を黙らせない**（X2 と同じ形）: 評価の締め切り 70 秒、書き込みは 1 件 10 秒（70 + 10 + 10 に `error` の 2 件を足しても 110 < ジョブの 120 秒。下の 15 で 80 秒から改めた）。git / DB / 準備中 / 時間切れはやり直し、
    最後の試みでは両方の run を `error`（要約に FG コードと request id）にしてからジョブを死なせる（`SpecChecks::fail`）。答えずに死んだジョブ（worker の落ち、reaper）は、
    `forge worker` の新しいタスク `spec_index_sweep`（60 秒ごと、50 件まで）が、7 日以内に死んで head に 2 つの run が揃っていない `check.spec_index` を探して `error` を書く
    （X2 の部分索引 `jobs_dead_kind` をそのまま使う）。`error` も書けなければ `forge.spec_index.error_unrecorded`（error）を出す。プロジェクトか MR が消えていれば何も書かない
@@ -289,3 +289,19 @@
     （`checks::spec_index`）、ルートは forge-web（`routes/specs.rs`）。新しいクレートは作らない。
 14. **見つけた既存の問題（この MR では直さない）**: `gstn` の URL の組み立ては空白を `+` にするが、サーバーの query の復号は `+` を空白に戻さない
     （`gstn browse commits --path "a b"` も同じ）。`gstn spec requirements --search` に空白を含めると一致しない。別の MR で直す。
+15. **X4 の独立レビュー（2026-11-06。HIGH 2 件）で直したこと**:
+    - **対象ブランチの変更で評価し直す（HIGH）**: `merge_request.updated` の `target_branch` があれば（マージベースが動く）、今の head をもう一度評価する。
+    - **仕様の文書の中の `@req` はテストではない（HIGH）**: 自分の仕様のディレクトリの下の Markdown の `@req`（説明の文やコードの例）は索引に入れない。
+      偽の `tested` と偽の `broken_reference` が出ないように。
+    - **重複の鍵は状態ごと（MEDIUM）**: 鍵を `spec_index:<project>:<iid>:<head>:<state>` にした（`state` = 対象ブランチと開いている結びつきの作業項目の id の md5）。
+      同じ head でも結びつきや対象が変われば評価し直し、同じ状態なら 1 回。**まとめる**: 同じ (プロジェクト, MR, head) のジョブが待っている（`queued`）間は積まない
+      （ジョブは動くときに結びつきと対象を読む）。結びつきを大量に変えても評価は 1 回。8 の `:seq:<seq>` の鍵はこれに置き換えた。
+    - **締め切り（MEDIUM）**: 9 のとおり 70 秒に。最後の試みが `error` を書き終えるまでジョブの時間内に収まる（テストで固定）。
+    - **フェンス（MEDIUM）**: バッククォートのフェンスの情報文字列にバッククォートがあればフェンスではない（CommonMark）。閉じないフェンスは `unclosed_fence` の違反にし、
+      その中に要件ブロックがあれば前付けの無いファイルも仕様の文書として扱う（後ろのブロックを黙って落とさない）。前付けの前の UTF-8 の BOM は読み飛ばす。
+    - **仕様の API の上限は仕事の量で数える（MEDIUM, security）**: 1 人 1 分に索引 120 回分（`requirements`・`versions` は 1、`diff` は 2、`trace` は 1 + 辿る参照の数）、
+      同時に 2 本まで（超えると `FG-WEB-0010 reason=in_flight`）。
+    - **LOW**: 索引が上限に達していて違反が `broken_reference` だけなら spec-lint は `neutral`（定義を読み落としたかもしれないため）。形の崩れたタグは 80 バイトで切る。
+      `cat-file --batch` の大きさの足し算はあふれを確かめる。
+    - **採らなかったもの**: 「`follow` の resolver の失敗・時間切れを `unavailable` にしてログ」は採らない。X1 の決定（引けない失敗は要求の失敗で、項目を黙って落とさない）と、
+      X2 の spec-drift が DB の一時的な失敗を `neutral` の run として残してしまう（やり直しが効かない）ことに反するため。git の失敗は従来どおり `unavailable`。
