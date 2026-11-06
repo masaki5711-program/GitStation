@@ -123,6 +123,7 @@ pub(crate) async fn merge_request_ctx(
     stored: &forge_review::StoredMergeRequest,
     record: &forge_core::ProjectRecord,
     requested_sha: Option<&str>,
+    route_action: Option<forge_auth::Action>,
 ) -> Result<MergeRequestCtx, ForgeError> {
     let Some(p) = principal(parts).filter(|p| p.act_as_credential().is_some()) else {
         return Ok(ctx);
@@ -146,7 +147,12 @@ pub(crate) async fn merge_request_ctx(
     // tip was decided — never for a read, an unbound or invisible project,
     // or a person without the role.
     let untipped = ctx.clone().acting(via, Some(subject(None))); // clone: the gate's trial context
-    let target_sha = match untipped.act_as_tip_gate(p) {
+                                                                 // The route's own action (re-review HIGH): never the assertion's intent.
+    let gate = match route_action {
+        Some(action) => untipped.act_as_tip_gate(p, action),
+        None => ActAsTipGate::Skip(None),
+    };
+    let target_sha = match gate {
         ActAsTipGate::Skip(assumed) => assumed,
         ActAsTipGate::Fetch => bounded(
             state,

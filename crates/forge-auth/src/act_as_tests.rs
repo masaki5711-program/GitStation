@@ -501,24 +501,66 @@ fn the_tip_is_read_only_after_the_pre_gate() {
         )
     };
     let tip = Some("2".repeat(40));
+    let approve = Action::MergeRequestApprove;
     let p = approver().principal();
-    assert_eq!(ctx(DEV, true).act_as_tip_gate(&p), ActAsTipGate::Fetch);
+    assert_eq!(
+        ctx(DEV, true).act_as_tip_gate(&p, approve),
+        ActAsTipGate::Fetch
+    );
     for refused in [
         ctx(DEV, false),
         ctx(None, true),
         ctx(Some(Role::Reporter), true),
     ] {
-        assert_eq!(refused.act_as_tip_gate(&p), ActAsTipGate::Skip(tip.clone()));
+        assert_eq!(
+            refused.act_as_tip_gate(&p, approve),
+            ActAsTipGate::Skip(tip.clone())
+        );
     }
+    // Re-review HIGH: the route's action decides, not the assertion's
+    // intent: an approve assertion on the unapprove route (and the reverse)
+    // reads no tip and is refused wrong_action.
+    let unapprover = via(DEV, ViaToken::Approver, Assert::Unapprove).principal();
+    for (who, route) in [
+        (&p, Action::MergeRequestUnapprove),
+        (&unapprover, Action::MergeRequestApprove),
+    ] {
+        let c = ctx(DEV, true);
+        assert_eq!(
+            c.act_as_tip_gate(who, route),
+            ActAsTipGate::Skip(tip.clone()),
+            "{route:?}"
+        );
+        let err = authorize(who, route, &crate::prove::ResourceCtx::resource(&c))
+            .expect_err("wrong action");
+        assert_eq!(reason(&err), "wrong_action");
+    }
+    // Another person (here the merge request's author) holding the
+    // assertion: refused, no tip.
+    let author = Principal::act_as(
+        crate::matrix::OTHER,
+        true,
+        AccountKind::Human,
+        approver().credential(),
+    );
+    assert_eq!(
+        ctx(DEV, true).act_as_tip_gate(&author, approve),
+        ActAsTipGate::Skip(tip.clone())
+    );
+    // A read route never reads a tip, with or without an assertion.
+    assert_eq!(
+        ctx(DEV, true).act_as_tip_gate(&p, Action::MergeRequestRead),
+        ActAsTipGate::Skip(None)
+    );
     let reader = via(DEV, ViaToken::Reader, Assert::None).principal();
     assert_eq!(
-        ctx(DEV, true).act_as_tip_gate(&reader),
+        ctx(DEV, true).act_as_tip_gate(&reader, approve),
         ActAsTipGate::Skip(None)
     );
     let session =
         Principal::authenticated(ME, false, true, Credential::Session, AccountKind::Human);
     assert_eq!(
-        ctx(DEV, true).act_as_tip_gate(&session),
+        ctx(DEV, true).act_as_tip_gate(&session, approve),
         ActAsTipGate::Skip(None)
     );
 }

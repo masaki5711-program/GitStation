@@ -119,12 +119,15 @@ async fn stored_lookup(
     edit: MergeRequestEdit,
 ) -> Result<Lookup<MergeRequestCtx>, ForgeError> {
     let ids = ids(parts.uri.path(), suffix)?;
-    lookup_ids_acting(state, parts, ids, viewer, edit, None).await
+    // These routes never read a target's tip acting for a person.
+    lookup_ids_acting(state, parts, ids, viewer, edit, None, None).await
 }
 
 /// [`lookup_ids`] for a request that may act for a person (M3 S2): the
 /// context gets the service account's facts and the assertion's subject
-/// (`requested_sha`: the body's `sha` of an approve) when it does.
+/// (`requested_sha`: the body's `sha` of an approve) when it does; the
+/// target's tip is read only for `route_action`'s change and only after
+/// its decision passed everything but the tip.
 pub(super) async fn lookup_ids_acting(
     state: &AppState,
     parts: &Parts,
@@ -132,6 +135,7 @@ pub(super) async fn lookup_ids_acting(
     viewer: Option<UserId>,
     edit: MergeRequestEdit,
     requested_sha: Option<&str>,
+    route_action: Option<forge_auth::Action>,
 ) -> Result<Lookup<MergeRequestCtx>, ForgeError> {
     let Some((project, record)) = project_of(state, id, viewer).await? else {
         return Ok(absent());
@@ -153,6 +157,7 @@ pub(super) async fn lookup_ids_acting(
         &stored,
         &record,
         requested_sha,
+        route_action,
     )
     .await?;
     Ok(found(ctx, record))

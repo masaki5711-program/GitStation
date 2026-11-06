@@ -458,7 +458,16 @@ impl Loader<AppState> for StoredMr {
     ) -> LoadFuture<'a, MergeRequestCtx> {
         Box::pin(async move {
             let ids = ids(parts.uri.path(), self.0)?;
-            lookup_ids_acting(state, parts, ids, viewer, MergeRequestEdit::default(), None).await
+            lookup_ids_acting(
+                state,
+                parts,
+                ids,
+                viewer,
+                MergeRequestEdit::default(),
+                None,
+                Some(self.action()),
+            )
+            .await
         })
     }
 }
@@ -483,9 +492,21 @@ impl BodyLoader<AppState, ApproveMergeRequest> for StoredMr {
                 viewer,
                 MergeRequestEdit::default(),
                 Some(body.sha.as_str()),
+                Some(self.action()),
             )
             .await
         })
+    }
+}
+
+impl StoredMr {
+    /// The route's action, for the act-as tip gate (re-review HIGH).
+    fn action(&self) -> forge_auth::Action {
+        match self.0 {
+            APPROVE_SUFFIX => forge_auth::Action::MergeRequestApprove,
+            UNAPPROVE_SUFFIX => forge_auth::Action::MergeRequestUnapprove,
+            _ => forge_auth::Action::MergeRequestRead,
+        }
     }
 }
 

@@ -943,3 +943,51 @@ async fn act_as_on_smart_http_is_refused() {
     );
     w.t.drop_now().await;
 }
+
+/// Re-review HIGH: the route's action decides, not the assertion's
+/// intent. An unapprove assertion sent to the approve route (with the head
+/// as `sha`) and an approve assertion sent to the unapprove route are both
+/// refused `wrong_action` before any git read, and stay unusable.
+#[tokio::test]
+async fn a_mismatched_route_reaches_no_git_and_is_wrong_action() {
+    let w = world().await;
+    let act_as = w.act_as(w.olga);
+    for (intent, tail, body, state) in [
+        (
+            "unapprove",
+            "/approve",
+            Some(json!({ "sha": w.head })),
+            "kanflow-state-mismatch-approve-0123",
+        ),
+        (
+            "approve",
+            "/unapprove",
+            None,
+            "kanflow-state-mismatch-unapprove-01",
+        ),
+    ] {
+        let assertion = w.confirmed(intent, state).await;
+        let before = w.git_calls();
+        let (status, answer) = send(
+            w.router.clone(),
+            "POST",
+            &w.mr(tail),
+            w.kanflow(),
+            body,
+            &[("forge-act-as", &act_as), ("forge-assertion", &assertion)],
+        )
+        .await;
+        assert_eq!(
+            (status, code(&answer)),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0020"),
+            "{tail}: {answer}"
+        );
+        assert_eq!(
+            w.git_calls(),
+            before,
+            "{tail}: a mismatched route reaches no git"
+        );
+        assert_eq!(w.assertion_state(&public_id(&assertion)).await, "rejected");
+    }
+    w.t.drop_now().await;
+}

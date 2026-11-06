@@ -261,9 +261,17 @@ pub enum ActAsTipGate {
 
 impl MergeRequestCtx {
     /// The tip gate of this context (loaded with the act-as facts and no
-    /// tip) for `principal`: `authorize()` on the assertion's intent with
-    /// the assertion's own tip assumed.
-    pub fn act_as_tip_gate(&self, principal: &Principal) -> ActAsTipGate {
+    /// tip) for `principal` on the route's `action`: `authorize()` on that
+    /// action — never the assertion's intent, so a mismatched route is
+    /// refused (`wrong_action`) before any git read — with the assertion's
+    /// own tip assumed. Only a change that needs an assertion reads a tip.
+    pub fn act_as_tip_gate(&self, principal: &Principal, action: Action) -> ActAsTipGate {
+        match action.act_as_rule() {
+            crate::ActAsRule::RequiresAssertion(_) => {}
+            crate::ActAsRule::ReadWithoutAssertion | crate::ActAsRule::Denied => {
+                return ActAsTipGate::Skip(None)
+            }
+        }
         let assertion = principal
             .act_as_credential()
             .and_then(|c| c.assertion.as_ref());
@@ -279,10 +287,6 @@ impl MergeRequestCtx {
                     ..subject.clone()
                 }),
             );
-        let action = match assertion.intent {
-            forge_core::act_as::Intent::Approve => Action::MergeRequestApprove,
-            forge_core::act_as::Intent::Unapprove => Action::MergeRequestUnapprove,
-        };
         if authorize(principal, action, &trial.resource()).is_ok() {
             ActAsTipGate::Fetch
         } else {
