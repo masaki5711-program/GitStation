@@ -2142,3 +2142,45 @@ diagnosis = "The event `forge.review.conflict_scan_incomplete` (or `forge.review
 fix = "A cap or the budget: expected on a target branch with very many open merge requests — the pairs left out are scanned again when either side gets a new head. pair_failed: fix the cause its FG-GIT code names (its runbook); the job retries. job_failed / job_stale: fix the cause the job's own error code names; the next push, retarget or reopen scans again. Never edit forge.merge_request_conflict_scans or forge.merge_request_conflict_pairs by hand outside an approved runbook step."
 runbook = "merge-request-mergeability"
 test = "a_scan_with_more_candidates_than_the_cap_is_incomplete"
+
+# ── M3 X7: deterministic risk check `forge/risk` (plan 04 M-6, ADR-0023
+# Amendment X7). The three codes below are notices named in a run's summary
+# and annotations, never HTTP errors. ──
+[[error]]
+code = "FG-REVIEW-0023"
+name = "RiskStop"
+http_status = 409
+severity = "info"
+user_message_ja = "この変更は、プログラムの破壊・DB の破壊・機密の流出のおそれがあるため、自動マージされません。チェック forge/risk の理由を確かめてください。"
+user_message_en = "This change may break the program, destroy database data or leak a secret, so it is not merged automatically. Read the reasons in the forge/risk check."
+user_message_id = "Perubahan ini berpotensi merusak program, menghapus data basis data atau membocorkan rahasia, sehingga tidak digabung otomatis. Baca alasannya pada pemeriksaan forge/risk."
+cause = "The check `forge/risk` (M3 X7, plan 04 M-6 layer 1, ADR-0023 Amendment X7) found a deterministic rule of class `stop` in a merge request head's diff against the merge base with its target branch: an applied migration changed or removed, a destructive statement in a new migration (DROP TABLE / COLUMN / SCHEMA / DATABASE, TRUNCATE, DELETE or UPDATE without WHERE, a column type change or rename, a dropped constraint, a disabled trigger), a file that looks like a secret (a credential file by name, a private key or token pattern by content), a backup / restore / retention script or job file changed, a rollback step in a deploy file, a new migration or CI / deploy file that could not be read (too large, or past the read limit), a mass deletion (500 lines and 30 % of the target's text lines, or 20 files and 30 % of its files), or a change too large to assess (more than 5000 files). The run concludes `failure`; it blocks a merge only where a protected branch requires `forge/risk` (a `failure` never satisfies a required check), and M4's auto-merge never merges a head whose run is `failure`. The summary and annotations name the rule, the path and (for SQL) the line, never the matched text."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head> (forge/risk; the summary lists every finding by rule, path and line; the rules and thresholds are in docs/api/checks.md). The worker's log event `forge.risk.recorded` carries `request_id`, `project_id`, `head_sha`, `level`, `findings` and `check_run_id`."
+fix = "Nothing to change on the server. Read the reasons and fix the change (a migration is append-only: add a new one instead of editing an applied one; remove the secret and rotate it), or ask a maintainer to decide. The rules are fixed in code; a project cannot lower them yet."
+test = "a_change_that_drops_a_table_is_a_failure_with_risk_stop"
+
+[[error]]
+code = "FG-REVIEW-0024"
+name = "RiskWarn"
+http_status = 409
+severity = "info"
+user_message_ja = "この変更には注意が要る点があります（認証・権限、CI やデプロイの設定、依存、新しいマイグレーションなど）。チェック forge/risk を確かめてください。"
+user_message_en = "This change touches something that needs a look (authentication or permissions, CI or deploy configuration, dependencies, a new migration, ...). Read the forge/risk check."
+user_message_id = "Perubahan ini menyentuh hal yang perlu diperhatikan (autentikasi atau izin, konfigurasi CI atau deploy, dependensi, migrasi baru, dan lain-lain). Baca pemeriksaan forge/risk."
+cause = "The check `forge/risk` (M3 X7, plan 04 M-6) found only rules of class `warn` in the diff: authentication / permission code or files by path, CI or deploy configuration, a dependency manifest or lock file, a new migration, a symlink or submodule, an index or object dropped in a migration, a GRANT or REVOKE. The run concludes `neutral`; the merge proceeds as the merge method allows (a `warn` never stops auto-merge), and the warning stays on the commit."
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head>. The summary lists each finding by rule and path."
+fix = "Nothing to fix: read the finding and make sure the change is intended. `neutral` does not satisfy a required check; a project that requires `forge/risk` needs a head without findings."
+test = "a_new_migration_and_a_dependency_change_are_neutral_with_risk_warn"
+
+[[error]]
+code = "FG-REVIEW-0025"
+name = "RiskNotAssessed"
+http_status = 409
+severity = "info"
+user_message_ja = "この変更の危険を、すべては確かめられていません。チェック forge/risk の理由を確かめてください。"
+user_message_en = "The risk of this change could not be fully assessed. Read the reasons in the forge/risk check."
+user_message_id = "Risiko perubahan ini belum dapat dinilai sepenuhnya. Baca alasannya pada pemeriksaan forge/risk."
+cause = "The check `forge/risk` (M3 X7) could not assess part of the head: no open merge request has this head any more, the target branch is gone, the target shares no history with the head, a changed path is not UTF-8, or more files changed than the content scan reads (the remainder is counted in the summary). It is a `warn`: the run concludes `neutral`, never `success`, so an unassessed head is never reported as safe. (A change of more than 5000 files is `stop`, FG-REVIEW-0023.)"
+diagnosis = "Open the run: gstn checks list --project <id> --sha <head>; the finding's rule names the reason (`no_open_merge_request`, `target_missing`, `no_common_history`, `non_utf8_path`, `content_not_scanned`). The event `forge.risk.recorded` carries the same."
+fix = "Nothing on the server. For no_open_merge_request / target_missing, open or retarget the merge request: a new head is assessed again. For non_utf8_path rename the path."
+test = "a_head_with_no_open_merge_request_is_neutral_and_not_assessed"

@@ -25,7 +25,8 @@
 //! retention (`check_run_retention`: every hour, check runs past
 //! `review.check_run_retention_days`), and the spec drift sweep
 //! (`spec_drift_sweep`, M3 X2: every 60 s, `error` for dead
-//! `check.spec_drift` jobs left without a run), the spec index sweep
+//! `check.spec_drift` jobs left without a run), and the risk sweep
+//! (`risk_sweep`, M3 X7: the same for `check.risk`), the spec index sweep
 //! (`spec_index_sweep`, M3 X4: every 60 s, `error` for both runs of dead
 //! `check.spec_index` jobs), and the repository
 //! maintenance (`maintenance`, M3 O3: its OWN job runner for
@@ -77,6 +78,10 @@ mod spec_drift_sweep;
 mod spec_index;
 mod spec_index_sweep;
 // ── end M3 X2 ──
+// ── M3 X7: `forge/risk` (the `check.risk` job) ──
+mod risk;
+mod risk_sweep;
+// ── end M3 X7 ──
 // ── M3 R2: stale and deferred mergeability checks ──
 mod mergeability_sweep;
 // ── end M3 R2 ──
@@ -204,6 +209,8 @@ enum Task {
     CheckRunRetention,
     /// Dead `check.spec_drift` jobs answered with `error` (`spec_drift_sweep`, M3 X2).
     SpecDriftSweep,
+    /// Dead `check.risk` jobs answered with `error` (`risk_sweep`, M3 X7).
+    RiskSweep,
     /// Dead `check.spec_index` jobs answered with `error` (`spec_index_sweep`, M3 X4).
     SpecIndexSweep,
     // ── M3 O3 ──
@@ -291,6 +298,8 @@ fn tasks_with(
         Task::CheckRunRetention,
         // M3 X2: needs only the database.
         Task::SpecDriftSweep,
+        // M3 X7: needs only the database.
+        Task::RiskSweep,
         // M3 X4: needs only the database.
         Task::SpecIndexSweep,
         // M3 I2: needs only the database.
@@ -331,7 +340,8 @@ fn tasks_with(
 /// `ordered`: the work item links and the events' work items; it stops and
 /// alerts on an event it cannot process), `spec-drift` (M3 X2,
 /// `independent`: the `check.spec_drift` job of each merge request
-/// version), `notify` (M3 N1, `independent`)
+/// version), `risk` (M3 X7, `independent`: the `check.risk` job of the
+/// same), `notify` (M3 N1, `independent`)
 /// and `webhook-dispatch` (M3 I2, `independent`, with the webhook lane
 /// only: it records each event's deliveries).
 #[cfg(test)]
@@ -355,6 +365,9 @@ fn registry_with(
         // M3 X2 (`independent`): every merge request version asks for its
         // `forge/spec-drift` run (the `check.spec_drift` job).
         .with(Arc::new(forge_db::checks::spec_drift::SpecDriftRequests))?
+        // M3 X7 (`independent`): the same version asks for its `forge/risk`
+        // run (the `check.risk` job).
+        .with(Arc::new(forge_db::checks::risk::RiskRequests))?
         // M3 X4 (`independent`): every merge request version (and a work
         // item link change) asks for its `forge/spec-lint` and
         // `forge/spec-trace` runs (the `check.spec_index` job).
@@ -431,6 +444,7 @@ impl Task {
             Self::EventsRetention => events_retention::NAME,
             Self::CheckRunRetention => check_run_retention::NAME,
             Self::SpecDriftSweep => spec_drift_sweep::NAME,
+            Self::RiskSweep => risk_sweep::NAME,
             Self::SpecIndexSweep => spec_index_sweep::NAME,
             Self::MaintenanceRunner => maintenance::RUNNER_NAME,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
@@ -461,6 +475,7 @@ impl Task {
             Self::EventsRetention => events_retention::PERIOD,
             Self::CheckRunRetention => check_run_retention::PERIOD,
             Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
+            Self::RiskSweep => risk_sweep::PERIOD,
             Self::SpecIndexSweep => spec_index_sweep::PERIOD,
             Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
@@ -513,6 +528,7 @@ impl Task {
             }
             Self::CodeownersRestore => codeowners_restore::run_codeowners_restore(db).await,
             Self::SpecDriftSweep => spec_drift_sweep::run_spec_drift_sweep(db).await,
+            Self::RiskSweep => risk_sweep::run_risk_sweep(db).await,
             Self::SpecIndexSweep => spec_index_sweep::run_spec_index_sweep(db).await,
             Self::EventsRetention => events_retention::run_events_retention(db).await,
             Self::CheckRunRetention => {

@@ -118,6 +118,11 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   ChangeListing` (`diff-tree --no-renames -r -z --raw --numstat`: each entry's old / new mode and
   added / deleted lines, `None` for binary; the approval carry's input). Tests
   `review_changes_tests.rs`.
+  M3 X7 (`risk_inputs`, ADR-0023 Amendment X7): `Git::risk_diff(…, base, head, max_entries, timeout) ->
+  RiskDiff` (`diff-tree -M -r -z --raw --numstat`: renames paired with their old path; `TooMany` /
+  `NonUtf8`) and `Git::tree_totals(…, commit, max_entries, timeout) -> TreeTotals` (a whole-tree
+  `--numstat` against the empty tree: files and text lines, `truncated` at the cap); inputs of
+  `forge_core::risk`, no decisions here. Tests `risk_inputs_tests.rs`.
 - **Introduced commits** (`push_introduced`, M3 R5 round 4/5, ADR-0024 §8.3):
   `Git::ref_snapshot(storage, id, principal, timeout) -> RefSnapshot` reads every ref tip before
   receive-pack starts (`for-each-ref`, hidden refs included, tags peeled, symbolic refs skipped,

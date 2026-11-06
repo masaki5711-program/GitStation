@@ -38,6 +38,7 @@ pub mod repo_config;
 // ── end M3 X1 ──
 pub mod repository;
 pub mod request_id;
+pub mod risk;
 pub mod role;
 pub mod scope;
 pub mod session_token;

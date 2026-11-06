@@ -34,10 +34,21 @@ pub const MAX_CHECK_DETAILS_URL_BYTES: usize = 2 * 1024;
 /// (`success`) or not (`neutral`). Reported by forge's worker only.
 pub const SPEC_DRIFT_CHECK: &str = "forge/spec-drift";
 
+/// `forge/risk` (M3 X7, plan 04 M-6 layer 1): the deterministic risk rules
+/// ([`crate::risk`]) applied to a merge request head's diff. `success` — no
+/// finding; `neutral` — only warnings (or part of the head could not be
+/// assessed); `failure` — a `stop` rule. Reported by forge's worker only.
+pub const RISK_CHECK: &str = "forge/risk";
+
 /// The `forge/` names forge's own worker reports (never over HTTP: the
 /// `CheckWrite` route refuses `forge/` to everyone, ADR-0024 §10). A
 /// required `forge/` name outside this list has no reporter.
-pub const FORGE_REPORTED_CHECKS: &[&str] = &[SPEC_DRIFT_CHECK, SPEC_LINT_CHECK, SPEC_TRACE_CHECK];
+pub const FORGE_REPORTED_CHECKS: &[&str] = &[
+    SPEC_DRIFT_CHECK,
+    RISK_CHECK,
+    SPEC_LINT_CHECK,
+    SPEC_TRACE_CHECK,
+];
 
 /// `forge/spec-lint` (M3 X4, plan 03 §5.4): whether the commit's own
 /// specification documents and the `@req` tags of its families keep the
