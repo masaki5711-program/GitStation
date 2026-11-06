@@ -646,7 +646,7 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "GET",
         "/api/v1/repositories",
-        Coverage::Planned("X3 follow-up: gstn integration-binding search"),
+        Coverage::NotForCli("kanflow's registration screen searches the repositories a PO / SM may bind, acting for them; in gstn a person names a project by its path"),
     ),
     (
         "GET",
