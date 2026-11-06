@@ -302,7 +302,7 @@ fn browse_commits_pages_with_a_cursor() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
         srv.seen().pop().expect("request").target,
-        "/api/v1/projects/7/repository/commits?ref=main&path=src%2Fa+b.rs&limit=5&cursor=v1.abc"
+        "/api/v1/projects/7/repository/commits?ref=main&path=src%2Fa%20b.rs&limit=5&cursor=v1.abc"
     );
     assert!(
         o.stdout.contains("fix the thing") && o.stdout.contains("more: --cursor v1.next"),

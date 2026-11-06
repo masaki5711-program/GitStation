@@ -715,3 +715,22 @@ async fn commit_id_lookups_are_limited_per_caller_on_the_routes() {
     let a = send(app, "GET", &by_id, Some(other)).await;
     assert_eq!(a.status, StatusCode::OK, "another caller");
 }
+
+/// Server half of the client contract: the exact wire string `gstn` sends
+/// (forge-client `query_values_are_percent_encoded_with_space_as_20`) decodes
+/// back to the value. `+` is literal here, so the client must send a space as
+/// `%20` and a plus as `%2B`.
+#[test]
+fn query_decodes_what_the_client_encodes() {
+    let got = crate::routes::browse::query(
+        Some("path=a%20b%2Bc%26d%3De%25f%E3%81%82&ref=x+y"),
+        &["path", "ref"],
+    )
+    .expect("query");
+    assert_eq!(
+        crate::routes::browse::take(&got, "path"),
+        Some("a b+c&d=e%f\u{3042}")
+    );
+    // A form-encoded `+` stays a plus: the reason the client avoids it.
+    assert_eq!(crate::routes::browse::take(&got, "ref"), Some("x+y"));
+}

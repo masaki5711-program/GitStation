@@ -95,6 +95,18 @@ pub struct ApiClient {
     token: Option<Token>,
 }
 
+/// Everything but the RFC 3986 unreserved characters is percent-encoded, so a
+/// space is `%20` and a literal `+` is `%2B`.
+const QUERY_COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+fn encode_component(raw: &str) -> String {
+    percent_encoding::utf8_percent_encode(raw, QUERY_COMPONENT).to_string()
+}
+
 impl ApiClient {
     pub fn new(cfg: &Config, token: Option<Token>) -> Result<Self> {
         let mut b = reqwest::blocking::Client::builder()
@@ -163,10 +175,13 @@ impl ApiClient {
             return Err(usage("it leaves the configured host"));
         }
         if !query.is_empty() {
-            let mut q = url.query_pairs_mut();
-            for (k, v) in query {
-                q.append_pair(k, v);
-            }
+            // Not `query_pairs_mut().append_pair`: that is form-encoding
+            // (space -> `+`), and the server decodes `+` literally.
+            let encoded: Vec<String> = query
+                .iter()
+                .map(|(k, v)| format!("{}={}", encode_component(k), encode_component(v)))
+                .collect();
+            url.set_query(Some(&encoded.join("&")));
         }
         Ok(url)
     }

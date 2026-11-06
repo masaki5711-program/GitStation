@@ -19,6 +19,16 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let clashes = forge_web::openapi_schema_name_conflicts();
+    if !clashes.is_empty() {
+        for c in &clashes {
+            eprintln!("gen-authz: OpenAPI schema name registered by two types: {c}");
+        }
+        eprintln!(
+            "gen-authz: rename one (`#[schema(as = ...)]`) so every schema name has one type"
+        );
+        return ExitCode::FAILURE;
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut stale = Vec::new();
     for (rel, body) in forge_web::generated_documents(env!("CARGO_PKG_VERSION")) {
