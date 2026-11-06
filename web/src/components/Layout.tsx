@@ -11,7 +11,8 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { ErrorNotice } from './ErrorNotice';
 import { Header } from './Header';
 
-export function Layout() {
+/** `bare`: no header (the act-as confirmation popup has nowhere to go). */
+export function Layout({ bare = false }: { bare?: boolean }) {
   const state = useSessionState();
   const location = useLocation();
   const main = useRef<HTMLElement>(null);
@@ -78,7 +79,7 @@ export function Layout() {
 
   return (
     <div className={styles.app}>
-      <Header />
+      {!bare && <Header />}
       <main id="main" tabIndex={-1} ref={main} className={styles.main}>
         <ErrorBoundary key={location.pathname}>{content}</ErrorBoundary>
       </main>

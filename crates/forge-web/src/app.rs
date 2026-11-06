@@ -1940,6 +1940,16 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "Web UI asset (embedded build; content-hashed, immutable)",
                 routes::assets::asset,
             )
+            // The act-as confirmation popup (ADR-0025 §5.4, U3): the same
+            // shell bytes; the headers (frame-ancestors, X-Frame-Options,
+            // COOP) come from the one table in `security_headers`.
+            .route(
+                verb,
+                routes::act_as::PAGE,
+                Action::WebShell,
+                "SPA shell: act-as confirmation popup",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
