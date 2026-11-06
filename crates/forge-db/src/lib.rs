@@ -59,6 +59,8 @@ mod migrator;
 mod options;
 mod pool;
 #[cfg(test)]
+mod ro_ledger_tests;
+#[cfg(test)]
 mod schema_tests;
 // ── C8 ──
 pub mod seal;
