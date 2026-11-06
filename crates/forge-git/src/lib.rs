@@ -61,6 +61,7 @@ mod refs;
 pub mod review_changes;
 pub mod review_inputs;
 mod revision;
+pub mod risk_inputs;
 pub mod secret_scan;
 pub mod smart_http;
 pub mod storage;

@@ -128,7 +128,7 @@ async fn a_forge_check_run_is_recorded_without_a_reporter() {
 async fn only_the_names_forge_reports_are_recorded_by_forge() {
     let t = FreshDb::migrated().await;
     let (_, web) = web(&t).await;
-    for raw in ["ci/gates", "forge/risk"] {
+    for raw in ["ci/gates", "forge/deploy-gate"] {
         let mut new = drift(CheckConclusion::Success, Vec::new());
         new.name = CheckName::parse(raw).expect("name");
         let err =

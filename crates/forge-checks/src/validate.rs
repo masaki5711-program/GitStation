@@ -128,7 +128,7 @@ fn details_url(raw: &str) -> Result<String, ForgeError> {
 /// A path inside the repository: relative (no leading `/`, no drive letter
 /// `C:` — review fix 8), no `..` segment, no backslash, no control
 /// character, 1–4096 bytes.
-fn relative_path(path: &str) -> bool {
+pub(crate) fn relative_path(path: &str) -> bool {
     let drive = matches!(path.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
     !path.is_empty()
         && path.len() <= MAX_ANNOTATION_PATH_BYTES
