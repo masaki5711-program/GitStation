@@ -12,11 +12,13 @@ import { useTranslation } from 'react-i18next';
 import { useParams, useSearchParams } from 'react-router';
 
 import {
-  parseConfirmLink,
+  ASSERTION_TTL_MINUTES,
+  takeConfirmLink,
   useActAsConfirmation,
   useIssueAssertion,
   type ActAsConfirmation,
   type ConfirmLink,
+  type IssueMutation,
 } from '../../api/actAs';
 import { ApiFailure, call } from '../../api/client';
 import { useApi } from '../../api/context';
@@ -45,29 +47,37 @@ export function ActAsConfirm() {
   const [search] = useSearchParams();
   const project = parseIid(params.id ?? '');
   const iid = parseIid(params.iid ?? '');
-  // Read once; the state never goes to a query key, a log or storage.
-  const link = useRef<ConfirmLink | null>(null);
-  link.current ??= parseConfirmLink(search);
+  // Read once; the state leaves the address bar and never goes to a query key
+  // or a log (see `takeConfirmLink`).
+  const [link] = useState(() => takeConfirmLink(search));
+  const [late, setLate] = useState(false);
   const [end, setEnd] = useState<End | null>(null);
+  // The press lives here, so the page timeout can see a press in flight.
+  const issue = useIssueAssertion(project ?? 0, iid ?? 0);
   useDocumentTitle(t('actAs.title'));
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setEnd((e) => e ?? { kind: 'expired', requestId: null });
+      setLate(true);
     }, PAGE_TTL_MS);
     return () => {
       window.clearTimeout(timer);
     };
   }, []);
 
-  const current = link.current;
-  const confirmation = useActAsConfirmation(project ?? 0, iid ?? 0, current, end === null);
+  const current = link;
+  // Past the timeout the page expires - but never while a press is in flight:
+  // its answer decides (a success is "done", a failure then expires).
+  const finished: End | null = issue.isSuccess
+    ? { kind: 'done' }
+    : (end ?? (late && !issue.isPending ? { kind: 'expired', requestId: null } : null));
+  const confirmation = useActAsConfirmation(project ?? 0, iid ?? 0, current, finished === null);
 
   let body: ReactNode;
   if (project === null || iid === null || current === null) {
     body = <Notice kind="invalidLink" requestId={null} />;
-  } else if (end !== null) {
-    body = <Ended end={end} />;
+  } else if (finished !== null) {
+    body = <Ended end={finished} />;
   } else if (confirmation.isPending) {
     body = <Loading />;
   } else if (confirmation.isError) {
@@ -89,7 +99,7 @@ export function ActAsConfirm() {
       );
     }
   } else {
-    body = <Confirmation project={project} iid={iid} link={current} data={confirmation.data} onEnd={setEnd} />;
+    body = <Confirmation project={project} iid={iid} link={current} data={confirmation.data} issue={issue} onEnd={setEnd} />;
   }
   return (
     <div className={styles.page}>
@@ -177,19 +187,21 @@ function Confirmation({
   iid,
   link,
   data,
+  issue,
   onEnd,
 }: {
   project: number;
   iid: number;
   link: ConfirmLink;
   data: ActAsConfirmation;
+  issue: IssueMutation;
   onEnd: (e: End) => void;
 }) {
   const { t } = useTranslation();
   const api = useApi();
-  const { armed, waited } = useArmed();
-  const issue = useIssueAssertion(project, iid);
-  const sending = useRef(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const { armed, waited, take } = useArmed(button);
+  const [tooSoon, setTooSoon] = useState(false);
   const projectInfo = useQuery({
     queryKey: ['project', project],
     queryFn: ({ signal }) =>
@@ -203,31 +215,36 @@ function Confirmation({
   if (!data.sha_matches || data.head_sha === null || data.target_sha === null) {
     return <Notice kind="stale" requestId={null} />;
   }
+  const targetSha = data.target_sha;
 
   const press = () => {
-    // One press at a time; a click that is not armed is ignored.
-    if (!armed || sending.current) return;
-    sending.current = true;
-    issue.mutate(link, {
-      onSuccess: () => {
-        onEnd({ kind: 'done' });
+    // One press at a time (the mutation is the guard), and only after an
+    // arming action older than the gap.
+    if (issue.isPending) return;
+    const accepted = take();
+    setTooSoon(!accepted && armed);
+    if (!accepted) return;
+    issue.mutate(
+      { link, targetSha },
+      {
+        onError: (e) => {
+          if (!(e instanceof ApiFailure) || e.failure.kind !== 'api') return;
+          const requestId = e.failure.requestId;
+          // 409: the head or target moved. 400: used before or not valid.
+          if (e.failure.status === 409) onEnd({ kind: 'stale', requestId });
+          else if (e.failure.status === 400) onEnd({ kind: 'alreadyDecided', requestId });
+          else if (e.failure.status === 404) onEnd({ kind: 'notFound', requestId });
+        },
       },
-      onError: (e) => {
-        sending.current = false;
-        if (!(e instanceof ApiFailure) || e.failure.kind !== 'api') return;
-        const requestId = e.failure.requestId;
-        // 409: the head moved. 400: the link was already used or is not valid.
-        if (e.failure.status === 409) onEnd({ kind: 'stale', requestId });
-        else if (e.failure.status === 400) onEnd({ kind: 'alreadyDecided', requestId });
-        else if (e.failure.status === 404) onEnd({ kind: 'notFound', requestId });
-      },
-    });
+    );
   };
 
   const ready = armed && !issue.isPending;
   const status = issue.isPending
     ? t('actAs.sending')
-    : armed
+    : tooSoon
+      ? t('actAs.tooSoon')
+      : armed
       ? t('actAs.ready')
       : waited
         ? t('actAs.moveToArm')
@@ -257,17 +274,22 @@ function Confirmation({
         <Row label={t('actAs.rowTargetTip')}>
           <code className={styles.sha}>{data.target_sha}</code>
         </Row>
-        <Row label={t('actAs.rowExpiry')}>{t('actAs.expiry', { minutes: PAGE_TTL_MINUTES })}</Row>
+        <Row label={t('actAs.rowExpiry')}>{t('actAs.expiry', { minutes: PAGE_TTL_MINUTES, assertion: ASSERTION_TTL_MINUTES })}</Row>
       </dl>
       {issue.isError &&
         (issue.error instanceof ApiFailure ? (
-          issue.error.failure.kind !== 'unauthenticated' && <ErrorNotice failure={issue.error.failure} />
+          issue.error.failure.kind === 'unauthenticated' ? (
+            <QueryError error={issue.error} />
+          ) : (
+            <ErrorNotice failure={issue.error.failure} />
+          )
         ) : (
           <ErrorNotice failure={{ kind: 'unexpected', status: null, requestId: null }} />
         ))}
       <div className={styles.buttons}>
         <button
           type="button"
+          ref={button}
           className={controls.primary}
           aria-disabled={!ready}
           aria-describedby="act-as-status"

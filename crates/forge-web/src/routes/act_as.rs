@@ -417,6 +417,9 @@ pub struct IssueAssertion {
     pub intent: String,
     /// The head the screen showed (another is FG-REVIEW-0008 stale_view).
     pub sha: String,
+    /// The target branch's tip the screen showed (all digits); another tip
+    /// now is the same `stale_view` refusal as another head.
+    pub target_sha: String,
     #[schema(minimum = 1)]
     pub integration: i64,
     /// The integration's state from the screen's URL (22..=128 of
@@ -478,6 +481,7 @@ pub async fn issue(
             ForgeError::new(ErrorCode::Internal).with_context("reason", "confirm_without_project")
         })?;
         let sha = sha_param(&w.input.sha)?;
+        let shown_tip = sha_param(&w.input.target_sha)?;
         let review = review(&state)?;
         let stored = bounded(
             &state,
@@ -497,6 +501,13 @@ pub async fn issue(
                 .with_context("reason", "stale_view")
                 .with_context("detail", "target_missing")
         })?;
+        // What the person saw is what is bound (re-review of U3b): the tip
+        // read now must be the tip the screen showed.
+        if tip.as_str() != shown_tip.as_str() {
+            return Err(ForgeError::new(ErrorCode::HeadChanged)
+                .with_context("reason", "stale_view")
+                .with_context("detail", "target_moved"));
+        }
         act_as(&state)?
             .issue(
                 &w.proof,

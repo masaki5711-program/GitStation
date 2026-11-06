@@ -90,6 +90,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/confirm/projects/{id}/merge-requests/{iid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: act-as confirmation popup */
+        get: operations["get_confirm_projects_id_merge_requests_iid"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: act-as confirmation popup */
+        head: operations["head_confirm_projects_id_merge_requests_iid"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/confirm/projects/{id}/merge-requests/{iid}/assertions": {
         parameters: {
             query?: never;
@@ -2924,6 +2942,11 @@ export interface components {
              *     `[A-Za-z0-9_-]`; only its SHA-256 is kept).
              */
             state: string;
+            /**
+             * @description The target branch's tip the screen showed (all digits); another tip
+             *     now is the same `stale_view` refusal as another head.
+             */
+            target_sha: string;
         };
         /** @description `POST /api/v1/admin/service-accounts/{id}/tokens`. */
         IssueServiceAccountToken: {
@@ -4589,6 +4612,52 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_confirm_projects_id_merge_requests_iid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_confirm_projects_id_merge_requests_iid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

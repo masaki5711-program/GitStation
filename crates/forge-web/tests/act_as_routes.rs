@@ -127,6 +127,8 @@ struct World {
     kanflow: String,
     project: i64,
     head: String,
+    /// The target branch's tip (what the confirmation shows).
+    base: String,
 }
 
 fn session_of(user: UserId) -> Principal {
@@ -387,6 +389,7 @@ async fn world() -> World {
         kanflow,
         project: p,
         head,
+        base,
     }
 }
 
@@ -420,6 +423,7 @@ impl World {
             Some(json!({
                 "intent": intent,
                 "sha": self.head,
+                "target_sha": self.base,
                 "integration": self.integration,
                 "state": state,
             })),
@@ -990,4 +994,44 @@ async fn a_mismatched_route_reaches_no_git_and_is_wrong_action() {
         assert_eq!(w.assertion_state(&public_id(&assertion)).await, "rejected");
     }
     w.t.drop_now().await;
+}
+
+/// U3b review: the press carries the target tip the screen showed; a tip that
+/// moved meanwhile (or a missing / malformed one) writes nothing.
+#[tokio::test]
+async fn a_press_with_another_target_tip_is_refused_as_stale() {
+    let w = world().await;
+    let uri = format!(
+        "/-/confirm/projects/{}/merge-requests/1/assertions",
+        w.project
+    );
+    for (what, tip) in [
+        ("moved", json!("0".repeat(40))),
+        ("malformed", json!("zz")),
+        ("missing", Value::Null),
+    ] {
+        let mut body = json!({
+            "intent": "approve", "sha": w.head,
+            "integration": w.integration, "state": STATE,
+        });
+        if !tip.is_null() {
+            body["target_sha"] = tip;
+        }
+        let (status, answer) = send(
+            w.router.clone(),
+            "POST",
+            &uri,
+            w.olga_by_session(),
+            Some(body),
+            &[],
+        )
+        .await;
+        assert_ne!(status, StatusCode::CREATED, "{what}: {answer}");
+        if what == "moved" {
+            assert_eq!(status, StatusCode::CONFLICT, "{what}: {answer}");
+        }
+    }
+    // Nothing was written: the same state is still free for the right press.
+    let assertion = w.confirmed("approve", STATE).await;
+    assert!(assertion.starts_with("fga_"));
 }

@@ -3116,11 +3116,16 @@
           "state": {
             "description": "The integration's state from the screen's URL (22..=128 of\n`[A-Za-z0-9_-]`; only its SHA-256 is kept).",
             "type": "string"
+          },
+          "target_sha": {
+            "description": "The target branch's tip the screen showed (all digits); another tip\nnow is the same `stale_view` refusal as another head.",
+            "type": "string"
           }
         },
         "required": [
           "intent",
           "sha",
+          "target_sha",
           "integration",
           "state"
         ],
@@ -7322,6 +7327,84 @@
         },
         "summary": "End the caller's own web session and 303 to the identity provider's logout (form post, sessions only)",
         "x-forge-action": "SessionLogout"
+      }
+    },
+    "/-/confirm/projects/{id}/merge-requests/{iid}": {
+      "get": {
+        "operationId": "get_confirm_projects_id_merge_requests_iid",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: act-as confirmation popup",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_confirm_projects_id_merge_requests_iid",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: act-as confirmation popup",
+        "x-forge-action": "WebShell"
       }
     },
     "/-/confirm/projects/{id}/merge-requests/{iid}/assertions": {

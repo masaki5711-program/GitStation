@@ -801,7 +801,7 @@ async function main() {
     await check('72-notifications-saved');
 
     // 6g. The act-as confirmation popup (U3): no navigation, the button is
-    // dead for the first second and after that until a fresh pointer move,
+    // dead for the first second and after that until a real press on it arms it (a click right after is refused),
     // one press, then "Done". The same state cannot be used twice.
     const popup = `${base}/-/confirm/projects/7/merge-requests/3?intent=approve&sha=${ACT_AS_HEAD}&integration=4&state=${ACT_AS_STATE}`;
     await page.goto(popup, { waitUntil: 'networkidle' });
@@ -814,16 +814,20 @@ async function main() {
     await page.waitForTimeout(1200);
     if ((await approveBtn.getAttribute('aria-disabled')) !== 'true') problems.push('act-as: armed without a new pointer action');
     await page.mouse.move(40, 40);
-    await page.mouse.move(60, 60);
-    if ((await approveBtn.getAttribute('aria-disabled')) !== 'false') problems.push('act-as: not armed after a pointer move');
-    await approveBtn.click();
+    if ((await approveBtn.getAttribute('aria-disabled')) !== 'true') problems.push('act-as: armed by a pointer move');
+    // The first click arms it and is refused; the second, later, counts.
+    await approveBtn.click({ force: true });
+    await page.getByText(/Press once more/).waitFor();
+    await page.waitForTimeout(400);
+    await approveBtn.click({ force: true });
     await page.getByRole('heading', { name: 'Done' }).waitFor();
     await check('74-act-as-done');
     await page.goto(popup, { waitUntil: 'networkidle' });
     await approveBtn.waitFor();
     await page.waitForTimeout(1200);
-    await page.mouse.move(80, 80);
-    await approveBtn.click();
+    await approveBtn.click({ force: true });
+    await page.waitForTimeout(400);
+    await approveBtn.click({ force: true });
     const used = page.getByRole('alert').filter({ hasText: 'already used' });
     await used.waitFor();
     if (!(await used.innerText()).includes('req-act-as-used')) problems.push('act-as: used-link request id is missing');

@@ -939,12 +939,12 @@
     "rowHead": "Version to approve (commit)",
     "rowTargetTip": "Target branch tip",
     "rowExpiry": "Expires",
-    "expiry": "After you press, the app must pick it up within 5 minutes or it becomes void. This screen becomes void {{minutes}} minutes after it opened.",
+    "expiry": "After you press, the app must pick it up within {{assertion}} minutes or it becomes void. This screen becomes void {{minutes}} minutes after it opened.",
     "confirmApprove": "Approve",
     "confirmUnapprove": "Withdraw approval",
     "cancel": "Cancel",
     "waiting": "Please wait a moment, so that nothing is pressed by mistake.",
-    "moveToArm": "Move the mouse or press a key to enable the button.",
+    "moveToArm": "Press the mouse on the button or press a key to enable it.",
     "ready": "You can press the button.",
     "sending": "Sending…",
     "doneTitle": "Done",
@@ -964,6 +964,7 @@
     "notFoundTitle": "Not found",
     "notFoundBody": "The merge request does not exist, or you may not see it.",
     "invalidTitle": "The link is not valid",
-    "invalidBody": "Open it again from the app."
+    "invalidBody": "Open it again from the app.",
+    "tooSoon": "Press once more. A click right after the button was armed is not accepted."
   }
 }

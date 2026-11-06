@@ -939,12 +939,12 @@
     "rowHead": "Versi yang disetujui (commit)",
     "rowTargetTip": "Ujung cabang tujuan",
     "rowExpiry": "Kedaluwarsa",
-    "expiry": "Setelah Anda menekan, aplikasi harus mengambilnya dalam 5 menit atau menjadi tidak berlaku. Layar ini tidak berlaku {{minutes}} menit setelah dibuka.",
+    "expiry": "Setelah Anda menekan, aplikasi harus mengambilnya dalam {{assertion}} menit atau menjadi tidak berlaku. Layar ini tidak berlaku {{minutes}} menit setelah dibuka.",
     "confirmApprove": "Setujui",
     "confirmUnapprove": "Batalkan persetujuan",
     "cancel": "Batal",
     "waiting": "Mohon tunggu sebentar agar tidak tertekan secara tidak sengaja.",
-    "moveToArm": "Gerakkan mouse atau tekan tombol untuk mengaktifkan tombol.",
+    "moveToArm": "Tekan mouse pada tombol atau tekan sebuah tombol untuk mengaktifkannya.",
     "ready": "Tombol dapat ditekan.",
     "sending": "Mengirim…",
     "doneTitle": "Selesai",
@@ -964,6 +964,7 @@
     "notFoundTitle": "Tidak ditemukan",
     "notFoundBody": "Merge request tidak ada, atau Anda tidak boleh melihatnya.",
     "invalidTitle": "Tautan tidak valid",
-    "invalidBody": "Buka lagi dari aplikasi."
+    "invalidBody": "Buka lagi dari aplikasi.",
+    "tooSoon": "Tekan sekali lagi. Klik tepat setelah tombol diaktifkan tidak diterima."
   }
 }

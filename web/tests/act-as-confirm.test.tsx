@@ -1,12 +1,14 @@
-// U3 (ADR-0025 §5.4): the act-as confirmation popup. The summary, the 1-second
-// arming (visible + focused, then a fresh pointer / key action; hiding the page
-// starts it over), one press only, every state, and the request bodies.
+// U3 (ADR-0025 §5.4): the act-as confirmation popup. The summary, the arming
+// (1 s visible + focused, then a real pointer-down on the button or a key,
+// and the click at least 300 ms later), one press only, every state, the
+// request body, the page timeout under a press in flight, and the `state`
+// leaving the address. Pure fake timers (clock and Date).
 import axe from 'axe-core';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PAGE_TTL_MS } from '../src/pages/confirm/ActAsConfirm';
-import { ARM_DELAY_MS } from '../src/pages/confirm/useArmed';
+import { ARM_DELAY_MS, ARM_GAP_MS, eventTrust } from '../src/pages/confirm/useArmed';
 import { apiError, mockServer, PROJECT, SESSION, type Handler } from './mock';
 import { json, renderApp } from './render';
 
@@ -49,12 +51,19 @@ function routes(over: Record<string, Handler> = {}): Record<string, Handler> {
 let focused = true;
 beforeEach(() => {
   focused = true;
+  window.sessionStorage.clear();
+  window.history.replaceState(null, '', PAGE);
+  vi.spyOn(eventTrust, 'check').mockImplementation((e) => people.has(e));
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
-  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
+  // Pure fake timers (clock and Date). Testing Library advances them while it
+  // waits when a `jest` global with advanceTimersByTime exists.
+  vi.useFakeTimers();
+  Object.assign(globalThis, { jest: { advanceTimersByTime: (ms: number) => vi.advanceTimersByTime(ms) } });
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  Reflect.deleteProperty(globalThis, 'jest');
   Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
 });
 
@@ -64,15 +73,28 @@ async function open(
   lang: 'ja' | 'en' = 'en',
 ) {
   const server = mockServer(table);
-  const view = await renderApp({ fetch: server.fetch, path, lang });
-  return { server, ...view };
+  const rendered = await renderApp({ fetch: server.fetch, path, lang });
+  return { server, ...rendered };
 }
 
 const approve = () => screen.findByRole('button', { name: 'Approve' });
 const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
-const move = () => {
+/** A person's event (jsdom's own are never trusted). */
+const people = new WeakSet<Event>();
+const trusted = <E extends Event>(e: E): E => {
+  people.add(e);
+  return e;
+};
+const down = (el: Element, real = true) => {
+  const e = new MouseEvent('pointerdown', { bubbles: true });
   act(() => {
-    fireEvent.pointerMove(document);
+    el.dispatchEvent(real ? trusted(e) : e);
+  });
+};
+const key = (real = true) => {
+  const e = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true });
+  act(() => {
+    document.dispatchEvent(real ? trusted(e) : e);
   });
 };
 const setVisible = (visible: boolean) => {
@@ -83,6 +105,18 @@ const setVisible = (visible: boolean) => {
   act(() => {
     document.dispatchEvent(new Event('visibilitychange'));
   });
+};
+/** Restart the 1 s wait at a known point and let it pass. */
+const waitOut = async () => {
+  setVisible(false);
+  setVisible(true);
+  await advance(ARM_DELAY_MS);
+};
+/** A real, accepted press: wait, arm on the button, let the gap pass. */
+const arm = async (button: HTMLElement) => {
+  await waitOut();
+  down(button);
+  await advance(ARM_GAP_MS);
 };
 const pressed = (server: ReturnType<typeof mockServer>) => server.to('POST', ISSUE);
 
@@ -99,6 +133,7 @@ describe('the summary', () => {
     expect(screen.getByText('feat/speed')).toBeTruthy();
     expect(screen.getByText('main')).toBeTruthy();
     await screen.findByText('acme/forge-web');
+    // The 5 minutes come from one constant.
     expect(screen.getByText(/within 5 minutes/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
     // No navigation header, no default focus.
@@ -117,67 +152,80 @@ describe('the summary', () => {
   });
 });
 
-describe('the arming delay', () => {
-  it('is disabled for 1 second, then waits for a fresh pointer action', async () => {
+describe('the arming', () => {
+  it('needs 1 s, then a real pointer-down ON the button; movement, scripts and other places do not arm', async () => {
     const { server } = await open();
     const button = await approve();
     expect(button.getAttribute('aria-disabled')).toBe('true');
-    // Restart the wait at a known point (the page was shown just now).
     setVisible(false);
     setVisible(true);
-    await advance(ARM_DELAY_MS - 150);
-    move();
+    await advance(ARM_DELAY_MS - 100);
+    down(button);
+    key();
     expect(button.getAttribute('aria-disabled')).toBe('true');
-    fireEvent.click(button);
-    expect(pressed(server)).toHaveLength(0);
-
-    await advance(150);
-    // Waited, but an action before arming does not count and none came after.
-    expect(button.getAttribute('aria-disabled')).toBe('true');
-    expect(screen.getByText(/Move the mouse or press a key/)).toBeTruthy();
-    fireEvent.click(button);
-    expect(pressed(server)).toHaveLength(0);
-
-    move();
-    expect(button.getAttribute('aria-disabled')).toBe('false');
-    expect(screen.getByText('You can press the button.')).toBeTruthy();
-  });
-
-  it('is armed by a key as well, and a key press on it sends once (keyboard)', async () => {
-    const { server } = await open();
-    const button = await approve();
-    await advance(ARM_DELAY_MS);
+    await advance(100);
+    expect(screen.getByText(/Press the mouse on the button or press a key/)).toBeTruthy();
+    // Not arming: movement, an untrusted event, a pointer-down elsewhere.
     act(() => {
-      fireEvent.keyDown(document, { key: 'Tab' });
+      document.dispatchEvent(trusted(new MouseEvent('pointermove', { bubbles: true })));
     });
-    button.focus();
+    down(button, false);
+    key(false);
+    down(screen.getByRole('heading', { level: 1 }));
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    // A real one on the button arms it...
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('false');
-    // A real Enter / Space on a button is a click.
+    // ...but the press itself cannot be that action: a click now is refused.
+    fireEvent.click(button);
+    expect(await screen.findByText(/Press once more/)).toBeTruthy();
+    expect(pressed(server)).toHaveLength(0);
+    // The arming stays; once the gap has passed the next click counts - and
+    // uses it up.
+    expect(button.getAttribute('aria-disabled')).toBe('false');
+    await advance(ARM_GAP_MS);
     fireEvent.click(button);
     await waitFor(() => {
       expect(pressed(server)).toHaveLength(1);
     });
   });
 
+  it('a key press arms it as well (keyboard), and the click must come later', async () => {
+    const { server } = await open();
+    const button = await approve();
+    await waitOut();
+    key();
+    button.focus();
+    expect(button.getAttribute('aria-disabled')).toBe('false');
+    await advance(ARM_GAP_MS - 1);
+    fireEvent.click(button);
+    expect(pressed(server)).toHaveLength(0);
+    await advance(1);
+    fireEvent.click(button);
+    await waitFor(() => {
+      expect(pressed(server)).toHaveLength(1);
+    });
+    // Used up: another click needs a new arming action.
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+  });
+
   it('starts over when the page is hidden and shown again', async () => {
     const { server } = await open();
     const button = await approve();
-    await advance(ARM_DELAY_MS);
-    move();
+    await waitOut();
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('false');
-
     setVisible(false);
     expect(button.getAttribute('aria-disabled')).toBe('true');
     await advance(5000);
-    move();
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('true');
-
     setVisible(true);
-    await advance(ARM_DELAY_MS - 150);
-    move();
+    await advance(ARM_DELAY_MS - 100);
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('true');
-    await advance(150);
-    move();
+    await advance(100);
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('false');
     expect(pressed(server)).toHaveLength(0);
   });
@@ -185,8 +233,8 @@ describe('the arming delay', () => {
   it('starts over when the window loses and regains the focus', async () => {
     await open();
     const button = await approve();
-    await advance(ARM_DELAY_MS);
-    move();
+    await waitOut();
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('false');
     focused = false;
     act(() => {
@@ -197,10 +245,10 @@ describe('the arming delay', () => {
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
-    move();
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('true');
     await advance(ARM_DELAY_MS);
-    move();
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('false');
   });
 
@@ -209,7 +257,7 @@ describe('the arming delay', () => {
     await open();
     const button = await approve();
     await advance(5000);
-    move();
+    down(button);
     expect(button.getAttribute('aria-disabled')).toBe('true');
   });
 });
@@ -218,24 +266,22 @@ describe('the press', () => {
   async function armed(table: Record<string, Handler> = routes()) {
     const o = await open(table);
     const button = await approve();
-    await advance(ARM_DELAY_MS);
-    move();
+    await arm(button);
     return { ...o, button };
   }
 
-  it('sends the intent, the viewed head, the integration and the state, with CSRF, then says done', async () => {
+  it('sends the intent, the viewed head and target tip, the integration and the state, with CSRF, then says done', async () => {
     const { server, button } = await armed();
     fireEvent.click(button);
     expect(await screen.findByRole('heading', { name: 'Done' })).toBeTruthy();
     const [call] = pressed(server);
-    expect(call?.body).toEqual({ intent: 'approve', sha: HEAD, integration: 4, state: STATE });
+    expect(call?.body).toEqual({ intent: 'approve', sha: HEAD, target_sha: TIP, integration: 4, state: STATE });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(SESSION.csrf_token);
     expect(screen.getByText('Close this screen and go back to the app.')).toBeTruthy();
-    // The state is in no query: it only travels in the one body.
     expect(server.calls.filter((c) => c.method === 'GET').some((c) => c.path.includes(STATE) || c.query.has('state'))).toBe(false);
   });
 
-  it('rejects a double submit: two clicks, one request', async () => {
+  it('rejects a double submit: three clicks, one request', async () => {
     let release: (r: Response) => void = () => undefined;
     const gate = new Promise<Response>((resolve) => {
       release = resolve;
@@ -245,7 +291,9 @@ describe('the press', () => {
     fireEvent.click(button);
     fireEvent.click(button);
     expect(await screen.findByText('Sending…')).toBeTruthy();
-    expect(button.getAttribute('aria-disabled')).toBe('true');
+    // Even a fully re-armed click while the first is in flight sends nothing.
+    await arm(button);
+    fireEvent.click(button);
     release(json(201, { status: 'issued' }));
     await screen.findByRole('heading', { name: 'Done' });
     expect(pressed(server)).toHaveLength(1);
@@ -258,7 +306,7 @@ describe('the press', () => {
     expect(pressed(server)).toHaveLength(0);
   });
 
-  it('shows the server message and the request id on another failure, and allows a retry', async () => {
+  it('shows the server message and the request id on another failure, and allows a new press', async () => {
     let fail = true;
     const { server, button } = await armed(
       routes({
@@ -270,12 +318,13 @@ describe('the press', () => {
     expect(screen.getByTestId('request-id').textContent).toBe('req-500');
     expect(screen.queryByText(/FG-/)).toBeNull();
     fail = false;
+    await arm(button);
     fireEvent.click(button);
     await screen.findByRole('heading', { name: 'Done' });
     expect(pressed(server)).toHaveLength(2);
   });
 
-  it('a head that moved meanwhile (409) is the stale state, with the request id', async () => {
+  it('a head or target that moved meanwhile (409) is the stale state, with the request id', async () => {
     const { button } = await armed(routes({ [`POST ${ISSUE}`]: () => apiError(409, 'Head changed.', 'req-409') }));
     fireEvent.click(button);
     expect(await screen.findByRole('heading', { name: 'The merge request was updated' })).toBeTruthy();
@@ -287,6 +336,80 @@ describe('the press', () => {
     fireEvent.click(button);
     expect(await screen.findByRole('heading', { name: 'This link was already used or cannot be used' })).toBeTruthy();
     expect(screen.getByTestId('request-id').textContent).toBe('req-400');
+  });
+
+  it('a session that ended while the page was open (401) hands over to sign-in, never silence', async () => {
+    let signedIn = true;
+    const { button } = await armed(
+      routes({
+        'GET /api/v1/session': () => (signedIn ? json(200, SESSION) : apiError(401, 'Sign in.', 'req-401')),
+        [`POST ${ISSUE}`]: () => {
+          signedIn = false;
+          return apiError(401, 'Sign in.', 'req-401');
+        },
+      }),
+    );
+    fireEvent.click(button);
+    expect(await screen.findByRole('heading', { name: 'Please sign in' })).toBeTruthy();
+  });
+
+  it('the page timeout never fires under a press in flight (9:59.9 race)', async () => {
+    let release: (r: Response) => void = () => undefined;
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const { server, button } = await armed(routes({ [`POST ${ISSUE}`]: () => gate }));
+    await advance(PAGE_TTL_MS - ARM_DELAY_MS - ARM_GAP_MS - 5000);
+    fireEvent.click(button);
+    await screen.findByText('Sending…');
+    await advance(10_000);
+    // Past the timeout, with the press still in flight: still the press.
+    expect(screen.queryByRole('heading', { name: 'Time ran out' })).toBeNull();
+    expect(screen.getByText('Sending…')).toBeTruthy();
+    release(json(201, { status: 'issued' }));
+    expect(await screen.findByRole('heading', { name: 'Done' })).toBeTruthy();
+    expect(pressed(server)).toHaveLength(1);
+  });
+
+  it('a press that fails after the timeout then shows the expired state', async () => {
+    let release: (r: Response) => void = () => undefined;
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const { button } = await armed(routes({ [`POST ${ISSUE}`]: () => gate }));
+    await advance(PAGE_TTL_MS - ARM_DELAY_MS - ARM_GAP_MS - 5000);
+    fireEvent.click(button);
+    await screen.findByText('Sending…');
+    await advance(10_000);
+    release(apiError(500, 'Down.', 'req-late'));
+    expect(await screen.findByRole('heading', { name: 'Time ran out' })).toBeTruthy();
+  });
+});
+
+describe('the state in the address', () => {
+  it('leaves the address bar and is kept for this tab only', async () => {
+    window.history.replaceState(null, '', `${PAGE}${QUERY}&x=1`);
+    const { server } = await open();
+    const button = await approve();
+    expect(window.location.search).toBe(`?intent=approve&sha=${HEAD}&integration=4&x=1`);
+    expect(window.location.href).not.toContain(STATE);
+    await arm(button);
+    fireEvent.click(button);
+    await screen.findByRole('heading', { name: 'Done' });
+    expect(pressed(server)[0]?.body).toMatchObject({ state: STATE });
+  });
+
+  it('survives a reload or the sign-in round trip (the address no longer has it)', async () => {
+    window.history.replaceState(null, '', `${PAGE}${QUERY}`);
+    const first = await open();
+    await approve();
+    first.unmount();
+    const { server } = await open(routes(), `${PAGE}?intent=approve&sha=${HEAD}&integration=4`);
+    const button = await approve();
+    await arm(button);
+    fireEvent.click(button);
+    await screen.findByRole('heading', { name: 'Done' });
+    expect(pressed(server)[0]?.body).toMatchObject({ state: STATE });
   });
 });
 
@@ -347,6 +470,7 @@ describe('the states', () => {
       `?intent=approve&sha=${HEAD}&integration=4&state=short`,
       `?intent=approve&sha=${HEAD}&integration=4`,
     ]) {
+      window.sessionStorage.clear();
       const { server, unmount } = await open(routes(), `${PAGE}${q}`);
       expect(await screen.findByRole('heading', { name: 'The link is not valid' })).toBeTruthy();
       expect(server.calls.filter((c) => c.path.includes('confirm'))).toHaveLength(0);
@@ -357,17 +481,21 @@ describe('the states', () => {
 
 describe('accessibility', () => {
   it('has no axe violations on the summary or on a refusal, in every language', async () => {
+    // axe runs on real timers.
+    vi.useRealTimers();
+    Reflect.deleteProperty(globalThis, 'jest');
     for (const lang of ['ja', 'en'] as const) {
+      window.sessionStorage.clear();
       const ok = await open(routes(), `${PAGE}${QUERY}`, lang);
       await screen.findByRole('button', { name: lang === 'ja' ? '承認する' : 'Approve' });
-      const main = document.querySelector('main') as HTMLElement;
       const run = (root: HTMLElement) =>
         axe.run(root, {
           runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] },
           rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
         });
-      expect((await run(main)).violations.map((v) => v.id)).toEqual([]);
+      expect((await run(document.querySelector('main') as HTMLElement)).violations.map((v) => v.id)).toEqual([]);
       ok.unmount();
+      window.sessionStorage.clear();
       const no = await open(routes({ [`GET ${CONFIRM}`]: () => apiError(403, 'x', 'r') }), `${PAGE}${QUERY}`, lang);
       await screen.findByRole('alert');
       expect((await run(document.querySelector('main') as HTMLElement)).violations.map((v) => v.id)).toEqual([]);
