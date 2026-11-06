@@ -18,11 +18,23 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..', '..');
 const local = join(here, '.local');
 const PROJECT = 'gs-m3-test';
-const P = { gitstation: 28080, gsPg: 25432, keycloak: 28180, kcPg: 25433, smtp: 28025, mailUi: 28026 };
+const P = { gitstation: 28080, gsPg: 25432, keycloak: 28180, smtp: 28025, mailUi: 28026 };
 const REALM = 'forge-m3-test';
 const forgeExe = process.env.FORGE_BIN ?? join(root, 'target', 'release', process.platform === 'win32' ? 'forge.exe' : 'forge');
 const f = (name) => join(local, name);
 const hex = (n) => randomBytes(n).toString('hex');
+
+/** Replace every generated secret value with *** (psql echoes statements, and these hold passwords). */
+function redact(text) {
+  let out = text;
+  try {
+    const values = [];
+    for (const n of ['db-app.pw', 'db-migrate.pw', 'oidc-client-secret']) values.push(readFileSync(f(n), 'utf8').trim());
+    for (const l of readFileSync(f('compose.env'), 'utf8').split(String.fromCharCode(10))) values.push(l.slice(l.indexOf('=') + 1).trim());
+    for (const v of values) if (v.length >= 8) out = out.split(v).join('***');
+  } catch { /* no secrets generated yet */ }
+  return out;
+}
 
 function run(cmd, args, opts = {}) {
   let r = spawnSync(cmd, args, { encoding: 'utf8', ...opts });
@@ -31,7 +43,7 @@ function run(cmd, args, opts = {}) {
     r = spawnSync(cmd, args, { encoding: 'utf8', ...opts });
   }
   if (r.status !== 0 && !opts.allowFail) {
-    throw new Error(`${cmd} ${args.join(' ')} failed (${r.status})\n${r.stdout ?? ''}${r.stderr ?? ''}`);
+    throw new Error(redact(`${cmd} ${args.join(' ')} failed (${r.status})\n${r.stdout ?? ''}${r.stderr ?? ''}`));
   }
   return r;
 }
@@ -90,6 +102,10 @@ migrate_password_file = ${q(f('db-migrate.pw'))}
 tls_mode = "disable"
 `);
   mkdirSync(f('storage'), { recursive: true });
+  if (process.platform === 'win32' && process.env.USERNAME) {
+    // Only the current user (and nobody inherited) may read the generated secrets.
+    run('icacls', [local, '/inheritance:r', '/grant:r', `${process.env.USERNAME}:(OI)(CI)F`], { allowFail: true });
+  }
 }
 
 function psqlSuper(args, input) {
@@ -117,7 +133,24 @@ async function waitFor(url, label, ms = 240000) {
 }
 
 const pidFile = (n) => f(`${n}.pid`);
-function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+/** Is this PID really OUR forge (this worktree's binary, our config)? A reused PID on a shared host must never be killed. */
+function isOurForge(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  let exe = '';
+  let cmdline = '';
+  if (process.platform === 'win32') {
+    const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { $p.ExecutablePath; $p.CommandLine }`], { encoding: 'utf8' });
+    [exe = '', cmdline = ''] = (r.stdout ?? '').split(/\r?\n/);
+  } else {
+    const r = spawnSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' });
+    cmdline = (r.stdout ?? '').trim();
+    exe = cmdline.split(' ')[0];
+  }
+  const norm = (x) => x.replaceAll(String.fromCharCode(92), '/').toLowerCase();
+  return norm(exe) === norm(forgeExe) && norm(cmdline).includes(norm(f('forge.toml')));
+}
+const alive = isOurForge;
 function startForge(name, sub) {
   if (existsSync(pidFile(name)) && alive(Number(readFileSync(pidFile(name), 'utf8')))) return;
   const log = openSync(f(`${name}.log`), 'a');
@@ -128,7 +161,8 @@ function startForge(name, sub) {
 function stopForge(name) {
   if (!existsSync(pidFile(name))) return;
   const pid = Number(readFileSync(pidFile(name), 'utf8'));
-  try { process.kill(pid); } catch { /* already gone */ }
+  if (isOurForge(pid)) process.kill(pid);
+  else console.error(`test-env: pid ${pid} (${name}) is not this environment's forge; stale pid file removed, nothing killed`);
   rmSync(pidFile(name), { force: true });
 }
 
@@ -159,7 +193,7 @@ async function up() {
 }
 
 function status() {
-  const rows = [['gitstation', P.gitstation], ['gs-test-pg', P.gsPg], ['keycloak', P.keycloak], ['kc-test-pg', P.kcPg], ['mailpit smtp', P.smtp], ['mailpit ui', P.mailUi]]
+  const rows = [['gitstation', P.gitstation], ['gs-test-pg', P.gsPg], ['keycloak', P.keycloak], ['mailpit smtp', P.smtp], ['mailpit ui', P.mailUi]]
     .map(([n, p]) => `${n.padEnd(14)} 127.0.0.1:${p}  ${portBusy(p) ? 'listening' : 'closed'}`);
   const ps = existsSync(f('compose.env')) ? compose('ps', '--format', 'table {{.Service}}\t{{.Status}}', '-a').stdout : '(not initialised)';
   const procs = ['serve', 'worker'].map((n) => `forge ${n}: ${existsSync(pidFile(n)) && alive(Number(readFileSync(pidFile(n), 'utf8'))) ? 'running' : 'stopped'}`);

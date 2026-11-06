@@ -12,12 +12,20 @@
 | GitStation（`forge serve`、release ビルド、UI 埋め込み） | 127.0.0.1:**28080** | ホストのプロセス（`forge worker` も同じ設定で動く） |
 | `gs-test-pg` | 127.0.0.1:**25432** | `timescale/timescaledb:2.28.1-pg16`。GitStation の DB `forge`（nextest の 55432 とは別） |
 | Keycloak `forge-m3-test` | 127.0.0.1:**28180** | `quay.io/keycloak/keycloak:26.4.2`、`start`（本番モード）、`KC_DB=postgres` |
-| `kc-test-pg` | 127.0.0.1:**25433** | Keycloak の DB |
+| `kc-test-pg` | （ホストへは公開しない） | Keycloak の DB。compose のネットワーク内で Keycloak だけが使う |
 | mailpit（SMTP） | 127.0.0.1:**28025** | 通知（N1）の受け口。`notify.smtp_tls = none` |
 | mailpit（画面） | 127.0.0.1:**28026** | 受信したメールを見る |
 
 使ってはいけない: **25434**（Kanflow の試験環境）、3000・3100・3200・8080・15432〜15434・15442・15445・18025・18080・55432・58080（ほかが使用中）。
 起動前に `netstat -ano` で空きを確かめ、使用中ならスクリプトが止まります。
+
+## 秘密の置き場と安全策
+
+- 生成した秘密は `ops/test-env/.local/` だけにある（gitignore 済み）。Windows では `up` が `icacls` で現在のユーザーだけに権限を絞る（継承を外す）。
+- `down` / `reset` は、PID ファイルの PID が**この環境の `forge`（このリポジトリの `target/release/forge`、設定は `.local/forge.toml`）**であることを
+  確かめてから止める。違う場合は何も止めず、古い PID ファイルだけを消す（共有ホストで PID が再利用されても他のプロセスを止めない）。
+- エラー文に出る生成済みのパスワードは `***` に伏せる。
+- journey は `composeProject` が `gs-m3-test` でなければ動かず、DB の書き換えは試験の利用者（Keycloak の `sub`）のセッションだけに限る。
 
 ## 前提
 
@@ -98,7 +106,7 @@ node ops/test-env/test-env.mjs reset    # 上に加え、gs-m3-test のボリュ
 
 ## Verify
 
-- `node ops/test-env/test-env.mjs status` の 6 つのポートがすべて `listening`、`forge serve` / `forge worker` が `running`。
+- `node ops/test-env/test-env.mjs status` の 5 つのポートがすべて `listening`、`forge serve` / `forge worker` が `running`。
 - 上の journey が `ok`。
 - `docker ps` に `gs-m3-test-*` 以外の変更がない（ほかのコンテナの稼働時間が変わっていない）。
 

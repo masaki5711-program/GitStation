@@ -28,8 +28,7 @@ services:
       POSTGRES_USER: keycloak
       POSTGRES_PASSWORD: ${KC_PG_PASSWORD:?run test-env.mjs init}
       POSTGRES_DB: keycloak
-    ports:
-      - "127.0.0.1:25433:5432"
+    # No host port: only Keycloak (same compose network) talks to it.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
       interval: 2s

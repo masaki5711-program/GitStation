@@ -35,6 +35,10 @@ if (!existsSync(envFile)) {
   process.exit(1);
 }
 const env = JSON.parse(readFileSync(envFile, 'utf8'));
+if (env.composeProject !== 'gs-m3-test') {
+  console.error(`journey-keycloak: refusing to run: composeProject is ${JSON.stringify(env.composeProject)}, expected "gs-m3-test"`);
+  process.exit(1);
+}
 const gsOrigin = new URL(env.gitstation).origin;
 
 async function adminToken() {
@@ -61,15 +65,17 @@ async function setEnabled(enabled) {
     signal: AbortSignal.timeout(10_000),
   });
   if (put.status !== 204) throw new Error(`Keycloak user update failed: ${put.status}`);
+  return user.id;
 }
 
-/** Make every live session look like it was last checked 10 minutes ago, so the next request refreshes. */
-function ageSessions() {
+/** Make the live sessions of ONE Keycloak subject look last checked 10 minutes ago, so the next request refreshes. */
+function ageSessions(sub) {
+  if (!/^[0-9a-f-]{36}$/.test(sub)) throw new Error('unexpected Keycloak subject id');
   const r = spawnSync(
     'docker',
     ['compose', '-p', env.composeProject, '-f', env.composeFile, '--env-file', env.composeEnv, 'exec', '-T', 'gs-test-pg',
       'psql', '-U', 'postgres', '-d', 'forge', '-v', 'ON_ERROR_STOP=1', '-tAc',
-      "UPDATE forge.web_sessions SET refresh_checked_at = now() - interval '10 minutes' WHERE revoked_at IS NULL RETURNING 1"],
+      `UPDATE forge.web_sessions SET refresh_checked_at = now() - interval '10 minutes' WHERE revoked_at IS NULL AND oidc_sub = '${sub}' RETURNING 1`],
     { encoding: 'utf8' },
   );
   if (r.status !== 0) throw new Error(`could not age the sessions: ${r.stderr}`);
@@ -85,7 +91,7 @@ const must = (cond, msg) => {
 
 let shot;
 async function main() {
-  await setEnabled(true); // a rerun after a failed run starts from a known state
+  const sub = await setEnabled(true); // a rerun after a failed run starts from a known state
   const browser = await chromium.launch();
   try {
     const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1100, height: 800 } });
@@ -135,14 +141,14 @@ async function main() {
     await signIn('3 sign-in again');
 
     // 4. Control: an aged session of an ENABLED user keeps working (the refresh succeeds).
-    must(ageSessions() >= 1, '4 control: no live session to age');
+    must(ageSessions(sub) >= 1, '4 control: no live session to age');
     must((await sessionStatus()) === 200, '4 control: an enabled user lost the session on refresh');
     log('4 control: aged session of an enabled user still works');
 
     // 5. Disable the user in Keycloak; the next request (after the check is due) is refused.
     await setEnabled(false);
     log('5 Keycloak: user disabled');
-    ageSessions();
+    ageSessions(sub);
     const after = await sessionStatus();
     must(after === 401, `5 disable: the next request answered ${after}, expected 401`);
     log(`5 disable: next request answered ${after}`);
