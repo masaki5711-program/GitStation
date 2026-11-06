@@ -135,6 +135,18 @@ pub enum Command {
         #[command(subcommand)]
         command: SpecCommand,
     },
+    /// The context API (M3 X5): a work item's, a requirement's or a merge
+    /// request's context, every item with its source.
+    #[command(disable_help_subcommand = true)]
+    Context {
+        #[command(subcommand)]
+        command: ContextCommand,
+    },
+    /// A read-only MCP server on stdin / stdout (M3 X5) for an AI agent:
+    /// get_work_item_context, get_requirement, search_requirements,
+    /// get_trace_matrix, get_merge_request_context — with your token, and
+    /// never what is marked confidential (plan 06 D-5).
+    Mcp,
     /// Users: search by name; administrators: list, disable, sessions, rename.
     #[command(disable_help_subcommand = true)]
     User {
@@ -1698,6 +1710,42 @@ pub enum SpecCommand {
         /// A commit id, a branch or a tag (default: the default branch).
         #[arg(long = "ref", value_parser = parse_text)]
         rev: Option<String>,
+    },
+}
+
+/// `gstn context` (M3 X5, plan 03 §6): the context API, read with your
+/// permissions.
+#[derive(Subcommand, Debug)]
+pub enum ContextCommand {
+    /// A kanflow work item's context: the project's linked merge requests
+    /// and the `@req PBI-<n>/AC-<m>` tests.
+    #[command(name = "work-item")]
+    WorkItem {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The work item, `PBI-<n>`.
+        #[arg(long = "ref", value_parser = parse_text, value_name = "PBI-N")]
+        reference: String,
+    },
+    /// A requirement's context: its text, document, tests and versions.
+    Requirement {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The requirement id (ZEVA-CFG-012).
+        #[arg(long, value_parser = parse_text)]
+        id: String,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+    },
+    /// A merge request's review context: files, requirements, work items,
+    /// check runs.
+    #[command(name = "merge-request")]
+    MergeRequest {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
     },
 }
 

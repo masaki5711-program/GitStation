@@ -93,6 +93,9 @@ pub struct ApiClient {
     http: reqwest::blocking::Client,
     base: Url,
     token: Option<Token>,
+    /// Sent with every request (`gstn mcp`: `Forge-Context-Audience:
+    /// agent`, M3 X5).
+    headers: Vec<(&'static str, &'static str)>,
 }
 
 /// Everything but the RFC 3986 unreserved characters is percent-encoded, so a
@@ -144,7 +147,15 @@ impl ApiClient {
             http,
             base: cfg.host.clone(),
             token,
+            headers: Vec::new(),
         })
+    }
+
+    /// The same client, sending `name: value` with every request.
+    #[must_use]
+    pub fn with_header(mut self, name: &'static str, value: &'static str) -> Self {
+        self.headers.push((name, value));
+        self
     }
 
     /// Resolve `path` against the configured host and refuse anything else.
@@ -200,6 +211,9 @@ impl ApiClient {
             .header(reqwest::header::ACCEPT, "application/json");
         if let Some(t) = &self.token {
             req = req.bearer_auth(t.expose());
+        }
+        for (name, value) in &self.headers {
+            req = req.header(*name, *value);
         }
         if let Some(b) = body {
             req = req.json(b);
