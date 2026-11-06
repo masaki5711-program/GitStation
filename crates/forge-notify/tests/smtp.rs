@@ -246,6 +246,13 @@ async fn auth_plain_is_sent_when_configured_and_a_wrong_password_is_auth_failed(
     let write = |name: &str, text: &str| {
         let path = dir.path().join(name);
         std::fs::write(&path, text).expect("write");
+        // A secret file must not be readable by others on Unix, or the sender
+        // refuses it (`insecure_permissions`); the default umask gives 0644.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
         path
     };
     let relay = FakeSmtp::start(Script {
