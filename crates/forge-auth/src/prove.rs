@@ -316,6 +316,7 @@ impl ResourceCtx for ProjectCtx {
                 inner,
                 via,
                 subject: None,
+                binding: None,
             })),
         }
     }

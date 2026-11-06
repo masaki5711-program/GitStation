@@ -182,10 +182,12 @@ impl World {
                 user: self.bob,
                 intent: Intent::Approve,
                 project: self.project,
-                merge_request: self.mr.id,
-                head_sha: head.as_str(),
-                target_ref: &target,
-                target_sha: tip.as_str(),
+                subject: NewSubject::MergeRequest {
+                    merge_request: self.mr.id,
+                    head_sha: head.as_str(),
+                    target_ref: &target,
+                    target_sha: tip.as_str(),
+                },
                 state,
                 lifetime,
             },
@@ -282,10 +284,12 @@ async fn issue_writes_a_pending_row_without_secret_public_id_or_mac() {
             user: w.bob,
             intent: Intent::Approve,
             project: w.project,
-            merge_request: w.mr.id,
-            head_sha: oid('a').as_str(),
-            target_ref: &target,
-            target_sha: oid('b').as_str(),
+            subject: NewSubject::MergeRequest {
+                merge_request: w.mr.id,
+                head_sha: oid('a').as_str(),
+                target_ref: &target,
+                target_sha: oid('b').as_str(),
+            },
             state: "short",
             lifetime: LIFETIME,
         },
@@ -302,10 +306,12 @@ async fn issue_writes_a_pending_row_without_secret_public_id_or_mac() {
             user: w.bob,
             intent: Intent::Approve,
             project: w.project,
-            merge_request: w.mr.id,
-            head_sha: oid('c').as_str(),
-            target_ref: &target,
-            target_sha: oid('b').as_str(),
+            subject: NewSubject::MergeRequest {
+                merge_request: w.mr.id,
+                head_sha: oid('c').as_str(),
+                target_ref: &target,
+                target_sha: oid('b').as_str(),
+            },
             state: STATE,
             lifetime: LIFETIME,
         },
@@ -325,9 +331,16 @@ async fn claim_creates_the_secret_and_returns_it_exactly_once() {
     assert_eq!(claimed.employee_number.as_deref(), Some("E-2001"));
     assert_eq!(claimed.intent, Intent::Approve);
     assert_eq!(claimed.project, w.project);
-    assert_eq!(claimed.iid, w.mr.iid);
-    assert_eq!(claimed.head_sha, oid('a').as_str());
-    assert_eq!(claimed.target_ref, "refs/heads/main");
+    assert_eq!(claimed.iid, Some(w.mr.iid));
+    assert_eq!(
+        claimed.subject,
+        AssertedSubject::MergeRequest {
+            merge_request: w.mr.id,
+            head_sha: oid('a').as_str().to_owned(),
+            target_ref: w.main(),
+            target_sha: oid('b').as_str().to_owned(),
+        }
+    );
     let row = w.row(id).await;
     assert_eq!(row["state"], "claimed");
     assert_eq!(row["public_id"], claimed.token.public_id());
@@ -335,9 +348,7 @@ async fn claim_creates_the_secret_and_returns_it_exactly_once() {
     assert_eq!(row["key_id"], 1);
     let verified = w.verify(&claimed.token).await.expect("verifies");
     assert_eq!(verified.id, id);
-    assert_eq!(verified.merge_request, w.mr.id);
-    assert_eq!(verified.target_ref, w.main());
-    assert_eq!(verified.target_sha, oid('b').as_str());
+    assert_eq!(verified.subject, claimed.subject);
     let audit =
         w.t.json_rows(&format!(
             "SELECT action, actor_kind FROM forge.audit_log \
@@ -1095,10 +1106,12 @@ async fn a_state_is_used_once_per_integration() {
             user: w.bob,
             intent: Intent::Approve,
             project: w.project,
-            merge_request: w.mr.id,
-            head_sha: oid('a').as_str(),
-            target_ref: &target,
-            target_sha: oid('b').as_str(),
+            subject: NewSubject::MergeRequest {
+                merge_request: w.mr.id,
+                head_sha: oid('a').as_str(),
+                target_ref: &target,
+                target_sha: oid('b').as_str(),
+            },
             state: STATE,
             lifetime: LIFETIME,
         },
@@ -1188,5 +1201,73 @@ async fn an_act_as_approval_rechecks_the_integration_and_the_account_under_the_l
         w.t.json_rows("SELECT count(*) AS n FROM forge.merge_request_approvals")
             .await;
     assert_eq!(approvals[0]["n"], 0);
+    w.t.drop_now().await;
+}
+
+/// M3 X3 (ADR-0025 Amendment X3): a binding assertion seals the kanflow
+/// project and the setting; a changed setting never verifies, and the
+/// subject of the other shape is refused at the issue.
+#[tokio::test]
+async fn a_binding_assertion_round_trips_and_its_setting_is_sealed() {
+    let w = world().await;
+    let issue_binding = |intent, resolves, state: &'static str| {
+        let w = &w;
+        async move {
+            issue(
+                &w.t.db,
+                &as_user(w.bob, "req-issue-binding"),
+                &NewAssertion {
+                    integration: w.integration,
+                    user: w.bob,
+                    intent,
+                    project: w.project,
+                    subject: NewSubject::Binding {
+                        external_project_id: "KF-7",
+                        resolves_work_items: resolves,
+                    },
+                    state,
+                    lifetime: LIFETIME,
+                },
+            )
+            .await
+        }
+    };
+    let id = issue_binding(Intent::BindingSet, Some(false), STATE)
+        .await
+        .expect("issue");
+    let claimed = w.claim_it(STATE, "req-claim-binding").await.expect("claim");
+    assert_eq!(claimed.intent, Intent::BindingSet);
+    assert_eq!(claimed.iid, None);
+    let expected = AssertedSubject::Binding {
+        external_project_id: "KF-7".to_owned(),
+        resolves_work_items: Some(false),
+    };
+    assert_eq!(claimed.subject, expected);
+    let verified = w.verify(&claimed.token).await.expect("verifies");
+    assert_eq!(verified.subject, expected);
+    // The setting is in the MAC: a row changed to resolve never verifies.
+    w.tamper(id, "resolves_work_items = true").await;
+    let err = w.verify(&claimed.token).await.expect_err("tampered");
+    assert_reason(&err, ErrorCode::ActAsAssertionInvalid, "mac_mismatch");
+    // A removal carries no setting; a set without one is a caller bug.
+    issue_binding(
+        Intent::BindingRemove,
+        None,
+        "s-remove-0123456789abcdefghijklmn",
+    )
+    .await
+    .expect("remove issued");
+    let err = issue_binding(
+        Intent::BindingSet,
+        None,
+        "s-broken-0123456789abcdefghijklmn",
+    )
+    .await
+    .expect_err("set without a setting");
+    assert_reason(&err, ErrorCode::Internal, "assertion_subject_mismatch");
+    let err = issue_binding(Intent::Approve, None, "s-approve-0123456789abcdefghijklm")
+        .await
+        .expect_err("approve on a binding");
+    assert_reason(&err, ErrorCode::Internal, "assertion_subject_mismatch");
     w.t.drop_now().await;
 }

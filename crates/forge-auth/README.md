@@ -250,8 +250,14 @@ decision point.
   `MergeRequestList` read without an assertion; `MergeRequestApprove`
   (`approve`) and `MergeRequestUnapprove` (`unapprove`) need one; everything
   else — merge, settings, session-only actions, the feed and dev status — is
-  `Denied` (`FG-AUTH-0003 act_as_not_allowed`). `IntegrationBindingManage`
-  joins in X3 with the rule fixed in ADR-0025 §4. Invariants:
+  `Denied` (`FG-AUTH-0003 act_as_not_allowed`). M3 X3 (ADR-0025 Amendment
+  X3): `IntegrationBindingManage` (`binding_set`) and the new
+  `IntegrationBindingRemove` (`binding_remove`) need an assertion, scoped to
+  the request's own integration instead of `via_bound`
+  (`act_as_other_integration`, `setting_mismatch`); `RepositorySearch` is
+  `ListAsPerson` (no assertion, decided as the person on the instance and on
+  each candidate); `IntegrationBindingList` is the integration's own account,
+  `Denied` acting for a person. Rows `matrix_rows_bindings.rs`. Invariants:
   `every_people_only_act_as_action_requires_an_assertion`,
   `no_session_only_action_is_act_as`, `every_unasserted_act_as_action_is_a_read`.
   An approval made through act-as is never carried to a new head

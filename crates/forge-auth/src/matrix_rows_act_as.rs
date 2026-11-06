@@ -34,8 +34,9 @@ use crate::model::Role;
 use crate::matrix::{ME, OTHER};
 #[cfg(test)]
 use crate::model::{
-    AccountKind, ActAsCredential, ActAsSubject, ActAsView, AssertionFacts, MergeRequestEdit,
-    Principal, ProjectView, Resource, Scope, UnresolvedReason, ViaView, Visibility,
+    AccountKind, ActAsCredential, ActAsSubject, ActAsView, AssertionFacts, AssertionSubject,
+    MergeRequestEdit, Principal, ProjectView, Resource, Scope, UnresolvedReason, ViaView,
+    Visibility,
 };
 #[cfg(test)]
 use forge_core::{act_as::Intent, IntegrationId, MergeRequestId, MergeRequestState, ProjectId};
@@ -51,6 +52,9 @@ pub(crate) enum ViaToken {
     NoActAs,
     /// [`ViaToken::Approver`] issued with `is_agent`.
     Agent,
+    /// `read_api` + `api` + `act_as`: kanflow's token for the binding
+    /// routes (M3 X3).
+    Binder,
 }
 
 /// The assertion an act-as row's request carries.
@@ -62,6 +66,14 @@ pub(crate) enum Assert {
     Unapprove,
     /// An approve assertion for another merge request.
     ApproveOtherMr,
+    /// M3 X3: `binding_set` of kanflow project `P1`, shared (not resolving).
+    BindShared,
+    /// `binding_set` of `P1`, resolving.
+    BindResolving,
+    /// `binding_set` of another kanflow project (`P2`), shared.
+    BindOtherKanflow,
+    /// `binding_remove` of `P1`.
+    Unbind,
 }
 
 /// The caller of an act-as row: the person (`ME`, with `person` as role)
@@ -144,16 +156,34 @@ impl Via {
             }
             ViaToken::Reader => vec![Scope::ReadApi, Scope::ActAs],
             ViaToken::NoActAs => vec![Scope::ReadApi, Scope::MergeApprove],
+            ViaToken::Binder => vec![Scope::ReadApi, Scope::Api, Scope::ActAs],
         };
-        let facts = |intent, mr| AssertionFacts {
+        let assertion = |intent, subject| AssertionFacts {
             id: 9,
             public_id: "00000000000000a5".to_owned(),
             intent,
             project: PROJECT,
-            merge_request: mr,
-            head_sha: HEAD.to_owned(),
-            target_ref: name("refs/heads/main"),
-            target_sha: TIP.to_owned(),
+            subject,
+        };
+        let facts = |intent, mr| {
+            assertion(
+                intent,
+                AssertionSubject::MergeRequest {
+                    merge_request: mr,
+                    head_sha: HEAD.to_owned(),
+                    target_ref: name("refs/heads/main"),
+                    target_sha: TIP.to_owned(),
+                },
+            )
+        };
+        let bind = |intent, external: &str, resolves| {
+            assertion(
+                intent,
+                AssertionSubject::Binding {
+                    external_project_id: external.to_owned(),
+                    resolves_work_items: resolves,
+                },
+            )
         };
         ActAsCredential {
             via: OTHER,
@@ -168,6 +198,10 @@ impl Via {
                 Assert::Approve => Some(facts(Intent::Approve, MR)),
                 Assert::Unapprove => Some(facts(Intent::Unapprove, MR)),
                 Assert::ApproveOtherMr => Some(facts(Intent::Approve, MergeRequestId::new(21))),
+                Assert::BindShared => Some(bind(Intent::BindingSet, "P1", Some(false))),
+                Assert::BindResolving => Some(bind(Intent::BindingSet, "P1", Some(true))),
+                Assert::BindOtherKanflow => Some(bind(Intent::BindingSet, "P2", Some(false))),
+                Assert::Unbind => Some(bind(Intent::BindingRemove, "P1", None)),
             },
             claimed_mac: "c".repeat(64),
             claimed_key_id: 1,
@@ -180,7 +214,7 @@ impl Via {
 }
 
 #[cfg(test)]
-fn project_view(project: P, role: Option<Role>) -> ProjectView {
+pub(crate) fn project_view(project: P, role: Option<Role>) -> ProjectView {
     let (visibility, pending_deletion) = match project {
         P::Private => (Visibility::Private, false),
         P::Internal => (Visibility::Internal, false),
@@ -249,6 +283,7 @@ impl Scene {
             }
         };
         Resource::ActAs(Box::new(ActAsView {
+            binding: None,
             inner,
             via: ViaView {
                 role: self.via_role,
@@ -272,7 +307,7 @@ impl Scene {
 impl ConfirmScene {
     pub(crate) fn resource(self, role: Option<Role>) -> Resource {
         Resource::ActAsConfirm(Box::new(crate::model::ActAsConfirmView {
-            merge_request: merge_request(project_view(self.project, role), self.own),
+            target: merge_request(project_view(self.project, role), self.own),
             intent: if self.unapprove {
                 Intent::Unapprove
             } else {
@@ -299,7 +334,7 @@ const fn deny(code: E) -> Expect {
 
 use Expect::Allow;
 
-const fn via(person: Option<Role>, token: ViaToken, assertion: Assert) -> W {
+pub(crate) const fn via(person: Option<Role>, token: ViaToken, assertion: Assert) -> W {
     W::ActAs(Via {
         person,
         token,
@@ -332,7 +367,7 @@ const fn scene(via_role: Option<Role>, bound: bool, target: Target, drift: Drift
 const MR_OTHER: Target = Target::Mr { own: false };
 /// Another's merge request of a bound project (the service account a
 /// Reporter, as a binding makes it).
-const BOUND_MR: F = scene(REPORTER, true, MR_OTHER, Drift::None);
+pub(crate) const BOUND_MR: F = scene(REPORTER, true, MR_OTHER, Drift::None);
 const BOUND_PROJECT: F = scene(REPORTER, true, Target::Project, Drift::None);
 
 #[rustfmt::skip]

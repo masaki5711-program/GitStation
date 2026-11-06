@@ -1488,3 +1488,61 @@ URL の名前で行い、`resolve` の固定はアドレスだけを替える。
 backlog）。forge-notify の `tests/smtp.rs`（偽の中継で配信・段階ごとの失敗の分類・時間切れ・AUTH・格下げの拒否・`smtp_failures_are_int_0015`）、`tests/pipeline.rs`（購読者・見えなくなった人・
 設定・言語・内部の情報が無い・再試行の上限・永続的な拒否・unknown・二重に送らない）。forge-web の `notification_routes`。forge-cli のワーカーの通し試験
 `the_worker_turns_an_approval_event_into_a_mail` と doctor の `notify::tests`。gstn の `tests/notifications.rs`（`get_reads_the_own_settings_route`、`set_changes_only_what_it_is_told_and_keeps_the_rest` ほか）。
+
+## Amendment（2026-11-06、M3 X3 `feat/cross-multi-repo-bindings`: kanflow のプロジェクトと複数のリポジトリ）
+
+計画 03 §7.1・計画 11 §5.7 X3・計画 02 §2。I1a の「1 つのプロジェクトに結びつけは 1 つ」を、**結びつけの設定** で 2 種類に分けた。
+代理（act-as）で結ぶ規則は ADR-0025 Amendment X3。
+
+1. **設定 `resolves_work_items`**（追記のマイグレーション `20261129100000_multi_repo_bindings.sql`、既存の結びつけは `true`）:
+   - `true`（**コードを持つリポジトリ**）: `PBI-123` をこのリポジトリのブランチ・MR に解決する（I1b の検出、I1d の開発状況、
+     マージの規則の `work_item_link`）。**そのプロジェクトの唯一の結びつけ**。2 つ目の kanflow のプロジェクトは `FG-INT-0016`
+     （`bound_to_other_external_project` / `bound_to_other_integration`）。裏の守りは部分一意の索引 `integration_bindings_one_resolving_per_project`。
+   - `false`（**共有する仕様のリポジトリ**、他から `specs:` で参照されるもの）: 解決しない。同じプロジェクトを **複数の kanflow のプロジェクト**
+     に結べる（要件 ID は全体で一意なので曖昧にならない）。ただし解決する結びつけと **同居しない**（`shared_bindings_present`、
+     コードを持つリポジトリを 2 つ目のプロジェクトに結ぶ抜け道にしないため）。同居の判定はプロジェクトの行の `FOR UPDATE` の下のコマンド
+     （結ぶ・変える・外すはすべてプロジェクトの行を先に錠にするので、1 プロジェクトで直列）。
+   - 種類（`kind`、ADR-0023 で廃止）ではなく結びつけの設定で決める（計画 03 §7.1 の「どちらかは結びつけの設定で決める」）。
+   - **変更は `false → true` だけ**（共有の仕様のリポジトリが、唯一の結びつけになったときにコードのリポジトリになる）。`true → false` は
+     `FG-INT-0016 reason=resolution_fixed`: I1b が作ったリンクが残るので、解除（リンクを `unbound` で終える）して共有として結び直す。
+     同じ値は `unchanged`。一つの (連携, プロジェクト, kanflow のプロジェクト) は 1 つ（`integration_bindings_one_per_external_project`）、
+     同じ設定の再度の結びつけは `unchanged`、違う設定は `bound_with_other_setting`。
+2. **結びつけの ID**: 既存の `generation`（結ぶたびに新しい identity、変わらない）を主キーにし、API の `binding_id` とした（主キーを
+   `(integration_id, project_id)` から移した）。新しい列は足さない。
+3. **メンバー**: 共有の結びつけが複数あっても、サービスアカウントの Reporter は 1 つ（最初の結びつけが付けた `granted_membership`）。
+   付けた結びつけを外し、同じ連携の結びつけがまだあるときは **付けた印を残りの最小の ID へ移す**（`grant_moved_to`、Reporter は残る）。
+   最後の 1 つを外したときだけ、I1a の規則（付けた印があり、まだ直接の Reporter なら外す）でメンバーを外す。
+4. **読む側**: 作業項目の検出（`work_items::binding_of`）、マージの規則の `LINKED_SQL`、開発状況の 3 つの問い合わせは
+   `resolves_work_items` の結びつけだけを見る。イベントの履歴の見える集合はプロジェクトごとに 1 つ（`max(generation)`）: 解決する結びつけは
+   1 つなので I1c の 410（再度の結びつけ）は変わらない。共有の結びつけを足すと最大値が変わり 410 になる（kanflow は再同期する）。
+   マージの規則の `work_item_link_unbound` の警告は解決する結びつけが無いとき。
+5. **経路**（すべて `authorize()` と権限の表の allow / deny、`matrix_rows_bindings.rs`）:
+   - `GET /api/v1/repositories?q=&limit=`（`RepositorySearch`、`read_api`）: 呼び出し元（代理なら本人）が **結べる** リポジトリ
+     （Maintainer 以上）。候補（パスか表示名に `q` を含む生きているプロジェクト、最大 200、パスの順）を 1 件ずつ `prove` で判定し、
+     許されたものだけを返す（件数も、見えないものの手がかりも返さない: 存在の手がかりを作らない）。
+   - `GET /api/v1/integrations/{id}/bindings?kanflow_project_id=`（`IntegrationBindingList`、`read_api`）: 連携のサービスアカウント自身だけ
+     （履歴と同じ判定、代理は不可）。リポジトリのパス・設定・`binding_id`。管理者は従来の `/api/v1/admin/integrations/{id}/bindings`。
+   - `POST /api/v1/integrations/{id}/bindings`（`IntegrationBindingManage`）`{kanflow_project_id, repository_id, settings: {resolves_work_items}}`、
+     `PATCH …/bindings/{binding_id}`（同じ Action、設定の変更）、`DELETE …/bindings/{binding_id}`（**新しい Action `IntegrationBindingRemove`**、
+     主張の intent と 1 対 1 にするため）。人だけ、Maintainer 以上、`api`。サービスアカウント単独は人だけの規則で `FG-AUTH-0003`。
+     **リポジトリは ID で指す**（計画 03 §7.1 の例はパス `specs/zeva-engine`）: 名前の変更・移動に影響されず、検索と claim の答えが ID を返すため。
+   - 既存の `PUT|DELETE /api/v1/projects/{id}/integration-bindings/{integration_id}` は残す。PUT は解決する結びつけ、DELETE はその連携の
+     そのプロジェクトの結びつけを **すべて** 外す。
+6. **イベント**: 結びつけの変更は今までどおり監査だけ（`integration.bound` / `.unbound` に `binding_id` と `resolves_work_items` /
+   `grant_moved_to`、新しい `integration.binding_changed`）。他の購読者は要らない（kanflow は代理で自分が結んだか、履歴の 410 で知る）。
+7. **エラー**: 新しいコードは足さない。`FG-INT-0016` の `reason` に `shared_bindings_present`・`bound_with_other_setting`・`resolution_fixed`
+   を足し、文言を「リポジトリの結びつけの規則」に直した（`errors.toml` と生成した `docs/errors/FG-INT-0016.md`）。
+
+テスト: forge-db の `binding_rows_share_a_spec_project_but_resolve_once`（制約名）、`multi_tests.rs` の 5 つ（共有の 2 つの結びつけ、
+コードのリポジトリの 2 つ目の拒否、印の移動、設定の変更、作業項目の解決は解決する結びつけだけ）、`a_binding_assertion_round_trips_and_its_setting_is_sealed`。
+forge-web の `tests/binding_routes.rs`。
+
+### X3 の独立レビュー（2026-11-06）で変えた点
+
+- （database HIGH）台帳 `tables.toml` の `act_as_assertions.ro_columns` に `external_project_id`・`resolves_work_items` を足した（マイグレーションの
+  `forge_ro` の列の権限と合わせる）。`integration_bindings` の注記（「1 プロジェクトに 1 つ」）を直した。`ro_columns` はどのゲートも権限と
+  突き合わせていない（doctor は `bootstrap/schema.rs` の手書きの期待値と比べる）ことが分かった。ハーネス側で別に直す。
+- （database MEDIUM）**遅延の制約トリガー `integration_bindings_resolving_alone`**（保護の対象、doctor が定義と本体を比べる）: 解決する結びつけの
+  あるプロジェクトには他の結びつけが無い、をスキーマでも守る（どちらの行が先でも。23514）。マイグレーション `20261129100000` を直接直した
+  （main に入っておらず、試験の DB の外で適用されていないため）。
+- （security LOW c）リポジトリ検索の候補をパスの順のページ（200 件 × 最大 5 ページ）で読み、見えない候補でページが埋まっても検索が止まらない。

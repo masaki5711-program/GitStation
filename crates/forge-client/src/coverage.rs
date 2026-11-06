@@ -658,6 +658,32 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/integrations/{id}/act-as/claim",
         Coverage::NotForCli("kanflow's server claims the assertion a person confirmed (an integration's act_as token); gstn never acts for a person"),
     ),
+    // M3 X3: a kanflow project's repositories (plan 03 §7.1).
+    (
+        "GET",
+        "/api/v1/repositories",
+        Coverage::NotForCli("kanflow's registration screen searches the repositories a PO / SM may bind, acting for them; in gstn a person names a project by its path"),
+    ),
+    (
+        "GET",
+        "/api/v1/integrations/{id}/bindings",
+        Coverage::NotForCli("kanflow's server lists its kanflow projects' repositories (the integration's own service account); a person reads a project's bindings with integration-binding list"),
+    ),
+    (
+        "POST",
+        "/api/v1/integrations/{id}/bindings",
+        Coverage::NotForCli("kanflow's server binds a repository for the PO / SM who confirmed it (act_as + binding_set assertion); a person binds with integration-binding set"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/integrations/{id}/bindings/{binding_id}",
+        Coverage::NotForCli("kanflow's server changes a binding's setting for the person who confirmed it (act_as + binding_set assertion)"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/integrations/{id}/bindings/{binding_id}",
+        Coverage::NotForCli("kanflow's server removes a binding for the person who confirmed it (act_as + binding_remove assertion); a person unbinds with integration-binding remove"),
+    ),
     (
         "POST",
         "/api/v1/users/{id}/rename",

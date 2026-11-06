@@ -363,6 +363,11 @@ pub(crate) enum Fixture {
     ActAs(crate::matrix_rows_act_as::Scene),
     /// The act-as confirmation of a merge request (M3 S2).
     Confirm(crate::matrix_rows_act_as::ConfirmScene),
+    /// A binding as an act-as request reaches it (M3 X3):
+    /// `matrix_rows_bindings.rs`.
+    ActAsBinding(crate::matrix_rows_bindings::BindingScene),
+    /// The act-as confirmation of a binding intent (M3 X3).
+    BindingConfirm(crate::matrix_rows_bindings::BindingConfirmScene),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -989,6 +994,8 @@ impl Fixture {
             Fixture::Mr(mr) => mr.resource(role),
             Fixture::ActAs(scene) => scene.resource(role),
             Fixture::Confirm(scene) => scene.resource(role),
+            Fixture::ActAsBinding(scene) => scene.resource(role),
+            Fixture::BindingConfirm(scene) => scene.resource(role),
             Fixture::Discussion(d) => d.resource(role),
             Fixture::ServiceAccountTarget { human, active } => {
                 Resource::ServiceAccount(service_account_view(human, active))
@@ -1054,6 +1061,9 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_dev_status::DEV_STATUS_ROWS,
         crate::matrix_rows_act_as::ACT_AS_ROWS,
         crate::matrix_rows_act_as::CONFIRM_ROWS,
+        crate::matrix_rows_bindings::BINDING_ROWS,
+        crate::matrix_rows_bindings::SEARCH_ROWS,
+        crate::matrix_rows_bindings::LIST_ROWS,
         &crate::matrix_rows_act_as::generated_denies(),
         crate::matrix_rows_webhooks::WEBHOOK_ROWS.as_slice(),
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,

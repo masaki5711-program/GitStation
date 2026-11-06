@@ -59,7 +59,12 @@ the account's state under their row locks.
 integration (`IntegrationManage` / `IntegrationRead`, decided once on the
 instance), and bind / unbind a project (`IntegrationBindingManage`, decided
 twice: forge-db's `bind_decided` / `unbind_decided` call
-`Authorized::reconfirm` inside the transaction). Owned codes: FG-INT-0012,
+`Authorized::reconfirm` inside the transaction). M3 X3: `bind_repository`,
+`change_binding`, `remove_binding` (`IntegrationBindingManage` /
+`IntegrationBindingRemove`, an act-as proof's assertion consumed in the
+command's transaction and its actor `user_via_service_account`),
+`integration_repositories` (`IntegrationBindingList`) and
+`repository_candidates` (`RepositorySearch`). Owned codes: FG-INT-0012,
 FG-INT-0016, FG-INT-0017 (runbook `integrations`).
 
 **Tests**: `tests/commands.rs`, `tests/members_protection.rs` (decisions on the

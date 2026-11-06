@@ -22,6 +22,16 @@
 //!    `target_retargeted`, `target_changed`), then the person's normal arm
 //!    on their own view.
 //!
+//! M3 X3 (ADR-0025 Amendment X3): a binding intent (`binding_set`,
+//! `binding_remove`) acts on a project that may not be bound yet, so its
+//! scope is not `via_bound` but "the route's integration is the request's
+//! own" (`FG-REPO-0005 reason=act_as_other_integration`) and the assertion
+//! bound to the project, the kanflow project and (for `binding_set`) the
+//! setting (`wrong_resource`, `setting_mismatch`); the person's own role
+//! then decides (Maintainer). A `ListAsPerson` listing (`RepositorySearch`)
+//! takes no assertion and is decided as the person on the plain instance
+//! and on each listed project.
+//!
 //! The person's normal arm runs for a token-shaped principal with the
 //! service account's scopes and **no administrator rights**, so the
 //! action's own scope (`merge_approve`) is still required and every rule
@@ -33,8 +43,8 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::{ActAsRule, Action};
 use crate::authorize::authorize;
 use crate::model::{
-    AccountKind, ActAsCredential, ActAsSubject, ActAsView, AssertionFacts, Credential, Principal,
-    ProjectView, Resource, Role, Scope, Visibility,
+    AccountKind, ActAsCredential, ActAsSubject, ActAsView, AssertionFacts, AssertionSubject,
+    BindingSubject, Credential, Principal, ProjectView, Resource, Role, Scope, Visibility,
 };
 use forge_core::act_as::{assertion_invalid, Intent};
 
@@ -64,7 +74,9 @@ pub fn act_as_route(action: Action) -> Result<(), ForgeError> {
         ActAsRule::Denied => Err(refused("act_as_not_allowed")
             .with_context("action", action.name())
             .with_context("act_as_rule", ActAsRule::Denied.as_str())),
-        ActAsRule::ReadWithoutAssertion | ActAsRule::RequiresAssertion(_) => Ok(()),
+        ActAsRule::ReadWithoutAssertion
+        | ActAsRule::RequiresAssertion(_)
+        | ActAsRule::ListAsPerson => Ok(()),
     }
 }
 
@@ -138,7 +150,7 @@ fn decide_rule(
     }
     let intent = match rule {
         ActAsRule::Denied => return Err(refused("act_as_not_allowed")),
-        ActAsRule::ReadWithoutAssertion => None,
+        ActAsRule::ReadWithoutAssertion | ActAsRule::ListAsPerson => None,
         ActAsRule::RequiresAssertion(intent) => Some(intent),
     };
     let assertion = match (intent, credential.assertion.as_ref()) {
@@ -147,6 +159,50 @@ fn decide_rule(
         (Some(_), Some(a)) => Some(a),
         (None, None) => None,
     };
+    // The person, as the normal arm sees them: the service account's
+    // scopes, no administrator rights, never an agent.
+    let as_person = Principal::authenticated(
+        person,
+        false,
+        true,
+        Credential::Token(credential.via_scopes.clone()), // clone: the trial principal owns its scopes
+        AccountKind::Human,
+    );
+    // M3 X3: a listing of what the person may act on, decided as the
+    // person on the plain resource (the route's instance, each project).
+    if rule == ActAsRule::ListAsPerson {
+        return match resource {
+            Resource::Instance | Resource::Project(_) => authorize(&as_person, action, resource),
+            Resource::Unresolved(reason) => Err(not_found(reason.as_str())),
+            Resource::Group { .. }
+            | Resource::Namespace { .. }
+            | Resource::Ref { .. }
+            | Resource::Transfer { .. }
+            | Resource::GroupTransfer { .. }
+            | Resource::UserRename { .. }
+            | Resource::Tombstone(_)
+            | Resource::Membership { .. }
+            | Resource::RefProtectionChange { .. }
+            | Resource::VisibilityChange { .. }
+            | Resource::Token { .. }
+            | Resource::Session { .. }
+            | Resource::TokenRequest { .. }
+            | Resource::Admission { .. }
+            | Resource::Resolved { .. }
+            | Resource::MergeRequest { .. }
+            | Resource::Discussion { .. }
+            | Resource::CodeownersEnforcement { .. }
+            | Resource::MergeSettingsChange { .. }
+            | Resource::ServiceAccount(_)
+            | Resource::ServiceAccountTokenRequest { .. }
+            | Resource::CheckRun { .. }
+            | Resource::IntegrationFeed(_)
+            | Resource::ProjectEvents { .. }
+            | Resource::ActAs(_)
+            | Resource::ActAsConfirm(_)
+            | Resource::NotificationPreferences { .. } => Err(refused("act_as_facts_missing")),
+        };
+    }
     let view: &ActAsView = match resource {
         Resource::ActAs(view) => view,
         Resource::Unresolved(reason) => return Err(not_found(reason.as_str())),
@@ -181,18 +237,24 @@ fn decide_rule(
         | Resource::ActAsConfirm(_)
         | Resource::NotificationPreferences { .. } => return Err(refused("act_as_facts_missing")),
     };
+    // M3 X3: a binding intent's scope is the request's own integration and
+    // the assertion's binding, not `via_bound` (the project may not be
+    // bound yet).
+    if let (Some(intent), Some(assertion)) = (intent, assertion) {
+        if !intent.is_merge_request() {
+            let Some(binding) = view.binding.as_ref() else {
+                return Err(refused("act_as_facts_missing"));
+            };
+            if binding.integration != credential.integration {
+                return Err(not_found("act_as_other_integration"));
+            }
+            bound_to_binding(intent, assertion, binding)?;
+            return authorize(&as_person, action, &view.inner);
+        }
+    }
     if !view.via.bound {
         return Err(not_found("act_as_unbound"));
     }
-    // The person, as the normal arm sees them: the service account's
-    // scopes, no administrator rights, never an agent.
-    let as_person = Principal::authenticated(
-        person,
-        false,
-        true,
-        Credential::Token(credential.via_scopes.clone()), // clone: the trial principal owns its scopes
-        AccountKind::Human,
-    );
     match (intent, assertion) {
         (Some(intent), Some(assertion)) => {
             bound_to(intent, assertion, view.subject.as_ref())?;
@@ -225,20 +287,59 @@ fn bound_to(
     let Some(s) = subject else {
         return Err(refused("act_as_facts_missing"));
     };
-    if assertion.project != s.project || assertion.merge_request != s.merge_request {
+    let AssertionSubject::MergeRequest {
+        merge_request,
+        head_sha,
+        target_ref,
+        target_sha,
+    } = &assertion.subject
+    else {
+        return Err(with_id(assertion_invalid("wrong_resource")));
+    };
+    if assertion.project != s.project || *merge_request != s.merge_request {
         return Err(with_id(assertion_invalid("wrong_resource")));
     }
-    if intent == Intent::Approve && s.requested_sha.as_deref() != Some(&assertion.head_sha) {
+    if intent == Intent::Approve && s.requested_sha.as_deref() != Some(head_sha) {
         return Err(with_id(assertion_invalid("sha_mismatch")));
     }
-    if s.head_sha.as_deref() != Some(&assertion.head_sha) {
+    if s.head_sha.as_deref() != Some(head_sha) {
         return Err(with_id(assertion_invalid("head_changed")));
     }
-    if s.target_ref != assertion.target_ref {
+    if s.target_ref != *target_ref {
         return Err(with_id(assertion_invalid("target_retargeted")));
     }
-    if s.target_sha.as_deref() != Some(&assertion.target_sha) {
+    if s.target_sha.as_deref() != Some(target_sha) {
         return Err(with_id(assertion_invalid("target_changed")));
+    }
+    Ok(())
+}
+
+/// A binding assertion against the action and the binding the request
+/// writes (M3 X3, ADR-0025 Amendment X3): the intent, the project, the
+/// kanflow project (`wrong_resource`) and, for `binding_set`, the setting
+/// the person confirmed (`setting_mismatch`).
+fn bound_to_binding(
+    intent: Intent,
+    assertion: &AssertionFacts,
+    subject: &BindingSubject,
+) -> Result<(), ForgeError> {
+    let with_id =
+        |e: ForgeError| e.with_context("assertion_public_id", assertion.public_id.clone());
+    if assertion.intent != intent {
+        return Err(with_id(assertion_invalid("wrong_action")));
+    }
+    let AssertionSubject::Binding {
+        external_project_id,
+        resolves_work_items,
+    } = &assertion.subject
+    else {
+        return Err(with_id(assertion_invalid("wrong_resource")));
+    };
+    if assertion.project != subject.project || *external_project_id != subject.external_project_id {
+        return Err(with_id(assertion_invalid("wrong_resource")));
+    }
+    if *resolves_work_items != subject.resolves_work_items {
+        return Err(with_id(assertion_invalid("setting_mismatch")));
     }
     Ok(())
 }

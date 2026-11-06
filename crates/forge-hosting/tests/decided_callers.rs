@@ -48,6 +48,10 @@ fn only_forge_hosting_calls_the_decided_commands() {
         // M3 I1a: a project's integration binding
         "bind",
         "unbind",
+        // M3 X3: a repository's bindings
+        "bind_as",
+        "unbind_binding",
+        "update_binding",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))

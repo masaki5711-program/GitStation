@@ -29,6 +29,7 @@ pub mod protected_ref_merge_rules;
 pub mod protected_refs;
 pub mod service_accounts;
 // M3 I1a: integrations and project bindings.
+pub mod integration_bindings;
 pub mod integrations;
 // M3 I1c: the event feed of an integration.
 pub mod integration_dev_status;

@@ -54,11 +54,58 @@ impl ActAsConfirmCtx {
 
 impl sealed::Sealed for ActAsConfirmCtx {}
 
+/// The confirmation of a binding intent (M3 X3, ADR-0025 Amendment X3):
+/// `ActAsAssertionIssue` decided on the project as loaded for the person,
+/// the intent (`binding_set` / `binding_remove`), the kanflow project and
+/// the receiving integration as loaded (`bound`: the integration is bound
+/// to the project for that kanflow project).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActAsBindingConfirmCtx {
+    project: crate::prove::ProjectCtx,
+    intent: Intent,
+    integration: LoadedConfirmIntegration,
+}
+
+impl ActAsBindingConfirmCtx {
+    pub fn new(
+        project: LoadedProject,
+        intent: Intent,
+        integration: LoadedConfirmIntegration,
+    ) -> Self {
+        Self {
+            project: crate::prove::ProjectCtx::new(project),
+            intent,
+            integration,
+        }
+    }
+
+    pub fn intent(&self) -> Intent {
+        self.intent
+    }
+}
+
+impl sealed::Sealed for ActAsBindingConfirmCtx {}
+
+impl ResourceCtx for ActAsBindingConfirmCtx {
+    type Id = (ProjectId, IntegrationId);
+    fn resource(&self) -> Resource {
+        Resource::ActAsConfirm(Box::new(ActAsConfirmView {
+            target: Resource::Project(self.project.view()),
+            intent: self.intent,
+            integration_enabled: self.integration.enabled,
+            bound: self.integration.bound,
+        }))
+    }
+    fn id(&self) -> (ProjectId, IntegrationId) {
+        (self.project.id(), self.integration.integration)
+    }
+}
+
 impl ResourceCtx for ActAsConfirmCtx {
     type Id = (ProjectId, Option<i64>, IntegrationId);
     fn resource(&self) -> Resource {
         Resource::ActAsConfirm(Box::new(ActAsConfirmView {
-            merge_request: self.mr.person_resource(),
+            target: self.mr.person_resource(),
             intent: self.intent,
             integration_enabled: self.integration.enabled,
             bound: self.integration.bound,

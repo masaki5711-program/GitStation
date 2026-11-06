@@ -66,7 +66,8 @@ fn stored_invalid(field: &'static str, id: i64) -> ForgeError {
         .with_context("id", id)
 }
 
-/// The project's binding (`None`: not bound; work items are not detected).
+/// The project's binding that resolves work items (`None`: not bound, or
+/// only shared bindings, M3 X3 — work items are not detected).
 pub(crate) async fn binding_of(
     conn: &mut PgConnection,
     project: ProjectId,
@@ -75,7 +76,7 @@ pub(crate) async fn binding_of(
         "SELECT b.integration_id, i.kind, b.external_project_id \
          FROM forge.integration_bindings AS b \
          JOIN forge.integrations AS i ON i.id = b.integration_id \
-         WHERE b.project_id = $1",
+         WHERE b.project_id = $1 AND b.resolves_work_items",
     )
     .bind(project.get())
     .fetch_optional(conn)
@@ -353,6 +354,7 @@ pub(crate) const LINKED_SQL: &str = "SELECT EXISTS (SELECT 1 \
      JOIN forge.integration_bindings AS b ON b.project_id = l.project_id \
        AND b.integration_id = w.integration_id \
        AND b.external_project_id = w.external_project_id \
+       AND b.resolves_work_items \
      WHERE l.merge_request_id = $1 AND l.unlinked_at IS NULL)";
 
 /// [`LINKED_SQL`] inside the caller's transaction (the merge gate: the

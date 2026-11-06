@@ -266,12 +266,34 @@ actions! {
     /// refused); a token needs `admin` and `read_api`.
     IntegrationRead,
     /// `PUT|DELETE /api/v1/projects/{id}/integration-bindings/{integration_id}`:
-    /// bind a project to an external (kanflow) project, or unbind it.
-    /// People only (agents, service accounts and bots are refused; acting
-    /// for a person with an assertion comes with S2); Maintainer and
-    /// above; `api`. Binding makes the integration's service account a
-    /// Reporter of the project, so it is a membership change.
+    /// bind a project to an external (kanflow) project, or unbind it; and
+    /// (M3 X3) `POST /api/v1/integrations/{id}/bindings` and `PATCH
+    /// …/bindings/{binding_id}`: bind a repository, change a binding's
+    /// setting. People only (agents, service accounts and bots are
+    /// refused); acting for a person only with a `binding_set` assertion
+    /// (ADR-0025 Amendment X3), never the integration's service account on
+    /// its own; Maintainer and above; `api`. Binding makes the
+    /// integration's service account a Reporter of the project, so it is a
+    /// membership change.
     IntegrationBindingManage,
+    /// `DELETE /api/v1/integrations/{id}/bindings/{binding_id}` (M3 X3):
+    /// remove one binding. Decided like `IntegrationBindingManage`, acting
+    /// for a person only with a `binding_remove` assertion (one intent per
+    /// action, ADR-0025 §5.1).
+    IntegrationBindingRemove,
+    /// `GET /api/v1/integrations/{id}/bindings?kanflow_project_id=` (M3 X3,
+    /// plan 03 §7.1): the repositories bound to the integration (to one of
+    /// its kanflow projects). The integration's own service account only,
+    /// as its feed (`Resource::IntegrationFeed`); never acting for a
+    /// person; `read_api`.
+    IntegrationBindingList,
+    /// `GET /api/v1/repositories?q=` (M3 X3, plan 03 §7.1): the
+    /// repositories the caller — or the person an act-as request names —
+    /// may bind, by path or name. The route on `Resource::Instance` (any
+    /// active signed-in caller), each candidate on its `Resource::Project`
+    /// (Maintainer and above): only what the person could bind is listed,
+    /// nothing about the rest (no existence oracle). `read_api`.
+    RepositorySearch,
     /// `GET /api/v1/integrations/{id}/events` (M3 I1c, ADR-0016 §7, plan
     /// 02 §5.7 / §11.2): the integration's event feed. Only that
     /// integration's own service account (`Resource::IntegrationFeed`:
@@ -473,6 +495,7 @@ impl Action {
                 | Action::IntegrationManage
                 | Action::IntegrationRead
                 | Action::IntegrationBindingManage
+                | Action::IntegrationBindingRemove
                 | Action::ActAsConfirmView
                 | Action::ActAsAssertionIssue
                 | Action::WebhookManage
@@ -543,6 +566,8 @@ impl Action {
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
             | Action::IntegrationDevStatusRead
+            | Action::IntegrationBindingList
+            | Action::RepositorySearch
             | Action::WebhookRead
             | Action::WebhookDeliveryRead
             | Action::WebhookDeliver
@@ -580,6 +605,7 @@ impl Action {
             | Action::CheckWrite
             | Action::CheckNamespaceGrantManage
             | Action::IntegrationBindingManage
+            | Action::IntegrationBindingRemove
             | Action::WebhookManage
             | Action::WebhookRedeliver
             | Action::WorkItemLink => Some(Scope::Api),
@@ -607,6 +633,16 @@ impl Action {
             // confirmed in a forge session (§4, §5).
             Action::MergeRequestApprove => ActAsRule::RequiresAssertion(Intent::Approve),
             Action::MergeRequestUnapprove => ActAsRule::RequiresAssertion(Intent::Unapprove),
+            // M3 X3 (ADR-0025 Amendment X3): a kanflow PO / SM binds,
+            // changes and removes a repository's binding with an assertion
+            // confirmed in their forge session; decided on their own role
+            // (Maintainer), the binding's kanflow project and setting sealed.
+            Action::IntegrationBindingManage => ActAsRule::RequiresAssertion(Intent::BindingSet),
+            Action::IntegrationBindingRemove => ActAsRule::RequiresAssertion(Intent::BindingRemove),
+            // M3 X3: the repositories the person may bind (names only, by
+            // the person's own role: a binding's target is not bound yet,
+            // so the min rule would show nothing).
+            Action::RepositorySearch => ActAsRule::ListAsPerson,
             // Merging and the merge conditions (M4 at the earliest, by an
             // amendment), creating and changing merge requests, threads,
             // work item links, checks, the feed, every session-only and
@@ -664,7 +700,7 @@ impl Action {
             | Action::ServiceAccountTokenRevoke
             | Action::IntegrationManage
             | Action::IntegrationRead
-            | Action::IntegrationBindingManage
+            | Action::IntegrationBindingList
             | Action::IntegrationEventRead
             | Action::IntegrationEventCursorRead
             | Action::IntegrationDevStatusRead
@@ -713,6 +749,13 @@ pub enum ActAsRule {
     /// A change that needs an assertion of this intent: decided on the
     /// person's role, the assertion bound to the resource.
     RequiresAssertion(forge_core::act_as::Intent),
+    /// A listing of what the person may act on (M3 X3,
+    /// `RepositorySearch`): no assertion, decided as the person (their own
+    /// role, no administrator rights) on the route's `Resource::Instance`
+    /// and on each listed project's plain `Resource::Project`. Only names
+    /// are listed, and only of what the person could bind with an
+    /// assertion.
+    ListAsPerson,
     /// Never performed acting for a person (`FG-AUTH-0003
     /// reason=act_as_not_allowed`).
     Denied,
@@ -724,6 +767,7 @@ impl ActAsRule {
         match self {
             Self::ReadWithoutAssertion => "read_without_assertion",
             Self::RequiresAssertion(_) => "requires_assertion",
+            Self::ListAsPerson => "list_as_person",
             Self::Denied => "denied",
         }
     }

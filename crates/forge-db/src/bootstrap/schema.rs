@@ -66,6 +66,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     // ── M3 S2: employee numbers kept; assertions move forward (20261125100000) ──
     "forge.users_employee_number_kept_when_disabled()",
     "forge.act_as_assertions_guard()",
+    // ── M3 X3 review: a resolving binding is alone on its project (20261129100000) ──
+    "forge.integration_bindings_resolving_alone()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -191,6 +193,14 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER act_as_assertions_forward BEFORE INSERT OR UPDATE ON \
          forge.act_as_assertions FOR EACH ROW EXECUTE FUNCTION \
          forge.act_as_assertions_guard()",
+    ),
+    // ── M3 X3 review: a resolving binding is alone on its project (20261129100000) ──
+    (
+        "integration_bindings",
+        "integration_bindings_resolving_alone",
+        "CREATE CONSTRAINT TRIGGER integration_bindings_resolving_alone AFTER INSERT OR UPDATE \
+         OF project_id, resolves_work_items ON forge.integration_bindings DEFERRABLE INITIALLY \
+         DEFERRED FOR EACH ROW EXECUTE FUNCTION forge.integration_bindings_resolving_alone()",
     ),
     // ── M3 I1a: an integration acts as one service account (20261114100000) ──
     (
@@ -709,10 +719,17 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                         "external_project_id",
                         "granted_membership",
                         "created_by",
+                        // M3 X3 (20261129100000).
+                        "resolves_work_items",
                     ],
                 ),
-                // Column-level since 20261114100200 (re-review).
-                columns("forge_app", "UPDATE", &["granted_membership"]),
+                // Column-level since 20261114100200 (re-review);
+                // resolves_work_items since M3 X3 (20261129100000).
+                columns(
+                    "forge_app",
+                    "UPDATE",
+                    &["granted_membership", "resolves_work_items"],
+                ),
             ]
             .concat(),
         ),
@@ -839,6 +856,9 @@ const ACT_AS_APP_INSERT: &[&str] = &[
     "head_sha",
     "target_ref",
     "target_sha",
+    // M3 X3: the binding intents (20261129100000).
+    "external_project_id",
+    "resolves_work_items",
     "state_hash",
     "expires_at",
     "issued_request_id",
@@ -872,6 +892,8 @@ const ACT_AS_RO: &[&str] = &[
     "head_sha",
     "target_ref",
     "target_sha",
+    "external_project_id",
+    "resolves_work_items",
     "issued_at",
     "expires_at",
     "claimed_at",
