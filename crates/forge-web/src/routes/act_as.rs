@@ -42,6 +42,9 @@ use crate::routes::write::{absent, bounded, json, no_store};
 pub const CONFIRMATION: &str = "/api/v1/projects/{id}/merge-requests/{iid}/act-as-confirmation";
 /// The path after `{iid}` of [`CONFIRMATION`].
 pub const CONFIRMATION_SUFFIX: &str = "/act-as-confirmation";
+/// `GET` the confirmation screen itself (the SPA shell; U3): the popup the
+/// integration opens. Its data comes from [`CONFIRMATION`].
+pub const PAGE: &str = "/-/confirm/projects/{id}/merge-requests/{iid}";
 /// `POST` the person's confirmation.
 pub const ISSUE: &str = "/-/confirm/projects/{id}/merge-requests/{iid}/assertions";
 /// The prefix of [`ISSUE`] before `{id}`.
