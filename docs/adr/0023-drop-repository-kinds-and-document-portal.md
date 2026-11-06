@@ -381,3 +381,48 @@
       `cat-file --batch` の大きさの足し算はあふれを確かめる。
     - **採らなかったもの**: 「`follow` の resolver の失敗・時間切れを `unavailable` にしてログ」は採らない。X1 の決定（引けない失敗は要求の失敗で、項目を黙って落とさない）と、
       X2 の spec-drift が DB の一時的な失敗を `neutral` の run として残してしまう（やり直しが効かない）ことに反するため。git の失敗は従来どおり `unavailable`。
+
+## Amendment 2026-11-06 — X5: 文脈 API・`gstn context`・MCP サーバー（読み取り）・D-5 の機密の境界（計画 11 §5.7 の X5、計画 03 §6・§10、計画 06 D-5、計画 02 §12）
+
+計画が決めていない点を次のとおり決めた（X4 と同じく、計画のパスよりほかのルートの決まりに合わせ、読む人に読めないものを出さないことと、診断のしやすさを優先した）。
+
+1. **ルート**（計画 03 §6 の `/api/v1/context/…` ではなく、プロジェクトの id の形。ADR-0015、X4 の 11 と同じ）:
+   - `GET /api/v1/projects/{id}/context/work-item?ref=PBI-<n>` — 新しい Action **`ContextRead`**（`read_api`、`RepoBrowse` と同じ arm。権限の表の行は `RepoBrowse` の全行の双子で、
+     `the_context_api_mirrors_every_browse_row` が保証する）。作業項目はそのプロジェクトの結びつき（1 プロジェクトに 1 つ）の `(integration, kanflow のプロジェクト, PBI-<n>)`。
+     計画の `provider=kanflow&project_id=…` は結びつきから決まるので取らない。結びついていないプロジェクトは `FG-INT-0018`（`reason=project_not_bound`）。
+   - `GET /api/v1/projects/{id}/context/requirement?id=<要件 ID>[&ref=]` — `ContextRead`。版は計画の `version=` ではなく X4 と同じ `ref`。自分の仕様に無い ID は
+     新しいコード **`FG-REPO-0032` RequirementNotFound**（404）。
+   - `GET /api/v1/projects/{id}/merge-requests/{iid}/context` — 既存の **`MergeRequestRead`**（MR の loader と枝の規則をそのまま使う。X6 の `…/conflicts` と同じ扱い）。
+2. **答えの中身**（forge が持っているものだけ。kanflow には触れない）:
+   - 作業項目: 結びつき・forge が初めて見た時刻、**そのプロジェクトの** MR のうち開いた結びつきのあるもの（新しい順に 50 件、`truncated`）、既定のブランチの
+     `@req PBI-<n>/AC-<m>`（50 件と件数）。ユーザーストーリーと受入基準の本文は kanflow にあり forge は持たないので返さない（kanflow 側の連携で足す）。
+   - 要件: 本文・priority・廃止・文書（spec・title・status・`confidential`）、それを指す `@req`（50 件と件数）、**新しい版のタグ 5 つ** での状態
+     （`same` / `changed` / `absent`、それぞれの場所。指定の版と同じコミットのタグは索引し直さない）。結びつく MR・デプロイ・要件の 5 段階の状態は M4（X4 の 11 と同じ）。
+   - MR: 題・説明（4 KiB まで）・状態・枝・最新の版のマージベース、`マージベース..head` の変更ファイル（300 件）、自分の仕様の要件の差分（100 件、追加・変更は head の本文つき）、
+     開いた結びつきの作業項目、head のチェックの run（要約は 4 KiB まで）。差分の本文（パッチ）は返さない（`gstn mr diff` で読む）。
+   - **すべての項目に `source`**（`project_id`・`project` の今のパス・`version`（読んだ枝やタグ、コミットを指定したときはその id）・`commit`・`path`・`line`、無いものは `null`）。
+3. **ほかのリポジトリを読まない**: 3 つのルートは、ルートのプロジェクトだけを読む（作業項目の MR も、そのプロジェクトのものだけ）。ほかのプロジェクトの MR の件数も出さないので、
+   読めないリポジトリがあるかどうかは答えから分からない（存在の手がかりを出さない）。ほかのプロジェクトは、そのプロジェクトの id で別に聞く。
+4. **上限**: X4 の仕様の API と同じ予算（30 秒、`FG-WEB-0002 operation=spec_index`）、1 人 1 分に索引 120 回分の上限（同じカウンタ）と同時 2 本（`FG-WEB-0010`）。
+   数え方は仕事の量: 作業項目は 1、要件は 1 + 索引し直す版の数（最大 5）、MR は 2（マージベースと head）。DB の読み取りは `lookup_timeout` と read pool の `statement_timeout` の内側。
+5. **D-5（AI に渡さないもの）**: **エージェントの相手**（`Principal::is_agent_audience`）= `is_agent` で発行したトークン（ADR-0017 §4.0）、または人でないアカウント
+   （サービスアカウント・bot。`users.kind`、ADR-0024 §8.4）。人のセッションと、人が `is_agent` なしで発行したトークンはエージェントではない。加えて、リクエストのヘッダー
+   **`Forge-Context-Audience: agent`** はどの呼び出しでも答えをエージェント向けにする（狭めるだけで広げない。`agent` 以外の値は `FG-WEB-0006`）。`gstn mcp` は必ず送る。
+   - **機密の印**: 仕様は文書の前付けの **`confidential: true`**（forge-core `spec_doc`。`true` / `false` 以外は `confidential_invalid` の違反。前付けが読めない文書と UTF-8 でない文書は
+     **機密として扱う**（印がそこにあるかもしれない。fail closed）。前付けの無い文書は印なし）。作業項目は **`forge.work_items.confidential`**（新しいマイグレーション
+     `20261128100000_work_item_confidential`、既定 `false`）。この MR では forge にこの列を書く経路は無い（UPDATE の権限も付けない）。kanflow の印を送る経路
+     （連携のサービスアカウントからの書き込みと監査の行）は kanflow 側の連携と一緒に足す（計画 02 §12）。
+   - **振る舞い**: 1 件を聞かれたとき（作業項目・要件）は **`FG-AUTH-0020` ContextWithheld**（403）。一覧（MR の文脈、X4 の `specs/requirements`・`diff`・`trace`）からは除き、
+     `withheld {error_code, documents, requirements, work_items}` に数える（人には `null`）。除いたときは `forge.context.withheld`（info）を 1 回ログに出す。
+     MCP の `search_requirements` と `get_trace_matrix` は X4 のルートを使うので、X4 の答えにも同じ除外を入れた（`SpecDocumentBody.confidential` も足した）。
+   - **これは認可ではない**: 認可は `authorize()` のまま（エージェントもプロジェクトを読める）。境界は「文脈 API がまとめて AI に渡さない」ことで、git の clone や browse API の
+     blob は印を見ない。機密の高い仕様は、エージェントのアカウントが読めないリポジトリに置く（D-5 の「Qwen だけ」）。印は二重の守り。
+6. **`gstn context`**: `work-item`・`requirement`・`merge-request`（C-1: 予定のままのルートを残さない）。人の道具なのでヘッダーは送らない（トークンが `is_agent` なら除外される）。
+7. **MCP サーバー `gstn mcp`**（読み取りのみ。forge-client の中、依存は forge-errors だけのまま）: 標準入出力の JSON-RPC 2.0（1 行 1 メッセージ、MCP の stdio）。
+   `initialize`（`2025-06-18` / `2025-03-26` / `2024-11-05`）・`ping`・`tools/list`・`tools/call`。道具は計画の 4 つ（`get_work_item_context`・`get_requirement`・
+   `search_requirements`（**1 プロジェクトの中**の検索。X4 の `specs/requirements?q=`）・`get_trace_matrix`（X4 の `specs/trace`））に `get_merge_request_context` を足した 5 つ。
+   どれも `readOnlyHint`、`additionalProperties: false`（知らない引数・道具は `-32602`）。呼び出しは保存したトークンで REST API を 1 回 `GET` するだけで、権限はサーバーの
+   `authorize()` が決める。失敗は `isError` の道具の結果（`error_code`・`user_message`・`request_id`）と stderr の 1 行。1 メッセージ 1 MiB まで。
+8. **採らなかったもの・後に回すもの**: リポジトリをまたぐ要件の検索（保存した索引が要る。X4 の 4 の宿題のまま。M4 の影響の分析で、使う側と一緒に決める）。
+   作業項目の文脈にほかのプロジェクトの MR を含めること（3 のとおり、存在の手がかりになるため。要るなら読む人の権限で辿る形で別に決める）。要件と PBI の結びつき
+   （kanflow が持つ）。kanflow から機密の印を受け取る経路（5）。
