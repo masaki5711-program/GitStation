@@ -235,6 +235,8 @@ const INTERNAL_READS: &[Action] = &[
     Action::RepoBrowse,
     // M3 X1: decided in RepoBrowse's arm.
     Action::SpecRefRead,
+    // M3 X4: decided in RepoBrowse's arm.
+    Action::SpecRead,
     Action::ProjectRead,
     Action::MemberList,
     Action::ProtectedRefList,

@@ -265,10 +265,14 @@ pub fn authorize(
         // Returned above for every non-public action; kept for exhaustiveness.
         (_, Resource::Unresolved(reason)) => unresolved(*reason),
 
-        // `SpecRefRead` (M3 X1): the referencing project by the route, and
-        // every referenced project again by `prove_spec_ref`.
+        // `SpecRefRead` (M3 X1) and `SpecRead` (M3 X4): the project by the
+        // route, and every referenced project again by `prove_spec_ref`.
         (
-            Action::RepoRead | Action::RepoBrowse | Action::SpecRefRead | Action::ProjectRead,
+            Action::RepoRead
+            | Action::RepoBrowse
+            | Action::SpecRefRead
+            | Action::SpecRead
+            | Action::ProjectRead,
             Resource::Project(p),
         ) => need(Role::Reporter, read_role(p)),
 
@@ -1059,6 +1063,7 @@ pub fn authorize(
             | Action::RepoPush
             | Action::RepoBrowse
             | Action::SpecRefRead
+            | Action::SpecRead
             | Action::ProjectRead
             | Action::ProjectList
             | Action::ProjectCreate

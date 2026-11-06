@@ -31,6 +31,7 @@ pub mod mr_work_items;
 pub mod notifications;
 pub mod registry;
 pub mod review;
+pub mod specs;
 pub mod store;
 // M3 I2: project webhooks.
 pub mod webhooks;

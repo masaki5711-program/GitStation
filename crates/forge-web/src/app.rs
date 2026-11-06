@@ -119,6 +119,10 @@ pub struct AppState {
     /// M3 X1: one budget for a whole spec-refs request (`FG-WEB-0002
     /// operation=spec_refs`).
     pub spec_refs_budget: Duration,
+    /// M3 X4: the spec API's requests per caller (`FG-WEB-0010`).
+    pub spec_index_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// M3 X4 review: the spec API's requests running per caller.
+    pub spec_index_in_flight: Arc<routes::specs::InFlight>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -164,6 +168,8 @@ impl AppState {
             search_limiter: Arc::new(routes::directory::search_limiter()),
             spec_refs_limiter: Arc::new(routes::spec_refs::limiter()),
             spec_refs_budget: routes::spec_refs::BUDGET,
+            spec_index_limiter: Arc::new(routes::specs::limiter()),
+            spec_index_in_flight: Arc::default(),
         }
     }
 
@@ -171,6 +177,13 @@ impl AppState {
     #[must_use]
     pub fn with_spec_refs_limiter(mut self, limiter: routes::namespaces::CallerLimiter) -> Self {
         self.spec_refs_limiter = Arc::new(limiter);
+        self
+    }
+
+    /// The spec API's limiter (M3 X4; tests set a small one).
+    #[must_use]
+    pub fn with_spec_index_limiter(mut self, limiter: routes::namespaces::CallerLimiter) -> Self {
+        self.spec_index_limiter = Arc::new(limiter);
         self
     }
 
@@ -1050,6 +1063,51 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
             routes::spec_refs::SPEC_REFS,
             routes::spec_refs::SPEC_REFS_QUERY,
         )
+        // M3 X4: the spec API (plan 03 §7.2); a trace's references decided
+        // again with the reader's own principal.
+        .route_with(
+            Verb::Get,
+            routes::specs::REQUIREMENTS,
+            Action::SpecRead,
+            "A revision's own specification: its documents, requirements (searchable) and document problems",
+            routes::specs::REQUIREMENTS_OF,
+            routes::specs::requirements,
+        )
+        .responds::<routes::specs::SpecRequirementsBody>(Verb::Get, routes::specs::REQUIREMENTS)
+        .queries(
+            Verb::Get,
+            routes::specs::REQUIREMENTS,
+            routes::specs::REQUIREMENTS_QUERY,
+        )
+        .route_with(
+            Verb::Get,
+            routes::specs::VERSIONS,
+            Action::SpecRead,
+            "The specification's versions (version tags), newest first",
+            routes::specs::VERSIONS_OF,
+            routes::specs::versions,
+        )
+        .responds::<routes::specs::SpecVersionsBody>(Verb::Get, routes::specs::VERSIONS)
+        .route_with(
+            Verb::Get,
+            routes::specs::DIFF,
+            Action::SpecRead,
+            "The requirements added, changed, removed or deprecated between two revisions",
+            routes::specs::DIFF_OF,
+            routes::specs::diff_route,
+        )
+        .responds::<routes::specs::SpecDiffBody>(Verb::Get, routes::specs::DIFF)
+        .queries(Verb::Get, routes::specs::DIFF, routes::specs::DIFF_QUERY)
+        .route_with(
+            Verb::Get,
+            routes::specs::TRACE,
+            Action::SpecRead,
+            "Each requirement (own and pinned references, followed for the reader) with the @req tests naming it",
+            routes::specs::TRACE_OF,
+            routes::specs::trace,
+        )
+        .responds::<routes::specs::SpecTraceBody>(Verb::Get, routes::specs::TRACE)
+        .queries(Verb::Get, routes::specs::TRACE, routes::specs::TRACE_QUERY)
 }
 
 /// The history half of the browse API (`RepoBrowse`, `read_api`; M2 MR8):

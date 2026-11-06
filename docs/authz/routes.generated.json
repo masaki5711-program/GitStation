@@ -856,6 +856,38 @@
     "word": "fixed"
   },
   {
+    "action": "SpecRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/specs/diff",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SpecRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/specs/requirements",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SpecRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/specs/trace",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SpecRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/specs/versions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectTransfer",
     "method": "POST",
     "path": "/api/v1/projects/{id}/transfer",

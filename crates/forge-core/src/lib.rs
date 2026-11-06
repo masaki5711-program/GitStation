@@ -43,6 +43,11 @@ pub mod role;
 pub mod scope;
 pub mod session_token;
 pub mod spec_version;
+// ── M3 X4: requirement blocks, `@req` tags, the index, spec-lint and spec-trace ──
+pub mod req_tags;
+pub mod spec_doc;
+pub mod spec_index;
+// ── end M3 X4 ──
 pub mod telemetry;
 pub mod token;
 pub mod user_kind;

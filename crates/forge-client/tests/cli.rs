@@ -409,7 +409,7 @@ fn api_fields_become_query_for_get_and_json_body_for_post() {
         "",
     );
     let seen = srv.seen();
-    assert_eq!(seen[0].target, "/api/v1/projects?limit=5&q=a+b%26c");
+    assert_eq!(seen[0].target, "/api/v1/projects?limit=5&q=a%20b%26c");
     let body: serde_json::Value = serde_json::from_str(&seen[1].body).unwrap();
     assert_eq!(body, json!({"name": "app", "parent_id": 12, "flag": true}));
     assert_eq!(seen[1].headers["content-type"], "application/json");
@@ -932,6 +932,10 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "browse compare",
             "browse blame",
             "browse spec-refs",
+            "spec requirements",
+            "spec versions",
+            "spec diff",
+            "spec trace",
             "user rename",
             "user search",
             "user list",

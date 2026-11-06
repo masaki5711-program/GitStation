@@ -339,6 +339,8 @@ fn the_production_registry_starts_the_subscribers_task() {
             forge_db::checks::spec_drift::SPEC_DRIFT_SUBSCRIBER,
             // M3 X7: and its risk run.
             forge_db::checks::risk::RISK_SUBSCRIBER,
+            // M3 X4: and for its spec lint and trace runs.
+            forge_db::checks::spec_index::SPEC_INDEX_SUBSCRIBER,
         ]
     );
     let tasks = crate::worker::tasks(
