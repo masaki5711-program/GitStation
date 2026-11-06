@@ -567,3 +567,76 @@ async fn binding_refusals_and_a_removal_acting_for_the_person() {
     );
     w.t.drop_now().await;
 }
+
+/// Review (security MEDIUM / LOW b): a search acting for a person is
+/// audited (person, integration, q) and limited per integration; the
+/// service account on its own never searches; an unknown person counts
+/// against the resolution failures.
+#[tokio::test]
+async fn act_as_repository_searches_are_audited_and_limited() {
+    let w = world().await;
+    let act_as = w.act_as();
+    let search = |headers: Vec<(&'static str, String)>| {
+        let router = w.router.clone();
+        let who = w.kanflow();
+        async move {
+            let h: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            send(router, "GET", "/api/v1/repositories?q=spec", who, None, &h).await
+        }
+    };
+    let (status, alone) = search(Vec::new()).await;
+    assert_eq!(
+        (status, code(&alone)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{alone}"
+    );
+    let (status, _) = search(vec![("forge-act-as", act_as.clone())]).await;
+    assert_eq!(status, StatusCode::OK);
+    let audit =
+        w.t.json_rows(
+            "SELECT actor_kind, actor_user_id, resource_type, resource_id, details \
+             FROM forge.audit_log WHERE action = 'integration.repository_searched'",
+        )
+        .await;
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert_eq!(audit[0]["actor_kind"], "user_via_service_account");
+    assert_eq!(audit[0]["actor_user_id"], w.olga.get());
+    assert_eq!(audit[0]["resource_type"], "integration");
+    assert_eq!(audit[0]["resource_id"], w.integration);
+    assert_eq!(audit[0]["details"]["q"], "spec");
+    assert_eq!(audit[0]["details"]["results"], 1);
+    // The per-integration budget of searches acting for a person.
+    let mut refused = None;
+    for _ in 0..forge_web::routes::integration_bindings::ACT_AS_SEARCHES_PER_MINUTE {
+        let (status, body) = search(vec![("forge-act-as", act_as.clone())]).await;
+        if status != StatusCode::OK {
+            refused = Some((status, code(&body).to_owned()));
+            break;
+        }
+    }
+    assert_eq!(
+        refused,
+        Some((StatusCode::TOO_MANY_REQUESTS, "FG-WEB-0010".to_owned()))
+    );
+    // An unknown person is a resolution failure (counted, FG-INT-0006).
+    let (status, unknown) = search(vec![("forge-act-as", "employee:E-nobody".to_owned())]).await;
+    assert_eq!(
+        (status, code(&unknown)),
+        (StatusCode::FORBIDDEN, "FG-INT-0006")
+    );
+    // Every unknown resolution is counted, under the limit and over it.
+    let mut tripped = None;
+    for n in 0..200 {
+        let (status, body) = search(vec![("forge-act-as", format!("employee:E-nobody-{n}"))]).await;
+        if status != StatusCode::FORBIDDEN {
+            tripped = Some((status, code(&body).to_owned()));
+            break;
+        }
+        assert_eq!(code(&body), "FG-INT-0006");
+    }
+    assert_eq!(
+        tripped,
+        Some((StatusCode::TOO_MANY_REQUESTS, "FG-WEB-0010".to_owned()))
+    );
+    w.t.drop_now().await;
+}

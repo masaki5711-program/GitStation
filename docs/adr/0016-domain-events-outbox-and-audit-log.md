@@ -1536,3 +1536,13 @@ backlog）。forge-notify の `tests/smtp.rs`（偽の中継で配信・段階�
 テスト: forge-db の `binding_rows_share_a_spec_project_but_resolve_once`（制約名）、`multi_tests.rs` の 5 つ（共有の 2 つの結びつけ、
 コードのリポジトリの 2 つ目の拒否、印の移動、設定の変更、作業項目の解決は解決する結びつけだけ）、`a_binding_assertion_round_trips_and_its_setting_is_sealed`。
 forge-web の `tests/binding_routes.rs`。
+
+### X3 の独立レビュー（2026-11-06）で変えた点
+
+- （database HIGH）台帳 `tables.toml` の `act_as_assertions.ro_columns` に `external_project_id`・`resolves_work_items` を足した（マイグレーションの
+  `forge_ro` の列の権限と合わせる）。`integration_bindings` の注記（「1 プロジェクトに 1 つ」）を直した。`ro_columns` はどのゲートも権限と
+  突き合わせていない（doctor は `bootstrap/schema.rs` の手書きの期待値と比べる）ことが分かった。ハーネス側で別に直す。
+- （database MEDIUM）**遅延の制約トリガー `integration_bindings_resolving_alone`**（保護の対象、doctor が定義と本体を比べる）: 解決する結びつけの
+  あるプロジェクトには他の結びつけが無い、をスキーマでも守る（どちらの行が先でも。23514）。マイグレーション `20261129100000` を直接直した
+  （main に入っておらず、試験の DB の外で適用されていないため）。
+- （security LOW c）リポジトリ検索の候補をパスの順のページ（200 件 × 最大 5 ページ）で読み、見えない候補でページが埋まっても検索が止まらない。

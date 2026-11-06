@@ -11,8 +11,11 @@
 --    does not (a shared spec repository, referenced by `specs:` of others)
 --    may be bound to several kanflow projects. Existing bindings resolve
 --    (true: what they did). The rule's backstop is the partial unique index
---    integration_bindings_one_resolving_per_project; "alone" is checked by
---    the command under the project row lock (every bind locks it first).
+--    integration_bindings_one_resolving_per_project and the deferred
+--    constraint trigger integration_bindings_resolving_alone (a project with
+--    a resolving binding has no other binding, whichever row came first;
+--    SQLSTATE 23514); the command checks the same under the project row
+--    lock first (every bind locks it), which also orders concurrent binds.
 --    forge_app may set it at the INSERT and UPDATE it (the command moves
 --    it only false -> true: true -> false would leave the links I1b made;
 --    unbinding ends them).
@@ -44,6 +47,34 @@ DROP INDEX forge.integration_bindings_one_per_project;
 CREATE UNIQUE INDEX integration_bindings_one_resolving_per_project
     ON forge.integration_bindings (project_id) WHERE resolves_work_items;
 CREATE INDEX integration_bindings_project ON forge.integration_bindings (project_id);
+
+-- A resolving binding is its project's only binding (review: the
+-- schema's own backstop of the command's rule). Deferred, so a change that
+-- removes the other rows in the same transaction passes; it reads the
+-- project's rows as they are at the check.
+CREATE FUNCTION forge.integration_bindings_resolving_alone() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM forge.integration_bindings
+               WHERE project_id = NEW.project_id AND resolves_work_items)
+       AND (SELECT count(*) FROM forge.integration_bindings
+            WHERE project_id = NEW.project_id) > 1 THEN
+        RAISE EXCEPTION USING ERRCODE = 'check_violation',
+            CONSTRAINT = 'integration_bindings_resolving_alone',
+            SCHEMA = TG_TABLE_SCHEMA, TABLE = TG_TABLE_NAME,
+            MESSAGE = 'a binding that resolves work items on forge.integration_bindings is its project''s only binding';
+    END IF;
+    RETURN NULL;
+END
+$$;
+REVOKE ALL ON FUNCTION forge.integration_bindings_resolving_alone() FROM PUBLIC;
+CREATE CONSTRAINT TRIGGER integration_bindings_resolving_alone
+    AFTER INSERT OR UPDATE OF project_id, resolves_work_items ON forge.integration_bindings
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+    EXECUTE FUNCTION forge.integration_bindings_resolving_alone();
+ALTER TABLE forge.integration_bindings ENABLE ALWAYS TRIGGER integration_bindings_resolving_alone;
 
 GRANT INSERT (resolves_work_items) ON forge.integration_bindings TO forge_app;
 GRANT UPDATE (resolves_work_items) ON forge.integration_bindings TO forge_app;
@@ -159,6 +190,11 @@ ALTER TABLE forge.act_as_assertions ENABLE ALWAYS TRIGGER audited_change_present
 GRANT INSERT (external_project_id, resolves_work_items) ON forge.act_as_assertions TO forge_app;
 GRANT SELECT (external_project_id, resolves_work_items) ON forge.act_as_assertions TO forge_ro;
 
+INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
+    ('function', 'forge.integration_bindings_resolving_alone()'),
+    ('trigger', 'integration_bindings_resolving_alone on forge.integration_bindings')
+ON CONFLICT DO NOTHING;
+
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261129100000, "guarded_changes": ["forge.integration_bindings", "forge.integration_bindings.audited_change_present", "forge.act_as_assertions", "forge.act_as_assertions_guard", "forge.act_as_assertions.audited_change_present"]}');
+    '{"version": 20261129100000, "guarded_changes": ["forge.integration_bindings", "forge.integration_bindings.audited_change_present", "forge.integration_bindings_resolving_alone", "forge.integration_bindings.integration_bindings_resolving_alone", "forge.act_as_assertions", "forge.act_as_assertions_guard", "forge.act_as_assertions.audited_change_present"]}');

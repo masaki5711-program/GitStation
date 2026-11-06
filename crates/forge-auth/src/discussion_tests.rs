@@ -303,6 +303,14 @@ fn only_people_only_actions_refuse_by_account_kind() {
                 Err(e) => {
                     let why = reason(&e);
                     let designed = match (kind, why.as_str()) {
+                        // M3 X3 review: the repository search's route is a
+                        // person's (or acted for); its candidates are not.
+                        (AccountKind::ServiceAccount, "service_account")
+                        | (AccountKind::Bot, "bot") => {
+                            e.code() == ErrorCode::Forbidden
+                                && r.action == Action::RepositorySearch
+                                && matches!(resource, crate::model::Resource::Instance)
+                        }
                         (AccountKind::ServiceAccount, "service_account_not_member") => {
                             e.code() == ErrorCode::NotFound
                         }

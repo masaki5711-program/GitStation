@@ -416,3 +416,14 @@ kanflow の画面で本人が「承認」/「取り消し」を押す
    kanflow のサービスアカウントは、社員番号を順に指して、各人が Maintainer のリポジトリ名を列挙できる（kanflow は社員の一覧を既に持つ。
    失敗した解決の流量 §1 は効かない: 解決は成功するため）。
 6. 不変条件のテストを更新: intent はすべてちょうど 1 つの Action に属する、`ListAsPerson` は `RepositorySearch` だけで `read_api`、人だけではない。
+
+### X3 の独立レビュー（2026-11-06）で変えた点
+
+- （security MEDIUM）代理の `RepositorySearch`（`ListAsPerson`）を絞った: 連携のサービスアカウントごとに **1 分に 30 回**（`FG-WEB-0010`）、
+  検索ごとに監査の行 `integration.repository_searched`（`user_via_service_account`、`integration` のリソース、`q` と件数）。
+  §1 の解決の失敗の流量は `unknown` を含むすべての `FG-INT-0006` を数える（上限の手前でも越えた後でも。テストで固定）。§5 の残る危険
+  （社員番号を順に指した列挙）は、この流量と監査で検出と速度の制限を受ける。
+- （LOW a）確認（`ActAsConfirmView` / `ActAsAssertionIssue`）は、本人の intent の権限を **連携の有効・結びつけの判定より先に** 見る（権限の無い人に
+  連携の状態を言わない）。存在しない連携は見えないプロジェクトと同じ 404 のまま。
+- （LOW b）`RepositorySearch` の経路（`Resource::Instance`）は人だけ（代理は本人として判定）。サービスアカウント・ボット・エージェントの単独は
+  `FG-AUTH-0003`。

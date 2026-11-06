@@ -123,6 +123,9 @@ pub struct AppState {
     /// integration's service account (120 a minute): `FG-WEB-0010`.
     pub act_as_failures: Arc<routes::namespaces::CallerLimiter>,
     pub act_as_issue_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// Repository searches acting for a person, per integration (M3 X3
+    /// review): `FG-WEB-0010` beyond.
+    pub act_as_search_limiter: Arc<routes::namespaces::CallerLimiter>,
     pub act_as_claim_limiter: Arc<routes::namespaces::CallerLimiter>,
     /// M3 X1: the spec references followed per caller (`FG-WEB-0010`).
     pub spec_refs_limiter: Arc<routes::namespaces::CallerLimiter>,
@@ -179,6 +182,7 @@ impl AppState {
             act_as: None,
             act_as_failures: Arc::new(crate::act_as::failure_limiter()),
             act_as_issue_limiter: Arc::new(routes::act_as::issue_limiter()),
+            act_as_search_limiter: Arc::new(routes::integration_bindings::act_as_search_limiter()),
             act_as_claim_limiter: Arc::new(routes::act_as::claim_limiter()),
             spec_refs_limiter: Arc::new(routes::spec_refs::limiter()),
             spec_refs_budget: routes::spec_refs::BUDGET,

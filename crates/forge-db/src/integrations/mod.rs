@@ -46,6 +46,7 @@ use crate::projects::ProjectAccessFacts;
 mod admin;
 mod bind;
 mod read;
+mod search;
 #[cfg(test)]
 mod tests;
 
@@ -55,6 +56,7 @@ pub use bind::{
     bind_as_decided, bind_decided, unbind_binding_decided, unbind_decided, update_binding_decided,
 };
 pub use read::{binding, bindings, external_bindings, get, list, project_bindings};
+pub use search::record_repository_search;
 
 /// The most projects one integration may be bound to (ADR-0016 §1: the
 /// feed decides every bound project on every read). `FG-INT-0012` beyond.

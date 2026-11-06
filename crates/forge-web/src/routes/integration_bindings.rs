@@ -74,6 +74,18 @@ pub const MAX_BODY: usize = 4 * 1024;
 /// The search's default and largest page.
 pub const DEFAULT_SEARCH_LIMIT: usize = 20;
 pub const MAX_SEARCH_LIMIT: usize = 50;
+/// Searches acting for a person, per integration's service account a
+/// minute (review, security MEDIUM): `FG-WEB-0010` beyond.
+pub const ACT_AS_SEARCHES_PER_MINUTE: u32 = 30;
+
+/// The limiter of [`ACT_AS_SEARCHES_PER_MINUTE`].
+pub fn act_as_search_limiter() -> crate::routes::namespaces::CallerLimiter {
+    crate::routes::namespaces::CallerLimiter::new(
+        "act_as_repository_search",
+        ACT_AS_SEARCHES_PER_MINUTE,
+        std::time::Duration::from_secs(60),
+    )
+}
 
 pub const SEARCH_QUERY: &[QueryParam] = &[
     QueryParam {
@@ -322,35 +334,59 @@ pub async fn search(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
     let w = request.into_write();
     let built = async {
         let (q, limit) = search_query(query.as_deref())?;
-        let candidates = bounded(
-            &state,
-            "repository_search",
-            hosting(&state)?.repository_candidates(&w.proof, &q),
-        )
-        .await?;
         let principal = w.proof.principal();
+        // Acting for a person: a budget per integration's service account.
+        if let Some(c) = principal.act_as_credential() {
+            state
+                .act_as_search_limiter
+                .check(c.via, Instant::now())
+                .map_err(|retry| state.act_as_search_limiter.refused(retry))?;
+        }
+        let hosting = hosting(&state)?;
         let mut items = Vec::new();
-        for record in candidates {
-            if items.len() >= limit {
+        let mut after: Option<String> = None;
+        for _ in 0..forge_hosting::integrations::SEARCH_PAGES {
+            let candidates = bounded(
+                &state,
+                "repository_search",
+                hosting.repository_candidates(&w.proof, &q, after.as_deref()),
+            )
+            .await?;
+            let full = candidates.len()
+                >= usize::try_from(forge_hosting::integrations::SEARCH_PAGE).unwrap_or(usize::MAX);
+            after = candidates.last().map(|r| r.path.full_path());
+            for record in candidates {
+                if items.len() >= limit {
+                    break;
+                }
+                // Every candidate through the single decision point: only
+                // what the caller (the person acted for) could bind.
+                let ctx = ProjectCtx::new(crate::routes::projects::loaded(&record));
+                match prove(principal, Action::RepositorySearch, ctx) {
+                    Ok(_) => {}
+                    Err(e)
+                        if matches!(
+                            e.code(),
+                            ErrorCode::NotFound | ErrorCode::Forbidden | ErrorCode::PendingDeletion
+                        ) =>
+                    {
+                        continue
+                    }
+                    Err(e) => return Err(e),
+                }
+                items.push(BindableRepository {
+                    id: record.id.get(),
+                    path: record.path.full_path(),
+                    display_name: record.display_name.clone(), // clone: the body owns it
+                });
+            }
+            if items.len() >= limit || !full {
                 break;
             }
-            // Every candidate through the single decision point: only what
-            // the caller (the person acted for) could bind is listed.
-            let ctx = ProjectCtx::new(crate::routes::projects::loaded(&record));
-            match prove(principal, Action::RepositorySearch, ctx) {
-                Ok(_) => {}
-                Err(e) if matches!(e.code(), ErrorCode::NotFound | ErrorCode::Forbidden) => {
-                    continue
-                }
-                Err(e) if e.code() == ErrorCode::PendingDeletion => continue,
-                Err(e) => return Err(e),
-            }
-            items.push(BindableRepository {
-                id: record.id.get(),
-                path: record.path.full_path(),
-                display_name: record.display_name.clone(), // clone: the body owns it
-            });
         }
+        hosting
+            .record_repository_search(&w.proof, &write_request(&w), &q, items.len())
+            .await?;
         json(BindableRepositoryList { items })
     }
     .await;

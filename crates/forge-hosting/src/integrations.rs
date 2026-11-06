@@ -28,8 +28,12 @@ pub use forge_db::integrations::{
     MAX_BINDINGS, MAX_LISTED as MAX_LISTED_INTEGRATIONS,
 };
 
-/// The most candidates a repository search reads and decides (M3 X3).
-pub const SEARCH_CANDIDATES: u32 = 200;
+/// One page of a repository search's candidates (M3 X3).
+pub const SEARCH_PAGE: u32 = 200;
+/// The most pages one search scans (review LOW c: the candidates are
+/// decided by the route, so a page full of projects the caller cannot
+/// bind does not end the search early).
+pub const SEARCH_PAGES: usize = 5;
 
 /// The reconfirmation's context under the lock: the project as locked, the
 /// integration, and — for an act-as proof — the binding the request writes
@@ -341,19 +345,46 @@ impl Hosting {
         integrations::external_bindings(&self.db, *proof.id(), external).await
     }
 
-    /// The candidates of a repository search for the proof's caller (the
-    /// person, acting for one): live projects whose path or name contains
-    /// `q` (ASCII case folded), at most [`SEARCH_CANDIDATES`], with the
-    /// caller's access facts — every one still to be decided by the route
-    /// (`RepositorySearch` on each project; M3 X3).
+    /// One page of a repository search's candidates for the proof's
+    /// caller (the person, acting for one): live projects after path
+    /// `after` whose path or name contains `q` (ASCII case folded), at most
+    /// [`SEARCH_PAGE`], by path, with the caller's access facts — every one
+    /// still to be decided by the route (`RepositorySearch` on each
+    /// project; M3 X3).
     pub async fn repository_candidates(
         &self,
         proof: &Authorized<InstanceCtx>,
         q: &str,
+        after: Option<&str>,
     ) -> Result<Vec<ProjectRecord>, ForgeError> {
         require(proof.action(), Action::RepositorySearch)?;
         let viewer = caller(proof)?;
-        forge_db::lists::project_search(&self.db, viewer, q, SEARCH_CANDIDATES).await
+        forge_db::lists::project_search(&self.db, viewer, q, after, SEARCH_PAGE).await
+    }
+
+    /// Audit a repository search acting for a person (M3 X3 review): one
+    /// `integration.repository_searched` row, the actor the person via the
+    /// service account. Nothing for any other caller.
+    pub async fn record_repository_search(
+        &self,
+        proof: &Authorized<InstanceCtx>,
+        request: &WriteRequest,
+        q: &str,
+        results: usize,
+    ) -> Result<(), ForgeError> {
+        require(proof.action(), Action::RepositorySearch)?;
+        let Some(c) = proof.principal().act_as_credential() else {
+            return Ok(());
+        };
+        let user = caller(proof)?;
+        integrations::record_repository_search(
+            &self.db,
+            &change_context(request, proof.principal(), user),
+            c.integration,
+            q,
+            results,
+        )
+        .await
     }
 
     /// Unbind the proof's project from the proof's integration

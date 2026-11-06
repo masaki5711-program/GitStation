@@ -97,7 +97,8 @@ pub(crate) const PROJECT_PAGE_SQL: &str = concat!(
 
 /// The repository search (M3 X3, `GET /api/v1/repositories?q=`): `$1` the
 /// `LIKE` pattern (lowercase, escaped with `\`), `$2` the viewer, `$3` the
-/// chain cap, `$4` the most rows. The live projects whose full path or
+/// chain cap, `$4` the most rows, `$5` the last path of the previous page
+/// (`''`: from the start; paths are unique). The live projects whose full path or
 /// display name contains the text (ASCII case folded), by path; the
 /// columns of [`PROJECT_PAGE_SQL`]. Nothing here filters by visibility:
 /// forge-web decides every row with `authorize()`.
@@ -105,7 +106,7 @@ pub(crate) const PROJECT_SEARCH_SQL: &str = concat!(
     page_scan!(
         @page ["page AS (SELECT p.id FROM forge.projects p \
                  JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id \
-                 WHERE p.deleted_at IS NULL \
+                 WHERE p.deleted_at IS NULL AND n.full_path > $5 \
                    AND (lower(n.full_path) LIKE $1 ESCAPE '\\' \
                         OR lower(p.display_name) LIKE $1 ESCAPE '\\') \
                  ORDER BY n.full_path, p.id LIMIT $4), "],
@@ -142,7 +143,8 @@ fn like_pattern(q: &str) -> String {
 }
 
 /// The repository search's candidates for `viewer` (M3 X3): at most
-/// `max_rows` live projects whose path or name contains `q`, by path, each
+/// `max_rows` live projects after path `after` (a page: the caller scans
+/// on until enough are allowed) whose path or name contains `q`, by path, each
 /// with `viewer`'s access facts (read as [`project_page`] reads its rows).
 /// `q` must be 1..=[`MAX_SEARCH_CHARS`] characters without control
 /// characters (`FG-WEB-0006 param=q` otherwise). One statement on the read
@@ -151,6 +153,7 @@ pub async fn project_search(
     db: &Db,
     viewer: UserId,
     q: &str,
+    after: Option<&str>,
     max_rows: u32,
 ) -> Result<Vec<ProjectRecord>, ForgeError> {
     let chars = q.chars().count();
@@ -169,6 +172,7 @@ pub async fn project_search(
                 .bind(viewer.get())
                 .bind(CAP)
                 .bind(limit)
+                .bind(after.unwrap_or(""))
                 .fetch_all(db.pool().executor())
                 .await
                 .map_err(|e| read_query_error("projects.search", e))

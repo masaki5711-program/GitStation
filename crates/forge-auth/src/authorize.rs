@@ -1023,7 +1023,9 @@ pub fn authorize(
         // The repository search (M3 X3): the route for any active caller
         // (the scope was checked above); each candidate only when the
         // caller could bind it (Maintainer; visibility was decided above).
-        (Action::RepositorySearch, Resource::Instance) => Ok(()),
+        // Review LOW (b): a person's (or acted for, decided as the person);
+        // never a service account, a bot or an agent on its own.
+        (Action::RepositorySearch, Resource::Instance) => people_only(),
         (Action::RepositorySearch, Resource::Project(p)) => need(Role::Maintainer, p.role),
 
         // --- the integrations' event feed (M3 I1c, ADR-0016 §7) ---
@@ -1061,12 +1063,8 @@ pub fn authorize(
             };
             authorize(principal, read, &c.target)
                 .map_err(|e| e.with_context("action", action.name()))?;
-            if !c.integration_enabled {
-                return Err(refused("integration_disabled"));
-            }
-            if !c.bound && c.intent != Intent::BindingSet {
-                return Err(refused("act_as_unbound"));
-            }
+            // Review LOW (a): the person's own right first, so the
+            // integration's state is said only to who may act.
             let intended = match c.intent {
                 Intent::Approve => Action::MergeRequestApprove,
                 Intent::Unapprove => Action::MergeRequestUnapprove,
@@ -1076,7 +1074,14 @@ pub fn authorize(
             authorize(principal, intended, &c.target).map_err(|e| {
                 e.with_context("action", action.name())
                     .with_context("intent", c.intent.as_str())
-            })
+            })?;
+            if !c.integration_enabled {
+                return Err(refused("integration_disabled"));
+            }
+            if !c.bound && c.intent != Intent::BindingSet {
+                return Err(refused("act_as_unbound"));
+            }
+            Ok(())
         }
         // The claim: the integration's own service account (as its feed).
         (Action::ActAsAssertionClaim, Resource::IntegrationFeed(feed)) => {

@@ -262,3 +262,82 @@ async fn work_items_resolve_only_through_the_resolving_binding() {
     drop(conn);
     w.t.drop_now().await;
 }
+
+/// Review (database MEDIUM): the schema itself keeps a resolving binding
+/// alone on its project (deferred constraint trigger
+/// `integration_bindings_resolving_alone`), whichever row comes first.
+#[tokio::test]
+async fn a_resolving_binding_is_alone_on_its_project_in_the_schema() {
+    let w = world().await;
+    let mut su = w.t.superuser().await;
+    let row = |external: &str, resolves: bool| {
+        format!(
+            "INSERT INTO forge.integration_bindings (integration_id, project_id, \
+             external_project_id, granted_membership, resolves_work_items) \
+             VALUES ({}, {}, '{external}', false, {resolves})",
+            w.integration.get(),
+            w.web.get()
+        )
+    };
+    let immediate = "SET CONSTRAINTS forge.integration_bindings_resolving_alone IMMEDIATE";
+    for (first, second) in [(true, false), (false, true)] {
+        let setup = format!("{immediate}; {}", row("P1", first));
+        assert_eq!(
+            refusal(&mut su, &setup, &row("P2", second)).await,
+            Some((
+                "23514".into(),
+                "integration_bindings_resolving_alone".into()
+            )),
+            "first resolves={first}"
+        );
+    }
+    // Shared rows together pass; a resolving row alone passes.
+    let shared = format!("{immediate}; {}", row("P1", false));
+    assert_eq!(refusal(&mut su, &shared, &row("P2", false)).await, None);
+    assert_eq!(refusal(&mut su, immediate, &row("P1", true)).await, None);
+    // Turning a shared row into a resolving one next to another: refused.
+    let two = format!("{immediate}; {}; {}", row("P1", false), row("P2", false));
+    assert_eq!(
+        refusal(
+            &mut su,
+            &two,
+            "UPDATE forge.integration_bindings SET resolves_work_items = true \
+             WHERE external_project_id = 'P1'"
+        )
+        .await,
+        Some((
+            "23514".into(),
+            "integration_bindings_resolving_alone".into()
+        ))
+    );
+    w.t.drop_now().await;
+}
+
+/// Review (security LOW c): the repository search's candidates come by
+/// page after a path, so a page of projects the caller cannot bind does
+/// not end a search.
+#[tokio::test]
+async fn the_search_candidates_page_by_path() {
+    let w = world().await;
+    for name in ["spec-a", "spec-b", "spec-c"] {
+        project(&w.t, &w.alice, name).await;
+    }
+    let page = |after: Option<&'static str>| {
+        let w = &w;
+        async move {
+            crate::lists::project_search(&w.t.db, w.alice.user_id, "SPEC", after, 2)
+                .await
+                .expect("search")
+                .into_iter()
+                .map(|r| r.path.full_path())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(page(None).await, vec!["alice/spec-a", "alice/spec-b"]);
+    assert_eq!(page(Some("alice/spec-b")).await, vec!["alice/spec-c"]);
+    let bad = crate::lists::project_search(&w.t.db, w.alice.user_id, "", None, 2)
+        .await
+        .expect_err("empty q");
+    assert_eq!(bad.code(), ErrorCode::RequestInvalid);
+    w.t.drop_now().await;
+}

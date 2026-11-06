@@ -64,7 +64,7 @@
   { "action": "IntegrationBindingManage", "allow": 9, "deny": 31, "public": false, "git_operation": false },
   { "action": "IntegrationBindingRemove", "allow": 4, "deny": 14, "public": false, "git_operation": false },
   { "action": "IntegrationBindingList", "allow": 1, "deny": 9, "public": false, "git_operation": false },
-  { "action": "RepositorySearch", "allow": 8, "deny": 14, "public": false, "git_operation": false },
+  { "action": "RepositorySearch", "allow": 8, "deny": 17, "public": false, "git_operation": false },
   { "action": "IntegrationEventRead", "allow": 5, "deny": 33, "public": false, "git_operation": false },
   { "action": "IntegrationEventCursorRead", "allow": 5, "deny": 33, "public": false, "git_operation": false },
   { "action": "IntegrationDevStatusRead", "allow": 5, "deny": 33, "public": false, "git_operation": false },

@@ -72,6 +72,9 @@ guarded_functions = [
     # assertion only moves forward, for a person, its binding fixed.
     "users_employee_number_kept_when_disabled",
     "act_as_assertions_guard",
+    # M3 X3 review: a binding that resolves work items is its project's only
+    # binding (deferred).
+    "integration_bindings_resolving_alone",
 ]
 
 [tables.events]
@@ -443,8 +446,10 @@ audit_id_column = "id"
 unaudited_columns = ["updated_at"]
 txn_audited_columns = []
 
-# One forge project bound to one external project (at most one per project,
-# 200 per integration); integration.bound / .unbound on the project.
+# A forge project bound to an external project (M3 X3: one binding that
+# resolves work items, or several shared ones — a spec repository in several
+# kanflow projects; 200 per integration); integration.bound / .unbound /
+# .binding_changed on the project.
 [tables.integration_bindings]
 guarded = false
 kind = "audited"
@@ -555,6 +560,8 @@ ro_columns = [
     "merge_request_id", "head_sha", "target_ref", "target_sha", "issued_at", "expires_at",
     "claimed_at", "finished_at", "reject_reason", "issued_request_id", "claimed_request_id",
     "finished_request_id",
+    # M3 X3: the binding intents (20261129100000).
+    "external_project_id", "resolves_work_items",
 ]
 audit_resource = "act_as_assertion"
 audit_id_column = "id"

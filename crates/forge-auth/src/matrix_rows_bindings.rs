@@ -244,6 +244,10 @@ pub(crate) const SEARCH_ROWS: &[Row] = &[
     row(A::RepositorySearch, via(MAINTAINER, ViaToken::Reader, Assert::BindShared), F::Instance, deny(E::ActAsAssertionInvalid)),
     row(A::RepositorySearch, via(MAINTAINER, ViaToken::NoActAs, Assert::None), F::Instance, deny(E::InsufficientScope)),
     row(A::RepositorySearch, via(MAINTAINER, ViaToken::Agent, Assert::None), F::Instance, deny(E::Forbidden)),
+    // Review LOW (b): never a service account, a bot or an agent alone.
+    row(A::RepositorySearch, W::ServiceAccountTokenReadApi, F::Instance, deny(E::Forbidden)),
+    row(A::RepositorySearch, W::BotTokenApi, F::Instance, deny(E::Forbidden)),
+    row(A::RepositorySearch, W::AgentTokenReadApi, F::Instance, deny(E::Forbidden)),
     // Each candidate: what the caller (the person acted for) could bind.
     row(A::RepositorySearch, W::Maintainer, F::PrivateProject, Allow),
     row(A::RepositorySearch, W::Owner, F::PrivateProject, Allow),
