@@ -248,3 +248,35 @@ fn a_byte_order_mark_before_the_front_matter_is_skipped() {
     );
     assert_eq!(d.requirements[0].line, 10);
 }
+
+/// M3 X5 (plan 06 D-5, ADR-0023 Amendment X5): `confidential: true` marks
+/// a document the context API never hands to an AI agent; an unreadable
+/// front matter is treated as confidential (fail closed), a document
+/// without one is not.
+#[test]
+fn a_confidential_front_matter_marks_the_document_and_fails_closed() {
+    let marked = doc("---\nspec: s\ntitle: t\nstatus: approved\nconfidential: true\n---\n::: req APP-X-1\nsecret\n:::\n");
+    assert!(marked.problems.is_empty(), "{:?}", marked.problems);
+    assert!(marked.meta.as_ref().expect("meta").confidential);
+    assert!(marked.confidential());
+    let open = doc("---\nspec: s\ntitle: t\nstatus: approved\nconfidential: false\n---\n");
+    assert!(open.problems.is_empty(), "{:?}", open.problems);
+    assert!(!open.confidential());
+    let unmarked = doc("---\nspec: s\ntitle: t\nstatus: approved\n---\n");
+    assert!(!unmarked.confidential());
+    // Not a boolean: a problem, and the document is withheld.
+    let bad = doc("---\nspec: s\ntitle: t\nstatus: approved\nconfidential: maybe\n---\n");
+    assert_eq!(rules(&bad), [(5, "confidential_invalid")]);
+    assert!(bad.meta.is_none());
+    assert!(bad.confidential(), "an unreadable mark fails closed");
+    // Any broken front matter fails closed (the mark may be in it).
+    let broken = doc("---\nspec: s\ntitle: t\nstatus: nope\nconfidential: true\n---\n");
+    assert!(broken.meta.is_none());
+    assert!(broken.confidential());
+    // Blocks without a front matter carry no mark.
+    let bare = doc("::: req APP-X-2\nopen\n:::\n");
+    assert!(bare.is_spec());
+    assert!(!bare.confidential());
+    // Not text at all: withheld.
+    assert!(parse_spec_document(&[0xff, 0xfe]).confidential());
+}
