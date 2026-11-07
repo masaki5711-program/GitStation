@@ -15,7 +15,9 @@
 //!   `--merge-base` (git 2.40) is not used: the minimum is 2.38.
 //! - [`Git::merge_base`]: `merge-base --end-of-options <a> <b>`; exit 1
 //!   (no common ancestor) is `None`.
-//! - [`Git::is_ancestor`]: `merge-base --is-ancestor`; exit 1 is `false`.
+//! - [`Git::is_ancestor`]: `merge-base --is-ancestor`; exit 1 is `false`
+//!   only with an empty stderr (git 2.43 also answers 1 for a commit it
+//!   could not read: an error then).
 //!
 //! Every call has its caller's timeout (`FG-GIT-0002`) and takes a slot of
 //! the global git pool (`FG-GIT-0004`). Revisions are validated object ids
@@ -226,7 +228,13 @@ impl Git {
             .map_err(|e| e.with_context("repo_id", id.get()))?;
         match captured.exit_code {
             Some(0) => Ok(true),
-            Some(1) => Ok(false),
+            // git before 2.44 answers 1 also when it could not read a commit
+            // on the way ("error: Could not read <id>", found on git 2.43);
+            // a plain "not an ancestor" prints nothing. Never read that as
+            // a decided `false`.
+            Some(1) if captured.stderr.trim().is_empty() => Ok(false),
+            Some(1) => Err(unexpected("merge-base", "unreadable_history")
+                .with_context("stderr", captured.stderr)),
             Some(_) | None => Err(unexpected("merge-base", "unexpected_output")),
         }
     }

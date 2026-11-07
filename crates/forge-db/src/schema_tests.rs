@@ -1035,3 +1035,74 @@ async fn only_migrations_write_db_migrate_rows_and_guarded_tables_keep_their_nam
     }
     t.drop_now().await;
 }
+
+// ── forge_ro's expected grants come from tables.toml (no hand-kept copy) ──
+
+fn parse_ledger(text: &str) -> toml::Table {
+    text.parse().expect("toml")
+}
+
+fn reason(err: &forge_errors::ForgeError) -> Option<&str> {
+    err.context()
+        .iter()
+        .find(|(k, _)| *k == "reason")
+        .map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn ro_grants_lists_one_column_grant_per_ledger_column() {
+    let l = parse_ledger("[tables.t]\nro_columns = [\"id\", \"name\"]\n");
+    let grants = bootstrap::schema::ro_grants(&l, "t").expect("grants");
+    assert_eq!(grants, ["forge_ro:SELECT(id)", "forge_ro:SELECT(name)"]);
+}
+
+#[test]
+fn ro_grants_star_is_one_table_wide_select() {
+    let l = parse_ledger("[tables.t]\nro_columns = [\"*\"]\n");
+    let grants = bootstrap::schema::ro_grants(&l, "t").expect("grants");
+    assert_eq!(grants, ["forge_ro:SELECT"]);
+}
+
+#[test]
+fn ro_grants_refuses_a_missing_empty_or_mixed_entry() {
+    for (text, why) in [
+        (
+            "[tables.other]\nro_columns = [\"id\"]\n",
+            "ro_columns_missing",
+        ),
+        ("[tables.t]\nkind = \"log\"\n", "ro_columns_missing"),
+        ("[tables.t]\nro_columns = []\n", "ro_columns_missing"),
+        ("[tables.t]\nro_columns = [1]\n", "ro_columns_missing"),
+        (
+            "[tables.t]\nro_columns = [\"*\", \"id\"]\n",
+            "ro_columns_star_mixed",
+        ),
+    ] {
+        let err = bootstrap::schema::ro_grants(&parse_ledger(text), "t").expect_err(text);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{text}");
+        assert_eq!(reason(&err), Some(why), "{text}");
+    }
+}
+
+#[test]
+fn every_table_with_column_grants_in_the_ledger_resolves() {
+    // The tables whose forge_ro grants the schema check reads from the
+    // ledger: each must have a column list (not "*", not missing).
+    let l = parse_ledger(include_str!("../tables.toml"));
+    for table in [
+        "audit_log",
+        "users",
+        "tokens",
+        "repositories",
+        "web_sessions",
+        "user_identities",
+        "act_as_assertions",
+        "webhooks",
+    ] {
+        let grants = bootstrap::schema::ro_grants(&l, table).expect(table);
+        assert!(
+            grants.iter().all(|g| g.starts_with("forge_ro:SELECT(")),
+            "{table}: {grants:?}"
+        );
+    }
+}

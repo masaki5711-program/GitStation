@@ -3,7 +3,7 @@
 //! the first migration creates. Before that migration the tables do not
 //! exist; the schema check reports the pending migration instead.
 
-use forge_errors::ForgeError;
+use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
 use super::acl::{compare, table_grants_sql};
@@ -394,30 +394,6 @@ const AUDIT_INSERT: &[&str] = &[
     "details",
 ];
 
-/// The read pool's columns of audit_log (tables.toml `ro_columns`).
-const AUDIT_RO: &[&str] = &[
-    "id",
-    "seq",
-    "sequenced_at",
-    "txid",
-    "occurred_at",
-    "actor_kind",
-    "actor_user_id",
-    "actor_via_id",
-    "credential_id",
-    "via_assertion_id",
-    "effective_scope",
-    "action",
-    "outcome",
-    "resource_type",
-    "resource_id",
-    "project_id",
-    "request_id",
-    "error_code",
-    "occurrences",
-    "details",
-];
-
 fn columns(role: &str, privilege: &str, cols: &[&str]) -> Vec<String> {
     cols.iter()
         .map(|c| format!("{role}:{privilege}({c})"))
@@ -428,8 +404,53 @@ fn plain(grants: &[&str]) -> Vec<String> {
     grants.iter().map(|g| (*g).to_owned()).collect()
 }
 
+/// forge_ro's SELECT grants on one table, from the ledger's `ro_columns`
+/// (tables.toml): `"*"` is a table-wide SELECT, a list is one column grant
+/// each. The ledger is the single place a readable column is declared; a
+/// table without an entry is a build defect, never "no grants".
+pub(crate) fn ro_grants(ledger: &toml::Table, table: &str) -> Result<Vec<String>, ForgeError> {
+    let columns = ledger
+        .get("tables")
+        .and_then(toml::Value::as_table)
+        .and_then(|tables| tables.get(table))
+        .and_then(toml::Value::as_table)
+        .and_then(|entry| entry.get("ro_columns"))
+        .and_then(toml::Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .map(toml::Value::as_str)
+                .collect::<Option<Vec<_>>>()
+        })
+        .filter(|cols| !cols.is_empty())
+        .ok_or_else(|| ledger_invalid("ro_columns_missing", table))?;
+    if columns.contains(&"*") {
+        return if columns.len() == 1 {
+            Ok(plain(&["forge_ro:SELECT"]))
+        } else {
+            Err(ledger_invalid("ro_columns_star_mixed", table))
+        };
+    }
+    Ok(columns
+        .iter()
+        .map(|c| format!("forge_ro:SELECT({c})"))
+        .collect())
+}
+
+fn ledger_invalid(reason: &'static str, table: &str) -> ForgeError {
+    // The ledger is built into the binary: a failure here is a build defect.
+    ForgeError::new(ErrorCode::ConfigInvalid)
+        .with_context("config_key", "tables.toml")
+        .with_context("reason", reason)
+        .with_context("table", table)
+}
+
 /// The grants of the first migration, per table.
-fn expectations() -> Vec<(&'static str, Vec<String>)> {
+fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
+    let ledger: toml::Table = include_str!("../../tables.toml")
+        .parse()
+        .map_err(|_| ledger_invalid("not_toml", "-"))?;
+    let ro = |table: &str| ro_grants(&ledger, table);
     let dml = |role: &str| {
         ["SELECT", "INSERT", "UPDATE", "DELETE"]
             .iter()
@@ -437,7 +458,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             .collect::<Vec<_>>()
     };
     let operational = || [dml("forge_app"), plain(&["forge_ro:SELECT"])].concat();
-    vec![
+    Ok(vec![
         (
             "forge.events",
             [
@@ -472,7 +493,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                     "UPDATE",
                     &["actor_label", "source_ip", "user_agent"],
                 ),
-                columns("forge_ro", "SELECT", AUDIT_RO),
+                ro("audit_log")?,
                 columns("forge_maint", "SELECT", &["txid", "action", "details"]),
             ]
             .concat(),
@@ -550,7 +571,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             "forge.users",
             [
                 plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:UPDATE"]),
-                columns("forge_ro", "SELECT", USERS_RO),
+                ro("users")?,
             ]
             .concat(),
         ),
@@ -603,7 +624,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             [
                 plain(&["forge_app:SELECT", "forge_app:INSERT"]),
                 columns("forge_app", "UPDATE", TOKENS_APP_UPDATE),
-                columns("forge_ro", "SELECT", TOKENS_RO),
+                ro("tokens")?,
             ]
             .concat(),
         ),
@@ -626,7 +647,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             [
                 plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
                 columns("forge_app", "UPDATE", &["state", "ready_at"]),
-                columns("forge_ro", "SELECT", REPOSITORIES_RO),
+                ro("repositories")?,
             ]
             .concat(),
         ),
@@ -642,7 +663,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                 // M2 MR6: DELETE for the purge (20261105100000, guarded).
                 plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
                 columns("forge_app", "UPDATE", WEB_SESSIONS_APP_UPDATE),
-                columns("forge_ro", "SELECT", WEB_SESSIONS_RO),
+                ro("web_sessions")?,
             ]
             .concat(),
         ),
@@ -651,7 +672,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             [
                 plain(&["forge_app:SELECT", "forge_app:INSERT"]),
                 columns("forge_app", "UPDATE", &["last_login_at"]),
-                columns("forge_ro", "SELECT", USER_IDENTITIES_RO),
+                ro("user_identities")?,
             ]
             .concat(),
         ),
@@ -813,7 +834,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                 plain(&["forge_app:SELECT"]),
                 columns("forge_app", "INSERT", ACT_AS_APP_INSERT),
                 columns("forge_app", "UPDATE", ACT_AS_APP_UPDATE),
-                columns("forge_ro", "SELECT", ACT_AS_RO),
+                ro("act_as_assertions")?,
             ]
             .concat(),
         ),
@@ -821,7 +842,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         // their deliveries (20261120200000) ──
         (
             "forge.webhooks",
-            [dml("forge_app"), columns("forge_ro", "SELECT", WEBHOOKS_RO)].concat(),
+            [dml("forge_app"), ro("webhooks")?].concat(),
         ),
         ("forge.webhook_deliveries", operational()),
         // ── M3 N1: notifications (20261120100000) ──
@@ -843,7 +864,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                 "forge_ro:SELECT",
             ]),
         ),
-    ]
+    ])
 }
 
 /// The columns forge_app may insert into forge.act_as_assertions.
@@ -877,55 +898,6 @@ const ACT_AS_APP_UPDATE: &[&str] = &[
     "finished_request_id",
 ];
 
-/// The columns forge_ro may read on forge.act_as_assertions (not mac,
-/// state_hash).
-const ACT_AS_RO: &[&str] = &[
-    "id",
-    "state",
-    "public_id",
-    "key_id",
-    "integration_id",
-    "user_id",
-    "intent",
-    "project_id",
-    "merge_request_id",
-    "head_sha",
-    "target_ref",
-    "target_sha",
-    "external_project_id",
-    "resolves_work_items",
-    "issued_at",
-    "expires_at",
-    "claimed_at",
-    "finished_at",
-    "reject_reason",
-    "issued_request_id",
-    "claimed_request_id",
-    "finished_request_id",
-];
-
-/// The read pool's columns of forge.webhooks (tables.toml `ro_columns`):
-/// not secret_ciphertext, secret_prev_ciphertext or url (I2 review).
-const WEBHOOKS_RO: &[&str] = &[
-    "id",
-    "uid",
-    "project_id",
-    "owner_user_id",
-    "origin",
-    "event_types",
-    "enabled",
-    "disabled_reason",
-    "secret_key_id",
-    "secret_version",
-    "secret_prev_key_id",
-    "secret_prev_until",
-    "consecutive_failures",
-    "failing_since",
-    "last_delivery_at",
-    "created_at",
-    "updated_at",
-];
-
 /// The columns forge_app may update on forge.web_sessions.
 const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
     "last_seen_at",
@@ -939,73 +911,8 @@ const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
     "refresh_without_id_token",
 ];
 
-/// The read pool's columns of web_sessions (tables.toml `ro_columns`): not
-/// secret_sha256, refresh_token_enc, id_token_enc or oidc_sub.
-const WEB_SESSIONS_RO: &[&str] = &[
-    "id",
-    "public_id",
-    "user_id",
-    "created_at",
-    "last_seen_at",
-    "idle_expires_at",
-    "absolute_expires_at",
-    "revoked_at",
-    "revoked_reason",
-    "oidc_issuer",
-    "oidc_sid",
-    "refresh_checked_at",
-    "access_role_seen_at",
-    "refresh_without_id_token",
-];
-
-/// The read pool's columns of user_identities: not subject.
-const USER_IDENTITIES_RO: &[&str] = &["id", "user_id", "issuer", "linked_at", "last_login_at"];
-
-/// The read pool's columns of repositories (tables.toml `ro_columns`): not
-/// provision_token.
-const REPOSITORIES_RO: &[&str] = &[
-    "id",
-    "project_id",
-    "kind",
-    "state",
-    "created_at",
-    "ready_at",
-];
-
 /// The columns forge_app may update on forge.tokens.
 const TOKENS_APP_UPDATE: &[&str] = &["revoked_at", "revoked_reason", "last_used_at"];
-
-/// The read pool's columns of tokens (tables.toml `ro_columns`): not
-/// secret_sha256.
-const TOKENS_RO: &[&str] = &[
-    "id",
-    "user_id",
-    "public_id",
-    "name",
-    "scopes",
-    "created_at",
-    "expires_at",
-    "revoked_at",
-    "revoked_reason",
-    "last_used_at",
-    "is_agent",
-    // M3 S0 (20261113100000).
-    "issued_by_user_id",
-];
-
-/// The read pool's columns of users (tables.toml `ro_columns`): not email,
-/// employee_number or external_id.
-const USERS_RO: &[&str] = &[
-    "id",
-    "kind",
-    "username",
-    "display_name",
-    "auth_source",
-    "state",
-    "is_admin",
-    "created_at",
-    "updated_at",
-];
 
 // ── C8 ──
 /// The columns forge_app and forge_seq may insert into forge.audit_seal
@@ -1189,7 +1096,7 @@ pub(crate) async fn check_schema_objects_with(
     // An audited table's owner, rules, row security and exact ACL are
     // checked like every table's: it must be listed here, or a TRUNCATE
     // grant (which bypasses its row trigger) would go unnoticed.
-    let expected = expectations();
+    let expected = expectations()?;
     for table in &ledger.audited {
         let object = format!("forge.{}", table.name);
         let listed = LATER_TABLES.contains(&table.name.as_str())

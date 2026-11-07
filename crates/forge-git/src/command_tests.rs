@@ -499,3 +499,61 @@ fn redact_removes_url_credentials() {
         "http.extraheader: Authorization: ***"
     );
 }
+
+/// git 2.43's `git grep` refuses `--end-of-options` ("must come before
+/// non-option arguments") while the minimum is 2.38: a validated full object
+/// id may be a plain operand right after the options, and nothing else may.
+#[test]
+fn object_id_operand_is_a_plain_operand_and_admits_only_full_hex_ids() {
+    let (_h, g) = git();
+    let oid = "b".repeat(40);
+    let rev = Revision::object_id(&oid).expect("oid");
+    let cmd = g
+        .command("grep")
+        .arg("-e")
+        .arg("@req")
+        .object_id_operand(&rev)
+        .expect("a full id is admitted");
+    let args: Vec<String> = cmd
+        .argv()
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(args, ["grep", "-e", "@req", oid.as_str()]);
+
+    // A ref turned into a revision is not an object id: refused, never placed.
+    let main = RefName::parse("refs/heads/main").expect("ref");
+    let as_rev: Revision = (&main).into();
+    let Err(err) = g.command("grep").object_id_operand(&as_rev) else {
+        panic!("a ref is refused");
+    };
+    assert_eq!(err.code(), ErrorCode::InvalidRefName);
+}
+
+/// The installed git accepts the shape `grep_fixed` sends (the bug was a
+/// fatal error on every git before 2.44).
+#[tokio::test]
+async fn grep_with_an_object_id_operand_runs_on_the_installed_git() {
+    let (_h, g) = git();
+    let dir = tempfile::tempdir().expect("dir");
+    let sha = repo_with_commit(&g, dir.path()).await;
+    let rev = Revision::object_id(&sha).expect("oid");
+    let out = g
+        .command("grep")
+        .arg("-z")
+        .arg("-n")
+        .arg("-F")
+        .arg("-e")
+        .arg("@nothing")
+        .object_id_operand(&rev)
+        .expect("oid")
+        .repo(dir.path().join(".git"))
+        .output_accepting(1024, &[0, 1])
+        .await
+        .expect("git grep runs");
+    assert_eq!(
+        out.exit_code,
+        Some(1),
+        "no match is exit 1, not a fatal 128"
+    );
+}

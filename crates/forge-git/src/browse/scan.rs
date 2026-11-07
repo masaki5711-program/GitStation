@@ -221,8 +221,9 @@ impl Browser {
             .arg("-e")
             .arg(needle)
             // No pathspec: the whole tree. The operand is a validated full
-            // id after `--end-of-options`.
-            .revision(rev)
+            // id, without `--end-of-options`: `git grep` before 2.44 refuses
+            // that marker (found on git 2.43; the minimum is 2.38).
+            .object_id_operand(&rev)?
             .repo(&dir)
             .timeout(timeout)
             .output_accepting(max_bytes, &[0, 1])
