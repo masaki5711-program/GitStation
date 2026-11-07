@@ -1,5 +1,7 @@
 # 引き継ぎ — クラウドのセッション（2026-11-07）
 
+> **追記（同じ日の後半）**: §1 のブランチは `main` に入れた（PC が使えないため利用者の指示でクラウドからマージ。**GitLab には未 push**）。続けて git 2.43 の互換の修正と **O2（GitLab への push ミラー）** を `main` に入れた（§6）。PC が戻ったら `git push gitlab main` を 1 回。
+
 `2026-11-06-m3-day5.md` の続き。PC で続けるときは、まずこのファイルの §1 の 3 つのブランチを `main` に入れる。
 
 ## 1. このセッションで作ったもの（どれも `main` には未マージ）
@@ -46,3 +48,21 @@ ALTER USER forge_dev PASSWORD 'forge_dev'; CREATE DATABASE forge_dev;
 3. GitStation の不安定なテストの残り（`2026-11-06-m3-day5.md` §6。readyz は直した）。
 4. エージェントモデル: W4（触る範囲の宣言。Kanflow の `declare_scope` が要る）、W12（`spec-authoring`）、エージェントモデル自身の GitHub Actions（今は `.gitlab-ci.yml` だけ）。
 5. エージェントモデルの小さな問題: `npm test` の要約（`scripts/lib/test-reporter-concise.js`）の件数が実行ごとにぶれる（失敗は 0、素の `node --test` は安定）。数え落としの原因を調べる。
+
+## 6. 追記: 後半に `main` に入れたもの
+
+| コミット | 中身 |
+|---|---|
+| `8f29150` | **git 2.43 の互換**: `git grep` は 2.44 より前は `--end-of-options` を受け付けず、仕様の索引（X4: spec-lint・spec-trace・仕様と文脈の API）がどのコミットでも FG-GIT-0003 だった。完全な 16 進の ID は印なしの引数にした（`object_id_operand`）。`merge-base --is-ancestor` は読めないコミットでも 1 を返すので、stderr があれば `reason=unreadable_history`。GitHub Actions 緑 |
+| `6d79707` | **O2 前半**: 表 `push_mirrors`（audited）・`push_mirror_status`（derived、20261130100000）、宛先の方針（https、`mirror.allowed_hosts`）と資格情報のファイル（`mirror.credentials_dir`、1 行 `user:token`、0600）、`git push`（`refs/heads/*`・`refs/tags/*` だけ、`--prune`、ヘッダーは子の環境だけ）、購読者 `push-mirror`、専用のランナー、FG-INT-0013 / 0014、runbook `gitlab-mirror`、ADR-0024 Amendment O2 |
+| `a7fbd2a` | **O2 後半**: `PushMirrorRead` / `PushMirrorManage`（管理者・人だけ・`admin` スコープ）、`GET|PUT|DELETE /api/v1/projects/{id}/push-mirror`・`POST …/sync`、`gstn mirror show|set|remove|sync`、doctor `mirror.config` / `mirror.status` / `mirror.lag`。独立レビュー（security・authz）の HIGH（リダイレクトでヘッダーが漏れる → `http.followRedirects=false` と `http.<url>.extraHeader`）と MEDIUM（sync の再確認 → `sync_decided`）を直し、再レビューは両方 APPROVE |
+
+計画からの変更（ADR-0024 の O2 の節）: 資格情報は credential helper ではなく子の環境変数のヘッダー。再送は運用者の CLI ではなく管理者の HTTP（契約 4 の例外を増やさない）。
+
+O2 の残り: **試験環境で本物の GitLab に送る通し**（Q7: 試験用の GitLab プロジェクトとミラー用アカウントのトークン）。試験環境の `mirror.credentials_dir` と `mirror.allowed_hosts` を設定し、`gstn mirror set` → push → `gstn mirror show` で `pending_since` が NULL になることを見る。R1 の条件 ①「そのマージが GitLab へ遅れなくミラーされる」はこれで確かめる。
+
+全体のテスト（クラウド、PG16 素の設定は §3）: 2 943 合格・3 失敗。3 件とも変更と無関係で単独では通る（不安定）:
+
+- forge-cli `worker::maintenance::tests::a_killed_pack_refs_removes_its_own_lock_and_keeps_a_foreign_one`（**単独でも 3 回中 2 回落ちる**。`2026-11-06-m3-day5.md` §6 の `pack_refs` より悪い。次に直す候補）
+- forge-git `browse::history_tests::answers_that_do_not_fit_are_process_failed`（負荷の下で `GitUnavailable`）
+- forge-review `conflicts_git a_git_timeout_on_a_pair_is_stored_on_the_pair`（負荷の下で時間切れが起きない）
