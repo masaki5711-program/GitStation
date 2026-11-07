@@ -5214,6 +5214,136 @@
         },
         "type": "object"
       },
+      "PushMirrorBody": {
+        "additionalProperties": false,
+        "description": "A project's mirror (never the credential's content).",
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "credential_name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "origin": {
+            "description": "`scheme://host:port` of the URL (what logs and audit rows show).",
+            "type": "string"
+          },
+          "repo_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PushMirrorStatusBody"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "url": {
+            "description": "The destination as stored (normalized).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_id",
+          "url",
+          "origin",
+          "credential_name",
+          "enabled",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "status"
+        ],
+        "type": "object"
+      },
+      "PushMirrorStatusBody": {
+        "additionalProperties": false,
+        "description": "A mirror's progress.",
+        "properties": {
+          "failures": {
+            "description": "Failed attempts in a row.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_error_code": {
+            "description": "`FG-INT-0013` after a failed attempt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_reason": {
+            "description": "`auth`, `network`, `timeout`, `credential_unreadable`, … (runbook\n`gitlab-mirror`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mirrored_seq": {
+            "description": "The newest push mirrored.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "pending_seq": {
+            "description": "The newest push waiting to be mirrored (`0`: none since it was set).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "pending_since": {
+            "description": "Waiting since (UTC, RFC 3339); `null` when up to date.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "pending_seq",
+          "pending_since",
+          "mirrored_seq",
+          "last_attempt_at",
+          "last_success_at",
+          "failures",
+          "last_error_code",
+          "last_reason"
+        ],
+        "type": "object"
+      },
+      "PushMirrorSyncQueued": {
+        "additionalProperties": false,
+        "description": "A push was asked for.",
+        "properties": {
+          "queued": {
+            "description": "`true`: a job was queued; `false`: this request's job was already\nthere.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "queued"
+        ],
+        "type": "object"
+      },
       "PutApprovalRule": {
         "additionalProperties": false,
         "description": "`PUT …/approval-rules/{name}`.",
@@ -6183,6 +6313,30 @@
         "required": [
           "user_id",
           "revoked_sessions"
+        ],
+        "type": "object"
+      },
+      "SetPushMirror": {
+        "additionalProperties": false,
+        "description": "`PUT …/push-mirror`.",
+        "properties": {
+          "credential_name": {
+            "description": "The name of a credential file in `mirror.credentials_dir` (1–64 of\n`[a-z0-9._-]`, starting with a letter or a digit): one\n`<username>:<token>` line, mode 0600.",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "description": "`false` keeps the setting without pushing (default `true`).",
+            "type": "boolean"
+          },
+          "url": {
+            "description": "An absolute `https` URL (`http` only where the operator allows it)\nof at most 2048 bytes, without user information, query or fragment,\nwhose host and port `mirror.allowed_hosts` names.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "credential_name"
         ],
         "type": "object"
       },
@@ -13405,6 +13559,170 @@
         "summary": "Set a protected branch rule's merge conditions: minimum approvals, required checks, resolved discussions, the direct-push ban (people only; Maintainer; never above the caller's role)",
         "x-forge-action": "ProtectedRefManage",
         "x-forge-max-body-bytes": 8192
+      }
+    },
+    "/api/v1/projects/{id}/push-mirror": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_push_mirror",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a project's push mirror and its progress; GitLab keeps what it has (administrators, people only)",
+        "x-forge-action": "PushMirrorManage"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id_push_mirror",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushMirrorBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's push mirror to GitLab and its progress: destination, credential name (never its content), the waiting and mirrored pushes, the last failure (administrators; a token needs admin)",
+        "x-forge-action": "PushMirrorRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_push_mirror",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPushMirror"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushMirrorBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set a project's push mirror (201 created, 200 changed): an https URL on mirror.allowed_hosts and a usable credential file of mirror.credentials_dir (400 FG-INT-0021); a new or re-enabled mirror is pushed at once (administrators, people only)",
+        "x-forge-action": "PushMirrorManage",
+        "x-forge-max-body-bytes": 8192
+      }
+    },
+    "/api/v1/projects/{id}/push-mirror/sync": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_push_mirror_sync",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushMirrorSyncQueued"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Queue one push of every branch and tag to the mirror now (administrators, people only; 404 without an enabled mirror)",
+        "x-forge-action": "PushMirrorManage"
       }
     },
     "/api/v1/projects/{id}/repository/blame": {

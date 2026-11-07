@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-A push mirror setting (`PUT /api/v1/projects/{id}/push-mirror`, `gstn mirror set`) was refused before anything was stored. `reason`: `invalid_url` (not an absolute URL of at most 2048 bytes), `scheme` (not https; http only when `mirror.allow_http` is true, for tests), `userinfo` (user or password in the URL: the token belongs in the credential file), `query_or_fragment`, `not_allowlisted` (the host and port are not in `mirror.allowed_hosts`; the list is empty by default), `credential_name` (not 1–64 of [a-z0-9._-] starting with a letter or digit), `credential_missing` (no regular file of that name in `mirror.credentials_dir`, or the directory is not configured), `credential_insecure` (the file is readable by group or others), `no_repository` (the project has no ready repository).
+A push mirror setting (`PUT /api/v1/projects/{id}/push-mirror`, `gstn mirror set`) was refused before anything was stored. `reason`: `invalid_url` (not an absolute URL of at most 2048 bytes), `scheme` (not https; http only when `mirror.allow_http` is true, for tests), `userinfo` (user or password in the URL: the token belongs in the credential file), `query_or_fragment`, `not_allowlisted` (the host and port are not in `mirror.allowed_hosts`; the list is empty by default), `credential_name` (not 1–64 of [a-z0-9._-] starting with a letter or digit), `credential_missing` (no regular file of that name in `mirror.credentials_dir`, or the directory is not configured: `detail=not_configured`), `credential_insecure` (the file is readable by group or others), `credential_invalid` (the file is unreadable, larger than 4 KiB or not one `<username>:<token>` line), `no_repository` (the project has no ready repository).
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason`, `origin` (scheme://host:port only) and `credential_name` (never the file's content). Compare with `forge doctor` (`mirror.config`), which prints mirror.allowed_hosts and whether mirror.credentials_dir is readable.
+The log event carries `reason`, `origin` (scheme://host:port only) or `credential_name` and, for a credential, `detail` (the underlying check: `not_configured`, `unreadable`, `insecure_permissions`, `invalid`, or the line's shape such as `no_separator`, `several_lines`, `empty`; never the file's path or content). Compare with `forge doctor` (`mirror.config`), which prints mirror.allowed_hosts and whether mirror.credentials_dir is readable.
 
 ## 対処 (fix)
 

@@ -362,6 +362,19 @@ actions! {
     /// every attempt. People only; Maintainer of the project; the admin
     /// class never.
     WebhookDeliver,
+    // --- the push mirror to GitLab (M3 O2, ADR-0024 Amendment O2) ---
+    /// `GET /api/v1/projects/{id}/push-mirror`: a project's mirror (its
+    /// full URL, credential name and status). Administrators, people only
+    /// (agents, service accounts and bots are refused); a token needs
+    /// `admin` and `read_api`.
+    PushMirrorRead,
+    /// `PUT|DELETE /api/v1/projects/{id}/push-mirror` and `POST
+    /// …/push-mirror/sync`: set, remove, or push now. Administrators,
+    /// people only (a mirror sends the whole repository out of the
+    /// instance); a token needs `admin` and `api`. Not session only: `gstn
+    /// mirror` works with an administrator's `admin` token. The URL passes
+    /// the operator's mirror policy (`FG-INT-0021`) after the decision.
+    PushMirrorManage,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -501,6 +514,8 @@ impl Action {
                 | Action::WebhookManage
                 | Action::WebhookRedeliver
                 | Action::WebhookDeliver
+                | Action::PushMirrorRead
+                | Action::PushMirrorManage
         )
     }
 
@@ -571,6 +586,7 @@ impl Action {
             | Action::WebhookRead
             | Action::WebhookDeliveryRead
             | Action::WebhookDeliver
+            | Action::PushMirrorRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -608,6 +624,7 @@ impl Action {
             | Action::IntegrationBindingRemove
             | Action::WebhookManage
             | Action::WebhookRedeliver
+            | Action::PushMirrorManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
@@ -718,6 +735,9 @@ impl Action {
             | Action::WebhookDeliveryRead
             | Action::WebhookRedeliver
             | Action::WebhookDeliver
+            // M3 O2: the push mirror is an administrator's.
+            | Action::PushMirrorRead
+            | Action::PushMirrorManage
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

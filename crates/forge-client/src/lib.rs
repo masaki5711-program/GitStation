@@ -38,6 +38,8 @@ pub mod mcp;
 pub mod store;
 // M3 I2: project webhooks.
 pub mod webhooks;
+// M3 O2: the push mirror to GitLab.
+pub mod mirror;
 
 #[cfg(test)]
 mod tests;

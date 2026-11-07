@@ -53,6 +53,9 @@ mod dev_status;
 // ── M3 I2: webhooks (ADR-0016 §8) ──
 pub mod webhooks;
 // ── end M3 I2 ──
+// ── M3 O2: the push mirror's administration ──
+pub mod mirror;
+// ── end M3 O2 ──
 
 pub use act_as::{ActAs, ActAsParts, ClaimAnswer, SWEEP_INTERVAL};
 /// What a claimed assertion is bound to (M3 X3: a merge request or a binding).

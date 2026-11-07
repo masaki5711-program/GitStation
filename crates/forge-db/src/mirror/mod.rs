@@ -14,6 +14,7 @@
 //!   job pushes every branch and tag as they are when it runs, so a job
 //!   that runs late or twice is harmless and the newest one catches up.
 //! - [`start`] / [`succeeded`] / [`failed`]: the job's reads and writes.
+//! - [`sync_decided`]: an administrator's "push now" (decided too).
 //! - [`lagging`]: the worker's sweep (FG-INT-0014 once an hour per mirror).
 //! - [`report`]: `forge doctor` (`mirror.status`, `mirror.lag`).
 //!
@@ -28,9 +29,7 @@ use forge_core::{AuditDetails, EventType, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, Settle};
-use crate::jobs::{
-    enqueue, enqueue_on, DedupKey, Enqueued, JobKind, JobTimeout, MaxAttempts, NewJob,
-};
+use crate::jobs::{enqueue_on, DedupKey, Enqueued, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::projects::{lock_shared, locked_access_facts, ProjectUpdateFacts};
 use crate::subscribers::{DerivedTx, HandleFuture, Ordering, SourceEvent, Subscriber};
 use crate::{query_error, read_query_error, Db};
@@ -544,40 +543,56 @@ fn short_reason(reason: &str) -> &str {
     }
 }
 
-/// Enqueue one push of `repo` now (`POST …/push-mirror/sync`, `gstn mirror
-/// sync`, an administrator; key
-/// `…:admin:<request_id>`). No enabled mirror: `FG-REPO-0005
-/// resource=push_mirror`.
-pub async fn enqueue_now(
+/// Enqueue one push of `project`'s mirror now (`POST …/push-mirror/sync`,
+/// `gstn mirror sync`, an administrator; key `…:admin:<request_id>`),
+/// decided in the transaction like every `PushMirrorManage` command (a
+/// caller who lost the rights after the route's decision is refused
+/// here). Operational: no audit row (the route logs
+/// `forge.mirror.sync_requested`). Errors: `decide`'s, `FG-REPO-0005`
+/// (`resource=project`; `resource=push_mirror` with `state` when there is
+/// no enabled mirror), `FG-INT-0021 reason=no_repository`.
+pub async fn sync_decided<P>(
     db: &Db,
-    repo: RepoId,
-    origin: &RequestId,
-) -> Result<Enqueued, ForgeError> {
-    const QUERY: &str = "mirror.enqueue_now";
-    let enabled: Option<bool> = db
-        .within(QUERY, async {
-            sqlx::query_scalar("SELECT enabled FROM forge.push_mirrors WHERE repo_id = $1")
+    ctx: &ChangeContext,
+    project: ProjectId,
+    caller: UserId,
+    decide: impl FnOnce(&ProjectUpdateFacts) -> Result<P, ForgeError>,
+) -> Result<(Enqueued, P), ForgeError> {
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = async {
+        let decided = decide(&decided_facts(&mut tx, project, caller).await?)?;
+        let repo = ready_repository(&mut tx, project).await?;
+        let enabled: Option<bool> = tx
+            .step(|c| async move {
+                sqlx::query_scalar(
+                    "SELECT enabled FROM forge.push_mirrors WHERE repo_id = $1 FOR SHARE",
+                )
                 .bind(repo.get())
-                .fetch_optional(db.write_pool())
+                .fetch_optional(c)
                 .await
-                .map_err(|e| query_error(QUERY, e))
-        })
-        .await?;
-    if enabled != Some(true) {
-        return Err(ForgeError::new(ErrorCode::NotFound)
-            .with_context("resource", "push_mirror")
-            .with_context("repo_id", repo.get())
-            .with_context(
-                "state",
-                if enabled.is_some() {
-                    "disabled"
-                } else {
-                    "missing"
-                },
-            ));
+                .map_err(|e| query_error("mirror.sync_lock", e))
+            })
+            .await?;
+        if enabled != Some(true) {
+            return Err(ForgeError::new(ErrorCode::NotFound)
+                .with_context("resource", "push_mirror")
+                .with_context("repo_id", repo.get())
+                .with_context(
+                    "state",
+                    if enabled.is_some() {
+                        "disabled"
+                    } else {
+                        "missing"
+                    },
+                ));
+        }
+        let what = format!("admin:{}", ctx.request_id.as_str());
+        let job = mirror_job(repo, &what, ctx.request_id.clone(), None)?; // clone: the job keeps it
+        let enqueued = tx.enqueue_job(&job).await?;
+        Ok(Settle::CommitDerived((enqueued, decided)))
     }
-    let what = format!("admin:{}", origin.as_str());
-    enqueue(db, &mirror_job(repo, &what, origin.clone(), None)?).await // clone: the job keeps it
+    .await;
+    tx.settle("push_mirror.sync", outcome).await
 }
 
 /// A mirror waiting longer than the threshold.

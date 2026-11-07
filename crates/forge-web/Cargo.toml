@@ -77,6 +77,9 @@ sha2.workspace = true
 uuid.workspace = true
 # M2 MR7: reading the tar.gz archive in routes/content_tests.rs.
 flate2.workspace = true
+# M3 O2: the push mirror route tests read the job queue and the read pool's
+# grants (tests/push_mirror_routes.rs).
+sqlx.workspace = true
 
 [lints]
 workspace = true

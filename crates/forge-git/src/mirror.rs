@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! git -c core.hooksPath=<empty> -c credential.helper= -c protocol.allow=never
-//!     -c protocol.https.allow=always [-c http.sslCAInfo=<ca>]
+//!     -c protocol.https.allow=always -c http.followRedirects=false
+//!     [-c http.sslCAInfo=<ca>]
 //!     push --porcelain --prune --no-verify --end-of-options <url>
 //!     +refs/heads/*:refs/heads/* +refs/tags/*:refs/tags/*
 //! ```
@@ -14,8 +15,8 @@
 //!   so a force-push and a deleted branch reach GitLab too.
 //! - **The token is never in the URL, the argument vector or a log**: the
 //!   `Authorization` header goes in `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_0`
-//!   / `GIT_CONFIG_VALUE_0` (`http.extraHeader`) in the child's environment
-//!   only; `credential.helper` is emptied so no stored credential is used,
+//!   / `GIT_CONFIG_VALUE_0` (`http.<url>.extraHeader`: that URL only) in the
+//!   child's environment only, and redirects are never followed; `credential.helper` is emptied so no stored credential is used,
 //!   and stderr is redacted (`redact::stderr_head`) before it reaches an
 //!   error.
 //! - **Transport**: `protocol.allow=never` with only `https` (or `http`
@@ -164,16 +165,25 @@ impl Git {
                 } else {
                     "protocol.http.allow"
                 };
-                cmd = cmd.config_override(scheme, "always");
+                // Security review (HIGH): never follow a redirect — a 30x to
+                // a host outside mirror.allowed_hosts would carry the header.
+                cmd = cmd
+                    .config_override(scheme, "always")
+                    .config_override("http.followRedirects", "false");
                 if let Some(ca) = ca_file {
                     cmd = cmd.config_override("http.sslCAInfo", ca.as_os_str());
                 }
                 // The header lives in the child's environment only.
                 let mut value = OsString::from("Authorization: ");
                 value.push(authorization.expose());
+                // Scoped to the mirror's own URL (`http.<url>.extraHeader`):
+                // git sends it to that URL only, whatever else it contacts.
                 cmd = cmd
                     .env("GIT_CONFIG_COUNT", OsString::from("1"))
-                    .env("GIT_CONFIG_KEY_0", OsString::from("http.extraHeader"))
+                    .env(
+                        "GIT_CONFIG_KEY_0",
+                        OsString::from(format!("http.{}.extraHeader", url.as_str())),
+                    )
                     .env("GIT_CONFIG_VALUE_0", value);
                 OsString::from(url.as_str())
             }

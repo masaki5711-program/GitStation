@@ -236,3 +236,34 @@ fn only_forge_integ_decides_webhook_deliveries() {
         );
     }
 }
+
+/// M3 O2: the push mirror's commands decide inside their transaction on
+/// the route's proof (`Authorized::reconfirm`); only forge-integ's
+/// `PushMirrors` calls them (forge-db defines and tests them; forge-cli's
+/// worker tests set a mirror up with them, as forge-db's own tests do).
+/// `remove_decided` is matched without its parenthesis: forge-integ
+/// imports it under another name.
+#[test]
+fn only_forge_integ_calls_the_push_mirror_commands() {
+    let found = mentions(&[
+        needle(&["set", "_decided("]),
+        needle(&["remove", "_decided"]),
+        // Authz review: the "push now" is decided too.
+        needle(&["sync", "_decided("]),
+    ]);
+    let offenders: Vec<_> = found
+        .iter()
+        .filter(|(krate, file)| {
+            krate != "forge-integ"
+                && krate != "forge-db"
+                && !(krate == "forge-cli" && file == "src/worker/mirror_tests.rs")
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "push mirror commands called outside forge-integ: {offenders:?}"
+    );
+    assert!(found
+        .iter()
+        .any(|(k, f)| k == "forge-integ" && f == "src/mirror.rs"));
+}

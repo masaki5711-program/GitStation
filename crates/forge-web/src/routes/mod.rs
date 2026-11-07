@@ -44,6 +44,9 @@ pub mod context;
 pub mod tokens;
 pub mod user_sessions;
 pub mod users;
+// ── M3 O2: the push mirror's administration ──
+pub mod push_mirror;
+// ── end M3 O2 ──
 // ── M3 I2: project webhooks (ADR-0016 §8) ──
 pub mod webhooks;
 // ── end M3 I2 ──

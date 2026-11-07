@@ -83,6 +83,10 @@ pub struct AppState {
     /// them; without them those routes answer `FG-SYS-0001
     /// reason=webhooks_unconfigured`).
     pub webhooks: Option<Arc<forge_integ::webhooks::Webhooks>>,
+    /// The push mirror's administration (M3 O2, ADR-0024 Amendment O2;
+    /// `forge serve` always sets it with `mirror.*`; without it those
+    /// routes answer `FG-SYS-0001 reason=push_mirrors_unconfigured`).
+    pub push_mirrors: Option<Arc<forge_integ::mirror::PushMirrors>>,
     /// The caller's notification settings (M3 N1, ADR-0016 Amendment N1;
     /// `forge serve` always sets it; without it those routes answer
     /// `FG-SYS-0001 reason=notifications_unconfigured`).
@@ -170,6 +174,7 @@ impl AppState {
             checks: None,
             feed: None,
             webhooks: None,
+            push_mirrors: None,
             notifications: None,
             lists: None,
             sessions: None,
@@ -278,6 +283,13 @@ impl AppState {
     #[must_use]
     pub fn with_webhooks(mut self, webhooks: forge_integ::webhooks::Webhooks) -> Self {
         self.webhooks = Some(Arc::new(webhooks));
+        self
+    }
+
+    /// The push mirror's administration (M3 O2).
+    #[must_use]
+    pub fn with_push_mirrors(mut self, mirrors: forge_integ::mirror::PushMirrors) -> Self {
+        self.push_mirrors = Some(Arc::new(mirrors));
         self
     }
 
@@ -526,13 +538,13 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    binding_routes(act_as_routes(webhook_routes(notification_routes(
-        check_routes(dev_status_routes(feed_routes(integration_routes(
-            service_account_routes(account_routes(history_routes(browse_routes(git_routes(
-                shell_routes(merge_request_routes(member_routes(move_routes(
-                    hosting_routes(fixed),
+    binding_routes(act_as_routes(mirror_routes(webhook_routes(
+        notification_routes(check_routes(dev_status_routes(feed_routes(
+            integration_routes(service_account_routes(account_routes(history_routes(
+                browse_routes(git_routes(shell_routes(merge_request_routes(
+                    member_routes(move_routes(hosting_routes(fixed))),
                 )))),
-            ))))),
+            )))),
         )))),
     ))))
 }
@@ -1039,6 +1051,50 @@ fn webhook_routes(registry: Registry<AppState>) -> Registry<AppState> {
             h::redeliver,
         )
         .responds_accepted::<h::RedeliveryQueued>(Verb::Post, h::REDELIVER)
+}
+
+/// A project's push mirror to GitLab (M3 O2, ADR-0024 Amendment O2,
+/// runbook gitlab-mirror): administrators only, people only.
+fn mirror_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::push_mirror as m;
+    registry
+        .route_with(
+            Verb::Get,
+            m::ONE,
+            Action::PushMirrorRead,
+            "A project's push mirror to GitLab and its progress: destination, credential name (never its content), the waiting and mirrored pushes, the last failure (administrators; a token needs admin)",
+            m::MIRROR,
+            m::read,
+        )
+        .responds::<m::PushMirrorBody>(Verb::Get, m::ONE)
+        .route_with_body(
+            Verb::Put,
+            m::ONE,
+            Action::PushMirrorManage,
+            "Set a project's push mirror (201 created, 200 changed): an https URL on mirror.allowed_hosts and a usable credential file of mirror.credentials_dir (400 FG-INT-0021); a new or re-enabled mirror is pushed at once (administrators, people only)",
+            m::MAX_BODY,
+            m::MIRROR,
+            m::set,
+        )
+        .responds::<m::PushMirrorBody>(Verb::Put, m::ONE)
+        .route_with(
+            Verb::Delete,
+            m::ONE,
+            Action::PushMirrorManage,
+            "Remove a project's push mirror and its progress; GitLab keeps what it has (administrators, people only)",
+            m::MIRROR,
+            m::delete,
+        )
+        .responds_no_content(Verb::Delete, m::ONE)
+        .route_with(
+            Verb::Post,
+            m::SYNC,
+            Action::PushMirrorManage,
+            "Queue one push of every branch and tag to the mirror now (administrators, people only; 404 without an enabled mirror)",
+            m::MIRROR_SYNC,
+            m::sync,
+        )
+        .responds_accepted::<m::PushMirrorSyncQueued>(Verb::Post, m::SYNC)
 }
 
 /// The integrations' event feed (M3 I1c, ADR-0016 §7, plan 02 §11.2,

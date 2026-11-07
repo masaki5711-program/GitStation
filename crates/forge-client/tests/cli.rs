@@ -979,6 +979,10 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "webhook rotate-secret",
             "webhook deliveries",
             "webhook redeliver",
+            "mirror show",
+            "mirror set",
+            "mirror remove",
+            "mirror sync",
             "api",
             "help",
             "schema"

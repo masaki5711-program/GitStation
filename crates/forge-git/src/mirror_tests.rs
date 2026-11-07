@@ -256,7 +256,11 @@ async fn the_token_goes_in_the_environment_never_in_the_arguments_or_the_error()
     assert!(argv.contains("protocol.allow=never"), "{argv}");
     assert!(argv.contains("protocol.https.allow=always"), "{argv}");
     assert!(argv.contains("credential.helper="), "{argv}");
-    assert!(env.contains("key=http.extraHeader"), "{env}");
+    assert!(
+        env.contains("key=http.https://gitlab.example.invalid/ymma/app.git.extraHeader"),
+        "{env}"
+    );
+    assert!(argv.contains("http.followRedirects=false"), "{argv}");
     assert!(
         env.contains("value=Authorization: Basic c3ludGhldGlj"),
         "{env}"
@@ -302,4 +306,74 @@ fn failure_reasons_are_read_from_stderr() {
         }
     );
     assert_eq!(rejected.as_deref(), Some("refs/heads/main"));
+}
+
+/// One HTTP listener on 127.0.0.1 that records each request's head and
+/// answers `answer`; returns its port and the recorded heads.
+fn listener(answer: String) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read as _, Write as _};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = l.local_addr().expect("addr").port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = std::sync::Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for stream in l.incoming().take(8) {
+            let Ok(mut s) = stream else { return };
+            let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut buf = [0u8; 8192];
+            let n = s.read(&mut buf).unwrap_or(0);
+            log.lock()
+                .expect("log")
+                .push(String::from_utf8_lossy(&buf[..n]).into_owned());
+            let _ = s.write_all(answer.as_bytes());
+        }
+    });
+    (port, seen)
+}
+
+/// Security review (HIGH): a 30x from the allowlisted host must not be
+/// followed, and the Authorization header goes to the mirror's URL only.
+#[tokio::test]
+async fn a_redirect_is_never_followed_and_the_header_reaches_only_the_mirror_url() {
+    let f = fixture().await;
+    let (other, other_seen) =
+        listener("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned());
+    let (port, seen) = listener(format!(
+        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{other}/stolen.git/info/refs?service=git-receive-pack\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n"
+    ));
+    let policy = MirrorPolicy::parse(&format!("127.0.0.1:{port}"), true).expect("policy");
+    let url = policy
+        .check(&format!("http://127.0.0.1:{port}/r.git"))
+        .expect("url");
+    let header = MirrorCredential::parse("synthetic:tok-synthetic-456\n")
+        .expect("credential")
+        .authorization();
+    let e = f
+        .git
+        .push_mirror(
+            &f.root,
+            f.id,
+            &MirrorDestination::Remote {
+                url: &url,
+                authorization: &header,
+                ca_file: None,
+            },
+            T,
+        )
+        .await
+        .expect_err("a redirect is a failure");
+    assert_eq!(e.code(), ErrorCode::PushMirrorFailed);
+    let first = seen.lock().expect("seen").join("\n");
+    assert!(first.contains("/r.git/info/refs"), "{first}");
+    assert!(
+        first.to_ascii_lowercase().contains("authorization: basic "),
+        "the mirror's own URL gets the header: {first}"
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    let redirected = other_seen.lock().expect("other").join("\n");
+    assert!(
+        redirected.is_empty(),
+        "the redirect was followed: {redirected}"
+    );
 }

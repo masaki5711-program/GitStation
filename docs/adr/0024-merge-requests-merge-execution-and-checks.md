@@ -1987,8 +1987,10 @@ forge-db `mirror`（マイグレーション 20261130100000）、宛先の方針
   （`mirror.push_timeout_secs`、既定 300、30〜1500）。
 - **資格情報（計画の「credential helper で渡す」からの変更）**: トークンは DB に置かない。`push_mirrors.credential_name` が
   `mirror.credentials_dir` のファイル（1 行 `<ユーザー名>:<トークン>`、権限 0600、forge-core `read_secret_text` で読む）を指す。
-  git には **`Authorization: Basic …` のヘッダーを子プロセスの環境だけ**（`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_0=http.extraHeader` /
-  `GIT_CONFIG_VALUE_0`）で渡し、`credential.helper` を空にする。補助のプログラム（forge 自身を helper として呼ぶ形）を作るより
+  git には **`Authorization: Basic …` のヘッダーを子プロセスの環境だけ**（`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_0=http.<ミラーの URL>.extraHeader` /
+  `GIT_CONFIG_VALUE_0`。その URL にだけ送る）で渡し、`credential.helper` を空にし、**リダイレクトは追わない**
+  （`http.followRedirects=false`。独立レビューの HIGH: 許可した host の 30x がヘッダーを別の host に運ぶ。
+  `a_redirect_is_never_followed_and_the_header_reaches_only_the_mirror_url`）。補助のプログラム（forge 自身を helper として呼ぶ形）を作るより
   部品が少なく、URL・引数・ログのどれにも出ない点は同じ（`the_token_goes_in_the_environment_never_in_the_arguments_or_the_error`）。
   ファイルは **push のたびに読み直す**（トークンの入れ替えが次の push で効く）。
 - **宛先の方針**: `https` の絶対 URL（`http` は `mirror.allow_http`、試験だけ）、ユーザー情報・クエリ・フラグメントなし、
@@ -2012,6 +2014,8 @@ forge-db `mirror`（マイグレーション 20261130100000）、宛先の方針
   `target_not_allowed`、`git`。stderr は伏せ字の先頭だけ。
 - **遅れ**: worker のタスク `mirror_lag`（1 分ごと）が、`pending_since` が `mirror.lag_alert_secs`（既定 900、60〜86 400）より古い
   有効なミラーごとに FG-INT-0014（alert）を **1 時間に 1 回まで**出す（`lag_alerted_at`）。doctor は `mirror.status` と `mirror.lag`。
+- **「今すぐ送る」も取引の中で判定する**（独立レビューの MEDIUM）: `sync_decided` が設定・削除と同じく `Authorized::reconfirm` を
+  取引の中で呼ぶ（判定の後で権限を外された管理者は積めない）。監査の行は無い（ログ `forge.mirror.sync_requested`）。
 - **管理（計画の「運用者の CLI」からの変更）**: 再送は運用者の CLI（`forge admin repo mirror`）にせず、管理者だけの HTTP の操作
   `POST /api/v1/projects/{id}/push-mirror/sync`（`PushMirrorManage`）にした。CLAUDE.md の契約 4 の「authorize() を通らない例外」を
   増やさないため。設定・表示・削除も `PushMirrorManage` / `PushMirrorRead`（管理者、人だけ。トークンは `admin` のスコープ）。

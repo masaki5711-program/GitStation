@@ -392,25 +392,46 @@ async fn a_disabled_mirror_or_a_purging_repository_starts_nothing() {
         start(&w.t.db, w.repo()).await.expect("start").is_none(),
         "disabled"
     );
-    let e = enqueue_now(
+    let e = sync_decided(
         &w.t.db,
-        w.repo(),
-        &RequestId::parse("req-admin").expect("id"),
+        &as_user(w.admin, "req-admin"),
+        w.project(),
+        w.admin,
+        |_| Ok(()),
     )
     .await
     .expect_err("disabled");
     assert_eq!(e.code(), ErrorCode::NotFound);
     w.set("req-on", &setting(URL, true)).await;
-    assert!(matches!(
-        enqueue_now(
+    for (request, queued) in [("req-admin", true), ("req-admin", false)] {
+        let (enqueued, ()) = sync_decided(
             &w.t.db,
-            w.repo(),
-            &RequestId::parse("req-admin").expect("id")
+            &as_user(w.admin, request),
+            w.project(),
+            w.admin,
+            |_| Ok(()),
         )
         .await
-        .expect("enqueue"),
-        Enqueued::Queued(_)
-    ));
+        .expect("sync");
+        assert_eq!(
+            matches!(enqueued, Enqueued::Queued(_)),
+            queued,
+            "{enqueued:?}"
+        );
+    }
+    // A refused decision enqueues nothing.
+    let before = w.jobs().await.len();
+    let e = sync_decided(
+        &w.t.db,
+        &as_user(w.admin, "req-denied"),
+        w.project(),
+        w.admin,
+        |_| -> Result<(), ForgeError> { Err(ForgeError::new(ErrorCode::Forbidden)) },
+    )
+    .await
+    .expect_err("denied");
+    assert_eq!(e.code(), ErrorCode::Forbidden);
+    assert_eq!(w.jobs().await.len(), before);
     w.t.drop_now().await;
 }
 

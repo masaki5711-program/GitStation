@@ -46,6 +46,9 @@ mod viewer;
 mod matrix_rows_webhooks;
 mod webhook_ctx;
 // ── end M3 I2 ──
+// ── M3 O2: the push mirror ──
+mod matrix_rows_mirror;
+// ── end M3 O2 ──
 // ── M3 X1 ──
 mod matrix_rows_spec_refs;
 mod spec_ref;

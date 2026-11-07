@@ -94,6 +94,13 @@ pub enum Command {
         #[command(subcommand)]
         command: WebhookCommand,
     },
+    /// A project's push mirror to GitLab (M3 O2): show, set, remove, sync
+    /// (administrators; a token needs the admin scope).
+    #[command(disable_help_subcommand = true)]
+    Mirror {
+        #[command(subcommand)]
+        command: MirrorCommand,
+    },
     /// An integration's event feed (M3 I1c): events, cursor — with the
     /// integration's own service account token.
     #[command(disable_help_subcommand = true)]
@@ -1414,6 +1421,43 @@ pub enum WebhookCommand {
         /// The delivery's id (from `webhook deliveries`).
         #[arg(value_parser = parse_id)]
         delivery: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MirrorCommand {
+    /// The project's mirror: destination, credential name, progress.
+    Show {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Set (create or change) the project's mirror.
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// An https URL whose host and port mirror.allowed_hosts names,
+        /// without user information (the token is in the credential file).
+        #[arg(long, value_parser = parse_text)]
+        url: String,
+        /// The name of a credential file in mirror.credentials_dir.
+        #[arg(long, value_parser = parse_text, value_name = "NAME")]
+        credential: String,
+        /// Keep the setting without pushing.
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// Remove the project's mirror (GitLab keeps what it has).
+    Remove {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Queue one push of every branch and tag now.
+    Sync {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
     },

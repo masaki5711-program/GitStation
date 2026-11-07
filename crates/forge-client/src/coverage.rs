@@ -635,6 +635,27 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
         Coverage::Command("webhook redeliver"),
     ),
+    // M3 O2 (ADR-0024 Amendment O2): the push mirror to GitLab.
+    (
+        "GET",
+        "/api/v1/projects/{id}/push-mirror",
+        Coverage::Command("mirror show"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/push-mirror",
+        Coverage::Command("mirror set"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/push-mirror",
+        Coverage::Command("mirror remove"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/push-mirror/sync",
+        Coverage::Command("mirror sync"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

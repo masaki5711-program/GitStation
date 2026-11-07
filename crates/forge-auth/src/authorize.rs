@@ -1120,6 +1120,15 @@ pub fn authorize(
             }
         }
 
+        // --- the push mirror (M3 O2, ADR-0024 Amendment O2) ---
+        // Administrators, people only (visibility and pending deletion were
+        // decided above: an administrator sees every project; a token
+        // without `admin` holds no administrator rights).
+        (Action::PushMirrorRead | Action::PushMirrorManage, Resource::Project(_)) => {
+            people_only()?;
+            admin_only()
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1217,6 +1226,8 @@ pub fn authorize(
             | Action::WebhookDeliveryRead
             | Action::WebhookRedeliver
             | Action::WebhookDeliver
+            | Action::PushMirrorRead
+            | Action::PushMirrorManage
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
