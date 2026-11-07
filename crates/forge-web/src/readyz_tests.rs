@@ -124,6 +124,12 @@ async fn readyz_body_contains_no_host_or_internal_detail() {
         Duration::from_secs(1),
     );
     let (_, body, _) = get_readyz(router).await;
+    // The request_id is random hex: a value such as `…5432…` would read as a
+    // leaked port. Check everything except that one value.
+    let json: Value = serde_json::from_str(&body).expect("json");
+    let request_id = json["request_id"].as_str().expect("request_id").to_owned();
+    assert!(!request_id.is_empty());
+    let body = body.replace(&request_id, "");
     for leak in [
         "db-secret-host",
         "5432",
