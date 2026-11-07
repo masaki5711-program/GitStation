@@ -274,4 +274,11 @@ pub const KEYS: &[Key] = &[
         "webhook.delivery_retention_days",
         "FORGE_WEBHOOK_DELIVERY_RETENTION_DAYS",
     ),
+    // M3 O2: the push mirror to GitLab (ADR-0024 Amendment O2).
+    text("mirror.credentials_dir", "FORGE_MIRROR_CREDENTIALS_DIR"),
+    text("mirror.allowed_hosts", "FORGE_MIRROR_ALLOWED_HOSTS"),
+    boolean("mirror.allow_http", "FORGE_MIRROR_ALLOW_HTTP"),
+    text("mirror.ca_file", "FORGE_MIRROR_CA_FILE"),
+    number("mirror.push_timeout_secs", "FORGE_MIRROR_PUSH_TIMEOUT_SECS"),
+    number("mirror.lag_alert_secs", "FORGE_MIRROR_LAG_ALERT_SECS"),
 ];

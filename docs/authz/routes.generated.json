@@ -880,6 +880,38 @@
     "word": "fixed"
   },
   {
+    "action": "PushMirrorRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/push-mirror",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PushMirrorManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/push-mirror",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PushMirrorManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/push-mirror",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PushMirrorManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/push-mirror/sync",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/blame",

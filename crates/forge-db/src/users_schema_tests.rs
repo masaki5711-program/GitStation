@@ -219,6 +219,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // M3 O2: the push mirror's setting (its status is derived).
+            AuditedTable {
+                name: "push_mirrors".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec!["updated_at".into()],
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "push_unlisted_refs".into(),
                 audit_resource: AuditResource::Literal("project".into()),

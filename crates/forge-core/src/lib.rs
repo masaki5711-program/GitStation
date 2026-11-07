@@ -20,6 +20,7 @@ pub mod list_page;
 pub mod merge;
 pub mod merge_conditions;
 pub mod merge_request;
+pub mod mirror;
 pub mod move_details;
 pub mod namespace_path;
 pub mod namespace_resolver;

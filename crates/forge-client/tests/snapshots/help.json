@@ -8090,6 +8090,180 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mirror show --project 7 --json"
+      ],
+      "name": "mirror show",
+      "output": {
+        "properties": {
+          "status": {
+            "required": [
+              "pending_seq",
+              "pending_since",
+              "mirrored_seq",
+              "last_attempt_at",
+              "last_success_at",
+              "failures",
+              "last_error_code",
+              "last_reason"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "repo_id",
+          "url",
+          "origin",
+          "credential_name",
+          "enabled",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "status"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/push-mirror"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "A project's push mirror to GitLab (administrators; a token needs admin): destination, credential name (never its content), enabled, and the progress — pending_since, the last success, failures and the last FG code and reason. 404 FG-REPO-0005 when there is none."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The GitLab repository's https URL.",
+          "kind": "option",
+          "name": "--url",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The credential file's name.",
+          "kind": "option",
+          "name": "--credential",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Keep the setting without pushing.",
+          "kind": "flag",
+          "name": "--disabled",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mirror set --project 7 --url https://gitlab.internal/ymma/app.git --credential gitlab"
+      ],
+      "name": "mirror set",
+      "output": {
+        "required": [
+          "repo_id",
+          "url",
+          "origin",
+          "credential_name",
+          "enabled",
+          "status"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/push-mirror"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Set a project's push mirror (an administrator, a person). The URL must be https, on mirror.allowed_hosts and without user information; --credential names a file of mirror.credentials_dir (one <username>:<token> line, mode 0600). 400 FG-INT-0021 otherwise. A new or re-enabled mirror is pushed at once."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mirror remove --project 7 --yes"
+      ],
+      "name": "mirror remove",
+      "output": {
+        "type": "null"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/push-mirror"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Remove a project's push mirror and its progress (an administrator, a person); GitLab keeps what it has. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mirror sync --project 7"
+      ],
+      "name": "mirror sync",
+      "output": {
+        "properties": {
+          "queued": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "queued"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/push-mirror/sync"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Queue one push of every branch and tag to the mirror now (an administrator, a person); queued false means this request's push was already queued. 404 FG-REPO-0005 without an enabled mirror."
+    },
+    {
+      "args": [
+        {
           "description": "GET | POST | PUT | PATCH | DELETE",
           "kind": "positional",
           "name": "method",

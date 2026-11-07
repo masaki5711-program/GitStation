@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# M3 O2: the push mirror's local destination (other crates' tests only).
+test-support = []
+
 [dependencies]
 forge-core.workspace = true
 forge-errors.workspace = true

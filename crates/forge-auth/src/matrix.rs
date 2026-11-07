@@ -109,6 +109,9 @@ pub(crate) enum Actor {
     MaintainerTokenReadApi,
     /// Administrator with a `merge_approve` + `admin` token (R5 review).
     AdminTokenMergeApproveAdmin,
+    /// Administrator with a `read_api` + `admin` token (M3 O2: reads the
+    /// push mirror, does not change it).
+    AdminTokenReadApiAdmin,
     /// A service account without a role, with a `read_api` token (M3 S0:
     /// it sees member projects only); the twin of `NonMemberTokenReadApi`.
     ServiceAccountNonMemberTokenReadApi,
@@ -473,6 +476,7 @@ impl Actor {
             }
             Actor::MaintainerTokenReadApi => token(false, &[Scope::ReadApi]),
             Actor::AdminTokenMergeApproveAdmin => token(true, &[Scope::MergeApprove, Scope::Admin]),
+            Actor::AdminTokenReadApiAdmin => token(true, &[Scope::ReadApi, Scope::Admin]),
             Actor::ServiceAccountNonMemberTokenReadApi => {
                 token_of(AccountKind::ServiceAccount, false, &[Scope::ReadApi])
             }
@@ -575,6 +579,7 @@ impl Actor {
             | Actor::AdminTokenMergeExecuteAdmin
             | Actor::AdminTokenMergeExecute
             | Actor::AdminTokenMergeApproveAdmin
+            | Actor::AdminTokenReadApiAdmin
             | Actor::ServiceAccountNonMemberTokenReadApi
             | Actor::BotNonMemberTokenReadApi => None,
         }
@@ -638,6 +643,7 @@ impl Actor {
             | Actor::AgentTokenMergeApprove
             | Actor::MaintainerTokenReadApi
             | Actor::AdminTokenMergeApproveAdmin
+            | Actor::AdminTokenReadApiAdmin
             | Actor::DevTokenUserEmail
             | Actor::ServiceAccountGuestTokenRead
             | Actor::BotNonMemberTokenReadApi
@@ -1066,6 +1072,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_bindings::LIST_ROWS,
         &crate::matrix_rows_act_as::generated_denies(),
         crate::matrix_rows_webhooks::WEBHOOK_ROWS.as_slice(),
+        crate::matrix_rows_mirror::MIRROR_ROWS.as_slice(),
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,
         crate::matrix_rows_spec_refs::CONTEXT_READ_ROWS,

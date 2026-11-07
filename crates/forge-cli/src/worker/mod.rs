@@ -49,7 +49,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_core::config::{Config, MaintenanceConfig, ReviewConfig, SealKeys};
+use forge_core::config::{Config, MaintenanceConfig, MirrorConfig, ReviewConfig, SealKeys};
 use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::subscribers::Registry;
@@ -91,6 +91,9 @@ mod codeowners_restore;
 // ── end M3 R6 ──
 // ── M3 O3: the repository maintenance (own runner + schedule) ──
 pub(crate) mod maintenance;
+// ── M3 O2: the push mirror lane ──
+pub(crate) mod mirror;
+// ── end M3 O2 ──
 // ── end M3 O3 ──
 // ── M3 N1: the notification lane (the subscriber and its own job runner) ──
 mod notify_lane;
@@ -167,7 +170,11 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             keys,
             &storage,
             purge,
-            (&cfg.review, Some(&cfg.maintenance), notify.as_ref()),
+            (
+                &cfg.review,
+                Some((&cfg.maintenance, &cfg.mirror)),
+                notify.as_ref(),
+            ),
             webhook,
             stopped,
         )
@@ -223,6 +230,12 @@ enum Task {
     /// The nightly maintenance schedule (`maintenance::run_schedule`).
     MaintenanceSchedule,
     // ── end M3 O3 ──
+    // ── M3 O2 ──
+    /// The mirror lane's own job runner (`mirror`), with `mirror.credentials_dir`.
+    MirrorRunner,
+    /// Mirrors waiting past `mirror.lag_alert_secs` (`mirror::run_lag`).
+    MirrorLag,
+    // ── end M3 O2 ──
     // ── M3 N1 ──
     /// The notification lane's own job runner (`notify_lane`).
     NotifyRunner,
@@ -252,11 +265,17 @@ impl Default for WebhookLane {
     }
 }
 
-/// The maintenance lane (M3 O3): its own job runner and its settings.
+/// The maintenance lane (M3 O3): its own job runner and its settings; and
+/// the push mirror lane (M3 O2) beside it — both need the storage and are
+/// built by `forge worker` only.
 #[derive(Clone)]
 pub(crate) struct MaintenanceTask {
     pub(crate) runner: Arc<JobRunner>,
     pub(crate) cfg: MaintenanceConfig,
+    /// The mirror's own runner (`None` without `mirror.credentials_dir`).
+    pub(crate) mirror_runner: Option<Arc<JobRunner>>,
+    /// `mirror.lag_alert_secs`.
+    pub(crate) mirror_lag: Duration,
 }
 
 /// The purge tasks' handles and periods (`hosting.purge_interval_secs`;
@@ -326,9 +345,14 @@ fn tasks_with(
         tasks.push(Task::SessionPurge);
     }
     // ── M3 O3: only with the storage (not in the loop tests) ──
-    if maintenance.is_some() {
+    if let Some(m) = maintenance {
         tasks.push(Task::MaintenanceRunner);
         tasks.push(Task::MaintenanceSchedule);
+        // ── M3 O2: the lag sweep always, the runner with the credentials ──
+        tasks.push(Task::MirrorLag);
+        if m.mirror_runner.is_some() {
+            tasks.push(Task::MirrorRunner);
+        }
     }
     // ── M3 N1: only with the notification lane (notify.enabled) ──
     if notify.is_some() {
@@ -377,7 +401,11 @@ fn registry_with(
         // M3 X4 (`independent`): every merge request version (and a work
         // item link change) asks for its `forge/spec-lint` and
         // `forge/spec-trace` runs (the `check.spec_index` job).
-        .with(Arc::new(forge_db::checks::spec_index::SpecIndexRequests))?;
+        .with(Arc::new(forge_db::checks::spec_index::SpecIndexRequests))?
+        // M3 O2 (`independent`): a push to a mirrored repository marks it
+        // waiting and enqueues its push (the job waits for the mirror lane;
+        // the lag shows meanwhile).
+        .with(Arc::new(forge_db::mirror::PushMirrorSubscriber))?;
     // M3 I2: deliveries are recorded only when the lane can send them.
     let registry = if webhooks {
         registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?
@@ -455,6 +483,8 @@ impl Task {
             Self::SpecIndexSweep => spec_index_sweep::NAME,
             Self::MaintenanceRunner => maintenance::RUNNER_NAME,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
+            Self::MirrorRunner => mirror::RUNNER_NAME,
+            Self::MirrorLag => mirror::LAG_NAME,
             Self::WebhookRunner => webhooks::RUNNER_NAME,
             Self::WebhookRetention => webhooks::RETENTION_NAME,
             Self::NotifyRunner => notify_lane::RUNNER_NAME,
@@ -487,6 +517,8 @@ impl Task {
             Self::SpecIndexSweep => spec_index_sweep::PERIOD,
             Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
+            Self::MirrorRunner => jobs::JOB_POLL_PERIOD,
+            Self::MirrorLag => mirror::LAG_PERIOD,
             Self::WebhookRunner => jobs::JOB_POLL_PERIOD,
             Self::WebhookRetention => webhooks::RETENTION_PERIOD,
             Self::NotifyRunner => jobs::JOB_POLL_PERIOD,
@@ -553,6 +585,21 @@ impl Task {
             },
             Self::MaintenanceSchedule => match shared.maintenance.as_ref() {
                 Some(m) => maintenance::run_schedule(db, &m.cfg).await,
+                None => Err(self.unconfigured()),
+            },
+            Self::MirrorRunner => match shared
+                .maintenance
+                .as_ref()
+                .and_then(|m| m.mirror_runner.as_ref())
+            {
+                Some(runner) => {
+                    let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver
+                    jobs::run_job(runner, shared.grace, stop).await
+                }
+                None => Err(self.unconfigured()),
+            },
+            Self::MirrorLag => match shared.maintenance.as_ref() {
+                Some(m) => mirror::run_lag(db, m.mirror_lag).await,
                 None => Err(self.unconfigured()),
             },
             Self::WebhookRunner => match shared.webhook.runner.as_ref() {
@@ -652,7 +699,7 @@ pub(crate) async fn run_full(
     purge: Option<PurgeTask>,
     (review, maintenance, notify): (
         &ReviewConfig,
-        Option<&MaintenanceConfig>,
+        Option<(&MaintenanceConfig, &MirrorConfig)>,
         Option<&NotifyLane>,
     ),
     webhook: WebhookLane,
@@ -662,14 +709,16 @@ pub(crate) async fn run_full(
     for handler in jobs::handlers(db, storage)? {
         runner.register(handler)?;
     }
-    let maintenance = maintenance
-        .map(|cfg| {
-            Ok::<_, ForgeError>(MaintenanceTask {
-                runner: Arc::new(maintenance::runner(db, storage, cfg)?),
-                cfg: cfg.clone(), // clone: the lane owns its settings
-            })
-        })
-        .transpose()?;
+    let maintenance = match maintenance {
+        Some((cfg, mirror_cfg)) => Some(MaintenanceTask {
+            runner: Arc::new(maintenance::runner(db, storage, cfg)?),
+            cfg: cfg.clone(), // clone: the lane owns its settings
+            // M3 O2: the mirror lane (the credential files are read per push).
+            mirror_runner: mirror::lane(db, storage, mirror_cfg).await?,
+            mirror_lag: mirror_cfg.lag_alert,
+        }),
+        None => None,
+    };
     // M3 N1: the relay's CA file and password are read now.
     let notify = notify
         .map(|lane| NotifyTask::new(db, lane, None))

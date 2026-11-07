@@ -169,6 +169,12 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 cfg.webhook.policy.clone(), // clone: the routes own their policy
                 webhook_keys,
             ))
+            // M3 O2: the push mirror's administration (the operator's
+            // mirror policy and credential directory).
+            .with_push_mirrors(forge_integ::mirror::PushMirrors::new(
+                db.clone(),         // clone: the pool handle is shared
+                cfg.mirror.clone(), // clone: the routes own their mirror config
+            ))
             // M3 N1: a person's own notification settings (always: the
             // routes are cheap and the settings are kept even while mail is
             // off, so turning mail on later honours them).

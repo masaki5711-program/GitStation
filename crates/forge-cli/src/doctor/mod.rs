@@ -40,6 +40,8 @@ mod checks;
 mod integrations;
 // M3 O3: FG-GIT-0018, FG-GIT-0019, the ref count.
 mod maintenance;
+// M3 O2: the push mirror (FG-INT-0013, FG-INT-0014).
+mod mirror;
 // M3 N1: FG-INT-0015 (the mail queue and the relay).
 mod notify;
 mod oidc;
@@ -82,7 +84,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 32] = [
+const DB_CHECKS: [&str; 35] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -134,6 +136,11 @@ const DB_CHECKS: [&str; 32] = [
     // M3 N1: FG-INT-0015 (the mail queue, the relay).
     notify::NAMES[0],
     notify::NAMES[1],
+    // M3 O2: the push mirror's settings, failures (FG-INT-0013) and lag
+    // (FG-INT-0014).
+    mirror::NAMES[0],
+    mirror::NAMES[1],
+    mirror::NAMES[2],
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -276,6 +283,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let act_as_keys = act_as::keys_check(db, cfg).await;
     let webhook_deliveries = webhooks::deliveries_check(db, &cfg.webhook).await;
     let [mail_queue, mail_relay] = notify::notify_checks(db, &cfg.notify).await;
+    let [mirror_config, mirror_status, mirror_lag] = mirror::mirror_checks(db, &cfg.mirror).await;
     vec![
         bootstrap,
         connections,
@@ -310,6 +318,9 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         webhook_deliveries,
         mail_queue,
         mail_relay,
+        mirror_config,
+        mirror_status,
+        mirror_lag,
     ]
 }
 

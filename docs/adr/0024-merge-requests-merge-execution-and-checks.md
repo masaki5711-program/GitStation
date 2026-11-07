@@ -1972,3 +1972,52 @@ push のたびに計算する。両方の作成者と kanflow に知らせる」
   足すと、変更パスは重ならないが merge-ort（git 2.53 で確認）は `e/new` の衝突（directory rename suggested、終了コード 1）を返す。絞り込みは、
   片側が **削除した** パスのディレクトリ（`diff-tree --diff-filter=D`、forge-git の `deleted_paths`）が、もう片側の変更パスのディレクトリの
   どれかと同じなら組を候補に残す（どちらかの集合が不明なら常に候補）。テスト `a_directory_rename_against_a_file_added_in_it_is_predicted`。
+
+## 実装で決めたこと（O2 `feat/git-gitlab-push-mirror`、2026-11-07）— GitLab への push ミラー
+
+計画 11 §5 O2（計画 06 D-2・D-4 §4.11: GitStation が正本、GitLab は保険）の実装。git の手順は forge-git `mirror`、設定と状態は
+forge-db `mirror`（マイグレーション 20261130100000）、宛先の方針と資格情報は forge-core `mirror` / `config::mirror`、ジョブと専用の
+ランナーは forge-cli `worker/mirror.rs`。Runbook `gitlab-mirror`。
+
+- **送り方**: `git -c core.hooksPath=<空> -c credential.helper= -c protocol.allow=never -c protocol.https.allow=always
+  [-c http.sslCAInfo=<ca>] push --porcelain --prune --no-verify --end-of-options <url> +refs/heads/*:refs/heads/*
+  +refs/tags/*:refs/tags/*`。**明示の refspec だけ**（`--mirror` も `refs/*` も使わない）なので `refs/merge-requests/*` は外に出ない
+  （本文の Risks の約束。`the_mirror_gets_branches_and_tags_and_never_merge_request_refs`）。`+` と `--prune`: 正本は GitStation なので
+  強制 push と削除も届く。`protocol.allow=never` で `file://`・`ext::`・ssh に届かない。プロセスの木ごと時間切れ
+  （`mirror.push_timeout_secs`、既定 300、30〜1500）。
+- **資格情報（計画の「credential helper で渡す」からの変更）**: トークンは DB に置かない。`push_mirrors.credential_name` が
+  `mirror.credentials_dir` のファイル（1 行 `<ユーザー名>:<トークン>`、権限 0600、forge-core `read_secret_text` で読む）を指す。
+  git には **`Authorization: Basic …` のヘッダーを子プロセスの環境だけ**（`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_0=http.<ミラーの URL>.extraHeader` /
+  `GIT_CONFIG_VALUE_0`。その URL にだけ送る）で渡し、`credential.helper` を空にし、**リダイレクトは追わない**
+  （`http.followRedirects=false`。独立レビューの HIGH: 許可した host の 30x がヘッダーを別の host に運ぶ。
+  `a_redirect_is_never_followed_and_the_header_reaches_only_the_mirror_url`）。補助のプログラム（forge 自身を helper として呼ぶ形）を作るより
+  部品が少なく、URL・引数・ログのどれにも出ない点は同じ（`the_token_goes_in_the_environment_never_in_the_arguments_or_the_error`）。
+  ファイルは **push のたびに読み直す**（トークンの入れ替えが次の push で効く）。
+- **宛先の方針**: `https` の絶対 URL（`http` は `mirror.allow_http`、試験だけ）、ユーザー情報・クエリ・フラグメントなし、
+  `mirror.allowed_hosts`（`host` / `host:port`、既定は空 = 設定できない）にある host と port。設定の時（FG-INT-0021、400）と
+  **push の時にもう一度**（その時点の方針。外れていれば FG-INT-0013 `reason=target_not_allowed`）。読み取りのプールは URL を読めず
+  `origin`（scheme://host:port）だけ。監査の行も `origin` と資格情報の名前だけ。
+- **表**: `push_mirrors`（`audited`、プロジェクトに 1 つ、管理者が決める。`push_mirror.set` / `push_mirror.removed`、イベントなし）と
+  `push_mirror_status`（`derived`: `pending_seq`、`pending_since`、`mirrored_seq`、失敗の回数・コード・理由、`lag_alerted_at`）。
+  完全削除が両方を消す。
+- **きっかけ（Outbox）**: 購読者 `push-mirror`（independent、**常に登録**）が、ミラーのある有効なリポジトリの `repository.pushed`
+  （マージとソースブランチの削除の経路も含む）ごとに状態を「待ち」にして `repository.push_mirror` を積む（重複の鍵
+  `push_mirror:<repo_id>:push:<seq>`）。ジョブは **そのときの全部の ref** を送るので、遅れて動いても二度動いても害がなく、最新の
+  ジョブが追いつく。成功は開始時に読んだ `pending_seq` までを覆い、その後の push が来ていれば待ちのまま（次のジョブが覆う）。
+  設定した時（と有効に戻した時）にも 1 件積む（既存の履歴をすぐ送る）。
+- **専用のランナー**: 保守のレーンと同じく自分の `JobRunner` と git のスロット（遅い GitLab がマージや作成のジョブを待たせない）。
+  `mirror.credentials_dir` が無ければランナーは動かず、ミラーがあれば起動時に `forge.worker.mirror_lane_off`（warn、FG-SYS-0002）。
+  ジョブはキューに残り、遅れが見える（購読者は動き続ける）。
+- **失敗の扱い**: 途中の試行の失敗は warn `forge.mirror.push_failed` と再試行（5 回、10 秒から倍）。**最後の試行は FG-INT-0013
+  （alert）を 1 回だけ出してジョブを完了にする**（キューの汎用のデッドレターと二重に鳴らさない）。状態に失敗が残り、次の push か
+  `gstn mirror sync` が再び試す。`reason`: `rejected`（`ref`）、`auth`、`unreachable`、`timeout`、`credential_unreadable`、
+  `target_not_allowed`、`git`。stderr は伏せ字の先頭だけ。
+- **遅れ**: worker のタスク `mirror_lag`（1 分ごと）が、`pending_since` が `mirror.lag_alert_secs`（既定 900、60〜86 400）より古い
+  有効なミラーごとに FG-INT-0014（alert）を **1 時間に 1 回まで**出す（`lag_alerted_at`）。doctor は `mirror.status` と `mirror.lag`。
+- **「今すぐ送る」も取引の中で判定する**（独立レビューの MEDIUM）: `sync_decided` が設定・削除と同じく `Authorized::reconfirm` を
+  取引の中で呼ぶ（判定の後で権限を外された管理者は積めない）。監査の行は無い（ログ `forge.mirror.sync_requested`）。
+- **管理（計画の「運用者の CLI」からの変更）**: 再送は運用者の CLI（`forge admin repo mirror`）にせず、管理者だけの HTTP の操作
+  `POST /api/v1/projects/{id}/push-mirror/sync`（`PushMirrorManage`）にした。CLAUDE.md の契約 4 の「authorize() を通らない例外」を
+  増やさないため。設定・表示・削除も `PushMirrorManage` / `PushMirrorRead`（管理者、人だけ。トークンは `admin` のスコープ）。
+- **git 2.43 での確認**: このセッションの環境（git 2.43）で `push --end-of-options <url> <refspec>…` が通ることを確かめた
+  （`git grep` と違い、push は 2.43 でもその印を受け付ける）。

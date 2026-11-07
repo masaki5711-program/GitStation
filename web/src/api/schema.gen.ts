@@ -1294,6 +1294,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/push-mirror": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's push mirror to GitLab and its progress: destination, credential name (never its content), the waiting and mirrored pushes, the last failure (administrators; a token needs admin) */
+        get: operations["get_api_v1_projects_id_push_mirror"];
+        /** Set a project's push mirror (201 created, 200 changed): an https URL on mirror.allowed_hosts and a usable credential file of mirror.credentials_dir (400 FG-INT-0021); a new or re-enabled mirror is pushed at once (administrators, people only) */
+        put: operations["put_api_v1_projects_id_push_mirror"];
+        post?: never;
+        /** Remove a project's push mirror and its progress; GitLab keeps what it has (administrators, people only) */
+        delete: operations["delete_api_v1_projects_id_push_mirror"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/push-mirror/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue one push of every branch and tag to the mirror now (administrators, people only; 404 without an enabled mirror) */
+        post: operations["post_api_v1_projects_id_push_mirror_sync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/repository/blame": {
         parameters: {
             query?: never;
@@ -3845,6 +3881,59 @@ export interface components {
              */
             versions?: number[] | null;
         };
+        /** @description A project's mirror (never the credential's content). */
+        PushMirrorBody: {
+            created_at: string;
+            /** Format: int64 */
+            created_by: number;
+            credential_name: string;
+            enabled: boolean;
+            /** @description `scheme://host:port` of the URL (what logs and audit rows show). */
+            origin: string;
+            /** Format: int64 */
+            repo_id: number;
+            status: components["schemas"]["PushMirrorStatusBody"];
+            updated_at: string;
+            /** @description The destination as stored (normalized). */
+            url: string;
+        };
+        /** @description A mirror's progress. */
+        PushMirrorStatusBody: {
+            /**
+             * Format: int32
+             * @description Failed attempts in a row.
+             */
+            failures: number;
+            last_attempt_at: string | null;
+            /** @description `FG-INT-0013` after a failed attempt. */
+            last_error_code: string | null;
+            /**
+             * @description `auth`, `network`, `timeout`, `credential_unreadable`, … (runbook
+             *     `gitlab-mirror`).
+             */
+            last_reason: string | null;
+            last_success_at: string | null;
+            /**
+             * Format: int64
+             * @description The newest push mirrored.
+             */
+            mirrored_seq: number;
+            /**
+             * Format: int64
+             * @description The newest push waiting to be mirrored (`0`: none since it was set).
+             */
+            pending_seq: number;
+            /** @description Waiting since (UTC, RFC 3339); `null` when up to date. */
+            pending_since: string | null;
+        };
+        /** @description A push was asked for. */
+        PushMirrorSyncQueued: {
+            /**
+             * @description `true`: a job was queued; `false`: this request's job was already
+             *     there.
+             */
+            queued: boolean;
+        };
         /** @description `PUT …/approval-rules/{name}`. */
         PutApprovalRule: {
             /**
@@ -4243,6 +4332,26 @@ export interface components {
             revoked_sessions: number;
             /** Format: int64 */
             user_id: number;
+        };
+        /** @description `PUT …/push-mirror`. */
+        SetPushMirror: {
+            /**
+             * @description The name of a credential file in `mirror.credentials_dir` (1–64 of
+             *     `[a-z0-9._-]`, starting with a letter or a digit): one
+             *     `<username>:<token>` line, mode 0600.
+             */
+            credential_name: string;
+            /**
+             * @description `false` keeps the setting without pushing (default `true`).
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * @description An absolute `https` URL (`http` only where the operator allows it)
+             *     of at most 2048 bytes, without user information, query or fragment,
+             *     whose host and port `mirror.allowed_hosts` names.
+             */
+            url: string;
         };
         /** @description `PUT /api/v1/projects/{id}/visibility`. */
         SetVisibility: {
@@ -8384,6 +8493,132 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_push_mirror: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushMirrorBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_push_mirror: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetPushMirror"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushMirrorBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_push_mirror: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_push_mirror_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushMirrorSyncQueued"];
+                };
             };
             /** @description Error: registered code, localized message, request id */
             default: {

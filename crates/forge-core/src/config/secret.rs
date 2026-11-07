@@ -11,6 +11,12 @@ use super::invalid;
 pub struct Secret(String);
 
 impl Secret {
+    /// Wrap a value forge-core read or derived from a secret (M3 O2: the
+    /// mirror credential and its header).
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+
     pub fn expose(&self) -> &str {
         &self.0
     }

@@ -2140,6 +2140,47 @@ diagnosis = "The log event carries `webhook_id`, `delivery_id`, `attempt`, `stat
 fix = "Usually nothing: a receiver that is briefly down catches up with the retries. If one webhook keeps failing, follow runbook webhook-delivery before it is disabled."
 runbook = "webhook-delivery"
 test = "a_failed_attempt_is_retried_with_backoff"
+# ── M3 O2: the push mirror to GitLab (plan 11 §4.4, ADR-0024 Amendment O2) ──
+[[error]]
+code = "FG-INT-0013"
+name = "PushMirrorFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "GitLab へのミラーに失敗しました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The mirror to GitLab failed. Contact the administrator with the request ID."
+user_message_id = "Mirror ke GitLab gagal. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The `repository.push_mirror` job (forge worker) could not bring a repository's GitLab mirror up to date on its last attempt (5 attempts, backoff 10 s × 2^(n−1)): `git push --porcelain --prune <url> +refs/heads/*:refs/heads/* +refs/tags/*:refs/tags/*` failed. `reason`: `rejected` (the destination refused a ref: a protected branch on GitLab, a pre-receive hook, a non-fast-forward the mirror account may not force; `ref` names the first one), `auth` (401/403: the token in the credential file is wrong, expired or lacks write_repository), `unreachable` (DNS, connect, TLS, a 5xx), `timeout` (the push ran past `mirror.push_timeout_secs`), `git` (another git failure; `exit_code` and the redacted `stderr`), `credential_unreadable` (the credential file named by the mirror is missing, not a regular file, or readable by group/others), `target_not_allowed` (the host is no longer in `mirror.allowed_hosts`). Earlier attempts log warn `forge.mirror.push_failed`; this code is logged once, at the last attempt, and `forge.push_mirror_status.last_error_code` keeps it until a push succeeds. The GitLab copy is now behind GitStation: it is the insurance (plan 06 D-2), so a failover would lose the pushes since `last_success_at`."
+diagnosis = "Filter logs by error_code=FG-INT-0013: `repo_id`, `project_id`, `reason`, `origin` (scheme://host:port only, never the path or the token), `ref` (for `rejected`), `exit_code` and `stderr` (redacted: user:password@, tokens and Authorization headers are removed). `forge doctor` (`mirror.status`) lists failing mirrors; SELECT * FROM forge.push_mirror_status WHERE repo_id = <id>. `gstn mirror show --project <id> --json` shows the destination and the last result."
+fix = "Follow runbook gitlab-mirror: fix the cause (unprotect or allow force-push for the mirror account on GitLab, renew the token in the credential file with mode 0600, add the host to mirror.allowed_hosts), then run `gstn mirror sync --project <id>` (an administrator: enqueues one push) and check that `mirror.status` is ok. Never push to GitLab by hand from a developer's clone: GitStation is the canonical copy and the next mirror run would overwrite it."
+runbook = "gitlab-mirror"
+test = "a_refused_push_is_int_0013_on_the_last_attempt"
+
+[[error]]
+code = "FG-INT-0014"
+name = "PushMirrorLagging"
+http_status = 500
+severity = "alert"
+user_message_ja = "GitLab へのミラーが遅れています。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The mirror to GitLab is behind. Contact the administrator with the request ID."
+user_message_id = "Mirror ke GitLab tertinggal. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "A push mirror has had a push waiting longer than `mirror.lag_alert_secs` (default 900 s): `forge.push_mirror_status.pending_since` (the first push not yet mirrored) is older than the threshold. Found by the worker's mirror sweep (every minute; logged once per mirror per hour while it lasts) and by `forge doctor` (`mirror.lag`). Usual causes: the job keeps failing (see FG-INT-0013 for the same repo_id), the worker is down or its mirror lane is off (`forge.worker.mirror_lane_off`: `mirror.credentials_dir` unset), or the job queue is backed up. The insurance copy on GitLab is stale (plan 06 §4.11: \"保険が実は古かった\")."
+diagnosis = "Filter logs by error_code=FG-INT-0014: `repo_id`, `project_id`, `pending_since`, `lag_secs`, `last_success_at`, `last_error_code`. Check `forge doctor` (`mirror.lag`, `mirror.status`, `jobs`), the worker's start-up log (`forge.worker.mirror_lane_off`) and SELECT state, attempts, last_error_code FROM forge.jobs WHERE kind = 'repository.push_mirror' ORDER BY id DESC LIMIT 5."
+fix = "Follow runbook gitlab-mirror: start the worker or enable its mirror lane, fix the failure behind FG-INT-0013 if any, then `gstn mirror sync --project <id>`; the alert stops when a push succeeds (pending_since returns to NULL)."
+runbook = "gitlab-mirror"
+test = "a_mirror_behind_the_threshold_is_int_0014"
+
+[[error]]
+code = "FG-INT-0021"
+name = "PushMirrorTargetInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "ミラーの宛先か資格情報の名前が正しくありません。"
+user_message_en = "The mirror destination or credential name is not valid."
+user_message_id = "Tujuan mirror atau nama kredensial tidak valid."
+cause = "A push mirror setting (`PUT /api/v1/projects/{id}/push-mirror`, `gstn mirror set`) was refused before anything was stored. `reason`: `invalid_url` (not an absolute URL of at most 2048 bytes), `scheme` (not https; http only when `mirror.allow_http` is true, for tests), `userinfo` (user or password in the URL: the token belongs in the credential file), `query_or_fragment`, `not_allowlisted` (the host and port are not in `mirror.allowed_hosts`; the list is empty by default), `credential_name` (not 1–64 of [a-z0-9._-] starting with a letter or digit), `credential_missing` (no regular file of that name in `mirror.credentials_dir`, or the directory is not configured: `detail=not_configured`), `credential_insecure` (the file is readable by group or others), `credential_invalid` (the file is unreadable, larger than 4 KiB or not one `<username>:<token>` line), `no_repository` (the project has no ready repository)."
+diagnosis = "The log event carries `reason`, `origin` (scheme://host:port only) or `credential_name` and, for a credential, `detail` (the underlying check: `not_configured`, `unreadable`, `insecure_permissions`, `invalid`, or the line's shape such as `no_separator`, `several_lines`, `empty`; never the file's path or content). Compare with `forge doctor` (`mirror.config`), which prints mirror.allowed_hosts and whether mirror.credentials_dir is readable."
+fix = "Use an https URL of a host listed in mirror.allowed_hosts without user information, and the name of a credential file in mirror.credentials_dir with mode 0600 (runbook gitlab-mirror, 「設定」)."
+test = "an_invalid_mirror_target_is_400_int_0021"
 # ── U2 follow-up: the rules' optimistic concurrency ──────────────────────
 [[error]]
 code = "FG-REVIEW-0018"
