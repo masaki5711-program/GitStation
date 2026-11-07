@@ -9,6 +9,8 @@
 //! - options are `&'static str` (or crate-internal forge-generated values), so
 //!   user input can never reach the option position;
 //! - revisions (refs, object ids) follow `--end-of-options`, paths follow `--`
+//!   (a validated full object id may instead be a plain operand where a
+//!   subcommand refuses the marker: `object_id_operand`, `git grep`)
 //!   — the two are different for git (`git log -- main` means the *path* main);
 //! - the environment is cleared and rebuilt (no inherited `GIT_*`), the target
 //!   repository is pinned with `GIT_DIR`, the global config is forge-owned;
@@ -102,6 +104,7 @@ impl Git {
             subcommand,
             config: Vec::new(),
             options: Vec::new(),
+            object_operands: Vec::new(),
             revisions: Vec::new(),
             paths: Vec::new(),
             git_dir: None,
@@ -136,6 +139,9 @@ pub struct GitCommand {
     pub(crate) subcommand: &'static str,
     config: Vec<(&'static str, OsString)>,
     options: Vec<OsString>,
+    /// Full hex object ids placed right after the options, without
+    /// `--end-of-options` (see [`GitCommand::object_id_operand`]).
+    object_operands: Vec<OsString>,
     revisions: Vec<OsString>,
     paths: Vec<OsString>,
     git_dir: Option<PathBuf>,
@@ -228,6 +234,18 @@ impl GitCommand {
     pub fn revision(mut self, rev: impl Into<Revision>) -> Self {
         self.revisions.push(OsString::from(rev.into().0));
         self
+    }
+
+    /// A full hex object id as an operand right after the options, with no
+    /// `--end-of-options` before it. Only for subcommands that refuse that
+    /// marker on the minimum git (2.38–2.43 `git grep` answers "option
+    /// '--end-of-options' must come before non-option arguments"). Safe
+    /// without the marker: [`Revision::object_id`] admits only 40 / 64 hex
+    /// digits, which never start with `-`; anything else is refused here.
+    pub(crate) fn object_id_operand(mut self, rev: &Revision) -> Result<Self, ForgeError> {
+        let id = Revision::object_id(&rev.0)?;
+        self.object_operands.push(OsString::from(id.0));
+        Ok(self)
     }
 
     /// A path or pathspec, placed after `--`.
@@ -358,6 +376,7 @@ impl GitCommand {
         }
         v.push(OsString::from(self.subcommand));
         v.extend(self.options.iter().cloned());
+        v.extend(self.object_operands.iter().cloned());
         if !self.revisions.is_empty() {
             v.push(OsString::from("--end-of-options"));
             v.extend(self.revisions.iter().cloned());
