@@ -39,6 +39,8 @@ tracing.workspace = true
 embed-ui = ["forge-web/embed-ui"]
 
 [dev-dependencies]
+# M3 O2: the mirror lane's tests push to a local bare repository.
+forge-git = { workspace = true, features = ["test-support"] }
 forge-oidc = { workspace = true, features = ["test-support"] }
 forge-db = { workspace = true, features = ["test-support"] }
 # The worker test reads the mail a fake relay received.

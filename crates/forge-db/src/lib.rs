@@ -136,6 +136,8 @@ pub mod checks;
 // ── end M3 C1 ──
 // ── M3 O3: the repository maintenance ledger and schedule ──
 pub mod maintenance;
+// M3 O2: the push mirror to GitLab.
+pub mod mirror;
 // ── end M3 O3 ──
 // ── M3 N1: notifications ──
 pub mod notify;

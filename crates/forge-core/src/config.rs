@@ -24,6 +24,9 @@ mod git_http;
 mod hosting;
 mod keys;
 mod maintenance;
+// ── M3 O2: `mirror.*` ──
+pub mod mirror;
+// ── end M3 O2 ──
 // ── M3 N1: `notify.*` ──
 mod notify;
 // ── end M3 N1 ──
@@ -46,6 +49,7 @@ pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
+pub use mirror::{CredentialProblem, MirrorConfig};
 pub use notify::{valid_mailbox, NotifyConfig, SmtpConfig, SmtpTls};
 pub use review::ReviewConfig;
 pub(crate) use secret::read_secret_text;
@@ -77,6 +81,8 @@ const NAMESPACES: &[&str] = &[
     // M2 MR3 / MR4 (ADR-0021 §12): `web.*` and `auth.oidc.*`.
     "FORGE_WEB_",
     "FORGE_AUTH_",
+    // M3 O2: `mirror.*`.
+    "FORGE_MIRROR_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -176,6 +182,8 @@ pub struct Config {
     pub auth: AuthConfig,
     /// `webhook.*` (the targets, the secret keys and the CA, M3 I2).
     pub webhook: WebhookConfig,
+    /// `mirror.*` (the push mirror to GitLab, M3 O2).
+    pub mirror: MirrorConfig,
 }
 
 impl Config {
@@ -425,6 +433,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         )?,
         auth: AuthConfig::load(get)?,
         webhook: WebhookConfig::load(get)?,
+        mirror: MirrorConfig::load(get)?,
     }
     .validate_across()
 }

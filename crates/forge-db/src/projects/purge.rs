@@ -626,6 +626,22 @@ async fn finish_steps(
         "projects.purge.finish.merge_request_counters",
     )
     .await?;
+    // M3 O2: the push mirror (audited on the project: the project.purged
+    // row covers it) and its status, before the repository row.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.push_mirror_status WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.push_mirror_status",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.push_mirrors WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.push_mirrors",
+    )
+    .await?;
     // M3 O3: the maintenance ledger of the repository (operational state).
     delete_rows(
         tx,

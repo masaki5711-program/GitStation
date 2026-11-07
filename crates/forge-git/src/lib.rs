@@ -47,6 +47,7 @@ pub mod gzip;
 pub mod hidden_refs;
 pub mod maintenance;
 pub mod mergeability;
+pub mod mirror;
 pub mod pkt_line;
 mod process;
 mod process_tree;

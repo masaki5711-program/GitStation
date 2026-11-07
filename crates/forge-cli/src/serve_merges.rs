@@ -237,6 +237,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // M3 I2: the webhook codes never reach the merge job.
         | ErrorCode::WebhookDeadLettered
         | ErrorCode::WebhookTargetForbidden
+        | ErrorCode::PushMirrorFailed
+        | ErrorCode::PushMirrorLagging
+        | ErrorCode::PushMirrorTargetInvalid
         | ErrorCode::WebhookDisabled
         | ErrorCode::WebhookAttemptFailed
         | ErrorCode::ApprovalRuleChanged

@@ -610,6 +610,30 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 N1 ──
 
+# ── M3 O2: the push mirror to GitLab (20261130100000, ADR-0024 Amendment O2) ──
+# One mirror per repository, set by an administrator; the token lives in a
+# file of mirror.credentials_dir, never here. The read pool sees the origin,
+# not the full url.
+[tables.push_mirrors]
+guarded = false
+kind = "audited"
+ro_columns = [
+    "repo_id", "project_id", "origin", "credential_name", "enabled", "created_by", "created_at",
+    "updated_at",
+]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+# The mirror's progress and last result, written by the push-mirror
+# subscriber and the repository.push_mirror job.
+[tables.push_mirror_status]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 O2 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true

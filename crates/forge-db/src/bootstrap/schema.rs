@@ -864,6 +864,12 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
                 "forge_ro:SELECT",
             ]),
         ),
+        // ── M3 O2: the push mirror (20261130100000) ──
+        (
+            "forge.push_mirrors",
+            [dml("forge_app"), ro("push_mirrors")?].concat(),
+        ),
+        ("forge.push_mirror_status", operational()),
     ])
 }
 
@@ -1013,6 +1019,9 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 N1: notifications (migration 20261120100000) ──
     "notification_preferences",
     "notifications",
+    // ── M3 O2: the push mirror (migration 20261130100000) ──
+    "push_mirrors",
+    "push_mirror_status",
 ];
 
 /// Every table the first migration creates.

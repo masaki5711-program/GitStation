@@ -248,6 +248,17 @@ impl GitCommand {
         Ok(self)
     }
 
+    /// An operand placed after `--end-of-options` that is not a revision:
+    /// the destination and the refspecs of the push mirror (M3 O2: a URL
+    /// that passed forge-core's mirror policy — it starts with `http` — and
+    /// forge's own constant refspecs). Crate-internal: the caller vouches
+    /// for the value.
+    #[must_use]
+    pub(crate) fn end_operand(mut self, value: OsString) -> Self {
+        self.revisions.push(value);
+        self
+    }
+
     /// A path or pathspec, placed after `--`.
     #[must_use]
     pub fn path(mut self, path: impl AsRef<OsStr>) -> Self {
