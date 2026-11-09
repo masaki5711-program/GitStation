@@ -132,6 +132,10 @@ describe('the notifications page', () => {
     expect(server.to('POST', `${LIST}/9/read`)[0]?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
     const done = await screen.findByText('Marked as read.');
     expect(done.closest('[role="status"]')).not.toBeNull();
+    // The focus moves on to the next item's link (the button is gone).
+    await waitFor(() => {
+      expect(document.activeElement?.textContent).toContain('Fix rounding 8');
+    });
     // The count was asked again; its growth is announced politely.
     const news = await screen.findByText('New notifications. 3 unread.');
     expect(news.getAttribute('role')).toBe('status');
@@ -150,7 +154,7 @@ describe('the notifications page', () => {
   });
 
   it('marks all read up to the newest item shown', async () => {
-    const { server } = await openPage({ [`POST ${LIST}/read-all`]: () => json(200, { marked: 1 }) });
+    const { server } = await openPage({ [`POST ${LIST}/read-all`]: () => new Response(null, { status: 204 }) });
     fireEvent.click(screen.getByRole('button', { name: 'Mark all as read' }));
     await waitFor(() => {
       expect(server.to('POST', `${LIST}/read-all`)).toHaveLength(1);
@@ -158,7 +162,42 @@ describe('the notifications page', () => {
     const call = server.to('POST', `${LIST}/read-all`)[0];
     expect(call?.body).toEqual({ up_to: 9 });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
-    expect(await screen.findByText('1 notification was marked as read.')).toBeTruthy();
+    // No count is shown (the server gives none: it would count hidden items).
+    expect(await screen.findByText('All notifications were marked as read.')).toBeTruthy();
+    // The button went away with the last unread item: the heading has the focus.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: 'Notifications' }));
+    });
+  });
+
+  it('says the same result again when it happens again', async () => {
+    await openPage({
+      [`GET ${LIST}`]: () => json(200, { items: [item(9), item(7)], next_before: null }),
+      [`POST ${LIST}/9/read`]: () => json(200, { id: 9, read_at: '2026-11-09T11:00:00Z' }),
+      [`POST ${LIST}/7/read`]: () => json(200, { id: 7, read_at: '2026-11-09T11:00:00Z' }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as read (Fix rounding 9)' }));
+    const status = await screen.findByText('Marked as read.');
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as read (Fix rounding 7)' }));
+    // Emptied first, then the same words: a change a screen reader reads out.
+    await waitFor(() => {
+      expect(status.textContent).toBe('');
+    });
+    await waitFor(() => {
+      expect(status.textContent).toBe('Marked as read.');
+    });
+  });
+
+  it('names an unknown kind in a general sentence', async () => {
+    await openPage({ [`GET ${LIST}`]: () => json(200, { items: [item(9, { kind: 'mr_future' })], next_before: null }) });
+    expect(screen.getByText('There is a new notification about your merge request')).toBeTruthy();
+    expect(screen.queryByText(/mr_future/)).toBeNull();
+  });
+
+  it('marks the bell as the current page here', async () => {
+    await openPage({ [`GET ${BELL_PATH}`]: () => json(200, { count: 120, capped: true }) });
+    const bell = await screen.findByRole('link', { name: 'Notifications (99+ unread)' });
+    expect(bell.getAttribute('aria-current')).toBe('page');
   });
 
   it('shows only unread ones on the unread filter and says when there are none', async () => {
@@ -186,7 +225,12 @@ describe('the notifications page', () => {
           : json(200, { items: [item(9)], next_before: 9 }),
     });
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
-    expect(await screen.findByRole('link', { name: /Fix rounding 5/ })).toBeTruthy();
+    const added = await screen.findByRole('link', { name: /Fix rounding 5/ });
+    // The focus goes to the first new item and the number is said.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(added);
+    });
+    expect(await screen.findByText('1 more notification is shown.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
     expect(server.calls.filter((c) => c.path === LIST).map((c) => c.query.get('limit'))).toEqual(['20', '20']);
     const empty = mockServer(routes({ [`GET ${LIST}`]: () => json(200, { items: [], next_before: null }) }));

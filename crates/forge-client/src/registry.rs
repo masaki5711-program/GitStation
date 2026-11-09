@@ -1216,7 +1216,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn notifications read 42", "gstn notifications read --all"],
         scopes: &["api"],
         routes: &["POST /api/v1/user/notifications/{id}/read", "POST /api/v1/user/notifications/read-all"],
-        output: r#"{"type":"object","properties":{"id":{"type":"integer"},"read_at":{"type":"string"},"marked":{"type":"integer"}}}"#,
+        output: r#"{"type":"object","properties":{"id":{"type":"integer"},"read_at":{"type":"string"},"all_read":{"const":true}}}"#,
     },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {

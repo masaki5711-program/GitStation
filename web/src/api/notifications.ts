@@ -6,7 +6,8 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 
-import { ApiFailure, call } from './client';
+import { SESSION_KEY } from '../session/session';
+import { ApiFailure, call, callNoContent, failureOf } from './client';
 import { useApi } from './context';
 import type { components } from './schema.gen';
 
@@ -54,6 +55,8 @@ export function useUnreadCount() {
     // A poll is no blip to retry at once: the next one comes after the backoff.
     retry: false,
     staleTime: 0,
+    // A hidden tab does not poll (the count is asked again when it shows).
+    refetchIntervalInBackground: false,
     refetchInterval: (query) => {
       const error = query.state.error;
       if (error instanceof ApiFailure && error.failure.kind === 'unauthenticated') return false;
@@ -91,16 +94,36 @@ function useRefreshNotifications() {
   return () => queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
 }
 
+/** A refused mark, wherever the screen went meanwhile (following an item's
+ * link marks it and leaves the page): an ended session or a stale CSRF
+ * token reads the session again, the list and the count are read again (the
+ * item shows unread), and the failure is logged with its request id. The
+ * screen still shows it when it is there to. */
+function useOnMarkFailed() {
+  const queryClient = useQueryClient();
+  return (error: unknown) => {
+    const failure = failureOf(error);
+    if (failure.kind === 'unauthenticated' || (failure.kind === 'api' && failure.status === 403)) {
+      void queryClient.invalidateQueries({ queryKey: SESSION_KEY });
+    }
+    void queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
+    const requestId = 'requestId' in failure ? failure.requestId : null;
+    console.warn(`gitstation: marking a notification read failed (${failure.kind}, request ${requestId ?? 'none'})`);
+  };
+}
+
 /** Mark one item read (the answer carries only its id and time). */
 export function useMarkRead() {
   const api = useApi();
   const refresh = useRefreshNotifications();
+  const onError = useOnMarkFailed();
   return useMutation({
     mutationFn: (id: number) =>
       call(() =>
         api.POST('/api/v1/user/notifications/{id}/read', { params: { path: { id } } }),
       ),
     onSuccess: refresh,
+    onError,
   });
 }
 
@@ -108,13 +131,16 @@ export function useMarkRead() {
 export function useMarkAllRead() {
   const api = useApi();
   const refresh = useRefreshNotifications();
+  const onError = useOnMarkFailed();
   return useMutation({
+    // 204: no count (it would include items the person may no longer see).
     mutationFn: (upTo: number | undefined) =>
-      call(() =>
+      callNoContent(() =>
         api.POST('/api/v1/user/notifications/read-all', {
           body: upTo === undefined ? {} : { up_to: upTo },
         }),
       ),
     onSuccess: refresh,
+    onError,
   });
 }

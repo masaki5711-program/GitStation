@@ -142,6 +142,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the caller's in-app notifications */
+        get: operations["get_notifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the caller's in-app notifications */
+        head: operations["head_notifications"];
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/integrations": {
         parameters: {
             query?: never;
@@ -1817,7 +1835,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The number of the caller's unread in-app notifications they may still see (at most 100 counted) */
+        /** The number of the caller's unread in-app notifications they may still see (visible items only; at most 100, capped when 100 were found) */
         get: operations["get_api_v1_user_notifications_unread_count"];
         put?: never;
         post?: never;
@@ -3527,11 +3545,6 @@ export interface components {
             /** @description The caller's effective role (`guest` … `owner`); `null` without one. */
             role: string | null;
         };
-        /** @description How many were marked. */
-        MarkedAllRead: {
-            /** Format: int64 */
-            marked: number;
-        };
         /** @description One item marked read. */
         MarkedRead: {
             /** Format: int64 */
@@ -4881,11 +4894,15 @@ export interface components {
         };
         /** @description The unread count. */
         UnreadCountBody: {
-            /** @description More unread items exist than were counted (show "99+"). */
+            /**
+             * @description 100 visible unread items were found (show "99+"); hidden items never
+             *     set it.
+             */
             capped: boolean;
             /**
              * Format: int64
-             * @description Unread items the caller may see, among the newest 100 unread ones.
+             * @description Unread items the caller may see, at most 100 (counted over at most
+             *     1000 unread rows, newest first; older visible ones are not counted).
              */
             count: number;
         };
@@ -5418,6 +5435,46 @@ export interface operations {
                     "application/json": components["schemas"]["IssuedBody"];
                 };
             };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_notifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_notifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {
@@ -9824,14 +9881,12 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Success */
-            200: {
+            /** @description No Content */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["MarkedAllRead"];
-                };
+                content?: never;
             };
             /** @description Error: registered code, localized message, request id */
             default: {

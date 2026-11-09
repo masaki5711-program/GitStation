@@ -816,7 +816,7 @@ async function main() {
     await page.getByText('Marked as read.').waitFor();
     await page.getByRole('link', { name: 'Notifications (1 unread)' }).waitFor();
     await page.getByRole('button', { name: 'Mark all as read' }).click();
-    await page.getByText('1 notification was marked as read.').waitFor();
+    await page.getByText('All notifications were marked as read.').waitFor();
     await page.getByRole('link', { name: 'Notifications', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Unread only' }).click();
     await page.getByText('You have no unread notifications.').waitFor();

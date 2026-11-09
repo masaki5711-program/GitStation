@@ -61,4 +61,41 @@ mod tests {
         );
         t.drop_now().await;
     }
+
+    /// A full batch asks to run again at once; the rest goes the next run.
+    #[tokio::test]
+    async fn a_full_batch_runs_again_at_once() {
+        use forge_core::RequestId;
+        use forge_db::change::{Actor, ChangeContext};
+        let t = FreshDb::migrated().await;
+        let user = forge_db::users::create(
+            &t.db,
+            &ChangeContext::new(Actor::System, RequestId::parse("req-user").expect("id")),
+            &forge_db::users::NewUser::human("alice", "Alice", "alice@example.test"),
+        )
+        .await
+        .expect("user");
+        let total = RETENTION_BATCH + 5;
+        t.exec_superuser(&format!(
+            "INSERT INTO forge.in_app_notifications (user_id, kind, event_id, event_seq, \
+             project_id, merge_request_iid, created_at, read_at) \
+             SELECT {}, 'mr_merged', gen_random_uuid(), 1, 1, 1, now() - interval '60 days', \
+             now() - interval '40 days' FROM generate_series(1, {total})",
+            user.user_id.get()
+        ))
+        .await;
+        assert_eq!(
+            run_in_app_retention(&t.db).await.expect("first"),
+            Next::Immediately
+        );
+        assert_eq!(
+            run_in_app_retention(&t.db).await.expect("second"),
+            Next::AfterPeriod
+        );
+        let left = t
+            .json_rows("SELECT count(*) AS n FROM forge.in_app_notifications")
+            .await;
+        assert_eq!(left[0]["n"], 0);
+        t.drop_now().await;
+    }
 }

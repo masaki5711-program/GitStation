@@ -4221,21 +4221,6 @@
         ],
         "type": "object"
       },
-      "MarkedAllRead": {
-        "additionalProperties": false,
-        "description": "How many were marked.",
-        "properties": {
-          "marked": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "marked"
-        ],
-        "type": "object"
-      },
       "MarkedRead": {
         "additionalProperties": false,
         "description": "One item marked read.",
@@ -7714,11 +7699,11 @@
         "description": "The unread count.",
         "properties": {
           "capped": {
-            "description": "More unread items exist than were counted (show \"99+\").",
+            "description": "100 visible unread items were found (show \"99+\"); hidden items never\nset it.",
             "type": "boolean"
           },
           "count": {
-            "description": "Unread items the caller may see, among the newest 100 unread ones.",
+            "description": "Unread items the caller may see, at most 100 (counted over at most\n1000 unread rows, newest first; older visible ones are not counted).",
             "format": "int64",
             "type": "integer"
           }
@@ -15548,15 +15533,8 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MarkedAllRead"
-                }
-              }
-            },
-            "description": "Success"
+          "204": {
+            "description": "No Content"
           },
           "default": {
             "content": {
@@ -15599,7 +15577,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "The number of the caller's unread in-app notifications they may still see (at most 100 counted)",
+        "summary": "The number of the caller's unread in-app notifications they may still see (visible items only; at most 100, capped when 100 were found)",
         "x-forge-action": "NotificationInboxRead"
       }
     },

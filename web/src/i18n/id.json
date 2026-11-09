@@ -884,18 +884,19 @@
     "unreadOnly": "Belum dibaca saja",
     "markAll": "Tandai semua sudah dibaca",
     "marking": "Menandai sudah dibaca…",
-    "markedAll_one": "{{count}} notifikasi ditandai sudah dibaca.",
-    "markedAll_other": "{{count}} notifikasi ditandai sudah dibaca.",
+    "markedAll": "Semua notifikasi ditandai sudah dibaca.",
     "marked": "Ditandai sudah dibaca.",
     "markRead": "Tandai sudah dibaca",
     "markReadTarget": " ({{title}})",
     "empty": "Anda tidak punya notifikasi.",
     "emptyUnread": "Anda tidak punya notifikasi yang belum dibaca.",
     "more": "Tampilkan lagi",
+    "moreShown_one": "{{count}} notifikasi lagi ditampilkan.",
+    "moreShown_other": "{{count}} notifikasi lagi ditampilkan.",
     "unreadMark": "Belum dibaca",
     "bell": "Notifikasi",
-    "bellUnread_one": "Notifikasi ({{count}} belum dibaca)",
-    "bellUnread_other": "Notifikasi ({{count}} belum dibaca)",
+    "bellUnread_one": "Notifikasi ({{shown}} belum dibaca)",
+    "bellUnread_other": "Notifikasi ({{shown}} belum dibaca)",
     "bellUnknown": "Notifikasi (jumlah yang belum dibaca tidak dapat dibaca)",
     "announceNew_one": "Notifikasi baru. {{count}} belum dibaca.",
     "announceNew_other": "Notifikasi baru. {{count}} belum dibaca.",
@@ -907,7 +908,7 @@
       "commented": "{{actor}} mengomentari merge request Anda",
       "commentedBySystem": "Merge request Anda mendapat komentar baru",
       "conflictPredicted": "Merge request Anda kemungkinan berkonflik dengan merge request lain",
-      "other": "Notifikasi ({{kind}})"
+      "other": "Ada notifikasi baru tentang merge request Anda"
     }
   },
   "sa": {

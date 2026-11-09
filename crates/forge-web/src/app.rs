@@ -847,7 +847,7 @@ fn notification_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             i::UNREAD_COUNT,
             Action::NotificationInboxRead,
-            "The number of the caller's unread in-app notifications they may still see (at most 100 counted)",
+            "The number of the caller's unread in-app notifications they may still see (visible items only; at most 100, capped when 100 were found)",
             i::OwnInbox,
             i::unread_count,
         )
@@ -870,7 +870,7 @@ fn notification_routes(registry: Registry<AppState>) -> Registry<AppState> {
             i::OwnInbox,
             i::mark_all_read,
         )
-        .responds::<i::MarkedAllRead>(Verb::Post, i::READ_ALL)
+        .responds_no_content(Verb::Post, i::READ_ALL)
 }
 
 /// The Checks API (M3 C1, ADR-0024 §10, docs/api/checks.md): a commit's

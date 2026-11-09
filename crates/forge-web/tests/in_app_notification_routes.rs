@@ -274,8 +274,9 @@ async fn a_person_lists_counts_and_marks_their_own_items() {
     assert_eq!(unread[0]["id"], ids[1]);
 
     let all = send(&w.t.db, "POST", READ_ALL, me(), Some(json!({}))).await;
-    assert_eq!(all.status, StatusCode::OK, "{}", all.json);
-    assert_eq!(all.json, json!({"marked": 1}));
+    // No count: it would include items the caller may no longer see.
+    assert_eq!(all.status, StatusCode::NO_CONTENT, "{}", all.json);
+    assert_eq!(all.json, Value::Null);
     let count = send(&w.t.db, "GET", COUNT, me(), None).await;
     assert_eq!(count.json["count"], 0);
     w.t.drop_now().await;

@@ -56,6 +56,24 @@ type ItemRow = (
     Option<String>,
 );
 
+/// A page of everything (`$1` user, `$2` the cursor, `$3` the limit).
+const ALL_PAGE_SQL: &str =
+    "SELECT n.id, n.kind, n.project_id, n.merge_request_iid, n.actor_user_id, \
+     (SELECT u.display_name FROM forge.users u WHERE u.id = n.actor_user_id), \
+     to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
+     to_char(n.read_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
+     FROM forge.in_app_notifications n WHERE n.user_id = $1 AND n.id < $2 \
+     ORDER BY n.id DESC LIMIT $3";
+/// A page of the unread ones (the same columns; the partial index).
+const UNREAD_PAGE_SQL: &str =
+    "SELECT n.id, n.kind, n.project_id, n.merge_request_iid, n.actor_user_id, \
+     (SELECT u.display_name FROM forge.users u WHERE u.id = n.actor_user_id), \
+     to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
+     to_char(n.read_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
+     FROM forge.in_app_notifications n WHERE n.user_id = $1 AND n.id < $2 \
+       AND n.read_at IS NULL \
+     ORDER BY n.id DESC LIMIT $3";
+
 const ITEM_COLUMNS: &str = "n.id, n.kind, n.project_id, n.merge_request_iid, n.actor_user_id, \
      (SELECT u.display_name FROM forge.users u WHERE u.id = n.actor_user_id), \
      to_char(n.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
@@ -130,21 +148,23 @@ pub struct PageQuery {
 /// visibility).
 pub async fn page(db: &Db, user: UserId, q: PageQuery) -> Result<Vec<Item>, ForgeError> {
     const QUERY: &str = "notify.in_app.page";
+    // Two static statements (not one with `NOT $3 OR …`), so the unread
+    // one can use the partial index `in_app_notifications_unread`; the
+    // cursor is always bound (`i64::MAX` = from the newest).
+    let sql = if q.unread_only {
+        UNREAD_PAGE_SQL
+    } else {
+        ALL_PAGE_SQL
+    };
     let rows: Vec<ItemRow> = db
         .within(QUERY, async {
-            sqlx::query_as(&format!(
-                "SELECT {ITEM_COLUMNS} FROM forge.in_app_notifications n \
-                 WHERE n.user_id = $1 AND ($2::bigint IS NULL OR n.id < $2) \
-                   AND (NOT $3 OR n.read_at IS NULL) \
-                 ORDER BY n.id DESC LIMIT $4"
-            ))
-            .bind(user.get())
-            .bind(q.before)
-            .bind(q.unread_only)
-            .bind(q.limit.clamp(1, MAX_PAGE))
-            .fetch_all(db.write_pool())
-            .await
-            .map_err(|e| query_error(QUERY, e))
+            sqlx::query_as(sql)
+                .bind(user.get())
+                .bind(q.before.unwrap_or(i64::MAX))
+                .bind(q.limit.clamp(1, MAX_PAGE))
+                .fetch_all(db.write_pool())
+                .await
+                .map_err(|e| query_error(QUERY, e))
         })
         .await?;
     rows.into_iter().map(parse_item).collect()
@@ -248,24 +268,37 @@ pub async fn mark_all_read(db: &Db, user: UserId, up_to: Option<i64>) -> Result<
 /// were deleted (derived rows: no audit row).
 pub async fn expire(db: &Db, batch: i64) -> Result<u64, ForgeError> {
     const QUERY: &str = "notify.in_app.expire";
-    let done = db
-        .within(QUERY, async {
-            sqlx::query(
-                "DELETE FROM forge.in_app_notifications WHERE id IN ( \
-                   (SELECT id FROM forge.in_app_notifications \
-                    WHERE read_at < now() - make_interval(days => $1) ORDER BY read_at LIMIT $3) \
-                   UNION \
-                   (SELECT id FROM forge.in_app_notifications \
-                    WHERE created_at < now() - make_interval(days => $2) \
-                    ORDER BY created_at LIMIT $3))",
-            )
-            .bind(READ_RETENTION_DAYS)
-            .bind(MAX_AGE_DAYS)
-            .bind(batch.clamp(1, 10_000))
-            .execute(db.write_pool())
-            .await
-            .map_err(|e| query_error(QUERY, e))
-        })
-        .await?;
-    Ok(done.rows_affected())
+    let batch = batch.clamp(1, 10_000);
+    // Two statements, each skipping rows another transaction holds (a
+    // person marking them read at the same moment): the next run takes them.
+    let mut deleted = 0;
+    for (sql, days) in [
+        (
+            "DELETE FROM forge.in_app_notifications WHERE id IN ( \
+               SELECT id FROM forge.in_app_notifications \
+               WHERE read_at < now() - make_interval(days => $1) \
+               ORDER BY read_at LIMIT $2 FOR UPDATE SKIP LOCKED)",
+            READ_RETENTION_DAYS,
+        ),
+        (
+            "DELETE FROM forge.in_app_notifications WHERE id IN ( \
+               SELECT id FROM forge.in_app_notifications \
+               WHERE created_at < now() - make_interval(days => $1) \
+               ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)",
+            MAX_AGE_DAYS,
+        ),
+    ] {
+        let done = db
+            .within(QUERY, async {
+                sqlx::query(sql)
+                    .bind(days)
+                    .bind(batch)
+                    .execute(db.write_pool())
+                    .await
+                    .map_err(|e| query_error(QUERY, e))
+            })
+            .await?;
+        deleted += done.rows_affected();
+    }
+    Ok(deleted)
 }

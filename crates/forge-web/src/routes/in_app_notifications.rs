@@ -13,7 +13,8 @@
 //!   item of somebody else and an absent one answer alike (`FG-REPO-0005`).
 //!   The answer carries no words of the item (it may no longer be visible).
 //! - `POST /api/v1/user/notifications/read-all` (`NotificationInboxUpdate`):
-//!   every unread item up to `up_to` (the newest the person saw).
+//!   every unread item up to `up_to` (the newest the person saw); `204`,
+//!   no count (it would include items the caller may no longer see).
 //!
 //! The routes have no user in them except the item id: the list is always
 //! the caller's own.
@@ -106,9 +107,11 @@ pub struct InAppNotificationList {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UnreadCountBody {
-    /// Unread items the caller may see, among the newest 100 unread ones.
+    /// Unread items the caller may see, at most 100 (counted over at most
+    /// 1000 unread rows, newest first; older visible ones are not counted).
     pub count: i64,
-    /// More unread items exist than were counted (show "99+").
+    /// 100 visible unread items were found (show "99+"); hidden items never
+    /// set it.
     pub capped: bool,
 }
 
@@ -128,13 +131,6 @@ pub struct ReadAllInput {
     /// Only items up to this id (the newest the person saw); absent: all.
     #[schema(minimum = 1)]
     pub up_to: Option<i64>,
-}
-
-/// How many were marked.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MarkedAllRead {
-    pub marked: u64,
 }
 
 fn listed_body(listed: Listed) -> InAppNotificationBody {
@@ -362,27 +358,38 @@ pub async fn mark_read(
     respond(&w.ctx, StatusCode::OK, built)
 }
 
-/// `POST /api/v1/user/notifications/read-all` → `200`.
+/// `POST /api/v1/user/notifications/read-all` → `204` (no count: the rows
+/// marked include items the caller may no longer see).
 pub async fn mark_all_read(
     state: AppState,
     request: Dispatched<NotificationPreferencesCtx, ReadAllInput>,
 ) -> Response {
     let w = request.into_write();
-    let built = async {
+    let done = async {
         let up_to = match w.input.up_to {
             Some(id) if id < 1 => return Err(param_invalid("up_to", "not_positive")),
             other => other,
         };
-        let marked = bounded(
+        bounded(
             &state,
             "in_app_notifications_mark_all_read",
             inbox(&state)?.mark_all_read(&w.proof, up_to),
         )
-        .await?;
-        json(MarkedAllRead { marked })
+        .await
     }
     .await;
-    respond(&w.ctx, StatusCode::OK, built)
+    match done {
+        Ok(marked) => {
+            tracing::debug!(
+                target: "forge_web",
+                event = "forge.notify.in_app_marked_all",
+                marked,
+                "in-app notifications were marked read"
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => w.ctx.fail(e).into_response(),
+    }
 }
 
 #[cfg(test)]

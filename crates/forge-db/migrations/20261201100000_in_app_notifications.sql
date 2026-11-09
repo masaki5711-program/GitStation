@@ -54,6 +54,10 @@ CREATE INDEX in_app_notifications_unread ON forge.in_app_notifications (user_id,
 CREATE INDEX in_app_notifications_read_at ON forge.in_app_notifications (read_at)
     WHERE read_at IS NOT NULL;
 CREATE INDEX in_app_notifications_created_at ON forge.in_app_notifications (created_at);
+-- The foreign key to the actor (a user row is never deleted today; the index
+-- keeps the key's check cheap if one ever is, as for the recipient's).
+CREATE INDEX in_app_notifications_actor ON forge.in_app_notifications (actor_user_id)
+    WHERE actor_user_id IS NOT NULL;
 GRANT SELECT, INSERT, UPDATE, DELETE ON forge.in_app_notifications TO forge_app;
 GRANT SELECT ON forge.in_app_notifications TO forge_ro;
 

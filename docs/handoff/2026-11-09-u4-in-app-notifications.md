@@ -41,6 +41,12 @@
 - web: `npm run lint`・`typecheck` 合格、`npm test` **792 / 792**（46 ファイル）、`build`、`i18n:report`（id の欠け 0 / 861）、`smoke`（CSP・
   コンソールの誤り無し）、`journey`（axe 86 画面すべて clean、keycloak の journey は環境が無くスキップ）、`licenses`（578 件すべて許可）。
 
+### レビューの修正の後（同じ日）
+
+- fmt・clippy `-D warnings`・gen-catalog / gen-authz `--check`: 合格。
+- nextest: forge-notify・forge-web・forge-cli・forge-client **894 / 894**、forge-db **911 / 911**（forge-auth は修正で触っていないので再実行していない）。
+- web: lint・typecheck 合格、`npm test` **798 / 798**（47 ファイル）、build、smoke、journey（axe 86 画面 clean）、i18n（id の欠け 0 / 862）、licenses。
+
 ## 4. 決めたこと・計画からのずれ
 
 1. **表は N1 と分けた**（N1 Amendment §10 (2) は「同じ表に `read_at`」）。メールの行は配信の状態機械と at-most-once を持つため。
@@ -48,12 +54,14 @@
 2. 未読の数は「新しい未読 100 件のうち見えるもの」（`capped`）。見えない未読が多いと実数より少なく出ることがある（受け入れた）。
 3. 保持の日数（30 / 180）は定数。設定の鍵は作っていない。
 4. ベルの数の失敗は画面に理由を出さない（ベルの名前が「未読の数を読めませんでした」になる。理由と request_id は一覧の画面が出す）。
-5. 評価役（typescript-reviewer、a11y-architect、i18n-sync-auditor、design-reviewer、e2e-runner、加えて authz-matrix-auditor・database-reviewer
-   が妥当）の独立レビューは**まだ**。
+5. 独立レビュー（UI の 5 つ + authz・rust・database）は済み。a11y の HIGH 1 件と MEDIUM を修正のコミットで直した（ADR-0016
+   Amendment U4「U4 の独立レビュー」）。ずれ 1〜3（表を分けた・メールが無効でも記録・N1 の資源を使う・保持の定数）は承認された。
+6. **未読の数は見える項目だけ**（最大 1000 行を読み、見える 100 件で `capped`）。`read-all` は `204`（件数なし）。
 
 ## 5. 次にやること
 
-- 評価役のレビュー → 指摘の修正 → `main` へ。
+- `main` へ（レビューの修正まで済み）。
+- **後回し（利用者の確認待ち）**: メールの行（`forge.notifications`）の保持。推奨は 30 日。
 - 全体のテスト（PC の `cargo nextest run --workspace -j 4`）は流していない（触ったクレートだけ）。
 - 後で: メールの行の保持、「レビューの依頼」・メンションの種類（イベントが出たら `NotificationKind` と両方の表の CHECK を一緒に）。
 

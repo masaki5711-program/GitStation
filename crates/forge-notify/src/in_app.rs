@@ -45,12 +45,17 @@ pub struct Page {
 /// The unread count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnreadCount {
-    /// Unread items the caller may see, among the newest [`COUNT_CAP`]
-    /// unread ones.
+    /// Unread items the caller may see, at most [`COUNT_CAP`]. Counted
+    /// over at most [`COUNT_SCAN_PAGES`] pages of unread rows (newest
+    /// first): past that, older visible items are not counted.
     pub count: i64,
-    /// More unread items exist than were counted.
+    /// [`COUNT_CAP`] visible unread items were found (show "99+"). Only
+    /// visible items decide it, so a hidden item gives no hint.
     pub capped: bool,
 }
+
+/// The most pages of [`COUNT_CAP`] unread rows the count reads.
+pub const COUNT_SCAN_PAGES: usize = 10;
 
 /// The in-app notification commands.
 #[derive(Clone)]
@@ -147,19 +152,38 @@ impl Inbox {
     ) -> Result<UnreadCount, ForgeError> {
         require(proof.action(), Action::NotificationInboxRead)?;
         let user = owner(proof);
-        let rows = in_app::page(
-            &self.db,
-            user,
-            PageQuery {
-                before: None,
-                unread_only: true,
-                limit: COUNT_CAP,
-            },
-        )
-        .await?;
-        let capped = i64::try_from(rows.len()).unwrap_or(i64::MAX) >= COUNT_CAP;
-        let count = i64::try_from(self.visible(user, rows).await?.len()).unwrap_or(i64::MAX);
-        Ok(UnreadCount { count, capped })
+        let mut count: i64 = 0;
+        let mut before = None;
+        // Bounded: at most COUNT_SCAN_PAGES pages, stop at COUNT_CAP visible.
+        for _ in 0..COUNT_SCAN_PAGES {
+            let rows = in_app::page(
+                &self.db,
+                user,
+                PageQuery {
+                    before,
+                    unread_only: true,
+                    limit: COUNT_CAP,
+                },
+            )
+            .await?;
+            let full = i64::try_from(rows.len()).unwrap_or(i64::MAX) >= COUNT_CAP;
+            before = rows.last().map(|i| i.id);
+            let seen = self.visible(user, rows).await?.len();
+            count = count.saturating_add(i64::try_from(seen).unwrap_or(i64::MAX));
+            if count >= COUNT_CAP {
+                return Ok(UnreadCount {
+                    count: COUNT_CAP,
+                    capped: true,
+                });
+            }
+            if !full {
+                break;
+            }
+        }
+        Ok(UnreadCount {
+            count,
+            capped: false,
+        })
     }
 
     /// `POST …/notifications/{id}/read` (`NotificationInboxUpdate` on the
@@ -182,7 +206,9 @@ impl Inbox {
     }
 
     /// `POST …/notifications/read-all` (`NotificationInboxUpdate`): every
-    /// unread item of the caller up to `up_to`; returns how many.
+    /// unread item of the caller up to `up_to`, hidden ones included. The
+    /// number of rows is not returned to the caller (it would count items
+    /// the caller may no longer see); it is for the log only.
     pub async fn mark_all_read(
         &self,
         proof: &Authorized<NotificationPreferencesCtx>,

@@ -884,18 +884,19 @@
     "unreadOnly": "Unread only",
     "markAll": "Mark all as read",
     "marking": "Marking as read…",
-    "markedAll_one": "{{count}} notification was marked as read.",
-    "markedAll_other": "{{count}} notifications were marked as read.",
+    "markedAll": "All notifications were marked as read.",
     "marked": "Marked as read.",
     "markRead": "Mark as read",
     "markReadTarget": " ({{title}})",
     "empty": "You have no notifications.",
     "emptyUnread": "You have no unread notifications.",
     "more": "Show more",
+    "moreShown_one": "{{count}} more notification is shown.",
+    "moreShown_other": "{{count}} more notifications are shown.",
     "unreadMark": "Unread",
     "bell": "Notifications",
-    "bellUnread_one": "Notifications ({{count}} unread)",
-    "bellUnread_other": "Notifications ({{count}} unread)",
+    "bellUnread_one": "Notifications ({{shown}} unread)",
+    "bellUnread_other": "Notifications ({{shown}} unread)",
     "bellUnknown": "Notifications (the unread count could not be read)",
     "announceNew_one": "New notification. {{count}} unread.",
     "announceNew_other": "New notifications. {{count}} unread.",
@@ -907,7 +908,7 @@
       "commented": "{{actor}} commented on your merge request",
       "commentedBySystem": "Your merge request has a new comment",
       "conflictPredicted": "Your merge request is likely to conflict with another one",
-      "other": "Notification ({{kind}})"
+      "other": "There is a new notification about your merge request"
     }
   },
   "sa": {

@@ -614,6 +614,8 @@ ro_columns = ["*"]
 # One row per (source event, recipient), written by the notify subscriber;
 # the person marks their own read (not audited, like their settings); the
 # worker deletes read items after 30 days and every item after 180.
+# Derived from the events except `read_at`: the read state is the person's
+# and is NOT reproducible (a rebuild from the outbox would mark all unread).
 [tables.in_app_notifications]
 guarded = false
 kind = "derived"

@@ -884,18 +884,19 @@
     "unreadOnly": "未読だけ",
     "markAll": "すべて既読にする",
     "marking": "既読にしています…",
-    "markedAll_one": "{{count}} 件を既読にしました。",
-    "markedAll_other": "{{count}} 件を既読にしました。",
+    "markedAll": "すべて既読にしました。",
     "marked": "既読にしました。",
     "markRead": "既読にする",
     "markReadTarget": "（{{title}}）",
     "empty": "通知はありません。",
     "emptyUnread": "未読の通知はありません。",
     "more": "さらに表示",
+    "moreShown_one": "さらに {{count}} 件を表示しました。",
+    "moreShown_other": "さらに {{count}} 件を表示しました。",
     "unreadMark": "未読",
     "bell": "通知",
-    "bellUnread_one": "通知（未読 {{count}} 件）",
-    "bellUnread_other": "通知（未読 {{count}} 件）",
+    "bellUnread_one": "通知（未読 {{shown}} 件）",
+    "bellUnread_other": "通知（未読 {{shown}} 件）",
     "bellUnknown": "通知（未読の数を読めませんでした）",
     "announceNew_one": "新しい通知があります。未読は {{count}} 件です。",
     "announceNew_other": "新しい通知があります。未読は {{count}} 件です。",
@@ -907,7 +908,7 @@
       "commented": "{{actor}} さんがあなたのマージリクエストにコメントしました",
       "commentedBySystem": "あなたのマージリクエストにコメントが付きました",
       "conflictPredicted": "あなたのマージリクエストは、ほかのマージリクエストと衝突しそうです",
-      "other": "通知（{{kind}}）"
+      "other": "あなたのマージリクエストに新しい通知があります"
     }
   },
   "sa": {

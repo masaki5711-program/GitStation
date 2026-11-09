@@ -44,7 +44,7 @@ export function inboxBackend(csrf) {
   ];
   const READ_AT = '2026-11-09T10:00:00Z';
 
-  /** `{ status, body }` or `{ error: [message, request id, code], status }`;
+  /** `{ status, body }`, `{ status: 204 }` or `{ error: [message, request id, code], status }`;
    * `null` when the request is not one of these. */
   function answer(req, url, text) {
     const path = url.pathname;
@@ -72,7 +72,8 @@ export function inboxBackend(csrf) {
           marked += 1;
         }
       }
-      return json({ marked });
+      void marked;
+      return { status: 204 };
     }
     const one = path.match(/^\/api\/v1\/user\/notifications\/(\d+)\/read$/);
     if (method === 'POST' && one) {

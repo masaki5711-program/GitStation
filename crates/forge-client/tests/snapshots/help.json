@@ -6541,10 +6541,10 @@
       "name": "notifications read",
       "output": {
         "properties": {
-          "id": {
-            "type": "integer"
+          "all_read": {
+            "const": true
           },
-          "marked": {
+          "id": {
             "type": "integer"
           },
           "read_at": {

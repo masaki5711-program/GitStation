@@ -106,12 +106,10 @@ pub fn notifications(
                     emit(io, cli, out, &human)
                 }
                 _ => {
-                    let out = call(&c, Method::Post, READ_ALL, &[], Some(&json!({})))?;
-                    let human = format!(
-                        "Marked read: {}",
-                        out.get("marked").and_then(Value::as_u64).unwrap_or(0)
-                    );
-                    emit(io, cli, out, &human)
+                    // 204: no count (it would include items you may no
+                    // longer see).
+                    call(&c, Method::Post, READ_ALL, &[], Some(&json!({})))?;
+                    emit(io, cli, json!({"all_read": true}), "All marked read")
                 }
             }
         }

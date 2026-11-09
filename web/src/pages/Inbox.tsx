@@ -4,9 +4,12 @@
 // to the merge request (following the link marks it read); "Mark as read"
 // per item and "Mark all as read" (up to the newest item shown, so one that
 // arrives meanwhile stays unread). The server lists only what the person may
-// still see. Results are announced in a live region; a refusal shows its
+// still see. Results are announced in a live region (the same words twice
+// are read out twice); the focus never falls to the page body: after a mark
+// it moves to the next item's link (or the heading), after "Mark all" to the
+// heading, after "Show more" to the first new item. A refusal shows its
 // reason and request id.
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router';
@@ -24,11 +27,11 @@ import { formatDateTime } from '../features/labels';
 import { pullUrl } from '../features/repoUrls';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useSession } from '../session/session';
-import { Denied, useRefreshSessionOn403 } from './settings/common';
+import { Denied } from './settings/common';
 import styles from './Inbox.module.css';
 
-/** What happened, in one sentence (a kind this screen does not know is
- * named by its code). */
+/** What happened, in one sentence (a kind this screen does not know gets a
+ * general sentence). */
 function sentence(t: TFunction, item: InAppNotification): string {
   const actor = item.actor_name;
   switch (item.kind) {
@@ -41,8 +44,30 @@ function sentence(t: TFunction, item: InAppNotification): string {
     case 'mr_conflict_predicted':
       return t('inbox.kind.conflictPredicted');
     default:
-      return t('inbox.kind.other', { kind: item.kind });
+      return t('inbox.kind.other');
   }
+}
+
+/** A polite message: emptied first, the words a moment later, so the same
+ * words twice are still a change that is read out. */
+function useAnnouncement(): [string, (text: string) => void] {
+  const [message, setMessage] = useState('');
+  const timer = useRef<number | undefined>(undefined);
+  const announce = useCallback((text: string) => {
+    setMessage('');
+    window.clearTimeout(timer.current);
+    if (text === '') return;
+    timer.current = window.setTimeout(() => {
+      setMessage(text);
+    }, 50);
+  }, []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  return [message, announce];
 }
 
 export function Inbox() {
@@ -52,22 +77,52 @@ export function Inbox() {
   const unread = params.get('unread') === '1';
   const list = useNotifications(unread);
   const markAll = useMarkAllRead();
-  const refresh = useRefreshSessionOn403();
-  const [message, setMessage] = useState('');
+  const [message, announce] = useAnnouncement();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
   useDocumentTitle(t('inbox.title'));
 
   const items = list.data?.pages.flatMap((p) => p.items) ?? [];
   const newest = items[0]?.id;
   const anyUnread = items.some((i) => i.read_at === null);
 
+  /** Focus item `id`'s link, or the heading when it is not on the page. */
+  const focusItem = (id: number | undefined) => {
+    window.setTimeout(() => {
+      const link =
+        id === undefined ? null : listRef.current?.querySelector<HTMLAnchorElement>(`li[data-id="${String(id)}"] a`);
+      if (link !== null && link !== undefined) link.focus();
+      else heading.current?.focus();
+    }, 0);
+  };
+
+  /** After item `id` was marked: its neighbour below, else above. */
+  const afterMarked = (id: number) => {
+    const at = items.findIndex((i) => i.id === id);
+    const next = items[at + 1] ?? items[at - 1];
+    announce(t('inbox.marked'));
+    focusItem(next?.id);
+  };
+
   const show = (onlyUnread: boolean) => {
-    setMessage('');
+    announce('');
     setParams(onlyUnread ? { unread: '1' } : {});
+  };
+
+  const more = () => {
+    if (list.isFetchingNextPage) return;
+    const before = items.length;
+    void list.fetchNextPage().then((r) => {
+      const all = r.data?.pages.flatMap((p) => p.items) ?? [];
+      const added = all.slice(before);
+      announce(t('inbox.moreShown', { count: added.length }));
+      focusItem(added[0]?.id);
+    });
   };
 
   return (
     <section aria-labelledby="inbox-title">
-      <h1 id="inbox-title" className={styles.title}>
+      <h1 id="inbox-title" ref={heading} tabIndex={-1} className={styles.title}>
         {t('inbox.title')}
       </h1>
       <p className={styles.hint}>
@@ -104,12 +159,12 @@ export function Inbox() {
             aria-disabled={markAll.isPending ? 'true' : undefined}
             onClick={() => {
               if (markAll.isPending) return;
-              setMessage('');
+              announce('');
               markAll.mutate(newest, {
-                onSuccess: (r) => {
-                  setMessage(t('inbox.markedAll', { count: r.marked }));
+                onSuccess: () => {
+                  announce(t('inbox.markedAll'));
+                  focusItem(undefined);
                 },
-                onError: refresh,
               });
             }}
           >
@@ -131,9 +186,9 @@ export function Inbox() {
         <p className={styles.empty}>{unread ? t('inbox.emptyUnread') : t('inbox.empty')}</p>
       )}
       {items.length > 0 && (
-        <ul className={styles.list} aria-label={unread ? t('inbox.unreadOnly') : t('inbox.all')}>
+        <ul ref={listRef} className={styles.list} aria-label={unread ? t('inbox.unreadOnly') : t('inbox.all')}>
           {items.map((item) => (
-            <Item key={item.id} item={item} onMarked={setMessage} />
+            <Item key={item.id} item={item} onMarked={afterMarked} />
           ))}
         </ul>
       )}
@@ -143,10 +198,7 @@ export function Inbox() {
             type="button"
             className={controls.button}
             aria-disabled={list.isFetchingNextPage ? 'true' : undefined}
-            onClick={() => {
-              if (list.isFetchingNextPage) return;
-              void list.fetchNextPage();
-            }}
+            onClick={more}
           >
             {list.isFetchingNextPage ? t('common.loading') : t('inbox.more')}
           </button>
@@ -159,23 +211,21 @@ export function Inbox() {
   );
 }
 
-function Item({ item, onMarked }: { item: InAppNotification; onMarked: (message: string) => void }) {
+function Item({ item, onMarked }: { item: InAppNotification; onMarked: (id: number) => void }) {
   const { t, i18n } = useTranslation();
   const mark = useMarkRead();
-  const refresh = useRefreshSessionOn403();
   const isUnread = item.read_at === null;
   const reference = `${item.project_path}!${String(item.merge_request_iid)}`;
-  const markRead = (announce: boolean) => {
+  const markRead = (byButton: boolean) => {
     if (!isUnread || mark.isPending) return;
     mark.mutate(item.id, {
       onSuccess: () => {
-        if (announce) onMarked(t('inbox.marked'));
+        if (byButton) onMarked(item.id);
       },
-      onError: refresh,
     });
   };
   return (
-    <li className={isUnread ? `${styles.item} ${styles.unread}` : styles.item}>
+    <li data-id={item.id} className={isUnread ? `${styles.item} ${styles.unread}` : styles.item}>
       <div className={styles.body}>
         <p className={styles.sentence}>
           {isUnread && <span className={styles.dot}>{t('inbox.unreadMark')}</span>}

@@ -32,6 +32,8 @@ struct World {
     t: FreshDb,
     alice: UserId,
     bob: UserId,
+    /// Bob's personal namespace.
+    bob_namespace: forge_core::ids::NamespaceId,
     carol: UserId,
     web: CreatedProject,
     notify: Notify,
@@ -69,6 +71,7 @@ async fn world() -> World {
         t,
         alice: alice.user_id,
         bob: bob.user_id,
+        bob_namespace: bob.namespace_id,
         carol: carol.user_id,
         web,
         notify,
@@ -590,6 +593,61 @@ async fn only_the_callers_own_items_are_marked_read() {
         Some(w.carol)
     );
     assert_eq!(in_app::owner(&w.t.db, 999_999).await.expect("none"), None);
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn the_unread_count_counts_only_visible_items_and_caps_on_them() {
+    let w = world().await;
+    let mine = w.open_mr(w.alice, "Alice's", "alice").await;
+    // Bob's private project with a merge request Alice cannot see.
+    let bobs = projects::create(
+        &w.t.db,
+        &system("req-secret"),
+        &NewProject::new("secret", w.bob_namespace, "Secret", w.bob),
+    )
+    .await
+    .expect("secret")
+    .project_id
+    .get();
+    w.t.commit_audited(
+        ("project", bobs),
+        &[
+            format!("INSERT INTO forge.merge_request_counters (project_id, last_iid) VALUES ({bobs}, 1)"),
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id, source_branch, \
+                 target_branch) VALUES ({bobs}, 1, 'Secret', {}, 'refs/heads/s', 'refs/heads/main')",
+                w.bob.get()
+            ),
+        ],
+    )
+    .await;
+    let add = |project: i64, iid: i64, n: i64| {
+        format!(
+            "INSERT INTO forge.in_app_notifications (user_id, kind, event_id, event_seq, project_id, \
+             merge_request_iid) SELECT {}, 'mr_approved', gen_random_uuid(), 1, {project}, {iid} \
+             FROM generate_series(1, {n})",
+            w.alice.get()
+        )
+    };
+    // 3 visible ones, then 150 newer hidden ones: the count reads past the
+    // hidden page and finds the 3; `capped` says nothing about the hidden.
+    w.t.exec_superuser(&add(w.project().get(), mine, 3)).await;
+    w.t.exec_superuser(&add(bobs, 1, 150)).await;
+    let count = w
+        .inbox
+        .unread_count(&read_proof(w.alice))
+        .await
+        .expect("count");
+    assert_eq!((count.count, count.capped), (3, false));
+    // 120 visible ones more: capped at 100 visible.
+    w.t.exec_superuser(&add(w.project().get(), mine, 120)).await;
+    let count = w
+        .inbox
+        .unread_count(&read_proof(w.alice))
+        .await
+        .expect("count");
+    assert_eq!((count.count, count.capped), (100, true));
     w.t.drop_now().await;
 }
 

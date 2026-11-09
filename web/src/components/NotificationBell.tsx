@@ -7,7 +7,7 @@
 // link's name says the count could not be read); the page shows the reason.
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
+import { Link, useLocation } from 'react-router';
 
 import { useUnreadCount } from '../api/notifications';
 import styles from './NotificationBell.module.css';
@@ -20,6 +20,8 @@ export function badgeText(count: number, capped: boolean): string {
 export function NotificationBell() {
   const { t } = useTranslation();
   const unread = useUnreadCount();
+  const location = useLocation();
+  const here = location.pathname === '/-/notifications';
   const [announcement, setAnnouncement] = useState('');
   const previous = useRef<number | null>(null);
   const count = unread.data?.count ?? null;
@@ -36,12 +38,13 @@ export function NotificationBell() {
 
   let label: string;
   if (unread.isError && count === null) label = t('inbox.bellUnknown');
-  else if (count !== null && count > 0) label = t('inbox.bellUnread', { count });
+  else if (count !== null && count > 0)
+    label = t('inbox.bellUnread', { count, shown: badgeText(count, unread.data?.capped ?? false) });
   else label = t('inbox.bell');
 
   return (
     <>
-      <Link to="/-/notifications" className={styles.bell}>
+      <Link to="/-/notifications" className={styles.bell} {...(here ? { 'aria-current': 'page' as const } : {})}>
         <span className={styles.srOnly}>{label}</span>
         <svg className={styles.icon} viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
           <path

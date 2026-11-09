@@ -185,7 +185,7 @@ fn inbox_server() -> Mock {
             200,
             r#"{"items":[{"id":9,"kind":"mr_approved","project_id":1,"project_path":"acme/web","merge_request_iid":4,"merge_request_title":"Fix rounding","actor_name":"Bob","created_at":"2026-11-09T09:00:00Z","read_at":null}],"next_before":9}"#,
         ),
-        ("POST", "/api/v1/user/notifications/read-all") => Resp::json(200, r#"{"marked":2}"#),
+        ("POST", "/api/v1/user/notifications/read-all") => Resp::json(204, ""),
         ("POST", _) => Resp::json(200, r#"{"id":9,"read_at":"2026-11-09T09:01:00Z"}"#),
         _ => Resp::json(404, "{}"),
     })
@@ -238,7 +238,7 @@ fn read_marks_one_or_all_and_needs_one_of_them() {
     assert_eq!(one.code, 0, "{}", one.stderr);
     let all = gstn(&sb, &srv, &["notifications", "read", "--all", "--json"]);
     assert_eq!(all.code, 0, "{}", all.stderr);
-    assert_eq!(all.json()["marked"], 2);
+    assert_eq!(all.json()["all_read"], true);
     let seen = srv.seen();
     assert_eq!(
         (seen[0].method.as_str(), seen[0].target.as_str()),
