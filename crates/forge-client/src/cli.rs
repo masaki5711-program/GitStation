@@ -169,7 +169,7 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
-    /// Your notification settings: mail on or off, language, muted kinds (M3 N1).
+    /// Your notifications: the in-app list (M3 U4) and your settings (M3 N1).
     #[command(disable_help_subcommand = true)]
     Notifications {
         #[command(subcommand)]
@@ -1222,6 +1222,31 @@ pub enum NotificationsCommand {
         /// Receive a kind again (repeatable).
         #[arg(long, value_parser = parse_text, value_name = "KIND")]
         unmute: Vec<String>,
+        /// Turn all in-app notifications on or off (M3 U4).
+        #[arg(long, value_enum)]
+        in_app: Option<MailSwitch>,
+    },
+    /// Your in-app notifications, newest first (M3 U4).
+    List {
+        /// Only unread ones.
+        #[arg(long)]
+        unread: bool,
+        /// Only items older than this id (`next_before` of the previous page).
+        #[arg(long, value_parser = parse_id)]
+        before: Option<i64>,
+        #[arg(long, value_parser = parse_limit)]
+        limit: Option<u32>,
+    },
+    /// How many in-app notifications are unread (M3 U4).
+    Count,
+    /// Mark one in-app notification read, or every unread one with --all.
+    Read {
+        /// The notification id (`notifications list`).
+        #[arg(value_parser = parse_id, required_unless_present = "all", conflicts_with = "all")]
+        id: Option<i64>,
+        /// Every unread one.
+        #[arg(long)]
+        all: bool,
     },
 }
 

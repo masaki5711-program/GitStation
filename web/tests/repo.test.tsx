@@ -285,7 +285,8 @@ describe('file', () => {
     expect(note.textContent).toContain('download');
     const code = await screen.findByTestId('code');
     expect(code.textContent).toContain('<svg onload="alert(1)">');
-    expect(view.container.querySelector('svg')).toBeNull();
+    // The page draws no svg (the header's bell icon is the UI's own).
+    expect(view.container.querySelector('main svg')).toBeNull();
     expect(view.container.querySelector('script')).toBeNull();
     expect(view.container.querySelector('main img')).toBeNull();
   });

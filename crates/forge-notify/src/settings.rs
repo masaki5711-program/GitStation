@@ -38,12 +38,28 @@ impl Settings {
         Self { db }
     }
 
+    /// The database handle (the in-app notifications use the same one).
+    pub fn db(&self) -> Db {
+        self.db.clone() // clone: a pool handle
+    }
+
     /// `GET …/notification-preferences` (`NotificationPreferencesRead`).
     pub async fn read(
         &self,
         proof: &Authorized<NotificationPreferencesCtx>,
     ) -> Result<Preferences, ForgeError> {
         require(proof.action(), Action::NotificationPreferencesRead)?;
+        notify::preferences(&self.db, owner(proof)).await
+    }
+
+    /// The owner's stored settings, for a `PUT` that leaves fields out
+    /// (`NotificationPreferencesWrite`: the in-app switches of M3 U4 are
+    /// kept when a client of N1 sends only the mail fields).
+    pub async fn current(
+        &self,
+        proof: &Authorized<NotificationPreferencesCtx>,
+    ) -> Result<Preferences, ForgeError> {
+        require(proof.action(), Action::NotificationPreferencesWrite)?;
         notify::preferences(&self.db, owner(proof)).await
     }
 

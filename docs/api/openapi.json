@@ -3743,6 +3743,90 @@
         ],
         "type": "object"
       },
+      "InAppNotificationBody": {
+        "additionalProperties": false,
+        "description": "One in-app notification.",
+        "properties": {
+          "actor_name": {
+            "description": "Who did it (`null`: the system).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`mr_approved`, `mr_merged`, `mr_commented`, `mr_conflict_predicted`.",
+            "type": "string"
+          },
+          "merge_request_iid": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "merge_request_title": {
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "The project's path now (`group/project`).",
+            "type": "string"
+          },
+          "read_at": {
+            "description": "`null`: unread.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "project_id",
+          "project_path",
+          "merge_request_iid",
+          "merge_request_title",
+          "actor_name",
+          "created_at",
+          "read_at"
+        ],
+        "type": "object"
+      },
+      "InAppNotificationList": {
+        "additionalProperties": false,
+        "description": "A page of the caller's notifications.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InAppNotificationBody"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "description": "Pass as `before` for the next (older) page; `null`: no more.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_before"
+        ],
+        "type": "object"
+      },
       "IntegrationAccountBody": {
         "additionalProperties": false,
         "description": "The service account an integration acts as.",
@@ -4134,6 +4218,25 @@
           "description",
           "created_at",
           "role"
+        ],
+        "type": "object"
+      },
+      "MarkedRead": {
+        "additionalProperties": false,
+        "description": "One item marked read.",
+        "properties": {
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "read_at": {
+            "description": "When it was first read (UTC, RFC 3339).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "read_at"
         ],
         "type": "object"
       },
@@ -4976,6 +5079,17 @@
           "email_enabled": {
             "type": "boolean"
           },
+          "in_app_enabled": {
+            "description": "In-app notifications on or off (M3 U4).",
+            "type": "boolean"
+          },
+          "in_app_muted_kinds": {
+            "description": "Kinds not shown in the app (M3 U4).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "kinds": {
             "description": "Every kind of notification there is.",
             "items": {
@@ -5000,6 +5114,8 @@
           "email_enabled",
           "language",
           "muted_kinds",
+          "in_app_enabled",
+          "in_app_muted_kinds",
           "kinds"
         ],
         "type": "object"
@@ -5011,6 +5127,23 @@
           "email_enabled": {
             "description": "`false` stops every mail.",
             "type": "boolean"
+          },
+          "in_app_enabled": {
+            "description": "`false` stops every in-app notification (M3 U4); absent: unchanged.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "in_app_muted_kinds": {
+            "description": "Kinds not shown in the app (M3 U4); absent: unchanged.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "language": {
             "description": "`ja`, `en` or `id`; `null` (or absent) for the instance default.",
@@ -5497,6 +5630,22 @@
           "committer_approvals_excluded",
           "expected_updated_at"
         ],
+        "type": "object"
+      },
+      "ReadAllInput": {
+        "additionalProperties": false,
+        "description": "`POST …/read-all`.",
+        "properties": {
+          "up_to": {
+            "description": "Only items up to this id (the newest the person saw); absent: all.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "RedeliveryQueued": {
@@ -7545,6 +7694,26 @@
         ],
         "type": "object"
       },
+      "UnreadCountBody": {
+        "additionalProperties": false,
+        "description": "The unread count.",
+        "properties": {
+          "capped": {
+            "description": "100 visible unread items were found (show \"99+\"); hidden items never\nset it.",
+            "type": "boolean"
+          },
+          "count": {
+            "description": "Unread items the caller may see, at most 100 (counted over at most\n1000 unread rows, newest first; older visible ones are not counted).",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "capped"
+        ],
+        "type": "object"
+      },
       "UpdateGroup": {
         "additionalProperties": false,
         "description": "`PATCH /api/v1/groups/{id}`: at least one field.",
@@ -8685,6 +8854,44 @@
         "summary": "The person confirms an act-as approve or unapprove: a pending assertion bound to the merge request, its head and target, for the integration to claim (a person's web session; CSRF; 30 per 10 minutes)",
         "x-forge-action": "ActAsAssertionIssue",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/-/notifications": {
+      "get": {
+        "operationId": "get_notifications",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's in-app notifications",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_notifications",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's in-app notifications",
+        "x-forge-action": "WebShell"
       }
     },
     "/api/v1/admin/integrations": {
@@ -15248,6 +15455,171 @@
         "summary": "Replace the caller's own notification settings (an unknown language or kind is FG-WEB-0006)",
         "x-forge-action": "NotificationPreferencesWrite",
         "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/user/notifications": {
+      "get": {
+        "operationId": "get_api_v1_user_notifications",
+        "parameters": [
+          {
+            "description": "Only items with a smaller id (next_before of the previous page)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Rows read per page, 1..=100 (default 20), newest first; hidden items are skipped, so a page may hold fewer",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "true: only unread items (default false)",
+            "in": "query",
+            "name": "unread",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InAppNotificationList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own in-app notifications, newest first; only items whose merge request the caller may read now (decided again on every read)",
+        "x-forge-action": "NotificationInboxRead"
+      }
+    },
+    "/api/v1/user/notifications/read-all": {
+      "post": {
+        "operationId": "post_api_v1_user_notifications_read_all",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadAllInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Mark every unread in-app notification of the caller read, up to up_to when given",
+        "x-forge-action": "NotificationInboxUpdate",
+        "x-forge-max-body-bytes": 256
+      }
+    },
+    "/api/v1/user/notifications/unread-count": {
+      "get": {
+        "operationId": "get_api_v1_user_notifications_unread_count",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCountBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The number of the caller's unread in-app notifications they may still see (visible items only; at most 100, capped when 100 were found)",
+        "x-forge-action": "NotificationInboxRead"
+      }
+    },
+    "/api/v1/user/notifications/{id}/read": {
+      "post": {
+        "operationId": "post_api_v1_user_notifications_id_read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkedRead"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Mark one of the caller's in-app notifications read (another person's or an absent one is not found)",
+        "x-forge-action": "NotificationInboxUpdate"
       }
     },
     "/api/v1/user/sessions": {

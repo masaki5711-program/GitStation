@@ -169,7 +169,7 @@ async fn a_person_reads_the_defaults_and_replaces_their_settings() {
     assert_eq!(got.status, StatusCode::OK, "{}", got.json);
     assert_eq!(
         got.json,
-        json!({"email_enabled": true, "language": null, "muted_kinds": [], "kinds": kinds()})
+        json!({"email_enabled": true, "language": null, "muted_kinds": [], "in_app_enabled": true, "in_app_muted_kinds": [], "kinds": kinds()})
     );
     assert_eq!(got.cache_control, "private, no-store");
 
@@ -184,7 +184,7 @@ async fn a_person_reads_the_defaults_and_replaces_their_settings() {
     // Normalised: sorted, distinct.
     assert_eq!(
         put.json,
-        json!({"email_enabled": false, "language": "id", "muted_kinds": ["mr_approved", "mr_commented"], "kinds": kinds()})
+        json!({"email_enabled": false, "language": "id", "muted_kinds": ["mr_approved", "mr_commented"], "in_app_enabled": true, "in_app_muted_kinds": [], "kinds": kinds()})
     );
     let again = call(&t.db, "GET", Some(session(alice, false)), None).await;
     assert_eq!(again.json, put.json);
@@ -204,6 +204,40 @@ async fn a_person_reads_the_defaults_and_replaces_their_settings() {
     assert_eq!(reset.status, StatusCode::OK);
     assert_eq!(reset.json["muted_kinds"], json!([]));
     assert_eq!(reset.json["language"], Value::Null);
+
+    // M3 U4: the in-app switches are written when given and kept when a
+    // client of N1 leaves them out.
+    let in_app = call(
+        &t.db,
+        "PUT",
+        Some(session(alice, false)),
+        Some(json!({"email_enabled": true, "language": null, "muted_kinds": [], "in_app_enabled": false, "in_app_muted_kinds": ["mr_merged", "mr_merged"]})),
+    )
+    .await;
+    assert_eq!(in_app.status, StatusCode::OK, "{}", in_app.json);
+    assert_eq!(in_app.json["in_app_enabled"], false);
+    assert_eq!(in_app.json["in_app_muted_kinds"], json!(["mr_merged"]));
+    let mail_only = call(
+        &t.db,
+        "PUT",
+        Some(session(alice, false)),
+        Some(json!({"email_enabled": false, "language": null, "muted_kinds": []})),
+    )
+    .await;
+    assert_eq!(mail_only.json["email_enabled"], false);
+    assert_eq!(mail_only.json["in_app_enabled"], false, "kept");
+    assert_eq!(mail_only.json["in_app_muted_kinds"], json!(["mr_merged"]));
+    let bad = call(
+        &t.db,
+        "PUT",
+        Some(session(alice, false)),
+        Some(json!({"email_enabled": true, "language": null, "muted_kinds": [], "in_app_muted_kinds": ["mr_closed"]})),
+    )
+    .await;
+    assert_eq!(
+        (bad.status, bad.code()),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006")
+    );
     t.drop_now().await;
 }
 
@@ -355,7 +389,7 @@ async fn a_bad_body_is_a_precise_field_error_and_changes_nothing() {
     let stored = call(&t.db, "GET", who(), None).await;
     assert_eq!(
         stored.json,
-        json!({"email_enabled": true, "language": "en", "muted_kinds": ["mr_merged"], "kinds": kinds()})
+        json!({"email_enabled": true, "language": "en", "muted_kinds": ["mr_merged"], "in_app_enabled": true, "in_app_muted_kinds": [], "kinds": kinds()})
     );
     t.drop_now().await;
 }

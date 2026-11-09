@@ -16,6 +16,7 @@ import axe from 'axe-core';
 import { chromium } from 'playwright';
 
 import { ACT_AS_HEAD, ACT_AS_STATE, actAsBackend } from './journey-act-as.mjs';
+import { inboxBackend } from './journey-inbox.mjs';
 import { mergeBackend } from './journey-merge.mjs';
 import { mrBackend } from './journey-mr.mjs';
 import { PNG, REFS, browse } from './journey-repo.mjs';
@@ -60,6 +61,7 @@ function backend() {
   const serviceAccounts = serviceAccountsBackend(CSRF, user);
   const mergeRequests = mrBackend(CSRF, user);
   const merging = mergeBackend(CSRF, user);
+  const inbox = inboxBackend(CSRF);
   let nextId = 9;
   const handle = (req, res, url, body) => {
     const path = url.pathname;
@@ -109,9 +111,10 @@ function backend() {
       if (mr.error) return sendError(res, mr.status, ...mr.error), true;
       return sendJson(res, mr.status, mr.body), true;
     }
-    // Webhooks, notification preferences (U3a) and service accounts come before
+    // In-app notifications (U4), webhooks, notification preferences (U3a) and service accounts come before
     // the settings fake, which claims every /projects/7/, /user/ and /admin/ path.
     const more =
+      inbox.answer(req, url, body) ??
       webhooks.answer(req, url, body) ??
       serviceAccounts.answer(req, url, body) ??
       settings.answer(req, url, body, forgeWeb);
@@ -799,6 +802,36 @@ async function main() {
     await page.getByRole('button', { name: 'Save notification settings' }).click();
     await page.getByText('Notification settings were saved.').waitFor();
     await check('72-notifications-saved');
+
+    // 6f'. In-app notifications (U4): the bell names the unread count and
+    // leads to the list; one item is marked read (the count follows), then
+    // the rest with "Mark all as read"; the unread filter is then empty.
+    // 375 px: no sideways scroll.
+    await page.getByRole('link', { name: 'Notifications (2 unread)' }).click();
+    await h1('Notifications');
+    await expectPath('/-/notifications', 'the bell');
+    await page.getByText('Hanako Suzuki commented on your merge request').waitFor();
+    await check('74-inbox');
+    await page.getByRole('button', { name: 'Mark as read (Show the clone URL)' }).first().click();
+    await page.getByText('Marked as read.').waitFor();
+    await page.getByRole('link', { name: 'Notifications (1 unread)' }).waitFor();
+    await page.getByRole('button', { name: 'Mark all as read' }).click();
+    await page.getByText('All notifications were marked as read.').waitFor();
+    await page.getByRole('link', { name: 'Notifications', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Unread only' }).click();
+    await page.getByText('You have no unread notifications.').waitFor();
+    await check('75-inbox-unread-empty');
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.goto(`${base}/-/notifications`, { waitUntil: 'networkidle' });
+    await h1('Notifications');
+    {
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      if (overflow > 0) problems.push(`76-inbox-375: the page scrolls sideways by ${overflow}px at 375px`);
+    }
+    await check('76-inbox-375');
+    await page.setViewportSize({ width: 1100, height: 800 });
 
     // 6g. The act-as confirmation popup (U3): no navigation, the button is
     // dead for the first second and after that until a real press on it arms it (a click right after is refused),

@@ -209,6 +209,14 @@ actions! {
     NotificationPreferencesRead,
     /// `PUT /api/v1/user/notification-preferences`: replace one's own.
     NotificationPreferencesWrite,
+    /// `GET /api/v1/user/notifications` and `…/unread-count` (M3 U4): one's
+    /// own in-app notifications. Only the person: another user's are not
+    /// found, administrators included; each item is decided again on
+    /// `MergeRequestRead` when it is listed.
+    NotificationInboxRead,
+    /// `POST /api/v1/user/notifications/{id}/read` and `…/read-all`: mark
+    /// one's own read.
+    NotificationInboxUpdate,
     UserCreate,
     /// `POST /api/v1/admin/users/{id}/disable` (M2 MR6): administrators,
     /// never an agent; the administration guard always holds over HTTP
@@ -565,6 +573,7 @@ impl Action {
             | Action::GroupList
             | Action::TokenList
             | Action::NotificationPreferencesRead
+            | Action::NotificationInboxRead
             | Action::AdminSessionList
             | Action::UserSearch
             | Action::UserAdminList
@@ -604,6 +613,7 @@ impl Action {
             | Action::UserRename
             | Action::TokenRevoke
             | Action::NotificationPreferencesWrite
+            | Action::NotificationInboxUpdate
             | Action::AdminSessionRevoke
             | Action::UserCreate
             | Action::UserDisable
@@ -729,7 +739,9 @@ impl Action {
             // M3 X5: the context API is no act-as read (ADR-0025 §4).
             | Action::ContextRead
             | Action::NotificationPreferencesRead
+            | Action::NotificationInboxRead
             | Action::NotificationPreferencesWrite
+            | Action::NotificationInboxUpdate
             | Action::WebhookRead
             | Action::WebhookManage
             | Action::WebhookDeliveryRead

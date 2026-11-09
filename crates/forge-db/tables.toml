@@ -610,6 +610,18 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 N1 ──
 
+# ── M3 U4: in-app notifications (20261202100000, ADR-0016 Amendment U4) ──
+# One row per (source event, recipient), written by the notify subscriber;
+# the person marks their own read (not audited, like their settings); the
+# worker deletes read items after 30 days and every item after 180.
+# Derived from the events except `read_at`: the read state is the person's
+# and is NOT reproducible (a rebuild from the outbox would mark all unread).
+[tables.in_app_notifications]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 U4 ──
+
 # ── M3 O2: the push mirror to GitLab (20261130100000, ADR-0024 Amendment O2) ──
 # One mirror per repository, set by an administrator; the token lives in a
 # file of mirror.credentials_dir, never here. The read pool sees the origin,

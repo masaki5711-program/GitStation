@@ -2,7 +2,8 @@
 // src/assets/brand/, checked by tests/brand.test.ts), the language choice
 // and, when someone is signed in, the user menu. The header is navy, so it
 // shows the dark logo (docs/brand/README.md: never the light version on a
-// dark background); its own navy rectangle matches the header.
+// dark background); its own navy rectangle matches the header. M3 U4: the
+// notification bell sits beside the user menu.
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
@@ -11,6 +12,7 @@ import logo from '../assets/brand/gitstation-v1-logo-dark.svg';
 import { LANGUAGES, rememberLanguage, type Language } from '../i18n';
 import { useSessionState } from '../session/session';
 import styles from './Header.module.css';
+import { NotificationBell } from './NotificationBell';
 import { UserMenu } from './UserMenu';
 
 export function Header() {
@@ -52,6 +54,7 @@ export function Header() {
           <option value="id">{t('language.id')}</option>
         </select>
       </label>
+      {state.status === 'authed' && <NotificationBell />}
       {state.status === 'authed' && <UserMenu session={state.session} />}
     </header>
   );

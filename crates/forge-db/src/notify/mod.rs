@@ -23,14 +23,19 @@ pub const COMMENT_WINDOW_SECS: i64 = 600;
 pub const COALESCED: &str = "coalesced";
 
 /// A person's settings (`forge.notification_preferences`). No row is the
-/// default: mail on, the instance language, nothing muted.
+/// default: mail on, the instance language, nothing muted; in the app on,
+/// nothing muted (M3 U4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preferences {
     pub email_enabled: bool,
     /// `None`: the instance default language.
     pub language: Option<Lang>,
-    /// Sorted, distinct.
+    /// The kinds not mailed. Sorted, distinct.
     pub muted: Vec<NotificationKind>,
+    /// `false` stops every in-app item (M3 U4).
+    pub in_app_enabled: bool,
+    /// The kinds not shown in the app. Sorted, distinct.
+    pub in_app_muted: Vec<NotificationKind>,
 }
 
 impl Default for Preferences {
@@ -39,7 +44,16 @@ impl Default for Preferences {
             email_enabled: true,
             language: None,
             muted: Vec::new(),
+            in_app_enabled: true,
+            in_app_muted: Vec::new(),
         }
+    }
+}
+
+impl Preferences {
+    /// Whether an in-app item of `kind` is to be recorded for this person.
+    pub fn shows_in_app(&self, kind: NotificationKind) -> bool {
+        self.in_app_enabled && !self.in_app_muted.contains(&kind)
     }
 }
 
@@ -49,7 +63,8 @@ pub async fn preferences(db: &Db, user: UserId) -> Result<Preferences, ForgeErro
     let row: Option<PreferencesRow> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "SELECT email_enabled, language, muted_kinds \
+                "SELECT email_enabled, language, muted_kinds, in_app_enabled, \
+                   in_app_muted_kinds \
                  FROM forge.notification_preferences WHERE user_id = $1",
             )
             .bind(user.get())
@@ -67,7 +82,7 @@ pub async fn preferences(db: &Db, user: UserId) -> Result<Preferences, ForgeErro
 /// id, user, kind, project, iid, actor, request id, state.
 type SendRow = (i64, i64, String, i64, i64, Option<i64>, String, String);
 
-type PreferencesRow = (bool, Option<String>, Vec<String>);
+type PreferencesRow = (bool, Option<String>, Vec<String>, bool, Vec<String>);
 
 /// A stored value this build cannot read (the CHECKs make it a bug or a
 /// newer writer): `FG-SYS-0001`, never a silent default.
@@ -77,29 +92,38 @@ fn stored_invalid(reason: &'static str, user: UserId) -> ForgeError {
         .with_context("user_id", user.get())
 }
 
-fn parse_preferences(row: PreferencesRow, user: UserId) -> Result<Preferences, ForgeError> {
-    {
-        let (email_enabled, language, muted) = row;
-        let language = language
-            .map(|tag| {
-                Lang::parse(&tag).ok_or_else(|| stored_invalid("stored_language_invalid", user))
-            })
-            .transpose()?;
-        let mut kinds = muted
-            .iter()
-            .map(|k| {
-                NotificationKind::parse(k)
-                    .ok_or_else(|| stored_invalid("stored_kind_invalid", user))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        kinds.sort_unstable();
-        kinds.dedup();
-        Ok(Preferences {
-            email_enabled,
-            language,
-            muted: kinds,
+fn parse_kinds(stored: &[String], user: UserId) -> Result<Vec<NotificationKind>, ForgeError> {
+    let mut kinds = stored
+        .iter()
+        .map(|k| {
+            NotificationKind::parse(k).ok_or_else(|| stored_invalid("stored_kind_invalid", user))
         })
-    }
+        .collect::<Result<Vec<_>, _>>()?;
+    kinds.sort_unstable();
+    kinds.dedup();
+    Ok(kinds)
+}
+
+fn parse_preferences(row: PreferencesRow, user: UserId) -> Result<Preferences, ForgeError> {
+    let (email_enabled, language, muted, in_app_enabled, in_app_muted) = row;
+    let language = language
+        .map(|tag| Lang::parse(&tag).ok_or_else(|| stored_invalid("stored_language_invalid", user)))
+        .transpose()?;
+    Ok(Preferences {
+        email_enabled,
+        language,
+        muted: parse_kinds(&muted, user)?,
+        in_app_enabled,
+        in_app_muted: parse_kinds(&in_app_muted, user)?,
+    })
+}
+
+/// Sorted, distinct stored names.
+fn kind_names(kinds: &[NotificationKind]) -> Vec<&'static str> {
+    let mut kinds = kinds.to_vec();
+    kinds.sort_unstable();
+    kinds.dedup();
+    kinds.iter().map(|k| k.as_str()).collect()
 }
 
 /// Replace `user`'s settings; returns what is stored.
@@ -109,25 +133,28 @@ pub async fn set_preferences(
     prefs: &Preferences,
 ) -> Result<Preferences, ForgeError> {
     const QUERY: &str = "notify.set_preferences";
-    let mut muted: Vec<NotificationKind> = prefs.muted.clone(); // clone: normalised below
-    muted.sort_unstable();
-    muted.dedup();
-    let names: Vec<&str> = muted.iter().map(|k| k.as_str()).collect();
+    let names = kind_names(&prefs.muted);
+    let in_app_names = kind_names(&prefs.in_app_muted);
     let row: PreferencesRow = db
         .within(QUERY, async {
             sqlx::query_as(
                 "INSERT INTO forge.notification_preferences \
-                   (user_id, email_enabled, language, muted_kinds) \
-                 VALUES ($1, $2, $3, $4) \
+                   (user_id, email_enabled, language, muted_kinds, in_app_enabled, \
+                    in_app_muted_kinds) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
                  ON CONFLICT (user_id) DO UPDATE SET email_enabled = EXCLUDED.email_enabled, \
                    language = EXCLUDED.language, muted_kinds = EXCLUDED.muted_kinds, \
-                   updated_at = now() \
-                 RETURNING email_enabled, language, muted_kinds",
+                   in_app_enabled = EXCLUDED.in_app_enabled, \
+                   in_app_muted_kinds = EXCLUDED.in_app_muted_kinds, updated_at = now() \
+                 RETURNING email_enabled, language, muted_kinds, in_app_enabled, \
+                   in_app_muted_kinds",
             )
             .bind(user.get())
             .bind(prefs.email_enabled)
             .bind(prefs.language.map(Lang::as_str))
             .bind(&names)
+            .bind(prefs.in_app_enabled)
+            .bind(&in_app_names)
             .fetch_one(db.write_pool())
             .await
             .map_err(|e| query_error(QUERY, e))
@@ -532,6 +559,8 @@ pub async fn backlog(db: &Db) -> Result<Backlog, ForgeError> {
         address_suppressed_24h: address,
     })
 }
+
+pub mod in_app;
 
 #[cfg(test)]
 mod tests;

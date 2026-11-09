@@ -19,8 +19,18 @@
 //! with a `notification.send` job, or `skipped` / `suppressed` with the
 //! reason, so "why did I get no mail?" always has an answer in the table.
 //! The mail itself is the job's, never the subscriber's (no network call in
-//! a step). With `notify.enabled = false` the worker registers [`Notify::paused`]:
-//! it reads every event and records nothing, so its cursor follows the head.
+//! a step).
+//!
+//! In the same step the same recipient gets an in-app item (M3 U4,
+//! `forge.in_app_notifications`, one per event and person) when
+//! [`crate::access::decide_in_app`] says so: an active person who has not
+//! switched the kind off in the app and may read the merge request now. No
+//! row is written otherwise (the in-app list has no delivery to explain);
+//! the list decides visibility again on every read.
+//!
+//! With `notify.enabled = false` the worker registers [`Notify::paused`]:
+//! it reads every event and records no mail, only the in-app items (they
+//! need no relay), so its cursor follows the head.
 //!
 //! An event whose payload this build cannot read fails the step (counted,
 //! quarantined after five tries: `FG-DB-0008`); a type this build does not
@@ -32,12 +42,12 @@ use forge_core::config::NotifyConfig;
 use forge_core::ids::UserId;
 use forge_core::{EventType, NotificationKind};
 use forge_db::jobs::{JobTimeout, MaxAttempts};
-use forge_db::notify::{self, Delivery, Initial, NewNotification};
+use forge_db::notify::{self, in_app, Delivery, Initial, NewNotification};
 use forge_db::subscribers::{DerivedTx, HandleFuture, Ordering, SourceEvent, Subscriber};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::access::{decide, Decision};
+use crate::access::{decide, decide_in_app, Decision};
 
 /// The subscriber's name (its row in forge.event_subscribers).
 pub const NAME: &str = "notify";
@@ -50,7 +60,7 @@ pub struct Notify {
     db: Db,
     delivery: Delivery,
     /// `notify.enabled = false`: the subscriber stays registered and reads
-    /// every event, but records nothing (see [`Notify::paused`]).
+    /// every event, but records no mail (see [`Notify::paused`]).
     paused: bool,
 }
 
@@ -76,11 +86,11 @@ impl Notify {
 
 impl Notify {
     /// The subscriber while mail is off (`notify.enabled = false`). It keeps
-    /// its row and its cursor moving — every event is read and passed over
-    /// without a row — so turning mail on later starts from the head, not
-    /// from where mail was switched off (no mail for the whole disabled
-    /// period), the subscriber lag stays zero and event retention is not
-    /// held back.
+    /// its row and its cursor moving — every event is read, the in-app
+    /// items are recorded and no mail row is — so turning mail on later
+    /// starts from the head, not from where mail was switched off (no mail
+    /// for the whole disabled period), the subscriber lag stays zero and
+    /// event retention is not held back.
     pub fn paused(db: &Db) -> Result<Self, ForgeError> {
         let mut paused = Self::new(db, &NotifyConfig::default())?;
         paused.paused = true;
@@ -161,23 +171,36 @@ impl Notify {
             return Ok(());
         };
         if actor == Some(author) {
-            // Nobody needs a mail about what they did themselves.
+            // Nobody needs to be told about what they did themselves.
             return Ok(());
         }
-        let initial = match decide(&self.db, author, kind, project, iid).await? {
-            Decision::Send { .. } => Initial::Queue,
-            Decision::Skip(reason) => Initial::Skip(reason),
-            Decision::Suppress(reason) => Initial::Suppress(reason),
-        };
-        let new = NewNotification {
-            user: author,
-            kind,
-            project,
-            iid,
-            actor,
-            initial,
-        };
-        notify::enqueue(tx, event, &new, &self.delivery).await?;
+        if !self.paused {
+            let initial = match decide(&self.db, author, kind, project, iid).await? {
+                Decision::Send { .. } => Initial::Queue,
+                Decision::Skip(reason) => Initial::Skip(reason),
+                Decision::Suppress(reason) => Initial::Suppress(reason),
+            };
+            let new = NewNotification {
+                user: author,
+                kind,
+                project,
+                iid,
+                actor,
+                initial,
+            };
+            notify::enqueue(tx, event, &new, &self.delivery).await?;
+        }
+        // M3 U4: the in-app item for the same recipient, mail on or off.
+        if decide_in_app(&self.db, author, kind, project, iid).await? {
+            let item = in_app::NewItem {
+                user: author,
+                kind,
+                project,
+                iid,
+                actor,
+            };
+            in_app::record(tx, event, &item).await?;
+        }
         Ok(())
     }
 }
@@ -193,11 +216,6 @@ impl Subscriber for Notify {
 
     fn handle<'a>(&'a self, event: &'a SourceEvent, tx: &'a mut DerivedTx<'_>) -> HandleFuture<'a> {
         Box::pin(async move {
-            if self.paused {
-                // Mail is off: read the event, record nothing (the cursor
-                // moves, so switching on later does not replay the period).
-                return Ok(());
-            }
             let Some(event_type) = EventType::parse(&event.event_type) else {
                 // A type this build does not know (a newer writer). The
                 // subscriber is independent, so it goes on, never silently.

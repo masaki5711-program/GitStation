@@ -21,6 +21,7 @@ pub mod members;
 pub mod merge_requests;
 pub mod moves;
 // M3 N1: the caller's notification settings.
+pub mod in_app_notifications;
 pub mod namespaces;
 pub mod notifications;
 pub mod project_writes;

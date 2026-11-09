@@ -7,8 +7,10 @@
 //!   needs no second source.
 //! - `PUT` (`NotificationPreferencesWrite`, `api`): replace the settings as
 //!   a whole. Muted kinds are sorted and de-duplicated; an unknown language
-//!   or kind is `FG-WEB-0006 field=language|muted_kinds` and changes
-//!   nothing.
+//!   or kind is `FG-WEB-0006 field=language|muted_kinds|in_app_muted_kinds`
+//!   and changes nothing. The in-app switches (M3 U4) may be left out: a
+//!   field that is absent keeps what is stored (clients of N1 send only
+//!   the mail fields).
 //!
 //! The route has no user in it: it is always the caller's own, and
 //! `authorize()` answers a settings resource of anyone else like an absent
@@ -43,6 +45,10 @@ pub struct PreferencesInput {
     pub language: Option<String>,
     /// Kinds to stop (`GET`'s `kinds` lists them).
     pub muted_kinds: Vec<String>,
+    /// `false` stops every in-app notification (M3 U4); absent: unchanged.
+    pub in_app_enabled: Option<bool>,
+    /// Kinds not shown in the app (M3 U4); absent: unchanged.
+    pub in_app_muted_kinds: Option<Vec<String>>,
 }
 
 /// The caller's settings.
@@ -53,6 +59,10 @@ pub struct PreferencesBody {
     #[schema(required = true)]
     pub language: Option<String>,
     pub muted_kinds: Vec<String>,
+    /// In-app notifications on or off (M3 U4).
+    pub in_app_enabled: bool,
+    /// Kinds not shown in the app (M3 U4).
+    pub in_app_muted_kinds: Vec<String>,
     /// Every kind of notification there is.
     pub kinds: Vec<String>,
 }
@@ -62,6 +72,12 @@ fn body(prefs: &Preferences) -> PreferencesBody {
         email_enabled: prefs.email_enabled,
         language: prefs.language.map(|l| l.as_str().to_owned()),
         muted_kinds: prefs.muted.iter().map(|k| k.as_str().to_owned()).collect(),
+        in_app_enabled: prefs.in_app_enabled,
+        in_app_muted_kinds: prefs
+            .in_app_muted
+            .iter()
+            .map(|k| k.as_str().to_owned())
+            .collect(),
         kinds: NotificationKind::ALL
             .iter()
             .map(|k| k.as_str().to_owned())
@@ -69,8 +85,27 @@ fn body(prefs: &Preferences) -> PreferencesBody {
     }
 }
 
-/// The input as settings; an unknown language or kind is a field error.
-fn parse(input: &PreferencesInput) -> Result<Preferences, ForgeError> {
+fn kinds(raw: &[String], field: &'static str) -> Result<Vec<NotificationKind>, ForgeError> {
+    let invalid = |rule: &'static str| {
+        request_invalid("field_invalid")
+            .with_context("field", field)
+            .with_context("rule", rule)
+    };
+    if raw.len() > NotificationKind::ALL.len() * 2 {
+        return Err(invalid("too_many"));
+    }
+    let mut kinds = raw
+        .iter()
+        .map(|k| NotificationKind::parse(k).ok_or_else(|| invalid("unknown_kind")))
+        .collect::<Result<Vec<_>, _>>()?;
+    kinds.sort_unstable();
+    kinds.dedup();
+    Ok(kinds)
+}
+
+/// The input as settings over `stored` (the in-app fields left out keep
+/// their stored values); an unknown language or kind is a field error.
+fn parse(input: &PreferencesInput, stored: &Preferences) -> Result<Preferences, ForgeError> {
     let invalid = |field: &'static str, rule: &'static str| {
         request_invalid("field_invalid")
             .with_context("field", field)
@@ -82,20 +117,17 @@ fn parse(input: &PreferencesInput) -> Result<Preferences, ForgeError> {
         Some(tag @ ("ja" | "en" | "id")) => Lang::parse(tag),
         Some(_) => return Err(invalid("language", "unknown_language")),
     };
-    if input.muted_kinds.len() > NotificationKind::ALL.len() * 2 {
-        return Err(invalid("muted_kinds", "too_many"));
-    }
-    let mut muted = input
-        .muted_kinds
-        .iter()
-        .map(|k| NotificationKind::parse(k).ok_or_else(|| invalid("muted_kinds", "unknown_kind")))
-        .collect::<Result<Vec<_>, _>>()?;
-    muted.sort_unstable();
-    muted.dedup();
+    let muted = kinds(&input.muted_kinds, "muted_kinds")?;
+    let in_app_muted = match input.in_app_muted_kinds.as_deref() {
+        Some(raw) => kinds(raw, "in_app_muted_kinds")?,
+        None => stored.in_app_muted.clone(), // clone: kept as stored
+    };
     Ok(Preferences {
         email_enabled: input.email_enabled,
         language,
         muted,
+        in_app_enabled: input.in_app_enabled.unwrap_or(stored.in_app_enabled),
+        in_app_muted,
     })
 }
 
@@ -181,7 +213,13 @@ pub async fn replace(
 ) -> Response {
     let w = request.into_write();
     let built = async {
-        let wanted = parse(&w.input)?;
+        let current = bounded(
+            &state,
+            "notification_preferences_write",
+            settings(&state)?.current(&w.proof),
+        )
+        .await?;
+        let wanted = parse(&w.input, &current)?;
         let stored = bounded(
             &state,
             "notification_preferences_write",

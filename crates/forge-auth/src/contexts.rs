@@ -581,7 +581,8 @@ impl ResourceCtx for TokenOwnerCtx {
     }
 }
 
-/// The notification settings of `owner` (`NotificationPreferencesRead` /
+/// The notification settings and in-app notifications of `owner`
+/// (`NotificationInboxRead` / `…Update`, M3 U4) (`NotificationPreferencesRead` /
 /// `…Write`, M3 N1): the id is the owner, so a proof names whose they are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationPreferencesCtx {
