@@ -1,0 +1,35 @@
+# synthetic — 計画 13 §5 の型の定義の例（ADR-0026 §5）。統制（承認者・フェーズ）は書かない（推奨だけ）。
+name: qms.procedure
+version: 1
+label: { ja: 手順書・規程, en: Procedure, id: Prosedur }
+id_pattern: '^Q[PM]-\d{2}-\d{3}$'
+defaults: { classification: internal, review_cycle: 24M }
+fields:
+  scope_sites: { type: list, required: false, label: { ja: 適用する事業所 } }
+  supersedes:  { type: ref, doctype: qms.procedure, required: false, label: { ja: 置き換える文書 } }
+sections:
+  - { title: 目的 }
+  - { title: 適用範囲 }
+  - { title: 用語と定義, blocks: [term] }
+  - { title: 責任と権限 }
+  - { title: 手順, blocks: [step] }
+  - { title: 記録, blocks: [record] }
+  - { title: 関連文書 }
+blocks:
+  term:
+    id_pattern: '^T-\d{2}$'
+  step:
+    id_pattern: '^S-\d{1,2}$'
+    attrs:
+      role: { type: text, required: true }        # 実施する役割（個人名にしない）
+  record:
+    id_pattern: '^R-\d{2}$'
+    attrs:
+      form: { type: docref, doctype: qms.form, required: true }   # 様式（雛形）の文書番号
+      retention: { type: duration, required: true }               # 保管期間（例 3Y）
+rules:
+  - every_record_names_a_form
+approval_hint:
+  review: [qa-team]
+  approve: [qa-manager]
+concurrency_hint: single_revision

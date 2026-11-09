@@ -2040,3 +2040,9 @@ O3 の再レビューの決定「kill の時刻（`killed_at_unix_ms`、forge-gi
 - テスト: forge-git `a_lock_written_in_the_millisecond_of_the_kill_is_ours`（修正前は 50 回中 48 回落ちた）・
   `a_kill_time_is_carried_rounded_up_to_the_millisecond`、forge-cli `a_pack_refs_killed_while_writing_its_lock_removes_it`（ロックを 1 ms ごとに
   `stat` する doctor 役つき。修正前は 5 回中 4 回落ちた）。
+
+## Amendment（proposed、2026-11-09、ADR-0028）— 承認した blob と発行する blob
+
+ADR-0028 §4（proposed）: 承認のフェーズのあるリポジトリでは、MR が変えた各文書について、マージの結果の blob が承認した head の blob と同じであることを
+マージの条件に足す（`evaluate_merge()` の新しい止める理由。ロックの下でもう一度確かめる）。§8 の 1 の「承認は `(head_sha, target_branch)` に結ぶ」は
+変えない（文書の blob の一致を足すだけ）。ADR-0028 が accepted になったときに有効になる。

@@ -29,3 +29,6 @@
 | [0023](0023-drop-repository-kinds-and-document-portal.md) | リポジトリの種類（spec / system）と文書ポータルをやめる | accepted | 2026-11-01 |
 | [0024](0024-merge-requests-merge-execution-and-checks.md) | MR の持ち方、マージの実行、マージの条件と Checks API | accepted | 2026-11-02 |
 | [0025](0025-act-as-delegated-actions-for-the-pm-integration.md) | 代理実行（act-as）— PM ツール（kanflow）が本人として行う操作 | proposed（`security-reviewer` の必須レビュー待ち） | 2026-11-05 |
+| [0026](0026-document-format-doctypes-and-forge-doc.md) | 文書の形式、文書の型の定義、解析のクレート `forge-doc` | proposed（accepted は計画 13 段 1 の試しの後） | 2026-11-09 |
+| [0027](0027-document-concurrent-editing.md) | 文書の同時の編集 — 改訂は文書ごとに 1 つ、期限つきの編集の宣言 | proposed | 2026-11-09 |
+| [0028](0028-document-e-approval-and-phases.md) | 文書の電子の承認と、リポジトリごとの承認のフェーズ | proposed（品質保証の部門の確認も条件） | 2026-11-09 |
