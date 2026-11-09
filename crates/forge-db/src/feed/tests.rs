@@ -1039,6 +1039,18 @@ async fn explain(
         .replace("$2", &bound.to_string())
         .replace("$1", &after.to_string());
     let mut su = w.t.superuser().await;
+    // The planner costs of the supported server (PostgreSQL 16 + TimescaleDB,
+    // the IoT platform's and ops/dev/compose.yml's image: timescaledb-tune
+    // sets these at its first start), whatever this test cluster was started
+    // with. With the stock `random_page_cost = 4` the planner walks
+    // `events_seq_key` instead of `events_project_type_seq` on this
+    // synthetic data (2026-11-09: 493 028 rows on a plain PostgreSQL 16).
+    sqlx::raw_sql(
+        "SET random_page_cost = 1.1; SET effective_cache_size = '4GB'; SET work_mem = '16MB'",
+    )
+    .execute(&mut su)
+    .await
+    .expect("server costs");
     sqlx::raw_sql(
         "CREATE FUNCTION pg_temp.plan_of(q text) RETURNS text LANGUAGE plpgsql AS $$ \
          DECLARE r json; BEGIN EXECUTE 'EXPLAIN (ANALYZE, FORMAT JSON) ' || q INTO r; \

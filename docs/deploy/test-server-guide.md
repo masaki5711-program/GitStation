@@ -33,7 +33,7 @@
 | GitStation `forge serve` | HTTP サーバー（REST API v1、Smart HTTP の git、埋め込み UI） | 127.0.0.1:8080 | `server.bind` の既定。非ループバックで待ち受けると「TLS のリバースプロキシを前に置け」の警告が出る (出典: `crates/forge-core/src/config.rs` の `build`、`crates/forge-web/src/server.rs`) |
 | GitStation `forge worker` | 背景タスク（リポジトリの作成、アウトボックスの採番、監査の封印、削除の確定）。**動いていないとプロジェクトを作ってもリポジトリができない** | なし | (出典: `crates/forge-cli/src/worker/mod.rs`、`ops/runbooks/repository-provisioning.md`) |
 | GitStation の埋め込み UI | `/` 以下の殻と `/-/assets/` | `forge serve` と同じ | (出典: `web/README.md`、`docs/adr/0022-web-ui-foundation-react-typescript-embedded.md` §2) |
-| PostgreSQL 16 | GitStation の DB（`forge`） | 5432（本番想定）。開発用 compose は 127.0.0.1:55432 | 16 未満は拒否 (出典: `crates/forge-db/src/options.rs` の `MIN_SERVER_VERSION_NUM`) |
+| PostgreSQL 16 | GitStation の DB（`forge`） | 5432（本番想定）。開発用 compose は 127.0.0.1:55432 | 16 未満は拒否 (出典: `crates/forge-db/src/options.rs` の `MIN_SERVER_VERSION_NUM`)。**IoT 基盤と同じ PostgreSQL 16 + TimescaleDB のイメージ（`ops/dev/compose.yml`）を推奨**。素の PostgreSQL を使うなら SSD 向けに `random_page_cost = 1.1`、`effective_cache_size` をメモリの半分程度に設定する。既定の `random_page_cost = 4` では、連携の feed のページが索引 `events_project_type_seq` を使わず、イベントの表を広く読む（2026-11-09、クラウドの素の PostgreSQL で 1 ページ 49 万行。`crates/forge-db/src/feed/tests.rs` の `explain`） |
 | Keycloak（任意） | ブラウザの OIDC ログイン | 開発用 compose は 127.0.0.1:58080 | (出典: `ops/dev/compose.yml`、`docs/adr/0021-oidc-keycloak-login-and-web-sessions.md` §13) |
 | `gstn` | GitStation のクライアント CLI（開発者の PC / Claude Code が使う） | — | `forge-client` は `forge-errors` だけに依存 (出典: `crates/forge-client/README.md`) |
 | Kanflow（Next.js） | PM ツール本体 + REST API v1 + MCP サーバー（`/api/mcp`） | 3000 | (出典: `Kanflow/README.md` の技術スタック表) |

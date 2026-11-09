@@ -9,7 +9,6 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
 
 use common::*;
 use forge_core::{CheckReason, MergeabilityStatus, RequestId};
@@ -201,8 +200,12 @@ async fn check_maps_git_timeout_and_no_version_to_check_failed() {
     )
     .await
     .expect("v1");
-    let slow = w.checker(MergeTreeLimits {
-        timeout: Duration::ZERO,
+    // A git that never answers `merge-tree`: the timeout is certain (a
+    // near-zero timeout is not: a fast git can win the race).
+    let fake = tempfile::tempdir().expect("fake git dir");
+    let stalled = forge_git::test_git::stalled_git(w._home.path(), fake.path(), Some("merge-tree"));
+    let slow = Mergeability::new(stalled, w.storage.clone()).with_limits(MergeTreeLimits {
+        timeout: forge_git::test_git::STALL,
         ..MergeTreeLimits::default()
     });
     let err = check(&w.t.db, &slow, w.request().await, &rid)

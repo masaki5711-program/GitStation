@@ -604,11 +604,20 @@ pub fn packed_refs_lock_age(
     }
 }
 
+/// How much older than the step's start our own `packed-refs.lock` may look:
+/// file times are stamped from a coarse clock, the step's start from a
+/// fine-grained one. The kernel tick alone gives a few milliseconds (measured
+/// up to 8 ms), but some file systems keep whole seconds (ext2/ext3; two on
+/// FAT), and the test and production file systems are not fixed — so 2 s, a
+/// deliberate trade-off. It widens the residual window below by 2 s.
+const LOCK_MTIME_SLACK: Duration = Duration::from_secs(2);
+
 impl Git {
     /// After a pack-refs that was **killed** ([`StepEnd::Killed`]: git
     /// could not remove its own lock), still under the merge lock: remove
-    /// `packed-refs.lock` only when its time lies between `step_started` and
-    /// `killed_at` — it can then only be the one our pack-refs made.
+    /// `packed-refs.lock` only when its time lies between `step_started`
+    /// (less [`LOCK_MTIME_SLACK`] for coarse file times) and `killed_at` —
+    /// it can then only be the one our pack-refs made.
     /// Anything else is left ([`LockCleanup::Foreign`]: the caller alerts,
     /// FG-GIT-0020): the merge lock does **not** keep writers out —
     /// receive-pack and `update-ref` of the version job take
@@ -618,7 +627,10 @@ impl Git {
     /// exists is someone else's). Residual: a writer that took the lock
     /// while our pack-refs waited for it (≤ 10 s) and before the kill has a
     /// time inside the window; on Unix the kill comes only after pack-refs
-    /// ignored SIGTERM for 5 s, on Windows (development only) at once.
+    /// ignored SIGTERM for 5 s, on Windows (development only) at once. The
+    /// slack adds one more: a writer that took the lock up to 2 s before the
+    /// step and still holds it at the kill (pack-refs waits ≤ 10 s for it,
+    /// the kill comes ≥ 5 s in) — very unlikely, accepted (2026-11-08).
     pub async fn clear_own_packed_refs_lock(
         &self,
         storage: &StorageRoot,
@@ -640,7 +652,13 @@ impl Git {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LockCleanup::Absent),
                 Err(e) => return Err(e),
             };
-            if modified >= step_started && modified <= killed_at {
+            // File times come from a coarse clock (the kernel tick, or whole
+            // seconds on some file systems); `step_started` is fine-grained,
+            // so our own lock can look up to that much older than the step.
+            let earliest = step_started
+                .checked_sub(LOCK_MTIME_SLACK)
+                .unwrap_or(step_started);
+            if modified >= earliest && modified <= killed_at {
                 match std::fs::remove_file(&lock) {
                     Ok(()) => Ok(LockCleanup::Removed),
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(LockCleanup::Absent),

@@ -67,6 +67,10 @@ pub mod secret_scan;
 pub mod smart_http;
 pub mod storage;
 mod stream;
+/// A git that never answers, for tests that need a certain timeout (this
+/// crate's and, with `test-support`, other crates' tests).
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_git;
 pub mod upload_request;
 pub mod version;
 mod want_check;

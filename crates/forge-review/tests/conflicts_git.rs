@@ -599,17 +599,28 @@ async fn a_git_timeout_on_a_pair_is_stored_on_the_pair() {
     let (two, seq2) = w
         .mr("two", &base, &[("a.txt", with_line(2, "two"))], false)
         .await;
+    // A git that never answers `merge-tree`: the timeout is certain (a
+    // near-zero timeout is not: a fast git can win the race).
+    let fake = tempfile::tempdir().expect("fake git dir");
+    let stalled = forge_git::test_git::stalled_git(w._home.path(), fake.path(), Some("merge-tree"));
     let limits = ScanLimits {
         merge_tree: MergeTreeLimits {
-            timeout: Duration::ZERO,
+            timeout: forge_git::test_git::STALL,
             ..MergeTreeLimits::default()
         },
         ..ScanLimits::default()
     };
-    let report = w
-        .run(&two, seq2, limits)
-        .await
-        .expect("a pair failure is stored");
+    let report = scan(
+        &w.t.db,
+        &ConflictPredictor::new(stalled, w.storage.clone()).with_limits(limits),
+        ConflictScanRequest {
+            merge_request: two.id,
+            scan_seq: seq2.expect("the version job requested a scan"),
+        },
+        &RequestId::parse("req-scan-stalled").expect("id"),
+    )
+    .await
+    .expect("a pair failure is stored");
     assert_eq!(report.reason, Some("pair_failed"));
     let row = conflict_scan(&w.t.db, two.id)
         .await
@@ -711,7 +722,8 @@ async fn a_file_against_a_directory_of_the_same_name_is_predicted() {
 }
 
 /// Review MEDIUM: with no budget left, no git process is started with a
-/// zero timeout: the candidate is skipped as `budget_exhausted`.
+/// zero timeout (the budget is checked in Rust before any spawn, so the
+/// zero budget is deterministic): the candidate is skipped as `budget_exhausted`.
 #[tokio::test]
 async fn an_exhausted_budget_skips_the_pair_without_running_git() {
     let w = world().await;

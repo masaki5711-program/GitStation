@@ -8,12 +8,13 @@ use forge_core::{ObjectId, RepoId};
 use forge_errors::ErrorCode;
 
 use super::*;
+use crate::test_git::{stalled_git, STALL};
 use crate::GitConfig;
 
 const T: Duration = Duration::from_secs(20);
 
 struct Fixture {
-    _home: tempfile::TempDir,
+    home: tempfile::TempDir,
     _root_dir: tempfile::TempDir,
     git: Git,
     root: StorageRoot,
@@ -32,7 +33,7 @@ async fn fixture() -> Fixture {
         .await
         .expect("init");
     Fixture {
-        _home: home,
+        home,
         _root_dir: root_dir,
         git,
         root,
@@ -317,11 +318,12 @@ async fn a_trial_merge_past_its_time_limit_is_git_timeout() {
     let f = fixture().await;
     let h = histories(&f.path);
     let limits = MergeTreeLimits {
-        timeout: Duration::ZERO,
+        timeout: STALL,
         ..MergeTreeLimits::default()
     };
-    let err = f
-        .trial(&h.target, &h.conflicting, limits)
+    let tmp = tempfile::tempdir().expect("tmp");
+    let err = stalled_git(f.home.path(), tmp.path(), None)
+        .merge_tree(&f.root, f.id, &h.target, &h.conflicting, limits)
         .await
         .expect_err("timeout");
     assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");
@@ -373,15 +375,15 @@ async fn merge_base_questions_time_out_and_refuse_missing_objects() {
     let f = fixture().await;
     let h = histories(&f.path);
     let missing = ObjectId::parse(&"e".repeat(40)).expect("oid");
-    let err = f
-        .git
-        .merge_base(&f.root, f.id, &h.target, &h.clean, Duration::ZERO)
+    let tmp = tempfile::tempdir().expect("tmp");
+    let stalled = stalled_git(f.home.path(), tmp.path(), None);
+    let err = stalled
+        .merge_base(&f.root, f.id, &h.target, &h.clean, STALL)
         .await
         .expect_err("timeout");
     assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");
-    let err = f
-        .git
-        .is_ancestor(&f.root, f.id, &h.base, &h.target, Duration::ZERO)
+    let err = stalled
+        .is_ancestor(&f.root, f.id, &h.base, &h.target, STALL)
         .await
         .expect_err("timeout");
     assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");

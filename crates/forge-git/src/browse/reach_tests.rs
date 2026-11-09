@@ -239,16 +239,22 @@ async fn names_and_cached_tips_skip_the_check() {
 /// is `FG-GIT-0002 check=reachability`, and an id lookup answers the user
 /// exactly like a missing id (`ref_not_found`, the hidden code in the
 /// log), so the status does not tell an existing commit from a missing
-/// one (review of P6, MEDIUM 2). Real git, so this also runs on Windows:
-/// a 1 ns limit always expires before git answers.
+/// one (review of P6, MEDIUM 2). The check's `rev-list` never answers
+/// (`test_git`: a 1 ns limit was not certain — a fast git that already
+/// answered wins under load); every other git call is the real one.
 #[tokio::test]
 async fn a_reachability_check_out_of_time_answers_not_found_never_success() {
     let f = fixture().await;
     let g = graph(&f.path);
-    let b = f.browser(BrowseLimits {
-        reach_timeout: Duration::from_nanos(1),
-        ..BrowseLimits::default()
-    });
+    let tmp = tempfile::tempdir().expect("tmp");
+    let b = Browser::new(
+        crate::test_git::stalled_git(&f.home, tmp.path(), Some("rev-list")),
+        f.storage.clone(),
+        BrowseLimits {
+            reach_timeout: crate::test_git::STALL,
+            ..BrowseLimits::default()
+        },
+    );
     let missing = told(
         &b.resolve_ref(f.id, &"0".repeat(40), "user:1")
             .await
@@ -273,8 +279,9 @@ async fn a_reachability_check_out_of_time_answers_not_found_never_success() {
     }
     // A timed-out answer is not cached: with time, the same id resolves.
     let ok = Browser {
+        git: f.git.clone(), // clone: the real git (the fake never answers)
         limits: BrowseLimits::default(),
-        ..b.clone() // clone: the same caches, other limits
+        ..b.clone() // clone: the same caches, other git and limits
     };
     assert_eq!(
         ok.resolve_ref(f.id, &g.mid, "user:1")

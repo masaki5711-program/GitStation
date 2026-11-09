@@ -66,3 +66,22 @@ O2 の残り: **試験環境で本物の GitLab に送る通し**（Q7: 試験�
 - forge-cli `worker::maintenance::tests::a_killed_pack_refs_removes_its_own_lock_and_keeps_a_foreign_one`（**単独でも 3 回中 2 回落ちる**。`2026-11-06-m3-day5.md` §6 の `pack_refs` より悪い。次に直す候補）
 - forge-git `browse::history_tests::answers_that_do_not_fit_are_process_failed`（負荷の下で `GitUnavailable`）
 - forge-review `conflicts_git a_git_timeout_on_a_pair_is_stored_on_the_pair`（負荷の下で時間切れが起きない）
+
+## 7. 追記（2026-11-08〜09、クラウド）: pack_refs のテストが落ちる原因を直した
+
+- **原因**: ファイルの更新時刻は粗い時計（カーネルの tick、ファイルシステムによっては秒）で付き、`SystemTime::now()` は細かい時計。
+  このコンテナでは、作った直後のファイルの更新時刻が直前の `now()` より早いことが 2000 回中 1501 回（最大 7.7 ms）あった。
+  そのため、殺した pack-refs が残した**自分の** `packed-refs.lock` が「ステップより古い = 他人のもの」と判定され、
+  残ったうえに誤った FG-GIT-0020 の警告が出ていた。`a_killed_pack_refs_removes_its_own_lock_and_keeps_a_foreign_one` は単独で 5 回中 5 回落ちた（§6 の「3 回中 2 回」はこれ）。
+- **修正**: `forge-git` の `clear_own_packed_refs_lock` で、下限を `step_started - LOCK_MTIME_SLACK（2 s）` にした。2 s は ext2/ext3（秒）と FAT（2 秒）も含めるための意図した値。
+  文書に「残る窓が 2 s 広がる（ステップの 2 s 前から持つ書き手のロックを、殺した時点でも持っていた場合）。可能性は極めて低く、受け入れる」と書いた。
+- **テスト**: 新しい単体テスト `a_lock_stamped_by_a_coarse_clock_just_before_the_step_is_ours`（10 ms 前 → 自分のもの、3 s 前 → 他人のもの）。修正前に落ち、修正後に通ることを確かめた。forge-cli の上のテストは修正後 5 回中 5 回合格。
+- **確かめたこと**: `cargo fmt --all -- --check`、`cargo clippy -p forge-git -p forge-cli --all-targets -D warnings`、`cargo nextest run -p forge-git -p forge-cli`（549 件中 548 合格。落ちた 1 件は下の別の不安定なテスト）。独立レビュー（rust-reviewer）は HIGH なし、MEDIUM（文書の窓の説明）と LOW（境界のテスト、行の長さ、2 s の理由）を直した。**ワークスペース全体のテストは流していない。**
+- **別の不安定なテスト**: forge-git `mergeability::tests::merge_base_questions_time_out_and_refuse_missing_objects` が 2 並列の実行で 1 回落ち、単独では 3 回中 3 回合格。負荷の下の時間切れの前提。§6 の一覧に足す。
+
+## 8. 追記（2026-11-09、クラウド）: 不安定なテストを直し、全体のテストが全部通った
+
+- **全体のテスト**: `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev cargo nextest run --workspace -j 4 --no-fail-fast` → **2931 件合格・1 件 skip**（修正前は 3 件失敗）。web の `npx vitest run` → 773 件合格（Rust の全体のテストの負荷の下で）。`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings` は緑。
+- **git の時間切れのテスト**（`210e70b`・`72bb6fb`）: `Duration::ZERO` / 1 ns の上限は時間切れを保証しない（期限は git を起動する前に決まり、`timeout_at` は先に実行を待つので、負荷の下では答え終えた速い git が勝つ）。`forge_git::test_git`（`cfg(test)` と `test-support`）の「答えない git」（全部、または 1 つのサブコマンドだけ止め、ほかは本物の git）と 300 ms に置き換えた: forge-git の mergeability・commit-tree・到達性、forge-review の mergeability・conflicts・merges（commit-tree、update-ref）。Rust の中で起動前に判定される 0 の予算はそのまま。
+- **feed の行数のテスト**（`f7d74e3`）: 素の PostgreSQL 16（`random_page_cost = 4`）では、計画が `events_project_type_seq` でなく `events_seq_key` を選び 1 ページ 49 万行を読んだ。本番・開発・CI は TimescaleDB のイメージ（timescaledb-tune の値）なので、テストの EXPLAIN のセッションにその値（`random_page_cost 1.1`、`effective_cache_size 4GB`、`work_mem 16MB`）を当てた。クエリの書き換え（キー全体の ORDER BY、行の比較）は計画を確実には変えられず、やめた。テストサーバーのガイドに、素の PostgreSQL を使うときの推奨値を書いた。
+- `2026-11-06-m3-day5.md` §6 の残り（OIDC、archive、Webhook、merges の再試行以外の forge-hosting など）は、この 2 回の全体のテストでは 1 件も落ちず、再現できないので手を入れていない。merges の `a_retry_after_the_fence_moves_the_ref_once` は上の置き換えで直った。
