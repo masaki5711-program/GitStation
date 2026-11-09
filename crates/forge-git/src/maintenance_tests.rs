@@ -852,6 +852,47 @@ async fn a_lock_stamped_by_a_coarse_clock_just_before_the_step_is_ours() {
     assert!(lock.exists(), "someone else's is left");
 }
 
+/// A pack-refs killed while still writing its lock (it ignored SIGTERM, e.g.
+/// blocked on slow storage): the lock's time is fine-grained here and lies
+/// in the same millisecond as the kill. The kill's time as the step's error
+/// carries it (`killed_at_unix_ms`, read back by `StepEnd::of`) must still
+/// cover it — our own lock is ours, never "someone else's" (2026-11-09).
+#[tokio::test]
+#[ignore = "reproduces the open upper-bound defect (handoff 2026-11-09-kanflow-k4 §4): fails 48/50 now; un-ignore with the fix"]
+async fn a_lock_written_in_the_millisecond_of_the_kill_is_ours() {
+    let f = fixture().await;
+    let lock = f.path.join("packed-refs.lock");
+    let started = SystemTime::now() - Duration::from_secs(30);
+    let mut misjudged = 0;
+    for _ in 0..50 {
+        std::fs::write(&lock, b"refs").expect("our lock, still being written");
+        // The kill right after the last write, as the supervisor records it.
+        let killed_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("after the epoch")
+            .as_millis();
+        let err = ForgeError::new(ErrorCode::GitTimeout)
+            .with_context("stop", "kill")
+            .with_context("killed_at_unix_ms", killed_ms);
+        let StepEnd::Killed { at } = StepEnd::of(&err) else {
+            panic!("a kill");
+        };
+        let found = f
+            .git
+            .clear_own_packed_refs_lock(&f.root, f.id, started, at)
+            .await
+            .expect("cleanup");
+        if found != LockCleanup::Removed {
+            misjudged += 1;
+            std::fs::remove_file(&lock).expect("reset");
+        }
+    }
+    assert_eq!(
+        misjudged, 0,
+        "our own lock judged foreign {misjudged} of 50 times"
+    );
+}
+
 /// After a **killed** pack-refs (still under the merge lock) the lock is
 /// removed only when its time lies between the step's start and the kill;
 /// an older one, and one made after the kill (a live writer: the merge lock
