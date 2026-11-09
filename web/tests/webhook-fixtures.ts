@@ -81,6 +81,8 @@ export const PREFS = {
   language: null,
   kinds: ['mr_approved', 'mr_merged', 'mr_commented', 'mr_conflict_predicted'],
   muted_kinds: ['mr_commented'],
+  in_app_enabled: true,
+  in_app_muted_kinds: [],
 };
 
 export const PREFS_URL = '/api/v1/user/notification-preferences';

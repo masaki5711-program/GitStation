@@ -30,7 +30,8 @@ async function open(over: Record<string, Handler> = {}) {
 describe('notification settings', () => {
   it('is a tab of the account settings', async () => {
     await open();
-    expect(screen.getByRole('link', { name: 'Notifications' }).getAttribute('aria-current')).toBe('page');
+    const tabs = screen.getByRole('navigation', { name: 'Account sections' });
+    expect(within(tabs).getByRole('link', { name: 'Notifications' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('shows the stored choices; the kinds come from the API', async () => {
@@ -74,14 +75,21 @@ describe('notification settings', () => {
     });
     fireEvent.click(await screen.findByLabelText('Send me notification mail'));
     fireEvent.change(screen.getByLabelText('Language of the mail'), { target: { value: 'ja' } });
-    fireEvent.click(screen.getByLabelText(/Merge request approved/));
-    fireEvent.click(screen.getByLabelText(/Comment on a merge request/));
+    const mail = screen.getByRole('group', { name: 'Notifications to stop' });
+    fireEvent.click(within(mail).getByLabelText(/Merge request approved/));
+    fireEvent.click(within(mail).getByLabelText(/Comment on a merge request/));
     fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }));
     await waitFor(() => {
       expect(server.to('PUT', PREFS_URL)).toHaveLength(1);
     });
     const call = server.to('PUT', PREFS_URL)[0];
-    expect(call?.body).toEqual({ email_enabled: false, language: 'ja', muted_kinds: ['mr_approved'] });
+    expect(call?.body).toEqual({
+      email_enabled: false,
+      language: 'ja',
+      muted_kinds: ['mr_approved'],
+      in_app_enabled: true,
+      in_app_muted_kinds: [],
+    });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
     const saved = await screen.findByText('Notification settings were saved.');
     expect(saved.closest('[role="status"]')).not.toBeNull();
@@ -102,11 +110,12 @@ describe('notification settings', () => {
 
   it('shows a refusal with its request id and keeps the choices', async () => {
     await open({ [`PUT ${PREFS_URL}`]: () => apiError(400, 'That language is not offered.', 'req-pref-1') });
-    fireEvent.click(await screen.findByLabelText(/Comment on a merge request/));
+    const mail = await screen.findByRole('group', { name: 'Notifications to stop' });
+    fireEvent.click(within(mail).getByLabelText(/Comment on a merge request/));
     fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }));
     expect(await screen.findByText('That language is not offered.')).toBeTruthy();
     expect(screen.getByTestId('request-id').textContent).toBe('req-pref-1');
-    expect(screen.getByLabelText<HTMLInputElement>(/Comment on a merge request/).checked).toBe(false);
+    expect(within(mail).getByLabelText<HTMLInputElement>(/Comment on a merge request/).checked).toBe(false);
   });
 
   it('shows the failure to read with a retry', async () => {
@@ -116,5 +125,30 @@ describe('notification settings', () => {
     await renderApp({ fetch: server.fetch, path: PATH, lang: 'en' });
     expect(await screen.findByText('Settings could not be read.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
+  it('M3 U4: switches the in-app notifications apart from the mail', async () => {
+    const { server } = await open({
+      [`GET ${PREFS_URL}`]: () => json(200, { ...PREFS, in_app_muted_kinds: ['mr_merged'] }),
+      [`PUT ${PREFS_URL}`]: (c) => json(200, { ...PREFS, ...(c.body as object) }),
+    });
+    const inApp = await screen.findByLabelText<HTMLInputElement>('Show notifications in the app');
+    expect(inApp.checked).toBe(true);
+    expect(document.getElementById(inApp.getAttribute('aria-describedby') ?? '')?.textContent).toContain('separate from mail');
+    const group = screen.getByRole('group', { name: 'Notifications not shown in the app' });
+    expect(within(group).getByLabelText<HTMLInputElement>(/Merge request merged/).checked).toBe(true);
+    fireEvent.click(inApp);
+    fireEvent.click(within(group).getByLabelText(/Merge request approved/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save notification settings' }));
+    await waitFor(() => {
+      expect(server.to('PUT', PREFS_URL)).toHaveLength(1);
+    });
+    expect(server.to('PUT', PREFS_URL)[0]?.body).toEqual({
+      email_enabled: true,
+      language: null,
+      muted_kinds: ['mr_commented'],
+      in_app_enabled: false,
+      in_app_muted_kinds: ['mr_approved', 'mr_merged'],
+    });
   });
 });

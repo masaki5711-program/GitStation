@@ -1,0 +1,113 @@
+/* The notifications page (M3 U4). Tokens only. */
+.title {
+  margin: 0 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-xl);
+  color: var(--gs-brand-navy);
+}
+
+.hint {
+  margin: 0 0 var(--gs-space-4);
+  color: var(--gs-color-text-muted);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gs-space-2) var(--gs-space-4);
+  margin: 0 0 var(--gs-space-4);
+}
+
+.filter {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+}
+
+.filter button[aria-pressed='true'] {
+  border-width: 2px;
+  font-weight: 700;
+}
+
+.empty {
+  margin: var(--gs-space-6) 0;
+  color: var(--gs-color-text-muted);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--gs-color-border);
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--gs-space-2) var(--gs-space-4);
+  padding: var(--gs-space-3) var(--gs-space-2);
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.unread {
+  border-left: 4px solid var(--gs-brand-teal-strong);
+  background: var(--gs-color-surface);
+}
+
+.body {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.sentence {
+  margin: 0 0 var(--gs-space-1);
+  overflow-wrap: anywhere;
+}
+
+.unread .sentence {
+  font-weight: 700;
+}
+
+.dot {
+  display: inline-block;
+  margin-right: var(--gs-space-2);
+  padding: 0 var(--gs-space-1);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+  font-size: var(--gs-font-size-sm);
+  font-weight: 700;
+}
+
+.target {
+  margin: 0 0 var(--gs-space-1);
+  overflow-wrap: anywhere;
+}
+
+.ref {
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+}
+
+.time {
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.status {
+  min-height: 1.5em;
+  color: var(--gs-color-text-muted);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

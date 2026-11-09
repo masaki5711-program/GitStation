@@ -1,6 +1,7 @@
 // The signed-in person's notification settings (N1 preferences API), a tab of
 // the account settings: mail on or off, the language of the mail (the
-// instance default when empty) and the kinds to stop. The kinds are the ones
+// instance default when empty) and the kinds to stop; M3 U4 adds the in-app
+// notifications (on or off, and the kinds not shown in the app). The kinds are the ones
 // the API lists; a kind the API no longer lists is dropped from the request
 // (the server refuses an unknown one). Saved with the CSRF header; the result
 // is announced in a live region and a refusal shows its reason and request id.
@@ -66,6 +67,8 @@ function PreferencesForm({ stored }: { stored: NotificationPreferences }) {
   // its own option), never sent as null or as another value by accident.
   const known = stored.language === null || ['ja', 'en', 'id'].includes(stored.language);
   const [muted, setMuted] = useState<string[]>(stored.muted_kinds);
+  const [inApp, setInApp] = useState(stored.in_app_enabled);
+  const [inAppMuted, setInAppMuted] = useState<string[]>(stored.in_app_muted_kinds);
   const [message, setMessage] = useState('');
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
@@ -76,6 +79,8 @@ function PreferencesForm({ stored }: { stored: NotificationPreferences }) {
         email_enabled: mail,
         language: language === '' ? null : language,
         muted_kinds: stored.kinds.filter((k) => muted.includes(k)),
+        in_app_enabled: inApp,
+        in_app_muted_kinds: stored.kinds.filter((k) => inAppMuted.includes(k)),
       },
       {
         onSuccess: () => {
@@ -135,6 +140,43 @@ function PreferencesForm({ stored }: { stored: NotificationPreferences }) {
                 checked={muted.includes(kind)}
                 onChange={(e) => {
                   setMuted(e.target.checked ? [...muted, kind] : muted.filter((k) => k !== kind));
+                }}
+              />
+              <span>{kindLabel(t, kind)}</span>
+              <code className={styles.muted}>{kind}</code>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <div className={controls.field}>
+        <label className={styles.check}>
+          <input
+            type="checkbox"
+            aria-describedby="notification-in-app-help"
+            checked={inApp}
+            onChange={(e) => {
+              setInApp(e.target.checked);
+            }}
+          />
+          <span>{t('notifications.inApp')}</span>
+        </label>
+        <p id="notification-in-app-help" className={controls.help}>
+          {t('notifications.inAppHelp')}
+        </p>
+      </div>
+      <fieldset className={controls.field} aria-describedby="notification-in-app-muted-help">
+        <legend className={controls.label}>{t('notifications.inAppMuted')}</legend>
+        <p id="notification-in-app-muted-help" className={controls.help}>
+          {t('notifications.inAppMutedHelp')}
+        </p>
+        <div className={styles.checks}>
+          {stored.kinds.map((kind) => (
+            <label key={kind} className={styles.check}>
+              <input
+                type="checkbox"
+                checked={inAppMuted.includes(kind)}
+                onChange={(e) => {
+                  setInAppMuted(e.target.checked ? [...inAppMuted, kind] : inAppMuted.filter((k) => k !== kind));
                 }}
               />
               <span>{kindLabel(t, kind)}</span>
