@@ -137,6 +137,8 @@ const SHELL_PATHS: &[&str] = &[
     "/-/projects/42/-/commits/main",
     // The act-as confirmation popup (U3): the same shell for everyone.
     "/-/confirm/projects/42/merge-requests/7",
+    // The in-app notifications page (U4).
+    "/-/notifications",
 ];
 
 #[tokio::test]

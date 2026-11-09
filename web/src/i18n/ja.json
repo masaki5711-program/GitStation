@@ -862,6 +862,10 @@
     "languageDefault": "インスタンスの既定",
     "muted": "止める通知",
     "mutedHelp": "チェックした種類はメールで届きません。",
+    "inApp": "アプリ内に通知を表示する",
+    "inAppHelp": "オフにすると、画面上部のベルと通知の一覧に何も届きません（メールとは別の設定です）。",
+    "inAppMuted": "アプリ内に表示しない通知",
+    "inAppMutedHelp": "チェックした種類は、通知の一覧に表示しません。",
     "save": "通知の設定を保存",
     "saved": "通知の設定を保存しました。",
     "kinds": {
@@ -869,6 +873,42 @@
       "mr_merged": "マージリクエストがマージされた",
       "mr_commented": "マージリクエストにコメントが付いた",
       "mr_conflict_predicted": "ほかのマージリクエストと衝突する見込み"
+    }
+  },
+  "inbox": {
+    "title": "通知",
+    "explain": "あなたのマージリクエストで起きたことです。今も見られるものだけを表示します。",
+    "settings": "通知の設定",
+    "filter": "表示する通知",
+    "all": "すべて",
+    "unreadOnly": "未読だけ",
+    "markAll": "すべて既読にする",
+    "marking": "既読にしています…",
+    "markedAll": "すべて既読にしました。",
+    "marked": "既読にしました。",
+    "markRead": "既読にする",
+    "markReadTarget": "（{{title}}）",
+    "empty": "通知はありません。",
+    "emptyUnread": "未読の通知はありません。",
+    "more": "さらに表示",
+    "moreShown_one": "さらに {{count}} 件を表示しました。",
+    "moreShown_other": "さらに {{count}} 件を表示しました。",
+    "unreadMark": "未読",
+    "bell": "通知",
+    "bellUnread_one": "通知（未読 {{shown}} 件）",
+    "bellUnread_other": "通知（未読 {{shown}} 件）",
+    "bellUnknown": "通知（未読の数を読めませんでした）",
+    "announceNew_one": "新しい通知があります。未読は {{count}} 件です。",
+    "announceNew_other": "新しい通知があります。未読は {{count}} 件です。",
+    "kind": {
+      "approved": "{{actor}} さんがあなたのマージリクエストを承認しました",
+      "approvedBySystem": "あなたのマージリクエストが承認されました",
+      "merged": "{{actor}} さんがあなたのマージリクエストをマージしました",
+      "mergedBySystem": "あなたのマージリクエストがマージされました",
+      "commented": "{{actor}} さんがあなたのマージリクエストにコメントしました",
+      "commentedBySystem": "あなたのマージリクエストにコメントが付きました",
+      "conflictPredicted": "あなたのマージリクエストは、ほかのマージリクエストと衝突しそうです",
+      "other": "あなたのマージリクエストに新しい通知があります"
     }
   },
   "sa": {

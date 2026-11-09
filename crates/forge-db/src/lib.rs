@@ -142,6 +142,9 @@ pub mod mirror;
 // ── M3 N1: notifications ──
 pub mod notify;
 // ── end M3 N1 ──
+// ── M3 O1: backup and restore ──
+pub mod restore;
+// ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

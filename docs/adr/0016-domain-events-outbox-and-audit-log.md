@@ -1546,3 +1546,67 @@ forge-web の `tests/binding_routes.rs`。
   あるプロジェクトには他の結びつけが無い、をスキーマでも守る（どちらの行が先でも。23514）。マイグレーション `20261129100000` を直接直した
   （main に入っておらず、試験の DB の外で適用されていないため）。
 - （security LOW c）リポジトリ検索の候補をパスの順のページ（200 件 × 最大 5 ページ）で読み、見えない候補でページが埋まっても検索が止まらない。
+
+## Amendment（2026-11-09、M3 U4 `feat/ui-in-app-notifications`: アプリ内の通知）
+
+計画 11 §5.7 U4（「アプリ内の通知」）と §10 Q6（「アプリ内は後半」）。N1 のメールと**同じイベント・同じ受け手**で、画面の上のベルと通知の一覧に出す。
+
+1. **記録は N1 の購読者 `notify` が同じ手順で書く（受け手の判断を作り直さない）**: `merge_request.approved` / `.merged` / `.commented` /
+   `.conflict_predicted` の受け手（MR の作者、自分の操作は除く）は N1 と同じ関数（`Notify::on_event`）で決まり、メールの行の隣に
+   `forge.in_app_notifications` の 1 行を同じトランザクションで書く（`UNIQUE (event_id, user_id)`、繰り返された手順は 2 行目を足せない）。
+   書くかどうかは `forge_notify::access::decide_in_app`: 有効な人（人間）で、アプリ内を止めておらず（`in_app_enabled`、`in_app_muted_kinds`）、
+   いま MR を読める（`prove(MergeRequestRead)`、メールと同じ判断）。**宛先とメールの設定は関係しない**。書かない時は行を作らない（アプリ内には
+   「なぜ届かないか」を説明する配信が無い）。
+2. **メールが無効でも記録する**: `notify.enabled = false` の `Notify::paused` は、これまでの「何も記録しない」から「**メールは記録せず、アプリ内だけ
+   記録する**」に変えた（アプリ内は中継が要らない）。位置が先頭に追従すること・無効の期間のメールを後で送らないことは変わらない
+   （`turning_mail_off_and_on_again_does_not_mail_the_disabled_period` はそのまま緑）。
+3. **表は N1 と分けた**（N1 §10 (2) は「同じ表に `read_at`」と書いていた）: メールの行は配信の状態機械（`sending` / `unknown` …）と
+   at-most-once の約束を持ち、アプリ内の行は既読だけを持つ。保持の決まりも違う（下の 6.）。同じ表にすると、メールが無効のとき・宛先が無い人の
+   行の意味が混ざる。**メールの行の保持は引き続き未決**（U4 の範囲外。`forge.notifications` に DELETE の権限は無いまま）。
+4. **読むたびに見えるかを判断し直す**（機密・公開範囲・メンバーは変わる）: 一覧と未読の数は、行を読んだ後に MR を 1 つの文でまとめて読み
+   （`forge_db::notify::in_app::merge_requests`）、プロジェクトごとに 1 回 `resolve::load_project`（本人として）、行ごとに
+   `forge_notify::access::visible_view`（= `prove(MergeRequestRead)`、本人をセッションの人として）。通らない行（メンバーから外れた・非公開に
+   なった・削除待ち・purge された・MR が無い）は**一覧にも数にも出さず、あることも返さない**。行は消さない（権限が戻れば再び見える）。
+   ページは `before`（行の id）のキーセットで、見えない行を飛ばすので 1 ページが `limit` より少ないことがある。`next_before` は読んだ行が
+   `limit` に達したときに付く。未読の数は見えるものだけを数える（下の「U4 の独立レビュー」）。
+5. **API と権限**（すべて `authorize()`、許可と拒否の行は `matrix_rows.rs`）: 新しい Action は `NotificationInboxRead`（`read_api`、
+   `GET /api/v1/user/notifications?before=&limit=&unread=`、`GET …/unread-count`）と `NotificationInboxUpdate`（`api`、
+   `POST …/{id}/read`、`POST …/read-all` 本文 `{"up_to"?: id}`、`204`）。資源は N1 の `Resource::NotificationPreferences { owner }`（= 本人の通知）を
+   使い、**本人だけ**（管理者でも他人のものは `FG-REPO-0005`）。`{id}/read` のローダーは行の持ち主を読んでから判断する（トークンの取り消しと
+   同じ形）ので、**他人の行と存在しない行は同じ答え**。答えは id と既読の時刻だけ（見えなくなった行の言葉を返さない）。既読は最初の時刻を保つ。
+   `read-all` は `up_to`（画面に出ていた最新の id）までにして、その後に届いたものは未読のまま。代理実行（`act_as`）は不可。gstn:
+   `gstn notifications list|count|read`、`set --in-app on|off`。
+6. **保持**（有界）: ワーカーのタスク `in_app_notification_retention`（1 時間ごと、1 回 1000 行、満杯なら 0.5 秒おいて続ける）が、既読から 30 日・
+   作成から 180 日を過ぎた行を消す（`forge_db::notify::in_app::expire`、派生の行なので監査の行は書かない）。`forge_app` に DELETE を付けた。
+   設定の鍵は作らない（固定値。必要になったら追記）。
+7. **設定**: `notification_preferences` に `in_app_enabled`（既定 true）と `in_app_muted_kinds` を追加（追記のマイグレーション `20261202100000`）。
+   PUT の 2 つの欄は**省略可**で、省略したら保存値を保つ（N1 の利用者・gstn の古い版が送らない欄を消さない）。未知の種類は `FG-WEB-0006`
+   `field=in_app_muted_kinds`。監査しない（N1 と同じ理由）。既読の変更も監査しない（本人のデータだけ）。
+8. **画面**: ヘッダーのベル（`/-/notifications` へのリンク。未読の数を名前に含め、見た目の数字は支援技術から隠す。60 秒ごとに問い合わせ、失敗が
+   続くと倍々で最長 15 分、401 で止める。websocket は使わない。数が増えたら polite のライブリージョンで 1 回知らせる）と通知の一覧
+   （すべて / 未読、1 文の説明と MR へのリンク、リンクを開くと既読、1 件ずつ・すべて既読、さらに表示、空・読み込み中・失敗の状態）。
+   アカウント設定の通知のタブにアプリ内の入り切りと止める種類。ja / en / id。シェルのルート `GET|HEAD /-/notifications`（`WebShell`）。
+9. **エラーコード**: 新しいコードは無い（クエリ・本文の誤りは `FG-WEB-0006`、見つからないは `FG-REPO-0005`、DB は既存の `FG-DB-*`）。
+
+テスト: forge-notify の `tests/in_app.rs`（作者に 1 行・操作した人には無し・繰り返しで増えない・アプリ内を止めた／種類を止めた／無効・見えない人は無し・
+メールが有効でも同じ人・見えなくなったら一覧にも数にも出ない・戻れば出る・MR が無い・ページと未読・既読は最初の時刻・`up_to`・他人の行は見つからない・
+保持・スキーマの制約）。forge-web の `tests/in_app_notification_routes.rs`（HTTP の通し・スコープ・匿名・他人と不在が同じ・クエリの厳密さ）と
+`notification_routes`（in-app の欄の保存と省略時の保持）。forge-auth の行列。gstn の `tests/notifications.rs`。web の `tests/inbox.test.tsx`
+（ベル・数・backoff・一覧・既読・すべて既読・未読・さらに表示・失敗・axe を 3 言語）と journey の 74〜76。
+
+### U4 の独立レビュー（2026-11-09）で変えた点
+
+- （a11y HIGH）既読にした後に焦点が消えた → 1 件の既読は次（無ければ前）の項目のリンクへ、すべて既読は見出し（`tabIndex=-1`）へ、
+  「さらに表示」は最初の新しい項目へ（件数を知らせる）。同じ文の連続も読み上げる（空にしてから入れる）。ベルの名前も「99+」、
+  一覧の画面ではベルに `aria-current="page"`。
+- （authz・rust MEDIUM）未読の数と `capped` は**見える項目だけ**から: 未読の行を 100 件ずつ最大 10 ページ（`COUNT_SCAN_PAGES`）読み、見える
+  100 件で止めて `capped = true`。1000 行を読んでも 100 に届かなければ、それより古い見える項目は数えない（API に書いた近似）。
+  `read-all` は `204` で件数を返さない（見えない行も含むため。件数はログだけ）。
+- （database MEDIUM）一覧の文を「すべて」と「未読」の 2 つの静的な文に分け、カーソルは常に `id < $2`（既定 `i64::MAX`）にして部分索引を使う。
+  保持の削除は 2 つの文に分け、内側の選択に `FOR UPDATE SKIP LOCKED`。`actor_user_id` の索引を追加（マイグレーション
+  `20261202100000` は `main` に入っておらず試験の DB の外で適用されていないので直接直した）。`tables.toml` に「`read_at` は再現できない」。
+- （typescript MEDIUM）既読の失敗をフックでも扱う（401 / 403 でセッションを読み直し、一覧と数を読み直し、request id つきで警告。リンクで
+  画面を離れた後も黙らない）。`refetchIntervalInBackground: false` を明示。知らない種類は一般的な文（コードを出さない）。
+- 試験: `the_unread_count_counts_only_visible_items_and_caps_on_them`、ワーカーの `a_full_batch_runs_again_at_once`、web の
+  `tests/unread-poll.test.tsx`（偽の時計: 60 秒・倍々・成功で戻る・401 で止まる・隠れたタブ）、焦点・再読み上げ・知らない種類・`aria-current`。
+- 後回し: メールの行（`forge.notifications`）の保持（推奨 30 日、利用者の確認待ち）。保持のタスクの 0.5 秒の待ちが停止の要求を待たない（LOW、他の保持のタスクと同じ）。

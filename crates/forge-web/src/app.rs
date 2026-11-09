@@ -91,6 +91,10 @@ pub struct AppState {
     /// `forge serve` always sets it; without it those routes answer
     /// `FG-SYS-0001 reason=notifications_unconfigured`).
     pub notifications: Option<Arc<forge_notify::Settings>>,
+    /// The caller's in-app notifications (M3 U4; set with the settings by
+    /// [`AppState::with_notifications`]; without it those routes answer
+    /// `FG-SYS-0001 reason=in_app_notifications_unconfigured`).
+    pub inbox: Option<Arc<forge_notify::Inbox>>,
     /// The list routes' page loaders and cursor keys (M1 phase 8b MR7b;
     /// `forge serve` always sets them, refusing to start without
     /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
@@ -176,6 +180,7 @@ impl AppState {
             webhooks: None,
             push_mirrors: None,
             notifications: None,
+            inbox: None,
             lists: None,
             sessions: None,
             web_origin: None,
@@ -265,9 +270,11 @@ impl AppState {
         self
     }
 
-    /// The notification settings commands (M3 N1).
+    /// The notification settings commands (M3 N1) and the in-app
+    /// notifications (M3 U4) on the same database.
     #[must_use]
     pub fn with_notifications(mut self, settings: forge_notify::Settings) -> Self {
+        self.inbox = Some(Arc::new(forge_notify::Inbox::new(settings.db())));
         self.notifications = Some(Arc::new(settings));
         self
     }
@@ -804,6 +811,7 @@ fn service_account_routes(registry: Registry<AppState>) -> Registry<AppState> {
 
 /// The caller's own notification settings (M3 N1, ADR-0016 Amendment N1).
 fn notification_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::in_app_notifications as i;
     use routes::notifications as n;
     registry
         .route_with(
@@ -825,6 +833,44 @@ fn notification_routes(registry: Registry<AppState>) -> Registry<AppState> {
             n::replace,
         )
         .responds::<n::PreferencesBody>(Verb::Put, n::PREFERENCES)
+        .route_with(
+            Verb::Get,
+            i::LIST,
+            Action::NotificationInboxRead,
+            "The caller's own in-app notifications, newest first; only items whose merge request the caller may read now (decided again on every read)",
+            i::OwnInbox,
+            i::list,
+        )
+        .responds::<i::InAppNotificationList>(Verb::Get, i::LIST)
+        .queries(Verb::Get, i::LIST, i::LIST_QUERY)
+        .route_with(
+            Verb::Get,
+            i::UNREAD_COUNT,
+            Action::NotificationInboxRead,
+            "The number of the caller's unread in-app notifications they may still see (visible items only; at most 100, capped when 100 were found)",
+            i::OwnInbox,
+            i::unread_count,
+        )
+        .responds::<i::UnreadCountBody>(Verb::Get, i::UNREAD_COUNT)
+        .route_with(
+            Verb::Post,
+            i::READ_ONE,
+            Action::NotificationInboxUpdate,
+            "Mark one of the caller's in-app notifications read (another person's or an absent one is not found)",
+            i::ItemToMark,
+            i::mark_read,
+        )
+        .responds::<i::MarkedRead>(Verb::Post, i::READ_ONE)
+        .route_with_body(
+            Verb::Post,
+            i::READ_ALL,
+            Action::NotificationInboxUpdate,
+            "Mark every unread in-app notification of the caller read, up to up_to when given",
+            i::MAX_BODY,
+            i::OwnInbox,
+            i::mark_all_read,
+        )
+        .responds_no_content(Verb::Post, i::READ_ALL)
 }
 
 /// The Checks API (M3 C1, ADR-0024 §10, docs/api/checks.md): a commit's
@@ -2125,6 +2171,14 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 routes::act_as::PAGE,
                 Action::WebShell,
                 "SPA shell: act-as confirmation popup",
+                shell,
+            )
+            // The in-app notifications page (M3 U4).
+            .route(
+                verb,
+                routes::in_app_notifications::PAGE,
+                Action::WebShell,
+                "SPA shell: the caller's in-app notifications",
                 shell,
             )
             .scoped(

@@ -8,6 +8,7 @@ import { ApiProvider } from './api/context';
 import { Layout } from './components/Layout';
 import { ActAsConfirm } from './pages/confirm/ActAsConfirm';
 import { Home } from './pages/Home';
+import { Inbox } from './pages/Inbox';
 import { NamespaceRoute } from './pages/Namespace';
 import { NotFound } from './pages/NotFound';
 import { Permalink } from './pages/Permalink';
@@ -43,6 +44,7 @@ export function AppRoutes() {
       <Route element={<Layout />}>
         <Route index element={<Home />} />
         <Route path="-/projects/:id/*" element={<Permalink />} />
+        <Route path="-/notifications" element={<Inbox />} />
         <Route path="-/*" element={<NotFound />} />
         <Route path="*" element={<NamespaceRoute />} />
       </Route>

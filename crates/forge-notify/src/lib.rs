@@ -16,11 +16,17 @@
 //!   outcome is the notification's own state, and a message that may already
 //!   have been handed over is never sent again.
 //!
+//! - [`Inbox`] (M3 U4) is a person's in-app notifications: the same
+//!   subscriber records an item for the same recipient beside the mail
+//!   record (in-app needs no mail relay and no address), and every read
+//!   decides again whether the person may still see the merge request.
+//!
 //! Nothing here decides who may see what: [`access`] only asks
 //! `forge_auth`. A mail never carries more than the recipient could read in
 //! GitStation, and never anything internal ([`templates`]).
 
 pub mod access;
+pub mod in_app;
 pub mod job;
 pub mod mail;
 pub mod settings;
@@ -31,6 +37,7 @@ pub mod templates;
 pub mod test_support;
 
 pub use forge_db::notify::Preferences;
+pub use in_app::Inbox;
 pub use job::SendHandler;
 pub use mail::Mail;
 pub use settings::Settings;

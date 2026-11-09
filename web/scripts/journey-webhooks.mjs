@@ -39,6 +39,8 @@ export function webhooksBackend(csrf) {
     language: null,
     kinds: ['review.requested', 'merge_request.merged', 'mention'],
     muted_kinds: ['mention'],
+    in_app_enabled: true,
+    in_app_muted_kinds: [],
   };
 
   const body = (h) => {

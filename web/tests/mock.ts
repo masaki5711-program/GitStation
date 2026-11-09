@@ -132,7 +132,15 @@ export const REFS_FILLED = {
   ],
 };
 
-/** The routes every signed-in page needs; spread into a test's table. */
+/** The unread count the header's bell polls on every signed-in page. */
+export const BELL_PATH = '/api/v1/user/notifications/unread-count';
+
+/** The paths a test asked for, the bell's poll left out. */
+export const askedPaths = (calls: Call[]) => calls.map((c) => c.path).filter((p) => p !== BELL_PATH);
+
+/** The routes every signed-in page needs; spread into a test's table (the
+ * header's notification bell polls the unread count, M3 U4). */
 export const signedIn = (): Record<string, Handler> => ({
   'GET /api/v1/session': () => json(200, SESSION),
+  'GET /api/v1/user/notifications/unread-count': () => json(200, { count: 0, capped: false }),
 });

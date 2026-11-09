@@ -6278,6 +6278,15 @@
           "email_enabled": {
             "type": "boolean"
           },
+          "in_app_enabled": {
+            "type": "boolean"
+          },
+          "in_app_muted_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "kinds": {
             "items": {
               "type": "string"
@@ -6301,6 +6310,8 @@
           "email_enabled",
           "language",
           "muted_kinds",
+          "in_app_enabled",
+          "in_app_muted_kinds",
           "kinds"
         ],
         "type": "object"
@@ -6311,7 +6322,7 @@
       "scopes": [
         "read_api"
       ],
-      "summary": "Show your notification settings: mail on or off, the language of the mail (null: the instance default) and the kinds muted; kinds lists every kind there is."
+      "summary": "Show your notification settings: mail on or off, the language of the mail (null: the instance default), the kinds muted, in-app on or off and its muted kinds; kinds lists every kind there is."
     },
     {
       "args": [
@@ -6342,6 +6353,13 @@
           "name": "--unmute",
           "repeatable": false,
           "required": false
+        },
+        {
+          "description": "on | off: all in-app notifications.",
+          "kind": "option",
+          "name": "--in-app",
+          "repeatable": false,
+          "required": false
         }
       ],
       "examples": [
@@ -6353,6 +6371,15 @@
         "properties": {
           "email_enabled": {
             "type": "boolean"
+          },
+          "in_app_enabled": {
+            "type": "boolean"
+          },
+          "in_app_muted_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "kinds": {
             "items": {
@@ -6377,6 +6404,8 @@
           "email_enabled",
           "language",
           "muted_kinds",
+          "in_app_enabled",
+          "in_app_muted_kinds",
           "kinds"
         ],
         "type": "object"
@@ -6390,6 +6419,148 @@
         "api"
       ],
       "summary": "Change your notification settings; a flag changes only what it names (the rest is kept). Nobody else's can be changed, administrators included."
+    },
+    {
+      "args": [
+        {
+          "description": "Only unread ones.",
+          "kind": "flag",
+          "name": "--unread",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Only older than this id (next_before of the previous page).",
+          "kind": "option",
+          "name": "--before",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Rows per page, 1..=100 (default 20).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn notifications list --unread --json"
+      ],
+      "name": "notifications list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "kind",
+                "project_id",
+                "project_path",
+                "merge_request_iid",
+                "merge_request_title",
+                "actor_name",
+                "created_at",
+                "read_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_before"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notifications"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List your in-app notifications, newest first: only those whose merge request you may still read (a page may hold fewer than --limit); next_before pages back."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn notifications count --json"
+      ],
+      "name": "notifications count",
+      "output": {
+        "properties": {
+          "capped": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "capped"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/notifications/unread-count"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "How many of your in-app notifications are unread (those you may still see; at most 100 counted, capped says when more exist)."
+    },
+    {
+      "args": [
+        {
+          "description": "The notification id (notifications list); or --all.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Every unread one.",
+          "kind": "flag",
+          "name": "--all",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn notifications read 42",
+        "gstn notifications read --all"
+      ],
+      "name": "notifications read",
+      "output": {
+        "properties": {
+          "all_read": {
+            "const": true
+          },
+          "id": {
+            "type": "integer"
+          },
+          "read_at": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/user/notifications/{id}/read",
+        "POST /api/v1/user/notifications/read-all"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Mark one of your in-app notifications read, or every unread one with --all (somebody else's is not found)."
     },
     {
       "args": [],

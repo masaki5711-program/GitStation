@@ -142,6 +142,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the caller's in-app notifications */
+        get: operations["get_notifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the caller's in-app notifications */
+        head: operations["head_notifications"];
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/integrations": {
         parameters: {
             query?: never;
@@ -1776,6 +1794,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own in-app notifications, newest first; only items whose merge request the caller may read now (decided again on every read) */
+        get: operations["get_api_v1_user_notifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark every unread in-app notification of the caller read, up to up_to when given */
+        post: operations["post_api_v1_user_notifications_read_all"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The number of the caller's unread in-app notifications they may still see (visible items only; at most 100, capped when 100 were found) */
+        get: operations["get_api_v1_user_notifications_unread_count"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/notifications/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark one of the caller's in-app notifications read (another person's or an absent one is not found) */
+        post: operations["post_api_v1_user_notifications_id_read"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user/sessions": {
         parameters: {
             query?: never;
@@ -3281,6 +3367,35 @@ export interface components {
             /** @description Pass as `cursor` for the next page; `null` on the last one. */
             next_cursor: string | null;
         };
+        /** @description One in-app notification. */
+        InAppNotificationBody: {
+            /** @description Who did it (`null`: the system). */
+            actor_name: string | null;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** Format: int64 */
+            id: number;
+            /** @description `mr_approved`, `mr_merged`, `mr_commented`, `mr_conflict_predicted`. */
+            kind: string;
+            /** Format: int64 */
+            merge_request_iid: number;
+            merge_request_title: string;
+            /** Format: int64 */
+            project_id: number;
+            /** @description The project's path now (`group/project`). */
+            project_path: string;
+            /** @description `null`: unread. */
+            read_at: string | null;
+        };
+        /** @description A page of the caller's notifications. */
+        InAppNotificationList: {
+            items: components["schemas"]["InAppNotificationBody"][];
+            /**
+             * Format: int64
+             * @description Pass as `before` for the next (older) page; `null`: no more.
+             */
+            next_before: number | null;
+        };
         /** @description The service account an integration acts as. */
         IntegrationAccountBody: {
             /** Format: int64 */
@@ -3429,6 +3544,13 @@ export interface components {
             path: string;
             /** @description The caller's effective role (`guest` … `owner`); `null` without one. */
             role: string | null;
+        };
+        /** @description One item marked read. */
+        MarkedRead: {
+            /** Format: int64 */
+            id: number;
+            /** @description When it was first read (UTC, RFC 3339). */
+            read_at: string;
         };
         /** @description One direct member as the API shows it. */
         MemberBody: {
@@ -3786,6 +3908,10 @@ export interface components {
         /** @description The caller's settings. */
         PreferencesBody: {
             email_enabled: boolean;
+            /** @description In-app notifications on or off (M3 U4). */
+            in_app_enabled: boolean;
+            /** @description Kinds not shown in the app (M3 U4). */
+            in_app_muted_kinds: string[];
             /** @description Every kind of notification there is. */
             kinds: string[];
             language: string | null;
@@ -3795,6 +3921,10 @@ export interface components {
         PreferencesInput: {
             /** @description `false` stops every mail. */
             email_enabled: boolean;
+            /** @description `false` stops every in-app notification (M3 U4); absent: unchanged. */
+            in_app_enabled?: boolean | null;
+            /** @description Kinds not shown in the app (M3 U4); absent: unchanged. */
+            in_app_muted_kinds?: string[] | null;
             /** @description `ja`, `en` or `id`; `null` (or absent) for the instance default. */
             language?: string | null;
             /** @description Kinds to stop (`GET`'s `kinds` lists them). */
@@ -4038,6 +4168,14 @@ export interface components {
              *     a configuration or CODEOWNERS path).
              */
             reset_approvals_on_push: boolean;
+        };
+        /** @description `POST …/read-all`. */
+        ReadAllInput: {
+            /**
+             * Format: int64
+             * @description Only items up to this id (the newest the person saw); absent: all.
+             */
+            up_to?: number | null;
         };
         /** @description A redelivery was queued. */
         RedeliveryQueued: {
@@ -4754,6 +4892,20 @@ export interface components {
             /** @description More entries than the server lists (5 000). */
             truncated: boolean;
         };
+        /** @description The unread count. */
+        UnreadCountBody: {
+            /**
+             * @description 100 visible unread items were found (show "99+"); hidden items never
+             *     set it.
+             */
+            capped: boolean;
+            /**
+             * Format: int64
+             * @description Unread items the caller may see, at most 100 (counted over at most
+             *     1000 unread rows, newest first; older visible ones are not counted).
+             */
+            count: number;
+        };
         /** @description `PATCH /api/v1/groups/{id}`: at least one field. */
         UpdateGroup: {
             description?: string | null;
@@ -5283,6 +5435,46 @@ export interface operations {
                     "application/json": components["schemas"]["IssuedBody"];
                 };
             };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_notifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_notifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {
@@ -9627,6 +9819,133 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PreferencesBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_notifications: {
+        parameters: {
+            query?: {
+                /** @description Only items with a smaller id (next_before of the previous page) */
+                before?: number;
+                /** @description Rows read per page, 1..=100 (default 20), newest first; hidden items are skipped, so a page may hold fewer */
+                limit?: number;
+                /** @description true: only unread items (default false) */
+                unread?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InAppNotificationList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_user_notifications_read_all: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadAllInput"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_notifications_unread_count: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadCountBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_user_notifications_id_read: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkedRead"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

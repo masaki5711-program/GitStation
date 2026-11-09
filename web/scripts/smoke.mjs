@@ -39,6 +39,9 @@ function smokeApi(_req, res, url) {
       csrf_token: 'c'.repeat(64),
       user: { id: 1, username: 'taro', display_name: 'Taro Yamada', is_admin: false },
     });
+  } else if (path === '/api/v1/user/notifications/unread-count') {
+    // The header's bell (M3 U4).
+    sendJson(res, 200, { count: 1, capped: false });
   } else if (path === '/api/v1/projects' || path === '/api/v1/groups') {
     sendJson(res, 200, { items: [], has_more: false, next_cursor: null });
   } else if (path === '/api/v1/namespaces/resolve') {

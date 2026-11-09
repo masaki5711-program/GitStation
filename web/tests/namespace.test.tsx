@@ -10,6 +10,7 @@ import {
   RESOLVE_GROUP,
   RESOLVE_PROJECT,
   apiError,
+  askedPaths,
   mockServer,
   page,
   signedIn,
@@ -177,14 +178,14 @@ describe('URL rescue (ADR-0015, plan 10 §4.3)', () => {
     const server = mockServer(signedIn());
     await renderApp({ fetch: server.fetch, path: '/-/projects/0' });
     expect(await screen.findByText('ページが見つかりません')).toBeTruthy();
-    expect(server.calls.map((c) => c.path)).toEqual(['/api/v1/session']);
+    expect(askedPaths(server.calls)).toEqual(['/api/v1/session']);
   });
 
   it('a path that does not decode is not found without asking', async () => {
     const server = mockServer(signedIn());
     await renderApp({ fetch: server.fetch, path: '/acme/%E0%A4%A' });
     expect(await screen.findByText('ページが見つかりません')).toBeTruthy();
-    expect(server.calls.map((c) => c.path)).toEqual(['/api/v1/session']);
+    expect(askedPaths(server.calls)).toEqual(['/api/v1/session']);
   });
 
   it('an error that is not a 404 is shown, not turned into not-found', async () => {

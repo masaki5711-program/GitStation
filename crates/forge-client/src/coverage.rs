@@ -51,6 +51,27 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/user/notification-preferences",
         Coverage::Command("notifications set"),
     ),
+    // M3 U4: your in-app notifications.
+    (
+        "GET",
+        "/api/v1/user/notifications",
+        Coverage::Command("notifications list"),
+    ),
+    (
+        "GET",
+        "/api/v1/user/notifications/unread-count",
+        Coverage::Command("notifications count"),
+    ),
+    (
+        "POST",
+        "/api/v1/user/notifications/{id}/read",
+        Coverage::Command("notifications read"),
+    ),
+    (
+        "POST",
+        "/api/v1/user/notifications/read-all",
+        Coverage::Command("notifications read"),
+    ),
     (
         "GET",
         "/api/v1/user/sessions",

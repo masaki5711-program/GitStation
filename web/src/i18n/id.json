@@ -862,6 +862,10 @@
     "languageDefault": "Bawaan instans",
     "muted": "Notifikasi yang dihentikan",
     "mutedHelp": "Jenis yang dicentang tidak dikirim lewat surel.",
+    "inApp": "Tampilkan notifikasi di aplikasi",
+    "inAppHelp": "Jika dimatikan, tidak ada yang masuk ke lonceng di atas maupun daftar notifikasi (terpisah dari email).",
+    "inAppMuted": "Notifikasi yang tidak ditampilkan di aplikasi",
+    "inAppMutedHelp": "Jenis yang dicentang tidak ditampilkan di daftar notifikasi Anda.",
     "save": "Simpan pengaturan notifikasi",
     "saved": "Pengaturan notifikasi disimpan.",
     "kinds": {
@@ -869,6 +873,42 @@
       "mr_merged": "Merge request digabung",
       "mr_commented": "Komentar pada merge request",
       "mr_conflict_predicted": "Kemungkinan konflik dengan merge request lain"
+    }
+  },
+  "inbox": {
+    "title": "Notifikasi",
+    "explain": "Apa yang terjadi pada merge request Anda. Hanya yang masih dapat Anda lihat yang ditampilkan.",
+    "settings": "Pengaturan notifikasi",
+    "filter": "Notifikasi yang ditampilkan",
+    "all": "Semua",
+    "unreadOnly": "Belum dibaca saja",
+    "markAll": "Tandai semua sudah dibaca",
+    "marking": "Menandai sudah dibaca…",
+    "markedAll": "Semua notifikasi ditandai sudah dibaca.",
+    "marked": "Ditandai sudah dibaca.",
+    "markRead": "Tandai sudah dibaca",
+    "markReadTarget": " ({{title}})",
+    "empty": "Anda tidak punya notifikasi.",
+    "emptyUnread": "Anda tidak punya notifikasi yang belum dibaca.",
+    "more": "Tampilkan lagi",
+    "moreShown_one": "{{count}} notifikasi lagi ditampilkan.",
+    "moreShown_other": "{{count}} notifikasi lagi ditampilkan.",
+    "unreadMark": "Belum dibaca",
+    "bell": "Notifikasi",
+    "bellUnread_one": "Notifikasi ({{shown}} belum dibaca)",
+    "bellUnread_other": "Notifikasi ({{shown}} belum dibaca)",
+    "bellUnknown": "Notifikasi (jumlah yang belum dibaca tidak dapat dibaca)",
+    "announceNew_one": "Notifikasi baru. {{count}} belum dibaca.",
+    "announceNew_other": "Notifikasi baru. {{count}} belum dibaca.",
+    "kind": {
+      "approved": "{{actor}} menyetujui merge request Anda",
+      "approvedBySystem": "Merge request Anda disetujui",
+      "merged": "{{actor}} melakukan merge pada merge request Anda",
+      "mergedBySystem": "Merge request Anda telah di-merge",
+      "commented": "{{actor}} mengomentari merge request Anda",
+      "commentedBySystem": "Merge request Anda mendapat komentar baru",
+      "conflictPredicted": "Merge request Anda kemungkinan berkonflik dengan merge request lain",
+      "other": "Ada notifikasi baru tentang merge request Anda"
     }
   },
   "sa": {

@@ -762,7 +762,8 @@ fn session_details_are_audit_only_ids_and_reasons() {
             "backchannel",
             "user_disabled",
             "admin",
-            "idp_revoked"
+            "idp_revoked",
+            "restore"
         ]
     );
     for r in SessionRevokeReason::ALL {

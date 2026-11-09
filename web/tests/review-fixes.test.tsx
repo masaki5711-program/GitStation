@@ -10,6 +10,7 @@ import {
   RESOLVE_GROUP,
   SESSION,
   apiError,
+  askedPaths,
   mockServer,
   page,
   signedIn,
@@ -196,7 +197,7 @@ describe('permalink', () => {
     const server = mockServer(signedIn());
     await renderApp({ fetch: server.fetch, path: '/-/projects/1234567890123456' });
     expect(await screen.findByText('ページが見つかりません')).toBeTruthy();
-    expect(server.calls.map((c) => c.path)).toEqual(['/api/v1/session']);
+    expect(askedPaths(server.calls)).toEqual(['/api/v1/session']);
   });
 });
 

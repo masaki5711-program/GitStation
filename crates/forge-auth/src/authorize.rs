@@ -574,8 +574,14 @@ pub fn authorize(
         (Action::TokenRevoke, Resource::Token { owner }) => own_token(*owner),
         // M3 N1: a person's own mail settings, for nobody else — an
         // administrator included (support reads the delivery records).
+        // M3 U4: their own in-app notifications likewise (the resource is
+        // the person's notifications; each listed item is decided again on
+        // `MergeRequestRead` by forge-notify).
         (
-            Action::NotificationPreferencesRead | Action::NotificationPreferencesWrite,
+            Action::NotificationPreferencesRead
+            | Action::NotificationPreferencesWrite
+            | Action::NotificationInboxRead
+            | Action::NotificationInboxUpdate,
             Resource::NotificationPreferences { owner },
         ) => own_preferences(*owner),
 
@@ -1167,7 +1173,9 @@ pub fn authorize(
             | Action::TokenList
             | Action::TokenRevoke
             | Action::NotificationPreferencesRead
+            | Action::NotificationInboxRead
             | Action::NotificationPreferencesWrite
+            | Action::NotificationInboxUpdate
             | Action::UserCreate
             | Action::UserDisable
             | Action::UserSearch

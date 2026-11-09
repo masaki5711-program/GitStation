@@ -1161,12 +1161,12 @@ pub const COMMANDS: &[CommandSpec] = &[
     // ── M3 N1: your notification settings ──
     CommandSpec {
         name: "notifications get",
-        summary: "Show your notification settings: mail on or off, the language of the mail (null: the instance default) and the kinds muted; kinds lists every kind there is.",
+        summary: "Show your notification settings: mail on or off, the language of the mail (null: the instance default), the kinds muted, in-app on or off and its muted kinds; kinds lists every kind there is.",
         args: &[],
         examples: &["gstn notifications get --json"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/user/notification-preferences"],
-        output: r#"{"type":"object","required":["email_enabled","language","muted_kinds","kinds"],"properties":{"email_enabled":{"type":"boolean"},"language":{"type":["string","null"]},"muted_kinds":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"type":"string"}}}}"#,
+        output: r#"{"type":"object","required":["email_enabled","language","muted_kinds","in_app_enabled","in_app_muted_kinds","kinds"],"properties":{"email_enabled":{"type":"boolean"},"language":{"type":["string","null"]},"muted_kinds":{"type":"array","items":{"type":"string"}},"in_app_enabled":{"type":"boolean"},"in_app_muted_kinds":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"type":"string"}}}}"#,
     },
     CommandSpec {
         name: "notifications set",
@@ -1176,11 +1176,47 @@ pub const COMMANDS: &[CommandSpec] = &[
             arg("--language", "option", false, "ja | en | id | default (the instance's)."),
             arg("--mute", "option", false, "A kind to stop (repeatable; notifications get lists them)."),
             arg("--unmute", "option", false, "A kind to receive again (repeatable)."),
+            arg("--in-app", "option", false, "on | off: all in-app notifications."),
         ],
         examples: &["gstn notifications set --email off", "gstn notifications set --mute mr_commented --language en"],
         scopes: &["read_api", "api"],
         routes: &["GET /api/v1/user/notification-preferences", "PUT /api/v1/user/notification-preferences"],
-        output: r#"{"type":"object","required":["email_enabled","language","muted_kinds","kinds"],"properties":{"email_enabled":{"type":"boolean"},"language":{"type":["string","null"]},"muted_kinds":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"type":"string"}}}}"#,
+        output: r#"{"type":"object","required":["email_enabled","language","muted_kinds","in_app_enabled","in_app_muted_kinds","kinds"],"properties":{"email_enabled":{"type":"boolean"},"language":{"type":["string","null"]},"muted_kinds":{"type":"array","items":{"type":"string"}},"in_app_enabled":{"type":"boolean"},"in_app_muted_kinds":{"type":"array","items":{"type":"string"}},"kinds":{"type":"array","items":{"type":"string"}}}}"#,
+    },
+    // ── M3 U4: your in-app notifications ──
+    CommandSpec {
+        name: "notifications list",
+        summary: "List your in-app notifications, newest first: only those whose merge request you may still read (a page may hold fewer than --limit); next_before pages back.",
+        args: &[
+            arg("--unread", "flag", false, "Only unread ones."),
+            arg("--before", "option", false, "Only older than this id (next_before of the previous page)."),
+            arg("--limit", "option", false, "Rows per page, 1..=100 (default 20)."),
+        ],
+        examples: &["gstn notifications list --unread --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/user/notifications"],
+        output: r#"{"type":"object","required":["items","next_before"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","kind","project_id","project_path","merge_request_iid","merge_request_title","actor_name","created_at","read_at"]}},"next_before":{"type":["integer","null"]}}}"#,
+    },
+    CommandSpec {
+        name: "notifications count",
+        summary: "How many of your in-app notifications are unread (those you may still see; at most 100 counted, capped says when more exist).",
+        args: &[],
+        examples: &["gstn notifications count --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/user/notifications/unread-count"],
+        output: r#"{"type":"object","required":["count","capped"],"properties":{"count":{"type":"integer"},"capped":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "notifications read",
+        summary: "Mark one of your in-app notifications read, or every unread one with --all (somebody else's is not found).",
+        args: &[
+            arg("id", "positional", false, "The notification id (notifications list); or --all."),
+            arg("--all", "flag", false, "Every unread one."),
+        ],
+        examples: &["gstn notifications read 42", "gstn notifications read --all"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/user/notifications/{id}/read", "POST /api/v1/user/notifications/read-all"],
+        output: r#"{"type":"object","properties":{"id":{"type":"integer"},"read_at":{"type":"string"},"all_read":{"const":true}}}"#,
     },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {

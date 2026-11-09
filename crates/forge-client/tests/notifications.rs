@@ -156,3 +156,106 @@ fn a_server_refusal_is_shown_with_its_request_id() {
         o.stderr
     );
 }
+
+// ── M3 U4: the in-app list ────────────────────────────────────────────
+
+#[test]
+fn set_in_app_sends_only_the_switch_beside_the_mail_settings() {
+    let srv = server(prefs(true, Value::Null, &[]));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &["notifications", "set", "--in-app", "off", "--json"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let sent: Value = serde_json::from_str(&srv.seen()[1].body).expect("body");
+    assert_eq!(
+        sent,
+        json!({"email_enabled": true, "language": null, "muted_kinds": [], "in_app_enabled": false})
+    );
+}
+
+fn inbox_server() -> Mock {
+    Mock::start(|r| match (r.method.as_str(), r.target.as_str()) {
+        ("GET", t) if t.starts_with("/api/v1/user/notifications/unread-count") => {
+            Resp::json(200, r#"{"count":3,"capped":false}"#)
+        }
+        ("GET", _) => Resp::json(
+            200,
+            r#"{"items":[{"id":9,"kind":"mr_approved","project_id":1,"project_path":"acme/web","merge_request_iid":4,"merge_request_title":"Fix rounding","actor_name":"Bob","created_at":"2026-11-09T09:00:00Z","read_at":null}],"next_before":9}"#,
+        ),
+        ("POST", "/api/v1/user/notifications/read-all") => Resp::json(204, ""),
+        ("POST", _) => Resp::json(200, r#"{"id":9,"read_at":"2026-11-09T09:01:00Z"}"#),
+        _ => Resp::json(404, "{}"),
+    })
+}
+
+#[test]
+fn list_reads_the_own_list_with_its_filters_and_pages_back() {
+    let srv = inbox_server();
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "notifications",
+            "list",
+            "--unread",
+            "--limit",
+            "5",
+            "--before",
+            "20",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let seen = srv.seen();
+    assert_eq!(seen[0].method, "GET");
+    assert!(
+        seen[0].target.starts_with("/api/v1/user/notifications?"),
+        "{}",
+        seen[0].target
+    );
+    for part in ["unread=true", "limit=5", "before=20"] {
+        assert!(seen[0].target.contains(part), "{part}: {}", seen[0].target);
+    }
+    assert!(
+        o.stdout.contains("acme/web!4") && o.stdout.contains("Fix rounding"),
+        "{}",
+        o.stdout
+    );
+    assert!(o.stdout.contains("--before 9"), "{}", o.stdout);
+    let c = gstn(&sb, &srv, &["notifications", "count", "--json"]);
+    assert_eq!(c.code, 0, "{}", c.stderr);
+    assert_eq!(c.json()["count"], 3);
+}
+
+#[test]
+fn read_marks_one_or_all_and_needs_one_of_them() {
+    let srv = inbox_server();
+    let sb = Sandbox::new();
+    let one = gstn(&sb, &srv, &["notifications", "read", "9", "--json"]);
+    assert_eq!(one.code, 0, "{}", one.stderr);
+    let all = gstn(&sb, &srv, &["notifications", "read", "--all", "--json"]);
+    assert_eq!(all.code, 0, "{}", all.stderr);
+    assert_eq!(all.json()["all_read"], true);
+    let seen = srv.seen();
+    assert_eq!(
+        (seen[0].method.as_str(), seen[0].target.as_str()),
+        ("POST", "/api/v1/user/notifications/9/read")
+    );
+    assert_eq!(
+        (seen[1].method.as_str(), seen[1].target.as_str()),
+        ("POST", "/api/v1/user/notifications/read-all")
+    );
+    let before = srv.seen().len();
+    for args in [
+        vec!["notifications", "read"],
+        vec!["notifications", "read", "9", "--all"],
+        vec!["notifications", "read", "x"],
+    ] {
+        let o = gstn(&sb, &srv, &args);
+        assert_eq!(o.code, 2, "{args:?}: {}", o.stderr);
+    }
+    assert_eq!(srv.seen().len(), before, "refused locally");
+}

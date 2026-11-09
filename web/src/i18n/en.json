@@ -862,6 +862,10 @@
     "languageDefault": "Instance default",
     "muted": "Notifications to stop",
     "mutedHelp": "Checked kinds are not mailed to you.",
+    "inApp": "Show notifications in the app",
+    "inAppHelp": "Turn this off and nothing reaches the bell at the top or the notification list (separate from mail).",
+    "inAppMuted": "Notifications not shown in the app",
+    "inAppMutedHelp": "Checked kinds are not shown in your notification list.",
     "save": "Save notification settings",
     "saved": "Notification settings were saved.",
     "kinds": {
@@ -869,6 +873,42 @@
       "mr_merged": "Merge request merged",
       "mr_commented": "Comment on a merge request",
       "mr_conflict_predicted": "Likely conflict with another merge request"
+    }
+  },
+  "inbox": {
+    "title": "Notifications",
+    "explain": "What happened on your merge requests. Only what you can still see is shown.",
+    "settings": "Notification settings",
+    "filter": "Notifications to show",
+    "all": "All",
+    "unreadOnly": "Unread only",
+    "markAll": "Mark all as read",
+    "marking": "Marking as read…",
+    "markedAll": "All notifications were marked as read.",
+    "marked": "Marked as read.",
+    "markRead": "Mark as read",
+    "markReadTarget": " ({{title}})",
+    "empty": "You have no notifications.",
+    "emptyUnread": "You have no unread notifications.",
+    "more": "Show more",
+    "moreShown_one": "{{count}} more notification is shown.",
+    "moreShown_other": "{{count}} more notifications are shown.",
+    "unreadMark": "Unread",
+    "bell": "Notifications",
+    "bellUnread_one": "Notifications ({{shown}} unread)",
+    "bellUnread_other": "Notifications ({{shown}} unread)",
+    "bellUnknown": "Notifications (the unread count could not be read)",
+    "announceNew_one": "New notification. {{count}} unread.",
+    "announceNew_other": "New notifications. {{count}} unread.",
+    "kind": {
+      "approved": "{{actor}} approved your merge request",
+      "approvedBySystem": "Your merge request was approved",
+      "merged": "{{actor}} merged your merge request",
+      "mergedBySystem": "Your merge request was merged",
+      "commented": "{{actor}} commented on your merge request",
+      "commentedBySystem": "Your merge request has a new comment",
+      "conflictPredicted": "Your merge request is likely to conflict with another one",
+      "other": "There is a new notification about your merge request"
     }
   },
   "sa": {
