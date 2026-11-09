@@ -17,6 +17,8 @@ use crate::GitConfig;
 const T: Duration = Duration::from_secs(60);
 
 struct Fixture {
+    // Read only by the Unix-only tests; on Windows it just keeps git's home alive.
+    #[cfg_attr(not(unix), allow(dead_code))]
     home: tempfile::TempDir,
     _root_dir: tempfile::TempDir,
     dest_dir: tempfile::TempDir,
@@ -177,7 +179,9 @@ async fn a_refused_push_is_int_0013_with_the_ref() {
 }
 
 /// A fake git: records its arguments and the header variable's presence,
-/// then answers like an HTTPS remote that refused the credentials.
+/// then answers like an HTTPS remote that refused the credentials
+/// (its only caller is Unix-only).
+#[cfg(unix)]
 fn recording_git(dir: &Path) -> (PathBuf, PathBuf) {
     let log = dir.join("argv.log");
     let script = dir.join("fake-git");

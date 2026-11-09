@@ -51,7 +51,6 @@ const URL: &str = "https://gitlab.example.invalid/ymma/web.git";
 /// A credentials directory: `gitlab` (0600), `loose` (0644), `broken`
 /// (0600, no `:`).
 fn credentials() -> tempfile::TempDir {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().expect("tempdir");
     for (name, text, mode) in [
         ("gitlab", "mirror-bot:glpat-synthetic-token\n", 0o600),
@@ -60,7 +59,15 @@ fn credentials() -> tempfile::TempDir {
     ] {
         let path = dir.path().join(name);
         std::fs::write(&path, text).expect("write");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("mode");
+        // Windows has no mode bits: the product checks them on Unix only
+        // (forge-core `config::secret`), so `loose` is refused there only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("mode");
+        }
+        #[cfg(not(unix))]
+        let _ = mode; // ignore: no mode bits to set
     }
     dir
 }
@@ -426,6 +433,8 @@ async fn an_invalid_mirror_target_is_400_int_0021_with_one_sentence() {
         (URL, "../gitlab"),
         (URL, "Gitlab"),
         (URL, "absent"),
+        // Too open (0644): refused on Unix only — Windows has no mode bits.
+        #[cfg(unix)]
         (URL, "loose"),
         (URL, "broken"),
     ] {
