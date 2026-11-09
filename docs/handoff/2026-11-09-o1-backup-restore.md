@@ -72,3 +72,31 @@
 3. 後の作業: NAS・別のサーバーへの転送（Q11）、O3 の保守が `repo_maint:<repo_id>` を取る形（バックアップと排他）、
    アプリ内の通知に「バックアップが古い」を出すか。
 4. エージェントモデルの `docs/plan/11-m3-plan.md` へ Q11 の答えを写し戻す。
+
+## 6. 追記: 独立レビューの指摘への対処（同じ日）
+
+評価役: security（HIGH 2）、git-protocol（HIGH 1）、rust / database（MEDIUM のみ）。計画からの変更 1〜3 は利用者が受け入れた。
+本物の pgBackRest での復元の訓練は試験環境で後に行う（後の作業）。詳細は ADR-0019「O1 の独立レビューで決めたこと」。
+
+- **HIGH**: 写し（形式 2）にプロジェクトの公開範囲・承認できる人・チェックの名前空間の許可を足し、狭める向きだけ当て直す。
+  push ミラーと連携を `finish` で無効にする（`reason=restore`）、保留中の代理実行の主張も終わらせる。バックアップと O3 の保守が
+  `repo_maint:<repo_id>` のセッションのロックで排他（バックアップは待つ、保守は飛ばす `backup_running`）。commit-graph・
+  multi-pack-index は複写しない。
+- **MEDIUM**: 最新の写しが読めなければ写し無し（`--allow-older-copy`）、`regrant-admin` の条件を厳しく（最新の `restore.finished` の
+  一覧・その後に変更が無い）、復元のファイル 0600 / ディレクトリ 0700・時間切れ（`restore_timeout`）・退避先を実行ごとに、AAD に世代の名前、
+  `manifest.mac`（HMAC）、pgBackRest のラベルは前後の `info` の差、所属の当て直しは利用者ごとの監査の行、`finish` の `rerun`、
+  管理者が 0 人になったら報告。LOW: 止まったバックアップの `.lock` を取り戻す、ロックのファイルの fsync。
+- 新しいテスト: `push_mirrors_and_integrations_are_disabled_with_reason_restore`、
+  `visibility_approvers_and_check_grants_are_narrowed_from_the_copy`、`the_repository_lock_is_exclusive_and_ends_with_its_connection`、
+  `a_copy_past_its_deadline_is_repository_copy_timeout`、`a_copy_that_never_passes_fsck_is_inconsistent_after_three_attempts`、
+  `a_repository_under_maintenance_is_waited_for_then_refused`、`a_failing_state_copy_after_the_rename_keeps_the_generation_and_fails_loudly`、
+  `the_lock_of_a_backup_that_no_longer_runs_is_reclaimed`、`commit_graphs_and_multi_pack_indexes_are_not_copied`、
+  `regrant_is_refused_after_a_later_change_of_the_user`、`a_finish_that_stopped_half_way_runs_again_and_says_so`、
+  `an_unreadable_newest_copy_counts_as_no_copy_unless_older_ones_are_allowed`、と既存のテストの追加の確認（マニフェストの改ざん、
+  別の世代の AAD、退避先、権限、pgBackRest のラベルが変わらない）。
+- 確かめたこと: `cargo fmt --all -- --check` 合格、`cargo clippy --workspace --all-targets -- -D warnings` 終了コード 0、
+  `gen-catalog -- --check` 168 files up to date、`cargo nextest run -p forge-cli -p forge-db -j 2 -E 'test(/backup|restore|state_copy|crypt|archive|db_tool|maintenance|commit_graphs|lock/)'`
+  118 / 118 合格（errors.toml の文の変更の前）。
+- **確かめていないこと（ディスクの空きが 1.5 GB で、3 GB を切ったため止めた）**: forge-db・forge-cli・forge-core・forge-errors の
+  全体のテスト、`gen-authz -- --check`（forge-web の bin のビルドが要る。今回は権限の表に触れていない）、errors.toml の cause の文を
+  変えた後の再実行。
