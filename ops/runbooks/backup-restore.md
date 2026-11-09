@@ -42,7 +42,8 @@ ADR-0019 Amendment「計画 11 P1」、ADR-0024 末尾の表 #26・#41・#44）�
    鍵や写しが `backup.dir` の中 → `key_inside_backup`）。
 2. **DB**: `pgbackrest --stanza=<stanza> --type=full --log-level-console=warn backup`、続けて `pgbackrest --stanza=<stanza> --output=json info`
    から新しいラベルを読む（時間切れ `backup.db_timeout_secs`、超えたら殺す）。
-3. **リポジトリ**: ready のリポジトリを 1 つずつ、**ref を先に、オブジェクトを後に** 作業用のディレクトリへ複写し、`git fsck --connectivity-only`
+3. **リポジトリ**: ready のリポジトリを 1 つずつ、そのリポジトリの保守（O3）と同じロック `repo_maint:<repo_id>` を取ってから（保守中なら
+   待つ。保守の側は複写中なら `skipped backup_running`）、**ref を先に、オブジェクトを後に** 作業用のディレクトリへ複写し、`git fsck --connectivity-only`
    で確かめ（保守の gc が途中でパックを入れ替えたら最大 3 回まで複写し直す）、アーカイブに足す。ロック・`gc.pid`・push の隔離は複写しない。
    `refs/merge-requests/*`（版の ref）も含む。
 4. `manifest.json` を最後に書き、`.partial` を外し、古い世代を `backup.generations` まで消す。
@@ -171,17 +172,24 @@ forge doctor        # backup.last_success が ok
    が新しい版の ref とぶつかったら、その MR を閉じて開き直す）。どちらにするかは incident-commander が決め、記録に残す。
 7. **終える**:
    ```
-   forge restore finish --generation <g> [--accept-db-behind]
+   forge restore finish --generation <g> [--accept-db-behind] [--allow-older-copy]
    ```
-   検証をもう一度流し、次をすべて行い、最後に印を消す:
+   検証をもう一度流し、次をすべて行い、最後に印を消す。**手順ごとに繰り返せる**: 途中で止まったら同じコマンドをもう一度流す
+   （印のファイルの `begin=` で同じ復元と分かり、`restore.finished` に `rerun: true`、管理者の一覧は前の実行の行から出る）。
    - **すべての資格情報を失効**: トークン（個人もサービスアカウントも）`revoked_reason=restore`、Web のセッション、Webhook は
-     `disabled_reason=restore` で無効（秘密がバックアップの後に入れ替えたものかもしれない）。監査の行 `restore.credentials_revoked` /
-     `restore.webhooks_disabled`。
+     `disabled_reason=restore` で無効（秘密がバックアップの後に入れ替えたものかもしれない）、**push ミラーと連携（kanflow）も無効**
+     （バックアップの後に外した・止めたものを戻さないため）、保留中の代理実行の主張は `reject_reason=restore`。監査の行
+     `restore.credentials_revoked` / `restore.webhooks_disabled` / `restore.push_mirrors_disabled` / `restore.integration_disabled` /
+     `restore.assertion_rejected`。
    - **権限の縮小を当て直す**（`backup.state_copy_dir` の写しのうち、世代の `db.completed_at` 以後の最新）: 無効化・管理者の印の削除・
      所属の削除・ロールの引き下げ・保護 ref の追加と `push_min_role` の引き上げ・マージの規則（承認数・必須チェック・未解決の議論・
      直接の push の禁止・作業項目のリンク）・承認の規則・マージの設定（`reset_approvals_on_push`・`committer_approvals_excluded`・
-     `codeowners_enforced`）。監査の行 `restore.reapplied`。
-   - **写しが使えないとき**: **すべての利用者の管理者の印を外し**、外した利用者を一覧に出す（`restore.admin_flags_removed`）。
+     `codeowners_enforced`）・承認できる人（写しと共通の人に切る）・プロジェクトの公開範囲（`internal` → `private`）・チェックの
+     名前空間の許可（写しに無いものを消す）。監査の行 `restore.reapplied`（プロジェクト・グループと、所属は各利用者にも）。
+   - **写しが使えないとき**（無い・古い・**最新の写しが読めない**）: **すべての利用者の管理者の印を外し**、外した利用者を一覧に出す
+     （`restore.admin_flags_removed`）。最新の写しが読めない理由を確かめた後でだけ、`--allow-older-copy` で読める古い写しを使える
+     （最新の写しにあった縮小は失われるので、手で確かめる）。
+   - 当て直しで有効な管理者が 0 人になったら報告に出る: 手順 8 か `forge admin bootstrap-admin --user <username>`。
    - **イベントの履歴に新しい epoch**（`feed.epoch_rotated`、FG-DB-0014）: すべての連携のカーソルが 410 `epoch_mismatch` になり、
      kanflow の GitStationSource は `/cursor` と開発状況の API から読み直す（`docs/api/integration-feed.md`）。`database.maint_url` が要る。
    - 監査の行 `restore.finished`（世代・件数。秘密なし）。
@@ -189,7 +197,9 @@ forge doctor        # backup.last_success が ok
    ```
    forge restore regrant-admin <username>
    ```
-   一覧に無い利用者・無効な利用者・人でない利用者は断る（FG-AUTH-0009 `not_removed_by_restore` / `not_active_human`）。
+   最新の `restore.finished` の一覧に無い利用者、一覧の後に変更（無効化・名前の変更・付け直し済みなど）のあった利用者、無効な利用者・
+   人でない利用者は断る（FG-AUTH-0009 `not_removed_by_restore` / `not_active_human`）。断られたら確かめ直して `bootstrap-admin`（管理者が
+   いないとき）か管理者の画面で付ける。
 9. **Keycloak を確かめる**: Keycloak で無効の利用者が GitStation で有効になっていないか（ログインは Keycloak が断るが、
    `forge admin user disable <username>` で揃える）。当て直せなかった利用者は無効のままにする（有効に倒さない）。
 10. **起動**: `systemctl start forge-worker forge-serve`、`forge doctor`。
@@ -205,6 +215,8 @@ forge doctor        # backup.last_success が ok
 | Webhook の署名の秘密 | プロジェクトの Maintainer | `gstn webhook rotate-secret <id> --project <p>` → 受け手に配る → `gstn webhook update <id> --project <p> --enable` | 各 Webhook の受け手 |
 | 代理実行の HMAC の鍵（ファイル） | 運用者 | act-as の「鍵の入れ替え」（新しい kid を active に） | kanflow は鍵を持たない（GitStation の中だけ） |
 | ミラーの資格情報（ファイル） | 運用者 | GitLab でミラー用のトークンを作り直し、`mirror.credentials_dir` のファイルを入れ替える（gitlab-mirror B） | GitLab |
+| push ミラー（`finish` が無効にした） | 管理者 | まだ要るものだけ `gstn mirror set --project <p> …` で設定し直す（有効に戻り、全部の ref を 1 回送る） | GitLab |
+| 連携（kanflow、`finish` が無効にした） | 管理者 | まだ要る連携だけ、管理の API（`PATCH /api/v1/admin/integrations/{id}`、`{"enabled": true}`）で有効に戻す。サービスアカウントのトークンは上の行で再発行 | kanflow |
 | バックアップの鍵 | 運用者 | 漏れの疑いがあるときだけ: 新しい鍵を作り、`forge backup` を流し、古い鍵で作った世代を消す | — |
 
 ## 復元の訓練（四半期に 1 回）

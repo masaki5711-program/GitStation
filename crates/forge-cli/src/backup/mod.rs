@@ -53,6 +53,8 @@ use db_tool::{failed, DbBackupTool, PgBackRest};
 pub const COPY_ATTEMPTS: u32 = 3;
 pub const MANIFEST: &str = "manifest.json";
 pub const ARCHIVE: &str = "repositories.fgbk";
+pub const MANIFEST_MAC: &str = "manifest.mac";
+const MANIFEST_MAC_LABEL: &[u8] = b"forge-backup-manifest-v1\n";
 const LOCK: &str = ".lock";
 const PARTIAL: &str = ".partial";
 const MANIFEST_FORMAT: u32 = 1;
@@ -251,6 +253,40 @@ pub fn read_manifest(generation: &Path) -> Result<Manifest, ForgeError> {
     Ok(m)
 }
 
+/// The keyed MAC of a manifest's bytes (HMAC-SHA256 with the backup key,
+/// domain-separated from the archive's AES-GCM use): `manifest.mac`.
+pub fn manifest_mac(key: &BackupKey, json: &[u8]) -> Result<String, ForgeError> {
+    use hmac::Mac as _;
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key.expose())
+        .map_err(|_| failed("storage_io").with_context("operation", "manifest_mac"))?;
+    mac.update(MANIFEST_MAC_LABEL);
+    mac.update(json);
+    Ok(hex(&mac.finalize().into_bytes()))
+}
+
+/// [`read_manifest`] after checking `manifest.mac` (a restore trusts only a
+/// manifest written with its key): FG-SYS-0009 `archive_corrupt`
+/// (`detail=manifest_mac`) otherwise.
+pub fn read_manifest_verified(generation: &Path, key: &BackupKey) -> Result<Manifest, ForgeError> {
+    let corrupt = || {
+        ForgeError::new(ErrorCode::RestoreVerificationFailed)
+            .with_context("reason", "archive_corrupt")
+            .with_context("detail", "manifest_mac")
+            .with_context("path", generation.display())
+    };
+    let json = fs::read(generation.join(MANIFEST)).map_err(|_| corrupt())?;
+    let stored = fs::read_to_string(generation.join(MANIFEST_MAC)).map_err(|_| corrupt())?;
+    let want = manifest_mac(key, &json)?;
+    let same = {
+        use subtle::ConstantTimeEq as _;
+        bool::from(stored.trim().as_bytes().ct_eq(want.as_bytes()))
+    };
+    if !same {
+        return Err(corrupt());
+    }
+    read_manifest(generation)
+}
+
 /// A writer that hashes and counts what passes.
 struct Hashing<W: Write> {
     inner: W,
@@ -299,19 +335,67 @@ impl Drop for LockGuard {
     }
 }
 
+/// Whether the lock file names a process of this host that no longer runs
+/// (`pid=<n>` on its first line; Unix only — elsewhere a lock is never
+/// reclaimed automatically).
+fn lock_is_stale(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(text) = fs::read_to_string(path) else {
+            return false;
+        };
+        let pid = text
+            .lines()
+            .next()
+            .and_then(|l| l.strip_prefix("pid="))
+            .and_then(|p| p.split_whitespace().next())
+            .and_then(|p| p.parse::<i32>().ok())
+            .and_then(rustix::process::Pid::from_raw);
+        match pid {
+            Some(pid) => {
+                rustix::process::test_kill_process(pid).is_err_and(|e| e == rustix::io::Errno::SRCH)
+            }
+            None => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 fn take_lock(dir: &Path, request_id: &RequestId) -> Result<LockGuard, ForgeError> {
     let path = dir.join(LOCK);
-    match create_private_file(&path) {
-        Ok(mut f) => {
-            f.write_all(format!("{request_id}\n").as_bytes())
+    for attempt in 0..2 {
+        match create_private_file(&path) {
+            Ok(mut f) => {
+                f.write_all(
+                    format!("pid={} request={request_id}\n", std::process::id()).as_bytes(),
+                )
+                .and_then(|()| f.sync_all())
                 .map_err(|e| io_failed("storage_io", "write_lock", e))?;
-            Ok(LockGuard(path))
+                return Ok(LockGuard(path));
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                if attempt == 0 && lock_is_stale(&path) {
+                    tracing::warn!(
+                        target: "forge_cli",
+                        event = "forge.backup.stale_lock_removed",
+                        request_id = %request_id,
+                        path = %path.display(),
+                        "the lock of a backup that no longer runs was removed"
+                    );
+                    fs::remove_file(&path)
+                        .map_err(|e| io_failed("storage_io", "remove_stale_lock", e))?;
+                    continue;
+                }
+                return Err(failed("backup_running").with_context("path", path.display()));
+            }
+            Err(e) => return Err(io_failed("storage_io", "create_lock", e)),
         }
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            Err(failed("backup_running").with_context("path", path.display()))
-        }
-        Err(e) => Err(io_failed("storage_io", "create_lock", e)),
     }
+    Err(failed("backup_running").with_context("path", path.display()))
 }
 
 /// What a backup wrote.
@@ -416,8 +500,13 @@ impl<T: DbBackupTool> Run<'_, T> {
             hasher: Sha256::new(),
             bytes: 0,
         };
-        let sealed = crypt::SealWriter::new(hashing, &self.prepared.key, crypt::Kind::Repositories)
-            .map_err(|e| io_failed("repository_copy_failed", "open_archive", e))?;
+        let sealed = crypt::SealWriter::new(
+            hashing,
+            &self.prepared.key,
+            crypt::Kind::Repositories,
+            generation.as_bytes(),
+        )
+        .map_err(|e| io_failed("repository_copy_failed", "open_archive", e))?;
         let mut archive = archive::ArchiveWriter::new(sealed);
         let deadline = Instant::now() + self.cfg.repo_timeout;
         let mut repos = Vec::new();
@@ -475,6 +564,12 @@ impl<T: DbBackupTool> Run<'_, T> {
         f.write_all(&json)
             .and_then(|()| f.sync_all())
             .map_err(|e| io_failed("storage_io", "write_manifest", e))?;
+        let mac = manifest_mac(&self.prepared.key, &json)?;
+        let mut m = create_private_file(&partial.join(MANIFEST_MAC))
+            .map_err(|e| io_failed("storage_io", "create_manifest_mac", e))?;
+        m.write_all(format!("{mac}\n").as_bytes())
+            .and_then(|()| m.sync_all())
+            .map_err(|e| io_failed("storage_io", "write_manifest_mac", e))?;
         sync_dir(partial).map_err(|e| io_failed("storage_io", "sync_dir", e))?;
         Ok(manifest)
     }
@@ -504,49 +599,76 @@ impl<T: DbBackupTool> Run<'_, T> {
             };
             io_failed(reason, op, e).with_context("repo_id", repo.get())
         };
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            if dst.exists() {
-                fs::remove_dir_all(&dst).map_err(|e| copy_failed("remove_copy", e))?;
-            }
-            archive::copy_repository(&src, &dst, deadline).map_err(|e| copy_failed("copy", e))?;
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(failed("repository_copy_timeout").with_context("repo_id", repo.get()));
-            }
-            match self
-                .git
-                .fsck(staging, repo, FsckMode::Connectivity, left)
-                .await
-            {
-                Ok(()) => break,
-                Err(e) if e.code() == ErrorCode::RepositoryCorrupt && attempt < COPY_ATTEMPTS => {
-                    tracing::warn!(
-                        target: "forge_cli",
-                        event = "forge.backup.copy_retried",
-                        request_id = %self.request_id,
-                        repo_id = repo.get(),
-                        attempt,
-                        error_code = %e.code(),
-                        "the copied repository failed fsck; copying it again"
+        // The maintenance (O3) of this repository waits while it is copied
+        // (`repo_maint:<repo_id>`); the fsck of the copy stays the second check.
+        let wait = deadline.saturating_duration_since(Instant::now());
+        let Some(mut lock) = forge_db::restore::RepoMaintLock::lock(self.db, repo, wait).await?
+        else {
+            return Err(failed("repository_copy_timeout")
+                .with_context("repo_id", repo.get())
+                .with_context("detail", "maintenance_lock_held"));
+        };
+        let copied: Result<(), ForgeError> = async {
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                if dst.exists() {
+                    fs::remove_dir_all(&dst).map_err(|e| copy_failed("remove_copy", e))?;
+                }
+                archive::copy_repository(&src, &dst, deadline)
+                    .map_err(|e| copy_failed("copy", e))?;
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(
+                        failed("repository_copy_timeout").with_context("repo_id", repo.get())
                     );
                 }
-                Err(e) if e.code() == ErrorCode::RepositoryCorrupt => {
-                    return Err(failed("repository_copy_inconsistent")
-                        .with_context("repo_id", repo.get())
-                        .with_context("attempts", attempt)
-                        .with_source(e));
-                }
-                Err(e) => {
-                    return Err(failed("repository_copy_failed")
-                        .with_context("repo_id", repo.get())
-                        .with_context("operation", "fsck")
-                        .with_context("cause", e.code())
-                        .with_source(e))
+                match self
+                    .git
+                    .fsck(staging, repo, FsckMode::Connectivity, left)
+                    .await
+                {
+                    Ok(()) => break,
+                    Err(e)
+                        if e.code() == ErrorCode::RepositoryCorrupt && attempt < COPY_ATTEMPTS =>
+                    {
+                        tracing::warn!(
+                            target: "forge_cli",
+                            event = "forge.backup.copy_retried",
+                            request_id = %self.request_id,
+                            repo_id = repo.get(),
+                            attempt,
+                            error_code = %e.code(),
+                            "the copied repository failed fsck; copying it again"
+                        );
+                    }
+                    Err(e) if e.code() == ErrorCode::RepositoryCorrupt => {
+                        return Err(failed("repository_copy_inconsistent")
+                            .with_context("repo_id", repo.get())
+                            .with_context("attempts", attempt)
+                            .with_source(e));
+                    }
+                    Err(e) => {
+                        return Err(failed("repository_copy_failed")
+                            .with_context("repo_id", repo.get())
+                            .with_context("operation", "fsck")
+                            .with_context("cause", e.code())
+                            .with_source(e))
+                    }
                 }
             }
+            Ok(())
         }
+        .await;
+        let alive = lock.alive().await;
+        lock.release().await;
+        copied?;
+        alive.map_err(|e| {
+            failed("repository_copy_failed")
+                .with_context("repo_id", repo.get())
+                .with_context("operation", "maintenance_lock")
+                .with_source(e)
+        })?;
         archive
             .tree(staging.path(), &dst, deadline)
             .map_err(|e| copy_failed("archive", e))?;

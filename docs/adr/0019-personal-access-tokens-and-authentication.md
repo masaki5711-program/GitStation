@@ -650,3 +650,32 @@ Amendment「計画 11 P1」の実装。計画 11 §10 Q11 の答え（2026-11-09
 - **エラー**: FG-SYS-0008 BackupFailed / FG-SYS-0009 RestoreVerificationFailed（どちらも alert、runbook `backup-restore`）。
 - **確かめていないこと**: 本物の pgBackRest（この環境に無い）。DB の手順は trait `DbBackupTool` の後ろにあり、テストは偽物と、
   引数・時間切れ・失敗を確かめるシェルの台本で行った。試験環境での訓練で確かめる（runbook「復元の訓練」）。
+
+### O1 の独立レビューで決めたこと（2026-11-09）
+
+`security-reviewer`（HIGH 2）・`git-protocol-reviewer`（HIGH 1）・`rust-reviewer` / `database-reviewer`（MEDIUM）への対処。利用者は
+上の計画からの変更 1〜3 を受け入れた。
+
+- **HIGH（写しの漏れ）**: 権限の状態の写し（形式 2。形式 1 の写しは読めない＝写し無しとして扱う）に、プロジェクトの `visibility`、
+  承認の規則の承認できる人（`approval_rule_approvers`）、チェックの名前空間の許可（`check_namespace_grants`）を足した。当て直しは狭める
+  向きだけ: `internal` → `private`、写しに無い許可を消す、承認できる人は共通の部分に切る（空は「Developer 以上の誰でも」なので、写しが空なら
+  そのまま、DB が空か共通が無ければ写しの一覧にする）。
+- **HIGH（戻ってくる連携）**: `revoke_all_credentials` が有効な push ミラーと連携（kanflow）をすべて無効にする（監査の行
+  `restore.push_mirrors_disabled` / `restore.integration_disabled`、`reason=restore`）。保留中・受け取り済みの代理実行の主張も
+  `reject_reason=restore` で終わらせる（`restore.assertion_rejected`）。runbook の「再発行」に有効に戻す手順を足した。
+- **HIGH（保守との排他）**: 予約していたロック `repo_maint:<repo_id>` を両方が取る。バックアップは複写と fsck の間（待つ。
+  `backup.repo_timeout_secs` の残りまで。取れなければ FG-SYS-0008 `repository_copy_timeout`、`detail=maintenance_lock_held`）、
+  O3 の保守は全手順の間（待たない。取れなければ `skipped backup_running`）。トランザクションのロックは `idle_in_transaction` の時間切れで
+  切れるので、プールから外した接続の **セッションのロック**（forge-db `restore::RepoMaintLock`。落とすと接続が閉じて外れる。fsck の後に
+  `alive()` で確かめる）。fsck と 3 回の再試行は二つ目の確認として残す。`commit-graph`・`commit-graphs/`・`multi-pack-index*` は複写しない
+  （次の保守が書く）。
+- **MEDIUM**: 最新の写しが読めないときは写し無し（管理者の印をすべて外す）。`--allow-older-copy` で古い写しを使える。
+  `regrant-admin` は最新の `restore.finished` と同じ `begin` の一覧にある利用者だけ、かつ一覧の後に `restore.*` 以外の監査の行がその利用者に
+  無いときだけ。`forge restore repositories` はディレクトリ 0700・ファイル 0600 で書き、`backup.repo_timeout_secs` で止まる
+  （FG-SYS-0009 `restore_timeout`）、`--replace` の退避先は実行ごと（`pre-restore-<g>-<request_id>`）。暗号の AAD に世代の名前
+  （写しは `state`）を入れ、`manifest.json` に鍵の HMAC（`manifest.mac`）を付けて復元で確かめる。pgBackRest のラベルは実行の前後の
+  `info` の差から取る（前からあったラベルなら `db_backup_unexpected`）。`narrow_members` は利用者ごとの監査の行も書く。
+  `finish` は手順ごとに繰り返せ、`begin`（印のファイル）で前の実行を見分けて `restore.finished` に `rerun` を書き、一覧は前の実行の行から出す。
+  当て直しで有効な管理者が 0 人になったら報告とログで言い、戻し方（`regrant-admin` / `bootstrap-admin`）を示す。
+- **LOW**: 止まったバックアップの `.lock`（`pid=` のプロセスが無い）は自動で取り戻す。ロックのファイルは fsync する。
+  `expected_versions` の流し読みは見送った（M3 の規模では不要）。

@@ -29,6 +29,8 @@ use crate::backup::{create_private_file, crypt};
 pub const KEEP: usize = 48;
 const PREFIX: &str = "state-";
 const SUFFIX: &str = ".fgbk";
+/// The authenticated context of a state copy (crypt.rs).
+const STATE_CONTEXT: &[u8] = b"state";
 /// The largest state copy read back (bytes).
 const MAX_BYTES: u64 = 256 << 20;
 
@@ -52,8 +54,8 @@ pub async fn write(db: &Db, dir: &Path, key: &BackupKey) -> Result<PathBuf, Forg
     let path = dir.join(&name);
     let io = |op: &'static str| move |e: std::io::Error| failed("storage_io", op).with_source(e);
     let file = create_private_file(&tmp).map_err(io("create_state_copy"))?;
-    let mut sealed =
-        crypt::SealWriter::new(file, key, crypt::Kind::StateCopy).map_err(io("open_state_copy"))?;
+    let mut sealed = crypt::SealWriter::new(file, key, crypt::Kind::StateCopy, STATE_CONTEXT)
+        .map_err(io("open_state_copy"))?;
     sealed.write_all(&json).map_err(io("write_state_copy"))?;
     let file = sealed.finish().map_err(io("finish_state_copy"))?;
     file.sync_all().map_err(io("sync_state_copy"))?;
@@ -102,7 +104,7 @@ pub fn read(path: &Path, key: &BackupKey) -> std::io::Result<AuthzState> {
             "too_large",
         ));
     }
-    let mut reader = crypt::OpenReader::new(file, key, crypt::Kind::StateCopy)?;
+    let mut reader = crypt::OpenReader::new(file, key, crypt::Kind::StateCopy, STATE_CONTEXT)?;
     let mut json = Vec::new();
     reader.read_to_end(&mut json)?;
     let st: AuthzState = serde_json::from_slice(&json)
@@ -137,12 +139,14 @@ impl Unusable {
 }
 
 /// The newest readable copy taken at or after `not_before_micros` (the
-/// restored generation's database clock). A copy that does not open is
-/// skipped with a warning (the next older one may do).
+/// restored generation's database clock). When the newest copy does not
+/// open it is `Unreadable` (no copy: every administrator flag is removed)
+/// unless `allow_older`, which goes on to the next older one.
 pub fn newest_usable(
     dir: Option<&Path>,
     key: &BackupKey,
     not_before_micros: i64,
+    allow_older: bool,
 ) -> Result<(PathBuf, AuthzState), Unusable> {
     let Some(dir) = dir else {
         return Err(Unusable::NotConfigured);
@@ -165,8 +169,14 @@ pub fn newest_usable(
                     reason = "archive_corrupt",
                     file = %path.display(),
                     error = %e,
-                    "a state copy could not be read and is skipped"
+                    "a state copy could not be read"
                 );
+                // The newest copy may hold the latest narrowings: an older
+                // one would silently lose them (`--allow-older-copy` accepts
+                // that after the operator checked why it does not open).
+                if !allow_older {
+                    return Err(Unusable::Unreadable);
+                }
             }
         }
     }

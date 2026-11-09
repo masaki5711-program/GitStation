@@ -15,7 +15,10 @@
 //! | protected refs | a rule the copy has is created; a higher `push_min_role` is set |
 //! | merge rules of a protected ref | created when missing; `required_approvals` = the larger, `required_checks` = the union (at most 20, the copy's first), each `require_*` / `direct_push_forbidden` = OR |
 //! | approval rules | a rule the copy has is created; `required_approvals` = the larger |
+//! | approvers of a rule | (empty = any Developer or above) the database's list is cut to the part it shares with the copy's; set to the copy's when the database's is empty or shares nothing; kept when the copy's is empty |
 //! | merge settings | `reset_approvals_on_push`, `committer_approvals_excluded`, `codeowners_enforced` (its suspension cleared) = OR |
+//! | project visibility | `internal` → `private` when the copy holds it `private` |
+//! | check namespace grants | a grant the copy lacks (its project is in the copy) is removed |
 //!
 //! A widening after the backup (a member added, a rule removed) is not
 //! re-applied: the people repeat it. Each change is one transaction per
@@ -36,7 +39,7 @@ use crate::{query_error, read_query_error, Db};
 pub const ACTION_REAPPLIED: &str = "restore.reapplied";
 
 /// The format of [`AuthzState`] (a reader refuses another).
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserFlags {
@@ -76,6 +79,22 @@ pub struct ApprovalRule {
     pub name: String,
     pub target_pattern: Option<String>,
     pub required_approvals: i32,
+    /// Who may approve under the rule (a user or a group each).
+    pub approvers: Vec<Approver>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Approver {
+    pub user: Option<i64>,
+    pub group: Option<i64>,
+}
+
+/// A service account allowed to report checks of `namespace` on `project`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct CheckGrant {
+    pub user: i64,
+    pub project: i64,
+    pub namespace: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,11 +115,14 @@ pub struct AuthzState {
     pub users: Vec<UserFlags>,
     pub groups: Vec<i64>,
     pub projects: Vec<i64>,
+    /// The projects whose visibility is `private` (the others are `internal`).
+    pub private_projects: Vec<i64>,
     pub group_members: Vec<Membership>,
     pub project_members: Vec<Membership>,
     pub protected_refs: Vec<ProtectedRef>,
     pub approval_rules: Vec<ApprovalRule>,
     pub merge_settings: Vec<MergeSettings>,
+    pub check_grants: Vec<CheckGrant>,
 }
 
 /// A protected ref joined with its merge rule (`None`s without one): id or
@@ -190,6 +212,34 @@ pub async fn read(db: &Db) -> Result<AuthzState, ForgeError> {
             .fetch_all(&mut *tx)
             .await
             .map_err(q)?;
+            let private_projects: Vec<i64> = sqlx::query_scalar(
+                "SELECT id FROM forge.projects WHERE visibility = 'private' ORDER BY id",
+            )
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(q)?;
+            let approvers: Vec<(i64, String, Option<i64>, Option<i64>)> = sqlx::query_as(
+                "SELECT r.project_id, r.name, a.user_id, a.group_id \
+                 FROM forge.approval_rule_approvers a \
+                 JOIN forge.approval_rules r ON r.id = a.rule_id ORDER BY 1, 2, 3, 4",
+            )
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(q)?;
+            let check_grants: Vec<(i64, i64, String)> = sqlx::query_as(
+                "SELECT user_id, project_id, namespace FROM forge.check_namespace_grants \
+                 ORDER BY 1, 2, 3",
+            )
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(q)?;
+            let mut by_rule: BTreeMap<(i64, String), Vec<Approver>> = BTreeMap::new();
+            for (project, name, user, group) in approvers {
+                by_rule
+                    .entry((project, name))
+                    .or_default()
+                    .push(Approver { user, group });
+            }
             let membership =
                 |(scope, user, role): (i64, i64, String)| Membership { scope, user, role };
             Ok(AuthzState {
@@ -232,6 +282,9 @@ pub async fn read(db: &Db) -> Result<AuthzState, ForgeError> {
                     .into_iter()
                     .map(
                         |(project, name, target_pattern, required_approvals)| ApprovalRule {
+                            approvers: by_rule
+                                .remove(&(project, name.clone())) // clone: the key
+                                .unwrap_or_default(),
                             project,
                             name,
                             target_pattern,
@@ -246,6 +299,15 @@ pub async fn read(db: &Db) -> Result<AuthzState, ForgeError> {
                         reset_approvals_on_push: r,
                         committer_approvals_excluded: c,
                         codeowners_enforced: o,
+                    })
+                    .collect(),
+                private_projects,
+                check_grants: check_grants
+                    .into_iter()
+                    .map(|(user, project, namespace)| CheckGrant {
+                        user,
+                        project,
+                        namespace,
                     })
                     .collect(),
             })
@@ -289,6 +351,9 @@ pub struct Reapplied {
     pub merge_rules_tightened: i64,
     pub approval_rules_tightened: i64,
     pub merge_settings_tightened: i64,
+    pub visibility_narrowed: i64,
+    pub approvers_narrowed: i64,
+    pub check_grants_revoked: i64,
 }
 
 impl Reapplied {
@@ -302,6 +367,9 @@ impl Reapplied {
             + self.merge_rules_tightened
             + self.approval_rules_tightened
             + self.merge_settings_tightened
+            + self.visibility_narrowed
+            + self.approvers_narrowed
+            + self.check_grants_revoked
     }
 }
 
@@ -395,6 +463,17 @@ pub async fn reapply(
     for s in &copy.merge_settings {
         wanted.entry(s.project).or_default().settings = Some(s.clone());
     }
+    for p in &copy.projects {
+        wanted.entry(*p).or_default().grants = Some(BTreeSet::new());
+    }
+    for p in &copy.private_projects {
+        wanted.entry(*p).or_default().private = true;
+    }
+    for g in &copy.check_grants {
+        if let Some(set) = wanted.entry(g.project).or_default().grants.as_mut() {
+            set.insert((g.user, g.namespace.clone())); // clone: the set owns it
+        }
+    }
     for (project, rules) in wanted {
         if !projects.contains(&project) {
             continue;
@@ -405,6 +484,9 @@ pub async fn reapply(
         done.merge_rules_tightened += n.merge_rules_tightened;
         done.approval_rules_tightened += n.approval_rules_tightened;
         done.merge_settings_tightened += n.merge_settings_tightened;
+        done.visibility_narrowed += n.visibility_narrowed;
+        done.approvers_narrowed += n.approvers_narrowed;
+        done.check_grants_revoked += n.check_grants_revoked;
     }
     Ok(done)
 }
@@ -436,6 +518,11 @@ struct ProjectRules {
     refs: Vec<ProtectedRef>,
     approvals: Vec<ApprovalRule>,
     settings: Option<MergeSettings>,
+    /// The copy holds the project `private`.
+    private: bool,
+    /// The check grants of the project in the copy (`None`: the project is
+    /// not in the copy).
+    grants: Option<BTreeSet<(i64, String)>>,
 }
 
 async fn narrow_user(
@@ -581,7 +668,22 @@ async fn narrow_members(
             }),
         );
         let n = |v: &Vec<i64>| i64::try_from(v.len()).unwrap_or(i64::MAX);
-        Ok(Settle::Commit(record(entry), (n(&removed), n(&lowered))))
+        let mut rec = record(entry);
+        // One row on each person too, so their audit trail shows the change.
+        for (user, kind) in removed
+            .iter()
+            .map(|u| (*u, "removed"))
+            .chain(lowered.iter().map(|u| (*u, "lowered")))
+        {
+            rec.affected.push(audit(
+                ACTION_REAPPLIED,
+                "user",
+                Some(user),
+                None,
+                serde_json::json!({"kind": "membership", "change": kind, "scope": scope.resource(), "scope_id": id}),
+            ));
+        }
+        Ok(Settle::Commit(rec, (n(&removed), n(&lowered))))
     }
     .await;
     tx.settle(ACTION_REAPPLIED, outcome).await
@@ -765,6 +867,7 @@ async fn narrow_project(
                 })
                 .await?;
             done.approval_rules_tightened += i64::try_from(n).unwrap_or(i64::MAX);
+            done.approvers_narrowed += narrow_approvers(&mut tx, p, want_rule).await?;
         }
         if let Some(s) = &want.settings {
             let (r, c2, o) = (
@@ -800,6 +903,43 @@ async fn narrow_project(
                 .await?;
             done.merge_settings_tightened += i64::try_from(n).unwrap_or(i64::MAX);
         }
+        if want.private {
+            let n = tx
+                .step(|c| async move {
+                    sqlx::query(
+                        "UPDATE forge.projects SET visibility = 'private', updated_at = now() \
+                         WHERE id = $1 AND visibility <> 'private'",
+                    )
+                    .bind(p)
+                    .execute(c)
+                    .await
+                    .map(|r| r.rows_affected())
+                    .map_err(|e| query_error("restore.reapply.visibility", e))
+                })
+                .await?;
+            done.visibility_narrowed += i64::try_from(n).unwrap_or(i64::MAX);
+        }
+        if let Some(grants) = &want.grants {
+            let users: Vec<i64> = grants.iter().map(|(u, _)| *u).collect();
+            let spaces: Vec<String> = grants.iter().map(|(_, n)| n.clone()).collect(); // clone: bound below
+            let n = tx
+                .step(|c| async move {
+                    sqlx::query(
+                        "DELETE FROM forge.check_namespace_grants g WHERE g.project_id = $1 \
+                         AND NOT EXISTS (SELECT 1 FROM unnest($2::bigint[], $3::text[]) \
+                         AS k(u, n) WHERE k.u = g.user_id AND k.n = g.namespace)",
+                    )
+                    .bind(p)
+                    .bind(users)
+                    .bind(spaces)
+                    .execute(c)
+                    .await
+                    .map(|r| r.rows_affected())
+                    .map_err(|e| query_error("restore.reapply.check_grants", e))
+                })
+                .await?;
+            done.check_grants_revoked += i64::try_from(n).unwrap_or(i64::MAX);
+        }
         if done.total() == 0 {
             return Ok(Settle::Discard(done));
         }
@@ -815,10 +955,116 @@ async fn narrow_project(
                 "merge_rules_tightened": done.merge_rules_tightened,
                 "approval_rules_tightened": done.approval_rules_tightened,
                 "merge_settings_tightened": done.merge_settings_tightened,
+                "visibility_narrowed": done.visibility_narrowed,
+                "approvers_narrowed": done.approvers_narrowed,
+                "check_grants_revoked": done.check_grants_revoked,
             }),
         );
         Ok(Settle::Commit(record(entry), done))
     }
     .await;
     tx.settle(ACTION_REAPPLIED, outcome).await
+}
+
+/// The approvers of rule `want` (on project `p`) narrowed (module docs):
+/// an empty list means "any Developer or above", so the database's list is
+/// kept when the copy's is empty; set to the copy's when the database's is
+/// empty or shares none with it; otherwise cut to the common part. Returns
+/// the number of approver rows removed or added.
+async fn narrow_approvers(
+    tx: &mut ChangeTx,
+    p: i64,
+    want: &ApprovalRule,
+) -> Result<i64, ForgeError> {
+    if want.approvers.is_empty() {
+        return Ok(0);
+    }
+    let name = want.name.clone(); // clone: moved into the step
+    let rows: Vec<(i64, Option<i64>, Option<i64>)> = tx
+        .step(|c| async move {
+            sqlx::query_as(
+                "SELECT r.id, a.user_id, a.group_id FROM forge.approval_rules r \
+                 LEFT JOIN forge.approval_rule_approvers a ON a.rule_id = r.id \
+                 WHERE r.project_id = $1 AND r.name = $2 FOR UPDATE OF r",
+            )
+            .bind(p)
+            .bind(name)
+            .fetch_all(c)
+            .await
+            .map_err(|e| query_error("restore.reapply.approvers", e))
+        })
+        .await?;
+    let Some(rule) = rows.first().map(|r| r.0) else {
+        return Ok(0);
+    };
+    let have: BTreeSet<Approver> = rows
+        .iter()
+        .filter(|(_, u, g)| u.is_some() || g.is_some())
+        .map(|(_, user, group)| Approver {
+            user: *user,
+            group: *group,
+        })
+        .collect();
+    let copy: BTreeSet<Approver> = want.approvers.iter().cloned().collect();
+    let common: BTreeSet<Approver> = have.intersection(&copy).cloned().collect();
+    let target = if common.is_empty() { copy } else { common };
+    if target == have {
+        return Ok(0);
+    }
+    let users: Vec<i64> = target.iter().filter_map(|a| a.user).collect();
+    let groups: Vec<i64> = target.iter().filter_map(|a| a.group).collect();
+    let (u2, g2) = (users.clone(), groups.clone()); // clone: two steps bind them
+    let removed = tx
+        .step(|c| async move {
+            sqlx::query(
+                "DELETE FROM forge.approval_rule_approvers WHERE rule_id = $1 AND \
+                 ((user_id IS NOT NULL AND NOT (user_id = ANY($2))) \
+                 OR (group_id IS NOT NULL AND NOT (group_id = ANY($3))))",
+            )
+            .bind(rule)
+            .bind(u2)
+            .bind(g2)
+            .execute(c)
+            .await
+            .map(|r| r.rows_affected())
+            .map_err(|e| query_error("restore.reapply.approvers_delete", e))
+        })
+        .await?;
+    let added = tx
+        .step(|c| async move {
+            sqlx::query(
+                "INSERT INTO forge.approval_rule_approvers (rule_id, project_id, user_id) \
+                 SELECT $1, $2, u FROM unnest($3::bigint[]) AS u \
+                 WHERE NOT EXISTS (SELECT 1 FROM forge.approval_rule_approvers \
+                   WHERE rule_id = $1 AND user_id = u) \
+                 AND EXISTS (SELECT 1 FROM forge.users WHERE id = u)",
+            )
+            .bind(rule)
+            .bind(p)
+            .bind(users)
+            .execute(c)
+            .await
+            .map(|r| r.rows_affected())
+            .map_err(|e| query_error("restore.reapply.approvers_users", e))
+        })
+        .await?;
+    let added_groups = tx
+        .step(|c| async move {
+            sqlx::query(
+                "INSERT INTO forge.approval_rule_approvers (rule_id, project_id, group_id) \
+                 SELECT $1, $2, g FROM unnest($3::bigint[]) AS g \
+                 WHERE NOT EXISTS (SELECT 1 FROM forge.approval_rule_approvers \
+                   WHERE rule_id = $1 AND group_id = g) \
+                 AND EXISTS (SELECT 1 FROM forge.groups WHERE id = g)",
+            )
+            .bind(rule)
+            .bind(p)
+            .bind(groups)
+            .execute(c)
+            .await
+            .map(|r| r.rows_affected())
+            .map_err(|e| query_error("restore.reapply.approvers_groups", e))
+        })
+        .await?;
+    Ok(i64::try_from(removed + added + added_groups).unwrap_or(i64::MAX))
 }

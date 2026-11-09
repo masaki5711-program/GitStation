@@ -38,6 +38,7 @@ async fn finish(f: &Fixture, generation: &str, accept: bool) -> Result<String, F
         &FinishArgs {
             generation,
             accept_db_behind: accept,
+            allow_older_copy: false,
         },
         &rid("req-restore-finish"),
     )
@@ -720,4 +721,133 @@ fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             out.push(p);
         }
     }
+}
+
+#[tokio::test]
+async fn regrant_is_refused_after_a_later_change_of_the_user() {
+    let f = fixture(false).await;
+    world(&f, "zed").await;
+    let (a, b) = (human(&f.t, "abe").await, human(&f.t, "bel").await);
+    audited(
+        &f.t,
+        &[("user", a.get()), ("user", b.get())],
+        &[format!(
+            "UPDATE forge.users SET is_admin = true WHERE id IN ({}, {})",
+            a.get(),
+            b.get()
+        )],
+    )
+    .await;
+    let done = f
+        .backup(&FakeDb::default(), "req-backup-lc")
+        .await
+        .expect("backup");
+    // Before finish nothing can be regranted (no finished restore lists them).
+    begin(f.storage.root.path(), &rid("req-begin-lc")).expect("begin");
+    finish(&f, &done.manifest.generation, false)
+        .await
+        .expect("finish");
+    // bel was changed after the restore listed her: the operator's check is
+    // out of date.
+    audited(
+        &f.t,
+        &[("user", b.get())],
+        &[format!(
+            "UPDATE forge.users SET display_name = 'synthetic' WHERE id = {}",
+            b.get()
+        )],
+    )
+    .await;
+    let err = regrant_admin_with(&f.t.db, "bel", &rid("req-regrant-lc"))
+        .await
+        .expect_err("changed since");
+    assert_reason(
+        &err,
+        ErrorCode::AdministrationConflict,
+        "not_removed_by_restore",
+    );
+    regrant_admin_with(&f.t.db, "abe", &rid("req-regrant-lc2"))
+        .await
+        .expect("listed and unchanged");
+    f.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_finish_that_stopped_half_way_runs_again_and_says_so() {
+    let f = fixture(false).await;
+    world(&f, "cyd").await;
+    let a = human(&f.t, "dax").await;
+    audited(
+        &f.t,
+        &[("user", a.get())],
+        &[format!(
+            "UPDATE forge.users SET is_admin = true WHERE id = {}",
+            a.get()
+        )],
+    )
+    .await;
+    let done = f
+        .backup(&FakeDb::default(), "req-backup-rr2")
+        .await
+        .expect("backup");
+    begin(f.storage.root.path(), &rid("req-begin-rr2")).expect("begin");
+    // The first run did its database steps and stopped before the epoch.
+    let first = finish_with(
+        &f.t.db,
+        &f.prepared,
+        &f.storage.root,
+        &f.storage.git,
+        &FinishArgs {
+            generation: &done.manifest.generation,
+            accept_db_behind: false,
+            allow_older_copy: false,
+        },
+        &rid("req-finish-1"),
+    )
+    .await
+    .expect("first run");
+    assert!(!first.rerun);
+    assert_eq!(first.admins_removed.len(), 1);
+    assert_eq!(first.admins_left, 0);
+    let report = finish(&f, &done.manifest.generation, false)
+        .await
+        .expect("second run");
+    assert!(report.contains("re-run"), "{report}");
+    assert!(
+        report.contains("dax"),
+        "the list comes from the first run: {report}"
+    );
+    assert!(
+        report.contains("no active administrator is left"),
+        "{report}"
+    );
+    let rows =
+        f.t.json_rows("SELECT details FROM forge.audit_log WHERE action = 'restore.finished'")
+            .await;
+    assert_eq!(rows[0]["details"]["rerun"], true);
+    assert_eq!(rows[0]["details"]["admin_flags_removed"], 1);
+    f.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn an_unreadable_newest_copy_counts_as_no_copy_unless_older_ones_are_allowed() {
+    let f = fixture(true).await;
+    world(&f, "eli").await;
+    let dir = f.prepared.state_copy_dir.clone().expect("dir"); // clone: the fixture keeps it
+    let done = f
+        .backup(&FakeDb::default(), "req-backup-un")
+        .await
+        .expect("backup");
+    let good = done.state_copy.clone().expect("copy"); // clone: compared below
+                                                       // A newer copy that does not open (changed, or another key).
+    let bad = dir.join("state-29991231T235959Z-00000000000000000001.fgbk");
+    fs::write(&bad, b"FGBK not really").expect("bad copy");
+    let micros = done.manifest.db.completed_at_micros;
+    let err = crate::state_copy::newest_usable(Some(&dir), &f.prepared.key, micros, false)
+        .expect_err("newest unreadable");
+    assert_eq!(err, crate::state_copy::Unusable::Unreadable);
+    let (used, _) = crate::state_copy::newest_usable(Some(&dir), &f.prepared.key, micros, true)
+        .expect("an older one is allowed");
+    assert_eq!(used, good);
+    f.t.drop_now().await;
 }

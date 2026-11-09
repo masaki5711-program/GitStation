@@ -129,7 +129,7 @@ impl<W: Write> ArchiveWriter<W> {
             } else if ty.is_file() {
                 self.file(&relative(root, &path)?, &path)?;
             } else {
-                return Err(invalid("not_a_regular_file"));
+                return Err(not_regular(&path));
             }
         }
         Ok(())
@@ -218,6 +218,20 @@ fn skipped(name: &str) -> bool {
         || name.starts_with("incoming-")
         || name.starts_with("tmp_pack_")
         || name.starts_with("tmp_idx_")
+        // Derived files the next maintenance rebuilds (commit-graph write):
+        // a copy taken while one is rewritten could be torn.
+        || name == "commit-graph"
+        || name == "commit-graphs"
+        || name.starts_with("multi-pack-index")
+}
+
+/// Not a directory or a regular file (a symlink, a socket): named by its
+/// path, so the repository and the entry are in the error.
+fn not_regular(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("not_a_regular_file: {}", path.display()),
+    )
 }
 
 fn copy_tree(src: &Path, dst: &Path, deadline: Instant) -> io::Result<()> {
@@ -249,7 +263,7 @@ fn copy_tree(src: &Path, dst: &Path, deadline: Instant) -> io::Result<()> {
                 Err(err) => return Err(err),
             }
         } else {
-            return Err(invalid("not_a_regular_file"));
+            return Err(not_regular(&e.path()));
         }
     }
     Ok(())
@@ -294,7 +308,7 @@ pub fn copy_repository(src: &Path, dst: &Path, deadline: Instant) -> io::Result<
                 Err(err) => return Err(err),
             }
         } else {
-            return Err(invalid("not_a_regular_file"));
+            return Err(not_regular(&e.path()));
         }
     }
     Ok(())

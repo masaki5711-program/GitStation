@@ -35,6 +35,8 @@ tracing.workspace = true
 aes-gcm.workspace = true
 getrandom.workspace = true
 sha2.workspace = true
+hmac.workspace = true
+subtle.workspace = true
 serde.workspace = true
 
 [target.'cfg(unix)'.dependencies]

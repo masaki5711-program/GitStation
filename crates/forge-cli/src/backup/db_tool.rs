@@ -143,15 +143,42 @@ pub(crate) fn newest_label(info: &[u8]) -> Option<String> {
     ok.then(|| label.to_owned())
 }
 
+/// Every label in `pgbackrest info --output=json` (empty before the first
+/// backup of a stanza).
+pub(crate) fn labels(info: &[u8]) -> Vec<String> {
+    let v: serde_json::Value = match serde_json::from_slice(info) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    v.as_array()
+        .and_then(|a| a.first())
+        .and_then(|s| s.get("backup"))
+        .and_then(|b| b.as_array())
+        .map(|b| {
+            b.iter()
+                .filter_map(|x| x.get("label").and_then(|l| l.as_str()))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl DbBackupTool for PgBackRest {
+    /// `info` before and after `backup`: the label is the newest one that
+    /// was not there before (a backup someone else made meanwhile, or none
+    /// at all, is `db_backup_unexpected`, never a wrong label).
     async fn backup(&self) -> Result<DbBackup, ForgeError> {
+        let before = self.run(&["--output=json", "info"], "info").await?;
+        let before = labels(&before);
         self.run(
             &["--type=full", "--log-level-console=warn", "backup"],
             "backup",
         )
         .await?;
         let info = self.run(&["--output=json", "info"], "info").await?;
-        let label = newest_label(&info).ok_or_else(|| failed("db_backup_unexpected"))?;
+        let label = newest_label(&info)
+            .filter(|l| !before.contains(l))
+            .ok_or_else(|| failed("db_backup_unexpected"))?;
         Ok(DbBackup {
             tool: "pgbackrest",
             label,
@@ -232,10 +259,28 @@ pub(crate) mod tests {
         };
         let err = hanging.backup().await.expect_err("hangs");
         forge_db::test_support::assert_reason(&err, ErrorCode::BackupFailed, "db_backup_timeout");
+        // The same newest label before and after: not this run's backup.
+        let unchanged = PgBackRest {
+            bin: script(
+                "same",
+                "case \"$*\" in *info*) echo '[{\"backup\":[{\"label\":\"20261108-021500F\"}]}]';; esac",
+            ),
+            ..tool.clone()
+        };
+        let err = unchanged.backup().await.expect_err("no new backup");
+        forge_db::test_support::assert_reason(
+            &err,
+            ErrorCode::BackupFailed,
+            "db_backup_unexpected",
+        );
+        let marker = tmp.path().join("backed-up");
         let ok = PgBackRest {
             bin: script(
                 "ok",
-                "case \"$*\" in *info*) echo '[{\"backup\":[{\"label\":\"20261109-021500F\"}]}]';; esac",
+                &format!(
+                    "case \"$*\" in *info*) if [ -e '{m}' ]; then echo '[{{\"backup\":[{{\"label\":\"20261108-021500F\"}},{{\"label\":\"20261109-021500F\"}}]}}]'; else echo '[{{\"backup\":[{{\"label\":\"20261108-021500F\"}}]}}]'; fi;; *backup*) touch '{m}';; esac",
+                    m = marker.display()
+                ),
             ),
             ..tool
         };

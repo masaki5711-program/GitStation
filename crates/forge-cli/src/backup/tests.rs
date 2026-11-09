@@ -236,6 +236,7 @@ async fn backup_then_delete_then_restore_then_verify() {
         &f.storage.root,
         &done.manifest.generation,
         false,
+        std::time::Duration::from_secs(600),
         &rid("req-restore-1"),
     )
     .expect_err("not begun");
@@ -246,6 +247,7 @@ async fn backup_then_delete_then_restore_then_verify() {
         &f.storage.root,
         &done.manifest.generation,
         false,
+        std::time::Duration::from_secs(600),
         &rid("req-restore-3"),
     )
     .expect("restore");
@@ -269,6 +271,7 @@ async fn backup_then_delete_then_restore_then_verify() {
         &f.storage.root,
         &done.manifest.generation,
         false,
+        std::time::Duration::from_secs(600),
         &rid("req-restore-4"),
     )
     .expect_err("exists");
@@ -279,6 +282,7 @@ async fn backup_then_delete_then_restore_then_verify() {
         &f.storage.root,
         &done.manifest.generation,
         true,
+        std::time::Duration::from_secs(600),
         &rid("req-restore-5"),
     )
     .expect("replace");
@@ -286,8 +290,58 @@ async fn backup_then_delete_then_restore_then_verify() {
         .storage
         .root
         .path()
-        .join(format!("pre-restore-{}", done.manifest.generation))
+        .join(format!(
+            "pre-restore-{}-req-restore-5",
+            done.manifest.generation
+        ))
         .is_dir());
+    // A second --replace moves the next one to its own place.
+    crate::restore::repositories(
+        &f.prepared,
+        &f.storage.root,
+        &done.manifest.generation,
+        true,
+        std::time::Duration::from_secs(600),
+        &rid("req-restore-6"),
+    )
+    .expect("replace again");
+    assert!(f
+        .storage
+        .root
+        .path()
+        .join(format!(
+            "pre-restore-{}-req-restore-6",
+            done.manifest.generation
+        ))
+        .is_dir());
+    // Restored files are private (0600 / 0700) until the next provisioning
+    // rules apply.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let head = fs::metadata(path.join("HEAD")).expect("HEAD").mode() & 0o777;
+        assert_eq!(head, 0o600);
+        let objects = fs::metadata(path.join("objects")).expect("objects").mode() & 0o777;
+        assert_eq!(objects, 0o700);
+    }
+    // A changed manifest is refused (its MAC is the key's).
+    let manifest = done.path.join(MANIFEST);
+    let text = fs::read_to_string(&manifest).expect("manifest");
+    fs::write(&manifest, text.replace("\"format\"", " \"format\"")).expect("write");
+    let err = crate::restore::repositories(
+        &f.prepared,
+        &f.storage.root,
+        &done.manifest.generation,
+        true,
+        std::time::Duration::from_secs(600),
+        &rid("req-restore-7"),
+    )
+    .expect_err("changed manifest");
+    assert_reason(
+        &err,
+        ErrorCode::RestoreVerificationFailed,
+        "archive_corrupt",
+    );
     f.t.drop_now().await;
 }
 
@@ -311,6 +365,7 @@ async fn a_changed_archive_is_refused_before_anything_is_written() {
         &f.storage.root,
         &done.manifest.generation,
         false,
+        std::time::Duration::from_secs(600),
         &rid("req-restore-c2"),
     )
     .expect_err("changed");
@@ -335,6 +390,7 @@ async fn a_changed_archive_is_refused_before_anything_is_written() {
         &f.storage.root,
         &done.manifest.generation,
         false,
+        std::time::Duration::from_secs(600),
         &rid("req-restore-c3"),
     )
     .expect_err("wrong key");
@@ -522,4 +578,183 @@ async fn no_secrets_in_logs_or_in_the_backup_files() {
     let manifest = fs::read_to_string(done.path.join(MANIFEST)).expect("manifest");
     assert!(!manifest.contains(KEY_HEX) && !manifest.contains(&secret));
     f.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_copy_past_its_deadline_is_repository_copy_timeout() {
+    let mut f = fixture(false).await;
+    world(&f, "ute").await;
+    f.cfg.repo_timeout = std::time::Duration::ZERO;
+    let err = f
+        .backup(&FakeDb::default(), "req-backup-t")
+        .await
+        .expect_err("deadline");
+    assert_reason(&err, ErrorCode::BackupFailed, "repository_copy_timeout");
+    assert!(generations(&f.backup_dir).expect("list").is_empty());
+    f.t.drop_now().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_copy_that_never_passes_fsck_is_inconsistent_after_three_attempts() {
+    let f = fixture(false).await;
+    world(&f, "val").await;
+    let tmp = tempfile::tempdir().expect("tmp");
+    let script = tmp.path().join("fsck-fails.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = fsck ]; then \
+         echo 'missing blob 0000000000000000000000000000000000000001'; exit 1; fi; done\n\
+         exec /usr/bin/git \"$@\"\n",
+    )
+    .expect("script");
+    chmod(&script, 0o700);
+    let git = forge_git::Git::new(forge_git::GitConfig::new(
+        &script,
+        f.storage.git.config().home.clone(), // clone: the config owns its home
+    ));
+    let logs = Captured::default();
+    let guard = logs.install();
+    let err = Run {
+        db: &f.t.db,
+        cfg: &f.cfg,
+        prepared: &f.prepared,
+        storage: &f.storage.root,
+        git: &git,
+        tool: &FakeDb::default(),
+        request_id: &rid("req-backup-i"),
+    }
+    .run()
+    .await
+    .expect_err("inconsistent");
+    drop(guard);
+    assert_reason(
+        &err,
+        ErrorCode::BackupFailed,
+        "repository_copy_inconsistent",
+    );
+    let retried = logs
+        .events()
+        .iter()
+        .filter(|e| e["fields"]["event"] == "forge.backup.copy_retried")
+        .count();
+    assert_eq!(retried, 2, "three copies, two retries");
+    f.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_repository_under_maintenance_is_waited_for_then_refused() {
+    let mut f = fixture(false).await;
+    let (repo, ..) = world(&f, "wes").await;
+    // O3's maintenance holds the repository's lock (`repo_maint:<id>`).
+    let held = forge_db::restore::RepoMaintLock::lock(&f.t.db, repo, std::time::Duration::ZERO)
+        .await
+        .expect("lock")
+        .expect("free");
+    assert!(
+        forge_db::restore::RepoMaintLock::try_lock(&f.t.db, repo)
+            .await
+            .expect("try")
+            .is_none(),
+        "the maintenance's try-lock sees it held"
+    );
+    f.cfg.repo_timeout = std::time::Duration::from_secs(2);
+    let err = f
+        .backup(&FakeDb::default(), "req-backup-m")
+        .await
+        .expect_err("held");
+    assert_reason(&err, ErrorCode::BackupFailed, "repository_copy_timeout");
+    assert!(format!("{:?}", err.context()).contains("maintenance_lock_held"));
+    held.release().await;
+    f.cfg.repo_timeout = std::time::Duration::from_secs(600);
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    f.backup(&FakeDb::default(), "req-backup-m2")
+        .await
+        .expect("free again");
+    f.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_failing_state_copy_after_the_rename_keeps_the_generation_and_fails_loudly() {
+    let f = fixture(true).await;
+    world(&f, "xia").await;
+    // The state copy directory vanished (another disk unmounted) after the
+    // checks: the generation is complete, the run still fails (FG-SYS-0008).
+    let state = f.prepared.state_copy_dir.clone().expect("dir"); // clone: removed below
+    fs::remove_dir_all(&state).expect("remove");
+    fs::write(&state, b"not a directory").expect("file");
+    let err = f
+        .backup(&FakeDb::default(), "req-backup-sc")
+        .await
+        .expect_err("state copy fails");
+    assert_reason(&err, ErrorCode::BackupFailed, "storage_io");
+    assert_eq!(generations(&f.backup_dir).expect("list").len(), 1);
+    assert!(!f.backup_dir.join(".lock").exists());
+    f.t.drop_now().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_lock_of_a_backup_that_no_longer_runs_is_reclaimed() {
+    let f = fixture(false).await;
+    world(&f, "yan").await;
+    let mut child = Command::new("true").spawn().expect("true");
+    let gone = child.id();
+    child.wait().expect("wait");
+    fs::write(
+        f.backup_dir.join(".lock"),
+        format!("pid={gone} request=req-old\n"),
+    )
+    .expect("lock");
+    f.backup(&FakeDb::default(), "req-backup-stale")
+        .await
+        .expect("a stale lock is reclaimed");
+    // A lock of a running process (this one) is not.
+    fs::write(
+        f.backup_dir.join(".lock"),
+        format!("pid={} request=req-live\n", std::process::id()),
+    )
+    .expect("lock");
+    let err = f
+        .backup(&FakeDb::default(), "req-backup-live")
+        .await
+        .expect_err("live lock");
+    assert_reason(&err, ErrorCode::BackupFailed, "backup_running");
+    f.t.drop_now().await;
+}
+
+#[test]
+fn commit_graphs_and_multi_pack_indexes_are_not_copied() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let src = tmp.path().join("src.git");
+    fs::create_dir_all(src.join("objects/info/commit-graphs")).expect("dirs");
+    fs::create_dir_all(src.join("objects/pack")).expect("pack");
+    fs::create_dir_all(src.join("refs/heads")).expect("refs");
+    fs::write(src.join("objects/info/commit-graph"), b"x").expect("cg");
+    fs::write(src.join("objects/info/commit-graphs/graph-1.graph"), b"x").expect("cgs");
+    fs::write(src.join("objects/pack/multi-pack-index"), b"x").expect("midx");
+    fs::write(src.join("objects/pack/pack-1.pack"), b"x").expect("pack");
+    fs::write(src.join("HEAD"), b"ref: refs/heads/main\n").expect("head");
+    let dst = tmp.path().join("dst.git");
+    archive::copy_repository(
+        &src,
+        &dst,
+        std::time::Instant::now() + std::time::Duration::from_secs(10),
+    )
+    .expect("copy");
+    assert!(dst.join("objects/pack/pack-1.pack").is_file());
+    assert!(!dst.join("objects/info/commit-graph").exists());
+    assert!(!dst.join("objects/info/commit-graphs").exists());
+    assert!(!dst.join("objects/pack/multi-pack-index").exists());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/etc/hostname", src.join("odd")).expect("symlink");
+        let err = archive::copy_repository(
+            &src,
+            &tmp.path().join("dst2.git"),
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+        )
+        .expect_err("symlink");
+        assert!(err.to_string().contains("odd"), "{err}");
+    }
 }

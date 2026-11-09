@@ -80,12 +80,34 @@ fn require_marker(storage_root: &Path) -> Result<(), ForgeError> {
     }
 }
 
-/// Step 1: write the marker (again: idempotent).
+/// The restore the marker names (`begin=<request id of forge restore
+/// begin>`): every `restore.*` audit row of `finish` carries it, so a
+/// re-run of `finish` knows its earlier run.
+pub fn begin_id(storage_root: &Path) -> Result<String, ForgeError> {
+    let text = fs::read_to_string(storage_root.join(MARKER))
+        .map_err(|e| io_failed("not_in_restore", "read_marker", e))?;
+    text.lines()
+        .find_map(|l| l.strip_prefix("begin="))
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && b.len() <= 128)
+        .map(str::to_owned)
+        .ok_or_else(|| failed("not_in_restore").with_context("detail", "marker_without_begin"))
+}
+
+/// Step 1: write the marker. Again while one exists: kept (the same
+/// restore goes on).
 pub fn begin(storage_root: &Path, request_id: &RequestId) -> Result<String, ForgeError> {
     let marker = storage_root.join(MARKER);
-    let mut f =
-        fs::File::create(&marker).map_err(|e| io_failed("storage_io", "write_marker", e))?;
-    f.write_all(format!("{request_id}\n").as_bytes())
+    if begin_id(storage_root).is_ok() {
+        return Ok(format!(
+            "a restore is already begun ({}); go on with its steps\n",
+            marker.display()
+        ));
+    }
+    let mut f = backup::create_private_file(&marker)
+        .or_else(|_| fs::File::create(&marker))
+        .map_err(|e| io_failed("storage_io", "write_marker", e))?;
+    f.write_all(format!("begin={request_id}\n").as_bytes())
         .and_then(|()| f.sync_all())
         .map_err(|e| io_failed("storage_io", "write_marker", e))?;
     tracing::info!(
@@ -132,18 +154,24 @@ fn repo_of(root: &StorageRoot, path: &str) -> Option<(RepoId, bool)> {
     ok.then_some((repo, parts.next().is_none()))
 }
 
-/// Step 3.
+/// Step 3. The manifest's MAC and the archive's checksum are checked before
+/// anything is written; every directory is created 0700 and every file
+/// 0600; the whole step stops at `timeout` (`backup.repo_timeout_secs`,
+/// FG-SYS-0009 `restore_timeout`).
 pub fn repositories(
     prepared: &Prepared,
     storage: &StorageRoot,
     generation: &str,
     replace: bool,
+    timeout: Duration,
     request_id: &RequestId,
 ) -> Result<String, ForgeError> {
     require_marker(storage.path())?;
+    let deadline = std::time::Instant::now() + timeout;
+    let late = || failed("restore_timeout").with_context("timeout_secs", timeout.as_secs());
     let dir = generation_dir(prepared, generation)?;
-    let manifest =
-        backup::read_manifest(&dir).map_err(|e| e.with_context("generation", generation))?;
+    let manifest = backup::read_manifest_verified(&dir, &prepared.key)
+        .map_err(|e| e.with_context("generation", generation))?;
     let archive_path = dir.join(&manifest.archive.file);
     let corrupt = |detail: &'static str| {
         failed("archive_corrupt")
@@ -154,13 +182,26 @@ pub fn repositories(
     let mut hasher = Sha256::new();
     let mut f =
         fs::File::open(&archive_path).map_err(|e| io_failed("archive_corrupt", "open", e))?;
-    io::copy(&mut f, &mut HashSink(&mut hasher))
-        .map_err(|e| io_failed("archive_corrupt", "read", e))?;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err(late());
+        }
+        let n = io::Read::read(&mut f, &mut buf)
+            .map_err(|e| io_failed("archive_corrupt", "read", e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     if backup::hex(&hasher.finalize()) != manifest.archive.sha256 {
         return Err(corrupt("checksum"));
     }
     let listed: BTreeSet<i64> = manifest.repositories.iter().map(|r| r.id).collect();
-    let pre = storage.path().join(format!("pre-restore-{generation}"));
+    // One place per run: a second `--replace` never meets the first one's.
+    let pre = storage
+        .path()
+        .join(format!("pre-restore-{generation}-{request_id}"));
     for id in &listed {
         let target = storage.path_for(RepoId::new(*id));
         if target.exists() && !replace {
@@ -173,6 +214,7 @@ pub fn repositories(
         BufReader::new(file),
         &prepared.key,
         crypt::Kind::Repositories,
+        generation.as_bytes(),
     )
     .map_err(|_| corrupt("decrypt"))?;
     let mut reader = archive::ArchiveReader::new(BufReader::new(opened));
@@ -186,7 +228,7 @@ pub fn repositories(
         };
         let target = storage.path_for(repo);
         if target.exists() {
-            fs::create_dir_all(&pre)
+            backup::create_private_dir(&pre)
                 .map_err(|e| io_failed("storage_io", "create_pre_restore", e))?;
             let aside = pre.join(format!("{}.git", repo.get()));
             fs::rename(&target, &aside).map_err(|e| io_failed("storage_io", "move_aside", e))?;
@@ -197,6 +239,9 @@ pub fn repositories(
     };
     let result: Result<(), ForgeError> = (|| {
         loop {
+            if std::time::Instant::now() > deadline {
+                return Err(late());
+            }
             let entry = reader.next_entry().map_err(|_| corrupt("entry"))?;
             let Some(entry) = entry else {
                 break;
@@ -222,7 +267,8 @@ pub fn repositories(
                     fs::remove_dir_all(&tmp)
                         .map_err(|e| io_failed("storage_io", "remove_tmp", e))?;
                 }
-                fs::create_dir(&tmp).map_err(|e| io_failed("storage_io", "create_tmp", e))?;
+                backup::create_private_dir(&tmp)
+                    .map_err(|e| io_failed("storage_io", "create_tmp", e))?;
                 current = Some((repo, tmp));
                 continue;
             }
@@ -242,15 +288,15 @@ pub fn repositories(
             let out = tmp.join(inner);
             match entry {
                 archive::Entry::Dir(_) => {
-                    fs::create_dir_all(&out)
+                    backup::create_private_dir(&out)
                         .map_err(|e| io_failed("storage_io", "create_dir", e))?;
                 }
                 archive::Entry::File(_, size) => {
                     if let Some(parent) = out.parent() {
-                        fs::create_dir_all(parent)
+                        backup::create_private_dir(parent)
                             .map_err(|e| io_failed("storage_io", "create_dir", e))?;
                     }
-                    let mut f = fs::File::create(&out)
+                    let mut f = backup::create_private_file(&out)
                         .map_err(|e| io_failed("storage_io", "create_file", e))?;
                     reader
                         .content(size, &mut f)
@@ -285,23 +331,11 @@ pub fn repositories(
     );
     Ok(format!(
         "restored {} repositories of generation {generation} into {}\nNext: `forge restore \
-         verify`.\n",
+         verify` (the commit-graph and multi-pack-index files are not in the backup: the next \
+         maintenance writes them).\n",
         restored.len(),
         storage.path().display()
     ))
-}
-
-struct HashSink<'a>(&'a mut Sha256);
-
-impl Write for HashSink<'_> {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.0.update(data);
-        Ok(data.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 /// What `verify` can find (FG-SYS-0009 cause).
@@ -618,7 +652,25 @@ pub struct Finished {
     pub revoked: db_restore::Revoked,
     pub reapplied: Option<(PathBuf, state::Reapplied)>,
     pub unusable: Option<crate::state_copy::Unusable>,
+    /// The users whose flag this restore removed (this run or an earlier run
+    /// of the same restore: read from its `restore.admin_flags_removed` row).
     pub admins_removed: Vec<db_restore::AdminRemoved>,
+    /// An earlier `finish` of the same restore (`begin`) wrote rows: this
+    /// one went on where it stopped (every step is per unit and re-runnable).
+    pub rerun: bool,
+    pub begin: String,
+    /// Active human administrators left (0: `forge admin bootstrap-admin`).
+    pub admins_left: i64,
+}
+
+/// The choices of `forge restore finish`.
+pub struct FinishArgs<'a> {
+    pub generation: &'a str,
+    pub accept_db_behind: bool,
+    /// Use an older readable state copy when the newest one does not open
+    /// (otherwise that is treated as no copy: every administrator flag is
+    /// removed).
+    pub allow_older_copy: bool,
 }
 
 /// Step 5 without the epoch (which needs the maintenance connection: the
@@ -628,31 +680,35 @@ pub async fn finish_with(
     prepared: &Prepared,
     storage: &StorageRoot,
     git: &Git,
-    generation: &str,
-    accept_db_behind: bool,
+    args: &FinishArgs<'_>,
     request_id: &RequestId,
 ) -> Result<Finished, ForgeError> {
     require_marker(storage.path())?;
+    let begin = begin_id(storage.path())?;
+    let generation = args.generation;
     let dir = generation_dir(prepared, generation)?;
-    let manifest =
-        backup::read_manifest(&dir).map_err(|e| e.with_context("generation", generation))?;
+    let manifest = backup::read_manifest_verified(&dir, &prepared.key)
+        .map_err(|e| e.with_context("generation", generation))?;
     let verified = verify(db, storage, git).await?;
-    if let Some(e) = verified.error(accept_db_behind) {
+    if let Some(e) = verified.error(args.accept_db_behind) {
         return Err(e);
     }
+    let (rerun, _) = db_restore::earlier_run(db, &begin).await?;
     let ctx = crate::admin_token::context(request_id);
-    let revoked = db_restore::revoke_all_credentials(db, &ctx).await?;
-    let (reapplied, unusable, admins_removed) = match crate::state_copy::newest_usable(
+    let revoked = db_restore::revoke_all_credentials(db, &ctx, &begin).await?;
+    let (reapplied, unusable) = match crate::state_copy::newest_usable(
         prepared.state_copy_dir.as_deref(),
         &prepared.key,
         manifest.db.completed_at_micros,
+        args.allow_older_copy,
     ) {
         Ok((path, copy)) => {
             let done = state::reapply(db, &ctx, &copy).await?;
-            (Some((path, done)), None, Vec::new())
+            (Some((path, done)), None)
         }
         Err(why) => {
-            let removed = db_restore::remove_all_admin_flags(db, &ctx, why.as_str()).await?;
+            let removed =
+                db_restore::remove_all_admin_flags(db, &ctx, why.as_str(), &begin).await?;
             tracing::warn!(
                 target: "forge_cli",
                 event = "forge.restore.admin_flags_removed",
@@ -661,52 +717,81 @@ pub async fn finish_with(
                 users = removed.len(),
                 "no usable state copy: every administrator flag was removed"
             );
-            (None, Some(why), removed)
+            (None, Some(why))
         }
     };
+    // The list of the whole restore (a re-run removes nothing new).
+    let (_, admins_removed) = db_restore::earlier_run(db, &begin).await?;
+    let admins_left = db_restore::active_admins(db).await?;
+    if admins_left == 0 {
+        tracing::warn!(
+            target: "forge_cli",
+            event = "forge.restore.no_admin_left",
+            request_id = %request_id,
+            "no active administrator is left after the restore: regrant-admin or bootstrap-admin"
+        );
+    }
     Ok(Finished {
         verified,
         revoked,
         reapplied,
         unusable,
         admins_removed,
+        rerun,
+        begin,
+        admins_left,
     })
 }
 
 fn finished_details(f: &Finished, generation: &str, epoch: Option<&str>) -> serde_json::Value {
     let r = f.reapplied.as_ref().map(|(_, r)| *r).unwrap_or_default();
     serde_json::json!({
+        "begin": f.begin,
+        "rerun": f.rerun,
         "generation": generation,
         "repositories": f.verified.repositories,
         "db_behind_findings": f.verified.findings.iter().filter(|x| x.kind.db_behind()).count(),
         "revoked_tokens": f.revoked.tokens,
         "revoked_sessions": f.revoked.sessions,
         "disabled_webhooks": f.revoked.webhooks,
+        "disabled_push_mirrors": f.revoked.push_mirrors,
+        "disabled_integrations": f.revoked.integrations,
+        "rejected_assertions": f.revoked.assertions,
         "state_copy": f.reapplied.is_some(),
         "state_copy_unusable": f.unusable.as_ref().map(|u| u.as_str()),
         "reapplied": r.total(),
         "admin_flags_removed": f.admins_removed.len(),
+        "admins_left": f.admins_left,
         "new_epoch": epoch,
     })
 }
 
 fn finish_report(f: &Finished, epoch: &str) -> String {
     let mut out = f.verified.report();
+    if f.rerun {
+        out.push_str(
+            "re-run of this restore's finish: the steps an earlier run did changed nothing again\n",
+        );
+    }
     out.push_str(&format!(
-        "revoked: {} token(s) and {} session(s) of {} user(s); disabled {} webhook(s) of {} \
-         project(s)\n",
+        "revoked: {} token(s) and {} session(s) of {} user(s); disabled {} webhook(s) and {} \
+         push mirror(s) of {} project(s), {} integration(s); rejected {} act-as assertion(s)\n",
         f.revoked.tokens,
         f.revoked.sessions,
         f.revoked.users,
         f.revoked.webhooks,
-        f.revoked.projects
+        f.revoked.push_mirrors,
+        f.revoked.projects,
+        f.revoked.integrations,
+        f.revoked.assertions
     ));
     match (&f.reapplied, &f.unusable) {
         (Some((path, r)), _) => out.push_str(&format!(
             "state copy {}: re-applied {} narrowing(s) (users disabled {}, admin flags removed \
              {}, members removed {}, roles lowered {}, protected refs created {}, push roles \
-             raised {}, merge rules tightened {}, approval rules tightened {}, merge settings \
-             tightened {})\n",
+             raised {}, merge rules tightened {}, approval rules tightened {}, approvers \
+             narrowed {}, merge settings tightened {}, projects made private {}, check grants \
+             revoked {})\n",
             path.display(),
             r.total(),
             r.users_disabled,
@@ -717,7 +802,10 @@ fn finish_report(f: &Finished, epoch: &str) -> String {
             r.push_roles_raised,
             r.merge_rules_tightened,
             r.approval_rules_tightened,
-            r.merge_settings_tightened
+            r.approvers_narrowed,
+            r.merge_settings_tightened,
+            r.visibility_narrowed,
+            r.check_grants_revoked
         )),
         (None, why) => {
             out.push_str(&format!(
@@ -730,10 +818,16 @@ fn finish_report(f: &Finished, epoch: &str) -> String {
             }
         }
     }
+    if f.admins_left == 0 {
+        out.push_str(
+            "no active administrator is left: `forge restore regrant-admin <username>` for a \
+             listed user, or `forge admin bootstrap-admin --user <username>`\n",
+        );
+    }
     out.push_str(&format!(
         "event feed epoch: {epoch} (every integration resyncs: 410 epoch_mismatch)\nrestore \
-         finished: forge serve and forge worker may start. Re-issue the credentials (runbook \
-         backup-restore, \"Re-issue\").\n"
+         finished: forge serve and forge worker may start. Re-issue the credentials and enable \
+         the push mirrors and integrations again (runbook backup-restore, \"Re-issue\").\n"
     ));
     out
 }
@@ -741,8 +835,7 @@ fn finish_report(f: &Finished, epoch: &str) -> String {
 /// `forge restore finish`.
 pub fn finish(
     cfg: &Config,
-    generation: &str,
-    accept_db_behind: bool,
+    args: &FinishArgs<'_>,
     request_id: &RequestId,
 ) -> Result<String, ForgeError> {
     let prepared = backup::prepare(&cfg.backup)?;
@@ -755,10 +848,7 @@ pub fn finish(
             &prepared,
             &storage.root,
             &storage.git,
-            &FinishArgs {
-                generation,
-                accept_db_behind,
-            },
+            args,
             request_id,
         )
         .await;
@@ -767,15 +857,10 @@ pub fn finish(
     })
 }
 
-/// The choices of `forge restore finish`.
-pub struct FinishArgs<'a> {
-    pub generation: &'a str,
-    pub accept_db_behind: bool,
-}
-
 /// Step 5 whole: [`finish_with`], the new epoch (`database.maint_url`; the
 /// `feed.epoch_rotated` audit row and FG-DB-0014), the `restore.finished`
-/// row, then the marker removed. A failure leaves the marker: run it again.
+/// row, then the marker removed. Per unit and re-runnable: a failure leaves
+/// the marker, and running it again goes on where it stopped (`rerun`).
 pub async fn finish_all(
     db: &Db,
     database: &forge_core::config::DatabaseConfig,
@@ -786,16 +871,7 @@ pub async fn finish_all(
     request_id: &RequestId,
 ) -> Result<String, ForgeError> {
     let generation = args.generation;
-    let done = finish_with(
-        db,
-        prepared,
-        storage,
-        git,
-        generation,
-        args.accept_db_behind,
-        request_id,
-    )
-    .await?;
+    let done = finish_with(db, prepared, storage, git, args, request_id).await?;
     let mut maint = Db::connect_maint(database)
         .await
         .map_err(|e| e.with_context("step", "new_epoch"))?;

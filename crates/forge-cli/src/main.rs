@@ -141,6 +141,10 @@ enum RestoreCommand {
         /// unknown refs and repositories are listed).
         #[arg(long)]
         accept_db_behind: bool,
+        /// Use an older state copy when the newest one does not open
+        /// (otherwise every administrator flag is removed).
+        #[arg(long)]
+        allow_older_copy: bool,
     },
     /// Give the administrator flag back to a user the restore removed it
     /// from (after checking the person).
@@ -769,7 +773,14 @@ fn main() -> ExitCode {
             } => {
                 let prepared = backup::prepare(&cfg.backup)?;
                 let root = forge_git::StorageRoot::open(cfg.storage_root()?)?;
-                restore::repositories(&prepared, &root, &generation, replace, &request_id)
+                restore::repositories(
+                    &prepared,
+                    &root,
+                    &generation,
+                    replace,
+                    cfg.backup.repo_timeout,
+                    &request_id,
+                )
             }
             RestoreCommand::Verify => {
                 let storage = worker::provision::Storage::open(cfg.storage_root()?)?;
@@ -780,7 +791,16 @@ fn main() -> ExitCode {
             RestoreCommand::Finish {
                 generation,
                 accept_db_behind,
-            } => restore::finish(&cfg, &generation, accept_db_behind, &request_id),
+                allow_older_copy,
+            } => restore::finish(
+                &cfg,
+                &restore::FinishArgs {
+                    generation: &generation,
+                    accept_db_behind,
+                    allow_older_copy,
+                },
+                &request_id,
+            ),
             RestoreCommand::RegrantAdmin { username } => {
                 admin_token::with_db(&cfg.database, async |db| {
                     restore::regrant_admin_with(db, &username, &request_id).await
