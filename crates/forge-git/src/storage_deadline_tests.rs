@@ -52,13 +52,11 @@ async fn a_deadline_with_time_left_provisions_as_usual() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_hanging_git_is_cut_at_the_deadline_as_a_git_timeout() {
-    use std::os::unix::fs::PermissionsExt as _;
     let (_d, root) = root();
     let bin = tempfile::tempdir().expect("bin dir");
     let fake = bin.path().join("git");
     // `exec`: the killed child is the sleep itself (no orphan holding the pipes).
-    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").expect("fake git");
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    crate::test_git::write_script(&fake, "#!/bin/sh\nexec sleep 30\n");
     let home = tempfile::tempdir().expect("home");
     let git = Git::new(GitConfig::new(&fake, home.path()));
     let id = RepoId::new(63);

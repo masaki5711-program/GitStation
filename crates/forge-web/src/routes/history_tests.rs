@@ -469,16 +469,13 @@ async fn blame_returns_hunks_and_the_commits_they_name() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_blame_past_its_time_limit_is_a_git_timeout() {
-    use std::os::unix::fs::PermissionsExt;
     let mut r = repo().await;
     chain(&r);
     let bin = r._root.path().join("slow-git.sh");
-    std::fs::write(
+    forge_git::test_git::write_script(
         &bin,
         "#!/bin/sh\nif [ \"$1\" = blame ]; then exec sleep 5; fi\nexec git \"$@\"\n",
-    )
-    .expect("script");
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    );
     r.git = Git::new(GitConfig::new(&bin, r._home.path()));
     let limits = BrowseLimits {
         blame_timeout: Duration::from_millis(500),

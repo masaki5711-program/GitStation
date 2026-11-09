@@ -1,5 +1,6 @@
 //! Test helpers (`cfg(test)` and the `test-support` feature only): a git that
-//! never answers, so a timeout is certain.
+//! never answers, so a timeout is certain, and [`write_script`] for every
+//! fake git / hook a test runs.
 //!
 //! A near-zero timeout (`Duration::ZERO`, 1 ns) is **not** certain: the
 //! deadline is set before git is spawned and `timeout_at` polls the run
@@ -31,7 +32,6 @@ pub fn stalled_git(home: &Path, dir: &Path, stall_on: Option<&str>) -> Git {
 
 #[cfg(unix)]
 fn write_fake(dir: &Path, stall_on: Option<&str>) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
     // The real git: the first `git` on PATH (the fake is never on PATH).
     let body = match stall_on {
         None => "#!/bin/sh\nexec sleep 60\n".to_owned(),
@@ -40,9 +40,47 @@ fn write_fake(dir: &Path, stall_on: Option<&str>) -> PathBuf {
         ),
     };
     let path = dir.join("git");
-    std::fs::write(&path, body).expect("fake git");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    write_script(&path, &body);
     path
+}
+
+/// Write an executable script (mode 0755) at `path`, replacing any file
+/// there, **from a child process**: this process never holds the script
+/// open for writing. A test binary runs many tests in parallel threads, and
+/// a child another thread forks inherits every open descriptor until its
+/// own `exec` (`O_CLOEXEC` closes it only then); running a script while
+/// such a child still holds it open for writing fails with `ETXTBSY` ("Text
+/// file busy") — forge sees `GitUnavailable reason=spawn_failed`. Measured
+/// 2026-11-09: 1 421 of 7 956 runs while six threads spawned processes.
+#[cfg(unix)]
+pub fn write_script(path: &Path, body: &str) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg("cat > \"$1\" && chmod 755 \"$1\"")
+        .arg("sh")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("sh to write the script");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(body.as_bytes()).expect("script body");
+    } // closed: `cat` ends
+    let status = child.wait().expect("sh");
+    assert!(
+        status.success(),
+        "writing {} failed: {status}",
+        path.display()
+    );
+}
+
+/// Windows: a plain write (no `ETXTBSY` there; git runs hooks through its
+/// own `sh`, and the executable bit does not exist).
+#[cfg(windows)]
+pub fn write_script(path: &Path, body: &str) {
+    std::fs::write(path, body).expect("script");
 }
 
 #[cfg(windows)]

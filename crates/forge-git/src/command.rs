@@ -819,23 +819,33 @@ struct Stopped {
     /// (SIGKILL / the Job Object closed: git could not clean up) or `none`
     /// (a plain captured run: only the leader was killed).
     how: &'static str,
-    /// When the kill was sent (`how = kill` only).
+    /// When the kill was sent (`how = kill` only). Deliberately not later
+    /// (e.g. when the leader is seen gone): `maintenance` removes a
+    /// `packed-refs.lock` stamped up to this time, and every millisecond
+    /// after the kill is time another writer could have taken that lock.
     killed_at: Option<std::time::SystemTime>,
 }
 
 impl Stopped {
     /// `stop` and, after a kill, `killed_at_unix_ms` in the error context
-    /// (`maintenance::StepEnd::of` reads them).
+    /// (`maintenance::StepEnd::of` reads them). The milliseconds are rounded
+    /// **up**: file times can be finer than a millisecond, and a lock our git
+    /// wrote in the kill's last millisecond must not look newer than the kill.
     fn attach(self, err: ForgeError) -> ForgeError {
         let err = err.with_context("stop", self.how);
         match self
             .killed_at
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         {
-            Some(at) => err.with_context("killed_at_unix_ms", at.as_millis()),
+            Some(at) => err.with_context("killed_at_unix_ms", ceil_millis(at)),
             None => err,
         }
     }
+}
+
+/// `d` in whole milliseconds, rounded up.
+pub(crate) fn ceil_millis(d: Duration) -> u128 {
+    d.as_nanos().div_ceil(1_000_000)
 }
 
 /// Stop a supervised run's tree at a timeout: `SIGTERM` to the group (git

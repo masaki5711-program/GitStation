@@ -2021,3 +2021,22 @@ forge-db `mirror`（マイグレーション 20261130100000）、宛先の方針
   増やさないため。設定・表示・削除も `PushMirrorManage` / `PushMirrorRead`（管理者、人だけ。トークンは `admin` のスコープ）。
 - **git 2.43 での確認**: このセッションの環境（git 2.43）で `push --end-of-options <url> <refspec>…` が通ることを確かめた
   （`git grep` と違い、push は 2.43 でもその印を受け付ける）。
+
+## Amendment（2026-11-09）— 殺した pack-refs のロックの窓の上限
+
+O3 の再レビューの決定「kill の時刻（`killed_at_unix_ms`、forge-git が kill の直前に記録）」に次を足す（`a1420ad` の下限の 2 s の余裕はそのまま）。
+
+- **欠陥**: 上限をミリ秒に**切り捨て**て運んでいた。Linux 6.13 以降の multigrain timestamps では、誰か（doctor の `repositories.stale_locks`
+  など）がロックを `stat` した後の書き込みの時刻は 1 ms より細かく、殺す直前に書いた**自分の**ロックが kill より新しく見えた（クラウドの 6.18 で、
+  切り捨てた時刻より後に見えたのが 2000 回中 1999 回）。自分のロックが残り、誤った FG-GIT-0020 が出る。
+- **決定**: `killed_at_unix_ms` を**切り上げ**る。上限は kill を**送った**時刻のまま（遅らせない）。
+- **退けた案**: kill の後にリーダーが終わったのを確かめてから時刻を取る（カーネルの中で書き込み中の git が kill の後に書き終える場合も自分の
+  ものにできる）。独立レビュー（rust-reviewer・git-protocol-reviewer）の MEDIUM: 確かめるまで 100 ms〜2 s かかり、その間に他の書き手が取った
+  **生きたロックを消しうる**（自分の git がまだロックを取っていなかったとき）。誤った警告は安全側、生きたロックを消すのは危険側なので採らない。
+  その場合（遅い記憶装置で kill の後に書き終える）は、従来どおり残して名指す（誤った FG-GIT-0020。runbook のとおり人が確かめて消す）。
+- **危険側**: 切り上げで、kill の後 1 ms 未満に作られたロックも自分のものに見える。自分の git がロックを持つ間は他の書き手は作れない（O_EXCL）ので、
+  効くのは自分の git がロックを取っていなかった場合だけ — 既存の「残る隙」と同じ種類で、1 ms 未満だけ広がる。ファイルの時刻はローカルの時計で付く
+  前提（NFS などで記憶装置の時計がずれると下限・上限ともに狂う。記憶装置はローカルのディスク、計画 01）。
+- テスト: forge-git `a_lock_written_in_the_millisecond_of_the_kill_is_ours`（修正前は 50 回中 48 回落ちた）・
+  `a_kill_time_is_carried_rounded_up_to_the_millisecond`、forge-cli `a_pack_refs_killed_while_writing_its_lock_removes_it`（ロックを 1 ms ごとに
+  `stat` する doctor 役つき。修正前は 5 回中 4 回落ちた）。

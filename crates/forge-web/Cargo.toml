@@ -62,6 +62,8 @@ embed-ui = ["dep:rust-embed", "dep:sha2"]
 
 [dev-dependencies]
 forge-web = { workspace = true, features = ["test-support"] }
+# Fake gits a test runs are written with forge_git::test_git::write_script (ETXTBSY).
+forge-git = { workspace = true, features = ["test-support"] }
 # D3 MR3: captured JSON logs (tests/token_principal.rs).
 tracing-subscriber.workspace = true
 # D2: roles loaded from the database feed authorize() (tests/member_roles.rs).
