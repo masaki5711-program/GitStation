@@ -18,7 +18,7 @@ use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::{query_error, Db};
 
-mod admin;
+pub(crate) mod admin;
 // M2 MR6: the user search and the administration list.
 mod directory;
 mod rename;

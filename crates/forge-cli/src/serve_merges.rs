@@ -183,6 +183,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::ServeFailed
         | ErrorCode::SignalHandlerUnavailable
         | ErrorCode::AcceptFailed
+        | ErrorCode::BackupFailed
+        | ErrorCode::RestoreVerificationFailed
         | ErrorCode::MigrationFailed
         | ErrorCode::SchemaIncompatible
         | ErrorCode::OutboxSequencerLag

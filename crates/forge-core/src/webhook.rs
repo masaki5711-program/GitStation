@@ -986,16 +986,25 @@ pub enum DisableReason {
     Failures,
     /// Failing without a success for [`DISABLE_AFTER_FAILING`].
     Failing24h,
+    /// `forge restore finish` disabled it: its signing secret may be one
+    /// rotated away after the backup (M3 O1). Rotate the secret, then enable.
+    Restore,
 }
 
 impl DisableReason {
-    pub const ALL: [DisableReason; 3] = [Self::Manual, Self::Failures, Self::Failing24h];
+    pub const ALL: [DisableReason; 4] = [
+        Self::Manual,
+        Self::Failures,
+        Self::Failing24h,
+        Self::Restore,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Manual => "manual",
             Self::Failures => "failures",
             Self::Failing24h => "failing_24h",
+            Self::Restore => "restore",
         }
     }
 

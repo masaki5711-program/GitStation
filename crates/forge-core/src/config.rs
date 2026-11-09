@@ -24,6 +24,9 @@ mod git_http;
 mod hosting;
 mod keys;
 mod maintenance;
+// ── M3 O1: `backup.*` ──
+pub mod backup;
+// ── end M3 O1 ──
 // ── M3 O2: `mirror.*` ──
 pub mod mirror;
 // ── end M3 O2 ──
@@ -43,6 +46,7 @@ pub use api::ApiConfig;
 pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use auth::{AuthConfig, OidcConfig, OidcSigningAlg};
+pub use backup::{BackupConfig, BackupKey};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
@@ -83,6 +87,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_AUTH_",
     // M3 O2: `mirror.*`.
     "FORGE_MIRROR_",
+    // M3 O1: `backup.*`.
+    "FORGE_BACKUP_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -184,6 +190,8 @@ pub struct Config {
     pub webhook: WebhookConfig,
     /// `mirror.*` (the push mirror to GitLab, M3 O2).
     pub mirror: MirrorConfig,
+    /// `backup.*` (forge backup / restore, M3 O1).
+    pub backup: BackupConfig,
 }
 
 impl Config {
@@ -434,6 +442,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         auth: AuthConfig::load(get)?,
         webhook: WebhookConfig::load(get)?,
         mirror: MirrorConfig::load(get)?,
+        backup: BackupConfig::load(get)?,
     }
     .validate_across()
 }

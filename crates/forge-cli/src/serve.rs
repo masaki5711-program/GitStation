@@ -61,6 +61,9 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // credentials (ADR-0018): their password files belong to other configs.
     database.reject_privileged_logins()?;
     let storage = StorageRoot::open(cfg.storage_root()?)?;
+    // M3 O1: nothing is served before `forge restore finish` revoked the
+    // restored credentials (FG-SYS-0009 restore_pending).
+    crate::restore::refuse_if_pending(storage.path())?;
     // The list routes seal their cursors with these keys (M1 phase 8b
     // MR7b): read once, before anything binds — missing or invalid is
     // FG-SYS-0002 config_key=api.cursor_keys_file (runbook config-invalid).
