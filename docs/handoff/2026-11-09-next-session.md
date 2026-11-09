@@ -80,3 +80,16 @@ GitStation 側（代理実行 S1 / S2、ADR-0025）は `main` に入っている
 - PC で GitStation の `git pull --ff-only origin main` → `git push gitlab main`（`gitlab` が gitstation のプロジェクトを指すことを確かめる。
   kanflow_ver2 ではない）。
 - O2 を本物の GitLab で確かめる: 試験用の GitLab プロジェクトとミラー用のトークン（計画 11 Q7）。
+
+## 9. 追記（同じ日・クラウド）: O1・U4 を `main` へ
+
+| コミット | 中身 |
+|---|---|
+| `3fb362e` | O1 `feat/ops-backup-restore` をマージ。security の再レビュー 2 回目で指摘なし（`narrow_approvers` が承認者を空にしない、HKDF の MAC 鍵、検証したバイトを解析、マーカーの O_NOFOLLOW、ホストつきのロック）。ゲート: fmt・clippy `-D warnings`・gen-catalog・gen-authz、全体 2973/2974（落ちた 1 つは下の `191a4d5` で直した） |
+| `3f0f349` | U4 `feat/ui-in-app-notifications` をマージ。**マイグレーションを `20261202100000` に付け替えた**（O1 の `20261201100000_restore_revocation_reasons` と同じ版だったため。U4 は `main` に入っていなかった）。a11y・authz・db・rust・ts の再レビューで CRITICAL / HIGH なし。全体 2996/2996、web vitest 800/800、journey の axe なし |
+| `191a4d5` | `a_concurrent_feed_read_answers_429_with_retry_after` を決定的に（`forge.event_feed_state` を ACCESS EXCLUSIVE で止め、1 つ目が枠を持ったまま待つのを確かめてから 2 つ目を送る）。枠は `Feed::read_events` で取られ、その前に経路の DB の読み取りがあるので、`join!` だと 1 つ目が先に終わることがあった。製品のコードは変えていない |
+
+試験の DB に古い版 `20261201100000_in_app_notifications` が当たっている場合は、その DB を作り直す（試験だけ。`main` には入っていなかった）。
+
+利用者の答え待ち（変わらず）: メールの行（`forge.notifications`）の保持（推奨 30 日）、復元の訓練の時期（本物の pgBackRest）、
+O2 の試験用 GitLab プロジェクトとトークン、P3 の試験サーバーの結果、Office の差分を server 側で変換するか。
