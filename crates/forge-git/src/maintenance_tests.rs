@@ -818,6 +818,40 @@ fn set_mtime(path: &Path, when: SystemTime) {
     file.set_modified(when).expect("set mtime");
 }
 
+/// File times come from a coarse clock (the kernel's tick, or whole seconds
+/// on some file systems) while `SystemTime::now()` is fine-grained: a lock
+/// made just after the step started can carry a time a few milliseconds
+/// *before* `step_started` (measured: up to 8 ms, 3 times in 4 on this CI
+/// class of machine). It is still ours and is removed (2026-11-08: the
+/// forge-cli `a_killed_pack_refs_removes_its_own_lock_and_keeps_a_foreign_one`
+/// failed on it).
+#[tokio::test]
+async fn a_lock_stamped_by_a_coarse_clock_just_before_the_step_is_ours() {
+    let f = fixture().await;
+    let lock = f.path.join("packed-refs.lock");
+    let started = SystemTime::now() - Duration::from_secs(30);
+    let killed = SystemTime::now();
+    std::fs::write(&lock, b"").expect("our lock");
+    set_mtime(&lock, started - Duration::from_millis(10));
+    let found = f
+        .git
+        .clear_own_packed_refs_lock(&f.root, f.id, started, killed)
+        .await
+        .expect("cleanup");
+    assert_eq!(found, LockCleanup::Removed);
+    assert!(!lock.exists(), "ours is removed");
+    // Older than the slack (2 s) before the start: someone else's.
+    std::fs::write(&lock, b"").expect("a foreign lock");
+    set_mtime(&lock, started - Duration::from_secs(3));
+    let kept = f
+        .git
+        .clear_own_packed_refs_lock(&f.root, f.id, started, killed)
+        .await
+        .expect("cleanup");
+    assert!(matches!(kept, LockCleanup::Foreign { .. }), "{kept:?}");
+    assert!(lock.exists(), "someone else's is left");
+}
+
 /// After a **killed** pack-refs (still under the merge lock) the lock is
 /// removed only when its time lies between the step's start and the kill;
 /// an older one, and one made after the kill (a live writer: the merge lock
