@@ -384,8 +384,10 @@ async fn a_commit_tree_past_its_timeout_is_git_timeout() {
     ))
     .expect("tree");
     let who = ident("Alice");
-    let err = f
-        .git
+    // A git that never answers: a 1 ns limit was not certain (a fast git
+    // that already answered wins under load; `test_git`).
+    let tmp = tempfile::tempdir().expect("tmp");
+    let err = crate::test_git::stalled_git(f._home.path(), tmp.path(), None)
         .commit_tree(
             &f.root,
             f.id,
@@ -396,7 +398,7 @@ async fn a_commit_tree_past_its_timeout_is_git_timeout() {
                 author: &who,
                 committer: &who,
             },
-            Duration::from_nanos(1),
+            crate::test_git::STALL,
         )
         .await
         .expect_err("timeout");
