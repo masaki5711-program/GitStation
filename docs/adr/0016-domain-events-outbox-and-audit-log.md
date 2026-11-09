@@ -1579,7 +1579,7 @@ forge-web の `tests/binding_routes.rs`。
 6. **保持**（有界）: ワーカーのタスク `in_app_notification_retention`（1 時間ごと、1 回 1000 行、満杯なら 0.5 秒おいて続ける）が、既読から 30 日・
    作成から 180 日を過ぎた行を消す（`forge_db::notify::in_app::expire`、派生の行なので監査の行は書かない）。`forge_app` に DELETE を付けた。
    設定の鍵は作らない（固定値。必要になったら追記）。
-7. **設定**: `notification_preferences` に `in_app_enabled`（既定 true）と `in_app_muted_kinds` を追加（追記のマイグレーション `20261201100000`）。
+7. **設定**: `notification_preferences` に `in_app_enabled`（既定 true）と `in_app_muted_kinds` を追加（追記のマイグレーション `20261202100000`）。
    PUT の 2 つの欄は**省略可**で、省略したら保存値を保つ（N1 の利用者・gstn の古い版が送らない欄を消さない）。未知の種類は `FG-WEB-0006`
    `field=in_app_muted_kinds`。監査しない（N1 と同じ理由）。既読の変更も監査しない（本人のデータだけ）。
 8. **画面**: ヘッダーのベル（`/-/notifications` へのリンク。未読の数を名前に含め、見た目の数字は支援技術から隠す。60 秒ごとに問い合わせ、失敗が
@@ -1604,7 +1604,7 @@ forge-web の `tests/binding_routes.rs`。
   `read-all` は `204` で件数を返さない（見えない行も含むため。件数はログだけ）。
 - （database MEDIUM）一覧の文を「すべて」と「未読」の 2 つの静的な文に分け、カーソルは常に `id < $2`（既定 `i64::MAX`）にして部分索引を使う。
   保持の削除は 2 つの文に分け、内側の選択に `FOR UPDATE SKIP LOCKED`。`actor_user_id` の索引を追加（マイグレーション
-  `20261201100000` は `main` に入っておらず試験の DB の外で適用されていないので直接直した）。`tables.toml` に「`read_at` は再現できない」。
+  `20261202100000` は `main` に入っておらず試験の DB の外で適用されていないので直接直した）。`tables.toml` に「`read_at` は再現できない」。
 - （typescript MEDIUM）既読の失敗をフックでも扱う（401 / 403 でセッションを読み直し、一覧と数を読み直し、request id つきで警告。リンクで
   画面を離れた後も黙らない）。`refetchIntervalInBackground: false` を明示。知らない種類は一般的な文（コードを出さない）。
 - 試験: `the_unread_count_counts_only_visible_items_and_caps_on_them`、ワーカーの `a_full_batch_runs_again_at_once`、web の

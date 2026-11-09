@@ -63,4 +63,4 @@ GRANT SELECT ON forge.in_app_notifications TO forge_ro;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261201100000, "guarded_changes": []}');
+    '{"version": 20261202100000, "guarded_changes": []}');

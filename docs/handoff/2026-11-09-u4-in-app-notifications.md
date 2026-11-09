@@ -25,7 +25,7 @@
   失敗が続くと倍々で最長 15 分、401 で止める、増えたら polite のライブリージョン）、通知の一覧 `/-/notifications`（`src/pages/Inbox.tsx`。
   すべて / 未読、1 文の説明と MR へのリンク、リンクで既読、1 件ずつ・すべて既読、さらに表示、空・読み込み中・失敗）。ja / en / id（id の欠け 0）。
   サーバーにシェルのルート `GET|HEAD /-/notifications`（`WebShell`）。
-- マイグレーション `20261201100000_in_app_notifications.sql`（追記）、`tables.toml`（`derived`）、`bootstrap/schema.rs` の権限
+- マイグレーション `20261202100000_in_app_notifications.sql`（追記）、`tables.toml`（`derived`）、`bootstrap/schema.rs` の権限
   （forge_app に SELECT/INSERT/UPDATE/DELETE、forge_ro に SELECT）。新しいエラーコードは無い。
 
 ## 3. 確かめたこと（このセッションで実行）

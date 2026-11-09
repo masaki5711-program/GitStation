@@ -610,7 +610,7 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 N1 ──
 
-# ── M3 U4: in-app notifications (20261201100000, ADR-0016 Amendment U4) ──
+# ── M3 U4: in-app notifications (20261202100000, ADR-0016 Amendment U4) ──
 # One row per (source event, recipient), written by the notify subscriber;
 # the person marks their own read (not audited, like their settings); the
 # worker deletes read items after 30 days and every item after 180.
