@@ -695,8 +695,16 @@ async fn the_feed_answers_the_golden_example_shape() {
 }
 
 /// Re-review (I1c): a second concurrent read of the same feed answers 429
-/// FG-WEB-0010 with `Retry-After: 1` through the router (the first one
-/// completes).
+/// FG-WEB-0010 with `Retry-After: 1` through the router while the first one
+/// is in flight (the first one then completes with 200).
+///
+/// Deterministic: the first read takes its slot (in `Feed::read_events`,
+/// after the route's own DB lookups), then blocks on an ACCESS EXCLUSIVE
+/// lock held here on `forge.event_feed_state`, the first table
+/// `Feed::decide` reads. The second request is sent only once a backend is
+/// seen waiting on that lock, so the slot is certainly held. Racing two
+/// `join!`ed requests was flaky: under load the first could finish before
+/// the second reached the slot.
 #[tokio::test]
 async fn a_concurrent_feed_read_answers_429_with_retry_after() {
     let w = world().await;
@@ -710,14 +718,28 @@ async fn a_concurrent_feed_read_answers_429_with_retry_after() {
         req.extensions_mut().insert(sa_token(w.sa, READ));
         req
     };
-    let (first, second) = tokio::join!(
-        app.clone().oneshot(request()),
-        app.clone().oneshot(request())
-    );
-    let mut statuses = [first.expect("infallible"), second.expect("infallible")];
-    statuses.sort_by_key(|r| r.status());
-    assert_eq!(statuses[0].status(), StatusCode::OK);
-    let busy = &statuses[1];
+    let mut blocker = w.t.superuser().await;
+    sqlx::query("BEGIN")
+        .execute(&mut blocker)
+        .await
+        .expect("begin");
+    sqlx::query("LOCK TABLE forge.event_feed_state IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut blocker)
+        .await
+        .expect("lock");
+    let first = tokio::spawn({
+        let app = app.clone();
+        let req = request();
+        async move { app.oneshot(req).await }
+    });
+    w.t.until_waiting("event_feed_state").await;
+    let busy = app.clone().oneshot(request()).await.expect("infallible");
+    sqlx::query("COMMIT")
+        .execute(&mut blocker)
+        .await
+        .expect("commit");
+    let first = first.await.expect("join").expect("infallible");
+    assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
         busy.headers()
