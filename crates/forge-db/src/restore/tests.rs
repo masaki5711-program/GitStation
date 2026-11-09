@@ -357,6 +357,56 @@ async fn visibility_approvers_and_check_grants_are_narrowed_from_the_copy() {
     t.drop_now().await;
 }
 
+/// Security re-review HIGH: the DB's rule allows {A}; the copy names only
+/// {B}, a user created after the backup (not in the restored database).
+/// Cutting to "the copy's list" would delete A and insert nothing — an
+/// empty list, so any Developer could approve. The list stays {A}.
+#[tokio::test]
+async fn approvers_the_database_does_not_share_never_empty_the_rule() {
+    let t = FreshDb::migrated().await;
+    let (p, _, _, _) = project_and_account(&t, "jae").await;
+    let a = human(&t, "kai").await;
+    t.commit_audited(
+        ("project", p),
+        &[
+            format!(
+                "INSERT INTO forge.approval_rules (project_id, name, required_approvals) \
+                 VALUES ({p}, 'core', 1)"
+            ),
+            format!(
+                "INSERT INTO forge.approval_rule_approvers (rule_id, project_id, user_id) \
+                 SELECT id, {p}, {} FROM forge.approval_rules WHERE project_id = {p}",
+                a.get()
+            ),
+        ],
+    )
+    .await;
+    let mut copy = state::read(&t.db).await.expect("state");
+    for r in &mut copy.approval_rules {
+        r.approvers = vec![state::Approver {
+            user: Some(987_654_321),
+            group: None,
+        }];
+    }
+    let done = state::reapply(&t.db, &ctx("req-reapply-b"), &copy)
+        .await
+        .expect("reapply");
+    assert_eq!(done.approvers_narrowed, 0);
+    assert_eq!(
+        count(
+            &t,
+            &format!(
+                "SELECT count(*) FROM forge.approval_rule_approvers WHERE user_id = {}",
+                a.get()
+            )
+        )
+        .await,
+        1,
+        "A still approves; the rule never became 'any Developer'"
+    );
+    t.drop_now().await;
+}
+
 #[tokio::test]
 async fn the_repository_lock_is_exclusive_and_ends_with_its_connection() {
     let t = FreshDb::migrated().await;

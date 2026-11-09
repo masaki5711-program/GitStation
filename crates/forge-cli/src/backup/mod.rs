@@ -240,7 +240,12 @@ pub fn read_manifest(generation: &Path) -> Result<Manifest, ForgeError> {
     let text = fs::read(generation.join(MANIFEST)).map_err(|e| {
         io_failed("storage_io", "read_manifest", e).with_context("path", generation.display())
     })?;
-    let m: Manifest = serde_json::from_slice(&text).map_err(|_| {
+    parse_manifest(generation, &text)
+}
+
+/// A manifest from exactly these bytes.
+fn parse_manifest(generation: &Path, text: &[u8]) -> Result<Manifest, ForgeError> {
+    let m: Manifest = serde_json::from_slice(text).map_err(|_| {
         failed("storage_io")
             .with_context("operation", "parse_manifest")
             .with_context("path", generation.display())
@@ -257,7 +262,12 @@ pub fn read_manifest(generation: &Path) -> Result<Manifest, ForgeError> {
 /// domain-separated from the archive's AES-GCM use): `manifest.mac`.
 pub fn manifest_mac(key: &BackupKey, json: &[u8]) -> Result<String, ForgeError> {
     use hmac::Mac as _;
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(key.expose())
+    // Its own key (HKDF-SHA256 of the backup key), not the AES-GCM key.
+    let mut mac_key = [0u8; 32];
+    hkdf::Hkdf::<Sha256>::new(None, key.expose())
+        .expand(MANIFEST_MAC_LABEL, &mut mac_key)
+        .map_err(|_| failed("storage_io").with_context("operation", "manifest_mac_key"))?;
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(&mac_key)
         .map_err(|_| failed("storage_io").with_context("operation", "manifest_mac"))?;
     mac.update(MANIFEST_MAC_LABEL);
     mac.update(json);
@@ -284,7 +294,8 @@ pub fn read_manifest_verified(generation: &Path, key: &BackupKey) -> Result<Mani
     if !same {
         return Err(corrupt());
     }
-    read_manifest(generation)
+    // The very bytes the MAC covered (no second read).
+    parse_manifest(generation, &json)
 }
 
 /// A writer that hashes and counts what passes.
@@ -335,20 +346,38 @@ impl Drop for LockGuard {
     }
 }
 
+/// This host's name (the lock names it: a pid means nothing elsewhere).
+fn host_name() -> String {
+    fs::read_to_string("/proc/sys/kernel/hostname")
+        .or_else(|_| fs::read_to_string("/etc/hostname"))
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .map(|h| h.trim().to_owned())
+        .filter(|h| !h.is_empty() && !h.contains(char::is_whitespace))
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
 /// Whether the lock file names a process of this host that no longer runs
-/// (`pid=<n>` on its first line; Unix only — elsewhere a lock is never
-/// reclaimed automatically).
+/// (`pid=<n> host=<name>` on its first line; Unix only — elsewhere, or for
+/// another or an unknown host, a lock is never reclaimed automatically).
 fn lock_is_stale(path: &Path) -> bool {
     #[cfg(unix)]
     {
         let Ok(text) = fs::read_to_string(path) else {
             return false;
         };
-        let pid = text
-            .lines()
-            .next()
-            .and_then(|l| l.strip_prefix("pid="))
-            .and_then(|p| p.split_whitespace().next())
+        let line = text.lines().next().unwrap_or("");
+        let field = |name: &str| {
+            line.split_whitespace()
+                .find_map(|w| w.strip_prefix(name))
+                .map(str::to_owned)
+        };
+        let host = host_name();
+        if host == "unknown" || field("host=").as_deref() != Some(host.as_str()) {
+            return false;
+        }
+        let pid = field("pid=")
             .and_then(|p| p.parse::<i32>().ok())
             .and_then(rustix::process::Pid::from_raw);
         match pid {
@@ -371,7 +400,12 @@ fn take_lock(dir: &Path, request_id: &RequestId) -> Result<LockGuard, ForgeError
         match create_private_file(&path) {
             Ok(mut f) => {
                 f.write_all(
-                    format!("pid={} request={request_id}\n", std::process::id()).as_bytes(),
+                    format!(
+                        "pid={} host={} request={request_id}\n",
+                        std::process::id(),
+                        host_name()
+                    )
+                    .as_bytes(),
                 )
                 .and_then(|()| f.sync_all())
                 .map_err(|e| io_failed("storage_io", "write_lock", e))?;
@@ -379,15 +413,25 @@ fn take_lock(dir: &Path, request_id: &RequestId) -> Result<LockGuard, ForgeError
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 if attempt == 0 && lock_is_stale(&path) {
-                    tracing::warn!(
-                        target: "forge_cli",
-                        event = "forge.backup.stale_lock_removed",
-                        request_id = %request_id,
-                        path = %path.display(),
-                        "the lock of a backup that no longer runs was removed"
-                    );
-                    fs::remove_file(&path)
-                        .map_err(|e| io_failed("storage_io", "remove_stale_lock", e))?;
+                    // Rename it aside first: of two runs that both saw it
+                    // stale, only one rename succeeds, and the other then
+                    // meets the winner's new lock (create-new).
+                    let aside = dir.join(format!("{LOCK}.stale-{request_id}"));
+                    match fs::rename(&path, &aside) {
+                        Ok(()) => {
+                            tracing::warn!(
+                                target: "forge_cli",
+                                event = "forge.backup.stale_lock_removed",
+                                request_id = %request_id,
+                                path = %path.display(),
+                                "the lock of a backup that no longer runs was taken over"
+                            );
+                            fs::remove_file(&aside)
+                                .map_err(|e| io_failed("storage_io", "remove_stale_lock", e))?;
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(io_failed("storage_io", "rename_stale_lock", e)),
+                    }
                     continue;
                 }
                 return Err(failed("backup_running").with_context("path", path.display()));

@@ -15,7 +15,7 @@
 //! | protected refs | a rule the copy has is created; a higher `push_min_role` is set |
 //! | merge rules of a protected ref | created when missing; `required_approvals` = the larger, `required_checks` = the union (at most 20, the copy's first), each `require_*` / `direct_push_forbidden` = OR |
 //! | approval rules | a rule the copy has is created; `required_approvals` = the larger |
-//! | approvers of a rule | (empty = any Developer or above) the database's list is cut to the part it shares with the copy's; set to the copy's when the database's is empty or shares nothing; kept when the copy's is empty |
+//! | approvers of a rule | (empty = any Developer or above) the database's list is cut to the part it shares with the copy's; set to the copy's when the database's is empty; kept when the copy's is empty or shares nothing with it (never emptied) |
 //! | merge settings | `reset_approvals_on_push`, `committer_approvals_excluded`, `codeowners_enforced` (its suspension cleared) = OR |
 //! | project visibility | `internal` → `private` when the copy holds it `private` |
 //! | check namespace grants | a grant the copy lacks (its project is in the copy) is removed |
@@ -968,8 +968,9 @@ async fn narrow_project(
 
 /// The approvers of rule `want` (on project `p`) narrowed (module docs):
 /// an empty list means "any Developer or above", so the database's list is
-/// kept when the copy's is empty; set to the copy's when the database's is
-/// empty or shares none with it; otherwise cut to the common part. Returns
+/// kept when the copy's is empty or shares none with it (a non-empty list
+/// is never emptied); set to the copy's when the database's is empty;
+/// otherwise cut to the common part. Returns
 /// the number of approver rows removed or added.
 async fn narrow_approvers(
     tx: &mut ChangeTx,
@@ -1007,7 +1008,17 @@ async fn narrow_approvers(
         .collect();
     let copy: BTreeSet<Approver> = want.approvers.iter().cloned().collect();
     let common: BTreeSet<Approver> = have.intersection(&copy).cloned().collect();
-    let target = if common.is_empty() { copy } else { common };
+    // Never end with fewer approvers than "some": an empty list means any
+    // Developer may approve. With approvers in the database and none shared
+    // with the copy (the copy's were created after the backup and are not
+    // in it), the database's list stays as it is; only an already empty
+    // list is filled from the copy (the inserts skip users / groups that do
+    // not exist, which at worst leaves it empty, as it was).
+    let target = match (have.is_empty(), common.is_empty()) {
+        (true, _) => copy,
+        (false, true) => return Ok(0),
+        (false, false) => common,
+    };
     if target == have {
         return Ok(0);
     }

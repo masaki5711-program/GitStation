@@ -80,6 +80,31 @@ fn require_marker(storage_root: &Path) -> Result<(), ForgeError> {
     }
 }
 
+/// fsync one directory (Unix; elsewhere the rename is the only barrier).
+fn sync_tree_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+    }
+    Ok(())
+}
+
+/// fsync `dir` and every directory below it (the files were synced when
+/// written).
+fn sync_tree(dir: &Path) -> io::Result<()> {
+    for e in fs::read_dir(dir)? {
+        let e = e?;
+        if e.file_type()?.is_dir() {
+            sync_tree(&e.path())?;
+        }
+    }
+    sync_tree_dir(dir)
+}
+
 /// The restore the marker names (`begin=<request id of forge restore
 /// begin>`): every `restore.*` audit row of `finish` carries it, so a
 /// re-run of `finish` knows its earlier run.
@@ -104,8 +129,14 @@ pub fn begin(storage_root: &Path, request_id: &RequestId) -> Result<String, Forg
             marker.display()
         ));
     }
+    // A marker without `begin=` (an older format) is replaced; a symlink in
+    // its place is never followed (create-new refuses it once removed).
+    if let Ok(meta) = fs::symlink_metadata(&marker) {
+        if meta.file_type().is_symlink() || meta.is_file() {
+            fs::remove_file(&marker).map_err(|e| io_failed("storage_io", "replace_marker", e))?;
+        }
+    }
     let mut f = backup::create_private_file(&marker)
-        .or_else(|_| fs::File::create(&marker))
         .map_err(|e| io_failed("storage_io", "write_marker", e))?;
     f.write_all(format!("begin={request_id}\n").as_bytes())
         .and_then(|()| f.sync_all())
@@ -227,6 +258,9 @@ pub fn repositories(
             return Ok(());
         };
         let target = storage.path_for(repo);
+        // Every directory of the restored repository is on disk (its entries
+        // were synced file by file) before the rename makes it visible.
+        sync_tree(&tmp).map_err(|e| io_failed("storage_io", "sync_dir", e))?;
         if target.exists() {
             backup::create_private_dir(&pre)
                 .map_err(|e| io_failed("storage_io", "create_pre_restore", e))?;
@@ -234,6 +268,9 @@ pub fn repositories(
             fs::rename(&target, &aside).map_err(|e| io_failed("storage_io", "move_aside", e))?;
         }
         fs::rename(&tmp, &target).map_err(|e| io_failed("storage_io", "rename_into_place", e))?;
+        if let Some(parent) = target.parent() {
+            sync_tree_dir(parent).map_err(|e| io_failed("storage_io", "sync_dir", e))?;
+        }
         restored.push(repo.get());
         Ok(())
     };
@@ -301,6 +338,9 @@ pub fn repositories(
                     reader
                         .content(size, &mut f)
                         .map_err(|_| corrupt("content"))?;
+                    // On disk before the repository is renamed into place.
+                    f.sync_all()
+                        .map_err(|e| io_failed("storage_io", "sync_file", e))?;
                 }
             }
         }

@@ -100,3 +100,15 @@
 - **確かめていないこと（ディスクの空きが 1.5 GB で、3 GB を切ったため止めた）**: forge-db・forge-cli・forge-core・forge-errors の
   全体のテスト、`gen-authz -- --check`（forge-web の bin のビルドが要る。今回は権限の表に触れていない）、errors.toml の cause の文を
   変えた後の再実行。
+
+## 7. 追記: 再レビュー（同じ日）
+
+- **HIGH（security）**: `narrow_approvers` が広げうる（DB {A}、写し {B}、B はバックアップの後に作られて DB に無い → A を消して B を入れられず
+  空 = Developer 以上の誰でも）。共通の承認者が無いときは DB の一覧をそのまま残す（空だった一覧だけを写しから埋める）。テスト
+  `approvers_the_database_does_not_share_never_empty_the_rule`。
+- **MEDIUM（rust）**: `forge restore repositories` は書いたファイルを 1 つずつ `sync_all`、名前を変える前にリポジトリの全ディレクトリと、
+  後で親を fsync。
+- **LOW**: manifest の MAC の鍵を HKDF で分けた（AES-GCM の鍵を使い回さない）、MAC で確かめたバイトそのものを解析、印のファイルは
+  シンボリックリンクを辿らず create-new、止まったロックは rename で退けてから create-new（ホスト名を書き、別のホストのロックは取り戻さない。
+  テストに別のホストと生きた pid の場合）、保守は解放の前に `alive()` を確かめて warn。runbook: 写しから外した印は `restore.reapplied` だけで
+  `regrant-admin` の対象外（戻し方は `bootstrap-admin` か残った管理者）、`regrant-admin` は serve の起動の前に流す。

@@ -703,7 +703,7 @@ async fn the_lock_of_a_backup_that_no_longer_runs_is_reclaimed() {
     child.wait().expect("wait");
     fs::write(
         f.backup_dir.join(".lock"),
-        format!("pid={gone} request=req-old\n"),
+        format!("pid={gone} host={} request=req-old\n", super::host_name()),
     )
     .expect("lock");
     f.backup(&FakeDb::default(), "req-backup-stale")
@@ -712,13 +712,28 @@ async fn the_lock_of_a_backup_that_no_longer_runs_is_reclaimed() {
     // A lock of a running process (this one) is not.
     fs::write(
         f.backup_dir.join(".lock"),
-        format!("pid={} request=req-live\n", std::process::id()),
+        format!(
+            "pid={} host={} request=req-live\n",
+            std::process::id(),
+            super::host_name()
+        ),
     )
     .expect("lock");
     let err = f
         .backup(&FakeDb::default(), "req-backup-live")
         .await
         .expect_err("live lock");
+    assert_reason(&err, ErrorCode::BackupFailed, "backup_running");
+    // A dead pid of another host (a shared disk) is not reclaimed either.
+    fs::write(
+        f.backup_dir.join(".lock"),
+        format!("pid={gone} host=elsewhere-synthetic request=req-other\n"),
+    )
+    .expect("lock");
+    let err = f
+        .backup(&FakeDb::default(), "req-backup-other")
+        .await
+        .expect_err("another host");
     assert_reason(&err, ErrorCode::BackupFailed, "backup_running");
     f.t.drop_now().await;
 }

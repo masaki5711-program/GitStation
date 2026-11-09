@@ -401,7 +401,21 @@ impl Inner {
                 }
             }
         };
+        let mut lock = lock;
         let end = self.locked_steps(repo, mode, deadline, request_id).await;
+        // A lock lost during the run (its connection ended) means a backup
+        // may have copied the repository meanwhile: said, not hidden (the
+        // backup's fsck of its copy is the second check).
+        if let Err(e) = lock.alive().await {
+            tracing::warn!(
+                target: "forge_cli",
+                event = "forge.git.maintenance_lock_lost",
+                error_code = e.code().id(),
+                request_id = %request_id,
+                repo_id = repo.get(),
+                "the backup lock was lost during the maintenance run"
+            );
+        }
         lock.release().await;
         end
     }

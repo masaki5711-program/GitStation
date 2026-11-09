@@ -199,7 +199,10 @@ forge doctor        # backup.last_success が ok
    ```
    最新の `restore.finished` の一覧に無い利用者、一覧の後に変更（無効化・名前の変更・付け直し済みなど）のあった利用者、無効な利用者・
    人でない利用者は断る（FG-AUTH-0009 `not_removed_by_restore` / `not_active_human`）。断られたら確かめ直して `bootstrap-admin`（管理者が
-   いないとき）か管理者の画面で付ける。
+   いないとき）か管理者の画面で付ける。**`regrant-admin` は手順 10（起動）の前に流す**: 起動の後は利用者のログインなどの
+   ふだんの監査の行も「後の変更」に数えられ、断られる。写しから当て直して外した印（`restore.reapplied` だけを書き、
+   `restore.admin_flags_removed` の一覧には入らない）は `regrant-admin` で戻せない: 本当に要るなら `bootstrap-admin`
+   （管理者が 1 人もいないとき）か、残った管理者が付け直す。
 9. **Keycloak を確かめる**: Keycloak で無効の利用者が GitStation で有効になっていないか（ログインは Keycloak が断るが、
    `forge admin user disable <username>` で揃える）。当て直せなかった利用者は無効のままにする（有効に倒さない）。
 10. **起動**: `systemctl start forge-worker forge-serve`、`forge doctor`。
