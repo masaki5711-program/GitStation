@@ -84,9 +84,14 @@ Forge-Act-As = "user:" 1*19DIGIT                                   ; forge の�
 - **結びつけていないプロジェクト**は、本人が見えても見えなくても `FG-REPO-0005`（`reason=act_as_unbound`。存在を漏らさない）。
 - 本人の判定は通常の arm をそのまま通る（自己承認の FG-REVIEW-0013、ロールの不足の FG-AUTH-0003、削除待ちの FG-REPO-0006）。経路ごとの分岐は作らない。kanflow の出どころの能力（ADR-0017 §4.4）は、入ったときに `role_for` の規則どおりに本人の側で数える（読み取りの min の規則は変わらない）。
 
+> **例外**（Amendment X3 の 5）: `RepositorySearch`（`ListAsPerson`）は min ではなく本人として判定する（結ぶ前のリポジトリを見せるため。名前だけ）。
+
 ### 4. 代理で使える Action の許可リスト（既定で閉じる）
 
 `Action::act_as_rule(self) -> ActAsRule`（`_` のない全列挙の `match`。新しい Action はコンパイルが `ActAsRule` を選ばせ、選ぶまで入らない）。M3（S2）の時点:
+
+> **X3 で広げた**（Amendment X3、下）: `IntegrationBindingManage`（主張 `binding_set`）・`IntegrationBindingRemove`（主張 `binding_remove`）・
+> `RepositorySearch`（主張なし、**本人として** 判定する `ListAsPerson` — §3 の min の規則の例外。名前だけ、流量の制限と監査つき）。この表は S2 の時点のもの。
 
 | Action | 規則 | 許す理由 |
 |---|---|---|
@@ -428,3 +433,18 @@ kanflow の画面で本人が「承認」/「取り消し」を押す
   連携の状態を言わない）。存在しない連携は見えないプロジェクトと同じ 404 のまま。
 - （LOW b）`RepositorySearch` の経路（`Resource::Instance`）は人だけ（代理は本人として判定）。サービスアカウント・ボット・エージェントの単独は
   `FG-AUTH-0003`。
+
+## accepted の条件の確認（2026-11-09、クラウド）
+
+1. **条件 1 は満たした**: `main`（S2 `04262d7`・U3b `f440c77`・X3 `a7036aa` 以降）のコードを、`security-reviewer`（T1〜T5・§1〜§9）と
+   `authz-matrix-auditor`（許可リストと権限の表・全経路の `authorize()`・人だけの Action・min の規則・契約 4 の例外）が読んで、どちらも
+   **CRITICAL / HIGH なし**（コードと生成物を読んだ。cargo は流していない）。
+   - MEDIUM（authz）: 公開の経路（`WebShell`・`Health`・ログイン）は認証の層を通らず、`Forge-Act-As` / `Forge-Assertion` を **断らずに無視** する
+     （副作用は無い）。§2 の「無視せず断る」と食い違う → 後で直す（安い事前の検査で断る）か、§2 に例外として書く。
+   - LOW（security）: (a) `Authorization` の無い要求の代理のヘッダーは外して匿名で続ける（匿名を許す経路だけ、昇格は無い）→ `FG-AUTH-0001` で断る、
+     (b) 要求が途中で切れると検証済みの主張が `claimed` のまま 5 分残る（同じ MR・head・target に縛られ昇格は無い）→ drop の守りで `reject_unused`、
+     (c) 鍵のバイトを drop で消していない・全部同じバイトの鍵を受け付ける → `zeroize` と拒否、(d) 確認の画面の MR のタイトルは作者が書いた文字
+     （React が逃がす）→ 切り詰めと番号・SHA を目立たせる。
+   - LOW（authz）: §4 の表が S2 の時点のまま（上に X3 の注記を足した）、`ListAsPerson` が §3 の例外（上に注記を足した）。
+2. **条件 2 は利用者の確認待ち**（§1 の社員番号の守りを S2 の範囲に含めることを受け入れるか。S2 は実装済み）。
+3. 条件 3 は未決のままでよい（変わらず）。
