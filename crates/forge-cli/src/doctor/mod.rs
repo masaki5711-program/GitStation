@@ -32,6 +32,8 @@ use forge_git::{Git, GitConfig, StorageRoot};
 
 use crate::runtime::block_on;
 
+// M3 O1: backup.last_success, backup.state_copy (no database).
+mod backup;
 // M3 C1: required checks have a reporter.
 // M3 S2: the act-as keys.
 mod act_as;
@@ -187,6 +189,9 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
         checks.push(git_check().await);
         checks.push(web_ui_check());
         checks.push(skip("auth.oidc", "configuration invalid"));
+        for name in backup::NAMES {
+            checks.push(skip(name, "configuration invalid"));
+        }
         return checks;
     };
 
@@ -216,6 +221,8 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
     checks.push(oidc::oidc_check(&cfg).await);
     // M3 I2: the webhook settings (no database).
     checks.extend(webhooks::config_checks(&cfg));
+    // M3 O1: the backups (no database).
+    checks.extend(backup::backup_checks(&cfg.backup));
     checks
 }
 

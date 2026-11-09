@@ -468,6 +468,9 @@ pub enum SessionRevokeReason {
     /// The refresh check found the IdP session gone or the role removed
     /// (ADR-0021 §7).
     IdpRevoked,
+    /// `forge restore finish` ended every session issued before the restore
+    /// (M3 O1, ADR-0019 Amendment plan 11 P1).
+    Restore,
 }
 
 impl SessionRevokeReason {
@@ -477,6 +480,7 @@ impl SessionRevokeReason {
         Self::UserDisabled,
         Self::Admin,
         Self::IdpRevoked,
+        Self::Restore,
     ];
 
     /// The stored value (and the log / audit `reason`).
@@ -487,6 +491,7 @@ impl SessionRevokeReason {
             Self::UserDisabled => "user_disabled",
             Self::Admin => "admin",
             Self::IdpRevoked => "idp_revoked",
+            Self::Restore => "restore",
         }
     }
 

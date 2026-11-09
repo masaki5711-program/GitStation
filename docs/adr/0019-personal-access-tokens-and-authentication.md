@@ -601,3 +601,52 @@ Amendment M2 の 4 と §10 の実装。
 - **HTTP から到達できない理由**: 入口は forge-cli のサブコマンドだけ。forge-web には保守の操作のルートが無い（権限の表の行も無い）。
   HTTP に保守の操作を作るときは、Action と権限の表の行を足して `authorize()` で判定する。
 - ログ `event=forge.admin.repo.maintain_enqueued`（`request_id`、`repo_id`、`job_id`、`outcome`）。
+
+## Addendum O1（2026-11-09、M3 O1 `feat/ops-backup-restore`: 実装で決めたこと）
+
+Amendment「計画 11 P1」の実装。計画 11 §10 Q11 の答え（2026-11-09）: 保管先はローカルのディレクトリ、7 世代、DB は pgBackRest、
+リポジトリはファイルの複写。コードは forge-cli `backup/`・`restore.rs`・`state_copy.rs`・`doctor/backup.rs`、SQL は forge-db
+`restore`、設定は forge-core `config::backup`。Runbook `backup-restore`。
+
+- **コマンド**（すべて actor `system`、`actor_label = forge-cli:<OS のアカウント>`、HTTP からは届かない。§8 の例外「`forge backup` /
+  `forge restore`」の中）: `forge backup`、`forge restore begin` / `repositories --generation <g> [--replace]` / `verify`（読むだけ）/
+  `finish --generation <g> [--accept-db-behind]` / `regrant-admin <username>`。forge-web と forge-hosting のソースがこれらの関数の名前を
+  含まないことを `forge_web_never_names_the_restore_commands` が守る。
+- **計画からの変更 1（verify と finish を分けた）**: 計画は `forge restore verify` が epoch も進める形だった。`verify` は何度でも
+  流せる読むだけの検査にし、資格情報の失効・権限の当て直し・epoch・`restore.finished` の監査の行は `finish` に置いた（`finish` も
+  最初に同じ検査を流し、問題があれば何も変えない）。訓練で `verify` を繰り返せるため。
+- **起動の止め方**: `forge restore begin` が `<storage.root>/.forge-restore-pending` を書き、`forge serve` と `forge worker` は
+  これがある間 FG-SYS-0009 `restore_pending` で起動しない。`finish` が最後に消す（Amendment の「`verify` が終わるまで HTTP の
+  受け付けを始めない」）。
+- **暗号**: AES-256-GCM の 1 MiB の塊（STREAM: nonce = 7 バイトの乱数 ‖ 塊の番号 ‖ 最後の印、ヘッダーを AAD に）。鍵は
+  `backup.key_file`（64 桁の 16 進、0600、`backup.dir` の外）。pgBackRest の側は pgBackRest 自身の暗号（`repo1-cipher-type`）。
+  `manifest.json` は平文（秘密なし）でアーカイブの sha256 を持ち、復元は sha256 を先に確かめてから書く。
+- **権限**: `backup.dir` と `backup.state_copy_dir` は実ディレクトリ・forge の実効ユーザーの持ち物・グループと他人に権限なし
+  （Unix `0700` 相当。違えば FG-SYS-0008 `insecure_permissions`）。作るファイルは 0600、ディレクトリは 0700。Windows の ACL は
+  確かめていない（運用者の責任、ADR-0013 と同じ）。
+- **リポジトリの複写**: ref を先に（ゆるい ref → `packed-refs` → 残り → `objects/`）、作業用のディレクトリで
+  `git fsck --connectivity-only`、失敗なら 3 回まで複写し直す（O3 の gc がパックを入れ替えた場合）。O3 が予約したロック
+  `repo_maint:<repo_id>` は **取っていない**（O3 の保守が取らないので意味がない。fsck による確認で代えた。後で両方が取る形にできる）。
+- **計画からの変更 2（「監査の写し」を「権限の状態の写し」にした）**: 監査の行を写して読み直す代わりに、`forge worker` が
+  `backup.state_copy_interval_secs`（既定 300 秒）ごとに権限の **状態**（利用者の無効化・管理者の印、所属とロール、保護 ref とマージの規則、
+  承認の規則、マージの設定）を読み、バックアップの鍵で暗号化して `backup.state_copy_dir` に書く（48 個まで。`forge backup` も 1 つ書く）。
+  復元は、世代の DB の手順の後の時刻（DB の時計）以後の最新の写しから **狭める変更だけ** を当て直す（表は forge-db `restore::state`）。
+  監査の `details` の形に依存せず、ADR-0024 #41 の対象（`protected_ref_merge_rules`・`approval_rules`・`merge_settings`・
+  `codeowners_enforced`・必須チェック）をまとめて扱える。写しは置き換えられうるファイルなので、広げる方向には決して使わない
+  （改ざんで起きるのは締め出しだけ）。写しが無い・読めない・古いときは、すべての管理者の印を外して一覧に出す。
+  失う範囲: 最後の写しより後の縮小（最大 1 間隔）。runbook に書いた。
+- **資格情報の失効**: 復元した DB のすべての未失効のトークン（個人とサービスアカウント）を `revoked_reason = 'restore'`、すべての
+  Web のセッションを `restore`、有効な Webhook を `disabled_reason = 'restore'` にする（マイグレーション 20261201100000 で 3 つの CHECK に
+  `restore` を足した）。利用者 / プロジェクトごとに 1 つの変更と監査の行（`restore.credentials_revoked` / `restore.webhooks_disabled`）。
+  イベントは出さない（epoch を新しくするので）。代理実行の HMAC の鍵とミラーの資格情報はファイルなので DB では失効できない:
+  runbook の「再発行」で入れ替える。
+- **管理者の印の付け直し（ADR-0024 #44）**: `bootstrap-admin` は管理者が 1 人でもいると断るので、`forge restore regrant-admin
+  <username>` を足した。直近の `restore.admin_flags_removed` の行が挙げた、有効な人だけ（それ以外は FG-AUTH-0009
+  `not_removed_by_restore` / `not_active_human`）。監査の行 `user.admin_regranted`。
+- **verify の比較**: ready のリポジトリのディレクトリと fsck、`merge_request_versions` の各行の ref
+  `refs/merge-requests/<iid>/v<n>`（`refs_purged_at` のある行は ref が無いこと）。DB が古いときの検出: 行の無い版の ref、行の無い
+  リポジトリのディレクトリ（`--accept-db-behind` のときだけ進める）。`refs/merge-requests/<iid>/head` は知っている MR なら数えない。
+  ブランチの先端は DB に期待値が無いので比べない（push の記録は保持で消える）。
+- **エラー**: FG-SYS-0008 BackupFailed / FG-SYS-0009 RestoreVerificationFailed（どちらも alert、runbook `backup-restore`）。
+- **確かめていないこと**: 本物の pgBackRest（この環境に無い）。DB の手順は trait `DbBackupTool` の後ろにあり、テストは偽物と、
+  引数・時間切れ・失敗を確かめるシェルの台本で行った。試験環境での訓練で確かめる（runbook「復元の訓練」）。

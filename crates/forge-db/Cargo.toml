@@ -14,6 +14,8 @@ sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 serde_json.workspace = true
+# M3 O1: the authorization state copy (restore).
+serde.workspace = true
 uuid.workspace = true
 # ── C8: the audit seal ──
 sha2.workspace = true

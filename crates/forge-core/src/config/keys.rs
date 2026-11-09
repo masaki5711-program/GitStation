@@ -281,4 +281,18 @@ pub const KEYS: &[Key] = &[
     text("mirror.ca_file", "FORGE_MIRROR_CA_FILE"),
     number("mirror.push_timeout_secs", "FORGE_MIRROR_PUSH_TIMEOUT_SECS"),
     number("mirror.lag_alert_secs", "FORGE_MIRROR_LAG_ALERT_SECS"),
+    // M3 O1: forge backup / restore (ADR-0019 Amendment plan 11 P1).
+    text("backup.dir", "FORGE_BACKUP_DIR"),
+    text("backup.key_file", "FORGE_BACKUP_KEY_FILE"),
+    number("backup.generations", "FORGE_BACKUP_GENERATIONS"),
+    text("backup.state_copy_dir", "FORGE_BACKUP_STATE_COPY_DIR"),
+    number(
+        "backup.state_copy_interval_secs",
+        "FORGE_BACKUP_STATE_COPY_INTERVAL_SECS",
+    ),
+    text("backup.pgbackrest_bin", "FORGE_BACKUP_PGBACKREST_BIN"),
+    text("backup.pgbackrest_stanza", "FORGE_BACKUP_PGBACKREST_STANZA"),
+    number("backup.db_timeout_secs", "FORGE_BACKUP_DB_TIMEOUT_SECS"),
+    number("backup.repo_timeout_secs", "FORGE_BACKUP_REPO_TIMEOUT_SECS"),
+    number("backup.max_age_hours", "FORGE_BACKUP_MAX_AGE_HOURS"),
 ];

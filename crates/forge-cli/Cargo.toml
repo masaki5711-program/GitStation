@@ -31,6 +31,15 @@ forge-oidc.workspace = true
 httpdate.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+# M3 O1: forge backup / restore (the encrypted archive, its checksum).
+aes-gcm.workspace = true
+getrandom.workspace = true
+sha2.workspace = true
+serde.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# M3 O1: the backup directory must be owned by the account that runs forge.
+rustix.workspace = true
 
 [features]
 # Serve the built web UI (ADR-0022 §2): `npm run build` in web/ first; the

@@ -23,15 +23,19 @@ mod admin_repo;
 // ── end D4 MR3b ──
 mod admin_token;
 mod admin_user;
+// M3 O1: `forge backup` / `forge restore`.
+mod backup;
 mod db;
 mod doctor;
 mod explain;
 // M3 X8: the push checks' pre-receive hook.
 mod hook;
 mod oidc;
+mod restore;
 mod runtime;
 mod serve;
 mod serve_merges;
+mod state_copy;
 mod worker;
 
 #[derive(Parser)]
@@ -97,7 +101,55 @@ enum Command {
         #[command(subcommand)]
         command: HookCommand,
     },
+    /// Back up the database (pgBackRest) and then every repository into a
+    /// new encrypted generation in `backup.dir` (runbook backup-restore).
+    Backup,
+    /// Restore from a backup (runbook backup-restore; production: approved
+    /// runbook steps). `verify` only reads.
+    Restore {
+        #[command(subcommand)]
+        command: RestoreCommand,
+    },
 }
+
+// ── M3 O1 ──
+#[derive(Subcommand)]
+enum RestoreCommand {
+    /// Mark a restore in progress: forge serve and forge worker refuse to
+    /// start until `finish`.
+    Begin,
+    /// Write the repositories of a generation back into `storage.root`.
+    Repositories {
+        /// The generation (`YYYYMMDDTHHMMSSZ`, a directory of `backup.dir`).
+        #[arg(long)]
+        generation: String,
+        /// Move existing repository directories aside
+        /// (`<storage.root>/pre-restore-<generation>/`) instead of refusing.
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Compare the database's expectations with the repositories (version
+    /// refs, `git fsck --connectivity-only`). Changes nothing.
+    Verify,
+    /// Verify, revoke every credential, re-apply the removed permissions,
+    /// give the event feed a new epoch, end the restore.
+    Finish {
+        /// The generation that was restored.
+        #[arg(long)]
+        generation: String,
+        /// Go on when the database is older than the repositories (the
+        /// unknown refs and repositories are listed).
+        #[arg(long)]
+        accept_db_behind: bool,
+    },
+    /// Give the administrator flag back to a user the restore removed it
+    /// from (after checking the person).
+    RegrantAdmin {
+        /// The username.
+        username: String,
+    },
+}
+// ── end M3 O1 ──
 
 #[derive(Subcommand)]
 enum HookCommand {
@@ -451,7 +503,19 @@ fn main() -> ExitCode {
                 | AdminCommand::Events {
                     command: EventsCommand::NewEpoch,
                 },
+        }
+        // M3 O1: backup and the mutating restore steps.
+        | Command::Backup
+        | Command::Restore {
+            command:
+                RestoreCommand::Begin
+                | RestoreCommand::Repositories { .. }
+                | RestoreCommand::Finish { .. }
+                | RestoreCommand::RegrantAdmin { .. },
         } => telemetry::init(LogFormat::Json, "info"),
+        Command::Restore {
+            command: RestoreCommand::Verify,
+        } => telemetry::init(LogFormat::Pretty, "warn"),
         Command::Explain { .. }
         | Command::Errors { .. }
         | Command::Admin {
@@ -695,6 +759,35 @@ fn main() -> ExitCode {
             serve::serve(&bind, &cfg)
         }),
         Command::Worker => config().and_then(|cfg| worker::worker(&cfg)),
+        // ── M3 O1 ──
+        Command::Backup => config().and_then(|cfg| backup::backup(&cfg, &request_id)),
+        Command::Restore { command } => config().and_then(|cfg| match command {
+            RestoreCommand::Begin => restore::begin(cfg.storage_root()?, &request_id),
+            RestoreCommand::Repositories {
+                generation,
+                replace,
+            } => {
+                let prepared = backup::prepare(&cfg.backup)?;
+                let root = forge_git::StorageRoot::open(cfg.storage_root()?)?;
+                restore::repositories(&prepared, &root, &generation, replace, &request_id)
+            }
+            RestoreCommand::Verify => {
+                let storage = worker::provision::Storage::open(cfg.storage_root()?)?;
+                admin_token::with_db(&cfg.database, async |db| {
+                    restore::verify_command(db, &storage.root, &storage.git, &request_id).await
+                })
+            }
+            RestoreCommand::Finish {
+                generation,
+                accept_db_behind,
+            } => restore::finish(&cfg, &generation, accept_db_behind, &request_id),
+            RestoreCommand::RegrantAdmin { username } => {
+                admin_token::with_db(&cfg.database, async |db| {
+                    restore::regrant_admin_with(db, &username, &request_id).await
+                })
+            }
+        }),
+        // ── end M3 O1 ──
         Command::Db {
             command: DbCommand::Status { check },
         } => config().and_then(|cfg| db::status(&cfg.database, check)),
