@@ -113,8 +113,12 @@ export function Inbox() {
     if (list.isFetchingNextPage) return;
     const before = items.length;
     void list.fetchNextPage().then((r) => {
+      // A failed fetch shows its error where the list is; nothing to say or
+      // to focus then.
+      if (r.isError) return;
       const all = r.data?.pages.flatMap((p) => p.items) ?? [];
       const added = all.slice(before);
+      if (added.length === 0) return;
       announce(t('inbox.moreShown', { count: added.length }));
       focusItem(added[0]?.id);
     });

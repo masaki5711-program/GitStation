@@ -65,14 +65,11 @@ export function inboxBackend(csrf) {
     }
     if (method === 'POST' && path === `${LIST}/read-all`) {
       const input = text === '' ? {} : JSON.parse(text);
-      let marked = 0;
       for (const i of items) {
         if (i.read_at === null && (input.up_to === undefined || i.id <= input.up_to)) {
           i.read_at = READ_AT;
-          marked += 1;
         }
       }
-      void marked;
       return { status: 204 };
     }
     const one = path.match(/^\/api\/v1\/user\/notifications\/(\d+)\/read$/);

@@ -7,8 +7,10 @@
 //!
 //! A failed run (the database: `FG-DB-0001` / `FG-DB-0002`) is returned and
 //! logged once per failure streak by the supervisor with `error_code` and
-//! `task=in_app_notification_retention`, then retried after the backoff; a
-//! batch is one statement, so nothing is half done.
+//! `task=in_app_notification_retention`, then retried after the backoff. A
+//! batch is two statements (read items, then old ones), each its own
+//! transaction; a failure between them leaves rows the next run deletes
+//! (the deletes are idempotent).
 
 use std::time::Duration;
 

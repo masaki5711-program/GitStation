@@ -5,7 +5,7 @@
 // states), with axe on the page in every language.
 import axe from 'axe-core';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { MAX_POLL_MS, POLL_MS, pollDelay } from '../src/api/notifications';
 import { badgeText } from '../src/components/NotificationBell';
@@ -251,6 +251,34 @@ describe('the notifications page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mark as read (Fix rounding 9)' }));
     expect(await screen.findByText('Not found.')).toBeTruthy();
     expect(screen.getByTestId('request-id').textContent).toBe('req-inbox-2');
+  });
+
+  it.each([
+    [403, 'req-mark-403', 'FG-AUTH-0016'],
+    [401, 'req-mark-401', 'FG-AUTH-0001'],
+  ])('a refused mark (%i) reads the session, the list and the count again and logs its request id', async (status, requestId, code) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { server } = await openPage({
+        [`POST ${LIST}/9/read`]: () => apiError(status, 'Refused.', requestId, code),
+      });
+      const before = {
+        session: server.to('GET', '/api/v1/session').length,
+        list: server.to('GET', LIST).length,
+        count: server.to('GET', BELL_PATH).length,
+      };
+      fireEvent.click(screen.getByRole('button', { name: 'Mark as read (Fix rounding 9)' }));
+      await waitFor(() => {
+        expect(server.to('GET', '/api/v1/session').length).toBeGreaterThan(before.session);
+        expect(server.to('GET', LIST).length).toBeGreaterThan(before.list);
+        expect(server.to('GET', BELL_PATH).length).toBeGreaterThan(before.count);
+      });
+      await waitFor(() => {
+        expect(warn.mock.calls.some((c) => String(c[0]).includes(`request ${requestId}`))).toBe(true);
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
