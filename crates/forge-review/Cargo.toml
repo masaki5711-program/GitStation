@@ -24,6 +24,8 @@ unicode-properties.workspace = true
 
 [dev-dependencies]
 forge-db = { workspace = true, features = ["test-support"] }
+# Tests that need a git timeout use a git that never answers, not a 1 ns timeout.
+forge-git = { workspace = true, features = ["test-support"] }
 tokio.workspace = true
 serde_json.workspace = true
 # tests/real_browser.rs: a real bare repository under a temporary storage root.

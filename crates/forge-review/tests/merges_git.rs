@@ -22,6 +22,7 @@ use forge_db::review::{merges, request_check, MergeabilityRequest, RefreshReques
 use forge_db::test_support::FreshDb;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{BrowseLimits, Browser};
+use forge_git::test_git::STALL;
 use forge_git::{Git, GitConfig, StorageRoot};
 use forge_review::approvals::ReviewGit;
 use forge_review::{
@@ -199,6 +200,14 @@ async fn world() -> World {
 }
 
 impl World {
+    /// A merger whose git never answers a call with `word` in its arguments
+    /// (every other call is the real git): a timeout there is certain,
+    /// unlike a near-zero timeout, which a fast git can win.
+    fn stalled_merger(&self, dir: &std::path::Path, word: &str) -> Merger {
+        let git = forge_git::test_git::stalled_git(self._home.path(), dir, Some(word));
+        Merger::new(self.t.db.clone(), git, self.storage.clone()).with_browser(self.browser.clone())
+    }
+
     /// Record the version and run the mergeability check, as the worker
     /// does; the merge request's head is then `self.head`.
     async fn checked(&mut self) {
@@ -877,11 +886,11 @@ async fn a_timeout_before_the_fence_is_retried_then_cleaned_up() {
     let mut w = world().await;
     w.checked().await;
     let attempt = w.ask(None, false).await.expect("queued");
+    let fake = tempfile::tempdir().expect("fake git dir");
     let slow = w
-        .merger
-        .clone()
+        .stalled_merger(fake.path(), "commit-tree")
         .with_timeouts(MergeTimeouts {
-            commit: Duration::from_nanos(1),
+            commit: STALL,
             ..MergeTimeouts::default()
         })
         .expect("timeouts");
@@ -1056,11 +1065,11 @@ async fn a_retry_after_the_fence_moves_the_ref_once() {
     let attempt = w.ask(None, false).await.expect("queued");
     // A first run whose update-ref times out: FG-REVIEW-0009, the attempt
     // stays `executing` (the ref did not move).
+    let fake = tempfile::tempdir().expect("fake git dir");
     let first = w
-        .merger
-        .clone()
+        .stalled_merger(fake.path(), "update-ref")
         .with_timeouts(MergeTimeouts {
-            update_ref: Duration::from_nanos(1),
+            update_ref: STALL,
             ..MergeTimeouts::default()
         })
         .expect("timeouts");
