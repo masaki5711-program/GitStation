@@ -22,7 +22,7 @@
 | [0016](0016-domain-events-outbox-and-audit-log.md) | ドメインイベントの Outbox、カーソル方式のイベントの履歴、監査ログ | accepted | 2026-10-27 |
 | [0017](0017-local-ai-autofix-loop.md) | ローカル LLM による MR の自動修正ループと、kanflow からの承認・マージ | accepted（代理の部分は 0025 が具体化） | 2026-10-28 |
 | [0018](0018-db-roles-append-only-and-audit-sealing.md) | DB のロール、追記のみの強制、監査ログの封印 | accepted | 2026-10-27 |
-| [0019](0019-personal-access-tokens-and-authentication.md) | 個人用アクセストークンと認証、無効化のガード | accepted（2026-11-02 改訂: §8 の例外に `forge backup` / `forge restore`） | 2026-10-29 |
+| [0019](0019-personal-access-tokens-and-authentication.md) | 個人用アクセストークンと認証、無効化のガード | accepted（2026-11-02 改訂: §8 の例外に `forge backup` / `forge restore`。2026-11-09 Addendum O1） | 2026-10-29 |
 | [0020](0020-gstn-client-crate-and-credential-storage.md) | クライアント `gstn` のクレートの置き方と、トークンの保管 | accepted | 2026-11-01 |
 | [0021](0021-oidc-keycloak-login-and-web-sessions.md) | OIDC（Keycloak）のログインと Web のセッション | accepted | 2026-11-01 |
 | [0022](0022-web-ui-foundation-react-typescript-embedded.md) | Web の画面の土台（React + TypeScript、埋め込みの配信） | accepted | 2026-11-01 |

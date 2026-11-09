@@ -601,3 +601,81 @@ Amendment M2 の 4 と §10 の実装。
 - **HTTP から到達できない理由**: 入口は forge-cli のサブコマンドだけ。forge-web には保守の操作のルートが無い（権限の表の行も無い）。
   HTTP に保守の操作を作るときは、Action と権限の表の行を足して `authorize()` で判定する。
 - ログ `event=forge.admin.repo.maintain_enqueued`（`request_id`、`repo_id`、`job_id`、`outcome`）。
+
+## Addendum O1（2026-11-09、M3 O1 `feat/ops-backup-restore`: 実装で決めたこと）
+
+Amendment「計画 11 P1」の実装。計画 11 §10 Q11 の答え（2026-11-09）: 保管先はローカルのディレクトリ、7 世代、DB は pgBackRest、
+リポジトリはファイルの複写。コードは forge-cli `backup/`・`restore.rs`・`state_copy.rs`・`doctor/backup.rs`、SQL は forge-db
+`restore`、設定は forge-core `config::backup`。Runbook `backup-restore`。
+
+- **コマンド**（すべて actor `system`、`actor_label = forge-cli:<OS のアカウント>`、HTTP からは届かない。§8 の例外「`forge backup` /
+  `forge restore`」の中）: `forge backup`、`forge restore begin` / `repositories --generation <g> [--replace]` / `verify`（読むだけ）/
+  `finish --generation <g> [--accept-db-behind]` / `regrant-admin <username>`。forge-web と forge-hosting のソースがこれらの関数の名前を
+  含まないことを `forge_web_never_names_the_restore_commands` が守る。
+- **計画からの変更 1（verify と finish を分けた）**: 計画は `forge restore verify` が epoch も進める形だった。`verify` は何度でも
+  流せる読むだけの検査にし、資格情報の失効・権限の当て直し・epoch・`restore.finished` の監査の行は `finish` に置いた（`finish` も
+  最初に同じ検査を流し、問題があれば何も変えない）。訓練で `verify` を繰り返せるため。
+- **起動の止め方**: `forge restore begin` が `<storage.root>/.forge-restore-pending` を書き、`forge serve` と `forge worker` は
+  これがある間 FG-SYS-0009 `restore_pending` で起動しない。`finish` が最後に消す（Amendment の「`verify` が終わるまで HTTP の
+  受け付けを始めない」）。
+- **暗号**: AES-256-GCM の 1 MiB の塊（STREAM: nonce = 7 バイトの乱数 ‖ 塊の番号 ‖ 最後の印、ヘッダーを AAD に）。鍵は
+  `backup.key_file`（64 桁の 16 進、0600、`backup.dir` の外）。pgBackRest の側は pgBackRest 自身の暗号（`repo1-cipher-type`）。
+  `manifest.json` は平文（秘密なし）でアーカイブの sha256 を持ち、復元は sha256 を先に確かめてから書く。
+- **権限**: `backup.dir` と `backup.state_copy_dir` は実ディレクトリ・forge の実効ユーザーの持ち物・グループと他人に権限なし
+  （Unix `0700` 相当。違えば FG-SYS-0008 `insecure_permissions`）。作るファイルは 0600、ディレクトリは 0700。Windows の ACL は
+  確かめていない（運用者の責任、ADR-0013 と同じ）。
+- **リポジトリの複写**: ref を先に（ゆるい ref → `packed-refs` → 残り → `objects/`）、作業用のディレクトリで
+  `git fsck --connectivity-only`、失敗なら 3 回まで複写し直す（O3 の gc がパックを入れ替えた場合）。O3 が予約したロック
+  `repo_maint:<repo_id>` は **取っていない**（O3 の保守が取らないので意味がない。fsck による確認で代えた。後で両方が取る形にできる）。
+- **計画からの変更 2（「監査の写し」を「権限の状態の写し」にした）**: 監査の行を写して読み直す代わりに、`forge worker` が
+  `backup.state_copy_interval_secs`（既定 300 秒）ごとに権限の **状態**（利用者の無効化・管理者の印、所属とロール、保護 ref とマージの規則、
+  承認の規則、マージの設定）を読み、バックアップの鍵で暗号化して `backup.state_copy_dir` に書く（48 個まで。`forge backup` も 1 つ書く）。
+  復元は、世代の DB の手順の後の時刻（DB の時計）以後の最新の写しから **狭める変更だけ** を当て直す（表は forge-db `restore::state`）。
+  監査の `details` の形に依存せず、ADR-0024 #41 の対象（`protected_ref_merge_rules`・`approval_rules`・`merge_settings`・
+  `codeowners_enforced`・必須チェック）をまとめて扱える。写しは置き換えられうるファイルなので、広げる方向には決して使わない
+  （改ざんで起きるのは締め出しだけ）。写しが無い・読めない・古いときは、すべての管理者の印を外して一覧に出す。
+  失う範囲: 最後の写しより後の縮小（最大 1 間隔）。runbook に書いた。
+- **資格情報の失効**: 復元した DB のすべての未失効のトークン（個人とサービスアカウント）を `revoked_reason = 'restore'`、すべての
+  Web のセッションを `restore`、有効な Webhook を `disabled_reason = 'restore'` にする（マイグレーション 20261201100000 で 3 つの CHECK に
+  `restore` を足した）。利用者 / プロジェクトごとに 1 つの変更と監査の行（`restore.credentials_revoked` / `restore.webhooks_disabled`）。
+  イベントは出さない（epoch を新しくするので）。代理実行の HMAC の鍵とミラーの資格情報はファイルなので DB では失効できない:
+  runbook の「再発行」で入れ替える。
+- **管理者の印の付け直し（ADR-0024 #44）**: `bootstrap-admin` は管理者が 1 人でもいると断るので、`forge restore regrant-admin
+  <username>` を足した。直近の `restore.admin_flags_removed` の行が挙げた、有効な人だけ（それ以外は FG-AUTH-0009
+  `not_removed_by_restore` / `not_active_human`）。監査の行 `user.admin_regranted`。
+- **verify の比較**: ready のリポジトリのディレクトリと fsck、`merge_request_versions` の各行の ref
+  `refs/merge-requests/<iid>/v<n>`（`refs_purged_at` のある行は ref が無いこと）。DB が古いときの検出: 行の無い版の ref、行の無い
+  リポジトリのディレクトリ（`--accept-db-behind` のときだけ進める）。`refs/merge-requests/<iid>/head` は知っている MR なら数えない。
+  ブランチの先端は DB に期待値が無いので比べない（push の記録は保持で消える）。
+- **エラー**: FG-SYS-0008 BackupFailed / FG-SYS-0009 RestoreVerificationFailed（どちらも alert、runbook `backup-restore`）。
+- **確かめていないこと**: 本物の pgBackRest（この環境に無い）。DB の手順は trait `DbBackupTool` の後ろにあり、テストは偽物と、
+  引数・時間切れ・失敗を確かめるシェルの台本で行った。試験環境での訓練で確かめる（runbook「復元の訓練」）。
+
+### O1 の独立レビューで決めたこと（2026-11-09）
+
+`security-reviewer`（HIGH 2）・`git-protocol-reviewer`（HIGH 1）・`rust-reviewer` / `database-reviewer`（MEDIUM）への対処。利用者は
+上の計画からの変更 1〜3 を受け入れた。
+
+- **HIGH（写しの漏れ）**: 権限の状態の写し（形式 2。形式 1 の写しは読めない＝写し無しとして扱う）に、プロジェクトの `visibility`、
+  承認の規則の承認できる人（`approval_rule_approvers`）、チェックの名前空間の許可（`check_namespace_grants`）を足した。当て直しは狭める
+  向きだけ: `internal` → `private`、写しに無い許可を消す、承認できる人は共通の部分に切る（空は「Developer 以上の誰でも」なので、写しが空なら
+  そのまま、DB が空か共通が無ければ写しの一覧にする）。
+- **HIGH（戻ってくる連携）**: `revoke_all_credentials` が有効な push ミラーと連携（kanflow）をすべて無効にする（監査の行
+  `restore.push_mirrors_disabled` / `restore.integration_disabled`、`reason=restore`）。保留中・受け取り済みの代理実行の主張も
+  `reject_reason=restore` で終わらせる（`restore.assertion_rejected`）。runbook の「再発行」に有効に戻す手順を足した。
+- **HIGH（保守との排他）**: 予約していたロック `repo_maint:<repo_id>` を両方が取る。バックアップは複写と fsck の間（待つ。
+  `backup.repo_timeout_secs` の残りまで。取れなければ FG-SYS-0008 `repository_copy_timeout`、`detail=maintenance_lock_held`）、
+  O3 の保守は全手順の間（待たない。取れなければ `skipped backup_running`）。トランザクションのロックは `idle_in_transaction` の時間切れで
+  切れるので、プールから外した接続の **セッションのロック**（forge-db `restore::RepoMaintLock`。落とすと接続が閉じて外れる。fsck の後に
+  `alive()` で確かめる）。fsck と 3 回の再試行は二つ目の確認として残す。`commit-graph`・`commit-graphs/`・`multi-pack-index*` は複写しない
+  （次の保守が書く）。
+- **MEDIUM**: 最新の写しが読めないときは写し無し（管理者の印をすべて外す）。`--allow-older-copy` で古い写しを使える。
+  `regrant-admin` は最新の `restore.finished` と同じ `begin` の一覧にある利用者だけ、かつ一覧の後に `restore.*` 以外の監査の行がその利用者に
+  無いときだけ。`forge restore repositories` はディレクトリ 0700・ファイル 0600 で書き、`backup.repo_timeout_secs` で止まる
+  （FG-SYS-0009 `restore_timeout`）、`--replace` の退避先は実行ごと（`pre-restore-<g>-<request_id>`）。暗号の AAD に世代の名前
+  （写しは `state`）を入れ、`manifest.json` に鍵の HMAC（`manifest.mac`）を付けて復元で確かめる。pgBackRest のラベルは実行の前後の
+  `info` の差から取る（前からあったラベルなら `db_backup_unexpected`）。`narrow_members` は利用者ごとの監査の行も書く。
+  `finish` は手順ごとに繰り返せ、`begin`（印のファイル）で前の実行を見分けて `restore.finished` に `rerun` を書き、一覧は前の実行の行から出す。
+  当て直しで有効な管理者が 0 人になったら報告とログで言い、戻し方（`regrant-admin` / `bootstrap-admin`）を示す。
+- **LOW**: 止まったバックアップの `.lock`（`pid=` のプロセスが無い）は自動で取り戻す。ロックのファイルは fsync する。
+  `expected_versions` の流し読みは見送った（M3 の規模では不要）。

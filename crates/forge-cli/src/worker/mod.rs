@@ -138,6 +138,8 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
     let keys = Arc::new(cfg.audit.require_seal_keys()?);
     // No storage, no start: provisioning would only fail (D4 MR3b).
     let storage = Storage::open(cfg.storage_root()?)?;
+    // M3 O1: no job or webhook runs before `forge restore finish`.
+    crate::restore::refuse_if_pending(storage.root.path())?;
     // M3 O3: the prune grace against the merge window, before anything runs.
     maintenance::check_settings(&cfg.maintenance)?;
     // M3 N1: mail lane inputs (the lane itself is built after the database).
@@ -157,6 +159,15 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             let _ = stop.send(true);
         });
         tracing::info!(db_target = %db.target(), "forge.worker.started");
+        // M3 O1: the authorization state copy outside the backup (its own
+        // loop: a failed copy is logged and retried, never stops the worker).
+        let state_copy = cfg.backup.state_copy_dir.is_some().then(|| {
+            tokio::spawn(crate::state_copy::run_task(
+                db.clone(),         // clone: the task's own pool handle
+                cfg.backup.clone(), // clone: the task owns its settings
+                stopped.clone(),    // clone: the task waits on its own receiver
+            ))
+        });
         // M3 I2: the webhook lane (keys and CA read now: a bad one stops the start).
         let webhook = WebhookLane {
             runner: webhooks::lane(&db, &cfg.webhook).await?,
@@ -182,6 +193,9 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             stopped,
         )
         .await;
+        if let Some(task) = state_copy {
+            task.abort();
+        }
         signal.abort();
         db.close().await;
         tracing::info!("forge.worker.stopped");
