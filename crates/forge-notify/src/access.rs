@@ -14,8 +14,9 @@ use forge_auth::{
 };
 use forge_core::config::valid_mailbox;
 use forge_core::ids::{ProjectId, UserId};
-use forge_core::{NotificationKind, UserKind};
+use forge_core::{NotificationKind, ProjectRecord, UserKind};
 use forge_db::notify::{self, Preferences, Recipient};
+use forge_db::review::StoredMergeRequest;
 use forge_db::{resolve, review, Db};
 use forge_errors::ForgeError;
 
@@ -98,10 +99,79 @@ pub async fn decide(
     }
 }
 
+/// Whether `user` is to get an in-app item of `kind` about merge request
+/// `iid` of `project` now (M3 U4): an active person who has not switched
+/// the kind off in the app and may read the merge request. No address is
+/// needed and the mail settings do not apply.
+pub async fn decide_in_app(
+    db: &Db,
+    user: UserId,
+    kind: NotificationKind,
+    project: ProjectId,
+    iid: i64,
+) -> Result<bool, ForgeError> {
+    let Some(recipient) = notify::recipient(db, user).await? else {
+        return Ok(false);
+    };
+    if !recipient.active || recipient.kind != UserKind::Human {
+        return Ok(false);
+    }
+    if !notify::preferences(db, user).await?.shows_in_app(kind) {
+        return Ok(false);
+    }
+    Ok(matches!(
+        merge_request_view(db, user, &recipient, project, iid).await?,
+        Seen::Visible(_)
+    ))
+}
+
 enum Seen {
     Visible(View),
     NotVisible,
     Gone,
+}
+
+/// The person `user` (as `recipient` says they are now) as a signed-in
+/// person in a session — the principal the web UI decides for.
+pub(crate) fn person(user: UserId, recipient: &Recipient) -> Principal {
+    Principal::authenticated(
+        user,
+        recipient.is_admin,
+        recipient.active,
+        Credential::Session,
+        recipient.kind,
+    )
+}
+
+/// `MergeRequestRead` for `principal` on `record` (the project as loaded
+/// for that person) and `stored`: what they may see of it, or `None`.
+pub fn visible_view(
+    principal: &Principal,
+    record: &ProjectRecord,
+    stored: &StoredMergeRequest,
+) -> Option<View> {
+    let loaded = LoadedProject {
+        id: record.id,
+        visibility: record.access.visibility,
+        role: record.access.role,
+        pending_deletion: record.access.pending_deletion,
+    };
+    let mr = LoadedMergeRequest {
+        iid: Some(stored.iid),
+        author: stored.author,
+        state: stored.state,
+        draft: stored.draft,
+        source_branch: stored.source_branch.clone(), // clone: the context owns its names
+        target_branch: stored.target_branch.clone(),
+    };
+    let ctx = MergeRequestCtx::new(loaded, mr);
+    if prove(principal, Action::MergeRequestRead, ctx).is_err() {
+        return None;
+    }
+    Some(View {
+        project_path: record.path.full_path(),
+        title: stored.title.clone(), // clone: the stored row stays the caller's
+    })
 }
 
 /// `MergeRequestRead` for `user` as a person in a session, on the project
@@ -121,33 +191,10 @@ async fn merge_request_view(
         // access is decided below only for one that exists).
         return Ok(Seen::Gone);
     };
-    let principal = Principal::authenticated(
-        user,
-        recipient.is_admin,
-        recipient.active,
-        Credential::Session,
-        recipient.kind,
-    );
-    let loaded = LoadedProject {
-        id: record.id,
-        visibility: record.access.visibility,
-        role: record.access.role,
-        pending_deletion: record.access.pending_deletion,
-    };
-    let mr = LoadedMergeRequest {
-        iid: Some(stored.iid),
-        author: stored.author,
-        state: stored.state,
-        draft: stored.draft,
-        source_branch: stored.source_branch.clone(), // clone: the context owns its names
-        target_branch: stored.target_branch.clone(),
-    };
-    let ctx = MergeRequestCtx::new(loaded, mr);
-    if prove(&principal, Action::MergeRequestRead, ctx).is_err() {
-        return Ok(Seen::NotVisible);
-    }
-    Ok(Seen::Visible(View {
-        project_path: record.path.full_path(),
-        title: stored.title,
-    }))
+    Ok(
+        match visible_view(&person(user, recipient), &record, &stored) {
+            Some(view) => Seen::Visible(view),
+            None => Seen::NotVisible,
+        },
+    )
 }

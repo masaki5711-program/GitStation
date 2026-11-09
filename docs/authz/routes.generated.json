@@ -98,6 +98,22 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/notifications",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/notifications",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/projects/{id}/{*rest}",
     "public": true,
     "scope": "instance",
@@ -1147,6 +1163,38 @@
     "action": "NotificationPreferencesWrite",
     "method": "PUT",
     "path": "/api/v1/user/notification-preferences",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NotificationInboxRead",
+    "method": "GET",
+    "path": "/api/v1/user/notifications",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NotificationInboxUpdate",
+    "method": "POST",
+    "path": "/api/v1/user/notifications/read-all",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NotificationInboxRead",
+    "method": "GET",
+    "path": "/api/v1/user/notifications/unread-count",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NotificationInboxUpdate",
+    "method": "POST",
+    "path": "/api/v1/user/notifications/{id}/read",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

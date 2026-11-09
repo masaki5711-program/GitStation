@@ -864,6 +864,17 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
                 "forge_ro:SELECT",
             ]),
         ),
+        // ── M3 U4: in-app notifications (20261201100000) ──
+        (
+            "forge.in_app_notifications",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_app:DELETE",
+                "forge_ro:SELECT",
+            ]),
+        ),
         // ── M3 O2: the push mirror (20261130100000) ──
         (
             "forge.push_mirrors",
@@ -1019,6 +1030,8 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 N1: notifications (migration 20261120100000) ──
     "notification_preferences",
     "notifications",
+    // ── M3 U4: in-app notifications (migration 20261201100000) ──
+    "in_app_notifications",
     // ── M3 O2: the push mirror (migration 20261130100000) ──
     "push_mirrors",
     "push_mirror_status",

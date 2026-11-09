@@ -199,6 +199,9 @@ async fn preferences_default_without_a_row_and_replace_as_a_whole() {
             NotificationKind::MergeRequestApproved,
             NotificationKind::MergeRequestCommented,
         ],
+        // M3 U4: the in-app switches are stored beside the mail ones.
+        in_app_enabled: false,
+        in_app_muted: vec![NotificationKind::MergeRequestMerged],
     };
     assert_eq!(
         set_preferences(&w.t.db, w.alice, &saved)
@@ -220,6 +223,7 @@ async fn preferences_default_without_a_row_and_replace_as_a_whole() {
             NotificationKind::MergeRequestMerged,
             NotificationKind::MergeRequestMerged,
         ],
+        ..Preferences::default()
     };
     let stored = set_preferences(&w.t.db, w.alice, &again)
         .await

@@ -36,7 +36,9 @@
 //! the webhook lane (`webhooks`, M3 I2: its OWN job runner for
 //! `webhook.deliver` with the `webhook-dispatch` subscriber, only with
 //! `webhook.secret_keys_file`) and the delivery history's retention
-//! (`webhook_delivery_retention`, every hour).
+//! (`webhook_delivery_retention`, every hour), and the in-app
+//! notifications' retention (`in_app_notification_retention`, M3 U4: every
+//! hour, read items after 30 days, every item after 180).
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
@@ -105,6 +107,7 @@ mod events_retention;
 // ── check run retention (feat/db-check-run-retention) ──
 mod act_as_sweep;
 mod check_run_retention;
+mod in_app_retention;
 // ── end check run retention ──
 // ── M2 MR6: the session purge ──
 mod session_purge;
@@ -216,6 +219,8 @@ enum Task {
     EventsRetention,
     /// Check runs past `review.check_run_retention_days` (`check_run_retention`).
     CheckRunRetention,
+    /// Old in-app notifications (`in_app_retention`, M3 U4).
+    InAppRetention,
     /// Expired pending act-as assertions rejected (`act_as_sweep`, M3 S2).
     ActAsSweep,
     /// Dead `check.spec_drift` jobs answered with `error` (`spec_drift_sweep`, M3 X2).
@@ -319,6 +324,8 @@ fn tasks_with(
         Task::EventsRetention,
         // Check runs: needs only the database.
         Task::CheckRunRetention,
+        // M3 U4: needs only the database.
+        Task::InAppRetention,
         // M3 S2: needs only the database.
         Task::ActAsSweep,
         // M3 X2: needs only the database.
@@ -413,17 +420,18 @@ fn registry_with(
         registry
     };
     // M3 N1 (`independent`): merge request events become notifications
-    // when mail is configured; without it nothing is recorded at all (no
-    // backlog that nothing would send).
+    // when mail is configured; without it no mail is recorded at all (no
+    // backlog that nothing would send). M3 U4: the in-app items are
+    // recorded either way.
     match notify {
         Some(task) => {
             let subscriber: Arc<dyn forge_db::subscribers::Subscriber> =
                 Arc::clone(&task.subscriber) as Arc<dyn forge_db::subscribers::Subscriber>;
             registry.with(subscriber)
         }
-        // Mail off: the subscriber stays registered but passes every event
-        // over, so its cursor follows the head (no replay of the disabled
-        // period on enabling, no lag, retention not held back).
+        // Mail off: the subscriber stays registered, records the in-app
+        // items and no mail, so its cursor follows the head (no replay of
+        // the disabled period on enabling, no lag, retention not held back).
         None => match paused {
             Some(db) => registry.with(Arc::new(forge_notify::Notify::paused(db)?)),
             None => Ok(registry),
@@ -477,6 +485,7 @@ impl Task {
             Self::CodeownersRestore => codeowners_restore::NAME,
             Self::EventsRetention => events_retention::NAME,
             Self::CheckRunRetention => check_run_retention::NAME,
+            Self::InAppRetention => in_app_retention::NAME,
             Self::ActAsSweep => act_as_sweep::NAME,
             Self::SpecDriftSweep => spec_drift_sweep::NAME,
             Self::RiskSweep => risk_sweep::NAME,
@@ -511,6 +520,7 @@ impl Task {
             Self::CodeownersRestore => codeowners_restore::PERIOD,
             Self::EventsRetention => events_retention::PERIOD,
             Self::CheckRunRetention => check_run_retention::PERIOD,
+            Self::InAppRetention => in_app_retention::PERIOD,
             Self::ActAsSweep => act_as_sweep::PERIOD,
             Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
             Self::RiskSweep => risk_sweep::PERIOD,
@@ -576,6 +586,7 @@ impl Task {
                     .await
             }
             Self::ActAsSweep => act_as_sweep::run_act_as_sweep(db).await,
+            Self::InAppRetention => in_app_retention::run_in_app_retention(db).await,
             Self::MaintenanceRunner => match shared.maintenance.as_ref() {
                 Some(m) => {
                     let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver
