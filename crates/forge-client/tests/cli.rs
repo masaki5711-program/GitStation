@@ -1001,6 +1001,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "pipeline cancel",
             "pipeline retry",
             "pipeline run",
+            "pipeline log",
+            "pipeline diagnosis",
             "api",
             "help",
             "schema"

@@ -184,3 +184,201 @@ fn bad_input_sends_nothing() {
     }
     assert!(srv.seen().is_empty());
 }
+
+const LOG_PAGE: &str = r#"{"pipeline_id":42,"job_id":9,"job":"test","job_status":"running","attempt":2,"current_attempt":2,"from":0,"to":3,"text":"running 4 tests\nFORGE_JOB_TOKEN=[MASKED]\n","next_from":4,"complete":false}"#;
+
+const DIAGNOSIS: &str = r#"{"pipeline_id":42,"status":"failed","error_code":null,"failures":[{"job":"test","job_id":9,"stage":"test","attempt":2,"pending":false,"fingerprint":"fp_0123456789abcdef","error_codes":["FG-DB-0003"],"excerpt":"test db::reload ... FAILED\npool timed out FG-DB-0003","source":{"log_path":"/api/v1/projects/7/pipelines/42/jobs/9/log?attempt=2","lines":[812,813]},"occurrences":3,"first_seen_at":"2026-11-01T00:00:00Z","known_fixes":[{"merge_request_id":61,"iid":5,"title":"Raise the pool limit","fixed_at":"2026-11-02T00:00:00Z"}]},{"job":"lint","job_id":10,"stage":"test","attempt":1,"pending":true,"fingerprint":null,"error_codes":["FG-CI-0004"],"excerpt":"","source":{"log_path":"/api/v1/projects/7/pipelines/42/jobs/10/log?attempt=1","lines":null},"occurrences":0,"first_seen_at":null,"known_fixes":[]}]}"#;
+
+/// M4 C5: the log and the diagnosis call their routes; the log's page and
+/// the next chunk, the diagnosis' fingerprints, excerpts and known fixes
+/// are shown.
+#[test]
+fn pipeline_log_and_diagnosis_call_their_routes() {
+    let cases: Vec<(Vec<&str>, &str, &str)> = vec![
+        (
+            vec![
+                "pipeline",
+                "log",
+                "--project",
+                "7",
+                "--pipeline",
+                "42",
+                "--job",
+                "9",
+            ],
+            "/api/v1/projects/7/pipelines/42/jobs/9/log",
+            LOG_PAGE,
+        ),
+        (
+            vec![
+                "pipeline",
+                "log",
+                "--project",
+                "7",
+                "--pipeline",
+                "42",
+                "--job",
+                "9",
+                "--attempt",
+                "2",
+                "--from",
+                "4",
+            ],
+            "/api/v1/projects/7/pipelines/42/jobs/9/log?attempt=2&from=4",
+            LOG_PAGE,
+        ),
+        (
+            vec![
+                "pipeline",
+                "diagnosis",
+                "--project",
+                "7",
+                "--pipeline",
+                "42",
+            ],
+            "/api/v1/projects/7/pipelines/42/diagnosis",
+            DIAGNOSIS,
+        ),
+    ];
+    for (args, target, answer) in cases {
+        let srv = Mock::start(move |_| Resp::json(200, answer));
+        let sb = Sandbox::new();
+        let o = gstn(&sb, &srv, &args);
+        assert_eq!(o.code, 0, "{args:?}: {}", o.stderr);
+        let r = srv.seen().pop().expect("a request");
+        assert_eq!((r.method.as_str(), r.target.as_str()), ("GET", target));
+    }
+    let srv = Mock::start(|_| Resp::json(200, LOG_PAGE));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "pipeline",
+            "log",
+            "--project",
+            "7",
+            "--pipeline",
+            "42",
+            "--job",
+            "9",
+        ],
+    );
+    assert!(
+        o.stdout.contains("FORGE_JOB_TOKEN=[MASKED]"),
+        "{}",
+        o.stdout
+    );
+    assert!(o.stdout.contains("more: --from 4"), "{}", o.stdout);
+    let srv = Mock::start(|_| Resp::json(200, DIAGNOSIS));
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "pipeline",
+            "diagnosis",
+            "--project",
+            "7",
+            "--pipeline",
+            "42",
+        ],
+    );
+    for want in [
+        "#42 failed",
+        "test (job 9, attempt 2): fp_0123456789abcdef seen 3 times FG-DB-0003",
+        "lines 812-813 of the log",
+        "  | pool timed out FG-DB-0003",
+        "known fix: !5 Raise the pool limit",
+        "lint (job 10, attempt 1): not fingerprinted yet FG-CI-0004",
+    ] {
+        assert!(o.stdout.contains(want), "{want}: {}", o.stdout);
+    }
+}
+
+/// ADR-0029 decision 5: a refused CI output (an agent's token on a
+/// confidential repository) is the server's FG-AUTH-0022 with its request
+/// id; nothing else is printed.
+#[test]
+fn a_withheld_log_shows_the_code_and_request_id() {
+    let srv = Mock::start(|_| {
+        Resp::json(
+            403,
+            r#"{"error_code":"FG-AUTH-0022","user_message":"This repository holds a confidential document (or it could not be checked), so an AI agent's account cannot clone, fetch or download an archive of it, or read its CI logs and diagnosis. Use a person's account.","request_id":"req-synthetic-22"}"#,
+        )
+    });
+    let sb = Sandbox::new();
+    for args in [
+        vec![
+            "pipeline",
+            "log",
+            "--project",
+            "7",
+            "--pipeline",
+            "42",
+            "--job",
+            "9",
+        ],
+        vec![
+            "pipeline",
+            "diagnosis",
+            "--project",
+            "7",
+            "--pipeline",
+            "42",
+        ],
+    ] {
+        let o = gstn(&sb, &srv, &args);
+        assert_ne!(o.code, 0, "{args:?}");
+        assert!(o.stderr.contains("FG-AUTH-0022"), "{}", o.stderr);
+        assert!(o.stderr.contains("req-synthetic-22"), "{}", o.stderr);
+        assert!(o.stdout.is_empty(), "{}", o.stdout);
+    }
+}
+
+#[test]
+fn bad_log_input_sends_nothing() {
+    let srv = Mock::start(|_| Resp::json(200, LOG_PAGE));
+    let sb = Sandbox::new();
+    for args in [
+        vec!["pipeline", "log", "--project", "7", "--pipeline", "42"],
+        vec![
+            "pipeline",
+            "log",
+            "--project",
+            "7",
+            "--pipeline",
+            "42",
+            "--job",
+            "0",
+        ],
+        vec![
+            "pipeline",
+            "log",
+            "--project",
+            "7",
+            "--pipeline",
+            "42",
+            "--job",
+            "9",
+            "--attempt",
+            "0",
+        ],
+        vec![
+            "pipeline",
+            "log",
+            "--project",
+            "7",
+            "--pipeline",
+            "42",
+            "--job",
+            "9",
+            "--from",
+            "4096",
+        ],
+        vec!["pipeline", "diagnosis", "--project", "7"],
+    ] {
+        let o = gstn(&sb, &srv, &args);
+        assert_ne!(o.code, 0, "{args:?}");
+    }
+    assert!(srv.seen().is_empty());
+}
