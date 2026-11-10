@@ -142,7 +142,7 @@ impl Review {
         }
         let project = *proof.id();
         let user = caller_of(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (outcome, stored, ()) =
             review::put_merge_settings_mr_decided(&self.db, &ctx, project, user, values, |facts| {
                 let fresh = MergeSettingsCtx::new(
@@ -182,7 +182,7 @@ impl Review {
         };
         let project = *proof.id();
         let user = caller_of(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (outcome, stored, ()) =
             review::toggle_codeowners_mr_decided(&self.db, &ctx, project, user, change, |facts| {
                 let fresh = CodeownersToggleCtx::new(

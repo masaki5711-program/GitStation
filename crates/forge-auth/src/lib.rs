@@ -21,6 +21,8 @@ mod codeowners_ctx;
 mod contexts;
 mod feed_ctx;
 mod integration_ctx;
+// M4 C0: CI runner and job principals (ADR-0029).
+mod job;
 pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
@@ -28,6 +30,7 @@ mod matrix_rows_act_as;
 mod matrix_rows_approval;
 mod matrix_rows_bindings;
 mod matrix_rows_checks;
+mod matrix_rows_ci;
 mod matrix_rows_conditions;
 mod matrix_rows_dev_status;
 mod matrix_rows_discussion;
@@ -61,19 +64,20 @@ mod spec_ref;
 
 pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
-pub use action::{ActAsRule, Action};
+pub use action::{ActAsRule, Action, CiRule};
 pub use authorize::authorize;
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
 pub use feed_ctx::{prove_visible, IntegrationFeedCtx, LoadedIntegrationFeed};
 pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
+pub use job::authorize_pinned_copy;
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
     AssertionFacts, AssertionSubject, BindingSubject, CodeownersToggle, CopyMark, Credential,
-    IntegrationFeedView, MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState,
-    NamespaceView, Principal, ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia,
-    Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
-    ViaView, Visibility,
+    IntegrationFeedView, JobCredential, JobTokenState, MembershipChange, MembershipScope,
+    MergeRequestEdit, MergeRequestState, NamespaceView, PinnedCopy, Principal, ProjectView,
+    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, Scope,
+    ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
@@ -127,6 +131,8 @@ mod viewer_tests;
 
 #[cfg(test)]
 mod act_as_tests;
+#[cfg(test)]
+mod job_tests;
 #[cfg(test)]
 mod webhook_tests;
 // M3 X5: the context API's action and the agent audience (plan 06 D-5).

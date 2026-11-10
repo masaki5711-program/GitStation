@@ -30,6 +30,64 @@ pub enum Credential {
     /// ([`Principal::act_as`]); `authorize()` decides it in its own arm
     /// (`act_as.rs`) and lends no administrator right.
     ActAs(Box<ActAsCredential>),
+    /// A registered CI runner (M4 C0, ADR-0029 §1): only the runner API's
+    /// actions (`CiRule::Runner`); never a repository or API read. Built by
+    /// forge-web's authentication only ([`Principal::runner`]); decided in
+    /// its own arm (`job.rs`).
+    Runner(RunnerCredential),
+    /// One CI job's short-lived token (ADR-0029 §1): one project, one
+    /// pinned SHA, the job's lifetime. Built by forge-web's authentication
+    /// only ([`Principal::job`]); decided in its own arm (`job.rs`).
+    Job(Box<JobCredential>),
+}
+
+/// What a runner request authenticated with (ADR-0029 §1). The token's
+/// lookup (`ci_runners`, SHA-256 hash only) lands with the runner API
+/// (M4 C3); authentication refuses an unknown or disabled runner's token
+/// (`FG-AUTH-0001`) before a principal exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunnerCredential {
+    /// `ci_runners.id` (the log `runner_id`).
+    pub runner_id: i64,
+}
+
+/// What a job request authenticated with (ADR-0029 §1, §3): the job, its
+/// project and the SHA its pipeline pinned, and the token's state as read
+/// with it (the token is checked against the database on every request,
+/// never a signature-only JWT). Issuance and lookup (`ci_job_tokens`) land
+/// with the runner API (M4 C3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobCredential {
+    /// `ci_jobs.id` (the log `job_id`).
+    pub job_id: i64,
+    /// The only project the job reads.
+    pub project: ProjectId,
+    /// The only commit the job reads (its pipeline's pinned SHA).
+    pub sha: forge_core::push::ObjectId,
+    /// Live, expired or revoked, as read with the token.
+    pub state: JobTokenState,
+}
+
+/// A job token's state as read with it (ADR-0029 §1): `expires_at` past →
+/// `Expired`; `revoked_at` set (the job ended: success, failure, cancel,
+/// lost lease) → `Revoked`. Only `Live` is authorized (`FG-AUTH-0001`
+/// otherwise; `authorize()` has no clock, so authentication states it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobTokenState {
+    Live,
+    Expired,
+    Revoked,
+}
+
+impl JobTokenState {
+    /// The log `reason` of a refusal.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JobTokenState::Live => "live",
+            JobTokenState::Expired => "expired",
+            JobTokenState::Revoked => "revoked",
+        }
+    }
 }
 
 /// What an act-as request authenticated with (ADR-0025 §2, §5): the
@@ -220,7 +278,39 @@ impl Principal {
     pub fn act_as_credential(&self) -> Option<&ActAsCredential> {
         match &self.credential {
             Credential::ActAs(c) => Some(c),
-            Credential::Session | Credential::Token(_) => None,
+            Credential::Session
+            | Credential::Token(_)
+            | Credential::Runner(_)
+            | Credential::Job(_) => None,
+        }
+    }
+
+    /// A registered CI runner (M4 C0, ADR-0029 §1): forge-web's
+    /// authentication builds it from a runner token it looked up, never
+    /// anything else (test `only_forge_web_builds_ci_principals`). No
+    /// person, no administrator rights; not a person, so an agent
+    /// audience ([`Principal::is_agent_audience`] unchanged) — but
+    /// `authorize()` decides it in `job.rs` before any other rule.
+    pub fn runner(credential: RunnerCredential) -> Self {
+        Self::ci(Credential::Runner(credential))
+    }
+
+    /// One CI job (M4 C0, ADR-0029 §1, §3): the same as
+    /// [`Principal::runner`], for a job token.
+    pub fn job(credential: JobCredential) -> Self {
+        Self::ci(Credential::Job(Box::new(credential)))
+    }
+
+    /// No user, active (the credential's own state decides), the kind of
+    /// no person (`Bot`: never a member, never `Human`).
+    fn ci(credential: Credential) -> Self {
+        Self {
+            user: None,
+            is_admin: false,
+            active: true,
+            credential,
+            agent: false,
+            kind: AccountKind::Bot,
         }
     }
 
@@ -232,7 +322,7 @@ impl Principal {
             && match &self.credential {
                 Credential::Session => true,
                 Credential::Token(scopes) => scopes.contains(&Scope::Admin),
-                Credential::ActAs(_) => false,
+                Credential::ActAs(_) | Credential::Runner(_) | Credential::Job(_) => false,
             }
     }
 
@@ -245,6 +335,8 @@ impl Principal {
             Credential::Session => Vec::new(),
             Credential::Token(scopes) => names(scopes),
             Credential::ActAs(c) => names(&c.via_scopes),
+            // CI principals hold no scope (ADR-0029: `CiRule` decides).
+            Credential::Runner(_) | Credential::Job(_) => Vec::new(),
         }
     }
 }
@@ -467,6 +559,13 @@ pub enum Resource {
         project: ProjectView,
         mark: CopyMark,
     },
+    /// A CI job's copy of its own project at its pipeline's pinned SHA (M4
+    /// C0, ADR-0029 §3). Only the job arm (`job.rs`) reads it: the project
+    /// and the SHA must be the job token's, whatever the confidential
+    /// marks. Unconstructible outside forge-auth ([`PinnedCopy`] has
+    /// private fields): built only by [`crate::authorize_pinned_copy`];
+    /// every other principal is refused.
+    PinnedCopy(PinnedCopy),
     /// One ref update in a push. The kind is derived from `name` inside
     /// `authorize()` (callers cannot mislabel a reserved ref); `update` must
     /// come from the ancestry check of old and new object ids; `protection`
@@ -644,6 +743,28 @@ pub enum Resource {
     /// `ActAsAssertionIssue`, ADR-0025 §5): the merge request as seen by
     /// the person, the intent, and the receiving integration's state.
     ActAsConfirm(Box<ActAsConfirmView>),
+}
+
+/// See [`Resource::PinnedCopy`]: what a job asks to copy. Private fields,
+/// a crate-only constructor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedCopy {
+    project: ProjectId,
+    sha: forge_core::push::ObjectId,
+}
+
+impl PinnedCopy {
+    pub(crate) fn new(project: ProjectId, sha: forge_core::push::ObjectId) -> Self {
+        Self { project, sha }
+    }
+
+    pub fn project(&self) -> ProjectId {
+        self.project
+    }
+
+    pub fn sha(&self) -> &forge_core::push::ObjectId {
+        &self.sha
+    }
 }
 
 /// See [`Resource::ActAs`].

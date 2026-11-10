@@ -168,7 +168,7 @@ impl Review {
                 REQUEST_BUDGET,
             )
             .await?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         // M3 S2: an act-as approve is bound to the target's tip too; it is
         // compared again under the lock with the merge request as locked.
         let using = act_as_use(proof.principal());
@@ -239,7 +239,7 @@ impl Review {
             return Err(shape_mismatch("merge_request_unapprove"));
         };
         let user = caller(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let using = act_as_use(proof.principal());
         let tip = match (&using, repo) {
             (Some(_), Some(repo)) => {
@@ -401,7 +401,7 @@ impl Review {
         let project = *proof.id();
         let user = caller_of(proof)?;
         let new = self.rule(ask).await?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (outcome, rule, ()) = review::put_approval_rule_mr_decided(
             &self.db,
             &ctx,
@@ -432,7 +432,7 @@ impl Review {
         require(proof.action(), Action::ApprovalRuleManage)?;
         let project = *proof.id();
         let user = caller_of(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (outcome, ()) =
             review::remove_approval_rule_mr_decided(&self.db, &ctx, project, user, name, |facts| {
                 proof

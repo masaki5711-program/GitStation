@@ -284,6 +284,7 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
+        | Resource::PinnedCopy(_)
         | Resource::ActAsConfirm(_) => None,
     };
     project.is_some_and(|p| p.visibility == Visibility::Internal)

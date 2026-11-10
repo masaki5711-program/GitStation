@@ -36,7 +36,7 @@ impl Review {
         })?;
         let repo_id = ready(project, repo)?;
         let user = caller(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (outcome, ()) = review::purge_mr_version_refs_decided(
             &self.db,
             &ctx,

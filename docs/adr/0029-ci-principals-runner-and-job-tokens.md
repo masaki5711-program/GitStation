@@ -22,7 +22,7 @@ M4 の CI（計画 14）では、別のホストの `forge-runner` がジョブ�
    - `Credential::Job(Box<JobCredential>)`: ジョブを Runner に割り当てたときに 1 つ発行する短命のトークン。**1 つのプロジェクト・固定した SHA・そのジョブの生存期間**に結びつく。期限は `ジョブの時間切れ + 猶予`、ジョブが終わる（成功・失敗・取り消し・リースの喪失）と同じトランザクションで `revoked_at` を書く。要求のたびに DB で失効を確かめる（署名だけの JWT にしない）。
    - どちらも人の `UserId` を持たず、`admin_rights()` は常に false。`Principal` は forge-web の認証だけが作る（`Principal::runner` / `Principal::job`。試験 `only_forge_web_builds_ci_principals`）。
 2. **判定は新しい `job.rs` で、`authorize()` の 1 か所の中**。`authorize()` は `Credential::Runner | Job` を最初に `job::decide` へ渡す（`act_as::decide` と同じ形）。許可は `Action::ci_rule() -> CiRule { Denied, Runner, Job }` の 1 つの網羅的な `match` で、**既定で閉じる**。`Denied` の Action はすべて行列に `ci_denied_for_<action>` の行を生成する。
-3. **ジョブの複製は自分のプロジェクトの固定した SHA だけ、機密の印に関係なく許す**。新しい `Resource::PinnedCopy { project, sha }`（`authorize_pinned_copy` だけが作る）で、`job.rs` は `project == credential.project` かつ `sha == credential.sha` かつジョブが生きていることだけを見る。`CopyMark` は見ない。Job が `RepoCopy` で求めたら断る（`reason=job_requires_pinned_copy`）。Smart HTTP の経路はジョブに隠した ref `refs/pipelines/<pipeline_id>/head` だけを広告する（`transfer.hideRefs` で他を隠す）。届くのはその SHA とその祖先だけ。
+3. **ジョブの複製は自分のプロジェクトの固定した SHA だけ、機密の印に関係なく許す**。新しい `Resource::PinnedCopy { project, sha }`（`authorize_pinned_copy` だけが作る）で、`job.rs` は `project == credential.project` かつ `sha == credential.sha` かつジョブが生きていることだけを見る。`CopyMark` は見ない。Job が `RepoCopy` や `Project` で求めたら、他のプロジェクト・他の SHA と同じく FG-REPO-0005 で断る（`reason=job_requires_pinned_copy` はログだけ。C0 のレビューで、見えるプロジェクトだけ 403 になる存在の手がかりを閉じた）。Smart HTTP の経路はジョブに隠した ref `refs/pipelines/<pipeline_id>/head` だけを広告する（`transfer.hideRefs` で他を隠す）。届くのはその SHA とその祖先だけ。
 4. **`is_agent_audience()` は変えない**。Job・Runner の主体は人ではないので真を返すが、`job.rs` が先に決めるので `RepoCopy` の arm にも文脈 API にも届かない（`ContextRead` などは `CiRule::Denied`）。
 5. **出力は元のリポジトリの印を継ぐ**。ログ・成果物・診断・失敗の指紋を読む Action（`CiLogRead`・`CiArtifactRead`・`PipelineDiagnosisRead`）は `Resource::CiOutput { project, pipeline_mark, tip_mark }` で判定する。`pipeline_mark` はパイプラインを作るときにその SHA を測った値（`ci_pipelines.copy_mark`、測れなければ `Undecided`）、`tip_mark` は読むときの既定のブランチの先端。人は `RepoBrowse` と同じ。**エージェントの相手は両方が `Open` のときだけ**。それ以外は FG-AUTH-0022（`route` = `ci_log` / `ci_artifact` / `ci_diagnosis`、`reason` = 印の名前、`mark_of` = `pipeline` / `tip`）。
 6. **サービスアカウントは今のまま**: CI の主体にしない。エージェントの相手として、機密のリポジトリの複製と CI の出力を断られる。M3 の `ci/gates` のスクリプトは切り替え（計画 14 X）までサービスアカウントで報告を続ける。
@@ -78,10 +78,23 @@ ADR-0026 の安全網（FG-AUTH-0022、`RepoRead` × `RepoCopy`）は CI のジ�
 | 失敗 | コード | ログの項目 |
 |---|---|---|
 | Runner / Job のトークンが無い・期限切れ・失効 | FG-AUTH-0001 | `credential=runner\|job`、`reason=unknown\|expired\|revoked`、`job_id` |
-| Job が他のプロジェクト・他の SHA・許されない Action | FG-AUTH-0003 | `reason=job_other_project\|job_sha_mismatch\|job_requires_pinned_copy\|ci_not_allowed`、`action`、`job_id` |
+| Job が他のプロジェクト・他の SHA、または固定した複製以外の `RepoRead` | FG-REPO-0005（見えないプロジェクトと同じ 404。見える・見えない・無いで同じ応答） | `reason=job_other_project\|job_sha_mismatch\|job_requires_pinned_copy`、`action`、`job_id` |
+| Job の許されない Action | FG-AUTH-0003 | `reason=ci_not_allowed`、`action`、`ci_rule`、`job_id` |
 | Runner が他の Runner のジョブ・終わったジョブ | FG-AUTH-0003 / CI-next（JobLeaseLost） | `reason=lease_other_runner\|job_finished`、`runner_id` |
 | AI が機密の CI の出力を読む | FG-AUTH-0022 | `route`、`reason`、`mark_of`、`audience`、`pipeline_id` |
 | HTTP から `ci/pipeline` を書く | FG-AUTH-0003 | `reason=ci_namespace_internal`、`action=CheckWrite` |
+
+## 後の MR の義務（C0 のレビュー、2026-11-10）
+
+C0 は型と判定だけを入れた（トークンの保存・発行・照会は無い）。次を後の MR が満たす。満たすまで ADR は accepted にしない。
+
+**C3（Runner の API・トークン）**
+1. プロジェクトの削除・移動・アーカイブと**同じトランザクションで**、そのプロジェクトのジョブのトークンに `revoked_at` を書く。
+2. `JobTokenState::Expired` は **DB の `now()`** と `expires_at` を比べて決める（アプリのホストの時計を使わない）。`authorize()` は時計を持たないので、認証が読んだ状態を `JobCredential.state` に入れる。
+3. `JobCredential.sha` は `forge_core::push::ObjectId` で、40 桁（SHA-1）か 64 桁（SHA-256）の**小文字の 16 進だけ**を受ける（`ObjectId::parse` が大文字・短縮・空白を拒む。C0 で確認済み）。`ci_pipelines.sha` も同じ形で保存し、比較は文字列の完全一致（短縮した SHA・ref 名で照合しない）。
+
+**C5（CI の出力）**
+4. ログ・成果物・診断のどの経路よりも先に、`Undecided`（測れなかった）の印でエージェントの相手の CI の出力の読み取りが断られる（閉じる）試験を入れる。
 
 ## Error codes and runbooks affected
 

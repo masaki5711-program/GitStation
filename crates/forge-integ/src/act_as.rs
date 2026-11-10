@@ -397,7 +397,10 @@ impl ActAs {
         let claimed = db::claim(&self.db, &ctx, keys, integration, state).await?;
         let employee = match proof.principal().credential() {
             Credential::Token(scopes) => scopes.contains(&Scope::UserEmployeeNumber),
-            Credential::Session | Credential::ActAs(_) => false,
+            Credential::Session
+            | Credential::ActAs(_)
+            | Credential::Runner(_)
+            | Credential::Job(_) => false,
         };
         Ok(ClaimAnswer {
             assertion: claimed.token,

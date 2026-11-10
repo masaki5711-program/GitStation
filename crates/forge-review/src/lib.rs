@@ -61,6 +61,9 @@ pub mod versions;
 mod versions_carry;
 pub mod work_items;
 
+#[cfg(test)]
+mod change_context_tests;
+
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
 pub use forge_db::review::settings::loosens as settings_loosen_approvals;
 pub use forge_db::review::{
@@ -213,7 +216,15 @@ fn caller(proof: &Authorized<MergeRequestCtx>) -> Result<UserId, ForgeError> {
 /// as `user_via_service_account` — the person, the service account, its
 /// token, the keyed HMAC of the claimed person and the assertion's public
 /// id; the effective scope is its token's.
-fn change_context(request: &ReviewRequest, principal: &Principal, user: UserId) -> ChangeContext {
+///
+/// A CI runner or job never reaches a review write (`authorize()` refuses
+/// it every review action, ADR-0029 §8); if one did, it is a defect:
+/// `FG-SYS-0001 reason=ci_principal_in_review`, never audited as a user.
+fn change_context(
+    request: &ReviewRequest,
+    principal: &Principal,
+    user: UserId,
+) -> Result<ChangeContext, ForgeError> {
     let actor = match (principal.credential(), principal.account_kind()) {
         (Credential::ActAs(c), _) => Actor::UserViaServiceAccount {
             user,
@@ -230,6 +241,10 @@ fn change_context(request: &ReviewRequest, principal: &Principal, user: UserId) 
             Credential::Session | Credential::Token(_),
             forge_auth::AccountKind::Human | forge_auth::AccountKind::Bot,
         ) => Actor::User(user),
+        (Credential::Runner(_) | Credential::Job(_), _) => {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "ci_principal_in_review"))
+        }
     };
     let mut ctx = ChangeContext::new(actor, request.request_id.clone());
     ctx.credential_id = match principal.act_as_credential() {
@@ -237,7 +252,7 @@ fn change_context(request: &ReviewRequest, principal: &Principal, user: UserId) 
         None => request.credential_id,
     };
     ctx.effective_scope = principal.scope_names();
-    ctx
+    Ok(ctx)
 }
 
 /// The assertion an act-as change consumes (`None` otherwise).
@@ -474,7 +489,7 @@ impl Review {
             ],
         )
         .await?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let new = NewMergeRequest {
             title: fields.title.clone(), // clone: forge-db owns its request
             description: fields.description.clone(), // clone: forge-db owns its request
@@ -520,7 +535,7 @@ impl Review {
             self.require_branches(project, repo, user, &[("target_branch", target)])
                 .await?;
         }
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let patch = MergeRequestPatch {
             title: fields.title.clone(), // clone: forge-db owns its request
             description: fields.description.clone(), // clone: forge-db owns its request
@@ -549,7 +564,7 @@ impl Review {
             return Err(shape_mismatch("merge_request_close"));
         };
         let user = caller(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (outcome, stored, ()) =
             review::close_mr_decided(&self.db, &ctx, project, iid, user, |facts| {
                 let fresh = MergeRequestCtx::new(loaded(&facts.project), locked(facts)?);
@@ -579,7 +594,7 @@ impl Review {
             return Err(shape_mismatch("merge_request_reopen"));
         };
         let user = caller(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         for _ in 0..STALE_ATTEMPTS {
             let current = self.merge_request(project, iid).await?.ok_or_else(absent)?;
             // The branches of a closed merge request, checked to exist; the

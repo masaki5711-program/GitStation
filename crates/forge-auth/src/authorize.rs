@@ -2,6 +2,8 @@
 //! ADR-0010). Pure: no I/O, no clock, no globals.
 //!
 //! Order of checks:
+//! 0. an act-as request (`act_as.rs`) and a CI runner or job (`job.rs`,
+//!    M4 C0, ADR-0029) are decided in their own arms, first;
 //! 1. public actions are allowed; the sign-in's admission (`SessionCreate`
 //!    on `Resource::Admission`, M2 MR4, ADR-0021 §3) is decided on its
 //!    facts alone → `FG-AUTH-0013` (`no_access_role`, `user_disabled`,
@@ -132,6 +134,11 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
     // else (a public action included: no act-as principal reaches one).
     if let Credential::ActAs(credential) = principal.credential() {
         return crate::act_as::decide(principal, credential, action, resource);
+    }
+    // A CI runner or job (M4 C0, ADR-0029 §2): its own arm, before
+    // anything else, closed by default (`Action::ci_rule`).
+    if let Credential::Runner(_) | Credential::Job(_) = principal.credential() {
+        return crate::job::decide(principal, action, resource);
     }
     if action.is_public() {
         return Ok(());
@@ -1158,6 +1165,11 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         (Action::ActAsAssertionClaim, Resource::IntegrationFeed(feed)) => {
             integration_feed(principal, feed).map_err(|e| e.with_context("action", action.name()))
         }
+        // Only the job arm (returned above) reads a pinned copy (ADR-0029
+        // §3): a person, a token or a service account never gets one.
+        (_, Resource::PinnedCopy(_)) => {
+            Err(deny(ErrorCode::Forbidden).with_context("reason", "pinned_copy_without_job"))
+        }
         // Only the act-as arm (returned above) reads an act-as resource.
         (_, Resource::ActAs(_)) => {
             Err(deny(ErrorCode::Forbidden).with_context("reason", "act_as_resource_without_act_as"))
@@ -1430,7 +1442,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::IntegrationFeed(_)
         // Decided in their own arms (the act-as arm; the confirmation
-        // decides visibility on its merge request).
+        // decides visibility on its merge request; the job arm).
+        | Resource::PinnedCopy(_)
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_) => None,
     }
@@ -1466,6 +1479,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::Project(_)
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
+        | Resource::PinnedCopy(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

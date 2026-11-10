@@ -149,6 +149,11 @@ pub(crate) enum Actor {
     /// A service account acting for the person `ME` (M3 S2, ADR-0025):
     /// `matrix_rows_act_as.rs`.
     ActAs(crate::matrix_rows_act_as::Via),
+    /// A registered CI runner (M4 C0, ADR-0029): `matrix_rows_ci.rs`.
+    Runner,
+    /// A CI job of `matrix_rows_ci::JOB_PROJECT` pinned at
+    /// `matrix_rows_ci::JOB_SHA`, its token in this state.
+    Job(crate::model::JobTokenState),
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -165,6 +170,12 @@ pub(crate) enum Fixture {
     RepoCopy(crate::model::CopyMark),
     /// The same of an internal project.
     InternalRepoCopy(crate::model::CopyMark),
+    /// A CI job's pinned copy (M4 C0, ADR-0029 §3) of the job's project
+    /// (or another) at the job's SHA (or another).
+    PinnedCopy {
+        other_project: bool,
+        other_sha: bool,
+    },
     /// A ref update on a private project; `protected` = minimum push role.
     Ref {
         kind: RefKind,
@@ -531,6 +542,8 @@ impl Actor {
                 token_of(AccountKind::ServiceAccount, false, &[Scope::ActAs]).as_agent(true)
             }
             Actor::ActAs(via) => via.principal(),
+            Actor::Runner => crate::matrix_rows_ci::runner(),
+            Actor::Job(state) => crate::matrix_rows_ci::job(state),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -575,6 +588,8 @@ impl Actor {
                 Some(Role::Reporter)
             }
             Actor::ActAs(via) => via.person,
+            // No membership: the job arm decides on the token alone.
+            Actor::Runner | Actor::Job(_) => None,
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -680,7 +695,9 @@ impl Actor {
             | Actor::AgentTokenReadRepository
             | Actor::ServiceAccountTokenReadRepository
             | Actor::BotTokenReadRepository
-            | Actor::ActAs(_) => None,
+            | Actor::ActAs(_)
+            | Actor::Runner
+            | Actor::Job(_) => None,
         }
     }
 
@@ -744,6 +761,10 @@ impl Fixture {
                 project: internal,
                 mark,
             },
+            Fixture::PinnedCopy {
+                other_project,
+                other_sha,
+            } => crate::matrix_rows_ci::pinned_copy(other_project, other_sha),
             Fixture::Ref {
                 kind,
                 update,
@@ -1113,6 +1134,8 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,
         crate::matrix_rows_spec_refs::CONTEXT_READ_ROWS,
         crate::matrix_rows_repo_copy::REPO_COPY_ROWS,
+        crate::matrix_rows_ci::CI_ROWS,
+        &crate::matrix_rows_ci::generated_denies(),
     ]
     .concat()
 });

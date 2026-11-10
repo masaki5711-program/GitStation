@@ -58,7 +58,7 @@ use forge_core::act_as::{assertion_invalid, Intent};
 pub fn act_as_admission(token: &Principal) -> Result<(), ForgeError> {
     let scopes = match token.credential() {
         Credential::Token(scopes) => scopes.as_slice(),
-        Credential::Session | Credential::ActAs(_) => {
+        Credential::Session | Credential::ActAs(_) | Credential::Runner(_) | Credential::Job(_) => {
             return Err(refused("act_as_requires_service_account"))
         }
     };
@@ -177,6 +177,7 @@ fn decide_rule(
             Resource::Group { .. }
             | Resource::Namespace { .. }
             | Resource::RepoCopy { .. }
+            | Resource::PinnedCopy(_)
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
             | Resource::GroupTransfer { .. }
@@ -215,6 +216,7 @@ fn decide_rule(
         | Resource::Project(_)
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
+        | Resource::PinnedCopy(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -356,6 +358,7 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::Namespace { .. }
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
+        | Resource::PinnedCopy(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -441,6 +444,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::Namespace { .. }
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
+        | Resource::PinnedCopy(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
