@@ -82,7 +82,7 @@ merge request in place (ADR-0024 §1).
   trial merge's tree, parents target tip then head), once per (head, target tip) pair
   (`forge_db::review::merge_result_of` / `record_merge_result`, which also enqueues the merge
   request pipeline on the result), and `refs/merge-requests/<iid>/merge` pointed at it while the
-  run's seq is the latest; a conflict / no target / unrelated / no version deletes the ref
+  run's seq is the latest (decided and written under `lock_version_refs`, the merge request's refs lock); a conflict / no target / unrelated / no version deletes the ref
   (`CheckReport::merge_result`, `merge_ref`; logs `forge.review.merge_result_updated` /
   `_removed`). Required checks are resolved against the live target tip
   (`forge_core::MergeCheckRuns::resolve`, `conditions((target, tip), …)`): a `ci/pipeline` run on an

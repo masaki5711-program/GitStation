@@ -3083,3 +3083,65 @@ async fn a_merge_result_is_written_once_per_pair() {
     assert_eq!(w.mr_pipeline_shas().await, [first]);
     w.t.drop_now().await;
 }
+
+/// Review MEDIUM (M4 C7): "still the latest" and the merge ref's write are
+/// one step under the merge request's refs lock. A run that waits for the
+/// lock while a newer request is made never moves the ref back to its
+/// older pair; the newer run moves it.
+#[tokio::test]
+async fn a_run_superseded_while_it_waits_for_the_refs_lock_leaves_the_merge_ref() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let r1 = w.merge_ref().expect("merge ref");
+    let next = commit(
+        &w.path,
+        &[("README.md", "base\n"), ("other.txt", "o\n")],
+        Some(&w.base),
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/main", &next], None);
+    w.browser.invalidate(w.repo);
+    let seq_a = request_check(&w.t.db, w.mr.id, RequestId::parse("req-a").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
+    let held = forge_db::review::lock_version_refs(&w.t.db, w.mr.id)
+        .await
+        .expect("lock");
+    let run_a = {
+        let db = w.t.db.clone();
+        let checker = Mergeability::new(w.git.clone(), w.storage.clone());
+        let mr = w.mr.id;
+        tokio::spawn(async move {
+            check(
+                &db,
+                &checker,
+                MergeabilityRequest {
+                    merge_request: mr,
+                    check_seq: seq_a,
+                },
+                &RequestId::parse("req-run-a").expect("id"),
+            )
+            .await
+        })
+    };
+    w.t.until_waiting("merge_request_refs:").await;
+    // A newer request while run A waits (its status is already stored).
+    let _seq_b = request_check(&w.t.db, w.mr.id, RequestId::parse("req-b").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
+    held.release().await;
+    let a = run_a.await.expect("join").expect("check");
+    assert_eq!(a.outcome, "checked");
+    assert_eq!(a.merge_ref, None, "a superseded run never moves the ref");
+    assert_eq!(w.merge_ref().as_deref(), Some(r1.as_str()));
+    // The newer run owns the ref.
+    let b = w.check_again().await;
+    let r2 = b.merge_result.expect("merge result");
+    assert_ne!(r2.as_str(), r1);
+    assert_eq!(w.merge_ref().as_deref(), Some(r2.as_str()));
+    w.t.drop_now().await;
+}

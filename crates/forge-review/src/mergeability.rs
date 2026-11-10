@@ -30,7 +30,9 @@
 //!    target, unrelated histories, no version) deletes the ref: no merge
 //!    result. A git failure leaves the ref as it is (the stored status
 //!    already blocks the merge). The ref moves only while this run's seq is
-//!    still the latest (a newer run owns it otherwise). A failure here is
+//!    still the latest (a newer run owns it otherwise), decided and written
+//!    under the merge request's refs lock (`lock_version_refs`), so two
+//!    runs never interleave between the two. A failure here is
 //!    the job's (retried; the status is already stored, and a missing merge
 //!    result never makes a check count).
 //!
@@ -49,7 +51,7 @@ use std::time::{Duration, Instant};
 
 use forge_core::{CheckReason, MergeabilityStatus, ObjectId, RefName, RepoId, RequestId};
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::review::{self, CheckResult, CheckStart, MergeabilityRequest, Recorded};
+use forge_db::review::{self, CheckResult, CheckStart, MergeabilityRequest, Recorded, RefsLock};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::merge_result::MergeRefChange;
@@ -69,6 +71,14 @@ pub const MAX_STORED_BYTES: usize = 16 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// The merge result's `commit-tree` and its ref update (M4 C7).
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The time a git step under the refs lock may take: [`WRITE_TIMEOUT`],
+/// cut to what is left of the lock's hold.
+fn left(lock: &RefsLock) -> Duration {
+    lock.deadline()
+        .saturating_duration_since(tokio::time::Instant::now())
+        .min(WRITE_TIMEOUT)
+}
 
 /// Where the check runs: git, the storage, the trial merge's limits.
 #[derive(Clone)]
@@ -423,13 +433,35 @@ fn no_merge_result(result: &CheckResult) -> bool {
 
 impl Mergeability {
     /// Step 4 of the module docs for a stored `result` of request `seq`;
-    /// the merge result and what happened to the ref.
+    /// the merge result and what happened to the ref. Runs under the merge
+    /// request's refs lock (`forge_db::review::lock_version_refs`, the lock
+    /// of every hidden ref of a merge request): "still the latest" and the
+    /// ref write are one step, so a run that loses the race never moves the
+    /// ref back to an older pair (review MEDIUM). A busy lock is
+    /// `FG-DB-0002` (the job retries).
     async fn merge_result(
         &self,
         db: &Db,
-        (repo, mr, iid, seq): (RepoId, forge_core::MergeRequestId, i64, i64),
+        subject: (RepoId, forge_core::MergeRequestId, i64, i64),
         result: &CheckResult,
         tree: Option<&ObjectId>,
+        request_id: &RequestId,
+    ) -> Result<(Option<ObjectId>, Option<MergeRefChange>), ForgeError> {
+        let mut lock = review::lock_version_refs(db, subject.1).await?;
+        let out = self
+            .merge_result_locked(db, &mut lock, subject, (result, tree), request_id)
+            .await;
+        lock.release().await;
+        out
+    }
+
+    /// [`Self::merge_result`] under `lock`.
+    async fn merge_result_locked(
+        &self,
+        db: &Db,
+        lock: &mut RefsLock,
+        (repo, mr, iid, seq): (RepoId, forge_core::MergeRequestId, i64, i64),
+        (result, tree): (&CheckResult, Option<&ObjectId>),
         request_id: &RequestId,
     ) -> Result<(Option<ObjectId>, Option<MergeRefChange>), ForgeError> {
         let clean = match (result.status, tree, &result.head, &result.target) {
@@ -442,9 +474,10 @@ impl Mergeability {
             if !no_merge_result(result) || !self.still_latest(db, mr, seq).await? {
                 return Ok((None, None));
             }
+            lock.alive().await?;
             let change = self
                 .git
-                .set_merge_result_ref(&self.storage, repo, iid, None, WRITE_TIMEOUT)
+                .set_merge_result_ref(&self.storage, repo, iid, None, left(lock))
                 .await?;
             if let MergeRefChange::Deleted { from } = &change {
                 tracing::info!(
@@ -468,7 +501,7 @@ impl Mergeability {
             Some(sha) => sha.clone(), // clone: the record step owns its id
             None => {
                 self.git
-                    .write_merge_result(&self.storage, repo, iid, (tree, tip, head), WRITE_TIMEOUT)
+                    .write_merge_result(&self.storage, repo, iid, (tree, tip, head), left(lock))
                     .await?
             }
         };
@@ -482,15 +515,10 @@ impl Mergeability {
             // for their pair.
             return Ok((Some(recorded.result), None));
         }
+        lock.alive().await?;
         let change = self
             .git
-            .set_merge_result_ref(
-                &self.storage,
-                repo,
-                iid,
-                Some(&recorded.result),
-                WRITE_TIMEOUT,
-            )
+            .set_merge_result_ref(&self.storage, repo, iid, Some(&recorded.result), left(lock))
             .await?;
         if recorded.created || change != MergeRefChange::Unchanged {
             tracing::info!(
