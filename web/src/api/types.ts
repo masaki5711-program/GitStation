@@ -68,3 +68,5 @@ export type DocumentSection = S['DocumentSectionBody'];
 export type DocumentPiece = S['DocumentPieceBody'];
 export type DocumentBlock = S['DocumentBlockBody'];
 export type DocumentRef = S['DocumentRefBody'];
+export type Referrers = S['ReferrersBody'];
+export type Referrer = S['ReferrerBody'];
