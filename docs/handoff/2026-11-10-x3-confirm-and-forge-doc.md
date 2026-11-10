@@ -65,7 +65,18 @@ Kanflow v2: K4・承認待ちの欄・X3 を `main` に統合（`49720ae`）。�
    `GET|PUT|DELETE …/doc-lint/migration`、`gstn doc migration`、`FG-DOC-0005`（期限は今日より後、180 日以内。今日は DB の日付）、
    設定の画面の「移行中の文書の検査」。`docs/api/checks.md` の「移行中の警告」。
 2. `gstn doc fmt --migrate`、`spec_doc` の本文の読み取りを新しい解析に置き換える（`legacy` の比べる試験が条件）。
-3. 段 3（表示と文書の JSON）。Q14 の「ID だけ」はここで実装。
+3. ~~段 3（表示と文書の JSON）。Q14 の「ID だけ」はここで実装。~~
+   **済み**（ブランチ `claude/clever-gates-j3elqg`）: `GET /api/v1/projects/{id}/documents[?ref=&doctype=&limit=&after=]` と
+   `GET …/documents/{doc_id}[?ref=&lang=]`（`RepoBrowse`、`forge-web/src/routes/documents.rs`）。木は `forge_checks::doc_lint::read_tree`
+   （lint と同じ読み方と上限、上限に当たると `incomplete` FG-DOC-0002）。索引は lint と同じ（`doctype` を書き `<id>.md` の名前、同じ id は
+   パスの順で最初、訳は `<id>.<lang>.md`）。型が読めない文書は `confidential`。参照先の方が機密なら `hidden`（ID だけ、題名を送らない）。
+   AI エージェント（`audience`）には機密の文書を FG-AUTH-0021 `doc_confidential` で断り、一覧からは外して `withheld` に数える
+   （読んだ版か既定のブランチの先で機密なら）。無い文書・訳は見えないプロジェクトと同じ 404（FG-REPO-0005、ログに
+   `document_not_found` / `translation_not_found`）。表示用の本文は `forge_doc::render::display_markdown`（散文の行だけを和文の詰めで
+   つなぐ。表・見出し・コードはそのまま）。画面の語 `documents`（`RouteWord::Documents`、`/-/documents`・`/-/documents/{id}`）、
+   `gstn doc show` / `gstn doc list`、Web の文書の画面と一覧（ファイルの画面に「文書として開く」）。
+   **残り**: blob / raw の経路は計画 13 の `classification: confidential` を見ない（`marked_paths` は仕様のディレクトリの
+   `confidential:` だけ）。MCP の道具（文書を ID で取る）・逆引き・型の名前（`label`）の表示は未実装。
 4. Kanflow: パラメータの探索を `main` へ（利用者の指示の後）、AI が実績を読んで学習から外す候補を出す案（引き継ぎ 2026-11-05 の (1)）。
 5. PC 側: ワークスペース全体の試験、M3 の完了の条件、計画 13 の段 1。
 
