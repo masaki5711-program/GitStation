@@ -8,6 +8,7 @@
 pub mod doctype;
 pub mod document;
 pub mod fmt;
+pub mod legacy;
 pub mod lint;
 pub mod spec_doc;
 pub mod yaml;
