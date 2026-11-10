@@ -22,7 +22,7 @@ use forge_errors::ErrorCode as E;
 
 use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Fixture as F, Row};
-use crate::model::CopyMark as M;
+use crate::model::{CopyMark as M, JobTokenState as J};
 
 const fn row(action: A, actor: W, fixture: F, expect: Expect) -> Row {
     Row {
@@ -238,6 +238,38 @@ const LOG: [Row; 42] = ci_output_rows!(A::CiLogRead);
 #[rustfmt::skip]
 const DIAGNOSIS: [Row; 42] = ci_output_rows!(A::PipelineDiagnosisRead);
 
+/// Review C5 (LOW): the refusals of the non-person callers written out on
+/// a CI output itself, beside the generated ones (on a project): a runner,
+/// a live job of the project, and a service account acting for a
+/// Developer read neither a log nor a diagnosis.
+const fn non_person_denies(a: A) -> [Row; 3] {
+    let acting = crate::matrix_rows_act_as::via(
+        Some(forge_core::Role::Developer),
+        crate::matrix_rows_act_as::ViaToken::Reader,
+        crate::matrix_rows_act_as::Assert::None,
+    );
+    [
+        row(a, W::Runner, OPEN, deny(E::Forbidden)),
+        row(a, W::Job(J::Live), OPEN, deny(E::Forbidden)),
+        row(
+            a,
+            acting,
+            crate::matrix_rows_act_as::BOUND_MR,
+            deny(E::Forbidden),
+        ),
+    ]
+}
+
+const LOG_NON_PERSON: [Row; 3] = non_person_denies(A::CiLogRead);
+const DIAGNOSIS_NON_PERSON: [Row; 3] = non_person_denies(A::PipelineDiagnosisRead);
+
 /// Every row of the CI outputs (`matrix::ROWS` appends them).
-pub(crate) static CI_OUTPUT_ROWS: std::sync::LazyLock<Vec<Row>> =
-    std::sync::LazyLock::new(|| [LOG.as_slice(), &DIAGNOSIS].concat());
+pub(crate) static CI_OUTPUT_ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new(|| {
+    [
+        LOG.as_slice(),
+        &DIAGNOSIS,
+        &LOG_NON_PERSON,
+        &DIAGNOSIS_NON_PERSON,
+    ]
+    .concat()
+});
