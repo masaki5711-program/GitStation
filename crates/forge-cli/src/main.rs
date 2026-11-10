@@ -25,6 +25,8 @@ mod admin_token;
 mod admin_user;
 // M3 O1: `forge backup` / `forge restore`.
 mod backup;
+// M4 C2: the confidential mark of a pipeline's commit.
+mod ci_marks;
 mod db;
 mod doctor;
 mod explain;

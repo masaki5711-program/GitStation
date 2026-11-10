@@ -96,6 +96,15 @@ C0 は型と判定だけを入れた（トークンの保存・発行・照会�
 **C5（CI の出力）**
 4. ログ・成果物・診断のどの経路よりも先に、`Undecided`（測れなかった）の印でエージェントの相手の CI の出力の読み取りが断られる（閉じる）試験を入れる。
 
+**C3 / C6 / C11 / C12（C2 のレビュー、2026-11-10 で追加）**
+5. **シークレットを渡すかは作成時の記録だけで決める**: `ci_pipelines.source = 'push'` かつ `ci_pipelines.protected`（作成のときに保護されたブランチだったか、
+   C2 で保存）のときだけ。`manual` / `merge_request` / `schedule` のパイプラインには **決して** 渡さない。実行の時点の保護の設定や ref 名から判定し直さない。
+   C2 は `StoredPipeline::secrets_allowed()` とその試験（`only_a_protected_push_may_release_secrets`）を置いた。C3・C6 はこの関数だけで判定し、
+   `secrets_allowed()` が偽のパイプラインのジョブにシークレットが渡らない試験を Runner の API の側にも入れる。
+6. **保護された push のパイプラインの再実行**（`PipelineRetry`）は、シークレットを持つジョブもやり直す。Developer・エージェント・サービスアカウントに許すが、
+   **デプロイのジョブ（C11）はそれとは別に人だけの `DeployApprove` を要る**（再実行が承認の代わりにならない）。C11 は「再実行されたデプロイのジョブが承認を待つ」試験を入れる。
+7. 手動・定期の実行の保護（C12）: 今は常に保護されない扱い。C12 で変えるときも 5 の判定（作成時の記録）を通す。
+
 ## 追記（2026-11-10、C1）— `forge-ci` の置き場所と、シークレットの判定
 
 - `forge-ci`（`.forge-ci.yml` の解析・lint・plan）は機能クレートではなく **純粋な層**（`forge-core → forge-ci → forge-doc → forge-errors`、契約 9、ADR-0020 の

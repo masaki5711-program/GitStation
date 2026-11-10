@@ -30,6 +30,7 @@ use forge_db::Db;
 use forge_errors::ForgeError;
 use tokio::sync::watch;
 
+use super::pipelines::PipelineHandler;
 use super::provision::{ProvisionHandler, Storage};
 use super::review::{ConflictScanHandler, MergeabilityHandler, RefreshHandler};
 use super::risk::RiskHandler;
@@ -61,6 +62,8 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
     let spec_drift = SpecDriftHandler::new(db, storage)?;
     let risk = RiskHandler::new(db, storage)?;
     let spec_index = SpecIndexHandler::new(db, storage)?;
+    // M4 C2: `ci.pipeline_create` (CI pipelines from pushes and versions).
+    let pipelines = PipelineHandler::new(db, storage)?;
     Ok(vec![
         Arc::new(provision),
         Arc::new(refresh),
@@ -69,6 +72,7 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
         Arc::new(spec_drift),
         Arc::new(risk),
         Arc::new(spec_index),
+        Arc::new(pipelines),
     ])
 }
 

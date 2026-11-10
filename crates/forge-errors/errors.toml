@@ -2414,3 +2414,30 @@ cause = "The pipeline definition lint (forge_ci::check, plan 14 C1, plan 04 P-1)
 diagnosis = "The log event carries `reason` and `line` of the first problem and `problems` (how many). Reproduce with forge_ci::lint on the same bytes (each problem's line, reason and subject); the reasons and bounds are in crates/forge-ci/README.md."
 fix = "Correct `.forge-ci.yml` at the listed line (pin the image by digest, set a timeout of at most 4h, keep secrets on jobs limited to protected branches with merge_requests: false, break the needs cycle). Nothing to change on the server."
 test = "a_pipeline_definition_with_a_cycle_is_ci_config_invalid"
+
+[[error]]
+code = "FG-CI-0002"
+name = "PipelineCreateFailed"
+http_status = 503
+severity = "warn"
+user_message_ja = "CI のパイプラインを作れませんでした（定義ファイルを読めませんでした）。しばらくしてからもう一度実行してください。"
+user_message_en = "The CI pipeline could not be created (the definition file could not be read). Run it again later."
+user_message_id = "Pipeline CI tidak dapat dibuat (berkas definisi tidak dapat dibaca). Jalankan lagi nanti."
+cause = "M4 C2 (plan 14): forge could not read `.forge-ci.yml` at the commit of a push, a merge request version or a manual run, or not the project's protected branches, so no plan was made. The job `ci.pipeline_create` retries what may pass (git timeout FG-GIT-0002, busy FG-GIT-0003 / 0004, the database, a repository still being provisioned FG-REPO-0003); on its last attempt — or at once for a failure that cannot pass — it records the pipeline with status `error` and this code so the push is never left without an answer. A manual run (`POST /api/v1/projects/{id}/pipelines`) answers 503 with this code at once (no row). Not the definition's fault (that is FG-CI-0001)."
+diagnosis = "One warn log line `forge.ci.pipeline_create_failed` with `error_code`, `request_id`, `project_id`, `ref`, `sha`, `source` and `cause_code` (the underlying code, e.g. FG-GIT-0002) plus that error's own context (`operation`, `timeout_ms`). The job runner logged each earlier attempt with the underlying code (`kind=ci.pipeline_create`, `job_id`). If the `error` row itself could not be written, the same event is logged at error level with the write's `error_code` and the `cause_code`, and the job retries and then dies with the write's code (no row: the push is unanswered). `forge doctor` `ci.pipelines` fails with this code (`reason=unanswered_pushes`, `pipeline_ids`, `job_ids`) for an `error` pipeline of the last 24 hours or a `ci.pipeline_create` job dead in the last 7 days. Read the row: SELECT id, status, error_code, ref, sha FROM forge.ci_pipelines WHERE project_id = <id> ORDER BY id DESC LIMIT 5; and the job: SELECT id, state, attempts, last_error_code FROM forge.jobs WHERE kind = 'ci.pipeline_create' ORDER BY id DESC LIMIT 5."
+fix = "Follow runbook ci-pipelines: fix the cause named by `cause_code` (its own runbook: git-unavailable / git-process-failed / db-unavailable / repository-provisioning), then start the pipeline again by hand (gstn pipeline run --project <id> --ref <branch>)."
+runbook = "ci-pipelines"
+test = "a_git_timeout_retries_then_records_an_error_pipeline"
+
+[[error]]
+code = "FG-CI-0003"
+name = "PipelineStateConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "このパイプラインは今の状態では取り消し・再実行ができません。画面を読み込み直してください。"
+user_message_en = "This pipeline cannot be cancelled or retried in its current state. Reload the page."
+user_message_id = "Pipeline ini tidak dapat dibatalkan atau dijalankan ulang dalam keadaannya saat ini. Muat ulang halaman."
+cause = "M4 C2: `POST …/pipelines/{pipeline_id}/cancel` on a pipeline that is already finished (succeeded, failed, canceled, skipped, invalid, error), or `POST …/retry` on one that is not `failed` or `canceled` (running ones are cancelled first; `invalid` / `error` have no jobs to retry — push a fix or run a new pipeline). The state is read under the row's lock, so two people pressing at once get one change and one conflict. Not a fault."
+diagnosis = "The log event carries `pipeline_id`, `project_id`, `operation` (`cancel` / `retry`) and `status` (the state found)."
+fix = "Nothing to fix: reload the pipeline. To run again a pipeline that cannot be retried, start a new one (gstn pipeline run --project <id> --ref <branch>)."
+test = "cancelling_a_finished_pipeline_is_a_state_conflict"

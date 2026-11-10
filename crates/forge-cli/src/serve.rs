@@ -153,6 +153,16 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 db.clone(),                          // clone: the pool handle is shared
                 Arc::new(smart_http.browse.clone()), // clone: shares the ref cache
             ))
+            // M4 C2: CI pipelines; a manual run reads `.forge-ci.yml` and
+            // measures the commit's confidential mark through the same
+            // browse API (limits, caches).
+            .with_pipelines(forge_pipelines::Pipelines::new(
+                db.clone(),                // clone: the pool handle is shared
+                smart_http.browse.clone(), // clone: shares the ref cache
+                Arc::new(crate::ci_marks::ConfidentialMeter::new(
+                    smart_http.browse.clone(), // clone: as above
+                )),
+            ))
             // M3 I1c: the integrations' event feed seals its cursors with
             // the same keys as the lists (another purpose, so neither opens
             // the other's).

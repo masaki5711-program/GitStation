@@ -720,6 +720,32 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/push-mirror/sync",
         Coverage::Command("mirror sync"),
     ),
+    // M4 C2 (plan 14): CI pipelines.
+    (
+        "GET",
+        "/api/v1/projects/{id}/pipelines",
+        Coverage::Command("pipeline list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/pipelines",
+        Coverage::Command("pipeline run"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/pipelines/{pipeline_id}",
+        Coverage::Command("pipeline show"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/pipelines/{pipeline_id}/cancel",
+        Coverage::Command("pipeline cancel"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry",
+        Coverage::Command("pipeline retry"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

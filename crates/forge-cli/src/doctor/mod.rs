@@ -38,6 +38,8 @@ mod backup;
 // M3 S2: the act-as keys.
 mod act_as;
 mod checks;
+// M4 C2: CI pipelines.
+mod ci;
 // M3 I1c: the integrations' event feed.
 mod integrations;
 // M3 O3: FG-GIT-0018, FG-GIT-0019, the ref count.
@@ -86,7 +88,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 35] = [
+const DB_CHECKS: [&str; 36] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -143,6 +145,8 @@ const DB_CHECKS: [&str; 35] = [
     mirror::NAMES[0],
     mirror::NAMES[1],
     mirror::NAMES[2],
+    // M4 C2: FG-CI-0002 (unanswered pushes), stale pipelines.
+    ci::NAME,
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -291,6 +295,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let webhook_deliveries = webhooks::deliveries_check(db, &cfg.webhook).await;
     let [mail_queue, mail_relay] = notify::notify_checks(db, &cfg.notify).await;
     let [mirror_config, mirror_status, mirror_lag] = mirror::mirror_checks(db, &cfg.mirror).await;
+    let pipelines = ci::pipelines_check(db).await;
     vec![
         bootstrap,
         connections,
@@ -328,6 +333,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         mirror_config,
         mirror_status,
         mirror_lag,
+        pipelines,
     ]
 }
 

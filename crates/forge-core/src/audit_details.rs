@@ -11,6 +11,7 @@ use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
 use crate::merge_request::{MergeRequestChange, MergeRequestVersionChange};
 use crate::mirror::PushMirrorChange;
 use crate::move_details::{MoveSummary, TombstoneKind};
+use crate::pipeline::PipelineChange;
 use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
 use crate::repository::RepositoryState;
 use crate::role::{Role, Visibility};
@@ -395,6 +396,9 @@ pub enum AuditDetails {
     /// (resource the project, no event). Shapes:
     /// [`DocLintMigrationChange::to_value`].
     DocLintMigration(DocLintMigrationChange),
+    /// M4 C2: a person cancelled, retried or ran a CI pipeline (resource
+    /// the project, no event). Shapes: [`PipelineChange::to_value`].
+    Pipeline(PipelineChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -564,6 +568,7 @@ impl AuditDetails {
             Self::Webhook(change) => change.action(),
             Self::PushMirror(change) => change.action(),
             Self::DocLintMigration(change) => change.action(),
+            Self::Pipeline(change) => change.action(),
         }
     }
 
@@ -621,7 +626,8 @@ impl AuditDetails {
             | Self::CheckRunsExpired { .. }
             | Self::Integration(_)
             | Self::PushMirror(_)
-            | Self::DocLintMigration(_) => None,
+            | Self::DocLintMigration(_)
+            | Self::Pipeline(_) => None,
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,
@@ -1042,6 +1048,7 @@ impl AuditDetails {
             Self::Webhook(change) => change.to_value(),
             Self::PushMirror(change) => change.to_value(),
             Self::DocLintMigration(change) => change.to_value(),
+            Self::Pipeline(change) => change.to_value(),
         }
     }
 
@@ -1123,7 +1130,8 @@ impl AuditDetails {
             | Self::WorkItem(_)
             | Self::Webhook(_)
             | Self::PushMirror(_)
-            | Self::DocLintMigration(_) => self.to_value(),
+            | Self::DocLintMigration(_)
+            | Self::Pipeline(_) => self.to_value(),
         }
     }
 }

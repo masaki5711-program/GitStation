@@ -81,6 +81,8 @@ mod spec_drift_sweep;
 mod spec_index;
 mod spec_index_sweep;
 // ── end M3 X2 ──
+// ── M4 C2: CI pipelines (the `ci.pipeline_create` job) ──
+mod pipelines;
 // ── M3 X7: `forge/risk` (the `check.risk` job) ──
 mod risk;
 mod risk_sweep;
@@ -426,7 +428,11 @@ fn registry_with(
         // M3 O2 (`independent`): a push to a mirrored repository marks it
         // waiting and enqueues its push (the job waits for the mirror lane;
         // the lag shows meanwhile).
-        .with(Arc::new(forge_db::mirror::PushMirrorSubscriber))?;
+        .with(Arc::new(forge_db::mirror::PushMirrorSubscriber))?
+        // M4 C2 (`independent`): every push to a branch and every merge
+        // request version asks for its CI pipeline (the
+        // `ci.pipeline_create` job).
+        .with(Arc::new(forge_db::pipelines::subscriber::PipelineRequests))?;
     // M3 I2: deliveries are recorded only when the lane can send them.
     let registry = if webhooks {
         registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?

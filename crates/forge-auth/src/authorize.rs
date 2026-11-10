@@ -1219,6 +1219,17 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             need(Role::Maintainer, p.role)
         }
 
+        // --- CI pipelines (M4 C2, plan 14 §4.2) ---
+        // Reading: as RepoBrowse (an agent audience too: metadata only,
+        // CI outputs are decided on their marks from C5). Running by hand,
+        // cancelling and retrying: Developer and above by membership
+        // (agents and service accounts included, plan 14 §4.2).
+        (Action::PipelineRead, Resource::Project(p)) => need(Role::Reporter, read_role(p)),
+        (
+            Action::PipelineCreate | Action::PipelineCancel | Action::PipelineRetry,
+            Resource::Project(p),
+        ) => need(Role::Developer, p.role),
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1321,6 +1332,10 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PushMirrorRead
             | Action::PushMirrorManage
             | Action::DocLintMigrationManage
+            | Action::PipelineRead
+            | Action::PipelineCreate
+            | Action::PipelineCancel
+            | Action::PipelineRetry
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }

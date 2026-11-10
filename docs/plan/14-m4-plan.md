@@ -141,6 +141,13 @@ M4-0 [root] ─▶ ADR-0029 / C0（Job の主体）─▶ C1（定義）─▶ C
 `forge/ci-lint` は C1 では入れず後の MR に回した（`check.spec_index` のジョブに `.forge-ci.yml` の読み取りと保護ブランチの一覧の DB の読み取りを足す必要があり、
 `forge/doc-lint` の機械的な写しにならないため）。
 
+**C2 の注記（2026-11-10）**: `forge-pipelines`（機能クレート）、表 `ci_pipelines`・`ci_jobs`（派生の状態。人の取り消し・再実行・手動の実行は
+`pipeline.canceled` / `.retried` / `.run_manual` の監査の行を同じトランザクションで書く）、購読者 `ci-pipelines`、ジョブ `ci.pipeline_create`、
+FG-CI-0002 / 0003、doctor `ci.pipelines`、runbook `ci-pipelines`。一意キーは (project, source, ref, sha, MR)（同じ SHA を別のブランチへ進めた
+push を落とさないため ref を含めた）。**保持期間**: パイプラインとジョブは 90 日（ログの保持の決定に合わせる）。消す処理は C5（ログと同じジョブ）で入れる。
+**後の MR の義務**（ADR-0029 の 5〜7）: シークレットは `source = push` かつ作成時に保護のときだけ（C3・C6）、保護された push の再実行でも
+デプロイは人の `DeployApprove`（C11）、手動・定期の保護は C12。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。

@@ -928,6 +928,46 @@
     "word": "fixed"
   },
   {
+    "action": "PipelineRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/pipelines",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/pipelines",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineCancel",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/cancel",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineRetry",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProtectedRefList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/protected-refs",

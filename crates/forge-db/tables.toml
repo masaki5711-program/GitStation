@@ -663,3 +663,20 @@ audit_resource = "project"
 audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
+
+# ── M4 C2 (20261204100000, plan 14 §4.1): CI pipelines and their jobs,
+# planned from `.forge-ci.yml` at one commit; derived state written by forge
+# (the `ci.pipeline_create` job, later the runner API: no person, so no
+# txn_audited trigger). A person's cancel / retry / manual run is audited by
+# the command in the same transaction (pipelines::*_decided, ChangeTx:
+# `pipeline.canceled` / `.retried` / `.run_manual`), like
+# merge_request_merges. Kept 90 days (the purge job comes with C5) ──
+[tables.ci_pipelines]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.ci_jobs]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]

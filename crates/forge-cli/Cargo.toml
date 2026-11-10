@@ -27,6 +27,8 @@ forge-checks.workspace = true
 forge-integ.workspace = true
 # M3 N1: the notify subscriber and the mail job (the worker's notification lane).
 forge-notify.workspace = true
+# M4 C2: CI pipelines (the worker's `ci.pipeline_create` job, serve's routes).
+forge-pipelines.workspace = true
 forge-oidc.workspace = true
 httpdate.workspace = true
 tokio.workspace = true

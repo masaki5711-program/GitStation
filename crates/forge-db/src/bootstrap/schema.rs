@@ -883,6 +883,9 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ("forge.push_mirror_status", operational()),
         // ── Plan 13 Q13: the document lint's migration (20261203100000) ──
         ("forge.doc_lint_migrations", operational()),
+        // ── M4 C2: CI pipelines and jobs (20261204100000) ──
+        ("forge.ci_pipelines", operational()),
+        ("forge.ci_jobs", operational()),
     ])
 }
 
@@ -1039,6 +1042,9 @@ const LATER_TABLES: &[&str] = &[
     "push_mirror_status",
     // ── Plan 13 Q13: the document lint's migration (20261203100000) ──
     "doc_lint_migrations",
+    // ── M4 C2: CI pipelines and jobs (20261204100000) ──
+    "ci_pipelines",
+    "ci_jobs",
 ];
 
 /// Every table the first migration creates.

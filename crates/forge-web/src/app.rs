@@ -79,6 +79,9 @@ pub struct AppState {
     /// checks by [`AppState::with_checks`]; without it those routes answer
     /// `FG-SYS-0001 reason=checks_unconfigured`).
     pub doc_lint_migrations: Option<Arc<forge_checks::DocLintMigrations>>,
+    /// CI pipelines (M4 C2; `forge serve` always sets them; without them
+    /// those routes answer `FG-SYS-0001 reason=pipelines_unconfigured`).
+    pub pipelines: Option<Arc<forge_pipelines::Pipelines>>,
     /// The integrations' event feed (M3 I1c, ADR-0016 §7; `forge serve`
     /// always sets it; without it the feed routes answer `FG-SYS-0001
     /// reason=feed_unconfigured`).
@@ -181,6 +184,7 @@ impl AppState {
             review: None,
             checks: None,
             doc_lint_migrations: None,
+            pipelines: None,
             feed: None,
             webhooks: None,
             push_mirrors: None,
@@ -296,6 +300,13 @@ impl AppState {
     #[must_use]
     pub fn with_webhooks(mut self, webhooks: forge_integ::webhooks::Webhooks) -> Self {
         self.webhooks = Some(Arc::new(webhooks));
+        self
+    }
+
+    /// CI pipelines (M4 C2).
+    #[must_use]
+    pub fn with_pipelines(mut self, pipelines: forge_pipelines::Pipelines) -> Self {
+        self.pipelines = Some(Arc::new(pipelines));
         self
     }
 
@@ -553,15 +564,69 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
-        webhook_routes(notification_routes(check_routes(dev_status_routes(
-            feed_routes(integration_routes(service_account_routes(account_routes(
-                history_routes(browse_routes(git_routes(shell_routes(
+    pipeline_routes(doc_lint_routes(binding_routes(act_as_routes(
+        mirror_routes(webhook_routes(notification_routes(check_routes(
+            dev_status_routes(feed_routes(integration_routes(service_account_routes(
+                account_routes(history_routes(browse_routes(git_routes(shell_routes(
                     merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
-                )))),
+                ))))),
             )))),
         )))),
     ))))
+}
+
+/// A project's CI pipelines (M4 C2, plan 14 §4.2): read (metadata only),
+/// run by hand, cancel and retry.
+fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::pipelines as p;
+    registry
+        .route_with(
+            Verb::Get,
+            p::LIST,
+            Action::PipelineRead,
+            "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit (project readers; metadata only)",
+            p::OF_LIST,
+            p::list,
+        )
+        .responds::<p::PipelinePage>(Verb::Get, p::LIST)
+        .queries(Verb::Get, p::LIST, p::LIST_QUERY)
+        .route_with_body(
+            Verb::Post,
+            p::LIST,
+            Action::PipelineCreate,
+            "Run a pipeline by hand on a branch's tip ({\"ref\": \"main\"}): 201 the pipeline (pending, skipped or invalid; a manual run is never protected, so a job with secrets is invalid); 404 FG-REPO-0023 without the branch or .forge-ci.yml; 503 FG-CI-0002 when the definition could not be read (Developer)",
+            p::MAX_BODY,
+            p::OF_LIST,
+            p::run,
+        )
+        .responds_created::<p::PipelineBody>(Verb::Post, p::LIST)
+        .route_with(
+            Verb::Get,
+            p::ONE,
+            Action::PipelineRead,
+            "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt); 404 FG-REPO-0005 when the project has no such pipeline (project readers; metadata only)",
+            p::OF_ONE,
+            p::one,
+        )
+        .responds::<p::PipelineBody>(Verb::Get, p::ONE)
+        .route_with(
+            Verb::Post,
+            p::CANCEL,
+            Action::PipelineCancel,
+            "Cancel a pending or running pipeline and its unfinished jobs; 409 FG-CI-0003 when it is finished (Developer)",
+            p::OF_CANCEL,
+            p::cancel,
+        )
+        .responds::<p::PipelineBody>(Verb::Post, p::CANCEL)
+        .route_with(
+            Verb::Post,
+            p::RETRY,
+            Action::PipelineRetry,
+            "Retry a failed or cancelled pipeline: its failed and cancelled jobs get a new attempt; 409 FG-CI-0003 in any other state (Developer)",
+            p::OF_RETRY,
+            p::retry,
+        )
+        .responds::<p::PipelineBody>(Verb::Post, p::RETRY)
 }
 
 /// A project's document lint migration setting (plan 13 Q13, ADR-0026):

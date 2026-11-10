@@ -391,6 +391,23 @@ actions! {
     /// Maintainer and above; `api`; never acting for a person. Reading it
     /// is `ProjectRead` (`GET …/doc-lint/migration`).
     DocLintMigrationManage,
+    // --- CI pipelines (M4 C2, plan 14 §4.2) ---
+    /// `GET /api/v1/projects/{id}/pipelines` and `…/pipelines/{pipeline_id}`:
+    /// a project's pipelines and their jobs. As `RepoBrowse` (Reporter, or
+    /// any signed-in person on an internal project); an agent audience is
+    /// allowed: the routes answer metadata only (no logs or artifacts
+    /// exist before C5, which decides CI outputs on their marks,
+    /// ADR-0029 decision 5); `read_api`.
+    PipelineRead,
+    /// `POST /api/v1/projects/{id}/pipelines`: run a pipeline by hand on a
+    /// branch's tip. Developer and above (agents and service accounts by
+    /// their membership, plan 14 §4.2); `api`. A manual run is never
+    /// protected: a job with secrets makes it `invalid` (C12 decides more).
+    PipelineCreate,
+    /// `POST …/pipelines/{pipeline_id}/cancel`: Developer and above; `api`.
+    PipelineCancel,
+    /// `POST …/pipelines/{pipeline_id}/retry`: Developer and above; `api`.
+    PipelineRetry,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -605,6 +622,7 @@ impl Action {
             | Action::WebhookDeliveryRead
             | Action::WebhookDeliver
             | Action::PushMirrorRead
+            | Action::PipelineRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -645,6 +663,9 @@ impl Action {
             | Action::WebhookRedeliver
             | Action::PushMirrorManage
             | Action::DocLintMigrationManage
+            | Action::PipelineCreate
+            | Action::PipelineCancel
+            | Action::PipelineRetry
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
@@ -762,6 +783,11 @@ impl Action {
             | Action::PushMirrorManage
             // Plan 13 Q13: a governance setting, a person's own decision.
             | Action::DocLintMigrationManage
+            // M4 C2: pipelines are no act-as action (ADR-0025 §4).
+            | Action::PipelineRead
+            | Action::PipelineCreate
+            | Action::PipelineCancel
+            | Action::PipelineRetry
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead
@@ -867,6 +893,11 @@ impl Action {
             | Action::PushMirrorRead
             | Action::PushMirrorManage
             | Action::DocLintMigrationManage
+            // M4 C2: a job never reads or changes pipelines (plan 14 §4.2).
+            | Action::PipelineRead
+            | Action::PipelineCreate
+            | Action::PipelineCancel
+            | Action::PipelineRetry
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

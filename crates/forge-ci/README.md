@@ -84,5 +84,6 @@ CPU・メモリ・プロセス数などの資源の上限は定義に書かせ�
 |---|---|---|
 | `gstn ci lint [path] [--protected a,b]` / `gstn ci plan [path] --branch <b> [--event push\|mr] [--protected a,b] [--json]`（`forge-client` の `ci.rs`） | 手元の `.forge-ci.yml`（既定は上へたどって見つけたリポジトリの根）。サーバーには何も送らない | 問題があれば終了コード 1（`FG-CI-0001`） |
 | `forge/ci-lint`（後の MR） | MR の版の head。保護ブランチの一覧を DB から読んで `with_protected_branches` に渡す | — |
+| `forge-pipelines`（C2） | push・MR の版・手動の実行のコミット。保護ブランチの一覧を `with_protected_branches` に、`Trigger.protected` は保護されたブランチへの push だけ真 | 問題があればパイプラインは `invalid`（FG-CI-0001 と問題を行に記録） |
 
 パイプラインの作成・実行（C2 以降、DB・イベント）は `forge-ci` に入れず、機能クレート（仮称 `forge-pipelines`）に置く。

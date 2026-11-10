@@ -149,6 +149,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::RiskNotAssessed
         // M4 C1: a `.forge-ci.yml` content outcome (never a merge's).
         | ErrorCode::CiConfigInvalid
+        // M4 C2: pipeline outcomes (never a merge's).
+        | ErrorCode::PipelineCreateFailed
+        | ErrorCode::PipelineStateConflict
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

@@ -77,6 +77,21 @@ const ALLOWED: &[(&str, &[&str])] = &[
         "forge-notify",
         &["forge-auth", "forge-db", "forge-core", "forge-errors"],
     ),
+    // M4 C2 (plan 14, contract 9): CI pipelines — planned from
+    // `.forge-ci.yml` (the pure forge-ci) and written through forge-db;
+    // never another feature crate (the confidential mark is measured by the
+    // caller through `forge_pipelines::MarkMeter`).
+    (
+        "forge-pipelines",
+        &[
+            "forge-auth",
+            "forge-git",
+            "forge-db",
+            "forge-core",
+            "forge-ci",
+            "forge-errors",
+        ],
+    ),
     // M2 MR4 (ADR-0021 §2): the OIDC sign-in, beside forge-hosting.
     (
         "forge-oidc",
@@ -91,6 +106,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-checks",
             "forge-integ",
             "forge-notify",
+            "forge-pipelines",
             "forge-auth",
             "forge-git",
             "forge-core",
@@ -109,6 +125,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-checks",
             "forge-integ",
             "forge-notify",
+            "forge-pipelines",
             "forge-auth",
             "forge-git",
             "forge-db",
