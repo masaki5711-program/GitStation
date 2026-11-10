@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)] // tests may fail loudly
 //! `gstn doc`'s pieces (the commands end to end: tests/doc.rs).
 
-use super::{find_root, is_doctype_file, selected, targets};
+use super::{canonical, find_root, is_doctype_file, selected, targets};
 
 #[test]
 fn targets_select_files_and_directories_by_whole_segments() {
@@ -29,7 +29,10 @@ fn the_root_is_found_upward_and_paths_are_made_relative_to_it() {
     std::fs::create_dir_all(dir.path().join("a/b")).unwrap();
     std::fs::write(dir.path().join("a/b/QM-001.md"), "x").unwrap();
     let root = find_root(&dir.path().join("a/b")).expect("root");
-    assert_eq!(root, dir.path().canonicalize().unwrap());
+    // Canonical, but in the plain form the user and git know: on Windows
+    // without the `\\?\` prefix `canonicalize` adds.
+    assert_eq!(root, canonical(dir.path()).unwrap());
+    assert!(!root.to_string_lossy().starts_with(r"\\?\"), "{root:?}");
     let cwd = dir.path().join("a");
     let t = targets(
         &root,
