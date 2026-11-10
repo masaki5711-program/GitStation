@@ -134,6 +134,10 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
   （`PinnedCopy`）だけで、それ以外の API は見えないプロジェクトと同じ FG-REPO-0005。ジョブの fetch の経路（C4）は
   `refs/pipelines/<pipeline_id>/head` だけを広告し（初めての fetch で固定した SHA に作る。人の clone・push からは隠す）、want は
   固定したコミットから届くものだけ（それ以外は帯域内の FG-GIT-0014）。終わったジョブのトークンは FG-AUTH-0001。
+- **`refs/pipelines/<id>/head` は動いている間だけ**: パイプラインを終わらせた完了の呼び出しが消す（失敗は forge のログの
+  `forge.ci.pipeline_ref_delete_failed`、warn、そのコード。完了そのものは成り立つ）。取り消し・回収で終わったものや消し損ねたものは、
+  リポジトリの保守（`repository.maintain`、runbook `repo-maintenance`）が `pending` / `running` でないパイプラインの ref をまとめて消す
+  （`forge.git.pipeline_refs_pruned`、`deleted`・`kept`。失敗は保守の `step=pipeline_refs`）。再実行したパイプラインは次のジョブの fetch で作り直す。
 
 ## 関連
 

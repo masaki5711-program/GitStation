@@ -18,8 +18,11 @@
 //!    nothing is pruned while a repository is corrupt;
 //! 4. `gc --cruft --prune=<grace>` (another gc running → `skipped
 //!    gc_running`, again in 1 h);
-//! 5. `pack-refs` under the merge lock, try-lock only: a merge in progress
-//!    skips this step (`skipped_reason = pack_refs_merge_lock_held`);
+//! 5. the refs of pipelines that are no longer live
+//!    (`refs/pipelines/<id>/head`, M4 C4 review) are deleted (the backstop
+//!    of their deletion when a pipeline ends), then `pack-refs` under the
+//!    merge lock, try-lock only: a merge in progress skips that
+//!    (`skipped_reason = pack_refs_merge_lock_held`);
 //! 6. `commit-graph write --reachable`;
 //! 7. the counts (objects, pack size, refs) into the ledger.
 //!
@@ -466,6 +469,9 @@ impl Inner {
             Ok(GcRun::AlreadyRunning) => return RunEnd::Skipped("gc_running", Some(mode)),
             Err(e) => return failed(e, ok),
         }
+        if let Err(e) = self.prune_pipeline_refs(repo, deadline, request_id).await {
+            return failed(e, ok);
+        }
         let skipped_step = match self.pack_refs(repo, deadline, request_id).await {
             Ok(skipped) => skipped,
             Err(e) => return failed(e, ok),
@@ -527,6 +533,53 @@ impl Inner {
 }
 
 impl Inner {
+    /// Step 5a (M4 C4 review): delete the pipeline refs of every pipeline
+    /// that is not live (finished, or gone with its project) — the
+    /// backstop of the deletion when a pipeline ends. One `update-ref`
+    /// transaction, each ref only if still at the listed commit. A
+    /// failure carries `step=pipeline_refs` and fails the run.
+    async fn prune_pipeline_refs(
+        &self,
+        repo: RepoId,
+        deadline: &RunDeadline,
+        request_id: &RequestId,
+    ) -> Result<(), ForgeError> {
+        let step = |e: ForgeError| e.with_context("step", "pipeline_refs");
+        let refs = self
+            .git
+            .pipeline_refs(&self.root, repo, deadline.step()?)
+            .await
+            .map_err(step)?;
+        if refs.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<i64> = refs.iter().map(|r| r.pipeline_id).collect();
+        let live = forge_db::pipelines::live_among(&self.db, &ids)
+            .await
+            .map_err(step)?;
+        let gone: Vec<forge_git::PipelineRef> = refs
+            .into_iter()
+            .filter(|r| live.binary_search(&r.pipeline_id).is_err())
+            .collect();
+        if gone.is_empty() {
+            return Ok(());
+        }
+        self.git
+            .delete_pipeline_refs(&self.root, repo, &gone, deadline.step()?)
+            .await
+            .map_err(step)?;
+        tracing::info!(
+            target: "forge_cli",
+            event = "forge.git.pipeline_refs_pruned",
+            request_id = %request_id,
+            repo_id = repo.get(),
+            deleted = gone.len(),
+            kept = live.len(),
+            "deleted the refs of finished pipelines"
+        );
+        Ok(())
+    }
+
     /// After a failed pack-refs, under the merge lock: remove our own
     /// `packed-refs.lock`; leave someone else's and alert (FG-GIT-0020).
     /// A failure to look is logged with its code (the run's own error is

@@ -112,6 +112,7 @@ struct World {
     t: FreshDb,
     ada: UserId,
     web: ProjectId,
+    web_repo: RepoId,
     api: ProjectId,
     git: Git,
     storage: StorageRoot,
@@ -175,6 +176,7 @@ impl World {
             t,
             ada: ada.user_id,
             web: web.project_id,
+            web_repo: web.repository_id,
             api: api.project_id,
             git,
             storage,
@@ -209,13 +211,31 @@ impl World {
     }
 
     async fn call(&self, method: &str, uri: &str, who: Who, body: Option<Vec<u8>>) -> Reply {
+        self.call_as(
+            method,
+            uri,
+            who,
+            body,
+            "application/x-git-upload-pack-request",
+        )
+        .await
+    }
+
+    async fn call_as(
+        &self,
+        method: &str,
+        uri: &str,
+        who: Who,
+        body: Option<Vec<u8>>,
+        content_type: &str,
+    ) -> Reply {
         let mut builder = Request::builder().method(method).uri(uri);
         if let Who::Bearer(token) = &who {
             builder = builder.header("authorization", format!("Bearer {token}"));
         }
         let mut req = match body {
             Some(b) => builder
-                .header("content-type", "application/x-git-upload-pack-request")
+                .header("content-type", content_type)
                 .body(Body::from(b)),
             None => builder.body(Body::empty()),
         }
@@ -450,5 +470,69 @@ async fn a_job_fetches_only_its_pinned_commit_while_it_lives() {
         .await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{}", r.text());
     assert_eq!(r.code(), "FG-AUTH-0001");
+    w.t.drop_now().await;
+}
+
+/// M4 C4 review: the pipeline ref pins its commit only while the pipeline
+/// runs; the completion that ends the pipeline deletes it.
+#[tokio::test]
+async fn the_pipeline_ref_is_deleted_when_the_pipeline_ends() {
+    let w = World::new().await;
+    let runner = ci_runners::register(
+        &w.t.db,
+        &ChangeContext::new(Actor::User(w.ada), RequestId::parse("req-reg").expect("id")),
+        &NewRunner {
+            name: "r1".to_owned(),
+            description: String::new(),
+            tags: Vec::new(),
+        },
+    )
+    .await
+    .expect("runner");
+    let own = w.pipeline(w.web, &w.c1, "build").await;
+    let claimed = lease::claim(&w.t.db, runner.runner.id)
+        .await
+        .expect("claim")
+        .expect("job");
+    let job = claimed.job_id;
+    let adv = w
+        .call(
+            "GET",
+            &info_refs(job),
+            Who::Bearer(claimed.token.reveal()),
+            None,
+        )
+        .await;
+    assert_eq!(adv.status, StatusCode::OK, "{}", adv.text());
+    let repo = w.web_repo;
+    let name = RefName::parse(&format!("refs/pipelines/{own}/head")).expect("ref");
+    let pinned = |w: &World| {
+        let (git, storage, name) = (w.git.clone(), w.storage.clone(), name.clone());
+        async move {
+            git.read_ref(&storage, repo, &name, std::time::Duration::from_secs(20))
+                .await
+                .expect("read")
+        }
+    };
+    assert_eq!(
+        pinned(&w).await.map(|o| o.as_str().to_owned()),
+        Some(w.c1.clone())
+    );
+    let done = w
+        .call_as(
+            "POST",
+            &format!("/api/v1/runner/jobs/{job}/complete"),
+            Who::Bearer(runner.token.reveal()),
+            Some(
+                serde_json::json!({"attempt": claimed.attempt, "result": "succeeded", "exit_code": 0})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            "application/json",
+        )
+        .await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.text());
+    assert!(done.text().contains("succeeded"), "{}", done.text());
+    assert_eq!(pinned(&w).await, None, "the ended pipeline's ref is gone");
     w.t.drop_now().await;
 }
