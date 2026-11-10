@@ -252,8 +252,10 @@ async fn upload_pack_inner(
         repository.id.get(),
         "job_upload_pack",
     );
-    let pipeline_ref = pipeline_ref(&smart, repository, &copy).await?;
+    // The per-principal slot first: a job cannot start the pipeline ref's
+    // git calls (`read_ref` / `update_refs`) beyond its body slots.
     let slot = smart.body_slots.acquire(&key).await?;
+    let pipeline_ref = pipeline_ref(&smart, repository, &copy).await?;
     let body = read_request_body(request.into_body(), gzip, &smart.limits).await?;
     drop(slot);
     let parsed = parse_upload_pack_request(&body, version)?;
