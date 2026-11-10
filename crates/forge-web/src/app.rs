@@ -1364,6 +1364,42 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
             routes::documents::ONE,
             routes::documents::ONE_QUERY,
         )
+        // Plan 13 §8.2: who refers to a document, and one block alone
+        // (computed on read; an agent is given no confidential one).
+        .route_with(
+            Verb::Get,
+            routes::documents::REFERENCED_BY,
+            Action::RepoBrowse,
+            "The documents that refer to one document (or one of its blocks), by id, paged (a more confidential referrer: its id only; an agent's answer leaves confidential ones out uncounted)",
+            routes::documents::DocumentOf,
+            routes::documents::referenced_by,
+        )
+        .responds::<routes::documents::ReferrersBody>(
+            Verb::Get,
+            routes::documents::REFERENCED_BY,
+        )
+        .queries(
+            Verb::Get,
+            routes::documents::REFERENCED_BY,
+            routes::documents::REFERENCED_BY_QUERY,
+        )
+        .route_with(
+            Verb::Get,
+            routes::documents::BLOCK,
+            Action::RepoBrowse,
+            "One block of a document alone, with the references inside it resolved (a missing block answers as a missing document)",
+            routes::documents::DocumentOf,
+            routes::documents::block,
+        )
+        .responds::<routes::documents::DocumentBlockAloneBody>(
+            Verb::Get,
+            routes::documents::BLOCK,
+        )
+        .queries(
+            Verb::Get,
+            routes::documents::BLOCK,
+            routes::documents::BLOCK_QUERY,
+        )
         // M3 X1: `.forge/repo.yml` and its spec references; every referenced
         // project decided again with the reader's own principal.
         .route_with(

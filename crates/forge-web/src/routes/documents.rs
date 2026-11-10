@@ -6,6 +6,8 @@
 //! |---|---|
 //! | `GET …/documents[?ref=&doctype=&limit=&after=]` | the documents (id, title, type, path, classification, translations), by id, paged |
 //! | `GET …/documents/{doc_id}[?ref=&lang=]` | one document's view ([`forge_doc::render`]): front matter, sections of text and blocks, every `[[…]]` reference resolved |
+//! | `GET …/documents/{doc_id}/referenced-by[?ref=&block=&limit=&after=]` | the documents (and translations) that refer to it or to one block, by key, paged ([`referenced_by`]) |
+//! | `GET …/documents/{doc_id}/blocks/{block_id}[?ref=&lang=]` | one block alone with its references resolved ([`block`]) |
 //!
 //! (`…` is `/api/v1/projects/{id}`.) The registry authenticates, the
 //! loader reads the project by id and `prove(RepoBrowse)` decides (the
@@ -63,8 +65,8 @@ use forge_doc::document::{
     parse_document, reference_of, Classification, Document, TypeDefault, Value,
 };
 use forge_doc::render::{
-    display_markdown, view_with_body, DocumentView, Piece, Resolver, Target as RefTarget,
-    TargetDoc, VIEW_VERSION,
+    display_markdown, referrers, view_with_body, DocumentView, Piece, Referrer, Resolver,
+    Target as RefTarget, TargetDoc, VIEW_VERSION,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::ResolvedRev;
@@ -132,6 +134,37 @@ pub const ONE_QUERY: &[QueryParam] = &[
         integer_range: None,
     },
 ];
+
+/// `GET …/documents/{doc_id}/referenced-by`.
+pub const REFERENCED_BY: &str = "/api/v1/projects/{id}/documents/{doc_id}/referenced-by";
+/// `GET …/documents/{doc_id}/blocks/{block_id}`.
+pub const BLOCK: &str = "/api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}";
+
+const REFERENCED_BY_SUFFIX: &str = "/referenced-by";
+const BLOCKS_INFIX: &str = "/blocks/";
+
+/// The query parameters of [`REFERENCED_BY`].
+pub const REFERENCED_BY_QUERY: &[QueryParam] = &[
+    REF_PARAM,
+    QueryParam {
+        name: "block",
+        description: "Only the references to this block of the document (e.g. H-01)",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "limit",
+        description: "At most this many referrers (default 100)",
+        integer_range: Some((1, MAX_LIMIT as i64)),
+    },
+    QueryParam {
+        name: "after",
+        description: "The previous page's next_after: only referrers whose key (<id> or <id>.<lang>) sorts after it",
+        integer_range: None,
+    },
+];
+
+/// The query parameters of [`BLOCK`].
+pub const BLOCK_QUERY: &[QueryParam] = ONE_QUERY;
 
 /// The loader of [`ONE`]: the project id before `/documents/` (the
 /// `{doc_id}` is checked after the decision).
@@ -350,6 +383,110 @@ pub struct DocumentBody {
     pub problem_count: usize,
     #[schema(required = true)]
     pub incomplete: Option<DocIncompleteBody>,
+}
+
+/// One reference of a referrer to the target.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReferrerRefBody {
+    pub line: usize,
+    /// The block named (`[[ID#BLOCK]]`); `null`: the document.
+    #[schema(required = true)]
+    pub block: Option<String>,
+}
+
+/// A document (or translation) that refers to the target.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReferrerBody {
+    pub id: String,
+    /// A translation's language; `null`: the original.
+    #[schema(required = true)]
+    pub lang: Option<String>,
+    /// More confidential than the target (plan 13 Q14): its id only —
+    /// `title`, `doctype`, `path` and `classification` are `null`, `refs`
+    /// is empty.
+    pub hidden: bool,
+    #[schema(required = true)]
+    pub title: Option<String>,
+    #[schema(required = true)]
+    pub doctype: Option<String>,
+    #[schema(required = true)]
+    pub path: Option<String>,
+    #[schema(required = true)]
+    pub classification: Option<String>,
+    /// Its references to the target, in the written order.
+    pub refs: Vec<ReferrerRefBody>,
+}
+
+/// The documents that refer to one document (or one of its blocks).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReferrersBody {
+    #[serde(rename = "ref")]
+    pub rev: RevBody,
+    pub id: String,
+    #[schema(required = true)]
+    pub block: Option<String>,
+    /// By key (`<id>`, or `<id>.<lang>` for a translation).
+    pub referrers: Vec<ReferrerBody>,
+    /// Referrers in all (a person's answer); `null` for an agent audience
+    /// (plan 06 D-5: a count would tell what was left out).
+    #[schema(required = true)]
+    pub total: Option<usize>,
+    /// More referrers follow: ask again with `after=<next_after>`.
+    #[schema(required = true)]
+    pub next_after: Option<String>,
+    /// A bound of the read (`FG-DOC-0002`), or `reason=doc_refs`: a
+    /// document's references hit the parser's cap, so a referrer may be
+    /// missing.
+    #[schema(required = true)]
+    pub incomplete: Option<DocIncompleteBody>,
+}
+
+/// One block of a document, alone.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentBlockAloneBody {
+    pub version: u32,
+    #[serde(rename = "ref")]
+    pub rev: RevBody,
+    pub path: String,
+    #[schema(required = true)]
+    pub lang: Option<String>,
+    pub id: String,
+    pub doctype: String,
+    #[schema(required = true)]
+    pub title: Option<String>,
+    pub classification: String,
+    /// The level-2 heading the block is under.
+    #[schema(required = true)]
+    pub section: Option<String>,
+    pub block: DocumentBlockAtBody,
+    /// The `[[…]]` references inside the block, resolved as in the
+    /// document's view.
+    pub refs: Vec<DocumentRefBody>,
+    #[schema(required = true)]
+    pub incomplete: Option<DocIncompleteBody>,
+}
+
+/// A block with where it is (the block route).
+#[derive(Debug, PartialEq, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentBlockAtBody {
+    pub kind: String,
+    pub id: String,
+    /// In the written order.
+    pub attrs: Vec<DocumentAttrBody>,
+    pub deprecated: bool,
+    /// The body as written.
+    pub body: String,
+    /// The body for display (prose lines joined).
+    pub display: String,
+    /// The opening line (1-based).
+    pub line: usize,
+    /// The closing `:::`.
+    pub end_line: usize,
 }
 
 // ── the index ──────────────────────────────────────────────────────────
@@ -610,17 +747,42 @@ pub(crate) fn view_parts(
 
 // ── the handlers ───────────────────────────────────────────────────────
 
-/// The document id of the path: a reference's id (ASCII letters, digits,
-/// `.`, `_`, `-`; at most 128 bytes) — `FG-WEB-0006 param=doc_id`.
-fn doc_id_param(raw_path: &str) -> Result<String, ForgeError> {
-    let raw = raw_path
-        .split_once(INFIX)
-        .map(|(_, id)| id)
-        .ok_or_else(|| param_invalid("doc_id", "missing"))?;
+/// A document or block id: a reference's id (ASCII letters, digits, `.`,
+/// `_`, `-`; at most 128 bytes) — `FG-WEB-0006 param=<name>`.
+fn ref_id(name: &'static str, raw: &str) -> Result<String, ForgeError> {
     match reference_of(raw, 0) {
         Some(r) if r.repo.is_none() && r.block.is_none() && r.doc == raw => Ok(r.doc),
-        _ => Err(param_invalid("doc_id", "invalid")),
+        _ => Err(param_invalid(name, "invalid")),
     }
+}
+
+/// The path after `/documents/`.
+fn after_infix(raw_path: &str) -> Result<&str, ForgeError> {
+    raw_path
+        .split_once(INFIX)
+        .map(|(_, rest)| rest)
+        .ok_or_else(|| param_invalid("doc_id", "missing"))
+}
+
+/// The document id of [`ONE`]'s path.
+fn doc_id_param(raw_path: &str) -> Result<String, ForgeError> {
+    ref_id("doc_id", after_infix(raw_path)?)
+}
+
+/// The document id of [`REFERENCED_BY`]'s path.
+fn referenced_by_param(raw_path: &str) -> Result<String, ForgeError> {
+    let id = after_infix(raw_path)?
+        .strip_suffix(REFERENCED_BY_SUFFIX)
+        .ok_or_else(|| param_invalid("doc_id", "invalid"))?;
+    ref_id("doc_id", id)
+}
+
+/// The document and block ids of [`BLOCK`]'s path.
+fn block_params(raw_path: &str) -> Result<(String, String), ForgeError> {
+    let (doc, block) = after_infix(raw_path)?
+        .split_once(BLOCKS_INFIX)
+        .ok_or_else(|| param_invalid("block_id", "missing"))?;
+    Ok((ref_id("doc_id", doc)?, ref_id("block_id", block)?))
 }
 
 /// `en`, `ja`, `pt-BR` (the lint's `lang`).
@@ -757,6 +919,39 @@ impl Resolver for AgentResolver<'_> {
     }
 }
 
+/// The original `id` the audience may be given (with `lang`'s translation
+/// measured too), or the absent document's 404: `document_not_found`, or
+/// `doc_confidential` with the withheld event (review stage 3 LOW: decided
+/// before a translation or a block is looked up).
+fn visible_original<'i>(
+    request: &Dispatched<ProjectCtx>,
+    route: &'static str,
+    who: Audience,
+    (index, tip): (&'i DocIndex, &TipMarks),
+    id: &str,
+    lang: Option<&str>,
+) -> Result<&'i Entry, ForgeError> {
+    let Some(original) = index.original(id) else {
+        return Err(not_found("document_not_found", index).with_context("doc_id", id));
+    };
+    if secret(index, tip, id, lang) {
+        let _logged = withheld(request, route, who, 1, 0, 0);
+        return Err(not_found("doc_confidential", index)
+            .with_context("doc_id", id)
+            .with_context("path", &original.path));
+    }
+    Ok(original)
+}
+
+/// A referrer's sort and cursor key: `<id>`, or `<id>.<lang>` (its file
+/// name without `.md`).
+fn key_of(e: &Entry) -> String {
+    match &e.lang {
+        Some(l) => format!("{}.{l}", e.id),
+        None => e.id.clone(), // clone: the key is owned
+    }
+}
+
 fn not_found(reason: &'static str, index: &DocIndex) -> ForgeError {
     let err = ForgeError::new(ErrorCode::NotFound).with_context("reason", reason);
     match index.tree.incomplete {
@@ -842,17 +1037,14 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
             // whether the document is there.
             let caller = caller_of(&request)?;
             let tip = tip_marks(&state, caller, &t, who, &rev).await?;
-            let Some(original) = index.original(&id) else {
-                return Err(not_found("document_not_found", &index).with_context("doc_id", id));
-            };
-            // Review stage 3 LOW: before the translation is looked up, and
-            // answered as an absent document (the log keeps the reason).
-            if secret(&index, &tip, &id, lang.as_deref()) {
-                let _logged = withheld(&request, "documents_show", who, 1, 0, 0);
-                return Err(not_found("doc_confidential", &index)
-                    .with_context("doc_id", id)
-                    .with_context("path", original.path.clone())); // clone: the log's copy
-            }
+            let original = visible_original(
+                &request,
+                "documents_show",
+                who,
+                (&index, &tip),
+                &id,
+                lang.as_deref(),
+            )?;
             let shown = match lang.as_deref() {
                 None => original,
                 Some(l) => index.translation(&id, l).ok_or_else(|| {
@@ -902,6 +1094,228 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
             })
         },
     )
+    .await
+}
+
+/// `GET /api/v1/projects/{id}/documents/{doc_id}/referenced-by`: the
+/// documents of the revision that refer to it (or to its `block`), by key,
+/// paged — computed on read over the same one read of the tree
+/// ([`forge_doc::render::referrers`]). For an agent audience the target is
+/// measured first ([`visible_original`]) and a referrer it may not be given
+/// is left out uncounted (`total` is `null`); a referrer more confidential
+/// than the target is its id only (plan 13 Q14). A document whose
+/// references hit the parser's cap makes the answer `incomplete`
+/// (`reason=doc_refs`). Another repository's referrers are not looked for.
+pub async fn referenced_by(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    const ROUTE: &str = "documents_referenced_by";
+    respond(state, request, ROUTE, |state, request, t| async move {
+        let params = query(request.raw_query(), &["ref", "block", "limit", "after"])?;
+        let who = audience(&request)?;
+        let id = referenced_by_param(request.raw_path())?;
+        let block = take(&params, "block")
+            .map(|b| ref_id("block", b))
+            .transpose()?;
+        let limit = limit_param(&params)?;
+        let after = take(&params, "after").filter(|a| !a.is_empty());
+        let rev = revision(&t, take(&params, "ref")).await?;
+        let index = index_at(&t, &rev).await?;
+        let caller = caller_of(&request)?;
+        let tip = tip_marks(&state, caller, &t, who, &rev).await?;
+        let target = visible_original(&request, ROUTE, who, (&index, &tip), &id, None)?;
+        if let Some(b) = &block {
+            if target.doc.block(b).is_none() {
+                return Err(not_found("block_not_found", &index)
+                    .with_context("doc_id", &id)
+                    .with_context("block_id", b));
+            }
+        }
+        let entries: Vec<&Entry> = index
+            .originals
+            .iter()
+            .chain(index.translations.iter())
+            .collect();
+        let docs: Vec<&Document> = entries.iter().map(|e| &e.doc).collect();
+        let found = referrers(&docs, &id, block.as_deref());
+        let given = |e: &Entry| !secret(&index, &tip, &e.id, e.lang.as_deref());
+        // Only a document the audience may be given tells it something.
+        let capped = found
+            .capped
+            .iter()
+            .filter_map(|i| entries.get(*i))
+            .any(|e| given(e));
+        let mut withheld_documents = 0usize;
+        let mut shown: Vec<(String, &Entry, &Referrer)> = Vec::new();
+        for r in &found.found {
+            let Some(e) = entries.get(r.doc) else {
+                continue; // an index of `docs`: always there
+            };
+            if given(e) {
+                shown.push((key_of(e), e, r));
+            } else {
+                withheld_documents += 1;
+            }
+        }
+        shown.sort_by(|a, b| a.0.cmp(&b.0));
+        let total = shown.len();
+        let mut page: Vec<ReferrerBody> = Vec::new();
+        let mut last: Option<&str> = None;
+        let mut next_after = None;
+        for (key, e, r) in &shown {
+            if after.is_some_and(|a| key.as_str() <= a) {
+                continue;
+            }
+            if page.len() == limit {
+                // One more is shown on the next page: this page ends here.
+                next_after = last.map(str::to_owned);
+                break;
+            }
+            last = Some(key.as_str());
+            page.push(referrer_body(e, r, &index, target.classification));
+        }
+        // Logged once; never answered (as the list).
+        let _logged = withheld(&request, ROUTE, who, withheld_documents, 0, 0);
+        let incomplete = index.incomplete().or_else(|| {
+            capped.then(|| DocIncompleteBody {
+                error_code: ErrorCode::DocIndexBounded.id().to_owned(),
+                reason: "doc_refs".to_owned(),
+            })
+        });
+        Ok(ReferrersBody {
+            rev: rev_body(&rev),
+            id,
+            block,
+            referrers: page,
+            total: (!who.is_agent()).then_some(total),
+            next_after,
+            incomplete,
+        })
+    })
+    .await
+}
+
+/// One referrer as answered: whole, or its id only when it is more
+/// confidential than the target (a translation is at least as confidential
+/// as its original).
+fn referrer_body(
+    e: &Entry,
+    r: &Referrer,
+    index: &DocIndex,
+    target: Classification,
+) -> ReferrerBody {
+    let classification = index
+        .original(&e.id)
+        .map_or(e.classification, |o| o.classification.max(e.classification));
+    let id = e.id.clone(); // clone: the answer owns its strings
+    let lang = e.lang.clone(); // clone: as above
+    if classification > target {
+        return ReferrerBody {
+            id,
+            lang,
+            hidden: true,
+            title: None,
+            doctype: None,
+            path: None,
+            classification: None,
+            refs: Vec::new(),
+        };
+    }
+    ReferrerBody {
+        id,
+        lang,
+        hidden: false,
+        title: e.doc.meta_text("title").map(str::to_owned),
+        doctype: Some(e.doctype.clone()), // clone: as above
+        path: Some(e.path.clone()),       // clone: as above
+        classification: Some(classification.as_str().to_owned()),
+        refs: r
+            .refs
+            .iter()
+            .map(|(line, block)| ReferrerRefBody {
+                line: *line,
+                block: block.clone(), // clone: as above
+            })
+            .collect(),
+    }
+}
+
+/// `GET /api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}`: one
+/// block alone (of the translation `lang`, when given) with the references
+/// inside it resolved as in the document's view. A block that is not there
+/// answers the absent document's 404 (`reason=block_not_found`); for an
+/// agent audience the document is measured before the block is looked up.
+pub async fn block(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    const ROUTE: &str = "documents_block";
+    respond(state, request, ROUTE, |state, request, t| async move {
+        let params = query(request.raw_query(), &["ref", "lang"])?;
+        let who = audience(&request)?;
+        let (id, block_id) = block_params(request.raw_path())?;
+        let lang = lang_param(take(&params, "lang"))?;
+        let rev = revision(&t, take(&params, "ref")).await?;
+        let index = index_at(&t, &rev).await?;
+        let caller = caller_of(&request)?;
+        let tip = tip_marks(&state, caller, &t, who, &rev).await?;
+        let original =
+            visible_original(&request, ROUTE, who, (&index, &tip), &id, lang.as_deref())?;
+        let shown = match lang.as_deref() {
+            None => original,
+            Some(l) => index.translation(&id, l).ok_or_else(|| {
+                not_found("translation_not_found", &index)
+                    .with_context("doc_id", &id)
+                    .with_context("lang", l)
+            })?,
+        };
+        let Some(b) = shown.doc.block(&block_id) else {
+            return Err(not_found("block_not_found", &index)
+                .with_context("doc_id", &id)
+                .with_context("block_id", &block_id));
+        };
+        let agent_view = AgentResolver {
+            index: &index,
+            tip: &tip,
+        };
+        let resolver: &dyn Resolver = if who.is_agent() { &agent_view } else { &index };
+        let view = forge_doc::render::view(&shown.doc, shown.ty, resolver);
+        let (_, _, refs) = view_parts(&view);
+        let lines = b.line..=b.end_line.max(b.line);
+        let refs = refs
+            .into_iter()
+            .filter(|r| lines.contains(&r.line))
+            .collect();
+        let classification = view.classification.max(original.classification);
+        Ok(DocumentBlockAloneBody {
+            version: VIEW_VERSION,
+            rev: rev_body(&rev),
+            path: shown.path.clone(), // clone: the answer owns its strings
+            lang: shown.lang.clone(), // clone: as above
+            doctype: shown.doctype.clone(), // clone: as above
+            title: view.title,
+            classification: classification.as_str().to_owned(),
+            section: b
+                .section
+                .and_then(|i| shown.doc.headings.get(i))
+                .map(|h| h.text.clone()), // clone: as above
+            block: DocumentBlockAtBody {
+                kind: b.kind.clone(), // clone: as above
+                id: block_id,
+                attrs: b
+                    .attrs
+                    .iter()
+                    .map(|a| DocumentAttrBody {
+                        key: a.key.clone(),     // clone: as above
+                        value: a.value.clone(), // clone: as above
+                    })
+                    .collect(),
+                deprecated: b.deprecated(),
+                body: b.body.clone(), // clone: as above
+                display: display_markdown(&b.body),
+                line: b.line,
+                end_line: b.end_line,
+            },
+            refs,
+            id,
+            incomplete: index.incomplete(),
+        })
+    })
     .await
 }
 

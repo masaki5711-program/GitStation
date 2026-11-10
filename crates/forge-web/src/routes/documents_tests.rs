@@ -425,7 +425,12 @@ async fn the_document_api_needs_read_api_and_a_reader() {
             Some(ErrorCode::Unauthenticated),
         ),
     ];
-    for uri in [API.to_owned(), format!("{API}/RA-2026-014")] {
+    for uri in [
+        API.to_owned(),
+        format!("{API}/RA-2026-014"),
+        format!("{API}/RA-2026-014/referenced-by"),
+        format!("{API}/RA-2026-014/blocks/H-01"),
+    ] {
         for (facts, who, status, code) in &cases {
             let a = send(
                 router(&r, *facts, BrowseLimits::default()),
@@ -756,4 +761,321 @@ fn the_view_maps_to_the_answer_shape() {
         r.target.as_str(),
         "found" | "hidden" | "broken" | "external"
     )));
+}
+
+// ── who refers to a document, and one block alone (plan 13 §8.2) ───────
+
+/// A front matter of the `qms.procedure` type (default `internal`): 7
+/// lines, so a body starts at line 9.
+fn fm(id: &str, title: &str, classification: &str) -> String {
+    format!("---\ndoctype: qms.procedure\nid: {id}\ntitle: {title}\nowner: x\nclassification: {classification}\n---\n")
+}
+
+const SECRET_TITLE: &str = "Secret Sigma";
+
+/// A target `T-1` (blocks B-1, B-2), its referrers (`A-2.en` a
+/// translation, `S-1` marked `sigma`) and a confidential `C-1`.
+fn refs_files(sigma: &str) -> Vec<(String, String)> {
+    let t1 = format!(
+        "{}\n## A\n\n::: req B-1\nOne.\n:::\n\n::: req B-2\nTwo [[A-1]].\n:::\n",
+        fm("T-1", "Target", "internal")
+    );
+    let a1 = format!(
+        "{}\n## A\n\nSee [[T-1]].\nAnd [[T-1#B-1]] and [[C-1]].\n",
+        fm("A-1", "Alpha", "internal")
+    );
+    let a2 = format!("{}\n## A\n\n[[T-1#B-2]]\n", fm("A-2", "Beta", "internal"));
+    let a2_en = "---\ndoctype: qms.procedure\nid: A-2\ntitle: Beta en\nowner: x\nclassification: internal\nlang: en\ntranslation_of: A-2\n---\n\n[[T-1#B-1]]\n".to_owned();
+    let a3 = format!("{}\n## A\n\n[[T-1]]\n", fm("A-3", "Gamma", "internal"));
+    let s1 = format!("{}\n## A\n\n[[T-1#B-1]]\n", fm("S-1", SECRET_TITLE, sigma));
+    let c1 = format!(
+        "{}\n## A\n\n::: req B-1\nHidden.\n:::\n",
+        fm("C-1", "Secret Gamma", "confidential")
+    );
+    vec![
+        (".forge/doctypes/qms.procedure.yml".into(), T_QP.into()),
+        ("d/T-1.md".into(), t1),
+        ("d/A-1.md".into(), a1),
+        ("d/A-2.md".into(), a2),
+        ("d/A-2.en.md".into(), a2_en),
+        ("d/A-3.md".into(), a3),
+        ("d/S-1.md".into(), s1),
+        ("d/C-1.md".into(), c1),
+    ]
+}
+
+fn commit_owned(r: &Repo, files: &[(String, String)], parent: Option<&str>) -> String {
+    let pairs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
+    commit(&r.path, &pairs, parent)
+}
+
+/// `main` (S-1 confidential) and tag `old` (S-1 internal).
+async fn refs_fixture() -> Repo {
+    let r = repo().await;
+    let old = commit_owned(&r, &refs_files("internal"), None);
+    let main = commit_owned(&r, &refs_files("confidential"), Some(&old));
+    plumb(&r.path, &["update-ref", "refs/tags/old", &old], None);
+    plumb(&r.path, &["update-ref", "refs/heads/main", &main], None);
+    r
+}
+
+/// The keys (`<id>` or `<id>.<lang>`) of an answer's referrers.
+fn referrer_keys(body: &Value) -> Vec<String> {
+    body["referrers"]
+        .as_array()
+        .expect("referrers")
+        .iter()
+        .map(|r| match r["lang"].as_str() {
+            Some(l) => format!("{}.{l}", r["id"].as_str().expect("id")),
+            None => r["id"].as_str().expect("id").to_owned(),
+        })
+        .collect()
+}
+
+fn referrer<'a>(body: &'a Value, id: &str, lang: Option<&str>) -> &'a Value {
+    body["referrers"]
+        .as_array()
+        .expect("referrers")
+        .iter()
+        .find(|r| r["id"] == id && r["lang"].as_str() == lang)
+        .unwrap_or_else(|| panic!("no referrer {id} {lang:?}"))
+}
+
+#[tokio::test]
+async fn referrers_of_a_document_and_of_one_block_are_listed_by_id_paged() {
+    let r = refs_fixture().await;
+    let uri = format!("{API}/T-1/referenced-by");
+    let body = ok(&get(&r, &uri, session()).await);
+    assert_eq!(body["ref"]["name"], "main");
+    assert_eq!(body["id"], "T-1");
+    assert_eq!(body["block"], Value::Null);
+    assert_eq!(body["incomplete"], Value::Null);
+    assert_eq!(body["next_after"], Value::Null);
+    // Its own references to itself are no referrers.
+    assert_eq!(referrer_keys(&body), ["A-1", "A-2", "A-2.en", "A-3", "S-1"]);
+    assert_eq!(body["total"], 5);
+    let a1 = referrer(&body, "A-1", None);
+    assert_eq!(a1["hidden"], false);
+    assert_eq!(a1["title"], "Alpha");
+    assert_eq!(a1["path"], "d/A-1.md");
+    assert_eq!(a1["doctype"], "qms.procedure");
+    assert_eq!(a1["classification"], "internal");
+    assert_eq!(
+        a1["refs"],
+        serde_json::json!([{"line": 11, "block": null}, {"line": 12, "block": "B-1"}])
+    );
+    let en = referrer(&body, "A-2", Some("en"));
+    assert_eq!(en["path"], "d/A-2.en.md");
+    assert_eq!(
+        en["refs"],
+        serde_json::json!([{"line": 11, "block": "B-1"}])
+    );
+
+    // Paged by the key.
+    let page = ok(&get(&r, &format!("{uri}?limit=2"), session()).await);
+    assert_eq!(referrer_keys(&page), ["A-1", "A-2"]);
+    assert_eq!(page["next_after"], "A-2");
+    assert_eq!(page["total"], 5);
+    let page = ok(&get(&r, &format!("{uri}?limit=2&after=A-2"), session()).await);
+    assert_eq!(referrer_keys(&page), ["A-2.en", "A-3"]);
+    assert_eq!(page["next_after"], "A-3");
+    let page = ok(&get(&r, &format!("{uri}?limit=2&after=A-3"), session()).await);
+    assert_eq!(referrer_keys(&page), ["S-1"]);
+    assert_eq!(page["next_after"], Value::Null);
+
+    // One block's referrers.
+    let body = ok(&get(&r, &format!("{uri}?block=B-1"), session()).await);
+    assert_eq!(body["block"], "B-1");
+    assert_eq!(referrer_keys(&body), ["A-1", "A-2.en", "S-1"]);
+    assert_eq!(
+        referrer(&body, "A-1", None)["refs"],
+        serde_json::json!([{"line": 12, "block": "B-1"}])
+    );
+    let body = ok(&get(&r, &format!("{uri}?block=B-2"), session()).await);
+    assert_eq!(referrer_keys(&body), ["A-2"]);
+    // A block that is not there: the absent document's 404.
+    let absent =
+        without_request_id(&get(&r, &format!("{API}/NOPE-1/referenced-by"), session()).await);
+    let a = get(&r, &format!("{uri}?block=B-9"), session()).await;
+    assert_eq!(a.status, StatusCode::NOT_FOUND, "{:?}", a.json());
+    assert_eq!(without_request_id(&a), absent);
+    // At another revision.
+    let body = ok(&get(&r, &format!("{uri}?ref=old"), session()).await);
+    assert_eq!(body["ref"]["name"], "old");
+    assert_eq!(referrer(&body, "S-1", None)["title"], SECRET_TITLE);
+}
+
+#[tokio::test]
+async fn a_more_confidential_referrer_is_shown_to_a_person_by_id_only() {
+    let r = refs_fixture().await;
+    let a = get(&r, &format!("{API}/T-1/referenced-by"), session()).await;
+    let body = ok(&a);
+    let s1 = referrer(&body, "S-1", None);
+    assert_eq!(s1["hidden"], true);
+    assert_eq!(s1["title"], Value::Null);
+    assert_eq!(s1["path"], Value::Null);
+    assert_eq!(s1["doctype"], Value::Null);
+    assert_eq!(s1["classification"], Value::Null);
+    assert_eq!(s1["refs"], serde_json::json!([]));
+    assert!(!text(&a).contains(SECRET_TITLE), "{}", text(&a));
+    assert!(!text(&a).contains("d/S-1.md"), "{}", text(&a));
+    // The confidential document's own referrers are shown whole to a person.
+    let body = ok(&get(&r, &format!("{API}/C-1/referenced-by"), session()).await);
+    assert_eq!(referrer_keys(&body), ["A-1"]);
+    assert_eq!(referrer(&body, "A-1", None)["title"], "Alpha");
+}
+
+#[tokio::test]
+async fn a_referrer_confidential_at_the_tip_is_left_out_for_an_agent_uncounted() {
+    let r = refs_fixture().await;
+    for q in ["", "?ref=old", "?block=B-1", "?ref=old&block=B-1"] {
+        let a = get(&r, &format!("{API}/T-1/referenced-by{q}"), agent()).await;
+        let body = ok(&a);
+        assert!(!referrer_keys(&body).contains(&"S-1".to_owned()), "{q}");
+        assert_eq!(body["total"], Value::Null, "{q}: no count for an agent");
+        assert!(!text(&a).contains("S-1"), "{q}: {}", text(&a));
+        assert!(!text(&a).contains(SECRET_TITLE), "{q}");
+    }
+    let body = ok(&get(&r, &format!("{API}/T-1/referenced-by"), agent()).await);
+    assert_eq!(referrer_keys(&body), ["A-1", "A-2", "A-2.en", "A-3"]);
+    // A person reads it at the older revision, where it was internal.
+    let body = ok(&get(&r, &format!("{API}/T-1/referenced-by?ref=old"), session()).await);
+    assert_eq!(referrer(&body, "S-1", None)["hidden"], false);
+}
+
+fn bot() -> Principal {
+    Principal::authenticated(
+        UserId::new(6),
+        false,
+        true,
+        Credential::Token(vec![Scope::ReadApi]),
+        AccountKind::Bot,
+    )
+}
+
+#[tokio::test]
+async fn the_referrers_of_a_confidential_document_are_404_for_agent_token_service_account_bot_and_header(
+) {
+    let r = refs_fixture().await;
+    let absent =
+        without_request_id(&get(&r, &format!("{API}/NOPE-1/referenced-by"), agent()).await);
+    for uri in [
+        format!("{API}/C-1/referenced-by"),
+        format!("{API}/C-1/blocks/B-1"),
+    ] {
+        ok(&get(&r, &uri, session()).await);
+        let refusals = [
+            get(&r, &uri, agent()).await,
+            get(&r, &uri, service_account()).await,
+            get(&r, &uri, bot()).await,
+            get_with_header(&r, &uri, session()).await,
+        ];
+        for a in &refusals {
+            assert_eq!(a.status, StatusCode::NOT_FOUND, "{uri}: {:?}", a.json());
+            assert_eq!(without_request_id(a), absent, "{uri}: as an absent id");
+            assert!(!text(a).contains("Secret Gamma"), "{}", text(a));
+        }
+    }
+    // Decided before the block is looked up: a missing block answers alike.
+    let a = get(&r, &format!("{API}/C-1/blocks/B-9"), agent()).await;
+    assert_eq!(without_request_id(&a), absent);
+    let a = get(&r, &format!("{API}/C-1/referenced-by?block=B-9"), agent()).await;
+    assert_eq!(without_request_id(&a), absent);
+}
+
+#[tokio::test]
+async fn a_block_is_answered_alone_and_a_missing_block_is_the_same_404() {
+    let r = refs_fixture().await;
+    let body = ok(&get(&r, &format!("{API}/T-1/blocks/B-2"), session()).await);
+    assert_eq!(body["version"], 1);
+    assert_eq!(body["ref"]["name"], "main");
+    assert_eq!(body["id"], "T-1");
+    assert_eq!(body["path"], "d/T-1.md");
+    assert_eq!(body["lang"], Value::Null);
+    assert_eq!(body["doctype"], "qms.procedure");
+    assert_eq!(body["title"], "Target");
+    assert_eq!(body["classification"], "internal");
+    assert_eq!(body["section"], "A");
+    assert_eq!(body["block"]["line"], 15);
+    assert_eq!(body["block"]["kind"], "req");
+    assert_eq!(body["block"]["id"], "B-2");
+    assert_eq!(body["block"]["body"], "Two [[A-1]].");
+    assert_eq!(body["block"]["deprecated"], false);
+    let refs = body["refs"].as_array().expect("refs");
+    assert_eq!(refs.len(), 1, "only the block's own references");
+    assert_eq!(refs[0]["doc"], "A-1");
+    assert_eq!(refs[0]["line"], 16);
+    assert_eq!(refs[0]["target"], "found");
+    assert_eq!(refs[0]["title"], "Alpha");
+    assert!(
+        !body.to_string().contains("One."),
+        "the other block is not given"
+    );
+
+    let absent = without_request_id(&get(&r, &format!("{API}/NOPE-1"), session()).await);
+    for uri in [
+        format!("{API}/T-1/blocks/B-9"),
+        format!("{API}/NOPE-1/blocks/B-1"),
+        format!("{API}/T-1/blocks/B-1?lang=en"),
+        format!("{API}/A-2/blocks/B-1?lang=en"),
+    ] {
+        let a = get(&r, &uri, session()).await;
+        assert_eq!(a.status, StatusCode::NOT_FOUND, "{uri}: {:?}", a.json());
+        assert_eq!(without_request_id(&a), absent, "{uri}");
+    }
+    // An agent is given an internal block.
+    ok(&get(&r, &format!("{API}/T-1/blocks/B-1"), agent()).await);
+}
+
+#[tokio::test]
+async fn a_truncated_reference_list_marks_the_answer_incomplete() {
+    let r = refs_fixture().await;
+    let tip = plumb(&r.path, &["rev-parse", "refs/heads/main"], None);
+    let mut files = refs_files("confidential");
+    let mut many = fm("M-1", "Many", "internal");
+    many.push('\n');
+    for _ in 0..=forge_doc::document::MAX_REFS_PER_DOCUMENT {
+        many.push_str("[[Z-1]]\n");
+    }
+    many.push_str("[[T-1]]\n");
+    files.push(("d/M-1.md".into(), many));
+    let capped = commit_owned(&r, &files, Some(&tip));
+    plumb(&r.path, &["update-ref", "refs/heads/capped", &capped], None);
+    let uri = format!("{API}/T-1/referenced-by?ref=capped");
+    let body = ok(&get(&r, &uri, session()).await);
+    assert_eq!(
+        body["incomplete"]["error_code"],
+        ErrorCode::DocIndexBounded.id()
+    );
+    assert_eq!(body["incomplete"]["reason"], "doc_refs");
+    assert!(!referrer_keys(&body).contains(&"M-1".to_owned()));
+    // Without the capped document the answer is whole.
+    let body = ok(&get(&r, &format!("{API}/T-1/referenced-by"), session()).await);
+    assert_eq!(body["incomplete"], Value::Null);
+}
+
+#[tokio::test]
+async fn bad_referrer_and_block_parameters_are_refused_before_git_runs() {
+    let r = refs_fixture().await;
+    for uri in [
+        format!("{API}/-x/referenced-by"),
+        format!("{API}/T-1/referenced-by?limit=0"),
+        format!("{API}/T-1/referenced-by?limit=501"),
+        format!("{API}/T-1/referenced-by?block=-x"),
+        format!("{API}/T-1/referenced-by?block=a%23b"),
+        format!("{API}/T-1/referenced-by?lang=en"),
+        format!("{API}/T-1/referenced-by?block=B-1&block=B-2"),
+        format!("{API}/T-1/blocks/-x"),
+        format!("{API}/T-1/blocks/a%2Fb"),
+        format!("{API}/T-1/blocks/{}", "B".repeat(129)),
+        format!("{API}/T-1/blocks/B-1?lang=EN"),
+        format!("{API}/T-1/blocks/B-1?block=B-1"),
+    ] {
+        let a = get(&r, &uri, session()).await;
+        assert_eq!(a.status, StatusCode::BAD_REQUEST, "{uri}: {:?}", a.json());
+        assert_eq!(a.code(), ErrorCode::RequestInvalid.id(), "{uri}");
+    }
 }

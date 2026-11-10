@@ -600,6 +600,22 @@
     "word": "fixed"
   },
   {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/documents/{doc_id}/referenced-by",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/integration-bindings",
