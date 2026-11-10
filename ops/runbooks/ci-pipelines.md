@@ -29,6 +29,9 @@ M4 C2（計画 14）の CI のパイプラインの作成（ジョブ `ci.pipeli
    `SELECT id, state, attempts, last_error_code, created_at FROM forge.jobs WHERE kind = 'ci.pipeline_create' ORDER BY id DESC LIMIT 10;`
    `queued` / `running` なら待つだけでよい（既定 5 回、間隔は待ち行列の backoff）。
 4. 購読者の遅れ: `forge doctor --json` の `subscribers.*`（`ci-pipelines` の `lag`、`dead_letters`）。
+   `ci.pipelines`: 24 時間の `error` のパイプラインと 7 日の死んだ `ci.pipeline_create` ジョブ（FG-CI-0002、id を最大 10 件）、
+   24 時間動かない `pending` / `running`（warn。C3 の Runner が入るまでは待つだけ）。死んだジョブの `last_error_code` は、`error` の行も
+   書けなかったときの書き込みの失敗のコード（`cause_code` は元の失敗）。
 5. 「push したのに無い」: `forge.ci.no_definition`（info）が出ていれば、その SHA に `.forge-ci.yml` が無い（ルートのファイルだけを読む）。
    `forge.ci.pipeline_created` の `status=skipped` は、定義がそのブランチでジョブを 1 つも選ばなかった（`rules.branches`）。
 6. `invalid`（FG-CI-0001）: 行の `problems`（最大 20 件の `line` / `reason` / `subject`）か `gstn pipeline show`。手元で
@@ -36,6 +39,21 @@ M4 C2（計画 14）の CI のパイプラインの作成（ジョブ `ci.pipeli
    保護されない扱いなので、シークレットを持つジョブが選ばれると `secret_on_unprotected_ref` になる（意図どおり）。
 7. 409（FG-CI-0003）: ログの `operation`（`cancel` / `retry`）と `status`（見つけた状態）。終わったパイプラインは取り消せず、
    `failed` / `canceled` 以外は再実行できない。
+
+## 重複と回復（知っておくこと）
+
+- push と MR のパイプラインは (project, source, ref, sha, MR) で 1 つだけ。**`error` / `invalid` になった後に同じブランチへ同じ SHA を
+  push し直しても、新しいパイプラインはできない**（重複として捨てる）。回復は手動の実行（`gstn pipeline run`）か、新しいコミットの push。
+- **手動の実行はシークレットを使えない**（行の `protected` は保護されたブランチへの push だけ真。ADR-0029）。シークレットを持つジョブ（デプロイなど）が
+  選ばれる定義を手動で実行すると `invalid`（`secret_on_unprotected_ref`）になる。そのパイプラインの回復は新しいコミットの push（C12 で見直す）。
+- 手動の実行には冪等のキーが無い。同じ要求を 2 回送れば 2 つのパイプラインができる（どちらも監査の行 `pipeline.run_manual` が残る）。
+- 取り消し・再実行・手動の実行は `forge.audit_log`（`action LIKE 'pipeline.%'`、resource は project）に、誰が（人・エージェントのトークンの持ち主・
+  サービスアカウント）を残す。
+
+## 保持期間
+
+- パイプラインとジョブは **90 日** 保持する（ログの保持の決定に合わせる）。消す処理は C5（ログの保持のジョブ）で入れる。それまでは消さない
+  （`ci_pipelines_project` の索引 `(project_id, id DESC)` で一覧は古い行の量に影響されない）。
 
 ## Mitigate（変更は人の承認のあと）
 
