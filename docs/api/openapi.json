@@ -3265,6 +3265,39 @@
         ],
         "type": "object"
       },
+      "DiagnosisBody": {
+        "additionalProperties": false,
+        "description": "`GET …/pipelines/{pipeline_id}/diagnosis`.",
+        "properties": {
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/FailureBody"
+            },
+            "type": "array"
+          },
+          "pipeline_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipeline_id",
+          "status",
+          "error_code",
+          "failures"
+        ],
+        "type": "object"
+      },
       "DiffBody": {
         "additionalProperties": false,
         "description": "The changed files of a diff.",
@@ -4297,6 +4330,114 @@
         ],
         "type": "object"
       },
+      "FailureBody": {
+        "additionalProperties": false,
+        "description": "One failed job of a pipeline (plan 04 P-9, deterministic).",
+        "properties": {
+          "attempt": {
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "error_codes": {
+            "description": "The `FG-…` codes: the job's own first, then those its log names.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "excerpt": {
+            "description": "The failure lines, secrets masked.",
+            "type": "string"
+          },
+          "fingerprint": {
+            "description": "`fp_` + 16 hex digits: the same failure on any commit has the same\none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job": {
+            "description": "The job's name.",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "known_fixes": {
+            "description": "Deterministic fixes (P-7), never a guess.",
+            "items": {
+              "$ref": "#/components/schemas/KnownFixBody"
+            },
+            "type": "array"
+          },
+          "occurrences": {
+            "description": "How often this fingerprint failed in the project.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending": {
+            "description": "`true` while the worker has not fingerprinted it yet (seconds after\nthe job failed): the fields below are empty then.",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/FailureSourceBody"
+          },
+          "stage": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "job",
+          "job_id",
+          "stage",
+          "attempt",
+          "pending",
+          "fingerprint",
+          "error_codes",
+          "excerpt",
+          "source",
+          "occurrences",
+          "first_seen_at",
+          "known_fixes"
+        ],
+        "type": "object"
+      },
+      "FailureSourceBody": {
+        "additionalProperties": false,
+        "description": "Where a failure's excerpt is in the job's log.",
+        "properties": {
+          "lines": {
+            "description": "The excerpt's first and last line in the attempt's log.",
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "log_path": {
+            "description": "The log route of the attempt (`GET`, CiLogRead).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "log_path",
+          "lines"
+        ],
+        "type": "object"
+      },
       "FeedActorBody": {
         "additionalProperties": false,
         "description": "The actor of an event.",
@@ -5092,6 +5233,91 @@
         ],
         "type": "object"
       },
+      "JobLogPage": {
+        "additionalProperties": false,
+        "description": "`GET …/jobs/{job_id}/log`: one page of a job attempt's log.",
+        "properties": {
+          "attempt": {
+            "description": "The attempt this page is of.",
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "complete": {
+            "description": "The attempt is over and nothing is left after this page.",
+            "type": "boolean"
+          },
+          "current_attempt": {
+            "description": "The job's current attempt.",
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "from": {
+            "description": "The first chunk in this page (`null`: none stored from `from` on\nyet).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "job": {
+            "description": "The job's name.",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "job_status": {
+            "description": "`created`, `pending`, `running`, `succeeded`, `failed`, `canceled`.",
+            "type": "string"
+          },
+          "next_from": {
+            "description": "Pass as `from` for the next page; `null`: nothing stored after this\npage yet.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pipeline_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "text": {
+            "description": "The page's text, secrets masked as `[MASKED]`.",
+            "type": "string"
+          },
+          "to": {
+            "description": "The last chunk in this page.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "pipeline_id",
+          "job_id",
+          "job",
+          "job_status",
+          "attempt",
+          "current_attempt",
+          "from",
+          "to",
+          "text",
+          "next_from",
+          "complete"
+        ],
+        "type": "object"
+      },
       "JobRequestAnswer": {
         "additionalProperties": false,
         "description": "The answer of a claim.",
@@ -5127,6 +5353,35 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "KnownFixBody": {
+        "additionalProperties": false,
+        "description": "A known fix of a failure (plan 04 P-7): the merge request whose\npipeline failed with the same fingerprint and later succeeded.",
+        "properties": {
+          "fixed_at": {
+            "type": "string"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "merge_request_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "merge_request_id",
+          "iid",
+          "title",
+          "fixed_at"
+        ],
         "type": "object"
       },
       "ListedGroup": {
@@ -15972,6 +16227,140 @@
         },
         "summary": "Cancel a pending or running pipeline and its unfinished jobs; 409 FG-CI-0003 when it is finished (Developer)",
         "x-forge-action": "PipelineCancel"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipelines_pipeline_id_diagnosis",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosisBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A pipeline's deterministic diagnosis (plan 04 P-9): each failed job's fingerprint, error codes, masked excerpt with its log lines, occurrences and known fixes (a merge request whose pipeline later passed); pending while the worker has not fingerprinted it; 404 FG-REPO-0005 without such a pipeline; 403 FG-AUTH-0022 to an AI agent audience unless both marks are open (project readers)",
+        "x-forge-action": "PipelineDiagnosisRead"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_log",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The job's attempt (default its current one)",
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The first chunk (0-based; the previous page's `next_from`; default 0)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "maximum": 4095,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobLogPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One page of a CI job attempt's log (attempt: default the current one; from: the first chunk, 0-based): whole chunks, at most 256 / 1 MiB, secrets masked as [MASKED]; next_from names the next page, complete says the attempt is over; 404 FG-REPO-0005 without such a pipeline, job or attempt; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers)",
+        "x-forge-action": "CiLogRead"
       }
     },
     "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry": {

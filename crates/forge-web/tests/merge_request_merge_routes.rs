@@ -2177,7 +2177,16 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
         );
     }
     // Plan 14 C1: `forge/ci-lint` is forge's own, refused like every `forge/` name.
-    for name in ["forge/risk", "forge/ci-lint", "forge/doc-lint", "ext/lint"] {
+    // Plan 14 C5 (ADR-0029 decision 7): `ci/pipeline` is the system's too —
+    // refused to this service account although it holds the `ci` grant
+    // (reason=ci_namespace_internal).
+    for name in [
+        "forge/risk",
+        "forge/ci-lint",
+        "forge/doc-lint",
+        "ext/lint",
+        "ci/pipeline",
+    ] {
         let mut r = report.clone();
         r["name"] = json!(name);
         let (status, body) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(r)).await;

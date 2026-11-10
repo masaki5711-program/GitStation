@@ -15,16 +15,29 @@
 //!   `…/retry` (`PipelineRetry`): `200` the pipeline after the change;
 //!   `409 FG-CI-0003` for a state that cannot change.
 //!
-//! Metadata only (an agent audience reads it too): no logs or artifacts
-//! exist before C5, which decides CI outputs on their marks (ADR-0029
-//! decision 5). The secret names a job uses are listed, never a value.
+//! - `GET …/pipelines/{pipeline_id}/jobs/{job_id}/log?attempt=&from=`
+//!   (`CiLogRead`, M4 C5): one page of a job attempt's log (whole chunks
+//!   from `from`, at most 256 chunks / 1 MiB), masked; `next_from` names
+//!   the next page, `complete` says nothing more will come.
+//! - `GET …/pipelines/{pipeline_id}/diagnosis` (`PipelineDiagnosisRead`,
+//!   M4 C5, plan 04 P-9 deterministic part): the failed jobs with their
+//!   fingerprints, error codes, masked excerpts and known fixes.
+//!
+//! The pipeline routes answer metadata (an agent audience reads it too;
+//! the secret names a job uses are listed, never a value). The log and the
+//! diagnosis are CI outputs (ADR-0029 decision 5): after the project read,
+//! an AI agent audience is measured — the default branch's tip, as a clone
+//! is (`repo_copy::measure`, cached per tip) — and `authorize_ci_output`
+//! refuses it with `FG-AUTH-0022` unless the pipeline's own mark and the
+//! tip are both open. A person is never measured nor refused by the marks.
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use forge_auth::ProjectCtx;
-use forge_core::{parse_positive_id, ProjectId, RefName, UserId};
+use forge_auth::{CopyMark, ProjectCtx};
+use forge_core::{parse_positive_id, ProjectId, RefName, RepoId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
+use forge_pipelines::outputs::{Failure as StoredFailure, OutputView};
 use forge_pipelines::{
     ChangeRequest, ManualRun, PipelineDetail, Pipelines, StoredJob, StoredPipeline,
 };
@@ -33,7 +46,9 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, QueryParam, WriteParts};
+use crate::routes::git::principal_key;
 use crate::routes::projects::{self, PREFIX};
+use crate::routes::repo_copy::{measure, refusal_context, Measured};
 use crate::routes::write::{absent, bounded, json, no_store};
 
 /// `GET` the list, `POST` a manual run.
@@ -44,6 +59,10 @@ pub const ONE: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}";
 pub const CANCEL: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/cancel";
 /// `POST` retry.
 pub const RETRY: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry";
+/// `GET` a job's log (M4 C5).
+pub const LOG: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log";
+/// `GET` a pipeline's diagnosis (M4 C5).
+pub const DIAGNOSIS: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis";
 /// The body cap of a manual run (one branch name).
 pub const MAX_BODY: usize = 1024;
 /// The page size without `limit`.
@@ -65,6 +84,20 @@ pub const LIST_QUERY: &[QueryParam] = &[
         name: "limit",
         description: "At most this many pipelines (default 20)",
         integer_range: Some((1, forge_pipelines::MAX_PAGE)),
+    },
+];
+
+/// The log's query parameters.
+pub const LOG_QUERY: &[QueryParam] = &[
+    QueryParam {
+        name: "attempt",
+        description: "The job's attempt (default its current one)",
+        integer_range: Some((1, 100)),
+    },
+    QueryParam {
+        name: "from",
+        description: "The first chunk (0-based; the previous page's `next_from`; default 0)",
+        integer_range: Some((0, 4095)),
     },
 ];
 
@@ -171,6 +204,109 @@ pub struct PipelinePage {
     pub next_before: Option<i64>,
 }
 
+/// `GET …/jobs/{job_id}/log`: one page of a job attempt's log.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JobLogPage {
+    #[schema(minimum = 1)]
+    pub pipeline_id: i64,
+    #[schema(minimum = 1)]
+    pub job_id: i64,
+    /// The job's name.
+    pub job: String,
+    /// `created`, `pending`, `running`, `succeeded`, `failed`, `canceled`.
+    pub job_status: String,
+    /// The attempt this page is of.
+    #[schema(minimum = 1)]
+    pub attempt: i32,
+    /// The job's current attempt.
+    #[schema(minimum = 1)]
+    pub current_attempt: i32,
+    /// The first chunk in this page (`null`: none stored from `from` on
+    /// yet).
+    #[schema(required = true, minimum = 0)]
+    pub from: Option<i32>,
+    /// The last chunk in this page.
+    #[schema(required = true, minimum = 0)]
+    pub to: Option<i32>,
+    /// The page's text, secrets masked as `[MASKED]`.
+    pub text: String,
+    /// Pass as `from` for the next page; `null`: nothing stored after this
+    /// page yet.
+    #[schema(required = true, minimum = 0)]
+    pub next_from: Option<i32>,
+    /// The attempt is over and nothing is left after this page.
+    pub complete: bool,
+}
+
+/// A known fix of a failure (plan 04 P-7): the merge request whose
+/// pipeline failed with the same fingerprint and later succeeded.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KnownFixBody {
+    #[schema(minimum = 1)]
+    pub merge_request_id: i64,
+    #[schema(minimum = 1)]
+    pub iid: i64,
+    pub title: String,
+    pub fixed_at: String,
+}
+
+/// Where a failure's excerpt is in the job's log.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FailureSourceBody {
+    /// The log route of the attempt (`GET`, CiLogRead).
+    pub log_path: String,
+    /// The excerpt's first and last line in the attempt's log.
+    #[schema(required = true)]
+    pub lines: Option<[i32; 2]>,
+}
+
+/// One failed job of a pipeline (plan 04 P-9, deterministic).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FailureBody {
+    /// The job's name.
+    pub job: String,
+    #[schema(minimum = 1)]
+    pub job_id: i64,
+    pub stage: String,
+    #[schema(minimum = 1)]
+    pub attempt: i32,
+    /// `true` while the worker has not fingerprinted it yet (seconds after
+    /// the job failed): the fields below are empty then.
+    pub pending: bool,
+    /// `fp_` + 16 hex digits: the same failure on any commit has the same
+    /// one.
+    #[schema(required = true)]
+    pub fingerprint: Option<String>,
+    /// The `FG-…` codes: the job's own first, then those its log names.
+    pub error_codes: Vec<String>,
+    /// The failure lines, secrets masked.
+    pub excerpt: String,
+    pub source: FailureSourceBody,
+    /// How often this fingerprint failed in the project.
+    #[schema(minimum = 0)]
+    pub occurrences: i32,
+    #[schema(required = true)]
+    pub first_seen_at: Option<String>,
+    /// Deterministic fixes (P-7), never a guess.
+    pub known_fixes: Vec<KnownFixBody>,
+}
+
+/// `GET …/pipelines/{pipeline_id}/diagnosis`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosisBody {
+    #[schema(minimum = 1)]
+    pub pipeline_id: i64,
+    pub status: String,
+    #[schema(required = true)]
+    pub error_code: Option<String>,
+    pub failures: Vec<FailureBody>,
+}
+
 fn job_body(j: StoredJob) -> PipelineJobBody {
     PipelineJobBody {
         id: j.id,
@@ -242,6 +378,8 @@ enum Tail {
     One(i64),
     Cancel(i64),
     Retry(i64),
+    Log(i64, i64),
+    Diagnosis(i64),
 }
 
 impl Tail {
@@ -251,13 +389,19 @@ impl Tail {
             Self::One(_) => 1,
             Self::Cancel(_) => 2,
             Self::Retry(_) => 3,
+            Self::Log(..) => 4,
+            Self::Diagnosis(_) => 5,
         }
     }
 
     fn pipeline(self) -> Option<i64> {
         match self {
             Self::List => None,
-            Self::One(id) | Self::Cancel(id) | Self::Retry(id) => Some(id),
+            Self::One(id)
+            | Self::Cancel(id)
+            | Self::Retry(id)
+            | Self::Log(id, _)
+            | Self::Diagnosis(id) => Some(id),
         }
     }
 }
@@ -281,7 +425,16 @@ fn ids(raw_path: &str) -> Result<(ProjectId, Tail), ForgeError> {
         "" => Tail::One(id),
         "cancel" => Tail::Cancel(id),
         "retry" => Tail::Retry(id),
-        _ => return Err(bad()),
+        "diagnosis" => Tail::Diagnosis(id),
+        other => {
+            let job = other
+                .strip_prefix("jobs/")
+                .and_then(|rest| rest.strip_suffix("/log"))
+                .ok_or_else(bad)?;
+            let job = parse_positive_id(job)
+                .ok_or_else(|| param_invalid("job_id", "not_positive_decimal"))?;
+            Tail::Log(id, job)
+        }
     };
     Ok((project, tail))
 }
@@ -299,6 +452,10 @@ pub const OF_ONE: PipelinesOf = PipelinesOf { tail: 1 };
 pub const OF_CANCEL: PipelinesOf = PipelinesOf { tail: 2 };
 /// `POST …/retry`.
 pub const OF_RETRY: PipelinesOf = PipelinesOf { tail: 3 };
+/// `GET …/jobs/{job_id}/log`.
+pub const OF_LOG: PipelinesOf = PipelinesOf { tail: 4 };
+/// `GET …/diagnosis`.
+pub const OF_DIAGNOSIS: PipelinesOf = PipelinesOf { tail: 5 };
 
 impl PipelinesOf {
     async fn lookup(
@@ -479,6 +636,263 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     respond(&w.ctx, StatusCode::OK, built)
 }
 
+/// The default branch's tip mark for a CI output (module docs): an AI
+/// agent audience is measured as a clone is; a person is not. A tip that
+/// cannot be measured — no Smart HTTP state, a repository not ready, a
+/// failed measurement — is `Undecided`: refused to an agent (fail closed),
+/// with the cause in the refusal's log line.
+async fn tip_mark(state: &AppState, target: TipTarget) -> (CopyMark, Option<(RepoId, Measured)>) {
+    match target {
+        TipTarget::Person => (CopyMark::NotMeasured, None),
+        // Answered before (the header's own error); never measured.
+        TipTarget::Refused(_) => (CopyMark::Undecided, None),
+        TipTarget::Unmeasurable(repo, e) => (
+            CopyMark::Undecided,
+            repo.map(|r| (r, Measured::undecided(None, e))),
+        ),
+        TipTarget::Measure(repo, key) => match state.smart_http.as_ref() {
+            Some(smart) => {
+                let measured = measure(smart, repo, &key, &smart.copy_limits).await;
+                (measured.mark, Some((repo, measured)))
+            }
+            None => (CopyMark::Undecided, None),
+        },
+    }
+}
+
+/// What [`tip_mark`] measures, read from the request before any await
+/// (the request's body is not `Sync`).
+enum TipTarget {
+    Person,
+    /// The audience header was malformed (`FG-WEB-0006`).
+    Refused(ForgeError),
+    Unmeasurable(Option<RepoId>, ForgeError),
+    Measure(RepoId, String),
+}
+
+fn tip_target(state: &AppState, request: &Dispatched<ProjectCtx>) -> TipTarget {
+    // The principal's audience, else `Forge-Context-Audience: agent`
+    // (`gstn mcp` always sends it): an agent is measured.
+    match crate::routes::context::audience(request) {
+        Ok(a) if a.is_agent() => {}
+        Ok(_) => return TipTarget::Person,
+        Err(e) => return TipTarget::Refused(e),
+    }
+    let ready = crate::routes::git::ready(state, request)
+        .and_then(|(_, repo)| Ok((repo.id, principal_key(request)?)));
+    match ready {
+        Ok((repo, key)) => TipTarget::Measure(repo, key),
+        Err(e) => TipTarget::Unmeasurable(request.repository().map(|r| r.id), e),
+    }
+}
+
+/// Whether the request declared an AI agent audience although its
+/// principal is a person (`Forge-Context-Audience: agent`): `authorize()`
+/// then decides it as an agent's (`audience=header`).
+fn declared_agent(request: &Dispatched<ProjectCtx>) -> bool {
+    !request.principal().is_agent_audience()
+        && matches!(
+            crate::routes::context::audience(request),
+            Ok(crate::routes::context::Audience::Agent(_))
+        )
+}
+
+/// A CI output's refusal with what the measurement found (`tip`,
+/// `paths`, `check_error`), for the one log line at the boundary.
+fn ci_output_refusal(err: ForgeError, measured: Option<&(RepoId, Measured)>) -> ForgeError {
+    match measured {
+        Some((repo, m)) if err.code() == ErrorCode::RepositoryCopyWithheld => {
+            refusal_context(err, *repo, m)
+        }
+        _ => err,
+    }
+}
+
+/// The log's query: `(attempt, from)`.
+fn log_query(query: Option<&str>) -> Result<(Option<i32>, i32), ForgeError> {
+    let (mut attempt, mut from) = (None, None);
+    for pair in query.unwrap_or_default().split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, raw) = pair.split_once('=').unwrap_or((pair, ""));
+        let number = |name: &'static str, min: i64, max: i64| {
+            Some(raw)
+                .filter(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|r| r.parse::<i64>().ok())
+                .filter(|n| (min..=max).contains(n))
+                .and_then(|n| i32::try_from(n).ok())
+                .ok_or_else(|| param_invalid(name, "out_of_range"))
+        };
+        let repeated = match key {
+            "attempt" => attempt.replace(number("attempt", 1, 100)?).is_some(),
+            "from" => from.replace(number("from", 0, 4095)?).is_some(),
+            _ => return Err(param_invalid("query", "unknown_parameter")),
+        };
+        if repeated {
+            let name = if key == "attempt" { "attempt" } else { "from" };
+            return Err(param_invalid(name, "repeated"));
+        }
+    }
+    Ok((attempt, from.unwrap_or(0)))
+}
+
+/// `GET …/pipelines/{pipeline_id}/jobs/{job_id}/log` → `200`.
+pub async fn log(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let path = request.raw_path().to_owned();
+    let query = request.raw_query().map(str::to_owned);
+    let target = tip_target(&state, &request);
+    let declared_agent = declared_agent(&request);
+    let w = request.into_write();
+    let (target, refused) = match target {
+        TipTarget::Refused(e) => (TipTarget::Person, Some(e)),
+        t => (t, None),
+    };
+    let (tip_mark, measured) = tip_mark(&state, target).await;
+    let view = OutputView {
+        tip_mark,
+        declared_agent,
+    };
+    let built = async {
+        if let Some(e) = refused {
+            return Err(e);
+        }
+        let (attempt, from) = log_query(query.as_deref())?;
+        let (_, tail) = ids(&path)?;
+        let Tail::Log(pipeline, job) = tail else {
+            return Err(not_found());
+        };
+        let page = bounded(
+            &state,
+            "pipeline_job_log",
+            pipelines(&state)?.job_log(&w.proof, view, (pipeline, job), attempt, from),
+        )
+        .await
+        .map_err(|e| ci_output_refusal(e, measured.as_ref()))?
+        .ok_or_else(|| ForgeError::new(ErrorCode::NotFound).with_context("resource", "job"))?;
+        json(JobLogPage {
+            pipeline_id: page.pipeline_id,
+            job_id: page.job_id,
+            job: page.job_name,
+            job_status: page.job_status.as_str().to_owned(),
+            attempt: page.attempt,
+            current_attempt: page.current_attempt,
+            from: page.chunks.map(|c| c.0),
+            to: page.chunks.map(|c| c.1),
+            text: page.text,
+            next_from: page.next_seq,
+            complete: page.complete,
+        })
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
+fn failure_body(project: ProjectId, pipeline: i64, f: StoredFailure) -> FailureBody {
+    let log_path = format!(
+        "/api/v1/projects/{}/pipelines/{pipeline}/jobs/{}/log?attempt={}",
+        project.get(),
+        f.job_id,
+        f.attempt
+    );
+    let pending = f.found.is_none();
+    let mut error_codes: Vec<String> = f.job_error_code.into_iter().collect();
+    let Some(found) = f.found else {
+        return FailureBody {
+            job: f.job_name,
+            job_id: f.job_id,
+            stage: f.stage,
+            attempt: f.attempt,
+            pending,
+            fingerprint: None,
+            error_codes,
+            excerpt: String::new(),
+            source: FailureSourceBody {
+                log_path,
+                lines: None,
+            },
+            occurrences: 0,
+            first_seen_at: None,
+            known_fixes: Vec::new(),
+        };
+    };
+    for code in found.error_codes {
+        if !error_codes.contains(&code) {
+            error_codes.push(code);
+        }
+    }
+    FailureBody {
+        job: f.job_name,
+        job_id: f.job_id,
+        stage: f.stage,
+        attempt: f.attempt,
+        pending,
+        fingerprint: Some(found.fingerprint),
+        error_codes,
+        excerpt: found.excerpt,
+        source: FailureSourceBody {
+            log_path,
+            lines: found.lines.map(|(a, b)| [a, b]),
+        },
+        occurrences: found.occurrences,
+        first_seen_at: Some(found.first_seen_at),
+        known_fixes: found
+            .known_fix
+            .map(|k| KnownFixBody {
+                merge_request_id: k.merge_request_id,
+                iid: k.iid,
+                title: k.title,
+                fixed_at: k.fixed_at,
+            })
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// `GET …/pipelines/{pipeline_id}/diagnosis` → `200`.
+pub async fn diagnosis(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let path = request.raw_path().to_owned();
+    let target = tip_target(&state, &request);
+    let declared_agent = declared_agent(&request);
+    let w = request.into_write();
+    let (target, refused) = match target {
+        TipTarget::Refused(e) => (TipTarget::Person, Some(e)),
+        t => (t, None),
+    };
+    let (tip_mark, measured) = tip_mark(&state, target).await;
+    let view = OutputView {
+        tip_mark,
+        declared_agent,
+    };
+    let built = async {
+        if let Some(e) = refused {
+            return Err(e);
+        }
+        let id = pipeline_id(&path)?;
+        let project = *w.proof.id();
+        let got = bounded(
+            &state,
+            "pipeline_diagnosis",
+            pipelines(&state)?.diagnosis(&w.proof, view, id),
+        )
+        .await
+        .map_err(|e| ci_output_refusal(e, measured.as_ref()))?
+        .ok_or_else(not_found)?;
+        json(DiagnosisBody {
+            pipeline_id: got.pipeline_id,
+            status: got.status.as_str().to_owned(),
+            error_code: got.error_code,
+            failures: got
+                .failures
+                .into_iter()
+                .map(|f| failure_body(project, id, f))
+                .collect(),
+        })
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
 /// `POST …/pipelines/{pipeline_id}/cancel` → `200`.
 pub async fn cancel(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let path = request.raw_path().to_owned();
@@ -549,12 +963,23 @@ mod unit {
             ids("/api/v1/projects/7/pipelines/3/retry").expect("retry"),
             (ProjectId::new(7), Tail::Retry(3))
         );
+        assert_eq!(
+            ids("/api/v1/projects/7/pipelines/3/jobs/9/log").expect("log"),
+            (ProjectId::new(7), Tail::Log(3, 9))
+        );
+        assert_eq!(
+            ids("/api/v1/projects/7/pipelines/3/diagnosis").expect("diagnosis"),
+            (ProjectId::new(7), Tail::Diagnosis(3))
+        );
         for bad in [
             "/api/v1/projects/0/pipelines",
             "/api/v1/projects/7/pipelinesx",
             "/api/v1/projects/7/pipelines/0",
             "/api/v1/projects/7/pipelines/3/other",
             "/api/v1/projects/7/pipelines/x/cancel",
+            "/api/v1/projects/7/pipelines/3/jobs/0/log",
+            "/api/v1/projects/7/pipelines/3/jobs/9",
+            "/api/v1/projects/7/pipelines/3/jobs/9/log/x",
         ] {
             assert!(ids(bad).is_err(), "{bad}");
         }
@@ -575,6 +1000,27 @@ mod unit {
             "limit=1&limit=2",
         ] {
             assert!(list_query(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_log_query_takes_an_attempt_and_a_first_chunk() {
+        assert_eq!(log_query(None).expect("none"), (None, 0));
+        assert_eq!(
+            log_query(Some("attempt=2&from=17")).expect("both"),
+            (Some(2), 17)
+        );
+        for bad in [
+            "attempt=0",
+            "attempt=101",
+            "from=-1",
+            "from=4096",
+            "from=+3",
+            "from=",
+            "x=1",
+            "from=1&from=2",
+        ] {
+            assert!(log_query(Some(bad)).is_err(), "{bad}");
         }
     }
 }

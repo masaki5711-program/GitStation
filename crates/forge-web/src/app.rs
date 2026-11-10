@@ -705,6 +705,25 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::retry,
         )
         .responds::<p::PipelineBody>(Verb::Post, p::RETRY)
+        .route_with(
+            Verb::Get,
+            p::LOG,
+            Action::CiLogRead,
+            "One page of a CI job attempt's log (attempt: default the current one; from: the first chunk, 0-based): whole chunks, at most 256 / 1 MiB, secrets masked as [MASKED]; next_from names the next page, complete says the attempt is over; 404 FG-REPO-0005 without such a pipeline, job or attempt; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers)",
+            p::OF_LOG,
+            p::log,
+        )
+        .responds::<p::JobLogPage>(Verb::Get, p::LOG)
+        .queries(Verb::Get, p::LOG, p::LOG_QUERY)
+        .route_with(
+            Verb::Get,
+            p::DIAGNOSIS,
+            Action::PipelineDiagnosisRead,
+            "A pipeline's deterministic diagnosis (plan 04 P-9): each failed job's fingerprint, error codes, masked excerpt with its log lines, occurrences and known fixes (a merge request whose pipeline later passed); pending while the worker has not fingerprinted it; 404 FG-REPO-0005 without such a pipeline; 403 FG-AUTH-0022 to an AI agent audience unless both marks are open (project readers)",
+            p::OF_DIAGNOSIS,
+            p::diagnosis,
+        )
+        .responds::<p::DiagnosisBody>(Verb::Get, p::DIAGNOSIS)
 }
 
 /// A project's document lint migration setting (plan 13 Q13, ADR-0026):
