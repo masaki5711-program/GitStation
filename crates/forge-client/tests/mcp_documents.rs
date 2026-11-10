@@ -154,6 +154,14 @@ fn a_confidential_document_is_a_tool_error_with_request_id() {
             "The project or repository was not found."
         );
         assert_eq!(r["structuredContent"]["request_id"], "req-doc-404");
+        let mut keys: Vec<&str> = r["structuredContent"]
+            .as_object()
+            .expect("structuredContent")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["error_code", "request_id", "user_message"], "{id}");
         let text = r["content"][0]["text"].as_str().expect("text");
         assert!(text.contains("req-doc-404"), "{text}");
         assert!(text.contains("FG-REPO-0005"), "{text}");

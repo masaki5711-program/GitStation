@@ -450,7 +450,13 @@ fn call_tool(
             let _logged = writeln!(stderr, "gstn mcp: {name} failed: {}", error_text(&e));
             json!({
                 "content": [{"type": "text", "text": error_text(&e)}],
-                "structuredContent": serde_json::to_value(e.as_json()).unwrap_or(Value::Null),
+                // The agent gets the code, the message and the request id
+                // only — never `detail` (client-side text such as a path).
+                "structuredContent": {
+                    "error_code": e.code_id(),
+                    "user_message": e.user_message(),
+                    "request_id": e.request_id(),
+                },
                 "isError": true,
             })
         }
