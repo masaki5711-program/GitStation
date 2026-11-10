@@ -70,10 +70,23 @@ push・MR の版から作られたパイプラインは人の操作ではない�
 | FG-CI-0001 CiConfigInvalid | 定義・計画の誤り（行に記録。ルートではなく行の `error_code`） |
 | FG-CI-0002 PipelineCreateFailed | 定義・保護ブランチを読めなかった（ジョブの最後の試行で `error` の行、手動の実行は 503）。runbook `ci-pipelines` |
 | FG-CI-0003 PipelineStateConflict | 取り消し・再実行ができない状態（409） |
+| FG-CI-0004 JobLeaseLost | Runner のリースが切れた・別の試行になった（409）、回収（warn）。runbook `ci-runner` |
+| FG-CI-0005 NoRunnerAvailable | 10 分を超えて取られないジョブ（alert、worker と doctor `ci.runners`）。runbook `ci-runner` |
+| FG-CI-0006 JobLogTooLarge | 1 試行のログが 16 MiB・4096 チャンクを超える（413） |
+
+## Runner の API（M4 C3、`runners`）
+
+- 管理（管理者の Web のセッションだけ）: `register_runner` / `update_runner` / `runners`。トークン `fgr_…` は登録のときに 1 回だけ返す。
+- Runner の呼び出し（証明の主体の `runner_id` だけを使う。要求の値は使わない）: `request_job`（long-poll、最大 20 秒、1 秒ごとに
+  `forge_db::ci_runners::lease::claim`）、`heartbeat`、`append_log`、`complete`。SQL は `forge_db::ci_runners`。
+- worker: `reap_leases`（リースの回収、`forge.ci.job_lease_lost`）と `check_runners`（FG-CI-0005、10 分に 1 回まで）。
+- ジョブの完了で、`needs` を満たしたジョブを `pending` に、失敗・取り消しの下流を `canceled` にし、パイプラインの状態をジョブから決める。
+- シークレット: 取得の応答の `secrets_allowed` は `StoredPipeline::secrets_allowed()` だけ。偽なら名前も渡さない（値は C6）。
 
 ## 後の MR
 
-- C3: Runner がジョブを取り、状態とパイプラインの状態を進める。`runner_id` の外部キーは `ci_runners` と一緒に足す。
+- C3（済み）: Runner がジョブを取り、状態とパイプラインの状態を進める（上の「Runner の API」）。
+- C4: ジョブの fetch の Smart HTTP（`refs/pipelines/<id>/head`）と `forge-runner`。スクリプトは `definition_hash` の `.forge-ci.yml` から読む。
 - C5: CI の出力の読み取りを `copy_mark` で判定する（`undecided` はエージェントに閉じる）。今のルートはメタデータだけ。
 - C12: 手動・定期の実行の保護（今は保護されない扱い）。
 - C3 / C6: シークレットは `secrets_allowed()` だけで判定する（上）。C11: 再実行されたデプロイのジョブも人の `DeployApprove` を待つ。
