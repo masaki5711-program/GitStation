@@ -204,3 +204,66 @@ pub async fn sweep_unchecked(
     })
     .await
 }
+
+/// How long a clean decision may stand without its merge result before
+/// [`sweep_missing_merge_results`] asks again: the job writes the result
+/// right after the decision (a live job is never swept), so only a row
+/// stored before M4 C7 or a run whose merge-result step failed for good is
+/// older; the bound keeps a failing repository from being re-requested
+/// every run.
+pub const MISSING_RESULT_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The rollout's backfill (review MEDIUM, M4 C7; worker, every 30 s):
+/// request a check for at most `limit` open merge requests whose stored
+/// `can_be_merged` (for the merge request's current head) has no
+/// `merge_result_refs` row for its checked (head, target) pair, decided
+/// longer than `older_than` ago, with no live job — rows stored before the
+/// merge results existed (they would never get a merge request pipeline,
+/// so never `ci/pipeline`), or a run whose merge-result step failed for
+/// good. Idempotent: the check writes the row, after which the merge
+/// request is no longer a candidate. The (merge request, seq) pairs
+/// requested.
+pub async fn sweep_missing_merge_results(
+    db: &Db,
+    older_than: std::time::Duration,
+    limit: i64,
+    origin: &RequestId,
+) -> Result<Vec<(MergeRequestId, i64)>, ForgeError> {
+    const QUERY: &str = "review.merge_result_backfill";
+    let millis = i64::try_from(older_than.as_millis()).unwrap_or(i64::MAX);
+    db.within(QUERY, async {
+        let mut tx = db
+            .write_pool()
+            .begin()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        let rows: Vec<(i64, i64)> = sqlx::query_as(&format!(
+            "SELECT g.merge_request_id, g.project_id FROM forge.merge_request_mergeability g \
+             JOIN forge.merge_requests m ON m.id = g.merge_request_id \
+             WHERE g.status = 'can_be_merged' AND m.state = 'open' \
+             AND g.checked_head_sha = m.head_sha AND g.checked_target_sha IS NOT NULL \
+             AND g.updated_at < now() - make_interval(secs => $1::double precision / 1000) \
+             AND NOT EXISTS (SELECT 1 FROM forge.merge_result_refs r \
+             WHERE r.merge_request_id = g.merge_request_id \
+             AND r.head_sha = g.checked_head_sha AND r.target_sha = g.checked_target_sha) \
+             AND NOT {LIVE_JOB} \
+             ORDER BY g.updated_at, g.merge_request_id LIMIT $2 FOR UPDATE OF g SKIP LOCKED"
+        ))
+        .bind(millis)
+        .bind(limit)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let mut requested = Vec::with_capacity(rows.len());
+        for (mr, project) in rows {
+            let mr = MergeRequestId::new(mr);
+            // clone: each job keeps the sweep's request id
+            let seq = request_check_on(&mut tx, mr, ProjectId::new(project), origin.clone(), None)
+                .await?;
+            requested.push((mr, seq));
+        }
+        tx.commit().await.map_err(|e| query_error(QUERY, e))?;
+        Ok(requested)
+    })
+    .await
+}

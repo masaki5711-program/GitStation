@@ -915,3 +915,71 @@ async fn doctor_counts_stale_and_unverified_decisions_and_the_sweep_visits_them(
     assert_eq!(confirm_live(&t.db, &[mr.id]).await.expect("confirm"), 1);
     t.drop_now().await;
 }
+
+/// Review MEDIUM (M4 C7 rollout): an open merge request whose stored
+/// `can_be_merged` has no merge result for its checked pair (stored before
+/// the merge results existed) is checked again, once — not one that has
+/// its merge result, not one with a live job, not a closed one.
+#[tokio::test]
+async fn the_backfill_requests_clean_decisions_without_a_merge_result() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let missing = open_at_a(&t, alice, p, "a", "main").await;
+    let has_result = open_at_a(&t, alice, p, "b", "main").await;
+    let live = open_at_a(&t, alice, p, "c", "main").await;
+    let closed = open_at_a(&t, alice, p, "d", "main").await;
+    for (n, mr) in [&missing, &has_result, &live, &closed].iter().enumerate() {
+        run(&t, mr.id, MergeabilityStatus::CanBeMerged, n).await;
+    }
+    for mr in [&missing, &has_result, &closed] {
+        kill_jobs(&t, mr.id).await;
+    }
+    let origin = RequestId::parse("req-backfill").expect("id");
+    let recorded = record_merge_result(
+        &t.db,
+        &origin,
+        has_result.id,
+        (&oid('a'), &oid('b')),
+        &oid('c'),
+    )
+    .await
+    .expect("record")
+    .expect("open");
+    assert!(recorded.created);
+    let _closed = close_mr_decided(
+        &t.db,
+        &as_user(alice, "req-close"),
+        p,
+        closed.iid,
+        alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect("close");
+    // A fresh decision waits for its own job's merge-result step.
+    let early = sweep_missing_merge_results(&t.db, MISSING_RESULT_AFTER, 10, &origin)
+        .await
+        .expect("sweep");
+    assert!(early.is_empty(), "{early:?}");
+    t.exec_superuser(
+        "UPDATE forge.merge_request_mergeability SET updated_at = now() - interval '1 hour'",
+    )
+    .await;
+    let swept = sweep_missing_merge_results(&t.db, MISSING_RESULT_AFTER, 10, &origin)
+        .await
+        .expect("sweep");
+    let ids: Vec<MergeRequestId> = swept.iter().map(|(m, _)| *m).collect();
+    assert_eq!(ids, [missing.id]);
+    let stored = mergeability_written(&t.db, missing.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(stored.status, MergeabilityStatus::Unchecked);
+    assert_eq!(stored.check_seq, swept[0].1);
+    let again = sweep_missing_merge_results(&t.db, std::time::Duration::ZERO, 10, &origin)
+        .await
+        .expect("sweep");
+    assert!(again.is_empty(), "idempotent: {again:?}");
+    t.drop_now().await;
+}

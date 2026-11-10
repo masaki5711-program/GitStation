@@ -30,6 +30,14 @@
 //!    `incomplete` with a retryable reason after a backoff, at most
 //!    `SCAN_SWEEP_ATTEMPTS` times each (`forge_db::review::sweep_scans`,
 //!    each request logged).
+//! 6. (M4 C7 review) requests a check for open merge requests whose stored
+//!    `can_be_merged` has no merge result for its checked pair, decided
+//!    longer than [`forge_db::review::MISSING_RESULT_AFTER`] ago, with no
+//!    live job (`forge_db::review::sweep_missing_merge_results`, at most
+//!    [`forge_db::review::SWEEP_BATCH`] per run): the rollout's backfill of
+//!    decisions stored before the merge results existed (no merge request
+//!    pipeline, so never `ci/pipeline`), and the retry of a merge-result
+//!    step that failed for good.
 //!
 //! A full batch runs again at once. A failed run (the database) is returned
 //! and logged once per failure streak by the supervisor with `error_code`
@@ -40,7 +48,8 @@ use std::time::Duration;
 use forge_core::RequestId;
 use forge_db::review::{
     confirm_live, decided_candidates, reap_stale_checks, reap_stale_scans, request_check,
-    sweep_scans, sweep_unchecked, SCAN_STALE_AFTER, STALE_AFTER, SWEEP_BATCH,
+    sweep_missing_merge_results, sweep_scans, sweep_unchecked, MISSING_RESULT_AFTER,
+    SCAN_STALE_AFTER, STALE_AFTER, SWEEP_BATCH,
 };
 use forge_db::Db;
 use forge_errors::ForgeError;
@@ -72,13 +81,16 @@ pub(crate) async fn run_mergeability_sweep(
     };
     let scans_reaped = reap_stale_scans(db, SCAN_STALE_AFTER, REAP_BATCH).await?;
     let scans_swept = sweep_scans(db, SWEEP_BATCH, &request_id).await?;
-    if !swept.is_empty() || moved > 0 {
+    let backfilled =
+        sweep_missing_merge_results(db, MISSING_RESULT_AFTER, SWEEP_BATCH, &request_id).await?;
+    if !swept.is_empty() || moved > 0 || !backfilled.is_empty() {
         tracing::info!(
             target: "forge_cli",
             task = NAME,
             request_id = %request_id,
             requested = swept.len(),
             moved,
+            merge_results_backfilled = backfilled.len(),
             "forge.worker.mergeability_swept"
         );
     }
@@ -88,6 +100,7 @@ pub(crate) async fn run_mergeability_sweep(
             || full(reaped.len(), REAP_BATCH)
             || full(scans_reaped.len(), REAP_BATCH)
             || full(scans_swept.len(), SWEEP_BATCH)
+            || full(backfilled.len(), SWEEP_BATCH)
             || full(verified, SWEEP_BATCH)
         {
             Next::Immediately

@@ -83,9 +83,10 @@ pub use merge_results::{
 pub use mergeability::{
     begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,
     mergeability, mergeability_job, mergeability_payload, mergeability_written, not_checked,
-    reap_stale_checks, record_check, request_check, sweep_unchecked, CheckResult, CheckStart,
-    CheckSubject, DecidedRow, MergeabilityHealth, MergeabilityRequest, Recorded,
-    StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT, STALE_AFTER, SWEEP_BATCH,
+    reap_stale_checks, record_check, request_check, sweep_missing_merge_results, sweep_unchecked,
+    CheckResult, CheckStart, CheckSubject, DecidedRow, MergeabilityHealth, MergeabilityRequest,
+    Recorded, StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT, MISSING_RESULT_AFTER,
+    STALE_AFTER, SWEEP_BATCH,
 };
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
 pub use settings::{
