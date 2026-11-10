@@ -37,6 +37,8 @@ pub struct GitPlan {
     empty_config: PathBuf,
     /// An empty directory: `core.hooksPath`.
     empty_hooks: PathBuf,
+    /// The runner's `ca_file`: the fetch's `GIT_SSL_CAINFO`.
+    ca_file: Option<PathBuf>,
 }
 
 impl GitPlan {
@@ -45,7 +47,15 @@ impl GitPlan {
             git,
             empty_config,
             empty_hooks,
+            ca_file: None,
         }
+    }
+
+    /// Trust `ca_file` (the runner's configured CA bundle) in the fetch.
+    #[must_use]
+    pub fn with_ca_file(mut self, ca_file: Option<PathBuf>) -> Self {
+        self.ca_file = ca_file;
+        self
     }
 
     /// `git -c … -C <repo> <subcommand>` with the fixed hardening.
@@ -89,7 +99,8 @@ impl GitPlan {
     pub fn fetch(&self, work: &Path, url: &str, pipeline_id: i64, token: &JobToken) -> Cmd {
         let mut header = OsString::from("Authorization: Bearer ");
         header.push(token.expose());
-        self.base(work, "fetch")
+        let cmd = self
+            .base(work, "fetch")
             .arg("--quiet")
             .arg("--no-tags")
             .arg("--no-recurse-submodules")
@@ -100,7 +111,11 @@ impl GitPlan {
             .arg(format!("+refs/pipelines/{pipeline_id}/head:refs/forge/job"))
             .env("GIT_CONFIG_COUNT", "1")
             .env("GIT_CONFIG_KEY_0", "http.extraHeader")
-            .env("GIT_CONFIG_VALUE_0", header)
+            .env("GIT_CONFIG_VALUE_0", header);
+        match &self.ca_file {
+            Some(ca) => cmd.env("GIT_SSL_CAINFO", ca.as_os_str()),
+            None => cmd,
+        }
     }
 
     /// The commit the fetch wrote (`refs/forge/job`), printed.
@@ -185,6 +200,23 @@ mod tests {
         assert_eq!(
             cmd.env_value("GIT_CONFIG_NOSYSTEM"),
             Some(std::ffi::OsStr::new("1"))
+        );
+    }
+
+    /// M4 C4 review: the runner's `ca_file` is the fetch's CA bundle;
+    /// without one git's default applies.
+    #[test]
+    fn the_fetch_trusts_the_configured_ca_file() {
+        let token = JobToken::new("fgj_abc_secret".to_owned());
+        let url = "https://forge.internal/api/v1/runner/jobs/7/repo.git";
+        let work = Path::new("/w");
+        let cmd = plan().fetch(work, url, 3, &token);
+        assert_eq!(cmd.env_value("GIT_SSL_CAINFO"), None);
+        let with_ca = plan().with_ca_file(Some(PathBuf::from("/etc/forge-runner/ca.pem")));
+        let cmd = with_ca.fetch(work, url, 3, &token);
+        assert_eq!(
+            cmd.env_value("GIT_SSL_CAINFO"),
+            Some(std::ffi::OsStr::new("/etc/forge-runner/ca.pem"))
         );
     }
 

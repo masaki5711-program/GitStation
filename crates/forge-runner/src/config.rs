@@ -5,10 +5,11 @@
 //! or the environment variable `FORGE_RUNNER_TOKEN`.
 //!
 //! ```toml
-//! server = "https://git.example.internal"   # forge (http or https)
+//! server = "https://git.example.internal"   # forge (https)
+//! # allow_insecure_http = false             # http only with this set to true
 //! token_file = "/etc/forge-runner/token"    # or FORGE_RUNNER_TOKEN
 //! work_dir = "/var/lib/forge-runner"        # the job's directories
-//! # ca_file = "/etc/forge-runner/internal-ca.pem"
+//! # ca_file = "/etc/forge-runner/internal-ca.pem"  # the API client's and git's CA
 //! # git = "git"
 //! # podman = "podman"
 //! # memory = "4g"
@@ -39,6 +40,8 @@ struct Raw {
     work_dir: PathBuf,
     #[serde(default)]
     ca_file: Option<PathBuf>,
+    #[serde(default)]
+    allow_insecure_http: bool,
     #[serde(default)]
     git: Option<PathBuf>,
     #[serde(default)]
@@ -91,6 +94,10 @@ impl RunnerConfig {
             || server.query().is_some()
         {
             return Err(invalid("server", "not_an_http_origin"));
+        }
+        // The runner token and every job's token cross this connection.
+        if server.scheme() == "http" && !raw.allow_insecure_http {
+            return Err(invalid("server", "insecure_http"));
         }
         if !raw.work_dir.is_absolute() {
             return Err(invalid("work_dir", "not_absolute"));
@@ -219,6 +226,23 @@ mod tests {
             assert_eq!(err.code(), ErrorCode::ConfigInvalid);
             assert_eq!(reason(&err), want, "{text}");
         }
+    }
+
+    /// M4 C4 review: plain http only when asked for explicitly.
+    #[test]
+    fn http_needs_an_explicit_opt_in() {
+        let work = if cfg!(windows) { "C:/r" } else { "/r" };
+        let err = RunnerConfig::parse(&format!(
+            "server = \"http://git.example.test\"\nwork_dir = \"{work}\""
+        ))
+        .expect_err("http");
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+        assert_eq!(reason(&err), "insecure_http");
+        let cfg = RunnerConfig::parse(&format!(
+            "server = \"http://git.example.test\"\nwork_dir = \"{work}\"\nallow_insecure_http = true"
+        ))
+        .expect("opted in");
+        assert_eq!(cfg.server.scheme(), "http");
     }
 
     #[test]

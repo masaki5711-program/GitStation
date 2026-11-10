@@ -109,7 +109,8 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
         api: Arc::new(HttpApi::new(client)),
         exec: Executor {
             proc,
-            git: GitPlan::new(cfg.git.clone(), empty_config, empty_hooks),
+            git: GitPlan::new(cfg.git.clone(), empty_config, empty_hooks)
+                .with_ca_file(cfg.ca_file.clone()), // clone: the plan owns its copy
             podman,
             workspace: Workspace::new(cfg.work_dir.clone()),
             git_limits: GitLimits::default(),

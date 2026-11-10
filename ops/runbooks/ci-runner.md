@@ -84,7 +84,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    server = "https://git.example.internal"
    token_file = "/etc/forge-runner/token"
    work_dir = "/var/lib/forge-runner"      # forge-runner の利用者が書けること
-   # ca_file = "/etc/forge-runner/internal-ca.pem"
+   # ca_file = "/etc/forge-runner/internal-ca.pem"   # API と git の fetch（GIT_SSL_CAINFO）の両方が信頼する CA
+   # allow_insecure_http = false   # http の server は true のときだけ（既定は https 必須、FG-SYS-0002 reason=insecure_http）
    # memory = "4g"   pids_limit = 4096   tmpfs_size = "1g"
    ```
 
