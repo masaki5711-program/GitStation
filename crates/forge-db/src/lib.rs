@@ -148,6 +148,8 @@ pub mod restore;
 pub mod pipelines;
 // ── M4 C3: CI runners, job tokens and logs (plan 14 §4.1) ──
 pub mod ci_runners;
+// M4 C5: the CI outputs (logs, fingerprints, diagnosis, ci/pipeline).
+pub mod ci_outputs;
 // ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

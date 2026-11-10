@@ -506,7 +506,7 @@ pub async fn record_forge_check_run(
 /// (the cap for a new name), its annotations, the audit record and the
 /// row as read back. `by`: the reporting account and its credential
 /// (`None`: forge's worker).
-async fn write_run(
+pub(crate) async fn write_run(
     tx: &mut ChangeTx,
     ctx: &ChangeContext,
     (project, head): (ProjectId, &ObjectId),

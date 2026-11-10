@@ -913,6 +913,16 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── M4 C5: failure fingerprints and job failures (20261206200000) ──
+        ("forge.failure_fingerprints", operational()),
+        (
+            "forge.ci_job_failures",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("ci_job_failures")?,
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -1085,6 +1095,9 @@ const LATER_TABLES: &[&str] = &[
     "ci_runners",
     "ci_job_tokens",
     "ci_log_chunks",
+    // ── M4 C5: failure fingerprints and job failures (20261206200000) ──
+    "failure_fingerprints",
+    "ci_job_failures",
 ];
 
 /// Every table the first migration creates.

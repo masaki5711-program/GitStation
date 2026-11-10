@@ -713,5 +713,27 @@ ro_columns = [
 [tables.ci_log_chunks]
 guarded = false
 kind = "derived"
-# Not body: no read path for CI output before C5 (ADR-0029 decision 5).
+# Not body: the log is read only on the write pool, after authorize_ci_output
+# (M4 C5, ADR-0029 decision 5) or by the system's fingerprint sweep.
 ro_columns = ["job_id", "attempt", "seq", "project_id", "created_at"]
+
+# ── M4 C5 (20261206200000, plan 04 P-6 / P-7 / P-9): failure fingerprints
+# (one per project and fingerprint, folded by the worker's sweep; no log
+# text) and one failure row per failed job attempt (its fingerprint, error
+# codes and masked excerpt). Derived: written by forge's worker only. The
+# excerpt is log output: no read for the read pool; read through
+# PipelineDiagnosisRead only. ci_jobs.diagnosed_attempt and
+# ci_pipelines.check_status are the sweeps' marks ──
+[tables.failure_fingerprints]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.ci_job_failures]
+guarded = false
+kind = "derived"
+# Not excerpt (log output, ADR-0029 decision 5).
+ro_columns = [
+    "job_id", "attempt", "project_id", "pipeline_id", "fingerprint_id", "error_codes", "first_line",
+    "last_line", "created_at",
+]
