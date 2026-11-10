@@ -584,6 +584,98 @@ impl Mergeability {
     }
 }
 
+/// What one [`prune_merge_results`] run did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PruneReport {
+    /// Merge requests visited.
+    pub visited: usize,
+    /// Merge refs deleted.
+    pub refs_deleted: usize,
+    /// Rows removed.
+    pub rows_removed: u64,
+}
+
+/// Prune the merge results of at most `limit` merge requests that are
+/// closed or merged (review LOW, M4 C7; the worker's mergeability sweep):
+/// under each one's refs lock, while it is still not open,
+/// `refs/merge-requests/<iid>/merge` is deleted, then every row of
+/// `merge_result_refs` no live pipeline needs
+/// (`forge_db::review::prune_merge_results`; a pending or running pipeline
+/// keeps its row, and its own `refs/pipelines/<id>/head` keeps the commit).
+/// A reopened merge request is skipped (its next check reuses the rows).
+/// A failure on one merge request is logged at warn with its code and the
+/// rest go on (the next run tries again); a failure to list is returned.
+pub async fn prune_merge_results(
+    db: &Db,
+    checker: &Mergeability,
+    limit: i64,
+    request_id: &RequestId,
+) -> Result<PruneReport, ForgeError> {
+    let candidates = review::merge_results_to_prune(db, limit).await?;
+    let mut report = PruneReport {
+        visited: candidates.len(),
+        ..PruneReport::default()
+    };
+    for c in &candidates {
+        match checker.prune_one(db, c).await {
+            Ok((deleted, removed)) => {
+                report.refs_deleted += usize::from(deleted);
+                report.rows_removed += removed;
+                if deleted || removed > 0 {
+                    tracing::info!(
+                        target: "forge_review",
+                        event = "forge.review.merge_results_pruned",
+                        request_id = %request_id,
+                        merge_request_id = c.merge_request.get(),
+                        iid = c.iid,
+                        ref_deleted = deleted,
+                        rows_removed = removed,
+                        "merge results of a closed or merged merge request pruned"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                target: "forge_review",
+                event = "forge.review.merge_results_prune_failed",
+                request_id = %request_id,
+                error_code = e.code().id(),
+                merge_request_id = c.merge_request.get(),
+                iid = c.iid,
+                error = %e,
+                "could not prune merge results; tried again next run"
+            ),
+        }
+    }
+    Ok(report)
+}
+
+impl Mergeability {
+    /// One merge request of [`prune_merge_results`]: (ref deleted, rows
+    /// removed).
+    async fn prune_one(
+        &self,
+        db: &Db,
+        c: &review::PruneCandidate,
+    ) -> Result<(bool, u64), ForgeError> {
+        let mut lock = review::lock_version_refs(db, c.merge_request).await?;
+        let out = async {
+            if review::merge_request_open(db, c.merge_request).await? != Some(false) {
+                return Ok((false, 0));
+            }
+            lock.alive().await?;
+            let change = self
+                .git
+                .set_merge_result_ref(&self.storage, c.repository, c.iid, None, left(&lock))
+                .await?;
+            let removed = review::prune_merge_results(db, c.merge_request).await?;
+            Ok((matches!(change, MergeRefChange::Deleted { .. }), removed))
+        }
+        .await;
+        lock.release().await;
+        out
+    }
+}
+
 /// The job failed for good (`cause`: its last error): end its request as
 /// `check_failed reason=job_failed` and log `FG-REVIEW-0003` once (the
 /// worker logs `cause` itself). A request already superseded or decided is

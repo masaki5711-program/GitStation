@@ -38,6 +38,11 @@
 //!    decisions stored before the merge results existed (no merge request
 //!    pipeline, so never `ci/pipeline`), and the retry of a merge-result
 //!    step that failed for good.
+//! 7. (M4 C7 review) prunes the merge results of closed and merged merge
+//!    requests (`forge_review::prune_merge_results`, at most
+//!    [`REAP_BATCH`] per run): `refs/merge-requests/<iid>/merge` and every
+//!    `merge_result_refs` row no pending or running pipeline needs. A
+//!    failure on one merge request is logged there and retried next run.
 //!
 //! A full batch runs again at once. A failed run (the database) is returned
 //! and logged once per failure streak by the supervisor with `error_code`
@@ -53,6 +58,7 @@ use forge_db::review::{
 };
 use forge_db::Db;
 use forge_errors::ForgeError;
+use forge_review::{prune_merge_results, Mergeability};
 
 use super::provision::Storage;
 use super::supervise::Next;
@@ -66,8 +72,8 @@ const REAP_BATCH: i64 = 100;
 /// One target tip read.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One run (module docs). Without `storage` (the loop tests) step 3 is
-/// skipped.
+/// One run (module docs). Without `storage` (the loop tests) steps 3 and
+/// 7 are skipped.
 pub(crate) async fn run_mergeability_sweep(
     db: &Db,
     storage: Option<&Storage>,
@@ -79,6 +85,13 @@ pub(crate) async fn run_mergeability_sweep(
         Some(storage) => verify_decided(db, storage, &request_id).await?,
         None => (0, 0),
     };
+    // Step 7 never makes the sweep run again at once: a merge request that
+    // keeps failing would spin it (each failure is logged where it happens).
+    if let Some(storage) = storage {
+        // clone: the checker owns its handles
+        let checker = Mergeability::new(storage.git.clone(), storage.root.clone());
+        prune_merge_results(db, &checker, REAP_BATCH, &request_id).await?;
+    }
     let scans_reaped = reap_stale_scans(db, SCAN_STALE_AFTER, REAP_BATCH).await?;
     let scans_swept = sweep_scans(db, SWEEP_BATCH, &request_id).await?;
     let backfilled =

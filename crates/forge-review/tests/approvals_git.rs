@@ -3201,3 +3201,83 @@ async fn a_pruned_merge_result_is_written_again_when_its_pair_returns() {
     assert_eq!(w.mr_pipeline_shas().await.len(), 3);
     w.t.drop_now().await;
 }
+
+/// Review LOW (M4 C7): closing (or merging) a merge request lets the
+/// worker's sweep delete `refs/merge-requests/<iid>/merge` and its merge
+/// result rows — except a row a live pipeline still needs (its own
+/// pipeline ref pins the commit), which goes once the pipeline ends. An
+/// open merge request is never pruned.
+#[tokio::test]
+async fn a_closed_merge_request_loses_its_merge_ref_and_unpinned_rows() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let r1 = w.merge_ref().expect("merge ref");
+    w.advance_main(&[("README.md", "base\n"), ("other.txt", "o\n")])
+        .await;
+    let checker = Mergeability::new(w.git.clone(), w.storage.clone());
+    let rid = RequestId::parse("req-prune").expect("id");
+    let prune = || forge_review::prune_merge_results(&w.t.db, &checker, 10, &rid);
+    assert_eq!(prune().await.expect("prune").visited, 0, "open: kept");
+    // The create jobs ran; r1's pipeline is still running.
+    w.t.exec_superuser(
+        "UPDATE forge.jobs SET state = 'succeeded', finished_at = now() \
+         WHERE kind = 'ci.pipeline_create'",
+    )
+    .await;
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[format!(
+            "INSERT INTO forge.ci_pipelines (project_id, ref, sha, source, merge_request_id, \
+             copy_mark, status, request_id) VALUES ({p}, 'refs/heads/feature', '{r1}', \
+             'merge_request', {mr}, 'open', 'running', 'req-pipe')",
+            p = w.project.get(),
+            mr = w.mr.id.get(),
+        )],
+    )
+    .await;
+    let _closed = forge_db::review::close_mr_decided(
+        &w.t.db,
+        &ChangeContext::new(
+            Actor::User(w.dave),
+            RequestId::parse("req-close").expect("id"),
+        ),
+        w.project,
+        w.mr.iid,
+        w.dave,
+        |_| Ok(()),
+    )
+    .await
+    .expect("close");
+    let report = prune().await.expect("prune");
+    assert_eq!(
+        (report.visited, report.refs_deleted, report.rows_removed),
+        (1, 1, 1)
+    );
+    assert_eq!(w.merge_ref(), None, "the merge ref is deleted");
+    let rows = forge_db::review::merge_results(&w.t.db, w.mr.id)
+        .await
+        .expect("rows");
+    assert_eq!(rows.len(), 1, "the running pipeline's row stays");
+    assert_eq!(rows[0].result.as_str(), r1);
+    assert_eq!(
+        prune().await.expect("prune").visited,
+        0,
+        "only pinned rows left"
+    );
+    // The pipeline ends: its row goes too.
+    w.t.exec_superuser("UPDATE forge.ci_pipelines SET status = 'succeeded', finished_at = now()")
+        .await;
+    let report = prune().await.expect("prune");
+    assert_eq!(
+        (report.visited, report.refs_deleted, report.rows_removed),
+        (1, 0, 1)
+    );
+    assert!(forge_db::review::merge_results(&w.t.db, w.mr.id)
+        .await
+        .expect("rows")
+        .is_empty());
+    w.t.drop_now().await;
+}

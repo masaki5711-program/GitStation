@@ -16,6 +16,9 @@
 //! - [`replace_merge_result`]: a stored result whose commit `gc` pruned is
 //!   written again by the job; the row points at the new commit and the
 //!   pipeline is asked for on it.
+//! - [`merge_results_to_prune`] / [`prune_merge_results`]: a closed or
+//!   merged merge request's rows are removed (with its merge ref, by the
+//!   worker's sweep) except those a live pipeline still needs.
 //! - [`merge_runs_on`] / [`merge_runs_for`]: the runs a merge decision reads
 //!   for a head — on the head and on each merge result of the head (newest
 //!   first, at most [`MAX_MERGE_RESULTS_READ`]) — resolved by
@@ -259,7 +262,9 @@ pub async fn replace_merge_result(
             return Ok(None);
         };
         let moved: Option<i64> = sqlx::query_scalar(
-            "UPDATE forge.merge_result_refs SET result_sha = $5              WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha = $3              AND result_sha = $4 RETURNING id",
+            "UPDATE forge.merge_result_refs SET result_sha = $5 \
+             WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha = $3 \
+             AND result_sha = $4 RETURNING id",
         )
         .bind(mr.get())
         .bind(head.as_str())
@@ -286,7 +291,8 @@ pub async fn replace_merge_result(
             }
         } else {
             let existing: Option<String> = sqlx::query_scalar(
-                "SELECT result_sha FROM forge.merge_result_refs                  WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha = $3",
+                "SELECT result_sha FROM forge.merge_result_refs \
+                 WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha = $3",
             )
             .bind(mr.get())
             .bind(head.as_str())
@@ -344,6 +350,96 @@ async fn enqueue_pipeline(
     };
     let enqueued = enqueue_on(conn, &create_job(&request, origin.clone(), None)?).await?; // clone: the job owns its id
     Ok(matches!(enqueued, crate::jobs::Enqueued::Queued(_)))
+}
+
+/// A merge result row a live pipeline still needs (`r` is the row): a
+/// merge request pipeline on its commit pending or running, or its
+/// `ci.pipeline_create` job not done yet. The pipeline's own ref
+/// (`refs/pipelines/<id>/head`) pins the commit; the row stays until it
+/// ends.
+const PINNED: &str = "(EXISTS (SELECT 1 FROM forge.ci_pipelines p \
+     WHERE p.merge_request_id = r.merge_request_id AND p.sha = r.result_sha \
+     AND p.status IN ('pending', 'running')) \
+     OR EXISTS (SELECT 1 FROM forge.jobs j WHERE j.kind = 'ci.pipeline_create' \
+     AND j.state IN ('queued', 'running') \
+     AND j.payload ->> 'merge_request_id' = r.merge_request_id::text \
+     AND j.payload ->> 'sha' = r.result_sha))";
+
+/// A closed or merged merge request with merge results to prune.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PruneCandidate {
+    pub merge_request: MergeRequestId,
+    pub repository: forge_core::RepoId,
+    pub iid: i64,
+}
+
+/// At most `limit` merge requests that are no longer open and hold a merge
+/// result row no live pipeline needs (review LOW, M4 C7): the worker's
+/// sweep deletes their `refs/merge-requests/<iid>/merge` and those rows
+/// ([`prune_merge_results`]). Ready repositories only.
+pub async fn merge_results_to_prune(
+    db: &Db,
+    limit: i64,
+) -> Result<Vec<PruneCandidate>, ForgeError> {
+    const QUERY: &str = "review.merge_results_to_prune";
+    let rows: Vec<(i64, i64, i64)> = db
+        .within(QUERY, async {
+            sqlx::query_as(&format!(
+                "SELECT m.id, g.id, m.iid FROM forge.merge_requests m \
+                 JOIN forge.repositories g ON g.project_id = m.project_id AND g.state = 'ready' \
+                 WHERE m.state <> 'open' AND EXISTS (SELECT 1 FROM forge.merge_result_refs r \
+                 WHERE r.merge_request_id = m.id AND NOT {PINNED}) \
+                 ORDER BY m.id LIMIT $1"
+            ))
+            .bind(limit)
+            .fetch_all(db.write_pool())
+            .await
+            .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(mr, repo, iid)| PruneCandidate {
+            merge_request: MergeRequestId::new(mr),
+            repository: forge_core::RepoId::new(repo),
+            iid,
+        })
+        .collect())
+}
+
+/// Remove the merge result rows of `mr` no live pipeline needs, while `mr`
+/// is not open (a reopened one keeps them: its next check reuses them);
+/// the count removed. The caller holds the merge request's refs lock and
+/// removed the merge ref first.
+pub async fn prune_merge_results(db: &Db, mr: MergeRequestId) -> Result<u64, ForgeError> {
+    const QUERY: &str = "review.merge_results_prune";
+    db.within(QUERY, async {
+        sqlx::query(&format!(
+            "DELETE FROM forge.merge_result_refs r USING forge.merge_requests m \
+             WHERE r.merge_request_id = $1 AND m.id = r.merge_request_id \
+             AND m.state <> 'open' AND NOT {PINNED}"
+        ))
+        .bind(mr.get())
+        .execute(db.write_pool())
+        .await
+        .map(|done| done.rows_affected())
+        .map_err(|e| query_error(QUERY, e))
+    })
+    .await
+}
+
+/// Whether `mr` is open now (`None`: gone) — read under the refs lock
+/// before the prune removes the merge ref.
+pub async fn merge_request_open(db: &Db, mr: MergeRequestId) -> Result<Option<bool>, ForgeError> {
+    const QUERY: &str = "review.merge_request_open";
+    db.within(QUERY, async {
+        sqlx::query_scalar("SELECT state = 'open' FROM forge.merge_requests WHERE id = $1")
+            .bind(mr.get())
+            .fetch_optional(db.write_pool())
+            .await
+            .map_err(|e| query_error(QUERY, e))
+    })
+    .await
 }
 
 type ResultPair = (String, String);

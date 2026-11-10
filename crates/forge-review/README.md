@@ -88,8 +88,10 @@ merge request in place (ADR-0024 §1).
   (`forge_core::MergeCheckRuns::resolve`, `conditions((target, tip), …)`): a `ci/pipeline` run on an
   earlier merge result only is `BlockReason::RequiredCheckStale` (other names: the head's run counts) (`RequiredCheck::stale`), and `blocked()`
   answers FG-CI-0013 RequiredCheckStale when it is the first reason. `MergeStatus::merge_result_sha`.
+  `prune_merge_results` (the worker's mergeability sweep) deletes the merge ref and the rows of closed
+  and merged merge requests, keeping a row a pending or running pipeline needs.
   Tests in `tests/approvals_git.rs` (`a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge`
-  and four more).
+  and seven more).
 
 - M3 X6 (conflict prediction, plan 04 C-2, ADR-0024 Amendment X6; `src/conflicts.rs`):
   `scan(&Db, &ConflictPredictor, ConflictScanRequest, &RequestId) -> ScanReport`, the body of the
