@@ -672,6 +672,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/documents/{doc_id}",
         Coverage::Command("doc show"),
     ),
+    // Plan 13 §8.2: who refers to a document, and one block alone.
+    (
+        "GET",
+        "/api/v1/projects/{id}/documents/{doc_id}/referenced-by",
+        Coverage::Command("doc refs"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}",
+        Coverage::Command("doc show"),
+    ),
     // Plan 13 Q13 (ADR-0026): the document lint migration setting.
     (
         "GET",

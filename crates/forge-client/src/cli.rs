@@ -158,8 +158,9 @@ pub enum Command {
     },
     /// A read-only MCP server on stdin / stdout (M3 X5) for an AI agent:
     /// get_work_item_context, get_requirement, search_requirements,
-    /// get_trace_matrix, get_merge_request_context — with your token, and
-    /// never what is marked confidential (plan 06 D-5).
+    /// get_trace_matrix, get_merge_request_context, list_documents,
+    /// get_document, get_document_block, get_document_referenced_by — with
+    /// your token, and never what is marked confidential (plan 06 D-5).
     ///
     /// Log in with a token issued with `is_agent` for the agent: a person's
     /// ordinary token is a person's on every other route.
@@ -1841,6 +1842,32 @@ pub enum DocCommand {
         /// A translation's language (e.g. en).
         #[arg(long, value_parser = parse_text)]
         lang: Option<String>,
+        /// Only this block of the document (e.g. H-01), with the
+        /// references inside it.
+        #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "BLOCK_ID")]
+        block: Option<String>,
+    },
+    /// The documents that refer to one document (or one of its blocks),
+    /// through the server's document API: id, classification, path,
+    /// title and the lines of the references.
+    Refs {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The document id (e.g. RA-2026-014).
+        #[arg(value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        id: String,
+        /// Only the references to this block (e.g. H-01).
+        #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "BLOCK_ID")]
+        block: Option<String>,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+        /// At most this many referrers, 1..=500 (server default 100).
+        #[arg(long, value_parser = parse_spec_limit)]
+        limit: Option<u32>,
+        /// The previous page's next_after.
+        #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "KEY")]
+        after: Option<String>,
     },
     /// A project's documents (id, classification, type, path, title),
     /// through the server's document API.

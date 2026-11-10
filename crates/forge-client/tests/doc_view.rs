@@ -144,3 +144,116 @@ fn doc_show_refuses_a_bad_id_before_any_request() {
     }
     assert!(srv.seen().is_empty(), "nothing was sent");
 }
+
+const REFS: &str = r#"{"ref":{"type":"branch","name":"main","full_name":"refs/heads/main","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"id":"T-1","block":"B-1","referrers":[{"id":"A-1","lang":null,"hidden":false,"title":"Synthetic alpha","doctype":"qms.procedure","path":"d/A-1.md","classification":"internal","refs":[{"line":11,"block":null},{"line":12,"block":"B-1"}]},{"id":"A-2","lang":"en","hidden":false,"title":"Synthetic beta","doctype":"qms.procedure","path":"d/A-2.en.md","classification":"internal","refs":[{"line":11,"block":"B-1"}]},{"id":"S-1","lang":null,"hidden":true,"title":null,"doctype":null,"path":null,"classification":null,"refs":[]}],"total":7,"next_after":"S-1","incomplete":{"error_code":"FG-DOC-0002","reason":"doc_refs"}}"#;
+
+const BLOCK: &str = r#"{"version":1,"ref":{"type":"branch","name":"main","full_name":"refs/heads/main","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"path":"d/T-1.md","lang":null,"id":"T-1","doctype":"qms.procedure","title":"Synthetic target","classification":"internal","section":"Hazards","block":{"kind":"req","id":"B-2","attrs":[{"key":"severity","value":"3"}],"deprecated":false,"body":"Two\nlines.","display":"Two lines.","line":15,"end_line":17},"refs":[{"repo":null,"doc":"A-1","block":null,"line":16,"target":"found","title":"Synthetic alpha","block_kind":null}],"incomplete":null}"#;
+
+#[test]
+fn doc_refs_lists_the_referrers_of_a_document_or_block() {
+    let srv = Mock::start(|_| Resp::json(200, REFS));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "doc",
+            "refs",
+            "--project",
+            "7",
+            "T-1",
+            "--block",
+            "B-1",
+            "--ref",
+            "v1.0",
+            "--limit",
+            "3",
+            "--after",
+            "A-0",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(r.method, "GET");
+    assert_eq!(
+        r.target,
+        "/api/v1/projects/7/documents/T-1/referenced-by?ref=v1.0&block=B-1&limit=3&after=A-0"
+    );
+    for want in [
+        "A-1  internal  d/A-1.md  Synthetic alpha  (lines 11, 12#B-1)",
+        "A-2 (en)  internal  d/A-2.en.md  Synthetic beta  (lines 11#B-1)",
+        "S-1  (more confidential: id only)",
+        "7 referrers",
+        "(more: --after S-1)",
+        "(incomplete: FG-DOC-0002 doc_refs",
+    ] {
+        assert!(o.stdout.contains(want), "{want}: {}", o.stdout);
+    }
+    let sb = Sandbox::new();
+    let json = gstn(
+        &sb,
+        &srv,
+        &["doc", "refs", "--project", "7", "T-1", "--json"],
+    )
+    .json();
+    assert_eq!(json["total"], 7);
+    assert_eq!(
+        srv.seen().pop().expect("a request").target,
+        "/api/v1/projects/7/documents/T-1/referenced-by"
+    );
+}
+
+#[test]
+fn doc_show_block_reads_one_block_alone() {
+    let srv = Mock::start(|_| Resp::json(200, BLOCK));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "doc",
+            "show",
+            "--project",
+            "7",
+            "T-1",
+            "--block",
+            "B-2",
+            "--lang",
+            "en",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        r.target,
+        "/api/v1/projects/7/documents/T-1/blocks/B-2?lang=en"
+    );
+    for want in [
+        "T-1  Synthetic target",
+        "## Hazards",
+        "[req B-2] severity=3",
+        "Two lines.",
+        "line 16  A-1 Synthetic alpha",
+    ] {
+        assert!(o.stdout.contains(want), "{want}: {}", o.stdout);
+    }
+}
+
+#[test]
+fn doc_refs_and_show_block_refuse_bad_ids_before_any_request() {
+    let srv = Mock::start(|_| Resp::json(200, "{}"));
+    let sb = Sandbox::new();
+    for args in [
+        vec!["doc", "refs", "--project", "7", "../x"],
+        vec!["doc", "refs", "--project", "7", "T-1", "--block", "a/b"],
+        vec!["doc", "refs", "--project", "7", "T-1", "--block", "B#1"],
+        vec!["doc", "refs", "--project", "7", "T-1", "--limit", "501"],
+        vec!["doc", "refs", "T-1"],
+        vec!["doc", "show", "--project", "7", "T-1", "--block", "-x"],
+        vec!["doc", "show", "--project", "7", "T-1", "--block", "../B"],
+    ] {
+        let o = gstn(&sb, &srv, &args);
+        assert_ne!(o.code, 0, "{args:?}");
+    }
+    assert!(srv.seen().is_empty(), "nothing was sent");
+}

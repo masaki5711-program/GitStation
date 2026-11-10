@@ -112,7 +112,41 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Resu
             id,
             rev,
             lang,
-        } => crate::doc_view::show(cli, *project, id, rev.as_deref(), lang.as_deref(), env, io),
+            block,
+        } => match block {
+            None => {
+                crate::doc_view::show(cli, *project, id, rev.as_deref(), lang.as_deref(), env, io)
+            }
+            Some(b) => crate::doc_view::show_block(
+                cli,
+                *project,
+                (id, b),
+                rev.as_deref(),
+                lang.as_deref(),
+                env,
+                io,
+            ),
+        },
+        DocCommand::Refs {
+            project,
+            id,
+            block,
+            rev,
+            limit,
+            after,
+        } => crate::doc_view::refs(
+            cli,
+            *project,
+            id,
+            &crate::doc_view::RefsArgs {
+                block: block.as_deref(),
+                rev: rev.as_deref(),
+                limit: *limit,
+                after: after.as_deref(),
+            },
+            env,
+            io,
+        ),
         DocCommand::List {
             project,
             rev,

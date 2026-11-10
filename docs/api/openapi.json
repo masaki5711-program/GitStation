@@ -3468,6 +3468,137 @@
         ],
         "type": "object"
       },
+      "DocumentBlockAloneBody": {
+        "additionalProperties": false,
+        "description": "One block of a document, alone.",
+        "properties": {
+          "block": {
+            "$ref": "#/components/schemas/DocumentBlockAtBody"
+          },
+          "classification": {
+            "type": "string"
+          },
+          "doctype": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocIncompleteBody"
+              }
+            ]
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "refs": {
+            "description": "The `[[…]]` references inside the block, resolved as in the\ndocument's view.",
+            "items": {
+              "$ref": "#/components/schemas/DocumentRefBody"
+            },
+            "type": "array"
+          },
+          "section": {
+            "description": "The level-2 heading the block is under.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "ref",
+          "path",
+          "lang",
+          "id",
+          "doctype",
+          "title",
+          "classification",
+          "section",
+          "block",
+          "refs",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "DocumentBlockAtBody": {
+        "additionalProperties": false,
+        "description": "A block with where it is (the block route).",
+        "properties": {
+          "attrs": {
+            "description": "In the written order.",
+            "items": {
+              "$ref": "#/components/schemas/DocumentAttrBody"
+            },
+            "type": "array"
+          },
+          "body": {
+            "description": "The body as written.",
+            "type": "string"
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "display": {
+            "description": "The body for display (prose lines joined).",
+            "type": "string"
+          },
+          "end_line": {
+            "description": "The closing `:::`.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "line": {
+            "description": "The opening line (1-based).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "attrs",
+          "deprecated",
+          "body",
+          "display",
+          "line",
+          "end_line"
+        ],
+        "type": "object"
+      },
       "DocumentBlockBody": {
         "additionalProperties": false,
         "description": "A block (`::: <kind> <id> <attrs>`).",
@@ -6318,6 +6449,151 @@
           "type",
           "commit",
           "target"
+        ],
+        "type": "object"
+      },
+      "ReferrerBody": {
+        "additionalProperties": false,
+        "description": "A document (or translation) that refers to the target.",
+        "properties": {
+          "classification": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doctype": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hidden": {
+            "description": "More confidential than the target (plan 13 Q14): its id only —\n`title`, `doctype`, `path` and `classification` are `null`, `refs`\nis empty.",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lang": {
+            "description": "A translation's language; `null`: the original.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refs": {
+            "description": "Its references to the target, in the written order.",
+            "items": {
+              "$ref": "#/components/schemas/ReferrerRefBody"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "lang",
+          "hidden",
+          "title",
+          "doctype",
+          "path",
+          "classification",
+          "refs"
+        ],
+        "type": "object"
+      },
+      "ReferrerRefBody": {
+        "additionalProperties": false,
+        "description": "One reference of a referrer to the target.",
+        "properties": {
+          "block": {
+            "description": "The block named (`[[ID#BLOCK]]`); `null`: the document.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "line",
+          "block"
+        ],
+        "type": "object"
+      },
+      "ReferrersBody": {
+        "additionalProperties": false,
+        "description": "The documents that refer to one document (or one of its blocks).",
+        "properties": {
+          "block": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocIncompleteBody",
+                "description": "A bound of the read (`FG-DOC-0002`), or `reason=doc_refs`: a\ndocument's references hit the parser's cap, so a referrer may be\nmissing."
+              }
+            ]
+          },
+          "next_after": {
+            "description": "More referrers follow: ask again with `after=<next_after>`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "referrers": {
+            "description": "By key (`<id>`, or `<id>.<lang>` for a translation).",
+            "items": {
+              "$ref": "#/components/schemas/ReferrerBody"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Referrers in all (a person's answer); `null` for an agent audience\n(plan 06 D-5: a count would tell what was left out).",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "id",
+          "block",
+          "referrers",
+          "total",
+          "next_after",
+          "incomplete"
         ],
         "type": "object"
       },
@@ -12363,6 +12639,172 @@
           }
         },
         "summary": "One document's view: front matter, sections of text and blocks, references resolved (a more confidential target: its id only)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_documents_doc_id_blocks_block_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "block_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A translation (<id>.<lang>.md, e.g. en); default: the original",
+            "in": "query",
+            "name": "lang",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentBlockAloneBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One block of a document alone, with the references inside it resolved (a missing block answers as a missing document)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/documents/{doc_id}/referenced-by": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_documents_doc_id_referenced_by",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the references to this block of the document (e.g. H-01)",
+            "in": "query",
+            "name": "block",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many referrers (default 100)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_after: only referrers whose key (<id> or <id>.<lang>) sorts after it",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferrersBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The documents that refer to one document (or one of its blocks), by id, paged (a more confidential referrer: its id only; an agent's answer leaves confidential ones out uncounted)",
         "x-forge-action": "RepoBrowse"
       }
     },

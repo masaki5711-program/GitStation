@@ -179,7 +179,11 @@ fn mcp_lists_read_only_tools_and_calls_the_api_as_an_agent() {
             "get_requirement",
             "search_requirements",
             "get_trace_matrix",
-            "get_merge_request_context"
+            "get_merge_request_context",
+            "list_documents",
+            "get_document",
+            "get_document_block",
+            "get_document_referenced_by"
         ]
     );
     for t in by_id(2)["result"]["tools"].as_array().expect("tools") {
