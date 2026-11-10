@@ -93,6 +93,11 @@ C0 は型と判定だけを入れた（トークンの保存・発行・照会�
 2. `JobTokenState::Expired` は **DB の `now()`** と `expires_at` を比べて決める（アプリのホストの時計を使わない）。`authorize()` は時計を持たないので、認証が読んだ状態を `JobCredential.state` に入れる。
 3. `JobCredential.sha` は `forge_core::push::ObjectId` で、40 桁（SHA-1）か 64 桁（SHA-256）の**小文字の 16 進だけ**を受ける（`ObjectId::parse` が大文字・短縮・空白を拒む。C0 で確認済み）。`ci_pipelines.sha` も同じ形で保存し、比較は文字列の完全一致（短縮した SHA・ref 名で照合しない）。
 
+C3 で満たした（2026-11-10）: 1 は `projects::delete_decided` と `namespaces::move_subtree`（プロジェクトとグループの移動）の同じトランザクションで
+`revoke_project_job_tokens`（試験 `deleting_or_moving_the_project_revokes_its_job_tokens`。アーカイブは機能が無い）。2 は認証が DB の
+`expires_at <= now()` を読む（`expiry_is_decided_by_the_database_clock`）。3 は `ci_job_tokens.sha` を `ci_pipelines.sha` から写し、`ObjectId::parse` で読む。
+ジョブの終わり（完了・取り消し・リースの喪失）でも同じトランザクションで失効する。
+
 **C5（CI の出力）**
 4. ログ・成果物・診断のどの経路よりも先に、`Undecided`（測れなかった）の印でエージェントの相手の CI の出力の読み取りが断られる（閉じる）試験を入れる。
 
