@@ -20,6 +20,8 @@ mod admin_project;
 // ── end D5 MR4 ──
 // ── D4 MR3b ──
 mod admin_repo;
+// M4 C4: `forge admin runner`.
+mod admin_runner;
 // ── end D4 MR3b ──
 mod admin_token;
 mod admin_user;
@@ -235,7 +237,44 @@ enum AdminCommand {
         command: ActAsCommand,
     },
     // ── end M3 S2 ──
+    // ── M4 C4 ──
+    /// CI runners (runbook ci-runner): register one and print its token
+    /// once, list them, disable one.
+    Runner {
+        #[command(subcommand)]
+        command: RunnerCommand,
+    },
+    // ── end M4 C4 ──
 }
+
+// ── M4 C4 ──
+#[derive(Subcommand)]
+enum RunnerCommand {
+    /// Register a runner and print its token `fgr_…` once (put it in the
+    /// runner host's token file).
+    Register {
+        /// `[a-z0-9][a-z0-9._-]{0,62}`, unique.
+        #[arg(long)]
+        name: String,
+        /// Comma-separated tags (a job runs on a runner whose tags cover all of its own).
+        #[arg(long)]
+        tags: Option<String>,
+        /// At most 1024 bytes.
+        #[arg(long)]
+        description: Option<String>,
+        /// The administrator recorded as registering it (an active human administrator).
+        #[arg(long)]
+        admin: String,
+    },
+    /// List the runners (never a token).
+    List,
+    /// Disable a runner: its token and its jobs' tokens are refused from now on.
+    Disable {
+        /// The runner id (from `runner list`).
+        runner_id: i64,
+    },
+}
+// ── end M4 C4 ──
 
 // ── M3 S2 ──
 #[derive(Subcommand)]
@@ -508,6 +547,9 @@ fn main() -> ExitCode {
                 // the trail besides the audit row).
                 | AdminCommand::Events {
                     command: EventsCommand::NewEpoch,
+                }
+                | AdminCommand::Runner {
+                    command: RunnerCommand::Register { .. } | RunnerCommand::Disable { .. },
                 },
         }
         // M3 O1: backup and the mutating restore steps.
@@ -535,6 +577,9 @@ fn main() -> ExitCode {
                 }
                 | AdminCommand::ActAs {
                     command: ActAsCommand::ClaimedMac { .. },
+                }
+                | AdminCommand::Runner {
+                    command: RunnerCommand::List,
                 },
         }
         | Command::Doctor { .. }
@@ -654,6 +699,29 @@ fn main() -> ExitCode {
                     command: ActAsCommand::ClaimedMac { value, kid },
                 },
         } => config().and_then(|cfg| admin::act_as_claimed_mac(&cfg, &value, kid)),
+        Command::Admin {
+            command: AdminCommand::Runner { command },
+        } => config().and_then(|cfg| match command {
+            RunnerCommand::Register {
+                name,
+                tags,
+                description,
+                admin,
+            } => admin_runner::register(
+                &cfg.database,
+                &request_id,
+                &admin_runner::RegisterArgs {
+                    name,
+                    tags,
+                    description,
+                    admin,
+                },
+            ),
+            RunnerCommand::List => admin_runner::list(&cfg.database),
+            RunnerCommand::Disable { runner_id } => {
+                admin_runner::disable(&cfg.database, &request_id, runner_id)
+            }
+        }),
         Command::Admin {
             command:
                 AdminCommand::Repo {
