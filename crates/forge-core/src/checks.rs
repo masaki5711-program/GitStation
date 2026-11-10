@@ -78,17 +78,51 @@ pub const DOC_LINT_CHECK: &str = "forge/doc-lint";
 /// beside `forge/doc-lint`. Reported by forge's worker only.
 pub const CI_LINT_CHECK: &str = "forge/ci-lint";
 
+/// `ci/pipeline` (M4 C5, plan 14 §9-1, ADR-0029 decision 7): the status of
+/// the newest CI pipeline of the commit (`queued` while pending,
+/// `in_progress` while running, then `success` / `failure` / `neutral`).
+/// Written by forge's worker as the system (no reporter, no HTTP): the
+/// `CheckWrite` route refuses this name to everyone
+/// (`reason=ci_namespace_internal`). The rest of `ci/` stays the granted
+/// service accounts' until the cutover (plan 14 X).
+pub const CI_PIPELINE_CHECK: &str = "ci/pipeline";
+
+/// Every name forge's worker reports itself: [`FORGE_REPORTED_CHECKS`] and
+/// [`CI_PIPELINE_CHECK`]. None is ever written over HTTP, and none counts
+/// in the reporters' cap.
+pub const SYSTEM_REPORTED_CHECKS: &[&str] = &[
+    SPEC_DRIFT_CHECK,
+    RISK_CHECK,
+    SPEC_LINT_CHECK,
+    SPEC_TRACE_CHECK,
+    DOC_LINT_CHECK,
+    CI_LINT_CHECK,
+    CI_PIPELINE_CHECK,
+];
+
 /// The most runs one commit holds in all: the reporters' cap
-/// ([`MAX_CHECK_RUNS_PER_COMMIT`], which counts no `forge/` name) plus one
-/// per name forge reports itself (review X2: other reporters can never
-/// crowd forge's own run out). Every read of a commit's runs is bounded by
-/// it.
+/// ([`MAX_CHECK_RUNS_PER_COMMIT`], which counts no name forge reports
+/// itself) plus one per name forge reports itself (review X2: other
+/// reporters can never crowd forge's own run out). Every read of a
+/// commit's runs is bounded by it.
 pub const MAX_STORED_CHECK_RUNS_PER_COMMIT: usize =
-    MAX_CHECK_RUNS_PER_COMMIT + FORGE_REPORTED_CHECKS.len();
+    MAX_CHECK_RUNS_PER_COMMIT + SYSTEM_REPORTED_CHECKS.len();
 
 /// Whether forge's own worker reports `name` ([`FORGE_REPORTED_CHECKS`]).
 pub fn forge_reports(name: &CheckName) -> bool {
     FORGE_REPORTED_CHECKS.contains(&name.as_str())
+}
+
+/// Whether forge's worker reports `name` as the system
+/// ([`SYSTEM_REPORTED_CHECKS`]: a `forge/` name or `ci/pipeline`).
+pub fn system_reports(name: &CheckName) -> bool {
+    SYSTEM_REPORTED_CHECKS.contains(&name.as_str())
+}
+
+/// Whether `name` is reserved from HTTP check writes although its
+/// namespace is grantable (`ci/pipeline`, ADR-0029 decision 7).
+pub fn reserved_from_http(name: &CheckName) -> bool {
+    name.as_str() == CI_PIPELINE_CHECK
 }
 
 /// A check run's status (ADR-0024 §10).

@@ -470,10 +470,11 @@ pub async fn report_check_run_decided<P>(
 const REPORTED_ACTION: &str = "check_run.reported";
 
 /// Record forge's own run `new` on `head` of `project` (M3 X2: the
-/// `check.spec_drift` job, through forge-checks). No decision: forge's
-/// worker is no account and `forge/` is never written over HTTP; the run
-/// has no reporter (`check_runs_reporter`). Only a name of
-/// [`forge_core::checks::FORGE_REPORTED_CHECKS`] is accepted
+/// `check.spec_drift` job, through forge-checks; M4 C5: `ci/pipeline`,
+/// through forge-pipelines). No decision: forge's worker is no account and
+/// these names are never written over HTTP; the run has no reporter
+/// (`check_runs_reporter`). Only a name of
+/// [`forge_core::checks::SYSTEM_REPORTED_CHECKS`] is accepted
 /// (`FG-SYS-0001 reason=not_forge_check` otherwise: a caller bug). The
 /// project row is taken `FOR SHARE` and the rest is a report's (lock order,
 /// the cap, `check.completed` only when the conclusion changed). Errors
@@ -485,7 +486,7 @@ pub async fn record_forge_check_run(
     (project, head): (ProjectId, &ObjectId),
     new: &NewCheckRun,
 ) -> Result<Reported, ForgeError> {
-    if !forge_core::checks::forge_reports(&new.name) {
+    if !forge_core::checks::system_reports(&new.name) {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "not_forge_check")
             .with_context("name", new.name.as_str().to_owned()));
@@ -556,15 +557,16 @@ async fn write_run(
                     )
                     .bind(project.get())
                     .bind(s)
-                    .bind(forge_core::checks::FORGE_REPORTED_CHECKS)
+                    .bind(forge_core::checks::SYSTEM_REPORTED_CHECKS)
                     .fetch_one(c)
                     .await
                     .map_err(|e| query_error("checks.run_count", e))
                 })
                 .await?;
-            // Review X2: forge's own names (one run each, the list is fixed)
-            // are outside the reporters' cap and never counted in it.
-            let forge_name = forge_core::checks::forge_reports(&new.name);
+            // Review X2: forge's own names (one run each, the list is fixed;
+            // M4 C5 `ci/pipeline` too) are outside the reporters' cap and
+            // never counted in it.
+            let forge_name = forge_core::checks::system_reports(&new.name);
             if !forge_name
                 && usize::try_from(count).unwrap_or(usize::MAX) >= MAX_CHECK_RUNS_PER_COMMIT
             {
@@ -1044,7 +1046,7 @@ pub async fn unreported_requirements(db: &Db) -> Result<BTreeMap<CheckNamespace,
                  AND u.state = 'active' AND u.kind = 'service_account') \
                  GROUP BY 1 ORDER BY 1",
             )
-            .bind(forge_core::checks::FORGE_REPORTED_CHECKS)
+            .bind(forge_core::checks::SYSTEM_REPORTED_CHECKS)
             .fetch_all(db.pool().executor())
             .await
             .map_err(|e| read_query_error(QUERY, e))
