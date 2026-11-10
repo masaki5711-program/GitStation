@@ -279,6 +279,36 @@ decision point.
   min-role read denials, and the deny rows listed in ADR-0025 "権限の表に S2
   が足す行".
 
+**CI principals (M4 C0, ADR-0029)**: a registered runner and a job's
+short-lived token, decided by the same `authorize()` in their own arm
+(`src/job.rs`, called first, like the act-as arm).
+- `Credential::Runner(RunnerCredential { runner_id })` and
+  `Credential::Job(Box<JobCredential { job_id, project, sha, state }>)`, built
+  only by `Principal::runner` / `Principal::job` (no user, no administrator
+  rights, no scopes, kind `Bot`; `is_agent_audience()` is unchanged and true,
+  but never reached). Test `only_forge_web_builds_ci_principals` limits the
+  builders to forge-web's authentication (its caller lands with C3).
+- `Action::ci_rule() -> CiRule { Denied, Runner, Job }`: one exhaustive
+  `match`, closed by default. Today only `RepoRead` is `Job`; no action is
+  `Runner` (the runner API arrives with C3).
+- `authorize_pinned_copy(&Principal, ProjectId, &ObjectId)` builds the only
+  `Resource::PinnedCopy { project, sha }`: a live job copies its own project
+  at its pinned SHA **whatever the confidential marks**; another project or
+  SHA is `FG-REPO-0005` (`job_other_project`, `job_sha_mismatch`); an expired
+  or revoked token `FG-AUTH-0001` (`credential=job`, `reason=expired|revoked`,
+  `authorize()` has no clock — authentication states `JobTokenState`); a
+  plain project read or a measured `RepoCopy` `FG-AUTH-0003
+  job_requires_pinned_copy`; every other action `FG-AUTH-0003
+  ci_not_allowed`. A runner reads nothing (`ci_not_allowed`). Every other
+  principal on a pinned copy is `FG-AUTH-0003 pinned_copy_without_job`;
+  service accounts, bots and agents' tokens keep `FG-AUTH-0022` on copies.
+- Rows `src/matrix_rows_ci.rs`: generated `ci_denied_for_<action>` for the job
+  and the runner columns, the pinned-copy allow / deny rows. Tests
+  `src/job_tests.rs`.
+- Not yet (C2 / C3): token issuance and lookup (`ci_job_tokens`,
+  `ci_runners`), the Smart HTTP route for a job (`refs/pipelines/<id>/head`
+  only), the runner API's actions and their lease checks.
+
 **Error codes owned**: FG-AUTH-0001..0004, FG-REPO-0005..0006,
 FG-GIT-0007..0010 (all `info`, no runbook: expected client conditions).
 With S2 (ADR-0025): FG-AUTH-0020 ActAsAssertionInvalid (warn, runbook `act-as`).

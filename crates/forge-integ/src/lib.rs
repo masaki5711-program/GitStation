@@ -425,6 +425,8 @@ impl Feed {
             Credential::Session => &[],
             // Refused on the feed (ADR-0025 §4); nothing personal.
             Credential::ActAs(_) => &[],
+            // Refused on the feed (ADR-0029 §8); nothing personal.
+            Credential::Runner(_) | Credential::Job(_) => &[],
         };
         let email = scopes.contains(&Scope::UserEmail);
         let employee = scopes.contains(&Scope::UserEmployeeNumber);

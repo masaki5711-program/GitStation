@@ -230,6 +230,9 @@ fn change_context(request: &ReviewRequest, principal: &Principal, user: UserId) 
             Credential::Session | Credential::Token(_),
             forge_auth::AccountKind::Human | forge_auth::AccountKind::Bot,
         ) => Actor::User(user),
+        // Unreachable: `authorize()` refuses a CI principal every review
+        // action (ADR-0029 §8) and it has no user to get here with.
+        (Credential::Runner(_) | Credential::Job(_), _) => Actor::User(user),
     };
     let mut ctx = ChangeContext::new(actor, request.request_id.clone());
     ctx.credential_id = match principal.act_as_credential() {

@@ -780,6 +780,119 @@ impl Action {
             | Action::Metrics => ActAsRule::Denied,
         }
     }
+
+    /// How a CI principal may perform the action (M4 C0, ADR-0029 §2).
+    /// Closed by default: every action is listed, so a new one does not
+    /// compile until it is decided here. No action is `Runner` yet (the
+    /// runner API's actions arrive with M4 C3).
+    pub fn ci_rule(self) -> CiRule {
+        match self {
+            // A job's copy of its own project at its pinned SHA (§3), on
+            // `Resource::PinnedCopy` only.
+            Action::RepoRead => CiRule::Job,
+            // Push, checks, merge requests, secrets, other pipelines, the
+            // context API, every read of the API and every administration
+            // and session action: never (§8).
+            Action::RepoPush
+            | Action::RepoBrowse
+            | Action::ProjectList
+            | Action::ProjectCreate
+            | Action::ProjectUpdate
+            | Action::ProjectVisibilityChange
+            | Action::ProjectTransfer
+            | Action::ProjectDelete
+            | Action::ProjectRestore
+            | Action::ProtectedRefManage
+            | Action::MemberManage
+            | Action::MemberList
+            | Action::ProtectedRefList
+            | Action::MergeRequestCreate
+            | Action::MergeRequestUpdate
+            | Action::MergeRequestClose
+            | Action::MergeRequestReopen
+            | Action::MergeRequestVersionRefsPurge
+            | Action::MergeRequestComment
+            | Action::DiscussionResolve
+            | Action::MergeRequestMerge
+            | Action::WorkItemLink
+            | Action::ApprovalRuleManage
+            | Action::MergeSettingsManage
+            | Action::CodeownersEnforcementToggle
+            | Action::CheckWrite
+            | Action::CheckRead
+            | Action::CheckNamespaceGrantManage
+            | Action::GroupRead
+            | Action::GroupList
+            | Action::GroupCreateTopLevel
+            | Action::SubgroupCreate
+            | Action::GroupUpdate
+            | Action::GroupTransfer
+            | Action::NamespaceTombstoneRelease
+            | Action::TokenCreate
+            | Action::TokenList
+            | Action::TokenRevoke
+            | Action::UserCreate
+            | Action::UserDisable
+            | Action::UserSearch
+            | Action::UserAdminList
+            | Action::UserRename
+            | Action::ServiceAccountCreate
+            | Action::ServiceAccountList
+            | Action::ServiceAccountRead
+            | Action::ServiceAccountUpdate
+            | Action::ServiceAccountTokenIssue
+            | Action::ServiceAccountTokenList
+            | Action::ServiceAccountTokenRevoke
+            | Action::IntegrationManage
+            | Action::IntegrationRead
+            | Action::IntegrationBindingList
+            | Action::IntegrationEventRead
+            | Action::IntegrationEventCursorRead
+            | Action::IntegrationDevStatusRead
+            | Action::ActAsConfirmView
+            | Action::ActAsAssertionIssue
+            | Action::ActAsAssertionClaim
+            | Action::SpecRefRead
+            | Action::SpecRead
+            | Action::ContextRead
+            | Action::NotificationPreferencesRead
+            | Action::NotificationInboxRead
+            | Action::NotificationPreferencesWrite
+            | Action::NotificationInboxUpdate
+            | Action::WebhookRead
+            | Action::WebhookManage
+            | Action::WebhookDeliveryRead
+            | Action::WebhookRedeliver
+            | Action::WebhookDeliver
+            | Action::PushMirrorRead
+            | Action::PushMirrorManage
+            | Action::DocLintMigrationManage
+            | Action::AuditRead
+            | Action::UserSelfRead
+            | Action::SessionRead
+            | Action::SessionList
+            | Action::SessionRevoke
+            | Action::AdminSessionList
+            | Action::AdminSessionRevoke
+            | Action::WebLogin
+            | Action::SessionCreate
+            | Action::SessionContinue
+            | Action::SessionLogout
+            | Action::OidcBackchannelLogout
+            | Action::PathResolve
+            | Action::WebShell
+            | Action::Health
+            | Action::Metrics
+            | Action::ProjectRead
+            | Action::MergeRequestRead
+            | Action::MergeRequestList
+            | Action::MergeRequestApprove
+            | Action::MergeRequestUnapprove
+            | Action::IntegrationBindingManage
+            | Action::IntegrationBindingRemove
+            | Action::RepositorySearch => CiRule::Denied,
+        }
+    }
 }
 
 /// How an action may be performed by a service account acting for a
@@ -813,6 +926,30 @@ impl ActAsRule {
             Self::RequiresAssertion(_) => "requires_assertion",
             Self::ListAsPerson => "list_as_person",
             Self::Denied => "denied",
+        }
+    }
+}
+
+/// How an action may be performed by a CI principal (M4 C0, ADR-0029 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiRule {
+    /// Never performed by a runner or a job (`FG-AUTH-0003
+    /// reason=ci_not_allowed`).
+    Denied,
+    /// The runner API (claiming a job, heartbeat and lease, log append,
+    /// completion; M4 C3): a runner only.
+    Runner,
+    /// A job's own work: a copy of its project at its pinned SHA.
+    Job,
+}
+
+impl CiRule {
+    /// The log `ci_rule`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Denied => "denied",
+            Self::Runner => "runner",
+            Self::Job => "job",
         }
     }
 }
