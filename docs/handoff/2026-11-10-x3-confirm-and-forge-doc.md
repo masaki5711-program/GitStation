@@ -41,3 +41,32 @@
 4. ADR-0025 の残り: 公開の経路で代理のヘッダーを断る（MEDIUM）、LOW 4 件、確認の画面の 403 の文。
 5. ディスク: `target/debug/deps` の古いテストの実行ファイルが溜まると容量が尽きる。
    `find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete` で空ける。
+
+## 4. 追記（2026-11-10 の後半）
+
+利用者の決定（推奨で）: Q13 = (b) 移行中は期限つきで警告に下げる（DB の設定）、Q14 = 機密の高い参照先は ID だけ、確認の画面は押せない人にすべて 404。
+記録: 計画 13 §14 の末尾、ADR-0026 の末尾、ADR-0025 の末尾（`9cd5b7d`）。
+
+| コミット | 中身 |
+|---|---|
+| `428e505`・`5073772`・`450f529`・`b6a81a3` | 段 2 MR2a（型の定義・解析・lint）、レビューの修正、MR2b（`fmt`）、`fmt` のレビューの修正 |
+| `401ff4f` | MR2c: 旧い形式（`spec:`）を新しい解析で読む（`legacy`、生成した文書で新旧の要件が一致する試験） |
+| `a2166ac`・`ed0a879` | MR3: `gstn doc fmt` / `lint`、`forge/doc-lint`（`check.spec_index` の中）、FG-DOC-0001〜0004、レビューの修正 |
+| `5db4636`・`aa640ec` | ADR-0025 の残りの指摘（公開の経路で代理のヘッダーを断る、切れた要求の主張を捨てる、鍵の消去、確認の画面の題名） |
+| `ff17e86`・`423ca54` | 確認の画面は押せない人にすべて 404（`authorize()` の 1 か所、ログに `refused_code`）、代理実行が未設定のときも同じ 404 |
+| `b5389b9`・`1d4bcb5`・`2a0b96c` | 画面: 連携の管理・プロジェクトの結びつけ（連携ごとに 1 行、解除は全部を一覧）・MR のチェックの結果と衝突の予測、結びつけの設定（コード / 共有の仕様）を API と画面に |
+
+Kanflow v2: K4・承認待ちの欄・X3 を `main` に統合（`49720ae`）。見積もりのパラメータの探索はブランチ `feat/L4-NOPBI-plan-param-search`
+（`254c2e6`・`7d979bf`、レビューの修正済み、`main` には未統合）。
+
+**次にやること**
+1. Q13 のリポジトリの設定（追記のマイグレーション、Action と権限の表の行、ルートと `gstn`、`forge/doc-lint` で `ref_broken` を警告に、期限の表示）。
+2. `gstn doc fmt --migrate`、`spec_doc` の本文の読み取りを新しい解析に置き換える（`legacy` の比べる試験が条件）。
+3. 段 3（表示と文書の JSON）。Q14 の「ID だけ」はここで実装。
+4. Kanflow: パラメータの探索を `main` へ（利用者の指示の後）、AI が実績を読んで学習から外す候補を出す案（引き継ぎ 2026-11-05 の (1)）。
+5. PC 側: ワークスペース全体の試験、M3 の完了の条件、計画 13 の段 1。
+
+**注意**: このクラウドの容器はディスクが約 10 GB しか空かない。並行の Rust のビルドで満杯になり、開発用の PostgreSQL が 2 回止まった。
+`find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete` と `rm -rf target/debug/incremental` で空ける。
+Kanflow の `origin` の URL は旧い名前（GitHub が `KandlowVer2` に転送）。Kanflow のコミットの作成者は CLAUDE.md の規則どおり利用者の名前
+（GitHub では署名が無いので Unverified と出る）。
