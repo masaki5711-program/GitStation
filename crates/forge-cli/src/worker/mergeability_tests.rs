@@ -187,9 +187,12 @@ impl World {
             ),
         )
         .expect("proof");
+        // Each open its own request id (the events and the audit carry it).
+        static OPENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.review
             .open(
-                &Self::request("req-open"),
+                &Self::request(&format!("req-open-{n}")),
                 &proof,
                 self.repository(),
                 &NewFields {
@@ -254,6 +257,9 @@ impl World {
                 (PushUpdateKind::Force, n.to_owned())
             }
         };
+        // As every push in forge-web does: the refs cache must not answer
+        // with the list before this move.
+        self.browser.invalidate(self.repo);
         self.pushes += 1;
         let pusher = Pusher {
             request_id: RequestId::parse(&format!("req-push-{}", self.pushes)).expect("id"),
@@ -1274,9 +1280,9 @@ async fn ci_lint_run(w: &World, head: &str) -> Option<forge_db::checks::StoredCh
 
 /// Plan 14 C1: the same `check.spec_index` job writes `forge/ci-lint` for
 /// the head's `.forge-ci.yml`, linted against the project's protected
-/// branches (none here: a job with secrets on `main` fails). Other cases
-/// (clean, absent, too large, protected in the database): forge-checks'
-/// ci_lint tests.
+/// branches (none here: a job with secrets on `main` fails), and a head
+/// without the file is nothing to check. Other cases (clean, too large,
+/// protected in the database): forge-checks' ci_lint tests.
 #[tokio::test]
 async fn a_merge_request_version_gets_its_ci_lint_run() {
     let mut w = World::new().await;
@@ -1324,6 +1330,19 @@ jobs:
     );
     assert!(!run.summary.contains("DEPLOY_KEY"), "{}", run.summary);
     assert_eq!(run.reported_by, None);
+    // A head without the file: nothing to check.
+    let plain = commit_files(&w.path, Some(&base), &[("README", "plain\n")]);
+    w.push("plain", Some(&plain)).await;
+    let _plain_mr = w.open("plain", "main").await;
+    w.drain().await;
+    let run = ci_lint_run(&w, &plain).await.expect("a ci-lint run");
+    assert_eq!(
+        run.conclusion,
+        Some(forge_core::CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("nothing to check"), "{}", run.summary);
     w.t.drop_now().await;
 }
 

@@ -80,6 +80,11 @@ fn ci_path() -> Result<RepoPath, ForgeError> {
 /// protected). Tag rules protect no branch. A `*` anywhere but at the end
 /// is left out: forge-ci compares only a trailing `*` — those branches are
 /// then treated as unprotected (a false alarm, never a secret let through).
+///
+/// forge-ci compares case-sensitively while a rule matches ignoring case:
+/// with both spellings passed, a job pattern in another case (`MAIN` against
+/// a rule `refs/heads/main`) is still not covered — a false alarm
+/// (`secret_on_unprotected_ref`), never a miss.
 pub fn branch_patterns(rules: &ProtectionRules) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for rule in rules.rules() {

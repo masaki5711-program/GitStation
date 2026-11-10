@@ -248,11 +248,14 @@ fn broken_references_alone_in_an_incomplete_index_are_neutral() {
 /// `forge/ci-lint`).
 #[test]
 fn the_last_attempt_answers_inside_the_job_timeout() {
-    let worst = super::EVALUATION_BUDGET + super::WRITE_TIMEOUT * 8;
+    // One run and one `error` write per check (the const assertion in
+    // spec_checks.rs checks the same at build time).
+    let checks = u32::try_from(super::SPEC_INDEX_CHECKS.len()).expect("few checks");
+    assert_eq!(checks, 4);
+    let worst = super::EVALUATION_BUDGET + super::WRITE_TIMEOUT * (2 * checks);
     // Review MR3: at least 10 s of margin.
     assert!(
-        worst + std::time::Duration::from_secs(10)
-            <= forge_db::checks::spec_index::SPEC_INDEX_TIMEOUT,
+        worst + super::JOB_TIMEOUT_MARGIN <= forge_db::checks::spec_index::SPEC_INDEX_TIMEOUT,
         "{worst:?}"
     );
 }

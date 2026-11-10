@@ -41,7 +41,7 @@ this crate calls the check commands (`tests/decided_callers.rs`).
   assess}` (X2), `risk::{Risk, assess, record_error, Limits}` (X7).
 - `spec_index::{index_commit, own_dirs, IndexLimits, Indexed, Tags}` (X4): one commit's
   requirement index (the own specification directories, the `@req` tags), bounded;
-  `spec_checks::{SpecChecks, assess_lint, assess_trace, record_errors}` (X4);
+  `spec_checks::{SpecChecks, assess_lint, assess_trace, record_errors, SPEC_INDEX_CHECKS}` (X4; a const assertion keeps the budget, 2 writes per check and a 10 s margin inside the job's 120 s);
   `spec_index::index_head` and `doc_lint::{assess_doc_lint, DocLimits, DocTree}` (plan 13 stage 2);
   `ci_lint::{read_input, assess_ci_lint, branch_patterns, CiFile, CiLintInput, CiLint, CI_FILE}` (plan 14 C1).
 

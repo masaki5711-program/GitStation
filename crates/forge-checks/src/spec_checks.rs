@@ -78,6 +78,29 @@ pub const EVALUATION_BUDGET: Duration = Duration::from_secs(60);
 /// margin).
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(6);
 
+/// The checks one `check.spec_index` job writes (and answers `error` for
+/// on its last failure): a run each, and an `error` write each.
+pub const SPEC_INDEX_CHECKS: [&str; 4] = [
+    SPEC_LINT_CHECK,
+    SPEC_TRACE_CHECK,
+    DOC_LINT_CHECK,
+    CI_LINT_CHECK,
+];
+
+/// The margin the last attempt keeps inside the job's timeout (review MR3).
+pub const JOB_TIMEOUT_MARGIN: Duration = Duration::from_secs(10);
+
+// The last attempt answers inside the job's timeout: the evaluation, one
+// write per check and one `error` write per check, with the margin. A check
+// added to [`SPEC_INDEX_CHECKS`] without shortening the budget or the
+// writes fails the build here, not in production.
+const _: () = assert!(
+    EVALUATION_BUDGET.as_secs()
+        + 2 * (SPEC_INDEX_CHECKS.len() as u64) * WRITE_TIMEOUT.as_secs()
+        + JOB_TIMEOUT_MARGIN.as_secs()
+        <= forge_db::checks::spec_index::SPEC_INDEX_TIMEOUT.as_secs()
+);
+
 /// The longest annotation message (the table's CHECK, 4 KiB).
 const MAX_MESSAGE_BYTES: usize = 4096;
 
@@ -685,12 +708,7 @@ pub async fn record_errors(
     code: &str,
 ) -> bool {
     let mut all = true;
-    for check in [
-        SPEC_LINT_CHECK,
-        SPEC_TRACE_CHECK,
-        DOC_LINT_CHECK,
-        CI_LINT_CHECK,
-    ] {
+    for check in SPEC_INDEX_CHECKS {
         let new = name(check).map(|name| NewCheckRun {
             name,
             status: CheckStatus::Completed,
