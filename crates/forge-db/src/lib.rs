@@ -144,6 +144,8 @@ pub mod notify;
 // ── end M3 N1 ──
 // ── M3 O1: backup and restore ──
 pub mod restore;
+// ── M4 C2: CI pipelines and jobs (plan 14 §4.1) ──
+pub mod pipelines;
 // ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

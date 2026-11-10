@@ -1,0 +1,510 @@
+//! CI pipelines against a migrated database (M4 C2): the job payload, the
+//! `ci-pipelines` subscriber (one job per pushed branch and per merge
+//! request version, none for a deleted branch, nothing new on
+//! redelivery), the idempotent write, the `invalid` row, and the cancel /
+//! retry transitions.
+
+use forge_core::{
+    MergeRequestId, ObjectId, ProjectId, PushRecord, PushRecorder, PushUpdateKind, PushedRef,
+    Pusher, RefName, RequestId, UserId,
+};
+use forge_errors::ErrorCode;
+
+use super::subscriber::{PipelineRequests, PIPELINES_SUBSCRIBER};
+use super::*;
+use crate::change::{Actor, ChangeContext};
+use crate::projects::{self, CreatedProject, NewProject};
+use crate::review::{open_mr_decided, record_mr_version, NewMergeRequest};
+use crate::subscribers::{self, Progress, Start, Subscriber};
+use crate::test_support::*;
+use crate::users::{self, NewUser};
+
+fn system(request: &str) -> ChangeContext {
+    ChangeContext::new(
+        Actor::System,
+        RequestId::parse(request).expect("request id"),
+    )
+}
+
+fn sha(c: char) -> ObjectId {
+    ObjectId::parse(&c.to_string().repeat(40)).expect("sha")
+}
+
+fn branch(name: &str) -> RefName {
+    RefName::parse(&format!("refs/heads/{name}")).expect("branch")
+}
+
+async fn web(t: &FreshDb) -> (UserId, CreatedProject) {
+    let alice = users::create(
+        &t.db,
+        &system("req-user-alice"),
+        &NewUser::human("alice", "alice", "alice@example.test"),
+    )
+    .await
+    .expect("alice");
+    let web = projects::create(
+        &t.db,
+        &system("req-project-web"),
+        &NewProject::new("web", alice.namespace_id, "Web", alice.user_id),
+    )
+    .await
+    .expect("web");
+    (alice.user_id, web)
+}
+
+async fn drain(t: &FreshDb, subscriber: &dyn Subscriber) {
+    crate::sequencer::run_once(
+        &t.db,
+        crate::sequencer::BatchSize::MAX,
+        crate::sequencer::AuditSequencing::Skip,
+    )
+    .await
+    .expect("sequencer");
+    loop {
+        match subscribers::run_once(&t.db, subscriber)
+            .await
+            .expect("step")
+        {
+            Progress::Handled { .. } => {}
+            Progress::CaughtUp => break,
+            other @ (Progress::Busy
+            | Progress::Disabled
+            | Progress::Failed(_)
+            | Progress::Stuck(_)
+            | Progress::Quarantined(_)) => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+fn pushed(name: &str, kind: PushUpdateKind, new: char) -> PushedRef {
+    let zero = ObjectId::parse(&"0".repeat(40)).expect("zero");
+    let (old, new) = match kind {
+        PushUpdateKind::Create => (zero, sha(new)),
+        PushUpdateKind::Delete => (sha('a'), zero),
+        PushUpdateKind::FastForward | PushUpdateKind::Force => (sha('a'), sha(new)),
+    };
+    PushedRef {
+        name: RefName::parse(name).expect("ref"),
+        old,
+        new,
+        kind,
+        commits: Vec::new(),
+        total_commits: 0,
+        total_commits_partial: false,
+    }
+}
+
+async fn push(t: &FreshDb, user: UserId, request: &str, record: &PushRecord) {
+    let who = Pusher {
+        request_id: RequestId::parse(request).expect("request id"),
+        user,
+        kind: forge_core::UserKind::Human,
+        credential_id: None,
+        source_ip: None,
+        user_agent: None,
+    };
+    let recorder: &dyn PushRecorder = &t.db;
+    let done = recorder.record_push(&who, record).await.expect("push");
+    assert_eq!(done, forge_core::PushRecorded::Recorded);
+}
+
+async fn create_jobs(t: &FreshDb) -> Vec<PipelineRequest> {
+    let rows: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT payload FROM forge.jobs WHERE kind = $1 ORDER BY id")
+            .bind(PIPELINE_CREATE_JOB)
+            .fetch_all(&mut t.superuser().await)
+            .await
+            .expect("jobs");
+    rows.iter()
+        .map(|p| create_payload(p).expect("payload"))
+        .collect()
+}
+
+#[test]
+fn the_payload_round_trips_and_refuses_anything_else() {
+    let request = PipelineRequest {
+        project: ProjectId::new(7),
+        git_ref: branch("main"),
+        sha: sha('d'),
+        source: Source::MergeRequest,
+        merge_request: Some(MergeRequestId::new(3)),
+        triggered_by: Some(UserId::new(9)),
+    };
+    let job = create_job(&request, RequestId::generate(), Some(4)).expect("job");
+    assert_eq!(job.kind.as_str(), "ci.pipeline_create");
+    assert_eq!(create_payload(&job.payload).expect("parse"), request);
+    let key = job.dedup_key.expect("key");
+    assert!(key.as_str().starts_with("ci_pipeline:7:merge_request:3:"));
+    // A very long branch still fits the key.
+    let long = PipelineRequest {
+        git_ref: branch(&"b".repeat(240)),
+        ..request.clone()
+    };
+    assert!(create_dedup_key(&long).len() <= crate::jobs::DedupKey::MAX_LEN);
+    for bad in [
+        serde_json::json!({}),
+        // A merge request pipeline without its merge request.
+        serde_json::json!({"project_id": 7, "ref": "refs/heads/main", "sha": sha('d').as_str(),
+            "source": "merge_request", "merge_request_id": null, "triggered_by": null}),
+        // A tag is no branch.
+        serde_json::json!({"project_id": 7, "ref": "refs/tags/v1", "sha": sha('d').as_str(),
+            "source": "push", "merge_request_id": null, "triggered_by": null}),
+        serde_json::json!({"project_id": 7, "ref": "refs/heads/main", "sha": "HEAD",
+            "source": "push", "merge_request_id": null, "triggered_by": null}),
+    ] {
+        let err = create_payload(&bad).expect_err("bad payload");
+        assert_reason(&err, ErrorCode::Internal, "invalid_job_payload");
+    }
+}
+
+/// One push → one job per created or moved branch (none for a delete, none
+/// for a tag); the same events again (a redelivery: the cursor moved
+/// back) enqueue nothing new.
+#[tokio::test]
+async fn one_push_enqueues_one_job_per_branch_and_a_redelivery_none() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let subscriber = PipelineRequests;
+    assert_eq!(subscriber.name(), PIPELINES_SUBSCRIBER);
+    subscribers::register(&t.db, &subscriber, Start::Head)
+        .await
+        .expect("register");
+    push(
+        &t,
+        alice,
+        "req-push-1",
+        &PushRecord {
+            repository_id: web.repository_id,
+            updates: vec![
+                pushed("refs/heads/main", PushUpdateKind::FastForward, 'b'),
+                pushed("refs/heads/feature", PushUpdateKind::Create, 'c'),
+                pushed("refs/heads/old", PushUpdateKind::Delete, 'a'),
+                pushed("refs/tags/v1", PushUpdateKind::Create, 'c'),
+            ],
+        },
+    )
+    .await;
+    drain(&t, &subscriber).await;
+    let jobs = create_jobs(&t).await;
+    let mut seen: Vec<(String, String)> = jobs
+        .iter()
+        .map(|r| {
+            assert_eq!(r.project, web.project_id);
+            assert_eq!(r.source, Source::Push);
+            assert_eq!(r.triggered_by, Some(alice));
+            (r.git_ref.as_str().to_owned(), r.sha.as_str().to_owned())
+        })
+        .collect();
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            (
+                "refs/heads/feature".to_owned(),
+                sha('c').as_str().to_owned()
+            ),
+            ("refs/heads/main".to_owned(), sha('b').as_str().to_owned()),
+        ]
+    );
+    // Redelivery: the subscriber's cursor back to before the push.
+    let _ = sqlx::query(
+        "UPDATE forge.event_subscribers SET last_seq = 0, last_txid = NULL WHERE name = $1",
+    )
+    .bind(PIPELINES_SUBSCRIBER)
+    .execute(&mut t.superuser().await)
+    .await
+    .expect("rewind");
+    drain(&t, &subscriber).await;
+    assert_eq!(
+        create_jobs(&t).await.len(),
+        2,
+        "a redelivery enqueues nothing new"
+    );
+    t.drop_now().await;
+}
+
+/// A merge request version asks for a merge request pipeline of its head
+/// on its source branch.
+#[tokio::test]
+async fn a_merge_request_version_enqueues_a_merge_request_pipeline() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let subscriber = PipelineRequests;
+    subscribers::register(&t.db, &subscriber, Start::Head)
+        .await
+        .expect("register");
+    let (mr, ()) = open_mr_decided(
+        &t.db,
+        &ChangeContext::new(
+            Actor::User(alice),
+            RequestId::parse("req-open").expect("id"),
+        ),
+        p,
+        alice,
+        &NewMergeRequest {
+            title: "Feature".to_owned(),
+            description: String::new(),
+            source_branch: branch("feature"),
+            target_branch: branch("main"),
+            draft: false,
+        },
+        |_| Ok(()),
+    )
+    .await
+    .expect("open");
+    record_mr_version(&t.db, &system("req-v1"), mr.id, &sha('e'), Some(alice))
+        .await
+        .expect("version");
+    drain(&t, &subscriber).await;
+    let jobs = create_jobs(&t).await;
+    assert_eq!(
+        jobs,
+        [PipelineRequest {
+            project: p,
+            git_ref: branch("feature"),
+            sha: sha('e'),
+            source: Source::MergeRequest,
+            merge_request: Some(mr.id),
+            triggered_by: Some(alice),
+        }]
+    );
+    t.drop_now().await;
+}
+
+fn a_job(name: &str, needs: &[&str]) -> NewCiJob {
+    NewCiJob {
+        name: name.to_owned(),
+        stage: "test".to_owned(),
+        wave: i32::from(!needs.is_empty()),
+        needs: needs.iter().map(|n| (*n).to_owned()).collect(),
+        image: format!("registry.internal/rust@sha256:{}", "a".repeat(64)),
+        timeout_s: 600,
+        tags: vec!["linux".to_owned()],
+        secrets: Vec::new(),
+    }
+}
+
+fn new_pipeline(project: ProjectId, source: Source, planned: Planned) -> NewPipeline {
+    NewPipeline {
+        request: PipelineRequest {
+            project,
+            git_ref: branch("main"),
+            sha: sha('b'),
+            source,
+            merge_request: None,
+            triggered_by: None,
+        },
+        request_id: "req-plan".to_owned(),
+        definition_hash: (planned != Planned::Error).then(|| definition_hash(b"version: 1")),
+        copy_mark: CopyMark::Open,
+        planned,
+    }
+}
+
+/// The same push pipeline written twice is one row (a retried job);
+/// manual runs are each their own.
+#[tokio::test]
+async fn one_push_is_exactly_one_pipeline_and_manual_runs_are_not_deduplicated() {
+    let t = FreshDb::migrated().await;
+    let (_, web) = web(&t).await;
+    let p = web.project_id;
+    let new = new_pipeline(
+        p,
+        Source::Push,
+        Planned::Jobs(vec![a_job("build", &[]), a_job("test", &["build"])]),
+    );
+    let first = create(&t.db, &new).await.expect("first");
+    assert!(!first.existing);
+    let again = create(&t.db, &new).await.expect("again");
+    assert_eq!(
+        again,
+        Created {
+            pipeline_id: first.pipeline_id,
+            existing: true
+        }
+    );
+    let (stored, jobs) = get(&t.db, p, first.pipeline_id)
+        .await
+        .expect("get")
+        .expect("found");
+    assert_eq!(stored.status, PipelineStatus::Pending);
+    assert_eq!(stored.copy_mark, CopyMark::Open);
+    let states: Vec<(&str, JobStatus, i32)> = jobs
+        .iter()
+        .map(|j| (j.name.as_str(), j.status, j.attempt))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            ("build", JobStatus::Pending, 1),
+            ("test", JobStatus::Created, 1)
+        ]
+    );
+    let manual = new_pipeline(p, Source::Manual, Planned::Jobs(vec![a_job("build", &[])]));
+    let m1 = create(&t.db, &manual).await.expect("m1");
+    let m2 = create(&t.db, &manual).await.expect("m2");
+    assert!(!m1.existing && !m2.existing && m1.pipeline_id != m2.pipeline_id);
+    assert_eq!(list(&t.db, p, None, None, 10).await.expect("list").len(), 3);
+    assert_eq!(
+        list(&t.db, p, Some("refs/heads/other"), None, 10)
+            .await
+            .expect("list")
+            .len(),
+        0
+    );
+    // Another project sees none of them.
+    assert!(
+        get(&t.db, ProjectId::new(p.get() + 1000), first.pipeline_id)
+            .await
+            .expect("get")
+            .is_none()
+    );
+    t.drop_now().await;
+}
+
+/// An invalid definition is a row (`invalid`, FG-CI-0001, the problems),
+/// never dropped; nothing to read is `error` (FG-CI-0002); no job selected
+/// is `skipped`.
+#[tokio::test]
+async fn invalid_error_and_skipped_pipelines_are_rows_with_their_reason() {
+    let t = FreshDb::migrated().await;
+    let (_, web) = web(&t).await;
+    let p = web.project_id;
+    let invalid = create(
+        &t.db,
+        &new_pipeline(
+            p,
+            Source::Push,
+            Planned::Invalid(vec![StoredProblem {
+                line: 7,
+                reason: "secret_on_unprotected_ref".to_owned(),
+                subject: Some("deploy".to_owned()),
+            }]),
+        ),
+    )
+    .await
+    .expect("invalid");
+    let (stored, jobs) = get(&t.db, p, invalid.pipeline_id)
+        .await
+        .expect("get")
+        .expect("found");
+    assert_eq!(stored.status, PipelineStatus::Invalid);
+    assert_eq!(stored.error_code.as_deref(), Some("FG-CI-0001"));
+    assert_eq!(stored.problems[0].reason, "secret_on_unprotected_ref");
+    assert_eq!(stored.problems[0].line, 7);
+    assert!(jobs.is_empty());
+    let mut err = new_pipeline(p, Source::Manual, Planned::Error);
+    err.request.git_ref = branch("other");
+    let error = create(&t.db, &err).await.expect("error");
+    let (stored, _) = get(&t.db, p, error.pipeline_id)
+        .await
+        .expect("get")
+        .expect("found");
+    assert_eq!(stored.status, PipelineStatus::Error);
+    assert_eq!(stored.error_code.as_deref(), Some("FG-CI-0002"));
+    assert_eq!(stored.definition_hash, None);
+    let mut skip = new_pipeline(p, Source::Manual, Planned::Jobs(Vec::new()));
+    skip.request.git_ref = branch("docs");
+    let skipped = create(&t.db, &skip).await.expect("skipped");
+    let (stored, _) = get(&t.db, p, skipped.pipeline_id)
+        .await
+        .expect("get")
+        .expect("found");
+    assert_eq!(stored.status, PipelineStatus::Skipped);
+    t.drop_now().await;
+}
+
+async fn force_status(t: &FreshDb, pipeline: i64, status: &str, jobs: &str) {
+    let mut su = t.superuser().await;
+    let _ = sqlx::query("UPDATE forge.ci_pipelines SET status = $2 WHERE id = $1")
+        .bind(pipeline)
+        .bind(status)
+        .execute(&mut su)
+        .await
+        .expect("pipeline");
+    let _ = sqlx::query("UPDATE forge.ci_jobs SET status = $2 WHERE pipeline_id = $1")
+        .bind(pipeline)
+        .bind(jobs)
+        .execute(&mut su)
+        .await
+        .expect("jobs");
+}
+
+/// Cancel: pending → canceled (jobs too); a finished pipeline is
+/// FG-CI-0003. Retry: canceled / failed → pending with a new attempt;
+/// a pending one is FG-CI-0003.
+#[tokio::test]
+async fn cancelling_a_finished_pipeline_is_a_state_conflict() {
+    let t = FreshDb::migrated().await;
+    let (_, web) = web(&t).await;
+    let p = web.project_id;
+    let created = create(
+        &t.db,
+        &new_pipeline(
+            p,
+            Source::Push,
+            Planned::Jobs(vec![a_job("build", &[]), a_job("test", &["build"])]),
+        ),
+    )
+    .await
+    .expect("create");
+    let id = created.pipeline_id;
+    assert!(cancel(&t.db, p, id).await.expect("cancel"));
+    let (stored, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(stored.status, PipelineStatus::Canceled);
+    assert!(stored.finished_at.is_some());
+    assert!(jobs.iter().all(|j| j.status == JobStatus::Canceled));
+    let again = cancel(&t.db, p, id).await.expect_err("finished");
+    assert_eq!(again.code(), ErrorCode::PipelineStateConflict);
+    assert_reason_ctx(&again, "status", "canceled");
+
+    assert!(retry(&t.db, p, id).await.expect("retry"));
+    let (stored, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(stored.status, PipelineStatus::Pending);
+    assert_eq!(stored.finished_at, None);
+    let states: Vec<(JobStatus, i32)> = jobs.iter().map(|j| (j.status, j.attempt)).collect();
+    assert_eq!(
+        states,
+        [(JobStatus::Pending, 2), (JobStatus::Created, 2)],
+        "a new attempt, ready by its needs"
+    );
+    let pending = retry(&t.db, p, id).await.expect_err("pending");
+    assert_eq!(pending.code(), ErrorCode::PipelineStateConflict);
+
+    // A failed pipeline retries its failed jobs only.
+    force_status(&t, id, "failed", "succeeded").await;
+    let _ = sqlx::query(
+        "UPDATE forge.ci_jobs SET status = 'failed' WHERE pipeline_id = $1 AND name = 'test'",
+    )
+    .bind(id)
+    .execute(&mut t.superuser().await)
+    .await
+    .expect("one failed");
+    assert!(retry(&t.db, p, id).await.expect("retry failed"));
+    let (_, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    let states: Vec<(&str, JobStatus, i32)> = jobs
+        .iter()
+        .map(|j| (j.name.as_str(), j.status, j.attempt))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            ("build", JobStatus::Succeeded, 2),
+            ("test", JobStatus::Created, 3)
+        ]
+    );
+    // Not in the project: not found, nothing changed.
+    assert!(!cancel(&t.db, ProjectId::new(p.get() + 1000), id)
+        .await
+        .expect("other project"));
+    t.drop_now().await;
+}
+
+fn assert_reason_ctx(err: &forge_errors::ForgeError, key: &str, value: &str) {
+    assert!(
+        err.context().iter().any(|(k, v)| *k == key && v == value),
+        "{key}={value} in {:?}",
+        err.context()
+    );
+}

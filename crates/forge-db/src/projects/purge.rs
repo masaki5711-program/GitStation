@@ -553,6 +553,21 @@ async fn finish_steps(
         "projects.purge.finish.merge_settings",
     )
     .await?;
+    // M4 C2: the CI jobs, then their pipelines.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_jobs WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_jobs",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_pipelines WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_pipelines",
+    )
+    .await?;
     // Plan 13 Q13: the document lint's migration setting.
     delete_rows(
         tx,
