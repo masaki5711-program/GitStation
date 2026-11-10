@@ -661,6 +661,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
         Coverage::Command("webhook redeliver"),
     ),
+    // Plan 13 stage 3: the document API.
+    (
+        "GET",
+        "/api/v1/projects/{id}/documents",
+        Coverage::Command("doc list"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/documents/{doc_id}",
+        Coverage::Command("doc show"),
+    ),
     // Plan 13 Q13 (ADR-0026): the document lint migration setting.
     (
         "GET",

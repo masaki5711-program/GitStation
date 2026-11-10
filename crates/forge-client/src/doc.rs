@@ -107,6 +107,30 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Resu
     };
     match cmd {
         DocCommand::Migration { command } => crate::doc_migration::migration(cli, command, env, io),
+        DocCommand::Show {
+            project,
+            id,
+            rev,
+            lang,
+        } => crate::doc_view::show(cli, *project, id, rev.as_deref(), lang.as_deref(), env, io),
+        DocCommand::List {
+            project,
+            rev,
+            doctype,
+            limit,
+            after,
+        } => crate::doc_view::list(
+            cli,
+            *project,
+            &crate::doc_view::ListArgs {
+                rev: rev.as_deref(),
+                doctype: doctype.as_deref(),
+                limit: *limit,
+                after: after.as_deref(),
+            },
+            env,
+            io,
+        ),
         DocCommand::Fmt {
             check,
             migrate,

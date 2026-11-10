@@ -46,6 +46,7 @@ pub mod webhooks;
 pub mod mirror;
 // Plan 13 Q13: the document lint migration setting.
 pub mod doc_migration;
+pub mod doc_view;
 
 #[cfg(test)]
 mod tests;

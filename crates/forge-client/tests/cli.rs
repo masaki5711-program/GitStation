@@ -938,6 +938,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "spec trace",
             "doc fmt",
             "doc lint",
+            "doc show",
+            "doc list",
             "doc migration show",
             "doc migration set",
             "doc migration clear",

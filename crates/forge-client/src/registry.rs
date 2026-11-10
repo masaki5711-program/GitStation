@@ -1043,6 +1043,36 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &[],
         output: r#"{"type":"object","required":["files","errors","warnings","markdown_files","doctype_files","migration_warnings","incomplete"],"properties":{"files":{"type":"array","items":{"type":"object","required":["path","problems","problems_dropped"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","rule","subject","level","error_code"],"properties":{"line":{"type":"integer"},"rule":{"type":"string"},"subject":{"type":["string","null"]},"level":{"enum":["error","warning"]},"error_code":{"enum":["FG-DOC-0001","FG-DOC-0003"]}}}},"problems_dropped":{"type":"integer"}}}},"errors":{"type":"integer"},"warnings":{"type":"integer"},"markdown_files":{"type":"integer"},"doctype_files":{"type":"integer"},"migration_warnings":{"type":"boolean"},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
     },
+    // Plan 13 stage 3: the document API (the document view as JSON).
+    CommandSpec {
+        name: "doc show",
+        summary: "One document of a project through the server's document API: its front matter (title, id, type, owner, classification), sections of text and blocks, and every [[...]] reference resolved (found: its title; hidden: a more confidential target, its id only; broken; external). An AI agent's token is refused a confidential document (403 FG-AUTH-0021); no such document is 404 FG-REPO-0005.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            ArgSpec { name: "doc_id", kind: "positional", required: true, repeatable: false, description: "The document id (ASCII letters, digits, '.', '_', '-'; e.g. RA-2026-014)." },
+            arg("--ref", "option", false, "A commit id, a branch or a tag (default: the default branch)."),
+            arg("--lang", "option", false, "A translation's language (<id>.<lang>.md, e.g. en)."),
+        ],
+        examples: &["gstn doc show --project 7 RA-2026-014", "gstn doc show --project 7 RA-2026-014 --ref v1.0 --json", "gstn doc show --project 7 QP-07-001 --lang en"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/documents/{doc_id}"],
+        output: r#"{"type":"object","required":["version","ref","path","lang","translations","id","doctype","title","owner","classification","fields","sections","refs","problems","problem_count","incomplete"],"properties":{"version":{"type":"integer"},"classification":{"enum":["public","internal","confidential"]},"sections":{"type":"array","items":{"type":"object","required":["heading","line","pieces"],"properties":{"pieces":{"type":"array","items":{"type":"object","required":["type","line","markdown","display","block"],"properties":{"type":{"enum":["text","block"]}}}}}}},"refs":{"type":"array","items":{"type":"object","required":["repo","doc","block","line","target","title","block_kind"],"properties":{"target":{"enum":["found","hidden","broken","external"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc list",
+        summary: "A project's documents through the server's document API, by id: id, classification, type, path, title and translations (paged with --limit / --after). An AI agent's list leaves confidential documents out and counts them in withheld.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", false, "A commit id, a branch or a tag (default: the default branch)."),
+            arg("--doctype", "option", false, "Only documents of this type."),
+            arg("--limit", "option", false, "At most this many documents, 1..=500 (server default 100)."),
+            arg("--after", "option", false, "The previous page's next_after."),
+        ],
+        examples: &["gstn doc list --project 7", "gstn doc list --project 7 --doctype safety.risk-assessment --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/documents"],
+        output: r#"{"type":"object","required":["ref","documents","next_after","incomplete","withheld"],"properties":{"documents":{"type":"array","items":{"type":"object","required":["id","title","doctype","path","classification","translations"]}},"next_after":{"type":["string","null"]},"incomplete":{"type":["object","null"],"required":["error_code","reason"]},"withheld":{"type":["object","null"]}}}"#,
+    },
     // Plan 13 Q13: the repository setting (the server's forge/doc-lint).
     CommandSpec {
         name: "doc migration show",

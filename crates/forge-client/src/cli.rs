@@ -142,8 +142,8 @@ pub enum Command {
         #[command(subcommand)]
         command: SpecCommand,
     },
-    /// Documents in the plan 13 format, on your working tree only (never
-    /// the server): fmt, lint.
+    /// Documents in the plan 13 format: fmt and lint on your working tree
+    /// (never the server); show, list and migration through the server.
     #[command(disable_help_subcommand = true)]
     Doc {
         #[command(subcommand)]
@@ -1825,6 +1825,40 @@ pub enum DocCommand {
         /// Q13; the server's forge/doc-lint decides).
         #[arg(long)]
         migration_warnings: bool,
+    },
+    /// One document of a project, read through the server's document API
+    /// (plan 13 stage 3): its front matter, sections, blocks and resolved
+    /// references.
+    Show {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The document id (e.g. RA-2026-014).
+        #[arg(value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        id: String,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+        /// A translation's language (e.g. en).
+        #[arg(long, value_parser = parse_text)]
+        lang: Option<String>,
+    },
+    /// A project's documents (id, classification, type, path, title),
+    /// through the server's document API.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+        /// Only documents of this type.
+        #[arg(long, value_parser = parse_text)]
+        doctype: Option<String>,
+        /// At most this many documents, 1..=500 (server default 100).
+        #[arg(long, value_parser = parse_spec_limit)]
+        limit: Option<u32>,
+        /// The previous page's next_after.
+        #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        after: Option<String>,
     },
     /// The repository setting that lowers broken references to warnings
     /// in forge/doc-lint until a date (plan 13 Q13): show, set, clear.
