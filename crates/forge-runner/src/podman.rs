@@ -2,14 +2,23 @@
 //! rootless container per job attempt, argv only.
 //!
 //! ```text
-//! podman run --rm --name=forge-job-<job>-<attempt> --network=none --read-only
+//! podman create --name=forge-job-<job>-<attempt> --network=none --read-only
 //!   --tmpfs=/tmp:rw,nosuid,nodev,size=<tmpfs> --security-opt=no-new-privileges
 //!   --cap-drop=all --pids-limit=<n> --memory=<m> --memory-swap=<m>
 //!   --ulimit=fsize=<bytes>:<bytes> --ulimit=nofile=<n>:<n> --pull=missing
 //!   --volume=<work>:/workspace:rw,Z --volume=<script>:/forge:ro,Z --workdir=/workspace
 //!   --env=CI=true --env=FORGE_JOB_ID=<job> … --entrypoint=/bin/sh
 //!   -- <image@sha256:…> -eu /forge/script.sh
+//! podman start --attach -- forge-job-<job>-<attempt>
 //! ```
+//!
+//! Create and start are separate calls (M4 C4 review): a failed create
+//! (the pull, the storage) is Podman's failure (FG-CI-0007); `start
+//! --attach` exits with the script's status, and only when it is 125 —
+//! Podman's own error code, but also a status a script may exit with —
+//! `podman inspect` tells them apart: a container that `exited` ran the
+//! script (a failed job with exit code 125), one still `created` never
+//! started (FG-CI-0007).
 //!
 //! - The image is the claim's, and must be pinned by digest
 //!   ([`valid_image`]) and come from an allowed registry
@@ -27,8 +36,8 @@
 //!   the filesystem's quota (runbook `ci-runner`) and checked after the job
 //!   (`work_dir_max_bytes`, FG-CI-0012).
 //! - The job's token is never in the container's environment.
-//! - A timeout or a cancel: `podman kill` and `podman rm --force` (the
-//!   container is removed whatever happened; `--rm` covers a normal end).
+//! - A timeout or a cancel: `podman kill`; then always `podman rm
+//!   --force` (the container is removed whatever happened).
 
 use std::path::{Path, PathBuf};
 
@@ -161,8 +170,9 @@ impl PodmanPlan {
         Cmd::new(self.podman.as_os_str())
     }
 
-    /// `podman run …` (module docs). The caller checked [`valid_image`].
-    pub fn run(&self, c: &Container<'_>) -> Cmd {
+    /// `podman create …` (module docs; its stdout is the container id).
+    /// The caller checked [`PodmanPlan::image_allowed`].
+    pub fn create(&self, c: &Container<'_>) -> Cmd {
         // The configuration checked the size; 4 GiB if it did not.
         let fsize = size_bytes(&self.limits.file_size).unwrap_or(4 << 30);
         let mut work = std::ffi::OsString::from("--volume=");
@@ -172,8 +182,7 @@ impl PodmanPlan {
         script.push(c.script_dir);
         script.push(":/forge:ro,Z");
         self.cmd()
-            .arg("run")
-            .arg("--rm")
+            .arg("create")
             .arg(format!("--name={}", c.name))
             .arg("--network=none")
             .arg("--read-only")
@@ -203,6 +212,26 @@ impl PodmanPlan {
             .arg(c.image)
             .arg("-eu")
             .arg(SCRIPT_IN_CONTAINER)
+            .captured()
+    }
+
+    /// `podman start --attach -- <name>`: runs the created container, its
+    /// output to the job's log, its exit status the script's (125 is
+    /// ambiguous: [`PodmanPlan::state`]).
+    pub fn start(&self, name: &str) -> Cmd {
+        self.cmd().arg("start").arg("--attach").arg("--").arg(name)
+    }
+
+    /// `podman inspect --type=container --format={{.State.Status}}
+    /// {{.State.ExitCode}} -- <name>`, e.g. `exited 125` or `created 0`.
+    pub fn state(&self, name: &str) -> Cmd {
+        self.cmd()
+            .arg("inspect")
+            .arg("--type=container")
+            .arg("--format={{.State.Status}} {{.State.ExitCode}}")
+            .arg("--")
+            .arg(name)
+            .captured()
     }
 
     /// `podman kill --signal=KILL -- <name>` (a timeout or a cancel).
@@ -215,7 +244,7 @@ impl PodmanPlan {
     }
 
     /// `podman rm --force --ignore -- <name>`: the container is gone
-    /// whatever happened (no error when `--rm` already removed it).
+    /// whatever happened (no error when it never existed).
     pub fn remove(&self, name: &str) -> Cmd {
         self.cmd()
             .arg("rm")
@@ -280,7 +309,7 @@ mod tests {
     fn the_run_argv_is_closed_by_default_and_the_image_follows_the_separator() {
         let image = format!("registry.internal/rust@sha256:{}", digest());
         let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
-        let cmd = plan.run(&Container {
+        let cmd = plan.create(&Container {
             name: "forge-job-7-1",
             image: &image,
             work: Path::new("/r/job/work"),
@@ -292,8 +321,7 @@ mod tests {
         });
         let argv = cmd.argv();
         for flag in [
-            "run",
-            "--rm",
+            "create",
             "--network=none",
             "--read-only",
             "--cap-drop=all",
@@ -325,7 +353,7 @@ mod tests {
         };
         let plan = PodmanPlan::new(PathBuf::from("podman"), limits);
         let argv = plan
-            .run(&Container {
+            .create(&Container {
                 name: "forge-job-7-1",
                 image: &image,
                 work: Path::new("/r/job/work"),

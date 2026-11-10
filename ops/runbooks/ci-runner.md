@@ -51,7 +51,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    トークンのファイルが古い・壊れた（再登録が要る。トークンは登録のときに 1 回しか表示されない）。
 
 7. Runner のホストでの失敗（M4 C4）。ログの `context` の `reason`・`step` で分ける:
-   - FG-CI-0007 `podman_exit`（`podman_stderr`）: イメージが社内のミラーに無い・ダイジェストが違う・ストレージが一杯。
+   - FG-CI-0007 `podman_exit`（`step=create|start`、`podman_stderr`）: イメージが社内のミラーに無い・ダイジェストが違う・ストレージが一杯。
+     スクリプトが自分で 125 で終わったときは FG-CI-0007 ではなく、終了コード 125 の失敗（`podman inspect` で `exited` を確かめて分ける）。
      Runner の利用者で `podman image exists <image>`、`podman system df`。`not_rootless` / `runs_as_root`: 下の「ホストの準備」と違う。
      `workspace_dirty`: ジョブのディレクトリが消せず、**Runner は次のジョブを取らずに終了した**（`ls -la <work_dir>/job`）
    - FG-CI-0008: `reason=hash_mismatch` は `expected`・`actual` を DB と比べる:
@@ -114,7 +115,7 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    `Restart=on-failure`）で起動する。ログは JSON（`journalctl -u forge-runner`）。
 
 **ジョブの間で状態を残さない**: ジョブごとに `<work_dir>/job` を消してから空で作り、終わると消す（コンテナの作ったファイルは
-`podman unshare rm -rf` で消す）。コンテナは `--rm` と `podman rm --force` で必ず消える。ジョブのトークンは git の環境の設定
+`podman unshare rm -rf` で消す）。コンテナは `podman create` → `podman start --attach` で動かし、終わると `podman rm --force` で必ず消える。ジョブのトークンは git の環境の設定
 （`http.extraHeader`）でだけ渡し、argv・コンテナの環境・ログに出さない（ログでは `[masked]`）。
 
 **本物の Podman の試験**: ホストを用意したら、そのホストで

@@ -60,13 +60,20 @@ fn claim(job_id: i64, token: &str, def: &str) -> ClaimedJob {
     }
 }
 
-/// How the fake `podman run` ends.
+/// How the fake container ends (`podman create`, then `podman start
+/// --attach`, then `podman inspect` after a 125).
 #[derive(Clone, Copy)]
 enum Podman {
+    /// The script exits with this code.
     Exit(i32),
     TimedOut,
     /// Exit 0 after leaving a file in the work directory.
     Litter,
+    /// `podman create` fails (exit 125: the image is not known).
+    CreateFails,
+    /// Created, but `podman start` fails before the script runs (125;
+    /// the container is still `created`).
+    NeverStarted,
 }
 
 /// A fake host: answers git and podman by subcommand and records every
@@ -76,6 +83,8 @@ struct Fake {
     definition: Mutex<String>,
     fetch_exit: i32,
     podman: Podman,
+    /// The work directory of the last `podman create`.
+    work: Mutex<Option<PathBuf>>,
 }
 
 impl Fake {
@@ -85,6 +94,7 @@ impl Fake {
             definition: Mutex::new(def.to_owned()),
             fetch_exit: 0,
             podman,
+            work: Mutex::new(None),
         })
     }
 
@@ -148,7 +158,18 @@ impl ProcessRunner for Fake {
             ("git", "rev-parse") => ok(format!("{SHA}\n").into_bytes()),
             ("git", "cat-file") => ok(self.definition.lock().unwrap().clone().into_bytes()),
             ("git", _) => ok(Vec::new()),
-            ("podman", "run") => match self.podman {
+            ("podman", "create") => match self.podman {
+                Podman::CreateFails => Ran {
+                    exit: Exit::Code(125),
+                    stdout: Vec::new(),
+                    stderr_tail: "Error: image not known".to_owned(),
+                },
+                Podman::Exit(_) | Podman::TimedOut | Podman::Litter | Podman::NeverStarted => {
+                    *self.work.lock().unwrap() = Some(work_mount(cmd));
+                    ok(b"0123abcd\n".to_vec())
+                }
+            },
+            ("podman", "start") => match self.podman {
                 Podman::Exit(0) => {
                     out(b"hello from the job\n");
                     ok(Vec::new())
@@ -156,7 +177,12 @@ impl ProcessRunner for Fake {
                 Podman::Exit(code) => Ran {
                     exit: Exit::Code(code),
                     stdout: Vec::new(),
-                    stderr_tail: "Error: image not known".to_owned(),
+                    stderr_tail: String::new(),
+                },
+                Podman::NeverStarted => Ran {
+                    exit: Exit::Code(125),
+                    stdout: Vec::new(),
+                    stderr_tail: "Error: OCI runtime error: unable to start".to_owned(),
                 },
                 Podman::TimedOut => Ran {
                     exit: Exit::TimedOut,
@@ -164,7 +190,7 @@ impl ProcessRunner for Fake {
                     stderr_tail: String::new(),
                 },
                 Podman::Litter => {
-                    let work = work_mount(cmd);
+                    let work = self.work.lock().unwrap().clone().expect("created");
                     assert_eq!(
                         std::fs::read_dir(&work).expect("work").count(),
                         0,
@@ -172,6 +198,14 @@ impl ProcessRunner for Fake {
                     );
                     std::fs::write(work.join("left-by-the-job"), b"x").expect("litter");
                     ok(Vec::new())
+                }
+                Podman::CreateFails => panic!("never started"),
+            },
+            ("podman", "inspect") => match self.podman {
+                Podman::NeverStarted => ok(b"created 0\n".to_vec()),
+                Podman::Exit(code) => ok(format!("exited {code}\n").into_bytes()),
+                Podman::TimedOut | Podman::Litter | Podman::CreateFails => {
+                    ok(b"exited 0\n".to_vec())
                 }
             },
             _ => ok(Vec::new()),
@@ -326,7 +360,7 @@ fn a_job_past_its_timeout_kills_and_removes_its_container() {
         .filter(|c| c.program_name() == "podman")
         .map(subcommand)
         .collect();
-    assert_eq!(order, ["run", "kill", "rm"]);
+    assert_eq!(order, ["create", "start", "kill", "rm"]);
     assert!(s.exec.workspace.is_clean());
     let logs = forge.logs.lock().unwrap().join("");
     assert!(logs.contains("FG-CI-0010"), "{logs}");
@@ -404,7 +438,7 @@ fn a_definition_hash_mismatch_fails_the_job_before_any_container() {
         .context()
         .iter()
         .any(|(k, v)| *k == "reason" && v == "hash_mismatch"));
-    assert!(fake.by("podman", "run").is_empty());
+    assert!(fake.by("podman", "create").is_empty());
     assert!(fake.by("git", "checkout").is_empty());
     assert!(s.exec.workspace.is_clean());
     // No hash in the claim, or a job the file does not hold: the same code.
@@ -419,14 +453,14 @@ fn a_definition_hash_mismatch_fails_the_job_before_any_container() {
         let s = setup(&fake);
         let err = run(&s, &c, &forge).error.expect("mismatch");
         assert_eq!(err.code(), ErrorCode::JobDefinitionMismatch);
-        assert!(fake.by("podman", "run").is_empty());
+        assert!(fake.by("podman", "create").is_empty());
     }
 }
 
 #[test]
 fn a_podman_error_exit_is_container_start_failed() {
     let def = definition("make");
-    let fake = Fake::new(&def, Podman::Exit(125));
+    let fake = Fake::new(&def, Podman::CreateFails);
     let s = setup(&fake);
     let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
     let err = out.error.expect("start failed");
@@ -436,6 +470,27 @@ fn a_podman_error_exit_is_container_start_failed() {
         .iter()
         .any(|(k, v)| *k == "podman_stderr" && v.contains("image")));
     assert_eq!(fake.by("podman", "rm").len(), 1);
+    assert!(fake.by("podman", "start").is_empty());
+    // Created, but Podman could not start it: the container never ran.
+    let fake = Fake::new(&def, Podman::NeverStarted);
+    let s = setup(&fake);
+    let out = run(&s, &claim(9, "fgj_9_secret", &def), &Forge::default());
+    let err = out.error.expect("start failed");
+    assert_eq!(err.code(), ErrorCode::ContainerStartFailed);
+    assert!(err
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "podman_stderr" && v.contains("OCI")));
+    assert_eq!(fake.by("podman", "rm").len(), 1);
+    // M4 C4 review: the script's own exit 125 is the script's failure,
+    // not Podman's (the container ran and exited with it).
+    let fake = Fake::new(&def, Podman::Exit(125));
+    let s = setup(&fake);
+    let out = run(&s, &claim(10, "fgj_10_secret", &def), &Forge::default());
+    assert_eq!(out.result, JobResult::Failed);
+    assert_eq!(out.exit_code, Some(125));
+    assert!(out.error.is_none(), "{:?}", out.error);
+    assert_eq!(fake.by("podman", "inspect").len(), 1);
     // The script's own failure is a plain failed result with its code.
     let fake = Fake::new(&def, Podman::Exit(3));
     let s = setup(&fake);
@@ -453,6 +508,7 @@ fn a_failed_fetch_is_job_fetch_failed() {
         definition: Mutex::new(def.clone()),
         fetch_exit: 128,
         podman: Podman::Exit(0),
+        work: Mutex::new(None),
     });
     let s = setup(&fake);
     let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
@@ -466,7 +522,7 @@ fn a_failed_fetch_is_job_fetch_failed() {
         .context()
         .iter()
         .all(|(_, v)| !v.contains("fgj_7_secret")));
-    assert!(fake.by("podman", "run").is_empty());
+    assert!(fake.by("podman", "create").is_empty());
     assert!(s.exec.workspace.is_clean());
 }
 
@@ -523,7 +579,7 @@ fn a_real_container_runs_without_network_and_is_removed() {
     )
     .expect("script");
     let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
-    let cmd = plan.run(&crate::podman::Container {
+    let create = plan.create(&crate::podman::Container {
         name: "forge-job-test-1",
         image: &image,
         work: &work,
@@ -533,11 +589,29 @@ fn a_real_container_runs_without_network_and_is_removed() {
         project_id: 1,
         sha: SHA,
     });
+    let created = SystemRunner
+        .run(&create, Duration::from_secs(120), &|| false, &mut |_| {})
+        .expect("podman create");
+    assert!(created.ok(), "{created:?}");
     let ran = SystemRunner
-        .run(&cmd, Duration::from_secs(120), &|| false, &mut |_| {})
-        .expect("podman");
+        .run(
+            &plan.start("forge-job-test-1"),
+            Duration::from_secs(120),
+            &|| false,
+            &mut |_| {},
+        )
+        .expect("podman start");
     assert!(ran.ok(), "{ran:?}");
     assert!(work.join("ok").exists());
+    let state = SystemRunner
+        .run(
+            &plan.state("forge-job-test-1"),
+            Duration::from_secs(60),
+            &|| false,
+            &mut |_| {},
+        )
+        .expect("inspect");
+    assert_eq!(String::from_utf8_lossy(&state.stdout).trim(), "exited 0");
     let rm = SystemRunner
         .run(
             &plan.remove("forge-job-test-1"),

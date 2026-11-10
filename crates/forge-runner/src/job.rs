@@ -11,9 +11,11 @@
 //!    with the claimed image and timeout (`FG-CI-0008` otherwise — no
 //!    container is started);
 //! 5. checkout, the script written to a read-only mount;
-//! 6. Podman: one container, no network, read-only root, killed and
-//!    removed at the timeout (`FG-CI-0010`) or on stop; Podman's own
-//!    failure is `FG-CI-0007`;
+//! 6. Podman: one container (`create`, then `start --attach`), no
+//!    network, read-only root, killed and removed at the timeout
+//!    (`FG-CI-0010`) or on stop; Podman's own failure is `FG-CI-0007` (a
+//!    failed create, or a 125 from a container that never started — a
+//!    script's own exit 125 is a failed job);
 //!    The work directory past `work_dir_max_bytes` when the container
 //!    ended fails the job (`FG-CI-0012`);
 //! 7. always: the container removed, the job directory removed.
@@ -329,7 +331,7 @@ impl Executor {
         Workspace::write_script(&dirs, spec.script())
             .map_err(|e| start_failed("workspace_unusable").with_source(e))?;
         // 6. The container.
-        let cmd = self.podman.run(&Container {
+        let create = self.podman.create(&Container {
             name,
             image: &job.image,
             work: &dirs.work,
@@ -341,12 +343,32 @@ impl Executor {
         });
         sink.line(&format!("running {} in {name}", job.image));
         *started = true;
+        // The pull is part of the create: bounded by the job's timeout.
         let limit = Duration::from_secs(u64::from(timeout_s));
+        let created = self
+            .run(&create, limit, stop, sink)
+            .map_err(|e| start_failed("spawn_failed").with_source(e))?;
+        match created.exit {
+            Exit::Code(0) => {}
+            Exit::Code(code) => {
+                return Err(start_failed("podman_exit")
+                    .with_context("step", "create")
+                    .with_context("exit_code", code)
+                    .with_context("podman_stderr", created.stderr_tail))
+            }
+            Exit::TimedOut => {
+                return Err(
+                    ForgeError::new(ErrorCode::JobTimedOut).with_context("timeout_s", timeout_s)
+                )
+            }
+            Exit::Stopped => return Ok(ScriptEnd::Stopped),
+        }
         let ran = self
-            .run(&cmd, limit, stop, sink)
+            .run(&self.podman.start(name), limit, stop, sink)
             .map_err(|e| start_failed("spawn_failed").with_source(e))?;
         match ran.exit {
-            Exit::Code(125) => Err(start_failed("podman_exit")
+            Exit::Code(125) if !self.script_exited(name) => Err(start_failed("podman_exit")
+                .with_context("step", "start")
                 .with_context("exit_code", 125)
                 .with_context("podman_stderr", ran.stderr_tail)),
             Exit::Code(code) => {
@@ -384,6 +406,22 @@ impl Executor {
             Exit::Code(_) => Err(mismatch("definition_missing")),
             Exit::TimedOut => Err(fetch_failed("read_definition", "timeout")),
             Exit::Stopped => Err(fetch_failed("read_definition", "stopped")),
+        }
+    }
+
+    /// After `podman start` exited 125: whether the container ran the
+    /// script and exited (then 125 is the script's status). Anything else
+    /// — still `created`, an inspect that fails — is Podman's failure.
+    fn script_exited(&self, name: &str) -> bool {
+        let state = self.proc.run(
+            &self.podman.state(name),
+            PODMAN_CLEANUP,
+            &|| false,
+            &mut |_| {},
+        );
+        match state {
+            Ok(ran) if ran.ok() => String::from_utf8_lossy(&ran.stdout).trim() == "exited 125",
+            _ => false,
         }
     }
 
