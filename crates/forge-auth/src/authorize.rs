@@ -1038,8 +1038,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             // written by forge's worker; refused to everyone over HTTP —
             // a granted service account and administrators included.
             if *reserved {
-                return Err(refused("ci_namespace_internal")
-                    .with_context("namespace", namespace.as_str()));
+                return Err(
+                    refused("ci_namespace_internal").with_context("namespace", namespace.as_str())
+                );
             }
             if principal.is_agent() {
                 return Err(refused("agent_token"));
@@ -1262,12 +1263,17 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
                 project,
                 pipeline_mark,
                 tip_mark,
+                declared_agent,
             },
         ) => {
             need(Role::Reporter, read_role(project))?;
-            if !principal.is_agent_audience() {
+            let audience = if principal.is_agent_audience() {
+                audience_of(principal)
+            } else if *declared_agent {
+                "header"
+            } else {
                 return Ok(());
-            }
+            };
             let route = if action == Action::CiLogRead {
                 "ci_log"
             } else {
@@ -1284,7 +1290,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
                 .with_context("route", route)
                 .with_context("reason", reason)
                 .with_context("mark_of", mark_of)
-                .with_context("audience", audience_of(principal)))
+                .with_context("audience", audience))
         }
         (
             Action::PipelineCreate | Action::PipelineCancel | Action::PipelineRetry,

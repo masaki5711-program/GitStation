@@ -389,6 +389,8 @@ pub(crate) enum Fixture {
         internal: bool,
         pipeline_mark: crate::model::CopyMark,
         tip_mark: crate::model::CopyMark,
+        /// The request declared an agent audience (`gstn mcp`).
+        declared: bool,
     },
     /// An integration's feed (M3 I1c): the caller is its service account
     /// (`own`), it is enabled, the request carried `Forge-Act-As`.
@@ -1069,10 +1071,12 @@ impl Fixture {
                 internal: is_internal,
                 pipeline_mark,
                 tip_mark,
+                declared,
             } => Resource::CiOutput {
                 project: if is_internal { internal } else { private },
                 pipeline_mark,
                 tip_mark,
+                declared_agent: declared,
             },
             Fixture::IntegrationFeed {
                 own,

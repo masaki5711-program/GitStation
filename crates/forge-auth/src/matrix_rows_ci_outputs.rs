@@ -44,6 +44,17 @@ const fn out(pipeline_mark: M, tip_mark: M) -> F {
         internal: false,
         pipeline_mark,
         tip_mark,
+        declared: false,
+    }
+}
+
+/// The same, the request declaring an agent audience (`gstn mcp`).
+const fn declared(pipeline_mark: M, tip_mark: M) -> F {
+    F::CiOutput {
+        internal: false,
+        pipeline_mark,
+        tip_mark,
+        declared: true,
     }
 }
 
@@ -63,48 +74,169 @@ macro_rules! ci_output_rows {
             row($a, W::ServiceAccountTokenReadApi, F::PrivateProject, Allow),
             row($a, W::OwnerTokenReadApi, F::PrivateProject, Allow),
             row($a, W::Guest, F::PrivateProject, deny(E::Forbidden)),
-            row($a, W::GuestTokenReadApi, F::PrivateProject, deny(E::Forbidden)),
-            row($a, W::DevTokenReadRepository, F::PrivateProject, deny(E::InsufficientScope)),
+            row(
+                $a,
+                W::GuestTokenReadApi,
+                F::PrivateProject,
+                deny(E::Forbidden),
+            ),
+            row(
+                $a,
+                W::DevTokenReadRepository,
+                F::PrivateProject,
+                deny(E::InsufficientScope),
+            ),
             row($a, W::NonMember, F::PrivateProject, deny(E::NotFound)),
-            row($a, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+            row(
+                $a,
+                W::Anonymous,
+                F::PrivateProject,
+                deny(E::Unauthenticated),
+            ),
             row($a, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
             row($a, W::Reporter, F::DeletedProject, deny(E::PendingDeletion)),
             // 2. People: never refused by the marks.
             row($a, W::Reporter, out(M::Confidential, M::NotMeasured), Allow),
             row($a, W::Developer, out(M::Undecided, M::Confidential), Allow),
-            row($a, W::OwnerTokenReadApi, out(M::Confidential, M::Unborn), Allow),
+            row(
+                $a,
+                W::OwnerTokenReadApi,
+                out(M::Confidential, M::Unborn),
+                Allow,
+            ),
             row($a, W::Admin, out(M::Undecided, M::Undecided), Allow),
-            row($a, W::NonMember, F::CiOutput { internal: true, pipeline_mark: M::Confidential, tip_mark: M::NotMeasured }, Allow),
+            row(
+                $a,
+                W::NonMember,
+                F::CiOutput {
+                    internal: true,
+                    pipeline_mark: M::Confidential,
+                    tip_mark: M::NotMeasured,
+                    declared: false,
+                },
+                Allow,
+            ),
             // Agents: both marks open only.
             row($a, W::AgentTokenReadApi, OPEN, Allow),
             row($a, W::AgentTokenApi, OPEN, Allow),
             row($a, W::ServiceAccountTokenReadApi, OPEN, Allow),
             row($a, W::BotTokenApi, OPEN, Allow),
-            row($a, W::AgentTokenReadApi, out(M::Confidential, M::Open), deny(WITHHELD)),
-            row($a, W::AgentTokenReadApi, out(M::Undecided, M::Open), deny(WITHHELD)),
-            row($a, W::AgentTokenReadApi, out(M::Open, M::Confidential), deny(WITHHELD)),
-            row($a, W::AgentTokenReadApi, out(M::Open, M::Undecided), deny(WITHHELD)),
-            row($a, W::AgentTokenReadApi, out(M::Open, M::Unborn), deny(WITHHELD)),
-            row($a, W::AgentTokenReadApi, out(M::Open, M::NotMeasured), deny(WITHHELD)),
-            row($a, W::AgentTokenApi, out(M::Confidential, M::Confidential), deny(WITHHELD)),
-            row($a, W::ServiceAccountTokenReadApi, out(M::Undecided, M::Open), deny(WITHHELD)),
-            row($a, W::ServiceAccountTokenReadApi, out(M::Open, M::Confidential), deny(WITHHELD)),
-            row($a, W::BotTokenApi, out(M::Confidential, M::Open), deny(WITHHELD)),
-            row($a, W::BotTokenApi, out(M::Open, M::Undecided), deny(WITHHELD)),
+            row(
+                $a,
+                W::AgentTokenReadApi,
+                out(M::Confidential, M::Open),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::AgentTokenReadApi,
+                out(M::Undecided, M::Open),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::AgentTokenReadApi,
+                out(M::Open, M::Confidential),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::AgentTokenReadApi,
+                out(M::Open, M::Undecided),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::AgentTokenReadApi,
+                out(M::Open, M::Unborn),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::AgentTokenReadApi,
+                out(M::Open, M::NotMeasured),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::AgentTokenApi,
+                out(M::Confidential, M::Confidential),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::ServiceAccountTokenReadApi,
+                out(M::Undecided, M::Open),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::ServiceAccountTokenReadApi,
+                out(M::Open, M::Confidential),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::BotTokenApi,
+                out(M::Confidential, M::Open),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::BotTokenApi,
+                out(M::Open, M::Undecided),
+                deny(WITHHELD),
+            ),
+            // A person's token through `gstn mcp` (declared agent
+            // audience): decided as an agent's.
+            row($a, W::OwnerTokenReadApi, declared(M::Open, M::Open), Allow),
+            row(
+                $a,
+                W::OwnerTokenReadApi,
+                declared(M::Confidential, M::Open),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::Reporter,
+                declared(M::Open, M::Confidential),
+                deny(WITHHELD),
+            ),
+            row(
+                $a,
+                W::DevTokenApi,
+                declared(M::Open, M::NotMeasured),
+                deny(WITHHELD),
+            ),
             // The project read comes first: no oracle on the marks for
             // who cannot read the project.
             row($a, W::Anonymous, OPEN, deny(E::Unauthenticated)),
-            row($a, W::NonMember, out(M::Confidential, M::Open), deny(E::NotFound)),
-            row($a, W::Guest, out(M::Confidential, M::Open), deny(E::Forbidden)),
-            row($a, W::AgentTokenWriteRepository, out(M::Confidential, M::Open), deny(E::InsufficientScope)),
+            row(
+                $a,
+                W::NonMember,
+                out(M::Confidential, M::Open),
+                deny(E::NotFound),
+            ),
+            row(
+                $a,
+                W::Guest,
+                out(M::Confidential, M::Open),
+                deny(E::Forbidden),
+            ),
+            row(
+                $a,
+                W::AgentTokenWriteRepository,
+                out(M::Confidential, M::Open),
+                deny(E::InsufficientScope),
+            ),
         ]
     };
 }
 
 #[rustfmt::skip]
-const LOG: [Row; 38] = ci_output_rows!(A::CiLogRead);
+const LOG: [Row; 42] = ci_output_rows!(A::CiLogRead);
 #[rustfmt::skip]
-const DIAGNOSIS: [Row; 38] = ci_output_rows!(A::PipelineDiagnosisRead);
+const DIAGNOSIS: [Row; 42] = ci_output_rows!(A::PipelineDiagnosisRead);
 
 /// Every row of the CI outputs (`matrix::ROWS` appends them).
 pub(crate) static CI_OUTPUT_ROWS: std::sync::LazyLock<Vec<Row>> =

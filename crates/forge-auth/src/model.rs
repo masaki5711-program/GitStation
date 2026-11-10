@@ -753,11 +753,14 @@ pub enum Resource {
     /// `authorize_ci_output` only. The project as seen by the caller, the
     /// pipeline's mark (`ci_pipelines.copy_mark`, measured at its
     /// creation) and the default branch's tip now (`NotMeasured` for a
-    /// person).
+    /// person). `declared_agent`: the request said it is for an AI agent
+    /// (`Forge-Context-Audience: agent`, which `gstn mcp` always sends), so
+    /// a person's token is decided as an agent's.
     CiOutput {
         project: ProjectView,
         pipeline_mark: CopyMark,
         tip_mark: CopyMark,
+        declared_agent: bool,
     },
     /// An integration's event feed as its route loaded it
     /// (`IntegrationEventRead`, `IntegrationEventCursorRead`; M3 I1c).

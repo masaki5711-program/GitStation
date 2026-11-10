@@ -38,7 +38,10 @@ impl CiOutputAllowed {
 }
 
 /// `authorize(<the proof's principal>, <the proof's action>, CiOutput {
-/// <the proof's project>, pipeline_mark, tip_mark })`. `FG-SYS-0001` (a
+/// <the proof's project>, pipeline_mark, tip_mark, declared_agent })`.
+/// `declared_agent`: the request declared an AI agent audience
+/// (`Forge-Context-Audience: agent`; a person's token is then decided as an
+/// agent's, `audience=header`). `FG-SYS-0001` (a
 /// programming error, never a pass) when the proof is not a `CiLogRead` /
 /// `PipelineDiagnosisRead` proof (`reason=proof_action_mismatch`). An agent
 /// audience's refusal is `FG-AUTH-0022` with `route`, `reason`, `mark_of`
@@ -47,6 +50,7 @@ pub fn authorize_ci_output(
     proof: &Authorized<ProjectCtx>,
     pipeline_mark: CopyMark,
     tip_mark: CopyMark,
+    declared_agent: bool,
 ) -> Result<CiOutputAllowed, ForgeError> {
     let action = proof.action();
     if !matches!(action, Action::CiLogRead | Action::PipelineDiagnosisRead) {
@@ -63,6 +67,7 @@ pub fn authorize_ci_output(
             project: proof.ctx().view(),
             pipeline_mark,
             tip_mark,
+            declared_agent,
         },
     )
     .map_err(|e| e.with_context("project_id", project.get()))?;
@@ -131,7 +136,7 @@ mod tests {
                     (CopyMark::Open, CopyMark::Undecided, "tip"),
                     (CopyMark::Undecided, CopyMark::Undecided, "pipeline"),
                 ] {
-                    let err = authorize_ci_output(&p, pipeline, tip).expect_err("closed");
+                    let err = authorize_ci_output(&p, pipeline, tip, false).expect_err("closed");
                     assert_eq!(err.code(), ErrorCode::RepositoryCopyWithheld);
                     assert_eq!(context(&err, "mark_of"), Some(mark_of));
                     assert_eq!(context(&err, "project_id"), Some("7"));
@@ -147,7 +152,7 @@ mod tests {
             let p = proof(agent.clone(), action);
             for pipeline in MARKS {
                 for tip in MARKS {
-                    let got = authorize_ci_output(&p, pipeline, tip);
+                    let got = authorize_ci_output(&p, pipeline, tip, false);
                     let open = pipeline == CopyMark::Open && tip == CopyMark::Open;
                     assert_eq!(got.is_ok(), open, "{action:?} {pipeline:?} {tip:?}");
                     if let Ok(allowed) = got {
@@ -161,6 +166,7 @@ mod tests {
             &proof(agent.clone(), Action::CiLogRead),
             CopyMark::Confidential,
             CopyMark::Open,
+            false,
         )
         .expect_err("pipeline");
         assert_eq!(context(&err, "route"), Some("ci_log"));
@@ -170,6 +176,7 @@ mod tests {
             &proof(agent, Action::PipelineDiagnosisRead),
             CopyMark::Open,
             CopyMark::Confidential,
+            false,
         )
         .expect_err("tip");
         assert_eq!(context(&err, "route"), Some("ci_diagnosis"));
@@ -183,8 +190,29 @@ mod tests {
             let p = proof(person.clone(), action);
             for pipeline in MARKS {
                 for tip in MARKS {
-                    assert!(authorize_ci_output(&p, pipeline, tip).is_ok());
+                    assert!(authorize_ci_output(&p, pipeline, tip, false).is_ok());
                 }
+            }
+        }
+    }
+
+    /// `gstn mcp` declares an agent audience on every request: a person's
+    /// own token is then decided as an agent's (fail closed), and the
+    /// refusal says why (`audience=header`).
+    #[test]
+    fn a_declared_agent_audience_is_decided_as_an_agent() {
+        let person = token(AccountKind::Human);
+        for action in [Action::CiLogRead, Action::PipelineDiagnosisRead] {
+            let p = proof(person.clone(), action);
+            assert!(authorize_ci_output(&p, CopyMark::Open, CopyMark::Open, true).is_ok());
+            for (pipeline, tip) in [
+                (CopyMark::Confidential, CopyMark::Open),
+                (CopyMark::Open, CopyMark::NotMeasured),
+                (CopyMark::Undecided, CopyMark::Open),
+            ] {
+                let err = authorize_ci_output(&p, pipeline, tip, true).expect_err("declared");
+                assert_eq!(err.code(), ErrorCode::RepositoryCopyWithheld);
+                assert_eq!(context(&err, "audience"), Some("header"));
             }
         }
     }
@@ -192,7 +220,8 @@ mod tests {
     #[test]
     fn only_a_ci_output_proof_decides() {
         let p = proof(token(AccountKind::Human), Action::PipelineRead);
-        let err = authorize_ci_output(&p, CopyMark::Open, CopyMark::Open).expect_err("proof");
+        let err =
+            authorize_ci_output(&p, CopyMark::Open, CopyMark::Open, false).expect_err("proof");
         assert_eq!(err.code(), ErrorCode::Internal);
         assert_eq!(context(&err, "reason"), Some("proof_action_mismatch"));
     }
