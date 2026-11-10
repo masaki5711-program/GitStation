@@ -8,7 +8,9 @@
 //   SHOTS=/some/dir npm run journey      # also save a screenshot per step
 //
 // Fails on: a CSP violation, a console error, a page error, an axe violation,
-// a request the stand-in did not expect, or any step not reaching its screen.
+// a request the stand-in did not expect, a GET route the UI's source calls that
+// the stand-in does not answer (scripts/journey-routes.mjs), or any step not
+// reaching its screen.
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -19,7 +21,9 @@ import { ACT_AS_HEAD, ACT_AS_STATE, actAsBackend } from './journey-act-as.mjs';
 import { inboxBackend } from './journey-inbox.mjs';
 import { mergeBackend } from './journey-merge.mjs';
 import { mrBackend } from './journey-mr.mjs';
+import { readsBackend } from './journey-reads.mjs';
 import { PNG, REFS, browse } from './journey-repo.mjs';
+import { probeGets } from './journey-routes.mjs';
 import { SA_SECRET, serviceAccountsBackend } from './journey-service-accounts.mjs';
 import { SECRET, settingsBackend } from './journey-settings.mjs';
 import { HOOK_SECRET, ROTATED_SECRET, webhooksBackend } from './journey-webhooks.mjs';
@@ -62,6 +66,7 @@ function backend() {
   const mergeRequests = mrBackend(CSRF, user);
   const merging = mergeBackend(CSRF, user);
   const inbox = inboxBackend(CSRF);
+  const reads = readsBackend();
   let nextId = 9;
   const handle = (req, res, url, body) => {
     const path = url.pathname;
@@ -105,8 +110,11 @@ function backend() {
       }), true;
     }
     // Merge requests first: the settings fake claims every /projects/7/ path.
-    // !5 (approve and merge, U2) before the U1 fake, which answers 404 for it.
-    const mr = actAs.answer(req, url, body) ?? merging.answer(req, url, body) ?? mergeRequests.answer(req, url, body);
+    // !5 (approve and merge, U2) before the U1 fake, which answers 404 for it. The check runs,
+    // conflicts, doc-lint migration and integration bindings reads (M3) before both.
+    const mr =
+      reads.answer(req, url) ??
+      actAs.answer(req, url, body) ?? merging.answer(req, url, body) ?? mergeRequests.answer(req, url, body);
     if (mr !== null) {
       if (mr.error) return sendError(res, mr.status, ...mr.error), true;
       return sendJson(res, mr.status, mr.body), true;
@@ -952,7 +960,11 @@ async function main() {
     await browser.close();
     server.close();
   }
-  for (const u of fake.unexpected) problems.push(`unexpected request: ${u}`);
+  for (const u of fake.unexpected) problems.push(`unexpected request (no fake answers it; add one in scripts/journey-*.mjs): ${u}`);
+  // Every read the UI's source makes must have a fake, visited by a step or not.
+  for (const r of probeGets(fake.handle, fake.unexpected, COOKIE)) {
+    problems.push(`route the UI calls has no fake (add one in scripts/journey-*.mjs): ${r}`);
+  }
   if (problems.length > 0) {
     for (const p of problems) console.error(`journey: ${p}`);
     process.exit(1);
