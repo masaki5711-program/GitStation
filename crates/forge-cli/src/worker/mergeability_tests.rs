@@ -187,9 +187,12 @@ impl World {
             ),
         )
         .expect("proof");
+        // Each open its own request id (the events and the audit carry it).
+        static OPENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = OPENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.review
             .open(
-                &Self::request("req-open"),
+                &Self::request(&format!("req-open-{n}")),
                 &proof,
                 self.repository(),
                 &NewFields {
@@ -254,6 +257,9 @@ impl World {
                 (PushUpdateKind::Force, n.to_owned())
             }
         };
+        // As every push in forge-web does: the refs cache must not answer
+        // with the list before this move.
+        self.browser.invalidate(self.repo);
         self.pushes += 1;
         let pusher = Pusher {
             request_id: RequestId::parse(&format!("req-push-{}", self.pushes)).expect("id"),
@@ -1264,6 +1270,82 @@ async fn a_merge_request_version_gets_its_doc_lint_run() {
     w.t.drop_now().await;
 }
 
+async fn ci_lint_run(w: &World, head: &str) -> Option<forge_db::checks::StoredCheckRun> {
+    forge_db::checks::check_runs(&w.t.db, w.project, &oid(head))
+        .await
+        .expect("runs")
+        .into_iter()
+        .find(|r| r.name.as_str() == forge_core::checks::CI_LINT_CHECK)
+}
+
+/// Plan 14 C1: the same `check.spec_index` job writes `forge/ci-lint` for
+/// the head's `.forge-ci.yml`, linted against the project's protected
+/// branches (none here: a job with secrets on `main` fails), and a head
+/// without the file is nothing to check. Other cases (clean, too large,
+/// protected in the database): forge-checks' ci_lint tests.
+#[tokio::test]
+async fn a_merge_request_version_gets_its_ci_lint_run() {
+    let mut w = World::new().await;
+    let base = commit_files(
+        &w.path,
+        None,
+        &[(
+            "README", "base
+",
+        )],
+    );
+    w.push("main", Some(&base)).await;
+    let d = "0123456789abcdef".repeat(4);
+    let ci = format!(
+        "version: 1
+stages: [deploy]
+jobs:
+  deploy:
+    stage: deploy
+    image: registry.internal/rust@sha256:{d}
+    timeout: 10m
+    script: [./deploy.sh]
+    secrets: [DEPLOY_KEY]
+    rules:
+      branches: [main]
+      merge_requests: false
+"
+    );
+    let head = commit_files(&w.path, Some(&base), &[(".forge-ci.yml", ci.as_str())]);
+    w.push("feature", Some(&head)).await;
+    let _mr = w.open("feature", "main").await;
+    w.drain().await;
+    let run = ci_lint_run(&w, &head).await.expect("a ci-lint run");
+    assert_eq!(
+        run.conclusion,
+        Some(forge_core::CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains(".forge-ci.yml:4 secret_on_unprotected_ref — main [FG-CI-0001]"),
+        "{}",
+        run.summary
+    );
+    assert!(!run.summary.contains("DEPLOY_KEY"), "{}", run.summary);
+    assert_eq!(run.reported_by, None);
+    // A head without the file: nothing to check.
+    let plain = commit_files(&w.path, Some(&base), &[("README", "plain\n")]);
+    w.push("plain", Some(&plain)).await;
+    let _plain_mr = w.open("plain", "main").await;
+    w.drain().await;
+    let run = ci_lint_run(&w, &plain).await.expect("a ci-lint run");
+    assert_eq!(
+        run.conclusion,
+        Some(forge_core::CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("nothing to check"), "{}", run.summary);
+    w.t.drop_now().await;
+}
+
 /// Plan 13 Q13: the project's migration setting, written as a person's
 /// change would (an audit row in the same transaction). `days` after
 /// the database's date; a negative `days` is a setting that has ended
@@ -1424,6 +1506,8 @@ async fn a_spec_index_job_that_dies_answers_error_for_both_checks() {
     assert_eq!(runs.len(), 2, "{runs:?}");
     runs.extend(doc_lint_run(&w, &"d".repeat(40)).await);
     assert_eq!(runs.len(), 3, "forge/doc-lint too: {runs:?}");
+    runs.extend(ci_lint_run(&w, &"d".repeat(40)).await);
+    assert_eq!(runs.len(), 4, "forge/ci-lint too: {runs:?}");
     for run in &runs {
         assert_eq!(run.conclusion, Some(forge_core::CheckConclusion::Error));
         assert!(run.summary.contains("req-index-dies"), "{}", run.summary);
@@ -1461,6 +1545,8 @@ async fn the_sweep_answers_a_reaped_spec_index_job_once() {
     assert_eq!(runs.len(), 2, "{runs:?}");
     runs.extend(doc_lint_run(&w, &"d".repeat(40)).await);
     assert_eq!(runs.len(), 3, "forge/doc-lint too: {runs:?}");
+    runs.extend(ci_lint_run(&w, &"d".repeat(40)).await);
+    assert_eq!(runs.len(), 4, "forge/ci-lint too: {runs:?}");
     for run in &runs {
         assert_eq!(run.conclusion, Some(forge_core::CheckConclusion::Error));
         assert!(run.summary.contains("FG-DB-0007"), "{}", run.summary);

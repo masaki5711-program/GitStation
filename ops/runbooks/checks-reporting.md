@@ -9,6 +9,8 @@ Checks API（M3 C1、ADR-0024 §10、`docs/api/checks.md`）で、CI や kanflow
   報告されない）。`ext/` は C1 では誰も書けない（人が書ける名前でマージの条件を満たさせない）。
 - サービスアカウントは、そのプロジェクトの **Developer 以上のメンバー** でなければ報告できない（メンバーでないプロジェクトは見えないので 404）。
 - 結論が変わった報告だけが `check.completed` のイベントを出す（同じ結論の報告を繰り返してもイベントは増えない）。
+- forge 自身のチェック（`forge/spec-drift`、`forge/risk`、`forge/spec-lint`、`forge/spec-trace`、`forge/doc-lint`、`forge/ci-lint`）は
+  `forge worker` が MR の版の head に書く。`forge/ci-lint`（計画 14 C1）の読み方は下の F。
 
 ## Trigger
 
@@ -121,12 +123,33 @@ SELECT created_at, resource_id AS project_id, details FROM forge.audit_log
 - 手で消さない（監査される表で、消すには監査の行が要る）。窓を短くしたい／長くしたいときは設定を変えてワーカーを再起動する
   `[MUTATING — needs approval]`（ロールバック: 値を戻す。消えた実行は戻らない）。
 
+### F. `forge/ci-lint` が `failure` / `error`（計画 14 C1）
+
+`check.spec_index` のジョブが `forge/doc-lint` と一緒に書く。head の `.forge-ci.yml` を forge-ci の lint（`gstn ci lint` と同じ関数）に、
+**そのプロジェクトの保護ブランチの一覧**（`forge.protected_refs` の `refs/heads/…`）を渡してかける。
+
+- `.forge-ci.yml` が無い: `success`（「nothing to check」）。パイプラインを定義していないだけ。
+- `failure`（`FG-CI-0001` CiConfigInvalid、info）: 要約に `.forge-ci.yml:<行> <理由> — <対象> [FG-CI-0001]` が並ぶ（forge-ci の上限:
+  100 件と `too_many_problems`、対象は 64 文字で切る、形の崩れたシークレット名は出さない）。サーバーの障害ではなく、リポジトリの中身の問題。
+  - `too_large`: 64 KiB を超えた（ファイルは読まない）。`not_a_file`: ディレクトリ・シンボリックリンク・サブモジュール（リンクはたどらない）。
+  - `secret_on_unprotected_ref — <ブランチのパターン>`: シークレットを持つジョブが、保護されていないブランチか MR で動く。保護の一覧は
+    `refs/heads/<パターン>` の規則から作る。タグの規則は数えない。`*` が末尾以外にある規則（`refs/heads/v*-lts`）は forge-ci が比べられないので
+    **数えない**（保護されていない扱い。誤って通すことはない）。大文字小文字はそのままと小文字の両方を数える。
+  - ログ: `event=forge.ci_lint.invalid error_code=FG-CI-0001`（`reason`・`line`・`problems` と `request_id`・`project_id`・`head_sha`）。
+  - 手元で同じ答え: `gstn ci lint --protected main,release/*`（一覧はプロジェクトの保護ブランチ: `gstn protected-ref list --project <id>`）。
+- `error`: ジョブが最後の試みで失敗した（`FG-GIT-*` の git の時間切れ・上限、`FG-DB-*`、保存された保護の規則を読めない `FG-DB-0020`）。
+  要約の `request` で worker のログを追う。4 つ（spec-lint / spec-trace / doc-lint / ci-lint）が同じ `error` になる。死んだジョブは
+  `spec_index_sweep` が `error` で答える。
+- 直し方: `.forge-ci.yml` を直して push する（新しい版がもう一度 lint される）。シークレットのジョブなら `merge_requests: false` にし、
+  `branches` を保護されたブランチだけにするか、保護の規則を足す（`gstn protected-ref add`、Maintainer。`[MUTATING — needs approval]`、ロールバック: `gstn protected-ref remove`）。
+
 ## Verify
 
 - `gstn checks list --project <id> --sha <head_sha>` に報告が出る。
 - `gstn mr status --project <id> --iid <n> --json` の `checks[]` に `status: "completed"`, `conclusion: "success"` が出て、
   `required_check_missing` が消える。
 - `forge doctor` の `checks.reporters` が OK。
+- `forge/ci-lint`: 直した head の `gstn checks list` で `forge/ci-lint` が `success`。
 
 ## Escalate
 

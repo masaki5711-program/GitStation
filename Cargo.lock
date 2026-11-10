@@ -734,6 +734,7 @@ name = "forge-checks"
 version = "0.1.0"
 dependencies = [
  "forge-auth",
+ "forge-ci",
  "forge-core",
  "forge-db",
  "forge-doc",

@@ -49,6 +49,7 @@ pub const FORGE_REPORTED_CHECKS: &[&str] = &[
     SPEC_LINT_CHECK,
     SPEC_TRACE_CHECK,
     DOC_LINT_CHECK,
+    CI_LINT_CHECK,
 ];
 
 /// `forge/spec-lint` (M3 X4, plan 03 §5.4): whether the commit's own
@@ -69,6 +70,13 @@ pub const SPEC_TRACE_CHECK: &str = "forge/spec-trace";
 /// bound). Written by the `check.spec_index` job beside `forge/spec-lint`.
 /// Reported by forge's worker only.
 pub const DOC_LINT_CHECK: &str = "forge/doc-lint";
+
+/// `forge/ci-lint` (plan 14 C1): whether the commit's `.forge-ci.yml`
+/// keeps forge-ci's rules, checked against the repository's protected
+/// branches (`success`; also when there is no such file: nothing to check)
+/// or not (`failure`, `FG-CI-0001`). Written by the `check.spec_index` job
+/// beside `forge/doc-lint`. Reported by forge's worker only.
+pub const CI_LINT_CHECK: &str = "forge/ci-lint";
 
 /// The most runs one commit holds in all: the reporters' cap
 /// ([`MAX_CHECK_RUNS_PER_COMMIT`], which counts no `forge/` name) plus one
