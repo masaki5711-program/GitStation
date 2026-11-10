@@ -95,7 +95,14 @@ impl Pattern {
         if source.is_empty() || source.len() > MAX_PATTERN_LEN {
             return None;
         }
-        let re = RegexBuilder::new(&format!("^(?:{source})$"))
+        // The source must stand on its own: `a)|(b` would otherwise close the
+        // group around it and escape the anchors (security review MR2a).
+        RegexBuilder::new(source)
+            .size_limit(PATTERN_SIZE_LIMIT)
+            .dfa_size_limit(PATTERN_SIZE_LIMIT)
+            .build()
+            .ok()?;
+        let re = RegexBuilder::new(&format!(r"\A(?:{source})\z"))
             .size_limit(PATTERN_SIZE_LIMIT)
             .dfa_size_limit(PATTERN_SIZE_LIMIT)
             .build()
@@ -194,6 +201,24 @@ impl Doctype {
         self.rules.contains(&rule)
     }
 }
+
+/// The front matter keys every document may have (ADR-0026 §1): a type
+/// cannot redeclare them as its own fields (review MR2a: the base would
+/// silently win).
+pub const BASE_FIELDS: &[&str] = &[
+    "doctype",
+    "id",
+    "title",
+    "owner",
+    "classification",
+    "review_cycle",
+    "related",
+    "lang",
+    "translation_of",
+    "retired",
+    // The older mark (`true` / `false`), read as a classification.
+    "confidential",
+];
 
 /// Attribute keys every block with an id has (ADR-0026 §2, plan 13 §14
 /// decision 6): a type cannot redeclare them.
@@ -399,6 +424,9 @@ fn value_defs(
         }
         if attrs && RESERVED_ATTRS.contains(&e.key) {
             return Err(problem(e.line, "attr_reserved"));
+        }
+        if !attrs && BASE_FIELDS.contains(&e.key) {
+            return Err(problem(e.line, "field_reserved"));
         }
         out.push(value_def(&e, reason, attrs)?);
     }

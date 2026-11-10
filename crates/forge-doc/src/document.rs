@@ -51,6 +51,8 @@ pub const MAX_FRONT_MATTER_BYTES: usize = 16 * 1024;
 pub const MAX_BLOCKS_PER_DOCUMENT: usize = 2_000;
 /// At most this many references are kept (`too_many_references`).
 pub const MAX_REFS_PER_DOCUMENT: usize = 5_000;
+/// At most this many headings are kept (`too_many_headings`).
+pub const MAX_HEADINGS: usize = 2_000;
 /// At most this many problems are kept per document (the rest are counted).
 pub const MAX_PROBLEMS_PER_DOCUMENT: usize = 200;
 /// The longest id in a reference (`ref_invalid`).
@@ -84,6 +86,17 @@ impl Classification {
             Self::Confidential => "confidential",
         }
     }
+}
+
+/// What the caller knows of a document's type, for
+/// [`Document::classification`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeDefault {
+    /// The type was read: its `defaults.classification` (`None`:
+    /// `internal`).
+    Known(Option<Classification>),
+    /// The type is unknown or could not be read: fail closed.
+    Unresolved,
 }
 
 /// A front matter value, as written (scalars are text).
@@ -193,12 +206,41 @@ pub struct Reference {
     pub line: usize,
 }
 
-/// A rule the text breaks: its 1-based line (0 for the whole file) and the
-/// rule's name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// A rule the text breaks: its 1-based line (0 for the whole file), the
+/// rule's name and, when it helps the reader, what it is about (the
+/// missing field or section, the id that does not resolve; at most
+/// [`MAX_SUBJECT_LEN`] bytes, as written in the file).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Problem {
     pub line: usize,
     pub rule: &'static str,
+    pub subject: Option<String>,
+}
+
+/// The longest subject a problem carries (longer ones are cut).
+pub const MAX_SUBJECT_LEN: usize = 128;
+
+impl Problem {
+    pub fn new(line: usize, rule: &'static str) -> Self {
+        Self {
+            line,
+            rule,
+            subject: None,
+        }
+    }
+
+    /// A problem about `subject` (cut at a character boundary).
+    pub fn on(line: usize, rule: &'static str, subject: &str) -> Self {
+        let mut end = subject.len().min(MAX_SUBJECT_LEN);
+        while !subject.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self {
+            line,
+            rule,
+            subject: Some(subject.get(..end).unwrap_or_default().to_owned()),
+        }
+    }
 }
 
 /// A parsed document (module docs).
@@ -238,21 +280,37 @@ impl Document {
         self.blocks.iter().find(|b| b.id.as_deref() == Some(id))
     }
 
-    /// The classification an AI must respect (ADR-0026 §6), given the
-    /// type's default. Fails closed: a front matter that could not be read,
-    /// a value that is no classification, or both `classification` and the
-    /// older `confidential` written, is `Confidential`.
-    pub fn classification(&self, default: Option<Classification>) -> Classification {
-        let Some(_) = &self.meta else {
+    /// The classification an AI must respect (ADR-0026 §6). `ty` is what
+    /// the caller knows of the document's type: its default when the type
+    /// was read, or [`TypeDefault::Unresolved`] when it could not be (unknown,
+    /// unreadable) — then a document without its own mark is
+    /// `Confidential`. Fails closed everywhere else too: a front matter that
+    /// could not be read, a value that is no classification, both
+    /// `classification` and the older `confidential`, or a key that only
+    /// looks like one of them (`Classification:`).
+    pub fn classification(&self, ty: TypeDefault) -> Classification {
+        let fallback = match ty {
+            TypeDefault::Known(default) => default.unwrap_or(Classification::Internal),
+            TypeDefault::Unresolved => Classification::Confidential,
+        };
+        let Some(meta) = &self.meta else {
             return if self.has_front_matter || self.not_text() {
                 Classification::Confidential
             } else {
-                default.unwrap_or(Classification::Internal)
+                fallback
             };
         };
+        let look_alike = meta.iter().any(|f| {
+            let k = f.key.trim().to_ascii_lowercase();
+            matches!(k.as_str(), "classification" | "confidential")
+                && !matches!(f.key.as_str(), "classification" | "confidential")
+        });
+        if look_alike {
+            return Classification::Confidential;
+        }
         let new = self.meta_field("classification");
         let old = self.meta_field("confidential");
-        match (new, old) {
+        let written = match (new, old) {
             (Some(_), Some(_)) => Classification::Confidential,
             (Some(f), None) => f
                 .value
@@ -263,7 +321,13 @@ impl Document {
                 Some("false") => Classification::Internal,
                 _ => Classification::Confidential,
             },
-            (None, None) => default.unwrap_or(Classification::Internal),
+            (None, None) => fallback,
+        };
+        // A document never reads as less confidential than its type's
+        // explicit default (lowering is the type's change, governed).
+        match ty {
+            TypeDefault::Known(Some(default)) => written.max(default),
+            TypeDefault::Known(None) | TypeDefault::Unresolved => written,
         }
     }
 
@@ -275,7 +339,7 @@ impl Document {
 
     fn problem(&mut self, line: usize, rule: &'static str) {
         if self.problems.len() < MAX_PROBLEMS_PER_DOCUMENT {
-            self.problems.push(Problem { line, rule });
+            self.problems.push(Problem::new(line, rule));
         } else {
             self.problems_dropped += 1;
         }
@@ -418,18 +482,35 @@ fn body(lines: &[&str], start: usize, doc: &mut Document) {
                 continue;
             }
         }
-        // The text outside comments and code spans: what references, HTML
-        // and headings are read from.
-        let (visible, still_in_comment) = visible_text(raw, in_comment);
+        // References and HTML are read outside comments and code spans;
+        // block markers and headings only where the line itself starts
+        // with one (never after a comment or inside a code span).
+        let started_in_comment = in_comment;
+        let (visible, still_in_comment) = visible_text(raw, in_comment, true);
+        let (no_comments, _) = visible_text(raw, in_comment, false);
         in_comment = still_in_comment;
         scan_inline(&visible, line, doc);
-        match container_of(&visible) {
+        let marker = if !started_in_comment && raw.trim_start().starts_with(":::") {
+            container_of(&no_comments)
+        } else {
+            None
+        };
+        match marker {
             None => {
-                if let Some(h) = heading_of(&visible, line) {
-                    if h.level == 2 {
-                        section = Some(doc.headings.len());
+                let heading = if !started_in_comment && heading_of(raw, line).is_some() {
+                    heading_of(&no_comments, line)
+                } else {
+                    None
+                };
+                if let Some(h) = heading {
+                    if doc.headings.len() >= MAX_HEADINGS {
+                        doc.problem(line, "too_many_headings");
+                    } else {
+                        if h.level == 2 {
+                            section = Some(doc.headings.len());
+                        }
+                        doc.headings.push(h);
                     }
-                    doc.headings.push(h);
                 }
                 push_body(&mut stack, raw);
             }
@@ -635,12 +716,17 @@ fn heading_of(visible: &str, line: usize) -> Option<Heading> {
     if !(rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t')) {
         return None;
     }
-    // A closing run of `#` is not part of the text (CommonMark).
-    let text = rest.trim();
-    let text = text
-        .strip_suffix(|c: char| c == '#')
-        .map_or(text, |s| s.trim_end_matches('#'))
-        .trim_end();
+    // A closing run of `#` after a space is not part of the text
+    // (CommonMark: `## C#` keeps its `#`).
+    let full = rest.trim();
+    let stripped = full.trim_end_matches('#');
+    let text = if stripped.len() != full.len()
+        && (stripped.is_empty() || stripped.ends_with([' ', '\t']))
+    {
+        stripped.trim_end()
+    } else {
+        full
+    };
     Some(Heading {
         level: u8::try_from(level).ok()?,
         text: text.to_owned(),
@@ -648,9 +734,9 @@ fn heading_of(visible: &str, line: usize) -> Option<Heading> {
     })
 }
 
-/// The line without HTML comments and code spans (each replaced by a
-/// space), and whether a comment is still open at its end.
-fn visible_text(raw: &str, mut in_comment: bool) -> (String, bool) {
+/// The line without HTML comments (and, with `strip_code`, code spans),
+/// each replaced by a space, and whether a comment is still open at its end.
+fn visible_text(raw: &str, mut in_comment: bool, strip_code: bool) -> (String, bool) {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
     loop {
@@ -666,7 +752,7 @@ fn visible_text(raw: &str, mut in_comment: bool) -> (String, bool) {
             continue;
         }
         let comment = rest.find("<!--");
-        let code = rest.find('`');
+        let code = if strip_code { rest.find('`') } else { None };
         match (comment, code) {
             (None, None) => {
                 out.push_str(rest);
@@ -683,7 +769,7 @@ fn visible_text(raw: &str, mut in_comment: bool) -> (String, bool) {
                 let run = after.bytes().take_while(|x| *x == b'`').count();
                 let ticks = after.get(..run).unwrap_or_default();
                 let inner = after.get(run..).unwrap_or_default();
-                match inner.find(ticks) {
+                match closing_run(inner, run) {
                     // A code span: hidden.
                     Some(end) => {
                         out.push(' ');
@@ -703,6 +789,27 @@ fn visible_text(raw: &str, mut in_comment: bool) -> (String, bool) {
             }
         }
     }
+}
+
+/// Where a run of exactly `n` backticks starts in `s` (CommonMark: a
+/// longer run does not close the span).
+fn closing_run(s: &str, n: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes.get(i) == Some(&b'`') {
+            let len = bytes
+                .get(i..)
+                .map_or(0, |b| b.iter().take_while(|x| **x == b'`').count());
+            if len == n {
+                return Some(i);
+            }
+            i += len;
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
 
 /// References and raw HTML on one visible line.

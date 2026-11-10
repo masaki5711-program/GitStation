@@ -181,50 +181,74 @@ fn the_front_matter_is_kept_as_written_with_its_lines() {
 
 #[test]
 fn classification_fails_closed() {
+    use super::TypeDefault::{Known, Unresolved};
     let with = |extra: &str| doc(&format!("---\ndoctype: t.x\n{extra}---\n"));
-    assert_eq!(with("").classification(None), Classification::Internal);
     assert_eq!(
-        with("").classification(Some(Classification::Public)),
+        with("").classification(Known(None)),
+        Classification::Internal
+    );
+    assert_eq!(
+        with("").classification(Known(Some(Classification::Public))),
+        Classification::Public
+    );
+    // A type that could not be read: no default to trust (security review).
+    assert_eq!(
+        with("").classification(Unresolved),
+        Classification::Confidential
+    );
+    assert_eq!(
+        with("classification: public\n").classification(Unresolved),
         Classification::Public
     );
     assert_eq!(
-        with("classification: public\n").classification(None),
+        with("classification: public\n").classification(Known(None)),
         Classification::Public
     );
     // The older mark (ADR-0026 §6).
     assert_eq!(
-        with("confidential: true\n").classification(None),
+        with("confidential: true\n").classification(Known(None)),
         Classification::Confidential
     );
     assert_eq!(
-        with("confidential: false\n").classification(None),
+        with("confidential: false\n").classification(Known(None)),
         Classification::Internal
     );
-    // Both, an unknown word, an odd old value, an unreadable front matter.
+    // Both, an unknown word, an odd old value, a look-alike key, an
+    // unreadable front matter.
+    for extra in [
+        "classification: public\nconfidential: false\n",
+        "classification: secret\n",
+        "confidential: yes\n",
+        "Classification: public\n",
+        "\"classification \": public\n",
+        "CONFIDENTIAL: false\n",
+    ] {
+        assert_eq!(
+            with(extra).classification(Known(Some(Classification::Public))),
+            Classification::Confidential,
+            "{extra}"
+        );
+    }
     assert_eq!(
-        with("classification: public\nconfidential: false\n").classification(None),
+        doc("---\na: [\n---\n").classification(Known(Some(Classification::Public))),
         Classification::Confidential
     );
     assert_eq!(
-        with("classification: secret\n").classification(None),
-        Classification::Confidential
-    );
-    assert_eq!(
-        with("confidential: yes\n").classification(None),
-        Classification::Confidential
-    );
-    assert_eq!(
-        doc("---\na: [\n---\n").classification(Some(Classification::Public)),
-        Classification::Confidential
-    );
-    assert_eq!(
-        doc("no front matter").classification(None),
+        doc("no front matter").classification(Known(None)),
         Classification::Internal
     );
     assert_eq!(
-        parse_document(&[0xff, 0xfe]).classification(None),
+        parse_document(&[0xff, 0xfe]).classification(Known(None)),
         Classification::Confidential
     );
+}
+
+#[test]
+fn headings_are_capped() {
+    let many = "## h\n".repeat(super::MAX_HEADINGS + 2);
+    let d = doc(&format!("{FRONT}{many}"));
+    assert_eq!(d.headings.len(), super::MAX_HEADINGS);
+    assert_eq!(rules(&d), vec!["too_many_headings", "too_many_headings"]);
 }
 
 #[test]
@@ -235,4 +259,31 @@ fn bytes_that_are_no_document_are_problems_not_panics() {
     // An editor's byte order mark and CRLF line ends.
     let d = parse_document(b"\xEF\xBB\xBF---\r\ndoctype: t.x\r\n---\r\n");
     assert_eq!(d.doctype(), Some("t.x"));
+}
+
+#[test]
+fn headings_keep_code_spans_and_a_hash_that_is_part_of_the_text() {
+    let d = doc(&format!(
+        "{FRONT}## `手順`\n## C#\n## Issue #\n## 手順 ##\n## 手順 <!-- x -->\n<!-- c --> ## no\n"
+    ));
+    let h: Vec<&str> = d.headings.iter().map(|h| h.text.as_str()).collect();
+    assert_eq!(h, vec!["`手順`", "C#", "Issue", "手順", "手順"]);
+}
+
+#[test]
+fn a_block_marker_must_start_the_line() {
+    let d = doc(&format!(
+        "{FRONT}::: step S-1 role=a\n本文 `x` :::\n<!-- c --> :::\n:::\n"
+    ));
+    assert_eq!(rules(&d), Vec::<&str>::new());
+    let b = d.block("S-1").expect("S-1");
+    assert_eq!(b.end_line, 10);
+}
+
+#[test]
+fn a_code_span_closes_only_on_the_same_run() {
+    // ``a`` contains no reference; a longer run does not close a single tick.
+    let d = doc(&format!("{FRONT}``[[A-1]]`` と `[[B-1]]`` [[C-1]]\n"));
+    let got: Vec<&str> = d.refs.iter().map(|r| r.doc.as_str()).collect();
+    assert_eq!(got, vec!["B-1", "C-1"]);
 }

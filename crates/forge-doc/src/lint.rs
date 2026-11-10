@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::doctype::{
     duration_ok, parse_doctype, Doctype, DoctypeProblem, Pattern, Rule, ValueDef, ValueType,
-    DEFAULT_BLOCK_ID,
+    BASE_FIELDS, DEFAULT_BLOCK_ID,
 };
 use crate::document::{
     parse_document, Block, Classification, Document, MetaField, Problem, Value,
@@ -46,21 +46,6 @@ pub struct FileReport {
     pub problems_dropped: usize,
 }
 
-/// The front matter keys every document may have (ADR-0026 §1).
-const BASE_KEYS: &[&str] = &[
-    "doctype",
-    "id",
-    "title",
-    "owner",
-    "classification",
-    "review_cycle",
-    "related",
-    "lang",
-    "translation_of",
-    "retired",
-    // The older mark (`true` / `false`), read as a classification.
-    "confidential",
-];
 const REQUIRED_KEYS: &[&str] = &["doctype", "id", "title", "owner"];
 
 /// What other documents may refer to.
@@ -93,8 +78,12 @@ pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport
     let mut docs: Vec<(&str, Document)> = Vec::new();
     for src in documents {
         let doc = parse_document(src.bytes);
-        let names_type = doc.doctype().is_some()
-            || (doc.meta.is_none() && doc.has_front_matter && mentions_doctype(src.bytes));
+        // A `doctype` key of any value, or — when the front matter could not
+        // be read (not UTF-8, too large, broken YAML) — a line that names
+        // one: such a file is a document whose problems are reported, never
+        // silently skipped (review MR2a).
+        let names_type = doc.meta_field("doctype").is_some()
+            || (doc.meta.is_none() && mentions_doctype(src.bytes));
         if names_type {
             docs.push((src.path, doc));
         }
@@ -111,13 +100,15 @@ pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport
         if stem_of(path) != Some(id) {
             continue;
         }
-        if first_path.contains_key(id) {
-            // The first file (by path) keeps the id; the others are told.
+        if let Some(first) = first_path.get(id) {
+            // The first file (by path) keeps the id; the others are told
+            // which file has it.
             let line = doc.meta_field("id").map_or(1, |f| f.line);
+            let first = (*first).to_owned();
             reports
                 .entry((*path).to_owned())
                 .or_default()
-                .push(line, "id_duplicate");
+                .push_on(line, "id_duplicate", &first);
             continue;
         }
         first_path.insert(id.to_owned(), path);
@@ -137,7 +128,7 @@ pub fn lint(doctypes: &[Source<'_>], documents: &[Source<'_>]) -> Vec<FileReport
     for (path, doc) in &docs {
         let report = reports.entry((*path).to_owned()).or_default();
         for p in &doc.problems {
-            report.push(p.line, p.rule);
+            report.add(p.clone());
         }
         report.dropped += doc.problems_dropped;
         check_document(path, doc, &types, &index, report);
@@ -158,7 +149,15 @@ struct Report {
 
 impl Report {
     fn push(&mut self, line: usize, rule: &'static str) {
-        let p = Problem { line, rule };
+        self.add(Problem::new(line, rule));
+    }
+
+    /// A problem about `subject` (the field, section or id).
+    fn push_on(&mut self, line: usize, rule: &'static str, subject: &str) {
+        self.add(Problem::on(line, rule, subject));
+    }
+
+    fn add(&mut self, p: Problem) {
         if self.problems.contains(&p) {
             return;
         }
@@ -193,14 +192,21 @@ fn stem_of(path: &str) -> Option<&str> {
 }
 
 /// A front matter that could not be read still names a type when one of
-/// its lines starts with `doctype:` — its problems must not be hidden.
+/// its top-level keys is `doctype` (quoted or not, spaces before the `:`
+/// allowed), read loosely from the bytes.
 fn mentions_doctype(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes).is_ok_and(|t| {
-        t.lines()
-            .skip(1)
-            .take_while(|l| !matches!(l.trim_end(), "---" | "..."))
-            .any(|l| l.starts_with("doctype:"))
-    })
+    let cap = bytes.len().min(crate::document::MAX_FRONT_MATTER_BYTES * 2);
+    let text = String::from_utf8_lossy(bytes.get(..cap).unwrap_or(bytes));
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let mut lines = text.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return false;
+    }
+    lines
+        .take_while(|l| !matches!(l.trim_end(), "---" | "..."))
+        .filter(|l| !l.starts_with([' ', '\t']))
+        .filter_map(|l| l.split_once(':'))
+        .any(|(key, _)| key.trim().trim_matches(['"', '\'']) == "doctype")
 }
 
 fn doctype_rule(reason: &'static str) -> &'static str {
@@ -264,7 +270,7 @@ fn check_meta(
 ) {
     for key in REQUIRED_KEYS {
         match doc.meta_field(key) {
-            None => report.push(1, "field_missing"),
+            None => report.push_on(1, "field_missing", key),
             Some(f) if f.value.as_text().is_none_or(|t| t.trim().is_empty()) => {
                 report.push(f.line, "field_invalid");
             }
@@ -273,18 +279,28 @@ fn check_meta(
     }
     for f in meta {
         let declared = ty.and_then(|t| t.field(&f.key));
-        if !BASE_KEYS.contains(&f.key.as_str()) && declared.is_none() {
+        if !BASE_FIELDS.contains(&f.key.as_str()) && declared.is_none() {
             // Unknown to a known type; a type that could not be read has
             // already said so once.
             if ty.is_some() {
-                report.push(f.line, "field_unknown");
+                report.push_on(f.line, "field_unknown", &f.key);
             }
             continue;
         }
         match f.key.as_str() {
             "classification" => {
-                if f.value.as_text().and_then(Classification::parse).is_none() {
-                    report.push(f.line, "classification_invalid");
+                match f.value.as_text().and_then(Classification::parse) {
+                    None => report.push(f.line, "classification_invalid"),
+                    // Lowering below the type's default is the type's change
+                    // (governed), never one document's (review MR2a).
+                    Some(c) => {
+                        if ty
+                            .and_then(|t| t.default_classification)
+                            .is_some_and(|d| c < d)
+                        {
+                            report.push(f.line, "classification_below_default");
+                        }
+                    }
                 }
                 if doc.meta_field("confidential").is_some() {
                     report.push(f.line, "classification_conflict");
@@ -318,8 +334,9 @@ fn check_meta(
                     report.push(f.line, "field_invalid")
                 }
             },
+            // A translation keeps its original's id, and the original exists.
             "translation_of" => match f.value.as_text() {
-                Some(id) if Some(id) == doc.id() => {}
+                Some(id) if Some(id) == doc.id() && index.contains_key(id) => {}
                 _ => report.push(f.line, "translation_invalid"),
             },
             "retired" => check_retired(f, index, report),
@@ -333,7 +350,7 @@ fn check_meta(
     if let Some(ty) = ty {
         for def in ty.fields.iter().filter(|d| d.required) {
             if doc.meta_field(&def.key).is_none() {
-                report.push(1, "field_missing");
+                report.push_on(1, "field_missing", &def.key);
             }
         }
         if let (Some(id), Some(pattern)) = (doc.id(), &ty.id_pattern) {
@@ -455,11 +472,11 @@ fn check_sections(doc: &Document, ty: &Doctype, report: &mut Report) {
             .iter()
             .position(|h| h.level == 2 && h.text == section.title);
         match found {
-            None => report.push(1, "section_missing"),
+            None => report.push_on(1, "section_missing", &section.title),
             Some(at) => {
                 if last.is_some_and(|l| at < l) {
                     let line = doc.headings.get(at).map_or(1, |h| h.line);
-                    report.push(line, "section_order");
+                    report.push_on(line, "section_order", &section.title);
                 }
                 last = Some(at);
             }
@@ -537,7 +554,7 @@ fn check_attrs(
                 resolve_block(doc, &a.value, None, b.line, report);
             }
             key => match defs.iter().find(|d| d.key == key) {
-                None => report.push(b.line, "attr_unknown"),
+                None => report.push_on(b.line, "attr_unknown", key),
                 Some(def) => match &def.ty {
                     ValueType::DocRef { doctype } => {
                         resolve_doc(&a.value, doctype.as_deref(), b.line, index, report);
@@ -561,7 +578,7 @@ fn check_attrs(
     }
     for def in defs.iter().filter(|d| d.required) {
         if b.attr(&def.key).is_none() {
-            report.push(b.line, "attr_missing");
+            report.push_on(b.line, "attr_missing", &def.key);
         }
     }
 }
@@ -569,10 +586,10 @@ fn check_attrs(
 /// A block of this document, optionally of one kind.
 fn resolve_block(doc: &Document, id: &str, kind: Option<&str>, line: usize, report: &mut Report) {
     match doc.block(id) {
-        None => report.push(line, "ref_broken"),
+        None => report.push_on(line, "ref_broken", id),
         Some(target) => {
             if kind.is_some_and(|k| k != target.kind) {
-                report.push(line, "ref_kind_mismatch");
+                report.push_on(line, "ref_kind_mismatch", id);
             }
         }
     }
@@ -587,10 +604,10 @@ fn resolve_doc(
     report: &mut Report,
 ) {
     match index.get(id) {
-        None => report.push(line, "ref_broken"),
+        None => report.push_on(line, "ref_broken", id),
         Some(entry) => {
             if doctype.is_some_and(|t| t != entry.doctype) {
-                report.push(line, "ref_doctype_mismatch");
+                report.push_on(line, "ref_doctype_mismatch", id);
             }
         }
     }
@@ -599,16 +616,17 @@ fn resolve_doc(
 /// `[[…]]` in the text: in this repository, the document (and block) exist.
 fn check_refs(doc: &Document, index: &HashMap<String, Entry>, report: &mut Report) {
     for r in doc.refs.iter().filter(|r| r.repo.is_none()) {
-        match index.get(&r.doc) {
-            None => report.push(r.line, "ref_broken"),
-            Some(entry) => {
-                if r.block
-                    .as_ref()
-                    .is_some_and(|b| !entry.blocks.contains_key(b))
-                {
-                    report.push(r.line, "ref_broken");
-                }
-            }
+        let target = match &r.block {
+            Some(b) => format!("{}#{b}", r.doc),
+            None => r.doc.clone(),
+        };
+        let resolves = index.get(&r.doc).is_some_and(|entry| {
+            r.block
+                .as_ref()
+                .is_none_or(|b| entry.blocks.contains_key(b))
+        });
+        if !resolves {
+            report.push_on(r.line, "ref_broken", &target);
         }
     }
 }

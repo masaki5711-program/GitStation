@@ -59,8 +59,8 @@ fn line_of(text: &str, needle: &str, nth: usize) -> usize {
         .unwrap_or_else(|| panic!("{needle:?} #{nth} not in the text"))
 }
 
-fn p(line: usize, rule: &'static str) -> Problem {
-    Problem { line, rule }
+fn p(line: usize, rule: &'static str, subject: &str) -> Problem {
+    Problem::on(line, rule, subject)
 }
 
 fn examples() -> Vec<(&'static str, &'static str)> {
@@ -72,17 +72,17 @@ fn the_examples_report_exactly_the_errors_their_readme_expects() {
     let reports = run(&examples());
     let mut qp = vec![
         // `related: [QM-001]` and `[[QM-001]]` twice: not in this repository.
-        p(line_of(QP, "related: [QM-001]", 0), "ref_broken"),
-        p(line_of(QP, "[[QM-001]]", 0), "ref_broken"),
-        p(line_of(QP, "[[QM-001]]", 1), "ref_broken"),
+        p(line_of(QP, "related: [QM-001]", 0), "ref_broken", "QM-001"),
+        p(line_of(QP, "[[QM-001]]", 0), "ref_broken", "QM-001"),
+        p(line_of(QP, "[[QM-001]]", 1), "ref_broken", "QM-001"),
         // `[[QP-07-002]]` twice.
-        p(line_of(QP, "[[QP-07-002]]", 0), "ref_broken"),
-        p(line_of(QP, "[[QP-07-002]]", 1), "ref_broken"),
+        p(line_of(QP, "[[QP-07-002]]", 0), "ref_broken", "QP-07-002"),
+        p(line_of(QP, "[[QP-07-002]]", 1), "ref_broken", "QP-07-002"),
         // The form of R-01.
-        p(line_of(QP, "form=QF-07-001", 0), "ref_broken"),
+        p(line_of(QP, "form=QF-07-001", 0), "ref_broken", "QF-07-001"),
     ];
     qp.sort();
-    let urs = vec![p(
+    let urs = vec![Problem::new(
         line_of(URS, "::: decision D-02", 0),
         "decisions_resolved",
     )];
@@ -432,4 +432,89 @@ fn markdown_that_names_no_type_is_not_a_document() {
     let readme = "# README\n\n[[NOPE-1]] <div>html</div>\n";
     let reports = run(&[(P_QP, QP), (P_RA, RA), (P_URS, URS), ("README.md", readme)]);
     assert!(reports.iter().all(|r| r.path != "README.md"));
+}
+
+#[test]
+fn problems_name_what_they_are_about() {
+    let got = edited(P_RA, |t| {
+        t.replace("owner: safety-team\n", "")
+            .replace("## 残留リスク", "## 残留")
+    });
+    let subjects: Vec<(&str, Option<&str>)> =
+        got.iter().map(|p| (p.rule, p.subject.as_deref())).collect();
+    assert_eq!(
+        subjects,
+        vec![
+            ("field_missing", Some("owner")),
+            ("section_missing", Some("残留リスク"))
+        ]
+    );
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_reported_never_skipped() {
+    // Not UTF-8, broken YAML with a quoted key, a doctype that is no text.
+    let mut not_utf8 = RA.as_bytes().to_vec();
+    not_utf8.push(0xff);
+    let broken = RA.replace(
+        "doctype: safety.risk-assessment",
+        "\"doctype\" : safety.risk-assessment\nx: [",
+    );
+    let listed = RA.replace("doctype: safety.risk-assessment", "doctype: [a, b]");
+    for (bytes, rule) in [
+        (not_utf8.as_slice(), "not_utf8"),
+        (broken.as_bytes(), "front_matter_syntax"),
+        (listed.as_bytes(), "field_invalid"),
+    ] {
+        let reports = lint(&types(), &[Source { path: P_RA, bytes }]);
+        let r = reports.iter().find(|r| r.path == P_RA).expect("reported");
+        assert!(rules(&r.problems).contains(&rule), "{rule}: {r:?}");
+    }
+    let big = format!("{}{}", RA, "a".repeat(crate::document::MAX_DOCUMENT_BYTES));
+    let reports = lint(
+        &types(),
+        &[Source {
+            path: P_RA,
+            bytes: big.as_bytes(),
+        }],
+    );
+    assert_eq!(
+        reports.first().map(|r| rules(&r.problems)),
+        Some(vec!["too_large"])
+    );
+}
+
+#[test]
+fn a_document_cannot_lower_its_types_default_classification() {
+    let ty = T_RA.replace("classification: internal", "classification: confidential");
+    let docs = [Source {
+        path: P_RA,
+        bytes: RA.as_bytes(),
+    }];
+    let reports = lint(
+        &[Source {
+            path: ".forge/doctypes/safety.risk-assessment.yml",
+            bytes: ty.as_bytes(),
+        }],
+        &docs,
+    );
+    let r = reports.first().expect("report");
+    assert!(
+        rules(&r.problems).contains(&"classification_below_default"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_translation_needs_its_original() {
+    let en = RA.replace(
+        "classification: internal",
+        "classification: internal\nlang: en\ntranslation_of: RA-2026-014",
+    );
+    let reports = run(&[(P_URS, URS), ("safety/RA-2026-014.en.md", &en)]);
+    let r = reports
+        .iter()
+        .find(|r| r.path == "safety/RA-2026-014.en.md")
+        .expect("report");
+    assert!(rules(&r.problems).contains(&"translation_invalid"), "{r:?}");
 }

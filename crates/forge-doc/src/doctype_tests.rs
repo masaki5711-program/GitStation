@@ -110,6 +110,10 @@ fn a_definition_breaking_a_rule_is_refused_with_its_reason() {
         ),
         ("name: t.x\nconcurrency_hint: whenever\n", "hint_invalid"),
         (
+            "name: t.x\nfields: { owner: { type: text } }\n",
+            "field_reserved",
+        ),
+        (
             "name: t.x\napproval_hint: { approve: qa }\n",
             "hint_invalid",
         ),
@@ -145,6 +149,9 @@ fn patterns_match_the_whole_id_and_are_bounded() {
     assert!(Pattern::new(&"a".repeat(super::MAX_PATTERN_LEN + 1)).is_none());
     assert!(Pattern::new("").is_none());
     assert!(Pattern::new("\\w{1000}{1000}").is_none());
+    // A source that closes the group around it cannot escape the anchors.
+    assert!(Pattern::new("a)|(b").is_none());
+    assert!(Pattern::new("A)|.*|(B").is_none());
 }
 
 #[test]
