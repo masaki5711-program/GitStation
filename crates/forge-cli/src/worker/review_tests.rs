@@ -343,6 +343,9 @@ fn the_production_registry_starts_the_subscribers_task() {
             forge_db::checks::spec_index::SPEC_INDEX_SUBSCRIBER,
             // M3 O2: a push to a mirrored repository enqueues its mirror push.
             forge_db::mirror::SUBSCRIBER,
+            // M4 C2: every pushed branch and merge request version asks
+            // for its CI pipeline.
+            forge_db::pipelines::subscriber::PIPELINES_SUBSCRIBER,
         ]
     );
     let tasks = crate::worker::tasks(

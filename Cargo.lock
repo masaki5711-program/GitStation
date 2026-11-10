@@ -775,6 +775,7 @@ dependencies = [
  "forge-integ",
  "forge-notify",
  "forge-oidc",
+ "forge-pipelines",
  "forge-review",
  "forge-web",
  "getrandom 0.2.17",
@@ -980,6 +981,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-pipelines"
+version = "0.1.0"
+dependencies = [
+ "forge-auth",
+ "forge-ci",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "forge-git",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "forge-review"
 version = "0.1.0"
 dependencies = [
@@ -1016,6 +1035,7 @@ dependencies = [
  "forge-integ",
  "forge-notify",
  "forge-oidc",
+ "forge-pipelines",
  "forge-review",
  "forge-web",
  "futures-util",

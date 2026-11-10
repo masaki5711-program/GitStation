@@ -1,0 +1,36 @@
+[package]
+name = "forge-pipelines"
+description = "forge CI pipelines: plan `.forge-ci.yml` at a commit and record the pipeline and its jobs; read, cancel, retry and run them by hand"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A feature crate (plan 14 C2, contract 9): forge-web / forge-cli →
+# forge-pipelines → forge-auth / forge-git / forge-db → forge-core → forge-ci
+# → forge-errors. It runs no SQL of its own (the SQL is
+# `forge_db::pipelines`) and never depends on another feature crate: the
+# confidential mark is measured by the caller through `MarkMeter`.
+[dependencies]
+forge-auth.workspace = true
+forge-ci.workspace = true
+forge-core.workspace = true
+forge-db.workspace = true
+forge-errors.workspace = true
+forge-git.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+forge-db = { workspace = true, features = ["test-support"] }
+# Tests that need a git timeout use a git that never answers.
+forge-git = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+sqlx.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
