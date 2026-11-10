@@ -49,6 +49,8 @@
   white-space: nowrap;
   vertical-align: bottom;
   color: var(--gs-color-text-muted);
+  /* Its direction never leaks into the number or the commit around it. */
+  unicode-bidi: isolate;
 }
 
 /* The facts forge checked: the number and the commit. */

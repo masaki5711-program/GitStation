@@ -423,8 +423,17 @@ impl ActAsKeys {
     /// `active` key is
     /// `FG-SYS-0002 config_key=auth.act_as_hmac_keys_file` with `reason`
     /// (and `line`); the key bytes are never quoted.
+    ///
+    /// Memory (review of ADR-0025, 2026-11-09 / 11-10, security LOW c): the
+    /// caller holds `text` in a `Zeroizing<String>` (the base64 slices
+    /// below borrow it); the decoded bytes are wiped; the ring's vector is
+    /// sized once, so growing it never leaves a freed copy of a key behind;
+    /// every `Key` wipes itself on drop. Accepted residue: the HMAC's
+    /// internal state (the keyed pads of each short-lived `Hmac` value are
+    /// not wiped when it is dropped) and the register / stack copies of a
+    /// move.
     pub fn parse(text: &str) -> Result<Self, ForgeError> {
-        let mut keys: Vec<Key> = Vec::new();
+        let mut keys: Vec<Key> = Vec::with_capacity(text.lines().count());
         for (n, line) in text.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {

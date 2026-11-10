@@ -487,4 +487,11 @@ Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 �
 - （LOW d）MR の確認の画面のタイトルは 80 文字で切り、目立たない 1 行にした。番号と head の SHA を太字にした。
 - （LOW、両方の確認の画面）403 は「この人では行えない」と言わず、中立の文（権限やアプリの連携の設定などが理由のことがある）と
   問い合わせ番号を出す（i18n `actAs.refusedTitle` / `refusedBody`、ja / en / id）。
+- 直した後の独立レビュー（2026-11-10）の指摘も直した: (MEDIUM) drop の守りは `finish` が終わるまで外さない（`finish` の
+  `reject_unused` の待ちで切れても拒否する。テスト `a_request_cut_off_while_its_assertion_is_being_rejected_still_rejects_it`）。
+  (LOW) 守りはタスクを起こす前に `forge.auth.act_as_assertion_reject_scheduled` を出し（停止で失われたタスクが見える）、`cancelled` の
+  行は「操作はもう確定したかもしれない」と書く。(LOW) 鍵のファイルの文字は `Zeroizing<String>` で読み、鍵の束は 1 回で確保する
+  （伸ばすときに鍵の写しを解放しない。テスト `the_ring_never_reallocates_over_key_bytes`）。HMAC の内部の状態の残りは受け入れる。
+  (LOW) 画面のタイトルは `Intl.Segmenter` が無いブラウザーでは code point で切り、双方向の制御文字（U+202A–202E・U+2066–2069）を
+  取り除き、`unicode-bidi: isolate` で囲む。
 - 残した: (MEDIUM) 押せない人に 403 か 404 か（利用者の判断を待つ）。

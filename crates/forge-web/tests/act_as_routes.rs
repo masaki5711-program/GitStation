@@ -600,6 +600,53 @@ async fn assertion_is_consumed_when_the_action_fails() {
 /// still being read) does not leave the assertion `claimed` for 5 minutes:
 /// the drop guard rejects it (`request_cancelled`), and it cannot be used.
 #[tokio::test]
+async fn a_request_cut_off_while_its_assertion_is_being_rejected_still_rejects_it() {
+    // Review of the follow-ups (2026-11-10, MEDIUM): the route answered
+    // (a malformed body, 400: the assertion is not used), `finish` is
+    // rejecting it and is cut off while waiting on the database — the
+    // guard must still be armed and reject it.
+    let w = world().await;
+    let assertion = w
+        .confirmed("approve", "kanflow-state-fin-0123456789abcdef")
+        .await;
+    let id = public_id(&assertion);
+    // Hold the assertion's row: finish's UPDATE waits on it.
+    let held =
+        w.t.hold_audited(
+            ("project", w.project),
+            &[format!(
+                "SELECT 1 FROM forge.act_as_assertions WHERE public_id = '{id}' FOR UPDATE"
+            )],
+        )
+        .await;
+    let act_as = w.act_as(w.olga);
+    let req = Request::builder()
+        .method("POST")
+        .uri(w.mr("/approve"))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", w.kanflow))
+        .header("forge-act-as", &act_as)
+        .header("forge-assertion", &assertion)
+        .body(Body::from("{\"sha\": 5}"))
+        .expect("request");
+    let request = tokio::spawn(w.router.clone().oneshot(req));
+    w.t.until_waiting("SET state = 'rejected'").await;
+    request.abort();
+    assert!(request.await.is_err(), "cut off inside finish");
+    drop(held); // rollback: the waiting statements go on
+    let mut state = String::new();
+    for _ in 0..200 {
+        state = w.assertion_state(&id).await;
+        if state != "claimed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(state, "rejected");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
 async fn a_request_cut_off_after_the_verification_rejects_its_assertion() {
     let w = world().await;
     let assertion = w

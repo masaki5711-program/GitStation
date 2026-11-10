@@ -43,15 +43,23 @@ export const PAGE_TTL_MINUTES = PAGE_TTL_MS / 60000;
 export const TITLE_MAX_CHARS = 80;
 
 /** The user-perceived characters of `text` (grapheme clusters: an emoji
- * or a combined character is never cut in half). */
+ * or a combined character is never cut in half). Without `Intl.Segmenter`
+ * (an older browser) code points: never half a surrogate pair. */
 export function graphemes(text: string): string[] {
-  return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), (s) => s.segment);
+  // The lib types say it always exists; an older browser has none.
+  const Segmenter = (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+  if (Segmenter === undefined) return Array.from(text);
+  return Array.from(new Segmenter(undefined, { granularity: 'grapheme' }).segment(text), (s) => s.segment);
 }
 
-/** `text` on one line, cut to at most `max` characters, ending in "…" when
- * it was cut. */
+/** The bidirectional embedding, override and isolate controls (U+202A-202E,
+ * U+2066-2069): an author's title must not reorder what is shown. */
+const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/g;
+
+/** `text` on one line without bidi controls, cut to at most `max`
+ * characters, ending in "…" when it was cut. */
 export function shortTitle(text: string, max = TITLE_MAX_CHARS): string {
-  const chars = graphemes(text.replace(/\s+/g, ' ').trim());
+  const chars = graphemes(text.replace(BIDI_CONTROLS, '').replace(/\s+/g, ' ').trim());
   return chars.length <= max ? chars.join('') : `${chars.slice(0, max).join('')}…`;
 }
 

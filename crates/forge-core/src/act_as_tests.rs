@@ -410,3 +410,18 @@ fn the_key_bytes_are_wiped_on_drop() {
     zeroize::Zeroize::zeroize(&mut key);
     assert_eq!(key.bytes, [0u8; 32]);
 }
+
+/// Review of the follow-ups (2026-11-10, LOW): the ring is sized once, so
+/// growing it never frees a buffer that still holds a key's bytes.
+#[test]
+fn the_ring_never_reallocates_over_key_bytes() {
+    let text = [
+        key_line(1, 1, ""),
+        key_line(2, 2, ""),
+        key_line(3, 3, "active"),
+    ]
+    .join("\n");
+    let keys = ActAsKeys::parse(&text).expect("ring");
+    assert_eq!(keys.keys.len(), 3);
+    assert_eq!(keys.keys.capacity(), 3, "one allocation, no growth");
+}

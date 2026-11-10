@@ -166,6 +166,26 @@ describe('the summary', () => {
     expect(shortTitle('x'.repeat(TITLE_MAX_CHARS))).toBe('x'.repeat(TITLE_MAX_CHARS));
   });
 
+  // Review of the follow-ups (2026-11-10, LOW): a browser without
+  // Intl.Segmenter still renders (code points), and a title cannot reorder
+  // the text around it with bidi controls.
+  it('cuts by code points when Intl.Segmenter is missing', () => {
+    vi.stubGlobal('Intl', { ...Intl, Segmenter: undefined });
+    try {
+      expect(graphemes('ab😀')).toEqual(['a', 'b', '😀']);
+      expect(shortTitle('y'.repeat(100))).toBe(`${'y'.repeat(TITLE_MAX_CHARS)}…`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('strips bidi controls from the title', async () => {
+    expect(shortTitle('safe \u202Etxt.exe\u202C \u2066x\u2069 \u202Ay\u202D')).toBe('safe txt.exe x y');
+    await open(routes({ [`GET ${CONFIRM}`]: () => json(200, view({ title: 'Fix \u202Eevil' })) }));
+    await approve();
+    expect(screen.getByTestId('mr-title').textContent).toBe('Fix evil');
+  });
+
   it('says it in simple Japanese too, and for unapprove', async () => {
     await open(
       routes({ [`GET ${CONFIRM}`]: () => json(200, view({ intent: 'unapprove' })) }),

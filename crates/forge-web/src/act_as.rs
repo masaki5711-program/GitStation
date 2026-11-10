@@ -335,7 +335,7 @@ pub(crate) fn answered(res: &Response) -> (axum::http::StatusCode, Option<Failur
 
 /// After the route answered (see the module documentation).
 pub(crate) async fn finish(
-    accepted: Accepted,
+    accepted: &Accepted,
     (status, failure): (axum::http::StatusCode, Option<Failure>),
 ) {
     let failure = failure.as_ref();
@@ -369,7 +369,7 @@ pub(crate) async fn finish(
     } else {
         "action_failed"
     };
-    reject_unused(&accepted, reason).await;
+    reject_unused(accepted, reason).await;
 }
 
 /// Reject the request's verified assertion unless the action consumed it,
@@ -407,8 +407,9 @@ async fn reject_unused(accepted: &Accepted, reason: &'static str) {
 
 /// An accepted act-as request between [`admit`] and [`finish`] (review of
 /// ADR-0025, 2026-11-09, security LOW b). When the request is cut off
-/// before the route answered (the client went away, so the server drops
-/// the request's future), [`finish`] never runs: dropping the guard then
+/// before [`finish`] completed (the client went away, so the server drops
+/// the request's future — while the route runs or while `finish` waits on
+/// the database), dropping the guard
 /// logs the request as `cancelled` and rejects its verified assertion
 /// (`request_cancelled`) in a task of its own — so it never stays
 /// `claimed` until it expires. The task is one `reject_unused` (one
@@ -422,9 +423,16 @@ impl Pending {
         Self(Some(accepted))
     }
 
-    /// The accepted request, for [`finish`]: the guard is disarmed.
-    pub(crate) fn take(mut self) -> Option<Accepted> {
-        self.0.take()
+    /// The accepted request, for [`finish`]: the guard stays armed while
+    /// `finish` runs (a cut-off inside it still rejects the assertion;
+    /// `reject_unused` is idempotent — it touches a `claimed` row only).
+    pub(crate) fn accepted(&self) -> Option<&Accepted> {
+        self.0.as_ref()
+    }
+
+    /// `finish` completed: the guard has nothing left to do.
+    pub(crate) fn disarm(mut self) {
+        self.0 = None;
     }
 }
 
@@ -434,10 +442,14 @@ impl Drop for Pending {
             return;
         };
         let l = &accepted.log;
+        // The route may have run to its end (and committed) before the cut:
+        // `cancelled` says the answer never reached the client, not that
+        // nothing happened.
         tracing::info!(
             target: "forge_web::auth",
             event = "forge.auth.act_as",
             outcome = "cancelled",
+            note = "the request was cut off before it answered; the action may already have been committed",
             request_id = %accepted.request_id,
             action = l.action.name(),
             act_as_rule = l.action.act_as_rule().as_str(),
@@ -455,6 +467,17 @@ impl Drop for Pending {
         }
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
+                // Logged before the task runs: a task lost at the runtime's
+                // shutdown leaves this line without its `rejected` /
+                // `reject_failed` follow-up (the assertion then expires).
+                tracing::info!(
+                    target: "forge_web::auth",
+                    event = "forge.auth.act_as_assertion_reject_scheduled",
+                    request_id = %accepted.request_id,
+                    assertion_public_id = l.assertion_public_id.as_deref(),
+                    reject_reason = "request_cancelled",
+                    "the unused assertion of a cut-off request will be rejected"
+                );
                 runtime.spawn(async move {
                     reject_unused(&accepted, "request_cancelled").await;
                 });
