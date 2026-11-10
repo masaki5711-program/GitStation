@@ -780,6 +780,13 @@ async fn binding_confirm_lookup(
     if asked.integration <= 0 {
         return Err(param_invalid("integration", "not_positive_decimal"));
     }
+    // Review ff17e86 (HIGH): without act-as configured, the same 404 before
+    // anything is loaded (no probe of the project's existence).
+    let Some(act_as) = state.act_as.as_deref() else {
+        return Ok(crate::routes::write::absent_because(
+            "act_as_not_configured",
+        ));
+    };
     let Some(record) = crate::routes::projects::load_bounded(state, project, viewer).await? else {
         return Ok(absent());
     };
@@ -790,9 +797,6 @@ async fn binding_confirm_lookup(
             .with_context("loaded_project_id", record.id.get()));
     }
     let loaded = crate::routes::projects::loaded(&record);
-    let act_as = state.act_as.as_deref().ok_or_else(|| {
-        ForgeError::new(ErrorCode::Forbidden).with_context("reason", "act_as_not_configured")
-    })?;
     let integration = bounded(
         state,
         "act_as_confirm_integration",

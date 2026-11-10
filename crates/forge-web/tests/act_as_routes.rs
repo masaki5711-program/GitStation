@@ -1324,3 +1324,67 @@ async fn every_refusal_of_the_merge_request_confirmation_is_the_invisible_projec
     assert_eq!(rows[0]["n"], json!(0));
     w.t.drop_now().await;
 }
+
+/// Review ff17e86 (HIGH): when act-as is not configured on the server, the
+/// confirmation and its press answer the invisible project's 404 for
+/// everyone, before anything is loaded — an existing project or merge
+/// request answers exactly like an absent one (no probe of existence).
+#[tokio::test]
+async fn without_act_as_configured_the_confirmation_is_the_same_404_for_all() {
+    let w = world().await;
+    let state = AppState::new(
+        "test",
+        Vec::new(),
+        Arc::new(w.t.db.clone()),
+        Lookups {
+            namespaces: Arc::new(w.t.db.clone()),
+            projects: Arc::new(w.t.db.clone()),
+        },
+    )
+    .with_hosting(forge_hosting::Hosting::new(w.t.db.clone()));
+    let router = forge_web::app(state, AppConfig::default()).expect("router");
+    let answer = |project: i64, who: Who| {
+        let router = router.clone();
+        let w = &w;
+        async move {
+            let (status, raw) = send_raw(
+                router.clone(),
+                "GET",
+                &format!(
+                    "/api/v1/projects/{project}/merge-requests/1/act-as-confirmation?intent=approve&sha={}&integration={}",
+                    w.head, w.integration
+                ),
+                who.clone(),
+                None,
+                &[],
+            )
+            .await;
+            let shown = without_request_id(status, &raw);
+            let (status, raw) = send_raw(
+                router,
+                "POST",
+                &format!("/-/confirm/projects/{project}/merge-requests/1/assertions"),
+                who,
+                Some(json!({
+                    "intent": "approve", "sha": w.head, "target_sha": w.base,
+                    "integration": w.integration,
+                    "state": "kanflow-state-unconfigured-0123456789ab",
+                })),
+                &[],
+            )
+            .await;
+            (shown, without_request_id(status, &raw))
+        }
+    };
+    let existing = answer(w.project, w.olga_by_session()).await;
+    let absent = answer(999_999, w.olga_by_session()).await;
+    let developer = answer(
+        w.project,
+        Who::Person(session_of(w.dave), Some(w.olga_session)),
+    )
+    .await;
+    assert_eq!(existing.0 .0, StatusCode::NOT_FOUND, "{existing:?}");
+    assert_eq!(existing, absent);
+    assert_eq!(developer, absent);
+    w.t.drop_now().await;
+}
