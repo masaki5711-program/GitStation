@@ -82,6 +82,24 @@ fn valid_size(raw: &str) -> bool {
         && matches!(unit, "k" | "m" | "g")
 }
 
+/// A `:` or `,` in the work directory (after a Windows drive prefix, on
+/// development machines only): it would split Podman's `--volume=` value
+/// into another target or option. Not UTF-8 is refused too.
+fn has_mount_separator(path: &Path) -> bool {
+    let Some(text) = path.to_str() else {
+        return true;
+    };
+    let text = if cfg!(windows) {
+        match text.as_bytes() {
+            [d, b':', ..] if d.is_ascii_alphabetic() => &text[2..],
+            _ => text,
+        }
+    } else {
+        text
+    };
+    text.contains([':', ','])
+}
+
 impl RunnerConfig {
     /// Parse and check the TOML text.
     pub fn parse(text: &str) -> Result<Self, ForgeError> {
@@ -101,6 +119,9 @@ impl RunnerConfig {
         }
         if !raw.work_dir.is_absolute() {
             return Err(invalid("work_dir", "not_absolute"));
+        }
+        if has_mount_separator(&raw.work_dir) {
+            return Err(invalid("work_dir", "mount_separator"));
         }
         let limits = Limits {
             memory: raw.memory.unwrap_or_else(|| Limits::default().memory),
@@ -226,6 +247,24 @@ mod tests {
             assert_eq!(err.code(), ErrorCode::ConfigInvalid);
             assert_eq!(reason(&err), want, "{text}");
         }
+    }
+
+    /// M4 C4 review: the work directory becomes part of Podman's
+    /// `--volume=<path>:/workspace:rw,Z`; a `:` or `,` in it would add a
+    /// mount target or option.
+    #[test]
+    fn a_work_dir_that_could_change_the_mount_is_refused() {
+        let work = if cfg!(windows) { "C:/r" } else { "/r" };
+        for bad in [":/etc:rw", "a,z", "x:y"] {
+            let text = format!("server = \"https://x\"\nwork_dir = \"{work}/{bad}\"");
+            let err = RunnerConfig::parse(&text).expect_err(&text);
+            assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+            assert_eq!(reason(&err), "mount_separator", "{text}");
+        }
+        RunnerConfig::parse(&format!(
+            "server = \"https://x\"\nwork_dir = \"{work}/forge-runner_1.d\""
+        ))
+        .expect("a plain path");
     }
 
     /// M4 C4 review: plain http only when asked for explicitly.
