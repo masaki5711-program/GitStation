@@ -1,6 +1,7 @@
 //! The `spec_index_sweep` task of `forge worker` (M3 X4, the X2 sweep's
 //! pattern): every 60 s it answers `error` for `forge/spec-lint`,
-//! `forge/spec-trace` and `forge/doc-lint` (plan 13 stage 2) of each
+//! `forge/spec-trace`, `forge/doc-lint` (plan 13 stage 2) and `forge/ci-lint`
+//! (plan 14 C1) of each
 //! `check.spec_index` job that died without them on its head (`forge_db::checks::spec_index::unanswered_dead_jobs`:
 //! the reaper ended it — a crashed worker, the runner's own timeout — so
 //! the handler never answered). At most [`BATCH`] per run, the oldest

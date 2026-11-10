@@ -42,7 +42,8 @@ this crate calls the check commands (`tests/decided_callers.rs`).
 - `spec_index::{index_commit, own_dirs, IndexLimits, Indexed, Tags}` (X4): one commit's
   requirement index (the own specification directories, the `@req` tags), bounded;
   `spec_checks::{SpecChecks, assess_lint, assess_trace, record_errors}` (X4);
-  `spec_index::index_head` and `doc_lint::{assess_doc_lint, DocLimits, DocTree}` (plan 13 stage 2).
+  `spec_index::index_head` and `doc_lint::{assess_doc_lint, DocLimits, DocTree}` (plan 13 stage 2);
+  `ci_lint::{read_input, assess_ci_lint, branch_patterns, CiFile, CiLintInput, CiLint, CI_FILE}` (plan 14 C1).
 
 **forge's own check (M3 X2, ADR-0023 Amendment X2)**: `spec_drift::SpecDrift` evaluates
 `forge/spec-drift` for one `check.spec_drift` job (a merge request version's head; the job is
@@ -69,7 +70,7 @@ and traces the merge request (`trace_merge_request`: changed requirements, added
 work items' `PBI-<n>/AC-<m>` tests). spec-lint is `success` / `failure` (FG-REPO-0028) /
 `neutral` (FG-REPO-0031); spec-trace is advisory: `success` / `neutral` (FG-REPO-0029, 0030,
 0031), never `failure`. A run shows only the repository's own text. The evaluation's deadline is
-60 s and each write's 8 s (three runs and three `error` writes: 108 s, 12 s inside the job's 120 s); `SpecChecks::fail` answers `error` for all three on the
+60 s and each write's 6 s (four runs and four `error` writes: 108 s, 12 s inside the job's 120 s); `SpecChecks::fail` answers `error` for all four on the
 last attempt and `record_errors` for `forge worker`'s `spec_index_sweep`. forge-web's spec API
 (`GET …/specs/…`) reads the same index with the reader's permissions.
 
@@ -92,6 +93,17 @@ Maintainer): the date's shape here (`FG-WEB-0006 param=warn_until`), its bounds 
 ahead — by forge-db (`FG-DOC-0005`), and the decision again inside the transaction (`Authorized::reconfirm`;
 `tests/decided_callers.rs` keeps `set_doc_lint_migration_decided` / `clear_doc_lint_migration_decided` here).
 
+**forge/ci-lint (plan 14 C1)**: the same job writes a fourth run, `ci_lint::assess_ci_lint`. `ci_lint::read_input`
+reads `.forge-ci.yml` at the head's root with `forge_git::Browser::small_file` (`ls-tree` decides the entry — a
+symlink is never followed —, a file over `forge_ci::MAX_BYTES` (64 KiB) is not read, the browse timeout) and the
+project's protected branches with `forge_db::protected_refs::rules_for` (`ci_lint::branch_patterns`: the
+`refs/heads/` rules without the prefix, as written and case-folded; tag rules and a `*` not at the end are left
+out — treated as unprotected, never a secret let through). The lint is `forge_ci::check` with
+`LintContext::with_protected_branches` (never the local check). No file: `success` (nothing to check); problems,
+`not_a_file` or `too_large`: `failure` (FG-CI-0001, each `.forge-ci.yml:<line> <reason> — <subject>` within
+forge-ci's caps — 100 problems, 64-character subjects, a malformed secret name never echoed), logged once at info
+as `forge.ci_lint.invalid` with `error_code`. A read failure fails the job (`error` for all four runs).
+
 **forge's risk check (M3 X7, ADR-0023 Amendment X7)**: `risk::Risk` evaluates `forge/risk` for one
 `check.risk` job (the same head; enqueued by forge-db's `risk` subscriber): the target branches of the
 open merge requests that have the head as a version (`forge_db::checks::risk::risk_targets`), then per target
@@ -108,7 +120,7 @@ CheckRunLimitReached (409, from forge-db), FG-DB-0022 CheckRunDataInvalid (500,
 alert; from forge-db), FG-REPO-0027 SpecVersionBehind (info, a `forge/spec-drift`
 notice; X2 — FG-REPO-0024..0026 are forge-core's and the spec refs'), FG-REPO-0028
 SpecLintProblem, FG-REPO-0029 RequirementUntested, FG-REPO-0030 RequirementTagUnknown,
-FG-REPO-0031 SpecIndexIncomplete (info; X4). Denials are FG-AUTH-0003 with `reason`
+FG-REPO-0031 SpecIndexIncomplete (info; X4). It reports FG-CI-0001 CiConfigInvalid (forge-ci's) in `forge/ci-lint`. Denials are FG-AUTH-0003 with `reason`
 (`not_service_account`, `namespace_not_granted`, `forge_namespace_internal`,
 `ext_namespace_unavailable`, `agent_token`).
 

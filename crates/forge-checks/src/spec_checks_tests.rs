@@ -243,11 +243,12 @@ fn broken_references_alone_in_an_incomplete_index_are_neutral() {
 }
 
 /// Review X4 (MEDIUM c): the last attempt always answers inside the job's
-/// timeout — the evaluation, the three runs' writes and the three `error`
-/// writes (plan 13 stage 2 added `forge/doc-lint`).
+/// timeout — the evaluation, the four runs' writes and the four `error`
+/// writes (plan 13 stage 2 added `forge/doc-lint`, plan 14 C1
+/// `forge/ci-lint`).
 #[test]
 fn the_last_attempt_answers_inside_the_job_timeout() {
-    let worst = super::EVALUATION_BUDGET + super::WRITE_TIMEOUT * 6;
+    let worst = super::EVALUATION_BUDGET + super::WRITE_TIMEOUT * 8;
     // Review MR3: at least 10 s of margin.
     assert!(
         worst + std::time::Duration::from_secs(10)

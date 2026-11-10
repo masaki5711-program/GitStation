@@ -1,7 +1,7 @@
 //! The `check.spec_index` job and the `spec-index` subscriber (M3 X4,
 //! ADR-0023 Amendment X4): `forge/spec-lint` and `forge/spec-trace` of a
-//! merge request version's head, and `forge/doc-lint` (plan 13 stage 2). The job is run by `forge worker` through
-//! forge-checks (`spec_checks::SpecChecks`), which writes both runs with
+//! merge request version's head, `forge/doc-lint` (plan 13 stage 2) and `forge/ci-lint` (plan 14 C1). The job is run by `forge worker` through
+//! forge-checks (`spec_checks::SpecChecks`), which writes the runs with
 //! [`super::record_forge_check_run`].
 //!
 //! When a job is asked for:
@@ -134,8 +134,9 @@ pub const UNANSWERED_WINDOW_DAYS: i32 = 7;
 
 /// At most `limit` [`UnansweredJob`]s, the oldest first: dead within
 /// [`UNANSWERED_WINDOW_DAYS`], of a project that still exists, whose head
-/// lacks one of `forge/spec-lint`, `forge/spec-trace` and `forge/doc-lint`
-/// (plan 13 stage 2: the same job writes all three). The partial index
+/// lacks one of `forge/spec-lint`, `forge/spec-trace`, `forge/doc-lint`
+/// and `forge/ci-lint` (plan 13 stage 2, plan 14 C1: the same job writes
+/// all four). The partial index
 /// `jobs_dead_kind` (X2) serves the lookup. A payload this build cannot
 /// read is passed over (logged at warn: forge wrote it).
 pub async fn unanswered_dead_jobs(db: &Db, limit: i64) -> Result<Vec<UnansweredJob>, ForgeError> {
@@ -144,6 +145,7 @@ pub async fn unanswered_dead_jobs(db: &Db, limit: i64) -> Result<Vec<UnansweredJ
         forge_core::checks::SPEC_LINT_CHECK,
         forge_core::checks::SPEC_TRACE_CHECK,
         forge_core::checks::DOC_LINT_CHECK,
+        forge_core::checks::CI_LINT_CHECK,
     ];
     let rows: Vec<(i64, serde_json::Value, String, Option<String>)> = db
         .within(QUERY, async {
