@@ -120,6 +120,49 @@ fn external_of(config: &RepoConfigRead) -> ExternalScope {
     }
 }
 
+/// Where the `spec.system` type is defined (ADR-0026 §7: both formats of a
+/// specification are that type).
+const SPEC_SYSTEM_TYPE_PATH: &str = ".forge/doctypes/spec.system.yml";
+
+/// Read the repository's `spec.system` definition at `commit` and apply
+/// its default classification to the index (review 0d59521: a document
+/// never reads less confidential than its type). No definition changes
+/// nothing; one that cannot be used (not a file, too large, invalid)
+/// withholds every document from an AI (fail closed; `forge/doc-lint`
+/// names the definition). Errors: git (the browse limits), with the commit.
+async fn apply_spec_system_type(
+    browse: &Browser,
+    repo: RepoId,
+    commit: &str,
+    index: &mut SpecIndex,
+) -> Result<(), ForgeError> {
+    use forge_doc::document::TypeDefault;
+    use forge_git::browse::SmallFile;
+    let path = RepoPath::parse(SPEC_SYSTEM_TYPE_PATH).map_err(|rule| {
+        ForgeError::new(forge_errors::ErrorCode::Internal)
+            .with_context("reason", "spec_system_type_path_invalid")
+            .with_context("rule", rule)
+    })?;
+    let max = u64::try_from(forge_doc::doctype::MAX_DOCTYPE_BYTES).unwrap_or(u64::MAX);
+    let file = browse
+        .small_file(repo, commit, &path, max)
+        .await
+        .map_err(|e| e.with_context("commit", commit.to_owned()))?;
+    let ty = match file {
+        SmallFile::Absent => return Ok(()),
+        SmallFile::NotAFile | SmallFile::TooLarge => TypeDefault::Unresolved,
+        SmallFile::Found(bytes) => {
+            match forge_doc::doctype::parse_doctype(forge_doc::legacy::SPEC_SYSTEM, &bytes) {
+                Ok(t) => TypeDefault::Known(t.default_classification),
+                // forge/doc-lint reports the definition (doctype_invalid).
+                Err(_) => TypeDefault::Unresolved,
+            }
+        }
+    };
+    index.apply_spec_system_type(ty);
+    Ok(())
+}
+
 /// The own specification directories as git pathspecs (no root, no
 /// trailing `/`).
 fn dir_paths(dirs: &[String]) -> Vec<RepoPath> {
@@ -227,6 +270,7 @@ pub async fn index_commit(
     for (b, bytes) in to_read.iter().zip(contents) {
         index.add_document(&b.path, &bytes);
     }
+    apply_spec_system_type(browse, repo, commit, &mut index).await?;
     // In path order whatever git listed first (the answers are by path).
     index.documents.sort_by(|a, b| a.path.cmp(&b.path));
     if tags == Tags::Read {
@@ -340,6 +384,7 @@ pub async fn index_head(
             .map_err(|e| e.with_context("commit", commit.to_owned()))?;
         docs.add(&b.path, bytes);
     }
+    apply_spec_system_type(browse, repo, commit, &mut index).await?;
     index.documents.sort_by(|a, b| a.path.cmp(&b.path));
     docs.sort();
     read_tags(browse, repo, commit, limits, &dirs, &mut index).await?;

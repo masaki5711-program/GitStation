@@ -346,3 +346,87 @@ fn a_marker_inside_an_html_comment_is_the_documented_difference() {
     assert!(new.requirements.is_empty());
     assert!(new.problems.is_empty(), "{:?}", new.problems);
 }
+
+/// Lines with HTML comments, closed and not (review 0d59521).
+fn line_with_comments() -> impl Strategy<Value = &'static str> {
+    prop_oneof![
+        8 => line(),
+        1 => Just("<!--"),
+        1 => Just("-->"),
+        1 => Just("<!-- 注 -->"),
+        1 => Just("<!-- 下書き"),
+    ]
+}
+
+/// For each generated line above: inside an HTML comment that closes
+/// (`Some(true)`), inside one never closed (`Some(false)`), or outside
+/// (whole-line comments only; none opens inside a code fence).
+fn commented(lines: &[&str]) -> Vec<Option<bool>> {
+    let mut fence: Option<Fence> = None;
+    let mut region: Option<usize> = None;
+    let mut closed: Vec<bool> = Vec::new();
+    let marks: Vec<Option<usize>> = lines
+        .iter()
+        .map(|raw| {
+            if let Some(open) = &fence {
+                if fence_of(raw).is_some_and(|f| {
+                    f.0 == open.0 && f.1 >= open.1 && raw.trim().bytes().all(|b| b == open.0)
+                }) {
+                    fence = None;
+                }
+                return None;
+            }
+            if let Some(r) = region {
+                if raw.contains("-->") {
+                    region = None;
+                    if let Some(c) = closed.get_mut(r) {
+                        *c = true;
+                    }
+                }
+                return Some(r);
+            }
+            if raw.starts_with("<!--") && !raw.contains("-->") {
+                region = Some(closed.len());
+                closed.push(false);
+                return None;
+            }
+            if let Some(f) = fence_of(raw) {
+                fence = Some(f);
+            }
+            None
+        })
+        .collect();
+    marks
+        .into_iter()
+        .map(|m| m.map(|r| closed.get(r).copied().unwrap_or(false)))
+        .collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(2048))]
+
+    /// With HTML comments the newer reading may read fewer requirements
+    /// (a `:::` inside a comment is no marker), but never silently: a
+    /// requirement the older scanner read is read, or was inside a comment
+    /// that closes, or the document reports a problem.
+    #[test]
+    fn a_requirement_is_never_lost_silently(
+        lines in prop::collection::vec(line_with_comments(), 0..40),
+    ) {
+        let text = format!("---\nspec: a\ntitle: t\nstatus: approved\n---\n{}\n", lines.join("\n"));
+        let old = parse_old(text.as_bytes());
+        let new = super::parse_spec_document(text.as_bytes());
+        let inside = commented(&lines);
+        let unclosed = new.problems.iter().any(|p| p.rule == "unclosed_comment");
+        for r in &old.requirements {
+            let kept = new.requirements.iter().any(|n| n.id == r.id && n.line == r.line);
+            let mark = r.line.checked_sub(6).and_then(|i| inside.get(i)).copied().flatten();
+            match (kept, mark) {
+                (true, _) | (false, Some(true)) => {}
+                // Hidden by a comment never closed: always named.
+                (false, Some(false)) => prop_assert!(unclosed, "{:?} lost\n{}", r.id, text),
+                (false, None) => prop_assert!(!new.problems.is_empty(), "{:?} lost\n{}", r.id, text),
+            }
+        }
+    }
+}

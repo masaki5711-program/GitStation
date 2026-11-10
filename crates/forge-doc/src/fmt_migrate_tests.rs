@@ -2,7 +2,7 @@
 //! `migrate_legacy` (ADR-0026 §7, `gstn doc fmt --migrate`) on the older
 //! format's fixtures (the documents of `spec_doc_tests.rs`; synthetic).
 
-use super::{format_document, migrate_legacy, FmtRefusal, MigrationNote};
+use super::{format_document, migrate_legacy, migrate_legacy_with, FmtRefusal, MigrationNote};
 use crate::document::{parse_document, Classification, TypeDefault};
 use crate::legacy::{requirement, requirements};
 use crate::lint::{lint, Source};
@@ -202,7 +202,7 @@ fn anything_but_a_readable_older_file_is_refused() {
 
 #[test]
 fn comments_line_endings_and_the_byte_order_mark_are_kept() {
-    let text = "\u{feff}---\r\n# 設定の仕様\r\nspec: a   # the name\r\ntitle: t\r\n\r\n# who\r\nowners:\r\n  - x@example.internal\r\n  - y@example.internal\r\nstatus: review\r\n---\r\n本文。\r\n";
+    let text = "\u{feff}---\r\n# 設定の仕様\r\nspec: a   # the name\r\ntitle: t\r\n\r\n# who\r\nowners:\r\n  - x@example.internal\r\n  - y@example.internal\r\nstatus: approved\r\n---\r\n本文。\r\n";
     let m = migrate(text);
     assert_eq!(
         m.text,
@@ -222,4 +222,35 @@ fn a_migrated_file_is_read_by_the_spec_reader_as_before() {
     assert_eq!(meta.spec, "zeva-engine/config");
     assert_eq!(older.requirements.len(), 2);
     assert!(!older.confidential());
+}
+
+/// Review (0d59521, MEDIUM): `status: draft` / `review` would read
+/// `approved` after a migration: refused unless the loss is accepted, and
+/// then the older value stays in a TODO comment.
+#[test]
+fn a_draft_or_review_status_is_not_lost_silently() {
+    for status in ["draft", "review"] {
+        let text = format!("---\nspec: a\ntitle: t\nstatus: {status}\n---\n::: req A-1\nx\n:::\n");
+        assert_eq!(
+            migrate_legacy(text.as_bytes(), None),
+            Err(FmtRefusal::StatusWouldBeLost),
+            "{status}"
+        );
+        let m = migrate_legacy_with(text.as_bytes(), None, true).expect("accepted");
+        assert!(
+            m.text.contains(&format!(
+                "\n# TODO(gstn doc fmt --migrate): the older file said status: {status} ("
+            )),
+            "{}",
+            m.text
+        );
+        assert_eq!(
+            m.notes,
+            [MigrationNote::OwnerMissing, MigrationNote::StatusDropped]
+        );
+    }
+    assert_eq!(
+        FmtRefusal::StatusWouldBeLost.as_str(),
+        "status_would_be_lost"
+    );
 }

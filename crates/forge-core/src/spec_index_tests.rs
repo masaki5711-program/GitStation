@@ -400,3 +400,20 @@ fn a_migrated_document_is_indexed_and_linted_as_before() {
     );
     assert!(other.documents.is_empty());
 }
+
+/// Review (0d59521, MEDIUM): the repository's `spec.system` type default is
+/// applied to every indexed document (the context API reads
+/// `confidential_paths`).
+#[test]
+fn a_stricter_spec_system_default_withholds_every_document() {
+    use forge_doc::document::{Classification, TypeDefault};
+    let mut i = index(&[("spec/a.md", spec("a", "::: req A-1\nx\n:::\n"))], &[]);
+    assert!(i.confidential_paths().is_empty());
+    i.apply_spec_system_type(TypeDefault::Known(None));
+    assert!(i.confidential_paths().is_empty());
+    i.apply_spec_system_type(TypeDefault::Known(Some(Classification::Confidential)));
+    assert_eq!(
+        i.confidential_paths().into_iter().collect::<Vec<_>>(),
+        ["spec/a.md"]
+    );
+}

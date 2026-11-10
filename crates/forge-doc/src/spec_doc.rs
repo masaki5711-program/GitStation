@@ -49,7 +49,7 @@
 
 use std::collections::HashSet;
 
-use crate::document::{parse_document_uncapped, MAX_DOCUMENT_BYTES};
+use crate::document::{parse_document_uncapped, Classification, TypeDefault, MAX_DOCUMENT_BYTES};
 use crate::yaml::{mapping, read_tree, text, Kind, Node};
 
 /// The longest requirement id (`requirement_id_invalid`).
@@ -239,9 +239,14 @@ pub struct SpecDocument {
     spec: bool,
     /// The file opens with a front matter (read or not).
     front_matter: bool,
-    /// The front matter names a `doctype` other than `spec.system`: a
-    /// plan 13 document of another type, no specification.
-    other_type: bool,
+    /// The front matter names a `doctype` other than `spec.system` (or
+    /// one that is no text): the `doctype:` line, and whether the front
+    /// matter also has a key of the older format (`spec`, `status`,
+    /// `owners`).
+    other_type: Option<(usize, bool)>,
+    /// The repository's `spec.system` type withholds every document
+    /// ([`SpecDocument::apply_type_default`]).
+    type_withheld: bool,
 }
 
 impl SpecDocument {
@@ -256,6 +261,9 @@ impl SpecDocument {
     /// that could not be read (the mark may be in it) or a file that is no
     /// text. A document without a front matter carries no mark.
     pub fn confidential(&self) -> bool {
+        if self.type_withheld {
+            return true;
+        }
         match &self.meta {
             Some(meta) => meta.confidential,
             None => self.front_matter || self.not_text(),
@@ -264,6 +272,20 @@ impl SpecDocument {
 
     fn not_text(&self) -> bool {
         self.problems.iter().any(|p| p.rule == "not_utf8")
+    }
+
+    /// Take the repository's `spec.system` type into account (review
+    /// 0d59521; ADR-0026 §6–§7: both formats are that type, and a document
+    /// never reads less confidential than its type's default): a default of
+    /// `confidential`, or a definition that could not be read
+    /// ([`TypeDefault::Unresolved`], fail closed), withholds the document
+    /// from an AI whatever it says itself. `TypeDefault::Known(None)` (no
+    /// definition, or one without a default) changes nothing.
+    pub fn apply_type_default(&mut self, ty: TypeDefault) {
+        self.type_withheld |= match ty {
+            TypeDefault::Known(default) => default >= Some(Classification::Confidential),
+            TypeDefault::Unresolved => true,
+        };
     }
 
     fn problem(&mut self, line: usize, rule: &'static str) {
@@ -298,9 +320,24 @@ fn parse_with(bytes: &[u8], read_blocks: ReadBlocks) -> SpecDocument {
         .map(|l| l.strip_suffix('\r').unwrap_or(l))
         .collect();
     let body_start = front_matter(&lines, &mut doc);
-    if doc.other_type {
-        // Another type's document: not this reader's (doc-lint's).
-        return SpecDocument::default();
+    // Review (0d59521): another type's document is doc-lint's and not
+    // indexed — unless it looks like a specification (a key of the older
+    // format, or a requirement block): then it stays one, with
+    // `doctype_not_spec`, its front matter unused (withheld from an AI,
+    // fail closed), its requirements read. Never a silent loss.
+    if let Some((line, older_keys)) = doc.other_type {
+        if older_keys {
+            doc.problem(line, "doctype_not_spec");
+        }
+        let saw_requirement = read_blocks(&lines, body_start, &mut doc);
+        if !older_keys && !saw_requirement {
+            return SpecDocument::default();
+        }
+        if !older_keys {
+            doc.problem(line, "doctype_not_spec");
+        }
+        doc.problems.sort_by_key(|p| p.line);
+        return doc;
     }
     let saw_requirement = read_blocks(&lines, body_start, &mut doc);
     if saw_requirement && !doc.spec {
@@ -376,7 +413,10 @@ fn meta_of(root: &Node, shift: impl Fn(usize) -> usize, doc: &mut SpecDocument) 
         if text(f.value, f.line, "doctype").ok() == Some(crate::legacy::SPEC_SYSTEM) {
             plan13_meta_of(&fields, shift, doc);
         } else {
-            doc.other_type = true;
+            let older_keys = fields
+                .iter()
+                .any(|f| matches!(f.key, "spec" | "status" | "owners"));
+            doc.other_type = Some((shift(f.line), older_keys));
         }
         return;
     }
@@ -469,7 +509,6 @@ fn plan13_meta_of(
     shift: impl Fn(usize) -> usize,
     doc: &mut SpecDocument,
 ) {
-    use crate::document::Classification;
     let mut id = None;
     let mut title = None;
     let mut retired = false;
@@ -838,6 +877,21 @@ fn blocks(lines: &[&str], _start: usize, doc: &mut SpecDocument) -> bool {
                 }
             }
             _ => {}
+        }
+    }
+    // An HTML comment never closed hides every block after it: never
+    // silently (the older scanner read them) — `unclosed_comment` on the
+    // line it opened whenever a requirement line follows.
+    if let Some(open) = read.unclosed_comment_line {
+        if lines.iter().skip(open).any(|raw| opens_req(raw)) {
+            saw_requirement = true;
+            found.push((
+                end,
+                SpecProblem {
+                    line: open,
+                    rule: "unclosed_comment",
+                },
+            ));
         }
     }
     let mut kept = 0usize;

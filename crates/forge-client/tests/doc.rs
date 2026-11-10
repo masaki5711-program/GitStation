@@ -398,3 +398,37 @@ fn fmt_migrate_rewrites_an_older_specification_only_when_asked() {
     assert_eq!(o.code, 1);
     assert!(o.stdout.contains("field_missing owner"), "{}", o.stdout);
 }
+
+/// Review (0d59521): `status: draft` would read approved after a migration —
+/// refused (`status_would_be_lost`) unless `--accept-status-loss`.
+#[test]
+fn fmt_migrate_refuses_to_lose_a_draft_status_unless_accepted() {
+    let draft = "---\nspec: a\ntitle: t\nstatus: draft\n---\n::: req A-1\nx\n:::\n";
+    let r = repo(&[("spec/a.md", draft)]);
+    let o = gstn(r.path(), &["doc", "fmt", "--migrate", "--json"]);
+    assert_eq!(o.code, 0, "{}{}", o.stdout, o.stderr);
+    assert_eq!(
+        o.json()["skipped"],
+        serde_json::json!([{"path": "spec/a.md", "reason": "status_would_be_lost"}])
+    );
+    assert_eq!(
+        std::fs::read_to_string(r.path().join("spec/a.md")).unwrap(),
+        draft
+    );
+    let o = gstn(r.path(), &["doc", "fmt", "--accept-status-loss"]);
+    assert_eq!(
+        o.code, 2,
+        "--accept-status-loss needs --migrate: {}",
+        o.stderr
+    );
+    let o = gstn(
+        r.path(),
+        &["doc", "fmt", "--migrate", "--accept-status-loss"],
+    );
+    assert_eq!(o.code, 0, "{}{}", o.stdout, o.stderr);
+    let migrated = std::fs::read_to_string(r.path().join("spec/a.md")).unwrap();
+    assert!(
+        migrated.contains("# TODO(gstn doc fmt --migrate): the older file said status: draft ("),
+        "{migrated}"
+    );
+}

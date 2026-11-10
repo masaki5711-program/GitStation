@@ -1807,6 +1807,11 @@ pub enum DocCommand {
         /// into the plan 13 format (ADR-0026 §7); never without it.
         #[arg(long)]
         migrate: bool,
+        /// With --migrate: also migrate a `status: draft` / `review`
+        /// specification (the plan 13 format keeps no state in the file;
+        /// the older value stays in a TODO comment).
+        #[arg(long, requires = "migrate")]
+        accept_status_loss: bool,
         /// Files or directories (default: the whole repository).
         paths: Vec<PathBuf>,
     },

@@ -34,7 +34,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use forge_doc::doctype::{parse_doctype, Doctype, MAX_DOCTYPE_BYTES};
 use forge_doc::document::{parse_document, Problem, MAX_DOCUMENT_BYTES};
-use forge_doc::fmt::{format_document, migrate_legacy, FmtRefusal, MigrationNote};
+use forge_doc::fmt::{format_document, migrate_legacy_with, FmtRefusal, MigrationNote};
 use forge_doc::legacy::{is_legacy, SPEC_SYSTEM};
 use forge_doc::lint::{lint as lint_documents, FileReport, Source, DOCTYPES_DIR};
 use forge_errors::ErrorCode;
@@ -110,6 +110,7 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Resu
         DocCommand::Fmt {
             check,
             migrate,
+            accept_status_loss,
             paths,
         } => {
             let (cwd, root) = local()?;
@@ -117,6 +118,7 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Resu
             let mode = FmtMode {
                 check: *check,
                 migrate: *migrate,
+                accept_status_loss: *accept_status_loss,
             };
             let out = fmt(&root, &targets, mode, &Limits::default())?;
             report_fmt(cli, io, &out)
@@ -653,6 +655,8 @@ pub struct FmtMode {
     pub check: bool,
     /// Also migrate older-format specifications (ADR-0026 §7).
     pub migrate: bool,
+    /// `--accept-status-loss` ([`forge_doc::fmt::migrate_legacy_with`]).
+    pub accept_status_loss: bool,
 }
 
 /// Write `bytes` over `path` through a new temporary file in the same
@@ -739,7 +743,15 @@ pub fn fmt(root: &Path, targets: &[String], mode: FmtMode, limits: &Limits) -> R
         let named = targets.iter().any(|t| t == path);
         let parsed = parse_document(bytes);
         if mode.migrate && is_legacy(&parsed) {
-            migrate_one(root, path, bytes, &types, &files, &mut out)?;
+            migrate_one(
+                root,
+                path,
+                bytes,
+                &types,
+                &files,
+                mode.accept_status_loss,
+                &mut out,
+            )?;
             continue;
         }
         let doctype_name = parsed.doctype().map(str::to_owned);
@@ -782,6 +794,7 @@ fn migrate_one(
     bytes: &[u8],
     types: &HashMap<String, Option<Doctype>>,
     files: &Files,
+    accept_status_loss: bool,
     out: &mut FmtOutcome,
 ) -> Result<()> {
     let ty = match types.get(SPEC_SYSTEM) {
@@ -793,7 +806,7 @@ fn migrate_one(
         Some(Some(t)) => Some(t),
         None => None,
     };
-    match migrate_legacy(bytes, ty) {
+    match migrate_legacy_with(bytes, ty, accept_status_loss) {
         Ok(m) => {
             if !out.check {
                 replace_file(&root.join(path), m.text.as_bytes(), files.stamps.get(path))?;

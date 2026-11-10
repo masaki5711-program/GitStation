@@ -4,7 +4,7 @@
 //! The older fixtures are those of `spec_doc_tests.rs` (synthetic).
 
 use super::{parse_spec_document, Requirement, SpecDocument, SpecStatus};
-use crate::fmt::migrate_legacy;
+use crate::fmt::migrate_legacy_with;
 
 fn doc(text: &str) -> SpecDocument {
     parse_spec_document(text.as_bytes())
@@ -66,7 +66,7 @@ fn fixtures() -> Vec<String> {
 fn a_migrated_document_gives_the_same_requirements_and_spec_lint_answer() {
     for older in fixtures() {
         let before = doc(&older);
-        let migrated = migrate_legacy(older.as_bytes(), None)
+        let migrated = migrate_legacy_with(older.as_bytes(), None, true)
             .unwrap_or_else(|e| panic!("{e:?}: {older}"))
             .text;
         let after = doc(&migrated);
@@ -168,15 +168,112 @@ fn the_base_keys_are_accepted_and_others_refused() {
     assert_eq!(rules(&no_title), ["title_missing"]);
 }
 
+/// Review (0d59521, HIGH): a document of another type is not indexed —
+/// unless it looks like a specification: then it is one, with
+/// `doctype_not_spec`, its requirements read and withheld from an AI.
 #[test]
-fn a_document_of_another_type_is_no_specification() {
-    for text in [
-        "---\ndoctype: qms.manual\nid: QM-001\ntitle: t\nowner: qa\n---\n::: req A-1\nx\n:::\n",
-        "---\ndoctype: [spec.system]\nid: a\ntitle: t\n---\n::: req A-1\nx\n:::\n",
+fn a_document_of_another_type_is_no_specification_unless_it_looks_like_one() {
+    let plain = doc("---\ndoctype: qms.manual\nid: QM-001\ntitle: t\nowner: qa\n---\n本文。\n");
+    assert!(!plain.is_spec());
+    assert!(plain.requirements.is_empty() && plain.problems.is_empty());
+    for (text, line) in [
+        // A requirement block.
+        ("---\ndoctype: qms.manual\nid: QM-001\ntitle: t\nowner: qa\n---\n::: req A-1\nx\n:::\n", 2),
+        // A non-scalar doctype.
+        ("---\ndoctype: [spec.system]\nid: a\ntitle: t\n---\n::: req A-1\nx\n:::\n", 2),
+        // An older file with a stray (typo'd) doctype.
+        ("---\nspec: a\ntitle: t\nstatus: approved\ndoctype: spec.sytem\nconfidential: false\n---\n::: req A-1\nx\n:::\n", 5),
     ] {
         let d = doc(text);
-        assert!(!d.is_spec(), "{text}");
-        assert!(d.requirements.is_empty() && d.problems.is_empty());
-        assert!(!d.confidential());
+        assert!(d.is_spec(), "{text}");
+        assert_eq!(
+            d.problems.iter().map(|p| (p.line, p.rule)).collect::<Vec<_>>(),
+            [(line, "doctype_not_spec")],
+            "{text}"
+        );
+        assert_eq!(d.requirements.len(), 1, "{text}");
+        assert!(d.meta.is_none());
+        assert!(d.confidential(), "{text}: fails closed");
+    }
+    // Older keys alone (no block) keep it a specification too.
+    let keys = doc("---\nspec: a\ntitle: t\nstatus: draft\ndoctype: x.y\n---\n");
+    assert!(keys.is_spec());
+    assert_eq!(rules(&keys), ["doctype_not_spec"]);
+}
+
+/// Review (0d59521, HIGH): an HTML comment never closed hides the
+/// requirement blocks after it from the newer parser — never silently.
+#[test]
+fn an_unclosed_comment_before_a_requirement_is_a_problem() {
+    let d = doc("---\nspec: a\ntitle: t\nstatus: draft\n---\n::: req A-1\nx\n:::\n<!-- 下書き\n::: req A-2\ny\n:::\n");
+    assert_eq!(
+        d.problems
+            .iter()
+            .map(|p| (p.line, p.rule))
+            .collect::<Vec<_>>(),
+        [(9, "unclosed_comment")]
+    );
+    assert_eq!(d.requirements.len(), 1);
+    // Without a requirement after it, the older answer stands (no problem).
+    let quiet =
+        doc("---\nspec: a\ntitle: t\nstatus: draft\n---\n::: req A-1\nx\n:::\n<!-- 下書き\n");
+    assert!(quiet.problems.is_empty(), "{:?}", quiet.problems);
+    // Reopened on a line that closes one: the last opening is named.
+    let again = doc(
+        "---\nspec: a\ntitle: t\nstatus: draft\n---\n<!-- a --> b <!-- c\n::: req A-2\ny\n:::\n",
+    );
+    assert_eq!(rules(&again), ["unclosed_comment"]);
+    assert_eq!(again.problems[0].line, 6);
+    // A file with no front matter: still a specification document.
+    let bare = doc("<!--\n::: req A-1\nx\n:::\n");
+    assert!(bare.is_spec());
+    assert_eq!(rules(&bare), ["unclosed_comment", "front_matter_missing"]);
+}
+
+/// Review (0d59521, LOW): past the newer parser's block cap (plain
+/// containers count) the requirements left out are reported.
+#[test]
+fn requirements_past_the_block_cap_are_reported() {
+    let text = format!(
+        "---\nspec: a\ntitle: t\nstatus: draft\n---\n{}{}",
+        "::: note\n:::\n".repeat(1500),
+        (0..600)
+            .map(|i| format!("::: req A-{i}\nx\n:::\n"))
+            .collect::<String>()
+    );
+    let d = doc(&text);
+    assert_eq!(d.requirements.len(), 500);
+    let cut = d
+        .problems
+        .iter()
+        .filter(|p| p.rule == "too_many_requirements")
+        .count();
+    assert_eq!(cut + d.problems_dropped, 100, "{:?}", d.problems.len());
+}
+
+/// Review (0d59521, MEDIUM): a stricter `spec.system` type default (or a
+/// definition that cannot be read) withholds every document, in both
+/// formats; an absent or lower default changes nothing.
+#[test]
+fn the_type_default_never_lowers_and_can_withhold() {
+    use crate::document::{Classification, TypeDefault};
+    let texts = [
+        format!("{NEW}---\n::: req A-1\nx\n:::\n"),
+        format!("{NEW}classification: public\n---\n"),
+        "---\nspec: a\ntitle: t\nstatus: approved\nconfidential: false\n---\n".to_owned(),
+        "::: req A-1\nx\n:::\n".to_owned(),
+    ];
+    for text in &texts {
+        for (ty, withheld) in [
+            (TypeDefault::Known(None), false),
+            (TypeDefault::Known(Some(Classification::Internal)), false),
+            (TypeDefault::Known(Some(Classification::Confidential)), true),
+            (TypeDefault::Unresolved, true),
+        ] {
+            let mut d = doc(text);
+            assert!(!d.confidential());
+            d.apply_type_default(ty);
+            assert_eq!(d.confidential(), withheld, "{ty:?}: {text}");
+        }
     }
 }

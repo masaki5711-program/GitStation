@@ -533,3 +533,57 @@ async fn a_large_markdown_file_is_read_in_part_and_is_no_bound() {
         .expect("head");
     assert_eq!(docs.incomplete, Some("doc_large_files"));
 }
+
+/// Review (0d59521, MEDIUM): the repository's `spec.system` type default
+/// is applied where the index is built (both reads): a stricter default, or
+/// a definition that cannot be used, withholds every document from an AI.
+#[tokio::test]
+async fn the_spec_system_type_default_withholds_the_documents() {
+    let r = repo().await;
+    let cases: [(&[u8], bool); 4] = [
+        (b"name: spec.system\n", false),
+        (
+            b"name: spec.system\ndefaults:\n  classification: internal\n",
+            false,
+        ),
+        (
+            b"name: spec.system\ndefaults:\n  classification: confidential\n",
+            true,
+        ),
+        (b"name: [broken\n", true),
+    ];
+    for (definition, withheld) in cases {
+        let c = commit(
+            &r.path,
+            &[
+                ("spec/a.md", SPEC_A),
+                (".forge/doctypes/spec.system.yml", definition),
+            ],
+        );
+        let i = index_commit(&r.browser, r.id, &c, &IndexLimits::default(), Tags::Read)
+            .await
+            .expect("index");
+        assert_eq!(
+            i.index.confidential_paths().contains("spec/a.md"),
+            withheld,
+            "{}",
+            String::from_utf8_lossy(definition)
+        );
+        let (head, _) = index_head(
+            &r.browser,
+            r.id,
+            &c,
+            &IndexLimits::default(),
+            &Default::default(),
+        )
+        .await
+        .expect("head");
+        assert_eq!(head.index, i.index, "the same in both reads");
+    }
+    // No definition: the document's own mark decides.
+    let c = commit(&r.path, &[("spec/a.md", SPEC_A)]);
+    let i = index_commit(&r.browser, r.id, &c, &IndexLimits::default(), Tags::Read)
+        .await
+        .expect("index");
+    assert!(i.index.confidential_paths().is_empty());
+}

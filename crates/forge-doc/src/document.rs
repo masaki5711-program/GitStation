@@ -255,6 +255,9 @@ pub struct Document {
     pub refs: Vec<Reference>,
     pub problems: Vec<Problem>,
     pub problems_dropped: usize,
+    /// Where an HTML comment never closed opened (`unclosed_comment` is
+    /// reported on the last line): for [`crate::spec_doc`].
+    pub(crate) unclosed_comment_line: Option<usize>,
 }
 
 impl Document {
@@ -477,6 +480,7 @@ fn body(lines: &[&str], start: usize, doc: &mut Document) {
     let mut fence: Option<crate::spec_doc::Fence> = None;
     let mut fence_line = 0usize;
     let mut in_comment = false;
+    let mut comment_line = 0usize;
     let mut section: Option<usize> = None;
     let mut last_line = start;
     for (i, raw) in lines.iter().enumerate().skip(start) {
@@ -506,6 +510,9 @@ fn body(lines: &[&str], start: usize, doc: &mut Document) {
         let started_in_comment = in_comment;
         let (visible, still_in_comment) = visible_text(raw, in_comment, true);
         let (no_comments, _) = visible_text(raw, in_comment, false);
+        if still_in_comment && (!started_in_comment || raw.contains("-->")) {
+            comment_line = line;
+        }
         in_comment = still_in_comment;
         scan_inline(&visible, line, doc);
         let marker = if !started_in_comment && raw.trim_start().starts_with(":::") {
@@ -556,6 +563,7 @@ fn body(lines: &[&str], start: usize, doc: &mut Document) {
     }
     if in_comment {
         doc.problem(last_line, "unclosed_comment");
+        doc.unclosed_comment_line = Some(comment_line);
     }
     while let Some(open) = stack.pop() {
         if let Some(b) = open.index.and_then(|i| doc.blocks.get(i)) {

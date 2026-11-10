@@ -38,6 +38,9 @@ pub enum FmtRefusal {
     /// `--migrate`: an older-format file whose front matter breaks a rule
     /// of [`crate::spec_doc`] (`forge/spec-lint` names it): fixed first.
     OlderFormatInvalid,
+    /// `--migrate`: `status: draft` / `review` would be lost (the
+    /// migrated document reads approved); `--accept-status-loss` accepts.
+    StatusWouldBeLost,
 }
 
 impl FmtRefusal {
@@ -48,6 +51,7 @@ impl FmtRefusal {
             Self::NotADocument => "not_a_document",
             Self::NotOlderFormat => "not_older_format",
             Self::OlderFormatInvalid => "older_format_invalid",
+            Self::StatusWouldBeLost => "status_would_be_lost",
         }
     }
 }
@@ -615,8 +619,10 @@ const RETIRED_TODO: &str =
 /// - `status: deprecated` → `retired: {}` with a `TODO` comment for its
 ///   `date` — no date is invented: the migration's day is not the day it
 ///   was deprecated, and forge-doc has no clock
-///   ([`MigrationNote::RetiredDateUnknown`]); any other `status` is
-///   dropped ([`MigrationNote::StatusDropped`]);
+///   ([`MigrationNote::RetiredDateUnknown`]); `approved` is dropped
+///   ([`MigrationNote::StatusDropped`]: it reads approved); `draft` /
+///   `review` are refused unless [`migrate_legacy_with`] accepts the loss
+///   (the older value then stays in a `TODO` comment);
 /// - `confidential: true` / `false` → `classification: confidential` /
 ///   `internal` (ADR-0026 §6); without it nothing is written (the type's
 ///   default applies, never lower than `internal`);
@@ -624,6 +630,19 @@ const RETIRED_TODO: &str =
 ///   comment of a removed key goes with it); the body is not touched
 ///   before the format.
 pub fn migrate_legacy(bytes: &[u8], doctype: Option<&Doctype>) -> Result<Migrated, FmtRefusal> {
+    migrate_legacy_with(bytes, doctype, false)
+}
+
+/// [`migrate_legacy`]; `accept_status_loss` (`--accept-status-loss`)
+/// migrates a `status: draft` / `review` document too. Without it such a
+/// file is [`FmtRefusal::StatusWouldBeLost`]: the plan 13 format keeps no
+/// state in the file, so it would read `approved` (review 0d59521). With
+/// it the older value stays in a `TODO` comment.
+pub fn migrate_legacy_with(
+    bytes: &[u8],
+    doctype: Option<&Doctype>,
+    accept_status_loss: bool,
+) -> Result<Migrated, FmtRefusal> {
     use crate::legacy::{is_legacy, SPEC_SYSTEM};
     if bytes.len() > MAX_DOCUMENT_BYTES {
         return Err(FmtRefusal::TooLarge);
@@ -689,6 +708,13 @@ pub fn migrate_legacy(bytes: &[u8], doctype: Option<&Doctype>) -> Result<Migrate
         added.push(format!("classification: {class}"));
     }
     let deprecated = meta.status == crate::spec_doc::SpecStatus::Deprecated;
+    let unapproved = matches!(
+        meta.status,
+        crate::spec_doc::SpecStatus::Draft | crate::spec_doc::SpecStatus::Review
+    );
+    if unapproved && !accept_status_loss {
+        return Err(FmtRefusal::StatusWouldBeLost);
+    }
     if deprecated {
         added.push("retired: {}".to_owned());
         notes.push(MigrationNote::RetiredDateUnknown);
@@ -707,6 +733,12 @@ pub fn migrate_legacy(bytes: &[u8], doctype: Option<&Doctype>) -> Result<Migrate
     notes.insert(0, MigrationNote::OwnerMissing);
     if deprecated {
         fm.push(RETIRED_TODO.to_owned());
+    }
+    if unapproved {
+        fm.push(format!(
+            "# TODO(gstn doc fmt --migrate): the older file said status: {} (the plan 13 format keeps no state in the file: it reads approved; delete this line once that is right)",
+            meta.status.as_str()
+        ));
     }
 
     let mut out: Vec<String> = Vec::with_capacity(lines.len() + 8);
