@@ -74,6 +74,59 @@ impl PipelineChange {
     }
 }
 
+/// An administrator's change to a CI runner (M4 C3): audited on the runner
+/// (`resource_type = ci_runner`), no event. Never the token or its hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunnerChange {
+    /// `ci_runner.registered`: a runner and its token were created.
+    Registered {
+        runner: i64,
+        name: String,
+        tags: Vec<String>,
+    },
+    /// `ci_runner.updated`: what changed (`None`: unchanged).
+    Updated {
+        runner: i64,
+        enabled: Option<bool>,
+        tags: Option<Vec<String>>,
+        description: bool,
+    },
+}
+
+impl RunnerChange {
+    pub fn action(&self) -> &'static str {
+        match self {
+            Self::Registered { .. } => "ci_runner.registered",
+            Self::Updated { .. } => "ci_runner.updated",
+        }
+    }
+
+    pub fn runner(&self) -> i64 {
+        match self {
+            Self::Registered { runner, .. } | Self::Updated { runner, .. } => *runner,
+        }
+    }
+
+    pub fn to_value(&self) -> serde_json::Value {
+        match self {
+            Self::Registered { runner, name, tags } => serde_json::json!({
+                "runner_id": runner, "name": name, "tags": tags,
+            }),
+            Self::Updated {
+                runner,
+                enabled,
+                tags,
+                description,
+            } => serde_json::json!({
+                "runner_id": runner,
+                "enabled": enabled,
+                "tags": tags,
+                "description_changed": description,
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +159,28 @@ mod tests {
         };
         assert_eq!(m.action(), "pipeline.run_manual");
         assert_eq!(m.to_value()["ref"], "refs/heads/main");
+    }
+
+    #[test]
+    fn a_runner_change_names_its_action_and_never_a_token() {
+        let r = RunnerChange::Registered {
+            runner: 3,
+            name: "linux-1".to_owned(),
+            tags: vec!["podman".to_owned()],
+        };
+        assert_eq!(r.action(), "ci_runner.registered");
+        assert_eq!(
+            r.to_value(),
+            serde_json::json!({"runner_id": 3, "name": "linux-1", "tags": ["podman"]})
+        );
+        let u = RunnerChange::Updated {
+            runner: 3,
+            enabled: Some(false),
+            tags: None,
+            description: false,
+        };
+        assert_eq!(u.action(), "ci_runner.updated");
+        assert_eq!(u.runner(), 3);
+        assert_eq!(u.to_value()["enabled"], false);
     }
 }

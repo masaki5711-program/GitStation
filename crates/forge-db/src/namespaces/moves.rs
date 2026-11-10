@@ -634,6 +634,21 @@ pub(crate) async fn move_subtree(
         .map(|n| n.owner_id)
         .collect();
     let ownerless_before = ownerless(tx, &project_ids).await?;
+    // M4 C3 (ADR-0029 obligation 1): the CI job tokens of every moved
+    // project end with the move, in this transaction (a group's move
+    // moves its projects).
+    if !project_ids.is_empty() {
+        let moved = &project_ids;
+        tx.step(|c| async move {
+            crate::ci_runners::revoke_project_job_tokens(
+                c,
+                moved,
+                crate::ci_runners::Revocation::ProjectMoved,
+            )
+            .await
+        })
+        .await?;
+    }
     let delta = new_root_depth.saturating_sub(root.depth);
     let (root_id, parent, new_root, old_len) = (
         root.id,

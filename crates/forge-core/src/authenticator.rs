@@ -49,7 +49,56 @@ pub trait Authenticator: Send + Sync {
     /// `FG-DB-0001` when the store cannot be reached (never a 401);
     /// `FG-DB-0019` for a stored row that cannot be read.
     fn authenticate<'a>(&'a self, request_id: &'a RequestId, presented: &'a str) -> AuthFuture<'a>;
+
+    /// A CI token (`fgr_…` / `fgj_…`, M4 C3, ADR-0029 §1): the runner, or
+    /// the job with its project, pinned SHA and the token's state as read
+    /// now (expiry from the database's clock). Errors: `FG-AUTH-0001`
+    /// (`credential`, `reason`: `malformed`, `unknown`, `mismatch`,
+    /// `runner_disabled`), `FG-DB-0001`, `FG-DB-0019`. An expired or
+    /// revoked job token is **not** an error here: `authorize()` refuses it
+    /// (`FG-AUTH-0001 reason=expired|revoked`, with the `job_id`).
+    ///
+    /// The default refuses every CI token (an authenticator that knows no
+    /// CI tables: test doubles).
+    fn authenticate_ci<'a>(
+        &'a self,
+        _request_id: &'a RequestId,
+        _presented: &'a str,
+    ) -> CiAuthFuture<'a> {
+        Box::pin(async {
+            Err(ForgeError::new(forge_errors::ErrorCode::Unauthenticated)
+                .with_context("reason", "ci_tokens_unsupported"))
+        })
+    }
 }
+
+/// A job token's state as read with it (M4 C3): `forge_auth::JobTokenState`
+/// is built from it by forge-web.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiJobTokenState {
+    Live,
+    Expired,
+    Revoked,
+}
+
+/// Who a valid CI token stands for (M4 C3, ADR-0029 §1). Never a person.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiIdentity {
+    /// An enabled runner (`ci_runners.id`).
+    Runner { runner_id: i64 },
+    /// A job attempt's token: the job, its project and pinned SHA.
+    Job {
+        job_id: i64,
+        runner_id: i64,
+        project: crate::ProjectId,
+        sha: crate::ObjectId,
+        state: CiJobTokenState,
+    },
+}
+
+/// The future [`Authenticator::authenticate_ci`] returns.
+pub type CiAuthFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<CiIdentity, ForgeError>> + Send + 'a>>;
 
 /// Who a valid web session stands for (M2 MR3, ADR-0021 §5). The user is
 /// active: a disabled user's session is refused by the authenticator

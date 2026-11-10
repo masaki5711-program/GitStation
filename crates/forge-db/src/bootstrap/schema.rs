@@ -886,8 +886,44 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         // ── M4 C2: CI pipelines and jobs (20261204100000) ──
         ("forge.ci_pipelines", operational()),
         ("forge.ci_jobs", operational()),
+        // ── M4 C3: runners, job tokens and job logs (20261205100000) ──
+        (
+            "forge.ci_runners",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                columns("forge_app", "UPDATE", CI_RUNNERS_APP_UPDATE),
+                ro("ci_runners")?,
+            ]
+            .concat(),
+        ),
+        (
+            "forge.ci_job_tokens",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                columns("forge_app", "UPDATE", &["revoked_at", "revoked_reason"]),
+                ro("ci_job_tokens")?,
+            ]
+            .concat(),
+        ),
+        (
+            "forge.ci_log_chunks",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("ci_log_chunks")?,
+            ]
+            .concat(),
+        ),
     ])
 }
+
+/// The columns forge_app may update in forge.ci_runners (M4 C3).
+const CI_RUNNERS_APP_UPDATE: &[&str] = &[
+    "description",
+    "tags",
+    "enabled",
+    "updated_at",
+    "last_contact_at",
+];
 
 /// The columns forge_app may insert into forge.act_as_assertions.
 const ACT_AS_APP_INSERT: &[&str] = &[
@@ -1045,6 +1081,10 @@ const LATER_TABLES: &[&str] = &[
     // ── M4 C2: CI pipelines and jobs (20261204100000) ──
     "ci_pipelines",
     "ci_jobs",
+    // ── M4 C3: runners, job tokens and job logs (20261205100000) ──
+    "ci_runners",
+    "ci_job_tokens",
+    "ci_log_chunks",
 ];
 
 /// Every table the first migration creates.

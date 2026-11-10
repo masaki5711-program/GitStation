@@ -152,6 +152,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // M4 C2: pipeline outcomes (never a merge's).
         | ErrorCode::PipelineCreateFailed
         | ErrorCode::PipelineStateConflict
+        | ErrorCode::JobLeaseLost
+        | ErrorCode::NoRunnerAvailable
+        | ErrorCode::JobLogTooLarge
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

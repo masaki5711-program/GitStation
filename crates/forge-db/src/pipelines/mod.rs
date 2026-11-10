@@ -629,7 +629,7 @@ pub struct StoredJob {
     pub finished_at: Option<String>,
 }
 
-const PIPELINE_COLUMNS: &str = "id, project_id, ref AS git_ref, sha, source, merge_request_id, \
+pub(crate) const PIPELINE_COLUMNS: &str = "id, project_id, ref AS git_ref, sha, source, merge_request_id, \
      triggered_by, definition_hash, protected, copy_mark, status, error_code, problems, request_id, \
      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
      to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at, \
@@ -637,7 +637,7 @@ const PIPELINE_COLUMNS: &str = "id, project_id, ref AS git_ref, sha, source, mer
 
 /// One row of [`PIPELINE_COLUMNS`] (by name: more columns than a tuple reads).
 #[derive(Debug, sqlx::FromRow)]
-struct PipelineRow {
+pub(crate) struct PipelineRow {
     id: i64,
     project_id: i64,
     git_ref: String,
@@ -679,7 +679,7 @@ fn problem_of(id: i64, p: &serde_json::Value) -> Result<StoredProblem, ForgeErro
     })
 }
 
-fn pipeline_of(row: PipelineRow) -> Result<StoredPipeline, ForgeError> {
+pub(crate) fn pipeline_of(row: PipelineRow) -> Result<StoredPipeline, ForgeError> {
     let id = row.id;
     // The table's CHECK keeps it an array.
     let problems = row
@@ -856,9 +856,14 @@ impl Transition {
 
     fn jobs_sql(self) -> &'static str {
         match self {
+            // A running job keeps its runner and lease (M4 C3): the
+            // runner's next heartbeat learns of the cancel and its
+            // completion releases it (or the reaper, if it never comes).
             Self::Cancel => {
-                "UPDATE forge.ci_jobs SET status = 'canceled', runner_id = NULL, \
-                   lease_until = NULL, updated_at = now(), finished_at = now() \
+                "UPDATE forge.ci_jobs SET status = 'canceled', \
+                   runner_id = CASE WHEN status = 'running' THEN runner_id END, \
+                   lease_until = CASE WHEN status = 'running' THEN lease_until END, \
+                   updated_at = now(), finished_at = now() \
                  WHERE pipeline_id = $1 AND status IN ('created', 'pending', 'running')"
             }
             Self::Retry => {
@@ -940,6 +945,19 @@ async fn transition<P>(
                     .execute(&mut *c)
                     .await
                     .map_err(|e| query_error(QUERY, e))?;
+                // M4 C3: a cancelled job's token ends with it (ADR-0029).
+                if transition == Transition::Cancel {
+                    sqlx::query(
+                        "UPDATE forge.ci_job_tokens SET revoked_at = now(), \
+                           revoked_reason = 'job_canceled' \
+                         WHERE revoked_at IS NULL AND job_id IN \
+                           (SELECT id FROM forge.ci_jobs WHERE pipeline_id = $1)",
+                    )
+                    .bind(pipeline)
+                    .execute(&mut *c)
+                    .await
+                    .map_err(|e| query_error(QUERY, e))?;
+                }
                 Ok(jobs)
             })
             .await?;

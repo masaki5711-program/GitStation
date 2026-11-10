@@ -133,6 +133,17 @@ pub async fn delete_decided<P>(
                 .with_context("reason", "already_pending")
                 .with_context("project_id", project.get()));
         };
+        // M4 C3 (ADR-0029 obligation 1): the project's CI job tokens end
+        // with it, in this transaction.
+        tx.step(|c| async move {
+            crate::ci_runners::revoke_project_job_tokens(
+                c,
+                &[project.get()],
+                crate::ci_runners::Revocation::ProjectDeleted,
+            )
+            .await
+        })
+        .await?;
         let deleted_by = deleted_by.map(UserId::new);
         let details = AuditDetails::ProjectDeleted {
             project_id: project,

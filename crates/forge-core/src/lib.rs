@@ -56,6 +56,8 @@ pub mod spec_index;
 // ── end M3 X4 ──
 pub mod telemetry;
 pub mod token;
+// M4 C3: the runner's and the job's tokens (ADR-0029 §1).
+pub mod ci_token;
 pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;
@@ -68,7 +70,10 @@ pub use approval::{ApprovalRuleChange, UnapproveReason, UncountedReason};
 pub use audit_details::{
     AuditDetails, ChangedField, IdentityLinkVia, ServiceAccountField, SessionRevokeReason,
 };
-pub use authenticator::{Authenticator, SessionAuthenticator, SessionIdentity, TokenIdentity};
+pub use authenticator::{
+    Authenticator, CiAuthFuture, CiIdentity, CiJobTokenState, SessionAuthenticator,
+    SessionIdentity, TokenIdentity,
+};
 pub use checks::{
     CheckConclusion, CheckResultsSource, CheckRun, CheckRunsOnHead, CheckStatus,
     MAX_CHECK_ANNOTATIONS, MAX_CHECK_RUNS_PER_COMMIT,
