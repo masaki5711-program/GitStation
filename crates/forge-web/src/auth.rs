@@ -159,6 +159,17 @@ impl Authenticator for BoundedAuthenticator {
             self.inner.authenticate(request_id, presented).await
         })
     }
+
+    fn authenticate_ci<'a>(
+        &'a self,
+        request_id: &'a RequestId,
+        presented: &'a str,
+    ) -> forge_core::CiAuthFuture<'a> {
+        Box::pin(async move {
+            let _permit = permit(&self.permits).await?;
+            self.inner.authenticate_ci(request_id, presented).await
+        })
+    }
 }
 
 /// A session authenticator behind a [`BoundedAuthenticator`]'s permits.
@@ -496,6 +507,33 @@ pub(crate) async fn authenticate_request(
             .into_response(),
         ));
     };
+    // M4 C3 (ADR-0029 §1): a runner's or a job's token, by its prefix.
+    if forge_core::ci_token::CiTokenKind::of(&presented.token).is_some() {
+        return match authenticator
+            .authenticate_ci(&request_id, &presented.token)
+            .await
+        {
+            Ok(identity) => {
+                req.extensions_mut().insert(ci_principal(identity));
+                req.headers_mut().remove(AUTHORIZATION);
+                Ok(())
+            }
+            Err(err) if err.code() == ErrorCode::Unauthenticated => Err(Box::new(token_rejected(
+                err,
+                Some(presented.scheme),
+                request_id,
+                lang,
+            ))),
+            Err(err) => Err(Box::new(
+                ApiError::new(
+                    err.with_context("scheme", presented.scheme.as_str()),
+                    request_id,
+                    lang,
+                )
+                .into_response(),
+            )),
+        };
+    }
     match authenticator
         .authenticate(&request_id, &presented.token)
         .await
@@ -551,6 +589,35 @@ pub(crate) async fn authenticate_request(
             )
             .into_response(),
         )),
+    }
+}
+
+/// The principal of a CI token (ADR-0029 §1): the only production builder
+/// of a runner's or a job's principal (`only_forge_web_builds_ci_principals`).
+/// A job token's state was read with it from the database's clock;
+/// `authorize()` refuses an expired or revoked one (`FG-AUTH-0001`, with
+/// the `job_id`).
+fn ci_principal(identity: forge_core::CiIdentity) -> Principal {
+    match identity {
+        forge_core::CiIdentity::Runner { runner_id } => {
+            Principal::runner(forge_auth::RunnerCredential { runner_id })
+        }
+        forge_core::CiIdentity::Job {
+            job_id,
+            runner_id: _,
+            project,
+            sha,
+            state,
+        } => Principal::job(forge_auth::JobCredential {
+            job_id,
+            project,
+            sha,
+            state: match state {
+                forge_core::CiJobTokenState::Live => forge_auth::JobTokenState::Live,
+                forge_core::CiJobTokenState::Expired => forge_auth::JobTokenState::Expired,
+                forge_core::CiJobTokenState::Revoked => forge_auth::JobTokenState::Revoked,
+            },
+        }),
     }
 }
 

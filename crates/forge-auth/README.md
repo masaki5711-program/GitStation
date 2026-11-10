@@ -309,9 +309,18 @@ short-lived token, decided by the same `authorize()` in their own arm
 - Rows `src/matrix_rows_ci.rs`: generated `ci_denied_for_<action>` for the job
   and the runner columns, the pinned-copy allow / deny rows. Tests
   `src/job_tests.rs`.
-- Not yet (C2 / C3): token issuance and lookup (`ci_job_tokens`,
-  `ci_runners`), the Smart HTTP route for a job (`refs/pipelines/<id>/head`
-  only), the runner API's actions and their lease checks.
+- M4 C3: the runner API's actions `RunnerJobRequest` (on the instance),
+  `RunnerJobHeartbeat` / `RunnerLogAppend` / `RunnerJobComplete` (on
+  `Resource::RunnerJob`, built by `RunnerJobCtx` from the loaded lease: the
+  runner must hold it — `lease_other_runner`, `job_finished` otherwise) are
+  `CiRule::Runner`; every other principal gets `FG-AUTH-0003 runner_only`.
+  `RunnerRegister` / `RunnerManage`: an administrator's web session, people
+  only. Token issuance and lookup are forge-db's (`ci_runners`,
+  `ci_job_tokens`); forge-web's authentication builds the principals
+  (`Principal::runner` / `Principal::job`); `Authorized::reconfirm` keeps a CI
+  principal as it is. Rows: `RUNNER_ROWS` in `src/matrix_rows_ci.rs`.
+- Not yet (C4): the Smart HTTP route for a job (`refs/pipelines/<id>/head`
+  only) that calls `authorize_pinned_copy`.
 
 **Error codes owned**: FG-AUTH-0001..0004, FG-REPO-0005..0006,
 FG-GIT-0007..0010 (all `info`, no runbook: expected client conditions).

@@ -56,6 +56,8 @@ pub mod push_mirror;
 // ── end M3 O2 ──
 // ── M4 C2: CI pipelines ──
 pub mod pipelines;
+// ── M4 C3: CI runners and the runner API ──
+pub mod runners;
 // ── M3 I2: project webhooks (ADR-0016 §8) ──
 pub mod webhooks;
 // ── end M3 I2 ──

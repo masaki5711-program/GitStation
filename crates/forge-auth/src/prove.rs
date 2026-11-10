@@ -93,7 +93,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::Action;
 use crate::authorize::authorize;
 use crate::model::{
-    ActAsView, NamespaceView, Principal, ProjectView, ResolvedVia, Resource, Role,
+    ActAsView, Credential, NamespaceView, Principal, ProjectView, ResolvedVia, Resource, Role,
     UnresolvedReason, ViaView, Visibility,
 };
 
@@ -101,9 +101,9 @@ pub use crate::contexts::{
     CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx, GroupTransferCtx, LoadedGroup,
     LoadedMembership, LoadedParent, LoadedProtection, LoadedTombstone, LoadedTransferTarget,
     LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx, ProjectMemberCtx, RefProtectionCtx,
-    ServiceAccountCtx, ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx,
-    TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx, UserNamespaceCtx, UserRenameCtx,
-    UserTargetCtx, VisibilityChangeCtx,
+    RunnerJobCtx, ServiceAccountCtx, ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx,
+    SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx,
+    UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 
 /// Seals [`ResourceCtx`]: only this crate implements it, so every context's
@@ -181,6 +181,12 @@ impl<R: ResourceCtx> Authorized<R> {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "reconfirm_target_mismatch")
                 .with_context("action", self.action.name()));
+        }
+        // A CI principal (M4 C3) has no account to re-read: its credential's
+        // own state was read with the request (a disabled runner or a
+        // revoked job token never authenticated).
+        if let Credential::Runner(_) | Credential::Job(_) = self.principal.credential() {
+            return prove(&self.principal, self.action, fresh);
         }
         let principal = match self.principal.user() {
             Some(user) => Principal::authenticated(

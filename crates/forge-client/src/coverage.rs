@@ -746,6 +746,44 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry",
         Coverage::Command("pipeline retry"),
     ),
+    // M4 C3 (plan 14, ADR-0029): runners. The administration is an
+    // administrator's web session; the runner API takes a runner's token
+    // (forge-runner, C4), never a person's.
+    (
+        "GET",
+        "/api/v1/admin/runners",
+        Coverage::BrowserOnly("an administrator's web session only: tokens are refused (FG-AUTH-0002 session_required); runbook ci-runner"),
+    ),
+    (
+        "POST",
+        "/api/v1/admin/runners",
+        Coverage::BrowserOnly("registering a runner shows its token once: an administrator's web session only (FG-AUTH-0002 session_required); runbook ci-runner"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/admin/runners/{runner_id}",
+        Coverage::BrowserOnly("enabling or disabling a runner: an administrator's web session only (FG-AUTH-0002 session_required); runbook ci-runner"),
+    ),
+    (
+        "POST",
+        "/api/v1/runner/jobs/request",
+        Coverage::NotForCli("the runner API: forge-runner (M4 C4) with a runner's token; a person's token is refused (runner_only)"),
+    ),
+    (
+        "POST",
+        "/api/v1/runner/jobs/{job_id}/heartbeat",
+        Coverage::NotForCli("the runner API: forge-runner (M4 C4) extends the lease of a job it holds"),
+    ),
+    (
+        "POST",
+        "/api/v1/runner/jobs/{job_id}/log",
+        Coverage::NotForCli("the runner API: forge-runner (M4 C4) appends the job's log; logs are read in C5"),
+    ),
+    (
+        "POST",
+        "/api/v1/runner/jobs/{job_id}/complete",
+        Coverage::NotForCli("the runner API: forge-runner (M4 C4) reports the job's result"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

@@ -564,15 +564,93 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    pipeline_routes(doc_lint_routes(binding_routes(act_as_routes(
-        mirror_routes(webhook_routes(notification_routes(check_routes(
-            dev_status_routes(feed_routes(integration_routes(service_account_routes(
-                account_routes(history_routes(browse_routes(git_routes(shell_routes(
-                    merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
+    runner_routes(pipeline_routes(doc_lint_routes(binding_routes(
+        act_as_routes(mirror_routes(webhook_routes(notification_routes(
+            check_routes(dev_status_routes(feed_routes(integration_routes(
+                service_account_routes(account_routes(history_routes(browse_routes(git_routes(
+                    shell_routes(merge_request_routes(member_routes(move_routes(
+                        hosting_routes(fixed),
+                    )))),
                 ))))),
             )))),
         )))),
     ))))
+}
+
+/// CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1): the administration (an
+/// administrator's web session) and the runner API (a runner's token).
+fn runner_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::runners as r;
+    registry
+        .route_with(
+            Verb::Get,
+            r::ADMIN,
+            Action::RunnerManage,
+            "Every CI runner: name, tags, enabled, last contact (never a token; an administrator's web session)",
+            r::OnInstance,
+            r::list,
+        )
+        .responds::<r::RunnerList>(Verb::Get, r::ADMIN)
+        .route_with_body(
+            Verb::Post,
+            r::ADMIN,
+            Action::RunnerRegister,
+            "Register a CI runner ({\"name\", \"tags\"?, \"description\"?}): 201 the runner and its token fgr_..., shown once (an administrator's web session)",
+            r::MAX_BODY,
+            r::OnInstance,
+            r::register,
+        )
+        .responds_created::<r::RegisteredRunnerBody>(Verb::Post, r::ADMIN)
+        .route_with_body(
+            Verb::Patch,
+            r::ADMIN_ONE,
+            Action::RunnerManage,
+            "Enable or disable a CI runner, change its tags or description; a disabled runner's token is refused at once; 404 FG-REPO-0005 without such a runner (an administrator's web session)",
+            r::MAX_BODY,
+            r::OnInstance,
+            r::update,
+        )
+        .responds::<r::RunnerBody>(Verb::Patch, r::ADMIN_ONE)
+        .route_with_body(
+            Verb::Post,
+            r::REQUEST,
+            Action::RunnerJobRequest,
+            "A runner's long-poll for a job ({\"wait_s\"?} 0..=20): 200 {\"job\": ...} with the job's token fgj_... (shown once), or {\"job\": null} when none came (a runner's token only)",
+            r::MAX_BODY,
+            r::OnInstance,
+            r::request_job,
+        )
+        .responds::<r::JobRequestAnswer>(Verb::Post, r::REQUEST)
+        .route_with_body(
+            Verb::Post,
+            r::HEARTBEAT,
+            Action::RunnerJobHeartbeat,
+            "Extend the lease of a job the runner holds ({\"attempt\"}): running with the new lease end, or canceled (stop and complete); 409 FG-CI-0004 when the lease was lost (the holding runner only)",
+            r::MAX_BODY,
+            r::LEASE_HEARTBEAT,
+            r::heartbeat,
+        )
+        .responds::<r::HeartbeatAnswer>(Verb::Post, r::HEARTBEAT)
+        .route_with_body(
+            Verb::Post,
+            r::LOG,
+            Action::RunnerLogAppend,
+            "Append a log chunk to a job the runner holds ({\"attempt\", \"seq\", \"text\"}; append only, a resent seq is a no-op); 413 FG-CI-0006 past the job's limit; 409 FG-CI-0004 when the lease was lost (the holding runner only)",
+            r::MAX_LOG_BODY,
+            r::LEASE_LOG,
+            r::append_log,
+        )
+        .responds::<r::LogAnswer>(Verb::Post, r::LOG)
+        .route_with_body(
+            Verb::Post,
+            r::COMPLETE,
+            Action::RunnerJobComplete,
+            "Report a job's result ({\"attempt\", \"result\": succeeded|failed, \"exit_code\"?}) or acknowledge its cancel: the token is revoked, waiting jobs start; 409 FG-CI-0004 when the lease was lost (the holding runner only)",
+            r::MAX_BODY,
+            r::LEASE_COMPLETE,
+            r::complete,
+        )
+        .responds::<r::CompleteAnswer>(Verb::Post, r::COMPLETE)
 }
 
 /// A project's CI pipelines (M4 C2, plan 14 §4.2): read (metadata only),

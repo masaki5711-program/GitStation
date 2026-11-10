@@ -553,6 +553,21 @@ async fn finish_steps(
         "projects.purge.finish.merge_settings",
     )
     .await?;
+    // M4 C3: the job logs and tokens (they point at the jobs).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_log_chunks WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_log_chunks",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_job_tokens WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_job_tokens",
+    )
+    .await?;
     // M4 C2: the CI jobs, then their pipelines.
     delete_rows(
         tx,

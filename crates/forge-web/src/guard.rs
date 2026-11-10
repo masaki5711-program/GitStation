@@ -45,6 +45,17 @@ pub(crate) async fn require_principal(
 pub(crate) fn active_principal(req: &Request, action: Action) -> Result<Principal, ForgeError> {
     let code = match req.extensions().get::<Principal>() {
         Some(p) if p.user().is_some() && p.active() => return Ok(p.clone()),
+        // A runner or a job (M4 C3, ADR-0029 §1): no user by design; its
+        // token was checked by authentication and `authorize()` decides it
+        // in its own arm (closed by default).
+        Some(p)
+            if matches!(
+                p.credential(),
+                forge_auth::Credential::Runner(_) | forge_auth::Credential::Job(_)
+            ) =>
+        {
+            return Ok(p.clone())
+        }
         Some(p) if p.user().is_some() => ErrorCode::AccountDisabled,
         _ => ErrorCode::Unauthenticated,
     };

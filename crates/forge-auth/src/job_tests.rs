@@ -151,15 +151,31 @@ fn service_account_still_withheld() {
 
 #[test]
 fn ci_rule_is_exhaustive_and_default_deny() {
-    // Only the job's copy is open to CI; no runner action before M4 C3.
+    // Only the job's copy and the runner API (M4 C3) are open to CI.
     let open: Vec<Action> = Action::ALL
         .iter()
         .copied()
         .filter(|a| a.ci_rule() != CiRule::Denied)
         .collect();
-    assert_eq!(open, vec![Action::RepoRead]);
+    assert_eq!(
+        open,
+        vec![
+            Action::RepoRead,
+            Action::RunnerJobRequest,
+            Action::RunnerJobHeartbeat,
+            Action::RunnerLogAppend,
+            Action::RunnerJobComplete,
+        ]
+    );
     assert_eq!(Action::RepoRead.ci_rule(), CiRule::Job);
     for &a in Action::ALL {
+        // The runner API's own actions have their rows in
+        // `matrix_rows_ci.rs` (RUNNER_ROWS); a claim on the instance is
+        // the one runner action allowed on it.
+        if a.ci_rule() == CiRule::Runner {
+            assert!(authorize(&job(JobTokenState::Live), a, &Resource::Instance).is_err());
+            continue;
+        }
         // Every action is refused to a live job and to a runner on a
         // plain resource (public ones included: the CI arm comes first);
         // the act-as confirmation hides every refusal as its 404 …
@@ -197,12 +213,17 @@ fn ci_rule_is_exhaustive_and_default_deny() {
             a.name()
         );
     }
-    // The job's one allowed row exists, and it is the only CI allow row.
+    // The job's one allowed row exists; the runner's allow rows are its
+    // own API's only.
     let allowed: Vec<_> = ROWS
         .iter()
-        .filter(|r| matches!(r.actor, Actor::Job(_) | Actor::Runner) && r.expect == Expect::Allow)
+        .filter(|r| matches!(r.actor, Actor::Job(_)) && r.expect == Expect::Allow)
         .collect();
     assert_eq!(allowed.len(), 1, "{allowed:?}");
+    assert!(ROWS
+        .iter()
+        .filter(|r| r.actor == Actor::Runner && r.expect == Expect::Allow)
+        .all(|r| r.action.ci_rule() == CiRule::Runner));
 }
 
 /// Security review of C0: a job asking for anything but its pinned copy

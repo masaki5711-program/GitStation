@@ -566,6 +566,13 @@ pub enum Resource {
     /// private fields): built only by [`crate::authorize_pinned_copy`];
     /// every other principal is refused.
     PinnedCopy(PinnedCopy),
+    /// A CI job as the runner API sees it (M4 C3, ADR-0029 §1): which
+    /// runner holds its lease and whether it has ended. Only the job arm
+    /// (`job.rs`) reads it: the runner must hold the lease. Unconstructible
+    /// outside forge-auth ([`RunnerJob`] has private fields): built by
+    /// [`crate::RunnerJobCtx`] from one loaded row; every other principal
+    /// is refused.
+    RunnerJob(RunnerJob),
     /// One ref update in a push. The kind is derived from `name` inside
     /// `authorize()` (callers cannot mislabel a reserved ref); `update` must
     /// come from the ancestry check of old and new object ids; `protection`
@@ -764,6 +771,30 @@ impl PinnedCopy {
 
     pub fn sha(&self) -> &forge_core::push::ObjectId {
         &self.sha
+    }
+}
+
+/// See [`Resource::RunnerJob`]: a job's lease as loaded. Private fields, a
+/// crate-only constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunnerJob {
+    holder: Option<i64>,
+    finished: bool,
+}
+
+impl RunnerJob {
+    pub(crate) fn new(holder: Option<i64>, finished: bool) -> Self {
+        Self { holder, finished }
+    }
+
+    /// The runner holding the lease (`ci_jobs.runner_id`).
+    pub fn holder(&self) -> Option<i64> {
+        self.holder
+    }
+
+    /// The job has ended (succeeded, failed, cancelled).
+    pub fn finished(&self) -> bool {
+        self.finished
     }
 }
 

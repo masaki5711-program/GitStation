@@ -680,3 +680,38 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── M4 C3 (20261205100000, plan 14 §4.1): the runner API. A runner is
+# registered and changed by an administrator (audited on the runner:
+# `ci_runner.registered` / `.updated`); last_contact_at is written by the
+# runner's own requests. Job tokens are issued with a claim and revoked with
+# the job's end or the project's deletion / move (derived). Job logs are
+# appended by the runners (derived, append only; no body for the read pool
+# before C5 decides the CI outputs on their marks) ──
+[tables.ci_runners]
+guarded = false
+kind = "audited"
+# Not secret_sha256 (ADR-0018: the read pool never sees token hashes).
+ro_columns = [
+    "id", "public_id", "name", "description", "tags", "enabled", "created_by", "created_at",
+    "updated_at", "last_contact_at",
+]
+audit_resource = "ci_runner"
+audit_id_column = "id"
+unaudited_columns = ["updated_at", "last_contact_at"]
+txn_audited_columns = []
+
+[tables.ci_job_tokens]
+guarded = false
+kind = "derived"
+# Not secret_sha256 (ADR-0018).
+ro_columns = [
+    "id", "public_id", "job_id", "attempt", "runner_id", "project_id", "sha", "created_at",
+    "expires_at", "revoked_at", "revoked_reason",
+]
+
+[tables.ci_log_chunks]
+guarded = false
+kind = "derived"
+# Not body: no read path for CI output before C5 (ADR-0029 decision 5).
+ro_columns = ["job_id", "attempt", "seq", "project_id", "created_at"]

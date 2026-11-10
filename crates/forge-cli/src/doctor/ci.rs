@@ -5,8 +5,8 @@
 //!   the last 24 hours or a `ci.pipeline_create` job died in the last 7
 //!   days (a push may be without its pipeline: run it by hand); a warning
 //!   when a `pending` / `running` pipeline has not moved for
-//!   [`STALE_AFTER`] (until the runner API exists, M4 C3, nothing runs
-//!   jobs, so pending pipelines only wait); otherwise ok. Ids only.
+//!   [`STALE_AFTER`] (a runner stopped, or no runner has the jobs' tags:
+//!   see `ci.runners`, M4 C3); otherwise ok. Ids only.
 
 use std::time::Duration;
 
@@ -46,7 +46,7 @@ fn line(h: &PipelineHealth) -> Check {
         return warn(
             NAME,
             &format!(
-                "{} pending or running pipeline(s) unchanged for over {} h (ids {}); no runner takes jobs before M4 C3 (runbook ci-pipelines)",
+                "{} pending or running pipeline(s) unchanged for over {} h (ids {}); see ci.runners (runbooks ci-pipelines, ci-runner)",
                 h.stale,
                 STALE_AFTER.as_secs() / 3600,
                 ids(&h.stale_ids)

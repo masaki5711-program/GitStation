@@ -148,6 +148,13 @@ push を落とさないため ref を含めた）。**保持期間**: パイプ�
 **後の MR の義務**（ADR-0029 の 5〜7）: シークレットは `source = push` かつ作成時に保護のときだけ（C3・C6）、保護された push の再実行でも
 デプロイは人の `DeployApprove`（C11）、手動・定期の保護は C12。
 
+**C3 の注記（2026-11-10）**: 表 `ci_runners`（監査あり）・`ci_job_tokens`・`ci_log_chunks`（ログの保存を C5 から前倒し。読む経路は C5 まで無い:
+試験 `ci_logs_have_no_read_path_before_c5`、読み取り用の接続は `body` を読めない）、`ci_jobs.lease_losses`。Action `RunnerRegister`・`RunnerManage`・
+`RunnerJobRequest`・`RunnerJobHeartbeat`・`RunnerLogAppend`・`RunnerJobComplete`、FG-CI-0004 / 0005 / 0006、worker の `ci_lease_reaper`、
+doctor `ci.runners`、runbook `ci-runner`。ジョブのスクリプトは表に持たず、Runner が固定した SHA の `.forge-ci.yml` を `definition_hash` で
+確かめて読む（C4）。ジョブの fetch の Smart HTTP（`refs/pipelines/<id>/head`、`authorize_pinned_copy`）は C4 に回した（`git-protocol-reviewer` が見る MR）。
+Runner の登録は管理者の Web のセッションだけ（`gstn` はトークンなので呼べない。画面は後の MR）。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。

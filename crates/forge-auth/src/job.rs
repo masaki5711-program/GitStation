@@ -19,7 +19,8 @@
 //!    the outputs inherit the marks instead (§5, M4 C5).
 //!
 //! Runners read no repository and no API (§1); the runner API's actions
-//! (`CiRule::Runner`) land with M4 C3, none exists yet. Every refusal
+//! (`CiRule::Runner`, M4 C3) are a claim on the instance and the heartbeat,
+//! log and completion of a job whose lease the runner holds. Every refusal
 //! carries `action`, `ci_rule`, `credential` and `job_id` / `runner_id`.
 
 use forge_errors::{ErrorCode, ForgeError};
@@ -74,7 +75,7 @@ pub(crate) fn decide(
             .with_context("action", action.name()));
     }
     let decided = match principal.credential() {
-        Credential::Runner(c) => runner(c, rule),
+        Credential::Runner(c) => runner(c, action, rule, resource),
         Credential::Job(c) => job(c, rule, resource),
         // `authorize()` calls this for the CI credentials only.
         Credential::Session | Credential::Token(_) | Credential::ActAs(_) => {
@@ -91,18 +92,46 @@ fn refused(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::Forbidden).with_context("reason", reason)
 }
 
-/// A runner: only the runner API (none before M4 C3). Its token reads no
-/// repository and no API (ADR-0029 §1).
-fn runner(credential: &RunnerCredential, rule: CiRule) -> Result<(), ForgeError> {
+/// A runner: only the runner API (M4 C3). Its token reads no repository
+/// and no API (ADR-0029 §1). A claim is decided on the instance; every
+/// other runner action on the job's lease: the runner must hold it
+/// (`lease_other_runner`, or `job_finished` for an ended job no runner
+/// holds — FG-AUTH-0003, the runner stops the job).
+fn runner(
+    credential: &RunnerCredential,
+    action: Action,
+    rule: CiRule,
+    resource: &Resource,
+) -> Result<(), ForgeError> {
     let refusal = |e: ForgeError| {
         e.with_context("credential", "runner")
             .with_context("runner_id", credential.runner_id)
     };
     match rule {
-        CiRule::Denied | CiRule::Job => Err(refusal(refused("ci_not_allowed"))),
-        // No runner action exists yet; C3 decides the lease (the job is
-        // this runner's, still running) here. Closed until then.
-        CiRule::Runner => Err(refusal(refused("runner_api_not_available"))),
+        CiRule::Denied | CiRule::Job => return Err(refusal(refused("ci_not_allowed"))),
+        CiRule::Runner => {}
+    }
+    match (action, resource) {
+        (Action::RunnerJobRequest, Resource::Instance) => Ok(()),
+        (
+            Action::RunnerJobHeartbeat | Action::RunnerLogAppend | Action::RunnerJobComplete,
+            Resource::RunnerJob(lease),
+        ) => {
+            if lease.holder() == Some(credential.runner_id) {
+                Ok(())
+            } else if lease.finished() {
+                Err(refusal(refused("job_finished")))
+            } else {
+                Err(refusal(refused("lease_other_runner")))
+            }
+        }
+        // No such job: the same 404 as for everyone.
+        (_, Resource::Unresolved(reason)) => Err(refusal(
+            ForgeError::new(ErrorCode::NotFound).with_context("reason", reason.as_str()),
+        )),
+        // The route's loader built another resource than its action
+        // decides on: a defect, never a pass.
+        _ => Err(refusal(refused("runner_resource_mismatch"))),
     }
 }
 
@@ -174,6 +203,7 @@ fn job(credential: &JobCredential, rule: CiRule, resource: &Resource) -> Result<
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
+        | Resource::RunnerJob(_)
         | Resource::ActAsConfirm(_) => Err(not_found("job_requires_pinned_copy")),
     }
 }

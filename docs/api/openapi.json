@@ -1206,6 +1206,109 @@
         ],
         "type": "object"
       },
+      "ClaimedJobBody": {
+        "additionalProperties": false,
+        "description": "A claimed job: what the runner needs to run it.",
+        "properties": {
+          "attempt": {
+            "description": "Send it back with every call on this job.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "definition_hash": {
+            "description": "sha256 of the `.forge-ci.yml` bytes the pipeline was planned from:\nthe runner reads the job's script from that file at `sha` and\nrefuses other bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "description": "Pinned by digest.",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "job_token": {
+            "description": "The job's token `fgj_…`: one project, this commit, this attempt;\nrevoked when the job ends. Shown once.",
+            "type": "string"
+          },
+          "job_token_expires_at": {
+            "type": "string"
+          },
+          "lease_until": {
+            "description": "The lease ends then unless a heartbeat extends it.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "ref": {
+            "description": "`refs/heads/…`.",
+            "type": "string"
+          },
+          "secret_names": {
+            "description": "The secret names the job asks for (empty unless `secrets_allowed`;\nno value before C6).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "secrets_allowed": {
+            "description": "Only a push to a branch protected when the pipeline was created\n(ADR-0029): the only jobs that may ever be given secrets.",
+            "type": "boolean"
+          },
+          "sha": {
+            "description": "The pinned commit (the job reads only this).",
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timeout_s": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id",
+          "attempt",
+          "name",
+          "stage",
+          "image",
+          "timeout_s",
+          "tags",
+          "pipeline_id",
+          "project_id",
+          "ref",
+          "sha",
+          "definition_hash",
+          "secrets_allowed",
+          "secret_names",
+          "lease_until",
+          "job_token",
+          "job_token_expires_at"
+        ],
+        "type": "object"
+      },
       "CodeownerStatusBody": {
         "additionalProperties": false,
         "description": "One CODEOWNERS rule the changed paths need.",
@@ -1417,6 +1520,51 @@
           "commits",
           "commits_truncated",
           "diff"
+        ],
+        "type": "object"
+      },
+      "CompleteAnswer": {
+        "additionalProperties": false,
+        "description": "The answer of a completion.",
+        "properties": {
+          "pipeline_status": {
+            "type": "string"
+          },
+          "status": {
+            "description": "The job's final status (`canceled` for an acknowledged cancel).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "pipeline_status"
+        ],
+        "type": "object"
+      },
+      "CompleteBody": {
+        "additionalProperties": false,
+        "description": "`POST …/complete`.",
+        "properties": {
+          "attempt": {
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "exit_code": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "`succeeded` or `failed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "result"
         ],
         "type": "object"
       },
@@ -4477,6 +4625,42 @@
         ],
         "type": "object"
       },
+      "HeartbeatAnswer": {
+        "additionalProperties": false,
+        "description": "The answer of a heartbeat.",
+        "properties": {
+          "lease_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`running` or `canceled` (stop the job and complete it).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "lease_until"
+        ],
+        "type": "object"
+      },
+      "HeartbeatBody": {
+        "additionalProperties": false,
+        "description": "`POST …/heartbeat` and the attempt of every job call.",
+        "properties": {
+          "attempt": {
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempt"
+        ],
+        "type": "object"
+      },
       "InAppNotificationBody": {
         "additionalProperties": false,
         "description": "One in-app notification.",
@@ -4908,6 +5092,43 @@
         ],
         "type": "object"
       },
+      "JobRequestAnswer": {
+        "additionalProperties": false,
+        "description": "The answer of a claim.",
+        "properties": {
+          "job": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClaimedJobBody",
+                "description": "`null`: nothing came within the wait."
+              }
+            ]
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "type": "object"
+      },
+      "JobRequestBody": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/runner/jobs/request`.",
+        "properties": {
+          "wait_s": {
+            "description": "How long to wait for a job, in seconds (0..=20, default 20).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ListedGroup": {
         "additionalProperties": false,
         "description": "A group as a list shows it.",
@@ -4957,6 +5178,48 @@
           "description",
           "created_at",
           "role"
+        ],
+        "type": "object"
+      },
+      "LogAnswer": {
+        "additionalProperties": false,
+        "description": "The answer of a log append.",
+        "properties": {
+          "stored": {
+            "description": "`false`: the chunk was stored already (a resend).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stored"
+        ],
+        "type": "object"
+      },
+      "LogChunkBody": {
+        "additionalProperties": false,
+        "description": "`POST …/log`.",
+        "properties": {
+          "attempt": {
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "seq": {
+            "description": "0-based, in order; a resent chunk keeps its number.",
+            "format": "int64",
+            "maximum": 4095,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "UTF-8 text, not empty.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "seq",
+          "text"
         ],
         "type": "object"
       },
@@ -5730,6 +5993,37 @@
         "required": [
           "kanflow_project_id",
           "repository_id"
+        ],
+        "type": "object"
+      },
+      "NewRunnerBody": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/admin/runners`.",
+        "properties": {
+          "description": {
+            "description": "At most 1024 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`[a-z0-9][a-z0-9._-]{0,62}`, unique.",
+            "type": "string"
+          },
+          "tags": {
+            "description": "At most 16, each like a name. A job runs on a runner whose tags\ncover all of the job's.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -6905,6 +7199,24 @@
         ],
         "type": "object"
       },
+      "RegisteredRunnerBody": {
+        "additionalProperties": false,
+        "description": "`201` of a registration: the runner and its token (shown once).",
+        "properties": {
+          "runner": {
+            "$ref": "#/components/schemas/RunnerBody"
+          },
+          "token": {
+            "description": "`fgr_<16 hex>_<64 hex>`: put it in the runner host's token file\n(ADR-0013); it is never shown again.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runner",
+          "token"
+        ],
+        "type": "object"
+      },
       "ReleaseTombstone": {
         "additionalProperties": false,
         "description": "`POST /api/v1/namespaces/tombstones/release`.",
@@ -7321,6 +7633,105 @@
           "required",
           "counted"
         ],
+        "type": "object"
+      },
+      "RunnerBody": {
+        "additionalProperties": false,
+        "description": "A runner (never its token).",
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_contact_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "tags",
+          "enabled",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "last_contact_at"
+        ],
+        "type": "object"
+      },
+      "RunnerList": {
+        "additionalProperties": false,
+        "description": "`GET /api/v1/admin/runners`.",
+        "properties": {
+          "runners": {
+            "items": {
+              "$ref": "#/components/schemas/RunnerBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runners"
+        ],
+        "type": "object"
+      },
+      "RunnerPatchBody": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/admin/runners/{runner_id}`.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "ServiceAccountBody": {
@@ -10329,6 +10740,125 @@
         },
         "summary": "The projects bound to an integration (administrators, people only)",
         "x-forge-action": "IntegrationRead"
+      }
+    },
+    "/api/v1/admin/runners": {
+      "get": {
+        "operationId": "get_api_v1_admin_runners",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Every CI runner: name, tags, enabled, last contact (never a token; an administrator's web session)",
+        "x-forge-action": "RunnerManage"
+      },
+      "post": {
+        "operationId": "post_api_v1_admin_runners",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRunnerBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredRunnerBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Register a CI runner ({\"name\", \"tags\"?, \"description\"?}): 201 the runner and its token fgr_..., shown once (an administrator's web session)",
+        "x-forge-action": "RunnerRegister",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/admin/runners/{runner_id}": {
+      "patch": {
+        "operationId": "patch_api_v1_admin_runners_runner_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runner_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnerPatchBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Enable or disable a CI runner, change its tags or description; a disabled runner's token is refused at once; 404 FG-REPO-0005 without such a runner (an administrator's web session)",
+        "x-forge-action": "RunnerManage",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/admin/service-accounts": {
@@ -17356,6 +17886,202 @@
         },
         "summary": "The repositories the caller (or the person acted for, no assertion) may bind, whose path or name contains q: each decided with authorize(), nothing said about the rest (read_api)",
         "x-forge-action": "RepositorySearch"
+      }
+    },
+    "/api/v1/runner/jobs/request": {
+      "post": {
+        "operationId": "post_api_v1_runner_jobs_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRequestAnswer"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A runner's long-poll for a job ({\"wait_s\"?} 0..=20): 200 {\"job\": ...} with the job's token fgj_... (shown once), or {\"job\": null} when none came (a runner's token only)",
+        "x-forge-action": "RunnerJobRequest",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/runner/jobs/{job_id}/complete": {
+      "post": {
+        "operationId": "post_api_v1_runner_jobs_job_id_complete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteAnswer"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Report a job's result ({\"attempt\", \"result\": succeeded|failed, \"exit_code\"?}) or acknowledge its cancel: the token is revoked, waiting jobs start; 409 FG-CI-0004 when the lease was lost (the holding runner only)",
+        "x-forge-action": "RunnerJobComplete",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/runner/jobs/{job_id}/heartbeat": {
+      "post": {
+        "operationId": "post_api_v1_runner_jobs_job_id_heartbeat",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatAnswer"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Extend the lease of a job the runner holds ({\"attempt\"}): running with the new lease end, or canceled (stop and complete); 409 FG-CI-0004 when the lease was lost (the holding runner only)",
+        "x-forge-action": "RunnerJobHeartbeat",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/runner/jobs/{job_id}/log": {
+      "post": {
+        "operationId": "post_api_v1_runner_jobs_job_id_log",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogChunkBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogAnswer"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Append a log chunk to a job the runner holds ({\"attempt\", \"seq\", \"text\"}; append only, a resent seq is a no-op); 413 FG-CI-0006 past the job's limit; 409 FG-CI-0004 when the lease was lost (the holding runner only)",
+        "x-forge-action": "RunnerLogAppend",
+        "x-forge-max-body-bytes": 65536
       }
     },
     "/api/v1/session": {

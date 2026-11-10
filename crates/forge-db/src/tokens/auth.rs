@@ -143,6 +143,15 @@ impl forge_core::Authenticator for Db {
     ) -> forge_core::authenticator::AuthFuture<'a> {
         Box::pin(authenticate(self, request_id, presented))
     }
+
+    /// M4 C3: a runner's or a job's token (`crate::ci_runners`).
+    fn authenticate_ci<'a>(
+        &'a self,
+        request_id: &'a RequestId,
+        presented: &'a str,
+    ) -> forge_core::CiAuthFuture<'a> {
+        crate::ci_runners::authenticate_ci(self, request_id, presented)
+    }
 }
 
 /// Constant-time comparison with the stored hash; a hash that is not 32

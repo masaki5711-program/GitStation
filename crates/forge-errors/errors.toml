@@ -2441,3 +2441,44 @@ cause = "M4 C2: `POST …/pipelines/{pipeline_id}/cancel` on a pipeline that is 
 diagnosis = "The log event carries `pipeline_id`, `project_id`, `operation` (`cancel` / `retry`) and `status` (the state found)."
 fix = "Nothing to fix: reload the pipeline. To run again a pipeline that cannot be retried, start a new one (gstn pipeline run --project <id> --ref <branch>)."
 test = "cancelling_a_finished_pipeline_is_a_state_conflict"
+
+[[error]]
+code = "FG-CI-0004"
+name = "JobLeaseLost"
+http_status = 409
+severity = "warn"
+user_message_ja = "この CI のジョブの割り当ては失われました。ジョブは待ちの列に戻されています。"
+user_message_en = "This CI job's lease was lost. The job has been returned to the queue."
+user_message_id = "Sewa tugas CI ini hilang. Tugas telah dikembalikan ke antrean."
+cause = "M4 C3 (plan 14, ADR-0029): a runner holds a job only while its lease lasts (`ci_jobs.lease_until`, extended by each heartbeat; compared with the database's `now()`). The lease ran out — the runner stopped sending heartbeats (crashed, lost its network, the host was overloaded) or sent one too late — and either the runner asked to extend, append a log to or complete the job after that (the runner API answers 409 with this code; the runner must stop the job), or the lease reaper (`forge worker`, `ci.lease_reaper`) took the job back: it returns the job to the queue (`pending`, a new attempt) exactly once and revokes its job token in the same transaction, or fails it with this code after the third lost lease (`lease_losses` reached the limit). Not a fault of the job's script."
+diagnosis = "The reaper logs `forge.ci.job_lease_lost` (warn) with `error_code`, `request_id`, `job_id`, `pipeline_id`, `project_id`, `runner_id`, `lease_losses` and `outcome` (`requeued` / `failed`); the runner API logs the refused call with `job_id`, `runner_id` and `operation` (`heartbeat` / `log` / `complete`). Read the job: SELECT id, status, runner_id, lease_until, lease_losses, attempt, error_code FROM forge.ci_jobs WHERE id = <job_id>; and the runner: SELECT id, name, enabled, last_contact_at FROM forge.ci_runners WHERE id = <runner_id>; a runner whose `last_contact_at` is old has stopped (see runbook ci-runner)."
+fix = "Follow runbook ci-runner: restart or repair the runner host named by `runner_id`. A requeued job runs again by itself on any runner; a job failed with this code is retried by hand (gstn pipeline retry --project <id> <pipeline_id>) once a runner is healthy."
+runbook = "ci-runner"
+test = "an_expired_lease_is_returned_to_the_queue_exactly_once"
+
+[[error]]
+code = "FG-CI-0005"
+name = "NoRunnerAvailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "CI のジョブを実行できる Runner がいません。管理者に連絡してください。"
+user_message_en = "No CI runner is available to run the jobs. Contact the administrator."
+user_message_id = "Tidak ada runner CI yang tersedia untuk menjalankan tugas. Hubungi administrator."
+cause = "M4 C3 (plan 14 §6, §7): CI jobs have been `pending` longer than the wait limit (10 minutes) and no enabled runner whose tags cover them has claimed them: no runner is registered or enabled, every runner has stopped contacting forge (`last_contact_at` older than 5 minutes), or the jobs ask for tags (`tags:` in `.forge-ci.yml`) no enabled runner has. Jobs wait; nothing is lost."
+diagnosis = "`forge worker` logs `forge.ci.no_runner_available` (error, at most once per 10 minutes) with `error_code`, `request_id`, `waiting` (how many jobs), `oldest_job_id`, `oldest_wait_s`, `enabled_runners` and `live_runners`. `forge doctor` `ci.runners` fails with this code and the same facts. Read: SELECT id, name, enabled, tags, last_contact_at FROM forge.ci_runners ORDER BY id; and SELECT id, pipeline_id, tags, created_at FROM forge.ci_jobs WHERE status = 'pending' ORDER BY id LIMIT 10;"
+fix = "Follow runbook ci-runner: start the runner process on its host, enable a disabled runner (PATCH /api/v1/admin/runners/{id} {\"enabled\": true}, an administrator's web session), or register a runner with the tags the jobs ask for."
+runbook = "ci-runner"
+test = "pending_jobs_without_a_live_runner_are_no_runner_available"
+
+[[error]]
+code = "FG-CI-0006"
+name = "JobLogTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "CI のジョブのログが上限を超えました。これより後のログは保存されません。"
+user_message_en = "The CI job's log exceeded its limit. Further output is not stored."
+user_message_id = "Log tugas CI melampaui batasnya. Keluaran berikutnya tidak disimpan."
+cause = "M4 C3: a runner appended a log chunk (`POST /api/v1/runner/jobs/{job_id}/log`) that would take the job attempt's stored log past 16 MiB, or the attempt already has 4096 chunks. The chunk is refused and nothing is stored for it; the job itself keeps running (the runner stops sending output and reports the result). A chunk over 64 KiB is refused earlier by the body cap (FG-WEB request too large)."
+diagnosis = "The log event carries `job_id`, `runner_id`, `attempt`, `seq`, `stored_bytes` and `limit_bytes` (or `chunks`). Read: SELECT count(*), sum(octet_length(body)) FROM forge.ci_log_chunks WHERE job_id = <job_id> AND attempt = <attempt>;"
+fix = "Make the job print less (quiet flags, write long reports to an artifact once C6 lands). Nothing to change on the server."
+test = "a_log_past_the_job_limit_is_refused"
