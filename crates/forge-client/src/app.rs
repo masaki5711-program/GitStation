@@ -220,6 +220,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Conflicts(args) => crate::conflicts::conflicts(cli, args, env, io),
         Command::Spec { command } => crate::specs::spec(cli, command, env, io),
         Command::Doc { command } => crate::doc::doc(cli, command, env, io),
+        Command::Ci { command } => crate::ci::ci(cli, command, io),
         Command::Context { command } => crate::context::context(cli, command, env, io),
         Command::Mcp => crate::mcp::serve(cli, env, io),
         Command::Namespace { command } => hosting::namespace(cli, command, env, io),

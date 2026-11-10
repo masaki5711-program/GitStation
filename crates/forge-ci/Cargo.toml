@@ -1,0 +1,23 @@
+[package]
+name = "forge-ci"
+description = "forge CI, pure: the `.forge-ci.yml` pipeline definition — parse, lint and the execution plan for a ref and event. No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Pure (plan 14 C1, like forge-doc): no I/O, clock or randomness. The only
+# dependencies allowed are forge-errors and forge-doc (its strict YAML tree)
+# — checked by tests/purity.rs. Who may depend on forge-ci beyond the server
+# crates (gstn, forge-checks) is a contract 9 decision; see README.md.
+[dependencies]
+forge-errors.workspace = true
+forge-doc.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

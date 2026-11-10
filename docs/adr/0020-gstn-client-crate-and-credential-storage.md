@@ -45,3 +45,10 @@
 ADR-0026 §8（proposed）: `gstn` が依存してよいサーバー側のクレートを **`forge-errors` と `forge-doc`** にする。`forge-doc` は文書の解析・整形・lint の
 純粋なクレート（I/O・秘密なし、依存は `forge-errors` と I/O の無い部品だけ）で、手元の `gstn doc fmt` / `lint` と CI の `forge/doc-lint` に同じ答えを
 出すため。サーバー側のどのクレートも `forge-client` に依存しない、は変えない。ADR-0026 が accepted になったときに有効になる。
+
+## Amendment（2026-11-10、M4 C1、ADR-0029）— `forge-ci` への依存
+
+CLAUDE.md の契約 9（エージェントモデル 813c66e）: `gstn` が依存してよいクレートを **`forge-errors`・`forge-doc`・`forge-ci`** にする。`forge-ci` は `.forge-ci.yml` の
+解析・lint・実行計画の純粋なクレート（I/O・DB・秘密なし、依存は `forge-errors` と `forge-doc` だけ、`tests/purity.rs`）で、手元の `gstn ci lint` / `gstn ci plan`
+（計画 04 P-3）とサーバーの `forge/ci-lint` に同じ答えを出すため。層は `forge-core → forge-ci → forge-doc → forge-errors`。パイプラインの実行（DB・イベント）は
+`forge-ci` に入れず、後の機能クレート（仮称 `forge-pipelines`）に置く。サーバー側のどのクレートも `forge-client` に依存しない、は変えない。

@@ -96,6 +96,15 @@ C0 は型と判定だけを入れた（トークンの保存・発行・照会�
 **C5（CI の出力）**
 4. ログ・成果物・診断のどの経路よりも先に、`Undecided`（測れなかった）の印でエージェントの相手の CI の出力の読み取りが断られる（閉じる）試験を入れる。
 
+## 追記（2026-11-10、C1）— `forge-ci` の置き場所と、シークレットの判定
+
+- `forge-ci`（`.forge-ci.yml` の解析・lint・plan）は機能クレートではなく **純粋な層**（`forge-core → forge-ci → forge-doc → forge-errors`、契約 9、ADR-0020 の
+  Amendment）。`gstn` と `forge-checks` が同じ lint を使える。パイプラインの作成と実行は後の機能クレート（仮称 `forge-pipelines`、C2）。
+- シークレットは二重に止める。lint: シークレットを持つジョブは `merge_requests: false` で、ブランチのパターンがリポジトリの保護ブランチに覆われていること
+  （`LintContext::with_protected_branches`。保護の一覧を知らない手元の検査 `LintContext::local_check` ではどのブランチも保護されていない扱い）。
+  plan: `Trigger.protected` が偽（保護されていないブランチ）か MR のパイプラインで、選ばれたジョブがシークレットを持てば計画が失敗する
+  （`secret_on_unprotected_ref`。黙って外さない）。C6 も保護ブランチにしか値を渡さない。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。

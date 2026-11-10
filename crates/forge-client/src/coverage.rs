@@ -800,6 +800,14 @@ pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
         "doc lint",
         "plan 13 stage 2: the forge/doc-lint lint on the working tree with forge-doc; nothing is sent",
     ),
+    (
+        "ci lint",
+        "plan 14 C1: the forge/ci-lint lint on the working tree's .forge-ci.yml with forge-ci; nothing is sent",
+    ),
+    (
+        "ci plan",
+        "plan 14 C1: the execution plan of the working tree's .forge-ci.yml with forge-ci; nothing is sent",
+    ),
     ("help", "describes the commands from the registry"),
     ("schema", "describes one command from the registry"),
 ];

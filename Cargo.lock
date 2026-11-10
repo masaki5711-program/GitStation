@@ -749,6 +749,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-ci"
+version = "0.1.0"
+dependencies = [
+ "forge-doc",
+ "forge-errors",
+ "proptest",
+ "toml",
+]
+
+[[package]]
 name = "forge-cli"
 version = "0.1.0"
 dependencies = [
@@ -789,6 +799,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "dbus-secret-service-keyring-store",
+ "forge-ci",
  "forge-client",
  "forge-doc",
  "forge-errors",

@@ -149,6 +149,13 @@ pub enum Command {
         #[command(subcommand)]
         command: DocCommand,
     },
+    /// CI pipeline definitions (.forge-ci.yml): lint and plan on your
+    /// working tree (never the server).
+    #[command(disable_help_subcommand = true)]
+    Ci {
+        #[command(subcommand)]
+        command: CiCommand,
+    },
     /// The context API (M3 X5): a work item's, a requirement's or a merge
     /// request's context, every item with its source.
     #[command(disable_help_subcommand = true)]
@@ -1791,6 +1798,47 @@ pub enum SpecCommand {
         #[arg(long = "ref", value_parser = parse_text)]
         rev: Option<String>,
     },
+}
+
+/// `gstn ci` (plan 14 C1, plan 04 P-3): the `.forge-ci.yml` lint and plan
+/// on the working tree, with forge-ci (the forge/ci-lint check's code).
+/// Local only: nothing is sent.
+#[derive(Subcommand, Debug)]
+pub enum CiCommand {
+    /// Check .forge-ci.yml: schema, needs, timeouts, pinned images,
+    /// secrets on protected branches only, bounds (the same lint as the
+    /// forge/ci-lint check).
+    Lint {
+        /// The file (default: .forge-ci.yml at the repository root).
+        path: Option<PathBuf>,
+        /// The repository's protected branch patterns (e.g.
+        /// main,release/*). Without it no branch counts as protected.
+        #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "A,B")]
+        protected: Option<Vec<String>>,
+    },
+    /// Show which jobs a push or a merge request would run, and in what
+    /// order (waves), without running anything.
+    Plan {
+        /// The file (default: .forge-ci.yml at the repository root).
+        path: Option<PathBuf>,
+        /// The branch pushed (for --event mr: the source branch).
+        #[arg(long, alias = "ref", value_parser = parse_text)]
+        branch: String,
+        /// push (default) or mr.
+        #[arg(long, value_enum, default_value_t = CiEvent::Push)]
+        event: CiEvent,
+        /// The repository's protected branch patterns (e.g.
+        /// main,release/*). Without it no branch counts as protected.
+        #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "A,B")]
+        protected: Option<Vec<String>>,
+    },
+}
+
+/// The event of `gstn ci plan`.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CiEvent {
+    Push,
+    Mr,
 }
 
 /// `gstn doc` (plan 13 stage 2, ADR-0026): the document format's tools on

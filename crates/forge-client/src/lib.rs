@@ -6,7 +6,8 @@
 //! `forge-errors` — the generated registry of `FG-…` codes and their messages,
 //! which both sides must agree on — and on `forge-doc`, the pure document
 //! parsing, formatting and lint `gstn doc` shares with the server's
-//! `forge/doc-lint`; on no server crate (no `forge-core`, `forge-db`,
+//! `forge/doc-lint` — and on `forge-ci`, the pure `.forge-ci.yml` lint and
+//! plan of `gstn ci` (contract 9, ADR-0020 Amendment M4 C1); on no server crate (no `forge-core`, `forge-db`,
 //! `forge-auth`, `forge-web`): it talks to the server over HTTP and nothing
 //! else. No server crate may depend on it. `Cargo.toml` of the server crates
 //! is checked by `client_depends_only_on_forge_errors_and_forge_doc` below.
@@ -15,6 +16,7 @@ pub mod admin;
 pub mod app;
 pub mod browse;
 pub mod checks;
+pub mod ci;
 pub mod cli;
 pub mod config;
 pub mod conflicts;
