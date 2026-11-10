@@ -1,4 +1,4 @@
-# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0011。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
+# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
 
 M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブの取得の long-poll、心拍とリース、ログ、完了、リースの回収）が
 期待どおりに動かないとき。表 `forge.ci_runners`・`forge.ci_job_tokens`・`forge.ci_log_chunks`・`forge.ci_jobs`（`runner_id`・`lease_until`・
@@ -17,7 +17,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
 - 利用者から「パイプラインが `pending` のまま進まない」と問い合わせがあった
 - Runner のホストのログ（`journalctl -u forge-runner`、JSON）に FG-CI-0007（コンテナを起動できない・ホストが rootless でない・
   ジョブのディレクトリを消せない）、FG-CI-0008（`.forge-ci.yml` が `definition_hash` と一致しない）、FG-CI-0009（固定した
-  コミットを取得できない）、FG-CI-0010（ジョブの時間切れ）、FG-CI-0011（ジョブのイメージが `image_registries` の外）。
+  コミットを取得できない）、FG-CI-0010（ジョブの時間切れ）、FG-CI-0011（ジョブのイメージが `image_registries` の外）、
+  FG-CI-0012（ジョブの作業ディレクトリが `work_dir_max_bytes` を超えた）。
   ジョブのログの最後の行にも同じコード
 
 ## Impact
@@ -62,6 +63,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    - FG-CI-0011: `context` の `image` が設定の `image_registries` のどの接頭辞でも始まらない。git も pull もコンテナも動いていない。
      イメージを社内のミラーに入れて `.forge-ci.yml` の `image` をミラーのもの（ダイジェストで固定）に直す。レジストリを足すのは
      レビューの後（設定を変えて `systemctl restart forge-runner`）
+   - FG-CI-0012: `context` の `bytes`・`limit_bytes`。ジョブの終わりに `<work_dir>/job/work` がそれより大きかった（ジョブは失敗、
+     ディレクトリは消えている）。`forge.runner.workspace_unmeasured`（warn）は測れなかっただけでジョブは失敗にしない
    - FG-CI-0010: ジョブの `timeout` を超えた。コンテナは `podman kill` と `podman rm --force` で消えている
      （`podman ps -a --filter name=forge-job-` で残りが無いこと）
 
@@ -92,7 +95,19 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    # ca_file = "/etc/forge-runner/internal-ca.pem"   # API と git の fetch（GIT_SSL_CAINFO）の両方が信頼する CA
    # allow_insecure_http = false   # http の server は true のときだけ（既定は https 必須、FG-SYS-0002 reason=insecure_http）
    # memory = "4g"   pids_limit = 4096   tmpfs_size = "1g"
+   # file_size_limit = "4g"   nofile_limit = 4096     # --ulimit=fsize / nofile
+   # work_dir_max_bytes = 21474836480                 # ジョブの終わりに確かめる（超えたら FG-CI-0012）
    ```
+
+   **`work_dir` は容量の上限（クォータ）のあるファイルシステムに置く（必須）**。ジョブのコンテナは `/workspace`（= `<work_dir>/job/work`）に
+   書けるので、上限が無いとジョブがホストのディスクを使い切れる。コンテナには `--memory`・`--memory-swap`（同じ値、スワップを足さない）・
+   `--pids-limit`・`--ulimit=fsize`（1 ファイル）・`--ulimit=nofile` が付くが、ファイルの合計はファイルシステムでしか止められない。
+   どちらか（変更は人の承認のあと）:
+   - XFS のプロジェクトのクォータ: `work_dir` を `prjquota` 付きでマウントした XFS に置き、
+     `xfs_quota -x -c 'project -s -p /var/lib/forge-runner 42' /var/lib`、`xfs_quota -x -c 'limit -p bhard=20g 42' /var/lib`
+   - ループバックのファイルシステム: `fallocate -l 20G /var/lib/forge-runner.img`、`mkfs.ext4 /var/lib/forge-runner.img`、
+     `/etc/fstab` に `/var/lib/forge-runner.img /var/lib/forge-runner ext4 loop,nodev,nosuid 0 2`
+   `work_dir_max_bytes` はクォータより小さくする（ジョブの後の確かめ。クォータが無い・大きすぎるホストの網）。
 
 6. 確かめる: `sudo -u forge-runner forge-runner --config /etc/forge-runner/config.toml check`（設定・トークン・rootless）。
 7. systemd のユニット（`User=forge-runner`、`ExecStart=/usr/local/bin/forge-runner --config /etc/forge-runner/config.toml run`、

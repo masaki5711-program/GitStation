@@ -234,6 +234,7 @@ fn setup(fake: &Arc<Fake>) -> Setup {
             .with_registries(vec!["registry.internal/".to_owned()]),
         workspace: Workspace::new(root.clone()),
         git_limits: GitLimits::default(),
+        work_dir_max_bytes: None,
         fetch_url: Box::new(|job| {
             Ok(format!(
                 "https://forge.test/api/v1/runner/jobs/{job}/repo.git"
@@ -636,4 +637,30 @@ fn an_image_outside_the_allowed_registries_is_refused_before_any_call() {
     }
     let logs = forge.logs.lock().unwrap().join("");
     assert!(logs.contains("FG-CI-0011"), "{logs}");
+}
+
+/// M4 C4 review: a job whose work directory grew past
+/// `work_dir_max_bytes` fails (FG-CI-0012) and the directory is wiped;
+/// within the bound (or unbounded) the same job succeeds.
+#[test]
+fn a_work_directory_past_its_bound_fails_the_job_and_is_wiped() {
+    let def = definition("make");
+    let fake = Fake::new(&def, Podman::Litter);
+    let mut s = setup(&fake);
+    s.exec.work_dir_max_bytes = Some(0);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Failed);
+    let err = out.error.expect("too large");
+    assert_eq!(err.code(), ErrorCode::JobWorkspaceTooLarge);
+    assert!(err
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "limit_bytes" && v == "0"));
+    assert!(s.exec.workspace.is_clean());
+    let logs = forge.logs.lock().unwrap().join("");
+    assert!(logs.contains("FG-CI-0012"), "{logs}");
+    s.exec.work_dir_max_bytes = Some(1 << 20);
+    let out = run(&s, &claim(8, "fgj_8_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
 }

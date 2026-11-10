@@ -14,6 +14,8 @@
 //! 6. Podman: one container, no network, read-only root, killed and
 //!    removed at the timeout (`FG-CI-0010`) or on stop; Podman's own
 //!    failure is `FG-CI-0007`;
+//!    The work directory past `work_dir_max_bytes` when the container
+//!    ended fails the job (`FG-CI-0012`);
 //! 7. always: the container removed, the job directory removed.
 //!
 //! Every failure is logged once here (`forge_core::telemetry::log_failure`
@@ -78,6 +80,9 @@ pub struct Executor {
     pub podman: PodmanPlan,
     pub workspace: Workspace,
     pub git_limits: GitLimits,
+    /// The most bytes the job's work directory may hold when its container
+    /// ends (`None`: unchecked; FG-CI-0012 past it).
+    pub work_dir_max_bytes: Option<u64>,
     /// `job_id` → the job's fetch URL (the runner's configured server).
     pub fetch_url: Box<dyn Fn(i64) -> Result<String, ForgeError> + Send + Sync>,
 }
@@ -344,7 +349,10 @@ impl Executor {
             Exit::Code(125) => Err(start_failed("podman_exit")
                 .with_context("exit_code", 125)
                 .with_context("podman_stderr", ran.stderr_tail)),
-            Exit::Code(code) => Ok(ScriptEnd::Exited(code)),
+            Exit::Code(code) => {
+                self.check_work_size()?;
+                Ok(ScriptEnd::Exited(code))
+            }
             Exit::TimedOut => {
                 self.kill(name);
                 Err(ForgeError::new(ErrorCode::JobTimedOut).with_context("timeout_s", timeout_s))
@@ -376,6 +384,32 @@ impl Executor {
             Exit::Code(_) => Err(mismatch("definition_missing")),
             Exit::TimedOut => Err(fetch_failed("read_definition", "timeout")),
             Exit::Stopped => Err(fetch_failed("read_definition", "stopped")),
+        }
+    }
+
+    /// `work_dir_max_bytes` after the container ended: FG-CI-0012 past
+    /// it (the directory is removed in [`Executor::execute`] as always). A
+    /// directory that cannot be measured is logged and does not fail the
+    /// job (the filesystem quota is the hard bound).
+    fn check_work_size(&self) -> Result<(), ForgeError> {
+        let Some(limit) = self.work_dir_max_bytes else {
+            return Ok(());
+        };
+        match self.workspace.work_size() {
+            Ok(bytes) if bytes > limit => Err(ForgeError::new(ErrorCode::JobWorkspaceTooLarge)
+                .with_context("bytes", bytes)
+                .with_context("limit_bytes", limit)),
+            Ok(_) => Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    target: "forge_runner",
+                    event = "forge.runner.workspace_unmeasured",
+                    error_code = ErrorCode::JobWorkspaceTooLarge.id(),
+                    error = %e,
+                    "the work directory could not be measured; the quota bounds it"
+                );
+                Ok(())
+            }
         }
     }
 

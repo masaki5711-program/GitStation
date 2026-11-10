@@ -74,6 +74,25 @@ impl Workspace {
         Ok(path)
     }
 
+    /// The bytes of every file under the job's work directory (symbolic
+    /// links not followed; a link counts its own size).
+    pub fn work_size(&self) -> std::io::Result<u64> {
+        fn walk(dir: &Path) -> std::io::Result<u64> {
+            let mut total = 0u64;
+            for entry in std::fs::read_dir(dir)? {
+                let entry = entry?;
+                let meta = std::fs::symlink_metadata(entry.path())?;
+                total = total.saturating_add(if meta.is_dir() {
+                    walk(&entry.path())?
+                } else {
+                    meta.len()
+                });
+            }
+            Ok(total)
+        }
+        walk(&self.dirs().work)
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }

@@ -4,7 +4,8 @@
 //! ```text
 //! podman run --rm --name=forge-job-<job>-<attempt> --network=none --read-only
 //!   --tmpfs=/tmp:rw,nosuid,nodev,size=<tmpfs> --security-opt=no-new-privileges
-//!   --cap-drop=all --pids-limit=<n> --memory=<m> --pull=missing
+//!   --cap-drop=all --pids-limit=<n> --memory=<m> --memory-swap=<m>
+//!   --ulimit=fsize=<bytes>:<bytes> --ulimit=nofile=<n>:<n> --pull=missing
 //!   --volume=<work>:/workspace:rw,Z --volume=<script>:/forge:ro,Z --workdir=/workspace
 //!   --env=CI=true --env=FORGE_JOB_ID=<job> … --entrypoint=/bin/sh
 //!   -- <image@sha256:…> -eu /forge/script.sh
@@ -21,7 +22,10 @@
 //!   shell at all.
 //! - No network (`--network=none`), a read-only root, no capabilities, no
 //!   new privileges; the work directory is the only writable mount and is
-//!   removed after the job.
+//!   removed after the job. Memory without extra swap, a bounded file size,
+//!   open files and processes; the work directory's total is bounded by
+//!   the filesystem's quota (runbook `ci-runner`) and checked after the job
+//!   (`work_dir_max_bytes`, FG-CI-0012).
 //! - The job's token is never in the container's environment.
 //! - A timeout or a cancel: `podman kill` and `podman rm --force` (the
 //!   container is removed whatever happened; `--rm` covers a normal end).
@@ -42,6 +46,10 @@ pub struct Limits {
     pub pids: u32,
     /// The size of the writable `/tmp`, e.g. `1g`.
     pub tmpfs: String,
+    /// The largest file a job may write (`--ulimit=fsize`), e.g. `4g`.
+    pub file_size: String,
+    /// The open files of one process (`--ulimit=nofile`).
+    pub nofile: u32,
 }
 
 impl Default for Limits {
@@ -50,8 +58,26 @@ impl Default for Limits {
             memory: "4g".to_owned(),
             pids: 4096,
             tmpfs: "1g".to_owned(),
+            file_size: "4g".to_owned(),
+            nofile: 4096,
         }
     }
+}
+
+/// `4g`, `512m`, `16k` in bytes; `None` for anything else (the
+/// configuration checked the form already).
+pub fn size_bytes(raw: &str) -> Option<u64> {
+    let (digits, unit) = raw.split_at_checked(raw.len().checked_sub(1)?)?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let shift = match unit {
+        "k" => 10,
+        "m" => 20,
+        "g" => 30,
+        _ => return None,
+    };
+    digits.parse::<u64>().ok()?.checked_mul(1u64 << shift)
 }
 
 /// `<name>@sha256:<64 hex>`: a lower-case registry path, no option, no
@@ -137,6 +163,8 @@ impl PodmanPlan {
 
     /// `podman run …` (module docs). The caller checked [`valid_image`].
     pub fn run(&self, c: &Container<'_>) -> Cmd {
+        // The configuration checked the size; 4 GiB if it did not.
+        let fsize = size_bytes(&self.limits.file_size).unwrap_or(4 << 30);
         let mut work = std::ffi::OsString::from("--volume=");
         work.push(c.work);
         work.push(":/workspace:rw,Z");
@@ -157,6 +185,10 @@ impl PodmanPlan {
             .arg("--cap-drop=all")
             .arg(format!("--pids-limit={}", self.limits.pids))
             .arg(format!("--memory={}", self.limits.memory))
+            // No swap on top of the memory limit.
+            .arg(format!("--memory-swap={}", self.limits.memory))
+            .arg(format!("--ulimit=fsize={fsize}:{fsize}"))
+            .arg(format!("--ulimit=nofile={n}:{n}", n = self.limits.nofile))
             .arg("--pull=missing")
             .arg(work)
             .arg(script)
@@ -277,5 +309,49 @@ mod tests {
         );
         assert!(argv.iter().all(|a| !a.starts_with("--privileged")));
         assert!(cmd.env.is_empty(), "{cmd:?}");
+    }
+
+    /// M4 C4 review: memory without swap on top, a bounded file size and
+    /// open files, a bounded process count — all before `--`.
+    #[test]
+    fn the_run_argv_bounds_memory_files_and_processes() {
+        let image = format!("registry.internal/rust@sha256:{}", digest());
+        let limits = Limits {
+            memory: "2g".to_owned(),
+            pids: 512,
+            tmpfs: "1g".to_owned(),
+            file_size: "512m".to_owned(),
+            nofile: 1024,
+        };
+        let plan = PodmanPlan::new(PathBuf::from("podman"), limits);
+        let argv = plan
+            .run(&Container {
+                name: "forge-job-7-1",
+                image: &image,
+                work: Path::new("/r/job/work"),
+                script_dir: Path::new("/r/job/script"),
+                job_id: 7,
+                pipeline_id: 3,
+                project_id: 2,
+                sha: &"b".repeat(40),
+            })
+            .argv();
+        let dash = argv.iter().position(|a| a == "--").expect("--");
+        for flag in [
+            "--memory=2g",
+            "--memory-swap=2g",
+            "--pids-limit=512",
+            "--ulimit=fsize=536870912:536870912",
+            "--ulimit=nofile=1024:1024",
+        ] {
+            let at = argv.iter().position(|a| a == flag);
+            assert!(at.is_some_and(|i| i < dash), "{flag}: {argv:?}");
+        }
+        let defaults = Limits::default();
+        assert_eq!(defaults.file_size, "4g");
+        assert_eq!(defaults.nofile, 4096);
+        assert_eq!(size_bytes("4g"), Some(4 * 1024 * 1024 * 1024));
+        assert_eq!(size_bytes("16k"), Some(16 * 1024));
+        assert_eq!(size_bytes("4x"), None);
     }
 }

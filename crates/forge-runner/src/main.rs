@@ -115,6 +115,7 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
             podman,
             workspace: Workspace::new(cfg.work_dir.clone()),
             git_limits: GitLimits::default(),
+            work_dir_max_bytes: cfg.work_dir_max_bytes,
             fetch_url: Box::new(move |job| fetch_cfg.fetch_url(job)),
         },
         heartbeat_every: HEARTBEAT_EVERY,

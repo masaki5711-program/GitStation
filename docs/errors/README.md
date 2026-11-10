@@ -189,3 +189,4 @@
 | [FG-CI-0009](FG-CI-0009.md) | 502 | warn | M4 C4: `forge-runner` fetches only the job's pinned commit, over Smart HTTP with the job's token (`/api/v1/runner/jobs/{job_id}/repo.git`, which advertises only `refs/pipelines/<pipeline_id>/head`), into a fresh work directory |
 | [FG-CI-0010](FG-CI-0010.md) | 504 | info | M4 C4: the job ran longer than its `timeout` in `.forge-ci.yml` |
 | [FG-CI-0011](FG-CI-0011.md) | 409 | warn | M4 C4 review: `forge-runner` runs only images whose name starts with one of the prefixes in its configuration's `image_registries` (the internal registry mirror, plan 14 §9.3) |
+| [FG-CI-0012](FG-CI-0012.md) | 507 | warn | M4 C4 review: the runner configuration sets `work_dir_max_bytes`, and after the job's container ended its work directory (the checkout plus everything the job wrote to /workspace) held more bytes than that |

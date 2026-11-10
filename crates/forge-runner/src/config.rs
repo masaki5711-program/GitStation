@@ -16,6 +16,9 @@
 //! # memory = "4g"
 //! # pids_limit = 4096
 //! # tmpfs_size = "1g"
+//! # file_size_limit = "4g"   # --ulimit=fsize
+//! # nofile_limit = 4096      # --ulimit=nofile
+//! # work_dir_max_bytes = 21474836480  # checked when the job ends (FG-CI-0012)
 //! ```
 //!
 //! Every problem is `FG-SYS-0002 ConfigInvalid` with `config_key` and
@@ -55,6 +58,12 @@ struct Raw {
     pids_limit: Option<u32>,
     #[serde(default)]
     tmpfs_size: Option<String>,
+    #[serde(default)]
+    file_size_limit: Option<String>,
+    #[serde(default)]
+    nofile_limit: Option<u32>,
+    #[serde(default)]
+    work_dir_max_bytes: Option<u64>,
 }
 
 /// A checked configuration.
@@ -70,6 +79,9 @@ pub struct RunnerConfig {
     pub git: PathBuf,
     pub podman: PathBuf,
     pub limits: Limits,
+    /// The job's work directory's bound, checked when its container ends
+    /// (FG-CI-0012); the filesystem quota is the bound while it runs.
+    pub work_dir_max_bytes: Option<u64>,
 }
 
 fn invalid(key: &'static str, reason: &'static str) -> ForgeError {
@@ -154,6 +166,10 @@ impl RunnerConfig {
             memory: raw.memory.unwrap_or_else(|| Limits::default().memory),
             pids: raw.pids_limit.unwrap_or(Limits::default().pids),
             tmpfs: raw.tmpfs_size.unwrap_or_else(|| Limits::default().tmpfs),
+            file_size: raw
+                .file_size_limit
+                .unwrap_or_else(|| Limits::default().file_size),
+            nofile: raw.nofile_limit.unwrap_or(Limits::default().nofile),
         };
         if !valid_size(&limits.memory) {
             return Err(invalid("memory", "not_a_size"));
@@ -163,6 +179,13 @@ impl RunnerConfig {
         }
         if limits.pids == 0 {
             return Err(invalid("pids_limit", "zero"));
+        }
+        if !valid_size(&limits.file_size) || crate::podman::size_bytes(&limits.file_size).is_none()
+        {
+            return Err(invalid("file_size_limit", "not_a_size"));
+        }
+        if limits.nofile == 0 {
+            return Err(invalid("nofile_limit", "zero"));
         }
         if raw.image_registries.is_empty() {
             return Err(invalid("image_registries", "missing"));
@@ -183,6 +206,7 @@ impl RunnerConfig {
             git: raw.git.unwrap_or_else(|| PathBuf::from("git")),
             podman: raw.podman.unwrap_or_else(|| PathBuf::from("podman")),
             limits,
+            work_dir_max_bytes: raw.work_dir_max_bytes,
         })
     }
 
@@ -316,6 +340,16 @@ mod tests {
             (
                 format!("server = \"https://x\"\nwork_dir = \"{work}\"\nmemory = \"4g; rm\""),
                 "not_a_size",
+            ),
+            (
+                format!(
+                    "{REG}server = \"https://x\"\nwork_dir = \"{work}\"\nfile_size_limit = \"4t\""
+                ),
+                "not_a_size",
+            ),
+            (
+                format!("{REG}server = \"https://x\"\nwork_dir = \"{work}\"\nnofile_limit = 0"),
+                "zero",
             ),
             ("server = \"https://x\"\nwork = 1".to_owned(), "unparsable"),
         ] {
