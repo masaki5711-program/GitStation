@@ -563,9 +563,11 @@ async fn grep_with_an_object_id_operand_runs_on_the_installed_git() {
 /// sub-millisecond file time, must not look newer than the kill.
 #[test]
 fn a_kill_time_is_carried_rounded_up_to_the_millisecond() {
+    // 100 ns past a millisecond: the finest SystemTime step Windows keeps
+    // (it truncates `UNIX_EPOCH + 1 ns` to the millisecond itself).
     let stopped = Stopped {
         how: "kill",
-        killed_at: Some(std::time::UNIX_EPOCH + Duration::from_nanos(1_000_000_001)),
+        killed_at: Some(std::time::UNIX_EPOCH + Duration::from_nanos(1_000_000_100)),
     };
     let err = stopped.attach(ForgeError::new(ErrorCode::GitTimeout));
     let at = err
@@ -574,6 +576,7 @@ fn a_kill_time_is_carried_rounded_up_to_the_millisecond() {
         .find(|(k, _)| *k == "killed_at_unix_ms")
         .map(|(_, v)| v.clone());
     assert_eq!(at.as_deref(), Some("1001"));
+    assert_eq!(ceil_millis(Duration::from_nanos(1_000_000_001)), 1001);
     assert_eq!(
         ceil_millis(Duration::from_millis(7)),
         7,

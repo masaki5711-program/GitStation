@@ -718,15 +718,7 @@ async fn a_concurrent_feed_read_answers_429_with_retry_after() {
         req.extensions_mut().insert(sa_token(w.sa, READ));
         req
     };
-    let mut blocker = w.t.superuser().await;
-    sqlx::query("BEGIN")
-        .execute(&mut blocker)
-        .await
-        .expect("begin");
-    sqlx::query("LOCK TABLE forge.event_feed_state IN ACCESS EXCLUSIVE MODE")
-        .execute(&mut blocker)
-        .await
-        .expect("lock");
+    let blocker = w.t.lock_table("forge.event_feed_state").await;
     let first = tokio::spawn({
         let app = app.clone();
         let req = request();
@@ -734,10 +726,7 @@ async fn a_concurrent_feed_read_answers_429_with_retry_after() {
     });
     w.t.until_waiting("event_feed_state").await;
     let busy = app.clone().oneshot(request()).await.expect("infallible");
-    sqlx::query("COMMIT")
-        .execute(&mut blocker)
-        .await
-        .expect("commit");
+    blocker.release().await;
     let first = first.await.expect("join").expect("infallible");
     assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);

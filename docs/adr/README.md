@@ -32,3 +32,4 @@
 | [0026](0026-document-format-doctypes-and-forge-doc.md) | 文書の形式、文書の型の定義、解析のクレート `forge-doc` | proposed（accepted は計画 13 段 1 の試しの後） | 2026-11-09 |
 | [0027](0027-document-concurrent-editing.md) | 文書の同時の編集 — 改訂は文書ごとに 1 つ、期限つきの編集の宣言 | proposed | 2026-11-09 |
 | [0028](0028-document-e-approval-and-phases.md) | 文書の電子の承認と、リポジトリごとの承認のフェーズ | proposed（品質保証の部門の確認も条件） | 2026-11-09 |
+| [0029](0029-ci-principals-runner-and-job-tokens.md) | CI の主体 — Runner と Job の資格情報、CI の信頼の境界 | proposed（accepted は C0 のレビューの後） | 2026-11-10 |
