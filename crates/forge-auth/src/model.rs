@@ -562,12 +562,10 @@ pub enum Resource {
     /// A CI job's copy of its own project at its pipeline's pinned SHA (M4
     /// C0, ADR-0029 §3). Only the job arm (`job.rs`) reads it: the project
     /// and the SHA must be the job token's, whatever the confidential
-    /// marks. Built only by [`crate::authorize_pinned_copy`]; every other
-    /// principal is refused.
-    PinnedCopy {
-        project: ProjectId,
-        sha: forge_core::push::ObjectId,
-    },
+    /// marks. Unconstructible outside forge-auth ([`PinnedCopy`] has
+    /// private fields): built only by [`crate::authorize_pinned_copy`];
+    /// every other principal is refused.
+    PinnedCopy(PinnedCopy),
     /// One ref update in a push. The kind is derived from `name` inside
     /// `authorize()` (callers cannot mislabel a reserved ref); `update` must
     /// come from the ancestry check of old and new object ids; `protection`
@@ -745,6 +743,28 @@ pub enum Resource {
     /// `ActAsAssertionIssue`, ADR-0025 §5): the merge request as seen by
     /// the person, the intent, and the receiving integration's state.
     ActAsConfirm(Box<ActAsConfirmView>),
+}
+
+/// See [`Resource::PinnedCopy`]: what a job asks to copy. Private fields,
+/// a crate-only constructor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedCopy {
+    project: ProjectId,
+    sha: forge_core::push::ObjectId,
+}
+
+impl PinnedCopy {
+    pub(crate) fn new(project: ProjectId, sha: forge_core::push::ObjectId) -> Self {
+        Self { project, sha }
+    }
+
+    pub fn project(&self) -> ProjectId {
+        self.project
+    }
+
+    pub fn sha(&self) -> &forge_core::push::ObjectId {
+        &self.sha
+    }
 }
 
 /// See [`Resource::ActAs`].

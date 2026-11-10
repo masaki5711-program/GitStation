@@ -57,10 +57,11 @@ fn job_token_clones_own_confidential_repo() {
     assert!(!live.admin_rights());
     assert!(live.user().is_none());
     assert!(live.scope_names().is_empty());
-    // The measured copy is a person's or an agent's route, not a job's.
+    // The measured copy is a person's or an agent's route, not a job's:
+    // the invisible project's 404, the cause in the log only.
     for mark in [CopyMark::Open, CopyMark::Confidential] {
         let err = authorize(&live, Action::RepoRead, &copy(mark)).expect_err("measured copy");
-        assert_eq!(err.code(), ErrorCode::Forbidden);
+        assert_eq!(err.code(), ErrorCode::NotFound);
         assert_eq!(ctx(&err, "reason"), Some("job_requires_pinned_copy"));
         assert_eq!(ctx(&err, "credential"), Some("job"));
         assert_eq!(ctx(&err, "job_id"), Some("41"));
@@ -167,9 +168,15 @@ fn ci_rule_is_exhaustive_and_default_deny() {
         } else {
             ErrorCode::Forbidden
         };
-        for p in [job(JobTokenState::Live), runner()] {
+        for (p, is_job) in [(job(JobTokenState::Live), true), (runner(), false)] {
             let err = authorize(&p, a, &Resource::Instance).expect_err("closed");
-            assert_eq!(err.code(), refusal, "{a:?}");
+            // A job's own action on anything but its pinned copy is 404.
+            let expected = if is_job && a.ci_rule() == CiRule::Job {
+                ErrorCode::NotFound
+            } else {
+                refusal
+            };
+            assert_eq!(err.code(), expected, "{a:?}");
         }
         // … and has its generated matrix row in both columns.
         if a.ci_rule() != CiRule::Job {
@@ -196,6 +203,60 @@ fn ci_rule_is_exhaustive_and_default_deny() {
         .filter(|r| matches!(r.actor, Actor::Job(_) | Actor::Runner) && r.expect == Expect::Allow)
         .collect();
     assert_eq!(allowed.len(), 1, "{allowed:?}");
+}
+
+/// Security review of C0: a job asking for anything but its pinned copy
+/// learns nothing about the project — a visible (internal) and a hidden
+/// (private, or absent) one give the same status and the same user body.
+#[test]
+fn a_job_sees_the_same_404_for_visible_and_hidden_projects() {
+    let live = job(JobTokenState::Live);
+    let view = |visibility| ProjectView {
+        visibility,
+        role: None,
+        pending_deletion: false,
+    };
+    let answers: Vec<ForgeError> = [
+        Resource::Project(view(Visibility::Internal)),
+        Resource::Project(view(Visibility::Private)),
+        Resource::RepoCopy {
+            project: view(Visibility::Internal),
+            mark: CopyMark::Open,
+        },
+        Resource::Unresolved(crate::model::UnresolvedReason::Absent),
+    ]
+    .iter()
+    .map(|r| authorize(&live, Action::RepoRead, r).expect_err("not the pinned copy"))
+    .collect();
+    let other = authorize_pinned_copy(&live, ProjectId::new(8), &sha(JOB_SHA)).expect_err("other");
+    for err in answers.iter().chain([&other]) {
+        assert_eq!(err.code(), ErrorCode::NotFound, "{err:?}");
+        for lang in [forge_errors::Lang::Ja, forge_errors::Lang::En] {
+            assert_eq!(err.user_message(lang), other.user_message(lang));
+        }
+    }
+}
+
+/// Authorization review of C0: a CI credential put into
+/// `Principal::authenticated` (which always carries a user) is a defect
+/// at the decision point, never a pass.
+#[test]
+fn a_ci_credential_with_a_user_is_an_internal_error() {
+    for ci in [job(JobTokenState::Live), runner()] {
+        let forged =
+            Principal::authenticated(ME, true, true, ci.credential().clone(), AccountKind::Human);
+        for (action, resource) in [
+            (
+                Action::RepoRead,
+                crate::matrix_rows_ci::pinned_copy(false, false),
+            ),
+            (Action::Health, Resource::Instance),
+        ] {
+            let err = authorize(&forged, action, &resource).expect_err("forged");
+            assert_eq!(err.code(), ErrorCode::Internal);
+            assert_eq!(ctx(&err, "reason"), Some("ci_credential_with_user"));
+        }
+    }
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -256,16 +317,26 @@ fn mentions(needles: &[String]) -> Vec<String> {
 #[test]
 fn only_forge_web_builds_ci_principals() {
     // Assembled so this file's own code does not match the needles.
+    // `authorize()` also refuses a CI credential that carries a user (it
+    // came through `Principal::authenticated`, test
+    // `a_ci_credential_with_a_user_is_an_internal_error`), and
+    // `Resource::PinnedCopy` is unconstructible outside forge-auth.
     let needles = [
         ["Principal::", "runner("].concat(),
         ["Principal::", "job("].concat(),
         ["Credential::", "Runner(RunnerCredential"].concat(),
         ["Credential::", "Job(Box"].concat(),
+        ["JobCredential", " {"].concat(),
+        ["RunnerCredential", " {"].concat(),
+        ["Credential::", "*"].concat(),
     ];
     let allowed = [
         // The constructors' own module and the matrix's fixtures.
         "forge-auth/src/model.rs",
         "forge-auth/src/matrix_rows_ci.rs",
+        // forge-review's proof that a CI principal is never audited as a
+        // user.
+        "forge-review/src/change_context_tests.rs",
         // The production caller (M4 C3): the authentication layer.
         "forge-web/src/auth.rs",
     ];

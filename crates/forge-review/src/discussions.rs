@@ -178,7 +178,7 @@ impl Review {
             let key = format!("user:{}", user.get());
             self.check_inline(project, iid, repo, &key, p).await?;
         }
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let new = NewDiscussion {
             body: body.to_owned(),
             position: position.cloned(), // clone: forge-db owns its request
@@ -215,7 +215,7 @@ impl Review {
         };
         check_note_body(body)?;
         let user = caller(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (stored, ()) = review::add_note_mr_decided(
             &self.db,
             &ctx,
@@ -252,7 +252,7 @@ impl Review {
                 .with_context("reason", "proof_without_user")
                 .with_context("action", proof.action().name())
         })?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (outcome, stored, ()) = review::resolve_discussion_mr_decided(
             &self.db,
             &ctx,

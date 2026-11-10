@@ -164,7 +164,7 @@ impl Review {
                 &mut crate::approvals::Budget::new(crate::approvals::REQUEST_BUDGET),
             )
             .await?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let new = NewMerge {
             method,
             head_sha: ask.sha.clone(), // clone: forge-db owns its request

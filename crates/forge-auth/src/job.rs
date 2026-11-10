@@ -11,11 +11,11 @@
 //! 2. the action's [`CiRule`] for the credential: `Denied` (and the other
 //!    principal's rule) → `FG-AUTH-0003 reason=ci_not_allowed`, before the
 //!    resource is looked at;
-//! 3. a job's copy: only `Resource::PinnedCopy` (`FG-AUTH-0003
-//!    reason=job_requires_pinned_copy` otherwise); another project
-//!    (`job_other_project`) or another SHA (`job_sha_mismatch`) is the
-//!    invisible project's `FG-REPO-0005` — no oracle on what exists
-//!    outside the job. The confidential marks are not looked at (§3):
+//! 3. a job's copy: only `Resource::PinnedCopy`; anything else
+//!    (`job_requires_pinned_copy`), another project (`job_other_project`)
+//!    or another SHA (`job_sha_mismatch`) is the invisible project's
+//!    `FG-REPO-0005` — no oracle on what exists outside the job, the
+//!    reason only in the log. The confidential marks are not looked at (§3):
 //!    the outputs inherit the marks instead (§5, M4 C5).
 //!
 //! Runners read no repository and no API (§1); the runner API's actions
@@ -27,7 +27,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::{Action, CiRule};
 use crate::authorize::authorize;
 use crate::model::{
-    Credential, JobCredential, JobTokenState, Principal, Resource, RunnerCredential,
+    Credential, JobCredential, JobTokenState, PinnedCopy, Principal, Resource, RunnerCredential,
 };
 use forge_core::push::ObjectId;
 use forge_core::ProjectId;
@@ -48,10 +48,10 @@ pub fn authorize_pinned_copy(
     authorize(
         principal,
         Action::RepoRead,
-        &Resource::PinnedCopy {
+        &Resource::PinnedCopy(PinnedCopy::new(
             project,
-            sha: sha.clone(), // clone: the resource owns its SHA
-        },
+            sha.clone(), // clone: the resource owns its SHA
+        )),
     )
     .map_err(|e| e.with_context("project_id", project.get()))
 }
@@ -64,6 +64,15 @@ pub(crate) fn decide(
     resource: &Resource,
 ) -> Result<(), ForgeError> {
     let rule = action.ci_rule();
+    // Structural guard (ADR-0029 §1): `Principal::runner` / `Principal::job`
+    // are the only builders of a CI principal and give it no user. A CI
+    // credential with a user was built through `Principal::authenticated`
+    // — a defect, never a pass.
+    if principal.user().is_some() {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "ci_credential_with_user")
+            .with_context("action", action.name()));
+    }
     let decided = match principal.credential() {
         Credential::Runner(c) => runner(c, rule),
         Credential::Job(c) => job(c, rule, resource),
@@ -120,11 +129,11 @@ fn job(credential: &JobCredential, rule: CiRule, resource: &Resource) -> Result<
         refusal(ForgeError::new(ErrorCode::NotFound).with_context("reason", reason))
     };
     match resource {
-        Resource::PinnedCopy { project, sha } => {
-            if *project != credential.project {
+        Resource::PinnedCopy(copy) => {
+            if copy.project() != credential.project {
                 return Err(not_found("job_other_project"));
             }
-            if *sha != credential.sha {
+            if *copy.sha() != credential.sha {
                 return Err(not_found("job_sha_mismatch"));
             }
             Ok(())
@@ -133,6 +142,9 @@ fn job(credential: &JobCredential, rule: CiRule, resource: &Resource) -> Result<
         Resource::Unresolved(reason) => Err(not_found(reason.as_str())),
         // A plain project read or a measured copy is a person's or an
         // agent's route: a job copies through `authorize_pinned_copy` only.
+        // The invisible project's 404 whatever the project (visible or
+        // hidden, existing or not): no existence oracle; the cause stays in
+        // the log's `reason`.
         Resource::Instance
         | Resource::Group { .. }
         | Resource::Namespace { .. }
@@ -162,6 +174,6 @@ fn job(credential: &JobCredential, rule: CiRule, resource: &Resource) -> Result<
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
-        | Resource::ActAsConfirm(_) => Err(refusal(refused("job_requires_pinned_copy"))),
+        | Resource::ActAsConfirm(_) => Err(not_found("job_requires_pinned_copy")),
     }
 }

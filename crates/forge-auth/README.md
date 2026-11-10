@@ -287,7 +287,11 @@ short-lived token, decided by the same `authorize()` in their own arm
   only by `Principal::runner` / `Principal::job` (no user, no administrator
   rights, no scopes, kind `Bot`; `is_agent_audience()` is unchanged and true,
   but never reached). Test `only_forge_web_builds_ci_principals` limits the
-  builders to forge-web's authentication (its caller lands with C3).
+  builders to forge-web's authentication (its caller lands with C3); a CI
+  credential with a user (put into `Principal::authenticated`) is
+  `FG-SYS-0001 ci_credential_with_user` at the decision point.
+  `Resource::PinnedCopy(PinnedCopy)` has private fields and a crate-only
+  constructor.
 - `Action::ci_rule() -> CiRule { Denied, Runner, Job }`: one exhaustive
   `match`, closed by default. Today only `RepoRead` is `Job`; no action is
   `Runner` (the runner API arrives with C3).
@@ -297,9 +301,9 @@ short-lived token, decided by the same `authorize()` in their own arm
   SHA is `FG-REPO-0005` (`job_other_project`, `job_sha_mismatch`); an expired
   or revoked token `FG-AUTH-0001` (`credential=job`, `reason=expired|revoked`,
   `authorize()` has no clock — authentication states `JobTokenState`); a
-  plain project read or a measured `RepoCopy` `FG-AUTH-0003
-  job_requires_pinned_copy`; every other action `FG-AUTH-0003
-  ci_not_allowed`. A runner reads nothing (`ci_not_allowed`). Every other
+  plain project read or a measured `RepoCopy`, visible or hidden, the same
+  `FG-REPO-0005` (`job_requires_pinned_copy` in the log only); every other
+  action `FG-AUTH-0003 ci_not_allowed`. A runner reads nothing (`ci_not_allowed`). Every other
   principal on a pinned copy is `FG-AUTH-0003 pinned_copy_without_job`;
   service accounts, bots and agents' tokens keep `FG-AUTH-0022` on copies.
 - Rows `src/matrix_rows_ci.rs`: generated `ci_denied_for_<action>` for the job

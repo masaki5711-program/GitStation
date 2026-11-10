@@ -1167,7 +1167,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         }
         // Only the job arm (returned above) reads a pinned copy (ADR-0029
         // §3): a person, a token or a service account never gets one.
-        (_, Resource::PinnedCopy { .. }) => {
+        (_, Resource::PinnedCopy(_)) => {
             Err(deny(ErrorCode::Forbidden).with_context("reason", "pinned_copy_without_job"))
         }
         // Only the act-as arm (returned above) reads an act-as resource.
@@ -1443,7 +1443,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::IntegrationFeed(_)
         // Decided in their own arms (the act-as arm; the confirmation
         // decides visibility on its merge request; the job arm).
-        | Resource::PinnedCopy { .. }
+        | Resource::PinnedCopy(_)
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_) => None,
     }
@@ -1479,7 +1479,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::Project(_)
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
-        | Resource::PinnedCopy { .. }
+        | Resource::PinnedCopy(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

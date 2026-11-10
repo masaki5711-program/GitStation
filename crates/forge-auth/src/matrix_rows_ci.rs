@@ -11,8 +11,8 @@
 //!    at its pinned SHA is allowed whatever the confidential marks (the
 //!    copy is never measured); another project or another SHA is the
 //!    invisible project's 404; an expired or revoked token is
-//!    unauthenticated; a plain project read or a measured copy is refused
-//!    (`job_requires_pinned_copy`);
+//!    unauthenticated; a plain project read or a measured copy, visible or
+//!    hidden, is the same 404 (`job_requires_pinned_copy` in the log);
 //! 3. a runner reads no repository (a pinned copy, a measured copy);
 //! 4. a pinned copy is the job's alone: people, administrators, agents'
 //!    tokens and service accounts are refused (`pinned_copy_without_job`).
@@ -67,9 +67,12 @@ pub(crate) const CI_ROWS: &[Row] = &[
     row(A::RepoRead, W::Job(J::Live), F::PinnedCopy { other_project: true, other_sha: true }, deny(E::NotFound)),
     row(A::RepoRead, W::Job(J::Expired), OWN, deny(E::Unauthenticated)),
     row(A::RepoRead, W::Job(J::Revoked), OWN, deny(E::Unauthenticated)),
-    row(A::RepoRead, W::Job(J::Live), F::PrivateProject, deny(E::Forbidden)),
-    row(A::RepoRead, W::Job(J::Live), F::RepoCopy(M::Open), deny(E::Forbidden)),
-    row(A::RepoRead, W::Job(J::Live), F::RepoCopy(M::Confidential), deny(E::Forbidden)),
+    // Anything but its pinned copy: the same 404, a hidden (private) or a
+    // visible (internal) project alike.
+    row(A::RepoRead, W::Job(J::Live), F::PrivateProject, deny(E::NotFound)),
+    row(A::RepoRead, W::Job(J::Live), F::InternalProject, deny(E::NotFound)),
+    row(A::RepoRead, W::Job(J::Live), F::RepoCopy(M::Open), deny(E::NotFound)),
+    row(A::RepoRead, W::Job(J::Live), F::InternalRepoCopy(M::Confidential), deny(E::NotFound)),
     // 3. A runner reads no repository.
     row(A::RepoRead, W::Runner, OWN, deny(E::Forbidden)),
     row(A::RepoRead, W::Runner, F::RepoCopy(M::Open), deny(E::Forbidden)),
@@ -124,14 +127,14 @@ pub(crate) fn job(state: J) -> Principal {
 /// A pinned copy of the job's project (or another) at its SHA (or another).
 #[cfg(test)]
 pub(crate) fn pinned_copy(other_project: bool, other_sha: bool) -> Resource {
-    Resource::PinnedCopy {
-        project: if other_project {
+    Resource::PinnedCopy(crate::model::PinnedCopy::new(
+        if other_project {
             ProjectId::new(8)
         } else {
             JOB_PROJECT
         },
-        sha: sha(if other_sha { OTHER_SHA } else { JOB_SHA }),
-    }
+        sha(if other_sha { OTHER_SHA } else { JOB_SHA }),
+    ))
 }
 
 #[cfg(test)]

@@ -44,7 +44,7 @@ impl Review {
             return Err(shape_mismatch("work_item_link"));
         };
         let user = caller(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (outcome, answer, ()) = review::link_work_item_mr_decided(
             &self.db,
             &ctx,
@@ -75,7 +75,7 @@ impl Review {
             return Err(shape_mismatch("work_item_unlink"));
         };
         let user = caller(proof)?;
-        let ctx = change_context(request, proof.principal(), user);
+        let ctx = change_context(request, proof.principal(), user)?;
         let (answer, ()) = review::unlink_work_item_mr_decided(
             &self.db,
             &ctx,
