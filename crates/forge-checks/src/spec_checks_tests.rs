@@ -248,8 +248,10 @@ fn broken_references_alone_in_an_incomplete_index_are_neutral() {
 #[test]
 fn the_last_attempt_answers_inside_the_job_timeout() {
     let worst = super::EVALUATION_BUDGET + super::WRITE_TIMEOUT * 6;
+    // Review MR3: at least 10 s of margin.
     assert!(
-        worst < forge_db::checks::spec_index::SPEC_INDEX_TIMEOUT,
+        worst + std::time::Duration::from_secs(10)
+            <= forge_db::checks::spec_index::SPEC_INDEX_TIMEOUT,
         "{worst:?}"
     );
 }

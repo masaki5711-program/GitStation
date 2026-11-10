@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-`gstn doc fmt --check` (forge_doc::fmt::format_document, ADR-0026 §4: one sentence per line, the front matter's keys and a block's attributes in the type's order) found a document whose formatted bytes differ from the file. Nothing was written (--check never writes). Only documents in the plan 13 format are formatted: an older `spec:` document or a Markdown file without a `doctype` is left alone.
+`gstn doc fmt --check` (forge_doc::fmt::format_document, ADR-0026 §4: one sentence per line, the front matter's keys and a block's attributes in the type's order) found a document whose formatted bytes differ from the file, or a file it could not check: a file named on the command line that is no document (`not_a_document`), or a document (its front matter names a `doctype`) that is too large (over 1 MiB) or not UTF-8 — a file fmt cannot check is never a pass (`unchecked=<n>` in the detail). Nothing was written (--check never writes). Only documents in the plan 13 format are formatted: an older `spec:` document or a Markdown file without a `doctype` is left alone.
 
 ## 調べ方 (diagnosis)
 
-gstn doc fmt --check --json lists `changed` (the files that would change). Run gstn doc fmt <path> and look at git diff to see what the formatting does.
+gstn doc fmt --check --json lists `changed` (the files that would change) and `skipped` with each reason. Run gstn doc fmt <path> and look at git diff to see what the formatting does.
 
 ## 対処 (fix)
 

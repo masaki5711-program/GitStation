@@ -69,7 +69,7 @@ and traces the merge request (`trace_merge_request`: changed requirements, added
 work items' `PBI-<n>/AC-<m>` tests). spec-lint is `success` / `failure` (FG-REPO-0028) /
 `neutral` (FG-REPO-0031); spec-trace is advisory: `success` / `neutral` (FG-REPO-0029, 0030,
 0031), never `failure`. A run shows only the repository's own text. The evaluation's deadline is
-70 s and each write's 8 s (three runs and three `error` writes: 118 s < the job's 120 s); `SpecChecks::fail` answers `error` for all three on the
+60 s and each write's 8 s (three runs and three `error` writes: 108 s, 12 s inside the job's 120 s); `SpecChecks::fail` answers `error` for all three on the
 last attempt and `record_errors` for `forge worker`'s `spec_index_sweep`. forge-web's spec API
 (`GET …/specs/…`) reads the same index with the reader's permissions.
 
@@ -79,7 +79,7 @@ from the **same read** of the head (`spec_index::index_head`: one `ls-tree` of t
 taken from that listing, so the index equals `index_commit`'s). Documents are the `.md` files naming a
 `doctype` in any folder, their types `.forge/doctypes/*.yml`; the lint is `forge_doc::lint::lint`, the same
 as `gstn doc lint`. `success` / `failure` (FG-DOC-0001; FG-DOC-0003 for a type definition that cannot be
-used) / `neutral` (FG-DOC-0002: `DocLimits` — 50 000 tree entries, 2000 `.md`, 4 MiB each, 32 MiB in all,
+used) / `neutral` (FG-DOC-0002: `DocLimits` — 50 000 tree entries, 2000 `.md`, 100 over the parser's limit (each read only up to the limit + 1 byte, like gstn), 32 MiB in all,
 64 definitions — never a silent pass). Broken references are errors (plan 13 Q13); the repository setting
 that lowers them during a migration is not built yet.
 

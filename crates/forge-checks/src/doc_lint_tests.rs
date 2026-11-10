@@ -186,32 +186,44 @@ fn select_reads_markdown_and_definitions_within_the_bounds() {
         truncated: false,
     };
     let (chosen, t) = select(&listing, &DocLimits::default());
-    let paths: Vec<&str> = chosen.iter().map(|b| b.path.as_str()).collect();
+    let paths: Vec<&str> = chosen.whole.iter().map(|b| b.path.as_str()).collect();
     assert_eq!(
         paths,
         vec![".forge/doctypes/a.yml", "a.md", "b.md", "big.md"]
     );
+    assert!(chosen.prefix.is_empty());
     assert_eq!(t.incomplete, None);
     let few = DocLimits {
         max_files: 1,
         ..DocLimits::default()
     };
     let (chosen, t) = select(&listing, &few);
-    assert_eq!(chosen.len(), 2);
+    assert_eq!(chosen.whole.len(), 2);
     assert_eq!(t.incomplete, Some("doc_files"));
-    let small = DocLimits {
-        max_file_bytes: 100,
+    // A file over the parser's limit is read in part, counted at the cap.
+    let huge = forge_doc::document::MAX_DOCUMENT_BYTES as u64 * 8;
+    let large = BlobListing {
+        blobs: vec![blob("a.md", 10), blob("huge.md", huge), blob("z.md", 10)],
+        truncated: false,
+    };
+    let (chosen, t) = select(&large, &DocLimits::default());
+    assert_eq!(chosen.prefix.len(), 1);
+    assert_eq!(chosen.whole.len(), 2);
+    assert_eq!(t.incomplete, None, "a large file is no bound by itself");
+    let none = DocLimits {
+        max_large_files: 0,
         ..DocLimits::default()
     };
-    let (chosen, t) = select(&listing, &small);
-    assert!(chosen.iter().all(|b| b.path != "big.md"));
-    assert_eq!(t.incomplete, Some("doc_file_too_large"));
+    let (chosen, t) = select(&large, &none);
+    assert!(chosen.prefix.is_empty());
+    assert_eq!(chosen.whole.len(), 2);
+    assert_eq!(t.incomplete, Some("doc_large_files"));
     let total = DocLimits {
         max_total_bytes: 25,
         ..DocLimits::default()
     };
     let (chosen, t) = select(&listing, &total);
-    assert_eq!(chosen.len(), 2);
+    assert_eq!(chosen.whole.len(), 2);
     assert_eq!(t.incomplete, Some("doc_bytes"));
     let types = DocLimits {
         max_doctypes: 0,
@@ -225,4 +237,38 @@ fn select_reads_markdown_and_definitions_within_the_bounds() {
     };
     let (_, t) = select(&cut, &DocLimits::default());
     assert_eq!(t.incomplete, Some("doc_tree"));
+}
+
+/// Review MR3: a real bound hit (not a hand-set one) through `select`
+/// makes the run `neutral` with FG-DOC-0002.
+#[test]
+fn a_bound_hit_while_selecting_makes_the_run_neutral() {
+    let listing = BlobListing {
+        blobs: vec![blob("QM-001.md", 10), blob("QM-002.md", 10)],
+        truncated: false,
+    };
+    let few = DocLimits {
+        max_files: 1,
+        ..DocLimits::default()
+    };
+    let (chosen, mut t) = select(&listing, &few);
+    t.add(
+        ".forge/doctypes/qms.manual.yml",
+        MANUAL_T.as_bytes().to_vec(),
+    );
+    for b in &chosen.whole {
+        t.add(&b.path, doc("QM-001", "本文。").into_bytes());
+    }
+    let run = assess_doc_lint(&t).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Neutral),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary.contains("(doc_files)") && run.summary.contains("[FG-DOC-0002]"),
+        "{}",
+        run.summary
+    );
 }

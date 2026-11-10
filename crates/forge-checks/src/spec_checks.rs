@@ -65,10 +65,11 @@ use crate::spec_refs::RepoConfigRead;
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// The whole evaluation before the writes (two indexes; each git call is
 /// bounded by the browse limits and `IndexLimits::grep_timeout`).
-pub const EVALUATION_BUDGET: Duration = Duration::from_secs(70);
+pub const EVALUATION_BUDGET: Duration = Duration::from_secs(60);
 /// One write of a run.
-/// Three runs and, on the last attempt, three `error` writes: 70 s + 6 × 8 s
-/// = 118 s, inside the job's 120 s (plan 13 stage 2 added `forge/doc-lint`).
+/// Three runs and, on the last attempt, three `error` writes: 60 s + 6 × 8 s
+/// = 108 s, at least 10 s inside the job's 120 s (plan 13 stage 2 added
+/// `forge/doc-lint`; review MR3: keep a margin).
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// The longest annotation message (the table's CHECK, 4 KiB).

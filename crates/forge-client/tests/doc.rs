@@ -51,7 +51,15 @@ impl Out {
 /// Run gstn in `cwd` with no host, no token and an unreachable host: the
 /// doc commands must never need any of them.
 fn gstn(cwd: &Path, args: &[&str]) -> Out {
-    let o = Command::new(env!("CARGO_BIN_EXE_gstn"))
+    gstn_env(cwd, args, &[])
+}
+
+fn gstn_env(cwd: &Path, args: &[&str], env: &[(&str, &Path)]) -> Out {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_gstn"));
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let o = cmd
         .args(args)
         .current_dir(cwd)
         .env_remove("GSTN_TOKEN")
@@ -254,4 +262,70 @@ fn doc_outside_a_repository_or_its_paths_is_a_usage_error() {
     let o = gstn(r.path(), &["doc", "fmt", plain.path().to_str().unwrap()]);
     assert_eq!(o.code, 2);
     assert!(o.stderr.contains("path_outside_repository"), "{}", o.stderr);
+}
+
+/// Review MR3: `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` in the
+/// caller's environment never point gstn at another repository.
+#[test]
+fn git_location_variables_do_not_redirect_the_listing() {
+    let r = repo(&[
+        (".forge/doctypes/qms.manual.yml", MANUAL_T),
+        ("qms/QM-001.md", &doc("QM-001", "本文。[[QM-404]]")),
+    ]);
+    let other = repo(&[("README.md", "# other\n")]);
+    let o = gstn_env(
+        r.path(),
+        &["doc", "lint", "--json"],
+        &[
+            ("GIT_DIR", &other.path().join(".git")),
+            ("GIT_WORK_TREE", other.path()),
+            ("GIT_INDEX_FILE", &other.path().join(".git/index")),
+        ],
+    );
+    assert_eq!(o.code, 1, "{}{}", o.stdout, o.stderr);
+    let v = o.json();
+    assert_eq!(v["markdown_files"], 1);
+    assert_eq!(v["files"][0]["path"], "qms/QM-001.md");
+}
+
+/// Review MR3: a file fmt could not check is never a pass of --check — a
+/// named file that is no document, a document too large to format — while
+/// a large Markdown file without a `doctype` is none of its concern.
+#[test]
+fn fmt_check_fails_for_a_file_it_could_not_check() {
+    let big = "x".repeat(1024 * 1024 + 10);
+    let r = repo(&[
+        (".forge/doctypes/qms.manual.yml", MANUAL_T),
+        ("qms/QM-001.md", &doc("QM-001", "一文目。")),
+        ("notes.md", "# notes\n"),
+        ("BIG-README.md", &format!("# big\n{big}\n")),
+    ]);
+    let o = gstn(r.path(), &["doc", "fmt", "--check"]);
+    assert_eq!(
+        o.code, 0,
+        "a large non-document is no concern: {}{}",
+        o.stdout, o.stderr
+    );
+    let o = gstn(r.path(), &["doc", "fmt", "--check", "notes.md", "--json"]);
+    assert_eq!(o.code, 1, "{}{}", o.stdout, o.stderr);
+    assert_eq!(o.err_json()["error_code"], "FG-DOC-0004");
+    assert_eq!(
+        o.json()["skipped"],
+        serde_json::json!([{"path": "notes.md", "reason": "not_a_document"}])
+    );
+    std::fs::write(r.path().join("qms/QM-002.md"), doc("QM-002", &big)).unwrap();
+    let o = gstn(r.path(), &["doc", "fmt", "--check", "--json"]);
+    assert_eq!(o.code, 1, "{}{}", o.stdout, o.stderr);
+    assert_eq!(o.err_json()["error_code"], "FG-DOC-0004");
+    assert_eq!(
+        o.json()["skipped"],
+        serde_json::json!([{"path": "qms/QM-002.md", "reason": "too_large"}])
+    );
+    // Plain fmt reports it too.
+    let o = gstn(r.path(), &["doc", "fmt"]);
+    assert!(
+        o.stdout.contains("skipped: qms/QM-002.md (too_large)"),
+        "{}",
+        o.stdout
+    );
 }

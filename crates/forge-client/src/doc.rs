@@ -29,7 +29,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use forge_doc::doctype::{parse_doctype, Doctype, MAX_DOCTYPE_BYTES};
 use forge_doc::document::{parse_document, Problem, MAX_DOCUMENT_BYTES};
@@ -50,6 +50,39 @@ pub const MAX_MARKDOWN_FILES: usize = 5_000;
 pub const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 /// Type definitions read at most (`doctype_files` past it).
 pub const MAX_DOCTYPE_FILES: usize = 64;
+/// The bounds of one read (module docs); the defaults are the constants
+/// above (tests use smaller ones).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    pub listing_bytes: usize,
+    pub markdown_files: usize,
+    pub total_bytes: u64,
+    pub doctype_files: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            listing_bytes: MAX_LISTING_BYTES,
+            markdown_files: MAX_MARKDOWN_FILES,
+            total_bytes: MAX_TOTAL_BYTES,
+            doctype_files: MAX_DOCTYPE_FILES,
+        }
+    }
+}
+
+/// Variables that would point git at another repository than the one
+/// found (review MR3): removed from `git ls-files`' environment.
+const GIT_LOCATION_VARS: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+];
+
 /// One `git ls-files`.
 pub const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -68,7 +101,7 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, io: &mut Io<'_>) -> Result<()> {
     match cmd {
         DocCommand::Fmt { check, paths } => {
             let targets = targets(&root, &cwd, paths)?;
-            let out = fmt(&root, &targets, *check)?;
+            let out = fmt(&root, &targets, *check, &Limits::default())?;
             report_fmt(cli, io, &out)
         }
         DocCommand::Lint {
@@ -76,7 +109,7 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, io: &mut Io<'_>) -> Result<()> {
             migration_warnings,
         } => {
             let targets = targets(&root, &cwd, paths)?;
-            let out = lint(&root, &targets, *migration_warnings)?;
+            let out = lint(&root, &targets, *migration_warnings, &Limits::default())?;
             report_lint(cli, io, &out)
         }
     }
@@ -84,10 +117,35 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, io: &mut Io<'_>) -> Result<()> {
 
 // ── the repository and its files ───────────────────────────────────────
 
+/// `raw` without the Windows verbatim prefix `canonicalize` adds
+/// (`\\?\C:\x` → `C:\x`, `\\?\UNC\srv\share` → `\\srv\share`);
+/// `None` when it has none. Git and the user know the plain form.
+pub fn strip_verbatim_str(raw: &str) -> Option<String> {
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{rest}"));
+    }
+    let rest = raw.strip_prefix(r"\\?\")?;
+    let mut chars = rest.chars();
+    let drive = matches!(
+        (chars.next(), chars.next()),
+        (Some(c), Some(':')) if c.is_ascii_alphabetic()
+    );
+    drive.then(|| rest.to_owned())
+}
+
+/// `canonicalize`, without the Windows verbatim prefix.
+fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let full = path.canonicalize()?;
+    Ok(full
+        .to_str()
+        .and_then(strip_verbatim_str)
+        .map_or(full, PathBuf::from))
+}
+
 /// The repository's root: the nearest directory from `start` upward that
 /// holds `.git` (a directory, or a file for a worktree), canonical.
 pub fn find_root(start: &Path) -> Result<PathBuf> {
-    let start = start.canonicalize().map_err(|e| {
+    let start = canonical(start).map_err(|e| {
         ClientError::local(
             ErrorCode::CliInputFailed,
             format!("reason=cwd_unreadable kind={:?}", e.kind()),
@@ -113,7 +171,7 @@ pub fn targets(root: &Path, cwd: &Path, paths: &[PathBuf]) -> Result<Vec<String>
     }
     let mut out = Vec::with_capacity(paths.len());
     for p in paths {
-        let full = cwd.join(p).canonicalize().map_err(|_| {
+        let full = canonical(&cwd.join(p)).map_err(|_| {
             ClientError::local(
                 ErrorCode::CliUsageInvalid,
                 format!("reason=path_not_found path={}", p.display()),
@@ -169,8 +227,27 @@ fn is_doctype_file(path: &str) -> bool {
 pub struct Files {
     pub doctypes: Vec<(String, Vec<u8>)>,
     pub markdown: Vec<(String, Vec<u8>)>,
+    /// Each file's length and time of change when it was read: `fmt`
+    /// refuses to write over a file that changed since (review MR3).
+    pub stamps: HashMap<String, Stamp>,
     /// The first bound hit (module docs).
     pub incomplete: Option<&'static str>,
+}
+
+/// A file's length and time of change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    pub len: u64,
+    pub modified: Option<SystemTime>,
+}
+
+impl Stamp {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        }
+    }
 }
 
 impl Files {
@@ -180,15 +257,20 @@ impl Files {
 }
 
 /// `git ls-files -z --cached --others --exclude-standard` in `root`, at
-/// most [`MAX_LISTING_BYTES`] (more: the second value is true).
-fn list_files(root: &Path) -> Result<(Vec<u8>, bool)> {
+/// most `max` bytes (more: the second value is true). Git is pointed at
+/// `root` only: the variables that name another repository are removed.
+fn list_files(root: &Path, max: usize) -> Result<(Vec<u8>, bool)> {
     let fail = |why: String| {
         ClientError::local(
             ErrorCode::CliInputFailed,
             format!("reason=git_ls_files_failed ({why})"),
         )
     };
-    let mut child = Command::new("git")
+    let mut cmd = Command::new("git");
+    for var in GIT_LOCATION_VARS {
+        cmd.env_remove(var);
+    }
+    let mut child = cmd
         .arg("-C")
         .arg(root)
         .args([
@@ -210,7 +292,7 @@ fn list_files(root: &Path) -> Result<(Vec<u8>, bool)> {
     // the pipe after the cap ends a git that has more to say.
     let reader = std::thread::spawn(move || {
         let mut out = Vec::new();
-        let limit = u64::try_from(MAX_LISTING_BYTES).unwrap_or(u64::MAX);
+        let limit = u64::try_from(max).unwrap_or(u64::MAX);
         let read = stdout.take(limit.saturating_add(1)).read_to_end(&mut out);
         read.map(|_| out)
     });
@@ -233,7 +315,7 @@ fn list_files(root: &Path) -> Result<(Vec<u8>, bool)> {
         .join()
         .map_err(|_| fail("reader_panicked".to_owned()))?
         .map_err(|e| fail(format!("read_failed {:?}", e.kind())))?;
-    let cut = out.len() > MAX_LISTING_BYTES;
+    let cut = out.len() > max;
     // A git that was cut off by the closed pipe fails; that is the cap.
     if !status.success() && !cut {
         return Err(fail(format!("exit {}", status.code().unwrap_or(-1))));
@@ -243,7 +325,7 @@ fn list_files(root: &Path) -> Result<(Vec<u8>, bool)> {
 
 /// Read up to `max` bytes of `path`; `None` when it is gone or is not a
 /// regular file (a symbolic link is not followed: the server reads none).
-fn read_prefix(path: &Path, max: usize) -> Result<Option<Vec<u8>>> {
+fn read_prefix(path: &Path, max: usize) -> Result<Option<(Vec<u8>, Stamp)>> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         // Listed but deleted in the working tree: not in the next commit.
@@ -258,7 +340,7 @@ fn read_prefix(path: &Path, max: usize) -> Result<Option<Vec<u8>>> {
     file.take(u64::try_from(max).unwrap_or(u64::MAX))
         .read_to_end(&mut out)
         .map_err(|e| unreadable(e.kind()))?;
-    Ok(Some(out))
+    Ok(Some((out, Stamp::of(&meta))))
 }
 
 fn unreadable(kind: std::io::ErrorKind) -> ClientError {
@@ -270,8 +352,8 @@ fn unreadable(kind: std::io::ErrorKind) -> ClientError {
 
 /// Every type definition, and the `.md` files `want` keeps, of the
 /// repository at `root` (module docs, bounds).
-pub fn read_files(root: &Path, want: impl Fn(&str) -> bool) -> Result<Files> {
-    let (listing, cut) = list_files(root)?;
+pub fn read_files(root: &Path, want: impl Fn(&str) -> bool, limits: &Limits) -> Result<Files> {
+    let (listing, cut) = list_files(root, limits.listing_bytes)?;
     let mut files = Files::default();
     if cut {
         files.left_out("doc_tree");
@@ -299,37 +381,38 @@ pub fn read_files(root: &Path, want: impl Fn(&str) -> bool) -> Result<Files> {
         }
     }
     let doctypes: Vec<&String> = paths.iter().filter(|p| is_doctype_file(p)).collect();
-    if doctypes.len() > MAX_DOCTYPE_FILES {
+    if doctypes.len() > limits.doctype_files {
         files.left_out("doctype_files");
     }
     let markdown: Vec<&String> = paths
         .iter()
         .filter(|p| p.ends_with(".md") && want(p))
         .collect();
-    if markdown.len() > MAX_MARKDOWN_FILES {
+    if markdown.len() > limits.markdown_files {
         files.left_out("doc_files");
     }
     let mut total = 0u64;
     let chosen = doctypes
         .into_iter()
-        .take(MAX_DOCTYPE_FILES)
+        .take(limits.doctype_files)
         .map(|p| (p, MAX_DOCTYPE_BYTES.saturating_add(1), true))
         .chain(
             markdown
                 .into_iter()
-                .take(MAX_MARKDOWN_FILES)
+                .take(limits.markdown_files)
                 .map(|p| (p, MAX_DOCUMENT_BYTES.saturating_add(1), false)),
         );
     for (path, max, is_type) in chosen {
-        let Some(bytes) = read_prefix(&root.join(path), max)? else {
+        let Some((bytes, stamp)) = read_prefix(&root.join(path), max)? else {
             continue;
         };
         let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        if total.saturating_add(size) > MAX_TOTAL_BYTES {
+        if total.saturating_add(size) > limits.total_bytes {
             files.left_out("doc_bytes");
             break;
         }
         total = total.saturating_add(size);
+        files.stamps.insert(path.clone(), stamp); // clone: the set keeps its paths
         if is_type {
             files.doctypes.push((path.clone(), bytes)); // clone: the set keeps its paths
         } else {
@@ -383,9 +466,14 @@ fn code_of(path: &str, rule: &str) -> ErrorCode {
 }
 
 /// Lint the repository at `root`; report the files under `targets`.
-pub fn lint(root: &Path, targets: &[String], migration_warnings: bool) -> Result<LintOutcome> {
+pub fn lint(
+    root: &Path,
+    targets: &[String],
+    migration_warnings: bool,
+    limits: &Limits,
+) -> Result<LintOutcome> {
     // Every document is read: references resolve against the repository.
-    let files = read_files(root, |_| true)?;
+    let files = read_files(root, |_| true, limits)?;
     let doctypes: Vec<Source<'_>> = files
         .doctypes
         .iter()
@@ -453,7 +541,7 @@ fn incomplete_json(reason: Option<&'static str>) -> Value {
     )
 }
 
-fn report_lint(cli: &Cli, io: &mut Io<'_>, out: &LintOutcome) -> Result<()> {
+pub fn report_lint(cli: &Cli, io: &mut Io<'_>, out: &LintOutcome) -> Result<()> {
     let mut human = Vec::new();
     for (path, problems, dropped) in &out.files {
         human.extend(problems.iter().map(|r| problem_text(path, r)));
@@ -537,38 +625,68 @@ pub struct FmtOutcome {
     pub incomplete: Option<&'static str>,
 }
 
-/// Write `bytes` over `path` through a temporary file in the same
+/// Write `bytes` over `path` through a new temporary file in the same
 /// directory and a rename (never half a file), keeping its permissions.
-fn replace_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    let fail = |kind: std::io::ErrorKind| {
+/// `read` is the file as it was read: a file that changed since (its length
+/// or time of change) is left as it is (review MR3: never overwrite an edit
+/// made while formatting).
+pub fn replace_file(path: &Path, bytes: &[u8], read: Option<&Stamp>) -> Result<()> {
+    use std::io::Write as _;
+    let fail = |reason: &str, kind: std::io::ErrorKind| {
         ClientError::local(
             ErrorCode::CliOutputFailed,
-            format!("stream=file reason=write_failed kind={kind:?}"),
+            format!("stream=file reason={reason} kind={kind:?}"),
         )
     };
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| fail(std::io::ErrorKind::InvalidInput))?;
+        .ok_or_else(|| fail("write_failed", std::io::ErrorKind::InvalidInput))?;
     let tmp = path.with_file_name(format!(".{name}.gstn-fmt-{}.tmp", std::process::id()));
-    let perms = std::fs::metadata(path)
-        .map_err(|e| fail(e.kind()))?
-        .permissions();
-    let written = std::fs::write(&tmp, bytes)
-        .and_then(|()| std::fs::set_permissions(&tmp, perms))
-        .and_then(|()| std::fs::rename(&tmp, path));
-    if let Err(e) = written {
+    let meta = std::fs::metadata(path).map_err(|e| fail("write_failed", e.kind()))?;
+    // `create_new`: never write through a file (or link) already there.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|e| fail("write_failed", e.kind()))?;
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::set_permissions(&tmp, meta.permissions()));
+    drop(file);
+    let unchanged = std::fs::metadata(path)
+        .map(|now| read.is_none_or(|r| Stamp::of(&now) == *r))
+        .unwrap_or(false);
+    let result = match written {
+        Err(e) => Err(fail("write_failed", e.kind())),
+        Ok(()) if !unchanged => Err(fail(
+            "file_changed_while_formatting",
+            std::io::ErrorKind::Other,
+        )),
+        Ok(()) => std::fs::rename(&tmp, path).map_err(|e| fail("write_failed", e.kind())),
+    };
+    if result.is_err() {
         // The temporary file is ours; the failure is what is reported.
         let _cleanup = std::fs::remove_file(&tmp);
-        return Err(fail(e.kind()));
     }
-    Ok(())
+    result
+}
+
+/// Whether `bytes` (a file fmt refused) names a `doctype` in its front
+/// matter, read as far as the parser's limit and lossily: a too large or
+/// not UTF-8 document is a document fmt could not check; any other
+/// Markdown file is none of its concern.
+fn names_doctype(bytes: &[u8]) -> bool {
+    let head = bytes.get(..MAX_DOCUMENT_BYTES).unwrap_or(bytes);
+    let text = String::from_utf8_lossy(head);
+    parse_document(text.as_bytes()).doctype().is_some()
 }
 
 /// Format the documents under `targets` (all: the whole repository);
 /// `check`: write nothing.
-pub fn fmt(root: &Path, targets: &[String], check: bool) -> Result<FmtOutcome> {
-    let files = read_files(root, |p| selected(targets, p))?;
+pub fn fmt(root: &Path, targets: &[String], check: bool, limits: &Limits) -> Result<FmtOutcome> {
+    let files = read_files(root, |p| selected(targets, p), limits)?;
     let mut types: HashMap<String, Option<Doctype>> = HashMap::new();
     for (path, bytes) in &files.doctypes {
         let stem = path
@@ -601,18 +719,24 @@ pub fn fmt(root: &Path, targets: &[String], check: bool) -> Result<FmtOutcome> {
             Ok(formatted) if formatted.as_bytes() == bytes.as_slice() => out.unchanged += 1,
             Ok(formatted) => {
                 if !check {
-                    replace_file(&root.join(path), formatted.as_bytes())?;
+                    replace_file(
+                        &root.join(path),
+                        formatted.as_bytes(),
+                        files.stamps.get(path),
+                    )?;
                 }
                 out.changed.push(path.clone()); // clone: as above
             }
+            // Not a document: none of fmt's concern, unless it was named.
             Err(FmtRefusal::NotADocument) if !named => {}
+            Err(FmtRefusal::TooLarge | FmtRefusal::NotUtf8) if !named && !names_doctype(bytes) => {}
             Err(why) => out.skipped.push((path.clone(), why.as_str())), // clone: as above
         }
     }
     Ok(out)
 }
 
-fn report_fmt(cli: &Cli, io: &mut Io<'_>, out: &FmtOutcome) -> Result<()> {
+pub fn report_fmt(cli: &Cli, io: &mut Io<'_>, out: &FmtOutcome) -> Result<()> {
     let verb = if out.check {
         "would change"
     } else {
@@ -644,10 +768,16 @@ fn report_fmt(cli: &Cli, io: &mut Io<'_>, out: &FmtOutcome) -> Result<()> {
         "incomplete": incomplete_json(out.incomplete),
     });
     emit(io, cli, value, &human.join("\n"))?;
-    if out.check && !out.changed.is_empty() {
+    // A file fmt could not check is never a pass of --check (review MR3).
+    let unchecked = out
+        .skipped
+        .iter()
+        .filter(|(_, why)| *why != "doctype_invalid")
+        .count();
+    if out.check && (!out.changed.is_empty() || unchecked > 0) {
         return Err(ClientError::local(
             ErrorCode::DocFormatWouldChange,
-            format!("files={}", out.changed.len()),
+            format!("files={} unchecked={unchecked}", out.changed.len()),
         ));
     }
     if out.definitions_invalid {

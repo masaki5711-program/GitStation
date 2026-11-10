@@ -111,6 +111,26 @@ async fn blobs_in_tree_lists_every_regular_file_of_the_commit() {
 }
 
 #[tokio::test]
+async fn read_blob_prefix_reads_at_most_the_cap() {
+    let f = fixture().await;
+    let c = commit(&f.path, &tree(&f.path), None);
+    let b = f.browser(BrowseLimits::default());
+    let listed = b
+        .blobs_under(f.id, &c, &[path("spec")], 100)
+        .await
+        .expect("list");
+    let first = &listed.blobs[0];
+    assert_eq!(
+        b.read_blob_prefix(f.id, first, 5).await.expect("read"),
+        b"---\ns".to_vec()
+    );
+    assert_eq!(
+        b.read_blob_prefix(f.id, first, 1000).await.expect("read"),
+        b"---\nspec: a\n---\n".to_vec()
+    );
+}
+
+#[tokio::test]
 async fn read_blobs_returns_each_content_in_order() {
     let f = fixture().await;
     let c = commit(&f.path, &tree(&f.path), None);

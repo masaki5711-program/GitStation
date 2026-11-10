@@ -446,7 +446,9 @@ async fn the_head_is_read_once_for_the_index_and_the_documents() {
         "{}",
         run.summary
     );
-    // A listing cut at its bound leaves both incomplete.
+    // A listing cut at its bound leaves the documents incomplete; the
+    // specification directories are listed on their own (review MR3):
+    // forge/spec-lint's answer does not depend on the tree's size.
     let cut = DocLimits {
         max_tree_entries: 2,
         ..DocLimits::default()
@@ -454,6 +456,80 @@ async fn the_head_is_read_once_for_the_index_and_the_documents() {
     let (head, docs) = index_head(&r.browser, r.id, &c, &limits, &cut)
         .await
         .expect("head");
-    assert_eq!(head.index.incomplete, Some("spec_files"));
+    assert_eq!(head, alone, "the same index as index_commit");
+    assert_eq!(head.index.incomplete, None);
     assert_eq!(docs.incomplete, Some("doc_tree"));
+    let run = assess_doc_lint(&docs).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Neutral),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("[FG-DOC-0002]"), "{}", run.summary);
+}
+
+/// A Markdown file over the parser's limit is read only as far as the
+/// parser needs: one without a `doctype` is no document and no bound
+/// (review MR3); one naming a type is `too_large`, as gstn says.
+#[tokio::test]
+async fn a_large_markdown_file_is_read_in_part_and_is_no_bound() {
+    let r = repo().await;
+    let big = "x".repeat(forge_doc::document::MAX_DOCUMENT_BYTES + 10);
+    let readme = format!("# notes\n{big}");
+    let large_doc = String::from_utf8(manual("QM-001", &big)).expect("utf8");
+    let c = commit(
+        &r.path,
+        &[
+            (".forge/doctypes/qms.manual.yml", MANUAL_T),
+            ("README.md", readme.as_bytes()),
+        ],
+    );
+    let limits = IndexLimits::default();
+    let (_, docs) = index_head(&r.browser, r.id, &c, &limits, &DocLimits::default())
+        .await
+        .expect("head");
+    assert_eq!(docs.incomplete, None);
+    assert_eq!(
+        docs.markdown[0].1.len(),
+        forge_doc::document::MAX_DOCUMENT_BYTES + 1
+    );
+    let run = assess_doc_lint(&docs).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    let c = commit(
+        &r.path,
+        &[
+            (".forge/doctypes/qms.manual.yml", MANUAL_T),
+            ("QM-001.md", large_doc.as_bytes()),
+        ],
+    );
+    let (_, docs) = index_head(&r.browser, r.id, &c, &limits, &DocLimits::default())
+        .await
+        .expect("head");
+    let run = assess_doc_lint(&docs).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary.contains("QM-001.md:0 too_large"),
+        "{}",
+        run.summary
+    );
+    // More large files than the bound: named, never a silent pass.
+    let none = DocLimits {
+        max_large_files: 0,
+        ..DocLimits::default()
+    };
+    let (_, docs) = index_head(&r.browser, r.id, &c, &limits, &none)
+        .await
+        .expect("head");
+    assert_eq!(docs.incomplete, Some("doc_large_files"));
 }

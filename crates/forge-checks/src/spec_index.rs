@@ -275,8 +275,10 @@ fn under_dirs(whole: &BlobListing, paths: &[RepoPath], max: usize) -> BlobListin
 /// and one read of the blobs give both the specification index (the same
 /// as [`index_commit`] with [`Tags::Read`]: the own directories' files are
 /// taken from that listing) and the documents of `forge/doc-lint`
-/// ([`crate::doc_lint`]). A listing cut at the tree's bound leaves both
-/// incomplete (`spec_files`, `doc_tree`), never a silent pass. Errors: as
+/// ([`crate::doc_lint`]). A listing cut at the tree's bound leaves the
+/// documents incomplete (`doc_tree`), never a silent pass; the
+/// specification directories are then listed on their own, so the index
+/// stays the one [`index_commit`] builds. Errors: as
 /// [`index_commit`].
 pub async fn index_head(
     browse: &Browser,
@@ -294,15 +296,24 @@ pub async fn index_head(
         .await
         .map_err(|e| e.with_context("commit", commit.to_owned()))?;
     let mut index = SpecIndex::default();
-    let spec = select_spec(
-        &under_dirs(&whole, &paths, limits.max_files.saturating_mul(4)),
-        limits,
-        &mut index,
-    );
+    let spec_cap = limits.max_files.saturating_mul(4);
+    // A whole tree past its bound says nothing about the specification
+    // directories: list them on their own as `index_commit` does (review
+    // MR3), so forge/spec-lint's answer never depends on the tree's size.
+    let spec_listed = if whole.truncated {
+        browse
+            .blobs_under(repo, commit, &paths, spec_cap)
+            .await
+            .map_err(|e| e.with_context("commit", commit.to_owned()))?
+    } else {
+        under_dirs(&whole, &paths, spec_cap)
+    };
+    let spec = select_spec(&spec_listed, limits, &mut index);
     let (doc_blobs, mut docs) = doc_lint::select(&whole, doc_limits);
     // One read: the specification files, then the documents not among them.
     let spec_paths: HashSet<&str> = spec.iter().map(|b| b.path.as_str()).collect();
     let extra: Vec<&ListedBlob> = doc_blobs
+        .whole
         .iter()
         .filter(|b| !spec_paths.contains(b.path.as_str()))
         .collect();
@@ -312,7 +323,7 @@ pub async fn index_head(
         .read_blobs(repo, &to_read)
         .await
         .map_err(|e| e.with_context("commit", commit.to_owned()))?;
-    let wanted: HashSet<&str> = doc_blobs.iter().map(|b| b.path.as_str()).collect();
+    let wanted: HashSet<&str> = doc_blobs.whole.iter().map(|b| b.path.as_str()).collect();
     for (i, (b, bytes)) in to_read.iter().zip(contents).enumerate() {
         if i < spec.len() {
             index.add_document(&b.path, &bytes);
@@ -320,6 +331,14 @@ pub async fn index_head(
         if wanted.contains(b.path.as_str()) {
             docs.add(&b.path, bytes);
         }
+    }
+    // Files over the parser's limit: only what the parser needs.
+    for b in &doc_blobs.prefix {
+        let bytes = browse
+            .read_blob_prefix(repo, b, doc_lint::read_cap(&b.path))
+            .await
+            .map_err(|e| e.with_context("commit", commit.to_owned()))?;
+        docs.add(&b.path, bytes);
     }
     index.documents.sort_by(|a, b| a.path.cmp(&b.path));
     docs.sort();

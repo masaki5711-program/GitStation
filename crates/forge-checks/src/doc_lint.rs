@@ -11,9 +11,10 @@
 //! the tree is read (whether it names a type is in its front matter).
 //!
 //! **Bounds** ([`DocLimits`]): the tree listing (`doc_tree`), the number of
-//! `.md` files (`doc_files`), one file's size (`doc_file_too_large`: not
-//! read), the bytes read in all (`doc_bytes`) and the number of type
-//! definitions (`doctype_files`). The first bound hit is named
+//! `.md` files (`doc_files`), the files over the parser's limit — read in
+//! part, only as far as the parser needs ([`read_cap`], like `gstn doc`) —
+//! (`doc_large_files`), the bytes read in all (`doc_bytes`) and the number
+//! of type definitions (`doctype_files`). The first bound hit is named
 //! ([`DocTree::incomplete`], `FG-DOC-0002`) and the run never claims more
 //! than it read.
 //!
@@ -25,6 +26,7 @@
 //! them to warnings during a migration is not built yet.
 
 use forge_core::checks::{CheckAnnotationLevel, CheckConclusion, DOC_LINT_CHECK};
+use forge_doc::doctype::MAX_DOCTYPE_BYTES;
 use forge_doc::document::MAX_DOCUMENT_BYTES;
 use forge_doc::lint::{lint, FileReport, Source, DOCTYPES_DIR};
 use forge_errors::{ErrorCode, ForgeError};
@@ -43,8 +45,9 @@ pub struct DocLimits {
     pub max_tree_entries: usize,
     /// `.md` files read at most (`doc_files` past it).
     pub max_files: usize,
-    /// A larger `.md` is not read (`doc_file_too_large`).
-    pub max_file_bytes: u64,
+    /// Files over the parser's limit read in part (one `cat-file` each)
+    /// at most (`doc_large_files` past it).
+    pub max_large_files: usize,
     /// Bytes read in all (`doc_bytes` past it).
     pub max_total_bytes: u64,
     /// Type definitions read at most (`doctype_files` past it).
@@ -56,10 +59,21 @@ impl Default for DocLimits {
         Self {
             max_tree_entries: 50_000,
             max_files: 2_000,
-            max_file_bytes: 4 * 1024 * 1024,
+            max_large_files: 100,
             max_total_bytes: 32 * 1024 * 1024,
             max_doctypes: 64,
         }
+    }
+}
+
+/// The bytes of `path` the lint needs at most: one past the parser's limit
+/// (a document's, a type definition's). More says nothing more: the lint
+/// answers `too_large` either way — and `gstn doc` reads no more.
+pub fn read_cap(path: &str) -> usize {
+    if is_doctype_file(path) {
+        MAX_DOCTYPE_BYTES.saturating_add(1)
+    } else {
+        MAX_DOCUMENT_BYTES.saturating_add(1)
     }
 }
 
@@ -80,15 +94,14 @@ impl DocTree {
         self.incomplete.get_or_insert(reason);
     }
 
-    /// Keep a file that was read. A document over the parser's limit is
-    /// kept as its first `MAX_DOCUMENT_BYTES + 1` bytes: the lint answers
+    /// Keep a file that was read, cut at [`read_cap`]: the lint answers
     /// `too_large` for it exactly as for the whole file (and as
     /// `gstn doc lint`, which reads no more).
     pub fn add(&mut self, path: &str, mut bytes: Vec<u8>) {
+        bytes.truncate(read_cap(path));
         if is_doctype_file(path) {
             self.doctypes.push((path.to_owned(), bytes));
         } else if is_document_file(path) {
-            bytes.truncate(MAX_DOCUMENT_BYTES.saturating_add(1));
             self.markdown.push((path.to_owned(), bytes));
         }
     }
@@ -112,14 +125,24 @@ pub fn is_doctype_file(path: &str) -> bool {
         .is_some_and(|name| name.ends_with(".yml") && !name.contains('/'))
 }
 
+/// What to read of a head's documents.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Selection {
+    /// Read whole (with the specification files, one `cat-file --batch`).
+    pub whole: Vec<ListedBlob>,
+    /// Over [`read_cap`]: only their first [`read_cap`] bytes are read
+    /// (whether a large `.md` names a `doctype` is in its front matter).
+    pub prefix: Vec<ListedBlob>,
+}
+
 /// What to read of the whole tree's `listing`, within `limits`, and the
 /// tree to fill (its bound already named when one was hit while choosing).
-pub fn select(listing: &BlobListing, limits: &DocLimits) -> (Vec<ListedBlob>, DocTree) {
+pub fn select(listing: &BlobListing, limits: &DocLimits) -> (Selection, DocTree) {
     let mut tree = DocTree::default();
     if listing.truncated {
         tree.left_out("doc_tree");
     }
-    let mut chosen = Vec::new();
+    let mut chosen = Selection::default();
     let mut total = 0u64;
     let doctypes: Vec<&ListedBlob> = listing
         .blobs
@@ -142,16 +165,23 @@ pub fn select(listing: &BlobListing, limits: &DocLimits) -> (Vec<ListedBlob>, Do
         .take(limits.max_doctypes)
         .chain(markdown.into_iter().take(limits.max_files));
     for b in wanted {
-        if b.size > limits.max_file_bytes {
-            tree.left_out("doc_file_too_large");
+        let cap = u64::try_from(read_cap(&b.path)).unwrap_or(u64::MAX);
+        let large = b.size > cap;
+        if large && chosen.prefix.len() >= limits.max_large_files {
+            tree.left_out("doc_large_files");
             continue;
         }
-        if total.saturating_add(b.size) > limits.max_total_bytes {
+        let size = b.size.min(cap);
+        if total.saturating_add(size) > limits.max_total_bytes {
             tree.left_out("doc_bytes");
             break;
         }
-        total = total.saturating_add(b.size);
-        chosen.push(b.clone()); // clone: the read owns its list
+        total = total.saturating_add(size);
+        if large {
+            chosen.prefix.push(b.clone()); // clone: the read owns its list
+        } else {
+            chosen.whole.push(b.clone()); // clone: as above
+        }
     }
     (chosen, tree)
 }

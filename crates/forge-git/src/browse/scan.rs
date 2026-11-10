@@ -162,6 +162,34 @@ impl Browser {
         Ok(listing)
     }
 
+    /// The first `max` bytes of one listed blob (`cat-file blob`, its
+    /// output capped: a large file is never read whole). Plan 13 stage 2:
+    /// a Markdown file over the document parser's limit is read only as far
+    /// as the parser needs to say `too_large`.
+    pub async fn read_blob_prefix(
+        &self,
+        repo: RepoId,
+        blob: &ListedBlob,
+        max: usize,
+    ) -> Result<Vec<u8>, ForgeError> {
+        let deadline = Deadline::new(self.limits.timeout);
+        let rev = Revision::object_id(&blob.oid)?;
+        let dir = self.storage.existing(repo)?;
+        let _slot = self.claim(repo)?;
+        let (out, _cut) = self
+            .git
+            .command("cat-file")
+            .arg("blob")
+            .revision(rev)
+            .repo(&dir)
+            .timeout(deadline.left()?)
+            .output_truncated(max)
+            .await?;
+        let mut bytes = out.stdout;
+        bytes.truncate(max);
+        Ok(bytes)
+    }
+
     /// The contents of `blobs` (as listed), in order: `cat-file --batch`,
     /// as many per call as stay within [`BATCH_BYTES`] by their listed
     /// sizes. Only full object ids reach git (anything else is
