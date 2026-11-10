@@ -17,6 +17,9 @@ const ALLOWED: &[(&str, &[&str])] = &[
     // Plan 13 stage 2 (ADR-0026 §8): pure document parsing, shared with gstn.
     ("forge-doc", &["forge-errors"]),
     ("forge-core", &["forge-doc", "forge-errors"]),
+    // M4 C1 (plan 14): the pure `.forge-ci.yml` parse / lint / plan. Like
+    // forge-doc it does no I/O; it reads YAML with forge-doc's strict tree.
+    ("forge-ci", &["forge-doc", "forge-errors"]),
     ("forge-auth", &["forge-core", "forge-errors"]),
     ("forge-git", &["forge-core", "forge-errors"]),
     ("forge-db", &["forge-core", "forge-errors"]),
