@@ -996,6 +996,11 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "mirror set",
             "mirror remove",
             "mirror sync",
+            "pipeline list",
+            "pipeline show",
+            "pipeline cancel",
+            "pipeline retry",
+            "pipeline run",
             "api",
             "help",
             "schema"

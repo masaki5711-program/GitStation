@@ -101,6 +101,13 @@ pub enum Command {
         #[command(subcommand)]
         command: MirrorCommand,
     },
+    /// A project's CI pipelines (M4 C2): list, show, cancel, retry, run
+    /// (reading: project readers; the rest: Developers).
+    #[command(disable_help_subcommand = true)]
+    Pipeline {
+        #[command(subcommand)]
+        command: PipelineCommand,
+    },
     /// An integration's event feed (M3 I1c): events, cursor — with the
     /// integration's own service account token.
     #[command(disable_help_subcommand = true)]
@@ -1500,6 +1507,54 @@ pub enum MirrorCommand {
     Sync {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PipelineCommand {
+    /// The project's pipelines, newest first.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Only this branch (`main` or `refs/heads/main`).
+        #[arg(long = "ref", value_parser = parse_text, value_name = "BRANCH")]
+        git_ref: Option<String>,
+        /// Only pipelines below this id (the previous page's `more`).
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        before: Option<i64>,
+        /// At most this many (1..=100, default 20).
+        #[arg(long, value_parser = parse_limit)]
+        limit: Option<u32>,
+    },
+    /// One pipeline with its jobs (an invalid one with its problems).
+    Show {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+    },
+    /// Cancel a pending or running pipeline.
+    Cancel {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+    },
+    /// Retry a failed or cancelled pipeline (its failed and cancelled jobs).
+    Retry {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+    },
+    /// Run a pipeline by hand on a branch's tip (never protected: a job
+    /// with secrets makes it invalid).
+    Run {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The branch (`main` or `refs/heads/main`).
+        #[arg(long = "ref", value_parser = parse_text, value_name = "BRANCH")]
+        git_ref: String,
     },
 }
 
