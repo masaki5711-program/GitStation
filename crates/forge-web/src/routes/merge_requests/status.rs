@@ -52,6 +52,8 @@ pub enum StatusReasonName {
     CodeownerApprovalMissing,
     CodeownersInvalid,
     RequiredCheckMissing,
+    /// M4 C7.
+    RequiredCheckStale,
     RequiredCheckNotSuccessful,
     UnresolvedDiscussions,
     /// M3 I1d.
@@ -62,7 +64,7 @@ pub enum StatusReasonName {
 
 impl StatusReasonName {
     /// Every name, in ADR-0024 §7's order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::NotOpen,
         Self::Draft,
         Self::MergeInProgress,
@@ -75,6 +77,7 @@ impl StatusReasonName {
         Self::CodeownerApprovalMissing,
         Self::CodeownersInvalid,
         Self::RequiredCheckMissing,
+        Self::RequiredCheckStale,
         Self::RequiredCheckNotSuccessful,
         Self::UnresolvedDiscussions,
         Self::WorkItemLinkMissing,
@@ -98,6 +101,7 @@ impl StatusReasonName {
             BlockReason::CodeownerApprovalMissing { .. } => Self::CodeownerApprovalMissing,
             BlockReason::CodeownersInvalid { .. } => Self::CodeownersInvalid,
             BlockReason::RequiredCheckMissing { .. } => Self::RequiredCheckMissing,
+            BlockReason::RequiredCheckStale { .. } => Self::RequiredCheckStale,
             BlockReason::RequiredCheckNotSuccessful { .. } => Self::RequiredCheckNotSuccessful,
             BlockReason::UnresolvedDiscussions { .. } => Self::UnresolvedDiscussions,
             BlockReason::WorkItemLinkMissing => Self::WorkItemLinkMissing,
@@ -171,6 +175,10 @@ pub struct StatusCheckBody {
     pub status: Option<String>,
     #[schema(required = true)]
     pub conclusion: Option<String>,
+    /// M4 C7 (added within `schema_version` 1): the run is on an earlier
+    /// merge result of the head (the target advanced since); it does not
+    /// count (`required_check_stale`).
+    pub stale: bool,
 }
 
 /// The discussions condition.
@@ -265,6 +273,12 @@ pub struct MergeRequestStatusBody {
     /// `null` before the first version (nothing can merge yet).
     #[schema(required = true)]
     pub head_sha: Option<String>,
+    /// M4 C7 (added within `schema_version` 1): the merge result of the
+    /// head into the target's tip (`refs/merge-requests/<iid>/merge`), where
+    /// the merge request pipeline reports `ci/pipeline`; `null` while it is
+    /// computed, on a conflict, or without a version or target.
+    #[schema(required = true)]
+    pub merge_result_sha: Option<String>,
     /// Without `refs/heads/`.
     pub target_branch: String,
     /// The method evaluated: the project's default.
@@ -311,6 +325,7 @@ pub(super) fn status_body(
         schema_version: SCHEMA_VERSION,
         iid,
         head_sha: s.head_sha.as_ref().map(|h| h.as_str().to_owned()),
+        merge_result_sha: s.merge_result_sha.as_ref().map(|h| h.as_str().to_owned()),
         target_branch: s
             .target_branch
             .branch()
@@ -367,6 +382,7 @@ pub(super) fn status_body(
                     .run
                     .and_then(|r| r.conclusion)
                     .map(|k| k.as_str().to_owned()),
+                stale: c.stale,
             })
             .collect(),
         discussions: s

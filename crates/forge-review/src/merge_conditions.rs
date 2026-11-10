@@ -42,6 +42,11 @@ fn caller_of<R: forge_auth::ResourceCtx>(proof: &Authorized<R>) -> Result<UserId
 pub struct MergeStatus {
     /// `None`: no version yet (nothing can merge; `reasons` says why).
     pub head_sha: Option<ObjectId>,
+    /// M4 C7: the merge result of the head into the live target tip
+    /// (`refs/merge-requests/<iid>/merge`), where the merge request pipeline
+    /// reports `ci/pipeline`; `None` while it is being computed, on a
+    /// conflict, or without a version or target.
+    pub merge_result_sha: Option<ObjectId>,
     pub target_branch: forge_core::RefName,
     /// The method evaluated (asked, or the project's default).
     pub method: MergeMethod,
@@ -254,6 +259,7 @@ impl Review {
             reasons.push(BlockReason::MergeabilityUnknown);
             return Ok(MergeStatus {
                 head_sha: None,
+                merge_result_sha: None,
                 target_branch: current.target_branch,
                 method,
                 mergeable: false,
@@ -286,15 +292,29 @@ impl Review {
         // M3 C1: the head's runs, only when the merge rule requires a check;
         // a failed read fails the status (a store failure is never
         // "no run reported").
+        // M4 C7: with the runs of the head's merge results.
         let runs = if facts
             .protection
             .merge_rule(&current.target_branch)
             .required_checks
             .is_empty()
         {
-            forge_core::CheckRunsOnHead::default()
+            forge_core::MergeCheckRuns::default()
         } else {
-            self.checks.runs_on(project, &head).await?
+            self.checks
+                .merge_runs_on(project, current.id, &head)
+                .await?
+        };
+        // M4 C7: the current merge result (the live tip's), for the reporters.
+        let merge_result = match (&target_tip, stored.as_ref()) {
+            (Some(tip), Some(s))
+                if s.status == forge_core::MergeabilityStatus::CanBeMerged
+                    && s.checked_head_sha.as_ref() == Some(&head)
+                    && s.checked_target_sha.as_ref() == Some(tip) =>
+            {
+                forge_db::review::merge_result_of_read(&self.db, current.id, &head, tip).await?
+            }
+            _ => None,
         };
         // M3 I1d: the link, only when the merge rule requires one. Read on
         // the read pool like the rest of the status, so it may trail the
@@ -307,7 +327,7 @@ impl Review {
             && forge_db::work_items::work_item_linked(&self.db, current.id).await?;
         let conditions = conditions(
             &facts.protection,
-            &current.target_branch,
+            (&current.target_branch, target_tip.as_ref()),
             &head,
             unresolved,
             linked,
@@ -370,6 +390,7 @@ impl Review {
         };
         Ok(MergeStatus {
             head_sha: Some(head),
+            merge_result_sha: merge_result,
             target_branch: current.target_branch,
             method,
             mergeable: ok,

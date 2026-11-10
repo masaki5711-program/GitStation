@@ -923,6 +923,8 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── M4 C7: merge results (20261207100000) ──
+        ("forge.merge_result_refs", operational()),
     ])
 }
 
@@ -1098,6 +1100,8 @@ const LATER_TABLES: &[&str] = &[
     // ── M4 C5: failure fingerprints and job failures (20261206200000) ──
     "failure_fingerprints",
     "ci_job_failures",
+    // ── M4 C7: merge results (20261207100000) ──
+    "merge_result_refs",
 ];
 
 /// Every table the first migration creates.

@@ -36,8 +36,10 @@ pub struct MergeGate {
     pub unresolved_discussions: u32,
     /// M3 C1: every check run on the merge request's head as stored now
     /// (empty without a head or a required check), read in this transaction with the same SQL
-    /// as the merge status (`crate::checks::RUNS_SQL`).
-    pub check_runs: forge_core::CheckRunsOnHead,
+    /// as the merge status (`crate::checks::RUNS_SQL`). M4 C7: with the runs
+    /// on every merge result of the head (resolved against the live target
+    /// tip by `forge_core::merge_results`).
+    pub check_runs: forge_core::MergeCheckRuns,
     /// M3 I1d: the merge request has an open link to a work item of its
     /// project's current binding (read only when the target's merge rule
     /// requires one; `false` otherwise — never consulted then).
@@ -114,10 +116,12 @@ pub(super) async fn gate(
         .transpose()?;
     let check_runs = match head {
         Some(head) => {
-            tx.step(|c| async move { crate::checks::runs_on(c, project, &head).await })
-                .await?
+            tx.step(|c| async move {
+                crate::review::merge_results::merge_runs_on(c, project, mr, &head).await
+            })
+            .await?
         }
-        None => forge_core::CheckRunsOnHead::default(),
+        None => forge_core::MergeCheckRuns::default(),
     };
     // M3 I1d: the work item link condition, only when the rule asks.
     let work_item_linked = if protection

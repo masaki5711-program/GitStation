@@ -11,24 +11,42 @@
 //! gate's transaction (`MergeGate::check_runs`), the status through
 //! `forge_core::CheckResultsSource` — the same SQL. A required name without
 //! a run is `required_check_missing`, never success (ADR-0024 §10).
+//!
+//! M4 C7: the snapshot also holds the runs of every merge result of the
+//! head ([`forge_core::MergeCheckRuns`]); each required name is resolved
+//! against the LIVE target tip (`forge_core::merge_results`): a run on the
+//! current merge result counts, a run on an earlier merge result only is
+//! stale (`required_check_stale`, FG-CI-0013), a head run counts for a
+//! head-reported name but never for `ci/pipeline`.
 
-use forge_core::{MergeMethod, ObjectId, ProtectionRules, RefName};
+use forge_core::{Freshness, MergeMethod, ObjectId, ProtectionRules, RefName};
 use forge_db::review::StoredMergeSettings;
 use forge_errors::ForgeError;
 
 use super::evaluate::{CheckRun, RequiredCheck};
 use super::MergeSettings;
 
-/// The runs of checks on a commit.
+/// The runs of checks of a merge of a head into a target tip.
 pub trait CheckRuns {
-    /// The latest run of `name` on `head` (`None`: none reported).
-    fn run(&self, head: &ObjectId, name: &forge_core::CheckName) -> Option<CheckRun>;
+    /// The run of `name` that decides a merge of `head` into `target_tip`
+    /// and whether it counts now (`None`: none reported).
+    fn run(
+        &self,
+        head: &ObjectId,
+        target_tip: Option<&ObjectId>,
+        name: &forge_core::CheckName,
+    ) -> Option<(CheckRun, Freshness)>;
 }
 
-/// M3 C1: the stored runs of one head (a run on another head never counts).
-impl CheckRuns for forge_core::CheckRunsOnHead {
-    fn run(&self, head: &ObjectId, name: &forge_core::CheckName) -> Option<CheckRun> {
-        forge_core::CheckRunsOnHead::run(self, head, name)
+/// M4 C7: the runs of the head and of its merge results (module docs).
+impl CheckRuns for forge_core::MergeCheckRuns {
+    fn run(
+        &self,
+        head: &ObjectId,
+        target_tip: Option<&ObjectId>,
+        name: &forge_core::CheckName,
+    ) -> Option<(CheckRun, Freshness)> {
+        self.resolve(head, target_tip, name)
     }
 }
 
@@ -44,11 +62,12 @@ pub struct Conditions {
 }
 
 /// The conditions `protection` puts on a merge of `head` into `target`
-/// (`unresolved`: the merge request's unresolved discussions now;
-/// `linked`: it has an open link to a work item of the project's binding).
+/// (`target_tip`: its live tip, M4 C7; `unresolved`: the merge request's
+/// unresolved discussions now; `linked`: it has an open link to a work
+/// item of the project's binding).
 pub fn conditions(
     protection: &ProtectionRules,
-    target: &RefName,
+    (target, target_tip): (&RefName, Option<&ObjectId>),
     head: &ObjectId,
     unresolved: u32,
     linked: bool,
@@ -59,9 +78,17 @@ pub fn conditions(
         checks: rule
             .required_checks
             .into_iter()
-            .map(|name| {
-                let run = runs.run(head, &name);
-                RequiredCheck { name, run }
+            .map(|name| match runs.run(head, target_tip, &name) {
+                Some((run, freshness)) => RequiredCheck {
+                    name,
+                    run: Some(run),
+                    stale: freshness == Freshness::Stale,
+                },
+                None => RequiredCheck {
+                    name,
+                    run: None,
+                    stale: false,
+                },
             })
             .collect(),
         discussions: rule.require_resolved_discussions.then_some(unresolved),

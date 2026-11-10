@@ -2566,3 +2566,16 @@ diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (
 fix = "Make the job write less into /workspace (build outputs to /tmp, which is a bounded tmpfs, or clean up before the end), or raise `work_dir_max_bytes` and the filesystem quota of `work_dir` together (runbook ci-runner), then retry the pipeline."
 runbook = "ci-runner"
 test = "a_work_directory_past_its_bound_fails_the_job_and_is_wiped"
+
+[[error]]
+code = "FG-CI-0013"
+name = "RequiredCheckStale"
+http_status = 409
+severity = "info"
+user_message_ja = "必須のチェックが古いマージ結果のものです。対象のブランチが進んだので、新しいマージ結果でのパイプラインが終わるのを待ってからマージしてください。"
+user_message_en = "A required check belongs to an older merge result. The target branch moved: wait for the pipeline on the new merge result to finish, then merge."
+user_message_id = "Pemeriksaan wajib berasal dari hasil penggabungan yang lama. Cabang tujuan telah bergerak: tunggu pipeline pada hasil penggabungan yang baru selesai, lalu gabungkan."
+cause = "M4 C7 (plan 04 M-1 / M-2, ADR-0024 Amendment 2026-11-11): the merge request's first blocking reason is `required_check_stale` — a check the target's merge rule requires has no run on the CURRENT merge result (the merge of the head into the live target tip, `refs/merge-requests/<iid>/merge`, a row of forge.merge_result_refs) but has one on an EARLIER merge result of the same head (the target branch advanced since). A run on an older merge result is stale whatever its conclusion. Precedence per required name: a run on the current merge result counts; else a run on an older merge result of the head is stale; else a run on the head counts (external reporters: the Checks API accepts only commits a branch or tag reaches), except `ci/pipeline`, which counts only on a merge result (the MR pipeline; a push pipeline's run on the head never satisfies it). Answered at the merge request (`POST …/merge-requests/{iid}/merge`, nothing written) or inside the merge job under the lock (the attempt is `superseded`, no ref moved); the merge status lists the same reason with `name=<check>`."
+diagnosis = "The log event carries `reasons`, `details` (`required_check_stale:name=<check>`), `merge_request_id` and `head_sha`. `gstn mr status --json` shows `merge_result_sha` (the current merge result; null while it is being computed, on a conflict or when the target is gone) and `checks[].stale: true`. forge.merge_result_refs lists the merge results of the head (`target_sha`, `result_sha`, one row per pair); the MR pipeline of the new merge result is `gstn pipeline list --project <id>` (source merge_request, sha = merge_result_sha). The event `forge.review.merge_result_updated` (info) logs every new merge result with `request_id`."
+fix = "Nothing to fix in the change: wait for the pipeline forge started on the new merge result (it reports the check on merge_result_sha), or run it again (gstn pipeline retry) if it failed; then merge. If no new merge result appears, the mergeability check is pending or failed (reason mergeability_unknown first; runbook merge-blocked)."
+test = "a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge"

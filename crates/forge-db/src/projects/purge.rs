@@ -628,6 +628,14 @@ async fn finish_steps(
         "projects.purge.finish.merge_request_discussions",
     )
     .await?;
+    // M4 C7: the merge results reference the merge requests.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_result_refs WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_result_refs",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.merge_request_mergeability WHERE project_id = $1",

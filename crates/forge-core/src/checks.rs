@@ -264,6 +264,17 @@ pub trait CheckResultsSource: Send + Sync {
         project: ProjectId,
         head: &'a ObjectId,
     ) -> LookupFuture<'a, CheckRunsOnHead>;
+
+    /// M4 C7: the runs on `head` and on every merge result of `head` of
+    /// merge request `mr` (newest first, bounded): what a required check is
+    /// resolved against (`crate::merge_results`). The same failure rules as
+    /// [`CheckResultsSource::runs_on`].
+    fn merge_runs_on<'a>(
+        &'a self,
+        project: ProjectId,
+        mr: crate::ids::MergeRequestId,
+        head: &'a ObjectId,
+    ) -> LookupFuture<'a, crate::merge_results::MergeCheckRuns>;
 }
 
 /// An annotation's level (`check_annotations.level`).

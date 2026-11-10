@@ -173,7 +173,7 @@ pub(super) fn decide(
         .inputs(stored, &attempt.head_sha, gate.approvals.clone()); // clone: as above
     let conditions = super::conditions::conditions(
         &gate.protection,
-        &stored.target_branch,
+        (&stored.target_branch, tips.target.as_ref()),
         &attempt.head_sha,
         gate.unresolved_discussions,
         gate.work_item_linked,

@@ -242,6 +242,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DiscussionLimitReached
         | ErrorCode::MergeRequestConflict
         | ErrorCode::MergeBlocked
+        // M4 C7: a stale required check is a decision like MergeBlocked.
+        | ErrorCode::RequiredCheckStale
         | ErrorCode::HeadChanged
         | ErrorCode::MergeMethodNotAllowed
         | ErrorCode::MergeInProgress

@@ -23,6 +23,7 @@ pub mod list_page;
 pub mod merge;
 pub mod merge_conditions;
 pub mod merge_request;
+pub mod merge_results;
 pub mod mirror;
 pub mod move_details;
 pub mod namespace_path;
@@ -100,6 +101,7 @@ pub use merge_request::{
     CheckReason, MergeRequestChange, MergeRequestField, MergeRequestState, MergeRequestTransition,
     MergeRequestVersionChange, MergeabilityStatus,
 };
+pub use merge_results::{Freshness, MergeCheckRuns, MergeResultRuns};
 pub use move_details::{MoveSummary, RoleChange, TombstoneKind};
 pub use namespace_path::{LookupPath, NamespacePath, PathSegment};
 pub use namespace_resolver::{

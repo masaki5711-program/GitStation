@@ -45,6 +45,7 @@ pub mod approvals;
 mod commands;
 pub mod conflicts;
 pub mod discussions;
+pub mod merge_results;
 pub mod mergeability;
 pub mod merges;
 mod refresh;
@@ -74,6 +75,10 @@ pub use discussions::{
     start_discussion_mr_decided, unresolved_discussions, DiscussionFacts, DiscussionPage,
     DiscussionPosition, NewDiscussion, ResolveOutcome, StoredDiscussion, StoredNote,
     MAX_DISCUSSIONS, MAX_NOTES, MAX_NOTES_PER_DISCUSSION,
+};
+pub use merge_results::{
+    merge_result_of, merge_result_of_read, merge_results, merge_runs_for, record_merge_result,
+    MergeResultRow, RecordedResult,
 };
 pub use mergeability::{
     begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,

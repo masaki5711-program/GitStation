@@ -25,12 +25,13 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
 | `schema_version` | 整数 | 1 |
 | `iid` | 整数 | プロジェクトの中の MR の番号 |
 | `head_sha` | 文字列 / null | 今の head。版がまだ無いと null（`reasons` に `mergeability_unknown`） |
+| `merge_result_sha` | 文字列 / null | M4 C7 で追加。head を target の今の先端へマージした結果のコミット（`refs/merge-requests/<iid>/merge`）。MR のパイプラインはこのコミットで動き、`ci/pipeline` をここへ報告する。判定中・衝突・版や target が無いときは null |
 | `target_branch` | 文字列 | `refs/heads/` を除いた target |
 | `method` | 文字列 | 評価した方式（`merge_commit` / `squash` / `fast_forward`） |
 | `mergeable` | 真偽 | 止める理由が無い |
 | `reasons[]` | 配列 | `{ "reason": 名前, "detail": 文字列 / null }`。下の表 |
 | `approvals` | オブジェクト / null | 承認の側（版が無いと null）: `rules[]`（`name`、`applies`、`required`、`counted`。保護ブランチの最低の承認数は `name = "@protected_branch"`）、`approvals[]`（`approver_id`、`username`、`counted`、`uncounted_reason`）、`codeowners[]`（`pattern`、`owners`、`satisfied`。CODEOWNERS の強制が一時停止中は空） |
-| `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion" }`。**`status: null` は報告が無い**（成功ではない）。値は Checks API（`docs/api/checks.md`、M3 C1）で **今の head** に報告された結果（古い head への報告は数えない） |
+| `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion", "stale" }`。**`status: null` は報告が無い**（成功ではない）。値は Checks API（`docs/api/checks.md`、M3 C1）で **今の head** に報告された結果（古い head への報告は数えない）。M4 C7: 今のマージ結果への報告があればそれ、前のマージ結果への報告しか無ければそれで `stale: true`（数えない）。下の「マージ結果と鮮度」 |
 | `discussions` | オブジェクト / null | マージの条件がスレッドの解決を求めるとき `{ "unresolved": 件数 }`、求めないとき null |
 | `work_item_link` | オブジェクト / null | M3 I1d で追加。マージの条件が作業項目のリンクを求めるとき `{ "linked": 真偽 }`（プロジェクトの **今の** 連携の結びつけの作業項目への開いたリンクがあるか）、求めないとき null |
 | `codeowners` | オブジェクト | `{ "enforced": 真偽, "suspended_until": 文字列 / null }`（一時停止中だけ期限。期限を過ぎれば `enforced: true`） |
@@ -73,6 +74,7 @@ target の保護、頼む変更）で `authorize()` を試しに呼んだ答え�
 | `codeowner_approval_missing` | `pattern=<p> owners=<@a,@b>` | 変更されたパスの CODEOWNERS の所有者の承認が無い |
 | `codeowners_invalid` | `line=<n> reason=<r>` | target の CODEOWNERS を使えない（runbook codeowners） |
 | `required_check_missing` | `name=<check>` | 必須のチェックの報告が今の head に無い |
+| `required_check_stale` | `name=<check>` | M4 C7。必須のチェックの報告が前のマージ結果（target が進む前）にしか無い。結論に関係なく数えない。最初の理由ならマージの拒否は FG-CI-0013 |
 | `required_check_not_successful` | `name=<check> status=<s> conclusion=<c\|none>` | 必須のチェックが `completed` / `success` でない（`neutral` を含む） |
 | `unresolved_discussions` | `count=<n>` | 未解決のスレッドがある（マージの条件が求めるときだけ） |
 | `work_item_link_missing` | null | マージの条件が作業項目のリンクを求め、MR にプロジェクトの今の結びつけの作業項目（`PBI-<n>`）への開いたリンクが無い（M3 I1d。結びつけの無いプロジェクトは満たせない） |
@@ -144,6 +146,19 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   失敗する**（`required_check_missing` として見せない）。マージの条件が必須のチェックを求めないときは実行を読まない。
 - マージの要求とマージのジョブは、MR のロックの下のトランザクションで同じ SQL で実行を読み直す（ジョブは要求の時点ではなく、ジョブの
   ゲートの時点の結果で決める。その間に `failure` になれば `superseded`）。
+
+## マージ結果と鮮度（M4 C7）
+
+この契約の版は変えずに、`merge_result_sha` と `checks[].stale` と理由 `required_check_stale` を足した（ADR-0024 Amendment 2026-11-11、
+計画 04 M-1・M-2）。
+
+- forge は MR の head を target の今の先端へマージした結果を、判定のジョブで隠した ref `refs/merge-requests/<iid>/merge` に作る（衝突のときは
+  作らない）。MR のパイプラインはこのコミットで動く。
+- 必須のチェックは名前ごとに次の順で決める: 今のマージ結果への報告 → 前のマージ結果（target が進む前）への報告（`stale: true`、
+  `required_check_stale`。数えない） → head への報告（外部の報告者。ただし `ci/pipeline` は head への報告を数えない） → 無し
+  （`required_check_missing`）。
+- target が進むと、前のマージ結果で出た `ci/pipeline` は古くなる。マージの要求は FG-CI-0013（最初の理由のとき）で断られる。**次の手**:
+  新しいマージ結果（`merge_result_sha`）で動くパイプラインが終わるのを待つ（失敗なら `gstn pipeline retry`）。
 
 ## マージの設定（`GET` / `PUT /api/v1/projects/{id}/merge-settings`）の `viewer` と同時編集
 

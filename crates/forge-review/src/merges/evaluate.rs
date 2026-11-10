@@ -72,6 +72,12 @@ pub enum BlockReason {
     RequiredCheckMissing {
         name: CheckName,
     },
+    /// M4 C7: a required check was reported only on an earlier merge
+    /// result of the head (the target advanced since): it never counts,
+    /// whatever its conclusion (FG-CI-0013).
+    RequiredCheckStale {
+        name: CheckName,
+    },
     /// A required check's run on the head is not `completed` / `success`
     /// (`neutral` included).
     RequiredCheckNotSuccessful {
@@ -95,10 +101,13 @@ pub enum BlockReason {
 pub use forge_core::checks::{CheckConclusion, CheckRun, CheckStatus};
 
 /// A required check and its run on the head (`None`: no run reported).
+/// M4 C7: or on a merge result of the head; `stale` when that merge result
+/// is not the current one (the run never counts then).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequiredCheck {
     pub name: CheckName,
     pub run: Option<CheckRun>,
+    pub stale: bool,
 }
 
 impl BlockReason {
@@ -118,6 +127,7 @@ impl BlockReason {
             Self::ConfigChangeNeedsMaintainerApproval => "config_change_needs_maintainer_approval",
             Self::ChangedPathsUnknown { .. } => "changed_paths_unknown",
             Self::RequiredCheckMissing { .. } => "required_check_missing",
+            Self::RequiredCheckStale { .. } => "required_check_stale",
             Self::RequiredCheckNotSuccessful { .. } => "required_check_not_successful",
             Self::UnresolvedDiscussions { .. } => "unresolved_discussions",
             Self::WorkItemLinkMissing => "work_item_link_missing",
@@ -140,11 +150,12 @@ impl BlockReason {
             Self::CodeownerApprovalMissing { .. } => 9,
             Self::CodeownersInvalid { .. } => 10,
             Self::RequiredCheckMissing { .. } => 11,
-            Self::RequiredCheckNotSuccessful { .. } => 12,
-            Self::UnresolvedDiscussions { .. } => 13,
-            Self::WorkItemLinkMissing => 14,
-            Self::ConfigChangeNeedsMaintainerApproval => 15,
-            Self::ChangedPathsUnknown { .. } => 16,
+            Self::RequiredCheckStale { .. } => 12,
+            Self::RequiredCheckNotSuccessful { .. } => 13,
+            Self::UnresolvedDiscussions { .. } => 14,
+            Self::WorkItemLinkMissing => 15,
+            Self::ConfigChangeNeedsMaintainerApproval => 16,
+            Self::ChangedPathsUnknown { .. } => 17,
         }
     }
 
@@ -165,7 +176,9 @@ impl BlockReason {
                 Some(format!("line={line} reason={reason}"))
             }
             Self::ChangedPathsUnknown { reason } => Some(format!("reason={reason}")),
-            Self::RequiredCheckMissing { name } => Some(format!("name={name}")),
+            Self::RequiredCheckMissing { name } | Self::RequiredCheckStale { name } => {
+                Some(format!("name={name}"))
+            }
             Self::RequiredCheckNotSuccessful {
                 name,
                 status,
@@ -280,6 +293,10 @@ pub fn evaluate_merge(facts: &MergeFacts) -> Result<MergeClearance, Vec<BlockRea
             None => reasons.push(BlockReason::RequiredCheckMissing {
                 name: check.name.clone(), // clone: the reason owns its name
             }),
+            // M4 C7: an earlier merge result's run never counts.
+            Some(_) if check.stale => reasons.push(BlockReason::RequiredCheckStale {
+                name: check.name.clone(), // clone: as above
+            }),
             Some(run) if !run.succeeded() => {
                 reasons.push(BlockReason::RequiredCheckNotSuccessful {
                     name: check.name.clone(), // clone: as above
@@ -308,14 +325,21 @@ pub fn evaluate_merge(facts: &MergeFacts) -> Result<MergeClearance, Vec<BlockRea
     }
 }
 
-/// `FG-REVIEW-0007` MergeBlocked with `reasons` (comma-separated names).
+/// `FG-REVIEW-0007` MergeBlocked with `reasons` (comma-separated names);
+/// M4 C7: `FG-CI-0013` RequiredCheckStale when the first reason is
+/// `required_check_stale` (its next step is to wait for the pipeline on the
+/// new merge result), with the same context.
 pub fn blocked(reasons: &[BlockReason]) -> ForgeError {
     let names: Vec<&str> = reasons.iter().map(|r| r.as_str()).collect();
     let details: Vec<String> = reasons
         .iter()
         .filter_map(|r| r.detail().map(|d| format!("{}:{d}", r.as_str())))
         .collect();
-    let e = ForgeError::new(ErrorCode::MergeBlocked)
+    let code = match reasons.first() {
+        Some(BlockReason::RequiredCheckStale { .. }) => ErrorCode::RequiredCheckStale,
+        _ => ErrorCode::MergeBlocked,
+    };
+    let e = ForgeError::new(code)
         .with_context("reason", names.first().copied().unwrap_or("blocked"))
         .with_context("reasons", names.join(","));
     if details.is_empty() {

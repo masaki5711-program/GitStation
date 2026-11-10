@@ -77,6 +77,20 @@ merge request in place (ADR-0024 §1).
   `version_refs.rs` holds `VersionRefs` / `plan_ref_changes` (re-exported from `versions`). Tests
   `tests/mergeability_git.rs` (`check_maps_git_timeout_and_no_version_to_check_failed`).
 
+- M4 C7 (merge results and required-check freshness, plan 04 M-1 / M-2, ADR-0024 Amendment
+  2026-11-11): a stored clean check becomes the merge result — `Git::write_merge_result` (the
+  trial merge's tree, parents target tip then head), once per (head, target tip) pair
+  (`forge_db::review::merge_result_of` / `record_merge_result`, which also enqueues the merge
+  request pipeline on the result), and `refs/merge-requests/<iid>/merge` pointed at it while the
+  run's seq is the latest; a conflict / no target / unrelated / no version deletes the ref
+  (`CheckReport::merge_result`, `merge_ref`; logs `forge.review.merge_result_updated` /
+  `_removed`). Required checks are resolved against the live target tip
+  (`forge_core::MergeCheckRuns::resolve`, `conditions((target, tip), …)`): a run on an earlier
+  merge result only is `BlockReason::RequiredCheckStale` (`RequiredCheck::stale`), and `blocked()`
+  answers FG-CI-0013 RequiredCheckStale when it is the first reason. `MergeStatus::merge_result_sha`.
+  Tests in `tests/approvals_git.rs` (`a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge`
+  and four more).
+
 - M3 X6 (conflict prediction, plan 04 C-2, ADR-0024 Amendment X6; `src/conflicts.rs`):
   `scan(&Db, &ConflictPredictor, ConflictScanRequest, &RequestId) -> ScanReport`, the body of the
   job `merge_request.conflict_scan`: the other open merge requests on the target (drafts
@@ -193,7 +207,8 @@ MergeBlocked (`reasons`), 0008 HeadChanged (`stale_view` / `source_moved` / `tar
 0010 MergeMethodNotAllowed, 0011 MergeInProgress (from forge-db); M3 R5: FG-REVIEW-0013
 SelfApprovalRefused (from `authorize()`), 0014 CodeownersInvalid (warn, logged once per
 evaluation; runbook `codeowners`), 0015 ApprovalLimitReached (from forge-db); M3 R6:
-FG-REVIEW-0016 RequiredCheckNamespaceNotAllowed (from forge-hosting / forge-db). Reused: FG-GIT-0016 (warn, round 5: a merge
+FG-REVIEW-0016 RequiredCheckNamespaceNotAllowed (from forge-hosting / forge-db); M4 C7:
+FG-CI-0013 RequiredCheckStale (info, `blocked()` when the first reason is `required_check_stale`). Reused: FG-GIT-0016 (warn, round 5: a merge
 commit whose range pushers are unknown gets no `push_commits` row, `merges/attribution.rs`); FG-AUTH-0002 / 0003 (with
 `not_a_branch`, `source_equals_target`, `foreign_author`, `foreign_draft`,
 `merged`, `not_open`), FG-REPO-0005 (an invisible project and a missing iid

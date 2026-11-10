@@ -159,6 +159,9 @@ fn every_block_reason() -> Vec<forge_review::BlockReason> {
         B::RequiredCheckMissing {
             name: check.clone(),
         },
+        B::RequiredCheckStale {
+            name: check.clone(),
+        },
         B::RequiredCheckNotSuccessful {
             name: check,
             status: CheckStatus::Queued,

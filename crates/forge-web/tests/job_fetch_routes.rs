@@ -536,3 +536,86 @@ async fn the_pipeline_ref_is_deleted_when_the_pipeline_ends() {
     assert_eq!(pinned(&w).await, None, "the ended pipeline's ref is gone");
     w.t.drop_now().await;
 }
+
+/// M4 C7: a merge request pipeline runs on the merge result, a commit only
+/// the hidden `refs/merge-requests/<iid>/merge` reaches (no branch has it).
+/// Its job fetches exactly that commit through its pipeline ref.
+#[tokio::test]
+async fn a_merge_request_job_fetches_its_merge_result_commit() {
+    let w = World::new().await;
+    let path = w.storage.existing(w.web_repo).expect("repo path");
+    let side = commit_on(&path, Some(&w.c1), "side\n");
+    let tree = plumb(&path, &["rev-parse", &format!("{side}^{{tree}}")], None);
+    let merged = plumb(
+        &path,
+        &[
+            "commit-tree",
+            tree.as_str(),
+            "-m",
+            "merge result",
+            "-p",
+            &w.c2,
+            "-p",
+            &side,
+        ],
+        None,
+    );
+    plumb(
+        &path,
+        &["update-ref", "refs/merge-requests/1/merge", &merged],
+        None,
+    );
+    let runner = ci_runners::register(
+        &w.t.db,
+        &ChangeContext::new(Actor::User(w.ada), RequestId::parse("req-reg").expect("id")),
+        &NewRunner {
+            name: "r1".to_owned(),
+            description: String::new(),
+            tags: Vec::new(),
+        },
+    )
+    .await
+    .expect("runner");
+    let own = w.pipeline(w.web, &merged, "test").await;
+    let claimed = lease::claim(&w.t.db, runner.runner.id)
+        .await
+        .expect("claim")
+        .expect("job");
+    assert_eq!(claimed.pipeline.id, own);
+    let token = claimed.token.reveal();
+    let adv = w
+        .call(
+            "GET",
+            &info_refs(claimed.job_id),
+            Who::Bearer(token.clone()),
+            None,
+        )
+        .await;
+    assert_eq!(adv.status, StatusCode::OK, "{}", adv.text());
+    assert!(
+        adv.text()
+            .contains(&format!("{merged} refs/pipelines/{own}/head")),
+        "{}",
+        adv.text()
+    );
+    assert!(
+        !adv.text().contains("refs/merge-requests"),
+        "{}",
+        adv.text()
+    );
+    let pack = w
+        .call(
+            "POST",
+            &rpc(claimed.job_id),
+            Who::Bearer(token),
+            Some(want(&merged)),
+        )
+        .await;
+    assert_eq!(pack.status, StatusCode::OK);
+    assert!(
+        pack.body.windows(4).any(|b| b == b"PACK"),
+        "{}",
+        pack.text()
+    );
+    w.t.drop_now().await;
+}
