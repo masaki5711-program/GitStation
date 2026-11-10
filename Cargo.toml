@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
+members = ["crates/forge-errors", "crates/forge-doc", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ publish = false
 
 [workspace.dependencies]
 forge-errors = { path = "crates/forge-errors" }
+forge-doc = { path = "crates/forge-doc" }
 forge-core = { path = "crates/forge-core" }
 forge-git = { path = "crates/forge-git" }
 forge-auth = { path = "crates/forge-auth" }
@@ -40,7 +41,7 @@ unicode-properties = { version = "0.1.4", default-features = false, features = [
 proptest = "1"
 # M3 X1: `.forge/repo.yml` (plan 03 §4.4, ADR-0023). Pure Rust, MIT OR
 # Apache-2.0; only its event parser is used (no alias expansion, no type
-# resolution: forge-core builds its own tree and refuses anchors, aliases
+# resolution: forge-doc builds its own tree and refuses anchors, aliases
 # and tags). Without the default `encoding` feature (input is UTF-8 only).
 yaml-rust2 = { version = "0.13", default-features = false }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }

@@ -1,0 +1,19 @@
+[package]
+name = "forge-doc"
+description = "forge documents, pure: the strict YAML tree, the spec document parser (and, from plan 13 stage 2, the document format, fmt and lint). No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Pure (ADR-0026 §8): no I/O, clock or randomness. The only dependencies
+# allowed are forge-errors and pure parsing parts (tests/purity.rs).
+[dependencies]
+yaml-rust2.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
+
+[lints]
+workspace = true

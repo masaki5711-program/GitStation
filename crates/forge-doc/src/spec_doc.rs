@@ -22,7 +22,7 @@
 //! block never hides the next.
 //!
 //! - **Front matter**: the first line is `---`, closed by `---` (or
-//!   `...`). Its YAML is read by `repo_config`'s tree builder (no anchors,
+//!   `...`). Its YAML is read by [`crate::yaml`]'s tree builder (no anchors,
 //!   aliases, tags, duplicate keys, a second document; at most
 //!   [`MAX_FRONT_MATTER_BYTES`]). Keys: `spec`, `title`, `status`
 //!   (required), `owners` (a list of at most [`MAX_OWNERS`]) and
@@ -40,7 +40,7 @@
 //!   ([`SpecDocument::is_spec`]); any other Markdown file under a
 //!   specification directory (a README) is not indexed.
 
-use crate::repo_config::{mapping, read_tree, text, Kind, Node};
+use crate::yaml::{mapping, read_tree, text, Kind, Node};
 
 /// The longest requirement id (`requirement_id_invalid`).
 pub const MAX_REQUIREMENT_ID_LEN: usize = 64;

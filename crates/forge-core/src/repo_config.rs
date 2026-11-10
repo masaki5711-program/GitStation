@@ -19,18 +19,16 @@
 //! file mean something else than it reads (anchors, aliases, tags) are
 //! refused, not ignored. Scalars are text as written (`1.10` is the tag
 //! `1.10`, never the number 1.1). Only yaml-rust2's event parser is used —
-//! it expands nothing — and the tree is built here with an explicit stack
-//! (bounded depth, no recursion on the input).
+//! it expands nothing — and the tree is built by `forge_doc::yaml` with an
+//! explicit stack (bounded depth, no recursion on the input).
 //!
 //! Who may follow a reference, and what it resolves to, is not decided
 //! here: the route decides every referenced repository with the reader's
 //! permissions (forge-auth `prove_spec_ref`).
 
-use std::collections::HashSet;
 use std::fmt;
 
-use yaml_rust2::parser::{Event, Parser};
-use yaml_rust2::scanner::{Marker, ScanError, TScalarStyle};
+use forge_doc::yaml::{mapping, problem, read_tree, text, Kind, Node, YamlProblem};
 
 use crate::namespace_path::LookupPath;
 use crate::ref_name::RefName;
@@ -50,9 +48,7 @@ pub const MAX_SCOPE_PATTERN_LEN: usize = 64;
 /// `RepoPath::MAX_BYTES`.
 pub const MAX_SPEC_PATH_LEN: usize = 4096;
 /// At most this many keys in one mapping (`too_many_keys`).
-pub const MAX_MAP_KEYS: usize = 64;
-/// The deepest nesting of collections (`too_deep`); the format needs 3.
-const MAX_DEPTH: usize = 16;
+pub use forge_doc::yaml::MAX_MAP_KEYS;
 
 /// A parsed `.forge/repo.yml`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -186,16 +182,9 @@ impl fmt::Display for ScopePattern {
 
 /// Why a file cannot be used: the first rule broken and its line (1-based;
 /// 0 for the whole file). `reason` is one of the rules in the module docs
-/// (`FG-REPO-0024`'s catalog entry lists them).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RepoConfigProblem {
-    pub line: usize,
-    pub reason: &'static str,
-}
-
-fn problem(line: usize, reason: &'static str) -> RepoConfigProblem {
-    RepoConfigProblem { line, reason }
-}
+/// (`FG-REPO-0024`'s catalog entry lists them). The tree's own refusals come
+/// from `forge_doc::yaml` (plan 13 stage 2 MR1: the same type).
+pub type RepoConfigProblem = YamlProblem;
 
 /// Parse `.forge/repo.yml` (module docs).
 pub fn parse_repo_config(bytes: &[u8]) -> Result<RepoConfig, RepoConfigProblem> {
@@ -209,210 +198,7 @@ pub fn parse_repo_config(bytes: &[u8]) -> Result<RepoConfig, RepoConfigProblem> 
     config_of(&root)
 }
 
-// ── the tree (scalars as text; no anchors, aliases or tags) ────────────
-
-#[derive(Debug)]
-pub(crate) struct Node {
-    pub(crate) line: usize,
-    pub(crate) kind: Kind,
-}
-
-#[derive(Debug)]
-pub(crate) enum Kind {
-    Text(String),
-    /// An empty value, or a plain `~` / `null` (YAML's null): never text.
-    Null,
-    List(Vec<Node>),
-    Map(Vec<(Node, Node)>),
-}
-
-/// A collection being filled: its line, its items, and for a mapping the
-/// key waiting for its value.
-enum Open {
-    List(usize, Vec<Node>),
-    /// Its line, its entries, the key waiting for its value, and the keys
-    /// so far (duplicates are refused in every mapping, read or not).
-    Map(usize, Vec<(Node, Node)>, Option<Node>, HashSet<String>),
-}
-
-fn syntax(e: &ScanError) -> RepoConfigProblem {
-    problem(line_of(e.marker()), "syntax")
-}
-
-fn line_of(mark: &Marker) -> usize {
-    mark.line().max(1)
-}
-
-/// Add a finished node to the innermost open collection (`None`: it is the
-/// document's root).
-fn attach(stack: &mut [Open], node: Node) -> Result<Option<Node>, RepoConfigProblem> {
-    match stack.last_mut() {
-        None => Ok(Some(node)),
-        Some(Open::List(_, items)) => {
-            items.push(node);
-            Ok(None)
-        }
-        Some(Open::Map(_, entries, pending, keys)) => {
-            match pending.take() {
-                Some(key) => entries.push((key, node)),
-                None => {
-                    if !matches!(node.kind, Kind::Text(_)) {
-                        return Err(problem(node.line, "key_not_text"));
-                    }
-                    // Bounded while it is built: the duplicate check and
-                    // every later scan stay small.
-                    if entries.len() >= MAX_MAP_KEYS {
-                        return Err(problem(node.line, "too_many_keys"));
-                    }
-                    if let Kind::Text(name) = &node.kind {
-                        if !keys.insert(name.clone()) {
-                            // clone: the set owns its keys
-                            return Err(problem(node.line, "duplicate_key"));
-                        }
-                    }
-                    *pending = Some(node);
-                }
-            }
-            Ok(None)
-        }
-    }
-}
-
-/// The document's root node (`None`: an empty stream). Also the spec
-/// documents' front matter (`spec_doc`, M3 X4): the same refusals.
-pub(crate) fn read_tree(text: &str) -> Result<Option<Node>, RepoConfigProblem> {
-    let mut parser = Parser::new_from_str(text);
-    let mut stack: Vec<Open> = Vec::new();
-    let mut root: Option<Node> = None;
-    let mut documents = 0usize;
-    loop {
-        let (event, mark) = parser.next_token().map_err(|e| syntax(&e))?;
-        let line = line_of(&mark);
-        let finished = match event {
-            Event::StreamStart | Event::Nothing | Event::DocumentEnd => None,
-            Event::StreamEnd => break,
-            Event::DocumentStart => {
-                documents += 1;
-                if documents > 1 {
-                    return Err(problem(line, "multiple_documents"));
-                }
-                None
-            }
-            Event::Alias(_) => return Err(problem(line, "yaml_alias")),
-            Event::Scalar(value, style, anchor, tag) => {
-                refuse_extras(line, anchor, tag.is_some())?;
-                let null = style == TScalarStyle::Plain
-                    && matches!(value.as_str(), "" | "~" | "null" | "Null" | "NULL");
-                Some(Node {
-                    line,
-                    kind: if null { Kind::Null } else { Kind::Text(value) },
-                })
-            }
-            Event::SequenceStart(anchor, tag) => {
-                refuse_extras(line, anchor, tag.is_some())?;
-                open(&mut stack, Open::List(line, Vec::new()))?;
-                None
-            }
-            Event::MappingStart(anchor, tag) => {
-                refuse_extras(line, anchor, tag.is_some())?;
-                open(
-                    &mut stack,
-                    Open::Map(line, Vec::new(), None, HashSet::new()),
-                )?;
-                None
-            }
-            Event::SequenceEnd | Event::MappingEnd => match stack.pop() {
-                Some(Open::List(at, items)) => Some(Node {
-                    line: at,
-                    kind: Kind::List(items),
-                }),
-                Some(Open::Map(at, entries, None, _)) => Some(Node {
-                    line: at,
-                    kind: Kind::Map(entries),
-                }),
-                // A key without a value, or an end with nothing open: the
-                // parser never emits these for a well-formed stream.
-                Some(Open::Map(_, _, Some(_), _)) | None => return Err(problem(line, "syntax")),
-            },
-        };
-        if let Some(node) = finished {
-            if let Some(done) = attach(&mut stack, node)? {
-                root = Some(done);
-            }
-        }
-    }
-    Ok(root)
-}
-
-fn refuse_extras(line: usize, anchor: usize, tagged: bool) -> Result<(), RepoConfigProblem> {
-    if anchor != 0 {
-        return Err(problem(line, "yaml_anchor"));
-    }
-    if tagged {
-        return Err(problem(line, "yaml_tag"));
-    }
-    Ok(())
-}
-
-fn open(stack: &mut Vec<Open>, collection: Open) -> Result<(), RepoConfigProblem> {
-    if stack.len() >= MAX_DEPTH {
-        let line = match &collection {
-            Open::List(l, _) | Open::Map(l, _, _, _) => *l,
-        };
-        return Err(problem(line, "too_deep"));
-    }
-    stack.push(collection);
-    Ok(())
-}
-
 // ── the format ──────────────────────────────────────────────────────────
-
-/// The entries of a mapping with unique text keys, or the problem.
-pub(crate) fn mapping<'a>(
-    node: &'a Node,
-    not_a_mapping: &'static str,
-) -> Result<Vec<Field<'a>>, RepoConfigProblem> {
-    let Kind::Map(entries) = &node.kind else {
-        return Err(problem(node.line, not_a_mapping));
-    };
-    let mut out: Vec<Field<'a>> = Vec::with_capacity(entries.len());
-    let mut seen: HashSet<&str> = HashSet::with_capacity(entries.len());
-    for (key, value) in entries {
-        let Kind::Text(name) = &key.kind else {
-            return Err(problem(key.line, "key_not_text"));
-        };
-        if !seen.insert(name.as_str()) {
-            return Err(problem(key.line, "duplicate_key"));
-        }
-        out.push(Field {
-            key: name.as_str(),
-            line: key.line,
-            value,
-        });
-    }
-    Ok(out)
-}
-
-/// One key of a mapping: its text, its line and its value.
-pub(crate) struct Field<'a> {
-    pub(crate) key: &'a str,
-    pub(crate) line: usize,
-    pub(crate) value: &'a Node,
-}
-
-/// A value that must be text: `empty` names the field's own rule for an
-/// empty or null value (reported at `at`, the key's line).
-pub(crate) fn text<'a>(
-    node: &'a Node,
-    at: usize,
-    empty: &'static str,
-) -> Result<&'a str, RepoConfigProblem> {
-    match &node.kind {
-        Kind::Text(t) => Ok(t),
-        Kind::Null => Err(problem(at, empty)),
-        Kind::List(_) | Kind::Map(_) => Err(problem(node.line, "not_text")),
-    }
-}
 
 fn config_of(root: &Node) -> Result<RepoConfig, RepoConfigProblem> {
     let top = mapping(root, "not_a_mapping")?;
