@@ -11,6 +11,7 @@ fn log(tail: &str) -> FailureLog {
     FailureLog {
         job_name: "test".to_owned(),
         job_error_code: None,
+        before: String::new(),
         tail: tail.to_owned(),
         first_line: 1,
         truncated: false,
@@ -64,7 +65,7 @@ fn a_secret_across_the_page_edge_is_masked_on_both_sides() {
     }
     // A key block whose END is beyond the page is masked to the page's end.
     let open = "log\n-----BEGIN RSA PRIVATE KEY-----\nMIIE\n";
-    assert_eq!(mask("", open, ""), "log\n[MASKED]");
+    assert_eq!(mask("", open, ""), "log\n[MASKED]\n[MASKED]\n");
 }
 
 #[test]
@@ -148,4 +149,66 @@ fn no_failure_line_keeps_the_last_lines_and_no_log_keys_on_the_job_code() {
     let mut later = log("ok\nerror: boom\n");
     later.first_line = 1000;
     assert_eq!(digest(&later).lines, Some((1001, 1001)));
+}
+
+/// Review C5 (MEDIUM): an Authorization header in any case and quoted (a
+/// JSON dump), a URL password holding `/`, and a key whose BEGIN line is
+/// before the page — in the context, or beyond it with its END in the
+/// page — are all masked; every masked line stays a line.
+#[test]
+fn masking_catches_quoted_headers_slash_passwords_and_keys_begun_before_the_page() {
+    let headers = "{\"Authorization\": \"Bearer abc123\"}\n\
+                   AUTHORIZATION: xyz789\n\
+                   'authorization'='Basic Zm9vOmJhcg=='\n";
+    let masked = mask("", headers, "");
+    for secret in ["abc123", "xyz789", "Zm9vOmJhcg"] {
+        assert!(!masked.contains(secret), "{secret} in {masked}");
+    }
+    assert_eq!(masked.lines().count(), 3, "{masked}");
+    let url = "git clone https://ci:pa/ss@git.internal/web.git\n";
+    let masked = mask("", url, "");
+    assert!(
+        !masked.contains("pa/ss") && !masked.contains("ss@"),
+        "{masked}"
+    );
+    assert!(masked.contains("git.internal/web.git"), "{masked}");
+    // The BEGIN line in the context before the page: the body lines and
+    // the END line in the page are masked, line by line.
+    let body = "MIIEpAIBAAKCAQEA0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL";
+    let before = format!("start\n-----BEGIN RSA PRIVATE KEY-----\n{body}\n");
+    let page = format!("{body}\n{body}\n-----END RSA PRIVATE KEY-----\nnext step\n");
+    assert_eq!(
+        mask(&before, &page, ""),
+        "[MASKED]\n[MASKED]\n[MASKED]\nnext step\n"
+    );
+    // The BEGIN line beyond the context: the base64 lines up to the END
+    // line are the key's body.
+    assert_eq!(
+        mask("", &page, ""),
+        "[MASKED]\n[MASKED]\n[MASKED]\nnext step\n"
+    );
+    // A page wholly inside a key whose BEGIN line is in the context.
+    assert_eq!(mask(&before, &format!("{body}\n"), "more"), "[MASKED]\n");
+}
+
+/// Review C5 (LOW): the excerpt's line numbers are the log's own, even
+/// after a masked block of several lines; a key open before the tail is
+/// masked through the context.
+#[test]
+fn the_excerpt_lines_are_the_logs_own_after_a_masked_block() {
+    let d = digest(&log(
+        "step 1\n-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\nBBBB\n\
+         -----END OPENSSH PRIVATE KEY-----\nerror: boom\n",
+    ));
+    assert_eq!(d.lines, Some((6, 6)));
+    assert_eq!(d.excerpt, "error: boom");
+    let mut cut = log("BBBB\n-----END OPENSSH PRIVATE KEY-----\nerror: boom\n");
+    cut.before = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n".to_owned();
+    assert_eq!(digest(&cut).lines, Some((3, 3)));
+    let quiet = digest(&log("ok\nAAAA\n"));
+    assert!(quiet.excerpt.contains("AAAA"));
+    let mut cut = log("AAAA\nok\n");
+    cut.before = "-----BEGIN OPENSSH PRIVATE KEY-----\n".to_owned();
+    let d = digest(&cut);
+    assert!(!d.excerpt.contains("AAAA"), "{}", d.excerpt);
 }

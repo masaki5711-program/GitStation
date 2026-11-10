@@ -43,10 +43,17 @@ use forge_core::{MergeRequestId, ObjectId, ProjectId};
 pub const LOG_PAGE_MAX_BYTES: i64 = 1024 * 1024;
 /// The most chunks one page returns.
 pub const LOG_PAGE_MAX_CHUNKS: i64 = 256;
-/// The bytes of log on each side of a page handed to the masking as
-/// context (never returned): a secret split across the page's edge is
-/// still whole in page + context.
+/// The bytes of log after a page handed to the masking as context (never
+/// returned): a secret split across the page's edge is still whole in
+/// page + context.
 pub const MASK_CONTEXT_BYTES: i64 = 512;
+/// The bytes of log before a page (or a failure's tail) handed to the
+/// masking as context (never returned): more than after it, so a private
+/// key whose `BEGIN` line is before the page is still found.
+pub const MASK_BEFORE_BYTES: i64 = 16 * 1024;
+/// The most chunks read for the context before a page: the read is a
+/// bounded `seq` range, never a scan of the whole log before it.
+pub const MASK_BEFORE_CHUNKS: i32 = 256;
 /// The most bytes of a failed job's log the fingerprint sweep reads (its
 /// end: where a failure is reported).
 pub const FAILURE_TAIL_BYTES: i64 = 256 * 1024;
@@ -76,7 +83,8 @@ pub struct LogPage {
     pub attempt: i32,
     /// `(seq, body)` in order.
     pub chunks: Vec<(i32, String)>,
-    /// Up to [`MASK_CONTEXT_BYTES`] of the log before the page.
+    /// Up to [`MASK_BEFORE_BYTES`] of the log before the page (from at
+    /// most [`MASK_BEFORE_CHUNKS`] chunks).
     pub before: String,
     /// Up to [`MASK_CONTEXT_BYTES`] of the log after the page.
     pub after: String,
@@ -115,6 +123,39 @@ fn head(mut text: String, max: usize) -> String {
 
 fn context_bytes() -> usize {
     usize::try_from(MASK_CONTEXT_BYTES).unwrap_or(512)
+}
+
+fn before_bytes() -> usize {
+    usize::try_from(MASK_BEFORE_BYTES).unwrap_or(16 * 1024)
+}
+
+/// Up to [`MASK_BEFORE_BYTES`] of the log before chunk `from_seq`: whole
+/// chunks of the `seq` range `[from_seq - MASK_BEFORE_CHUNKS, from_seq)`
+/// (a range of the primary key, whatever the log's length), cut to the
+/// bytes.
+async fn context_before(
+    c: &mut PgConnection,
+    job: i64,
+    attempt: i32,
+    from_seq: i32,
+) -> Result<String, ForgeError> {
+    const QUERY: &str = "ci_outputs.context_before";
+    let before: Option<String> = sqlx::query_scalar(
+        "SELECT string_agg(body, '' ORDER BY seq) FROM ( \
+           SELECT seq, body, sum(octet_length(body)) OVER (ORDER BY seq DESC) AS acc \
+           FROM forge.ci_log_chunks WHERE job_id = $1 AND attempt = $2 \
+             AND seq < $3 AND seq >= $3 - $5) t \
+         WHERE acc - octet_length(body) < $4",
+    )
+    .bind(job)
+    .bind(attempt)
+    .bind(from_seq)
+    .bind(MASK_BEFORE_BYTES)
+    .bind(MASK_BEFORE_CHUNKS)
+    .fetch_one(&mut *c)
+    .await
+    .map_err(|e| query_error(QUERY, e))?;
+    Ok(tail(before.unwrap_or_default(), before_bytes()))
 }
 
 /// Read one page of `job`'s log in `pipeline` of `project`, from chunk
@@ -214,25 +255,15 @@ async fn read_page(
     .await
     .map_err(|e| query_error(QUERY, e))?;
     let last = chunks.last().map_or(from_seq - 1, |(s, _)| *s);
-    // Context on both sides: whole chunks until MASK_CONTEXT_BYTES are
-    // covered, whatever the chunk sizes.
-    let before: Option<String> = sqlx::query_scalar(
+    // Context on both sides, each a bounded `seq` range of whole chunks (a
+    // chunk holds at least one byte: MASK_CONTEXT_BYTES chunks cover the
+    // context after the page).
+    let before = context_before(c, job, attempt, from_seq).await?;
+    let after: Option<String> = sqlx::query_scalar(
         "SELECT string_agg(body, '' ORDER BY seq) FROM ( \
-           SELECT seq, body, sum(octet_length(body)) OVER (ORDER BY seq DESC) AS acc \
-           FROM forge.ci_log_chunks WHERE job_id = $1 AND attempt = $2 AND seq < $3) t \
-         WHERE acc - octet_length(body) < $4",
-    )
-    .bind(job)
-    .bind(attempt)
-    .bind(from_seq)
-    .bind(MASK_CONTEXT_BYTES)
-    .fetch_one(&mut *c)
-    .await
-    .map_err(|e| query_error(QUERY, e))?;
-    let (after, next_seq): (Option<String>, Option<i32>) = sqlx::query_as(
-        "SELECT string_agg(body, '' ORDER BY seq), min(seq) FROM ( \
            SELECT seq, body, sum(octet_length(body)) OVER (ORDER BY seq) AS acc \
-           FROM forge.ci_log_chunks WHERE job_id = $1 AND attempt = $2 AND seq > $3) t \
+           FROM forge.ci_log_chunks WHERE job_id = $1 AND attempt = $2 \
+             AND seq > $3 AND seq <= $3 + $4) t \
          WHERE acc - octet_length(body) < $4",
     )
     .bind(job)
@@ -242,9 +273,19 @@ async fn read_page(
     .fetch_one(&mut *c)
     .await
     .map_err(|e| query_error(QUERY, e))?;
+    let next_seq: Option<i32> = sqlx::query_scalar(
+        "SELECT min(seq) FROM forge.ci_log_chunks \
+         WHERE job_id = $1 AND attempt = $2 AND seq > $3",
+    )
+    .bind(job)
+    .bind(attempt)
+    .bind(last)
+    .fetch_one(&mut *c)
+    .await
+    .map_err(|e| query_error(QUERY, e))?;
     Ok((
         chunks,
-        tail(before.unwrap_or_default(), context_bytes()),
+        before,
         head(after.unwrap_or_default(), context_bytes()),
         next_seq,
     ))
@@ -259,6 +300,9 @@ pub struct FailureLog {
     pub job_name: String,
     /// The job's own error code (`FG-CI-0004` lease lost, a timeout…).
     pub job_error_code: Option<String>,
+    /// Up to [`MASK_BEFORE_BYTES`] of the log before `tail` (masking
+    /// context only, never kept).
+    pub before: String,
     /// The last [`FAILURE_TAIL_BYTES`] of the attempt's log (whole chunks;
     /// empty: no log).
     pub tail: String,
@@ -472,9 +516,11 @@ async fn failure_log(
     .fetch_one(&mut *c)
     .await
     .map_err(|e| query_error(QUERY, e))?;
+    let before = context_before(c, job, attempt, first_seq).await?;
     Ok(FailureLog {
         job_name,
         job_error_code,
+        before,
         tail: tail_text.unwrap_or_default(),
         first_line: lines_before + 1,
         truncated: chunks_before > 0,

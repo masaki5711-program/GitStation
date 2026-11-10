@@ -262,7 +262,7 @@ async fn a_log_page_is_whole_chunks_with_masking_context_and_a_cursor() {
         .await
         .expect("read")
         .expect("found");
-    assert!(page.before.len() <= 512 && page.before.ends_with('x'));
+    assert_eq!(page.before, format!("line 1\n{big}"));
     // Another pipeline, another project's view, an attempt not run: not found.
     for (pipeline, attempt) in [(p + 1, None), (p, Some(attempt + 1)), (p, Some(0))] {
         let got = job_log_decided(&w.t.db, project, (pipeline, job), attempt, 0, allow)
@@ -270,6 +270,40 @@ async fn a_log_page_is_whole_chunks_with_masking_context_and_a_cursor() {
             .expect("read");
         assert!(got.is_none(), "{pipeline} {attempt:?}");
     }
+    w.t.drop_now().await;
+}
+
+/// Review C5 (MEDIUM): the context before a page reaches back far enough
+/// to hold a private key's BEGIN line (MASK_BEFORE_BYTES), and is read
+/// from a bounded `seq` range (MASK_BEFORE_CHUNKS chunks), whatever the
+/// log's length.
+#[tokio::test]
+async fn the_context_before_a_page_holds_a_key_begun_before_it_and_is_bounded() {
+    let w = world().await;
+    let p = w.pipeline('a', &["test"]).await;
+    let begin = "-----BEGIN RSA PRIVATE KEY-----\n";
+    let body = format!("{}\n", "A".repeat(64)).repeat(30);
+    let mut chunks: Vec<String> = vec![begin.to_owned(), body.clone()];
+    chunks.extend((0..300).map(|i| format!("{}\n", i % 10)));
+    chunks.push("error: boom\n".to_owned());
+    let refs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+    let (job, _) = w.run(&refs, JobResult::Failed).await;
+    let project = w.web.project_id;
+    let (page, ()) = job_log_decided(&w.t.db, project, (p, job), None, 2, allow)
+        .await
+        .expect("read")
+        .expect("found");
+    assert_eq!(page.before, format!("{begin}{body}"));
+    // 300 chunks later the context is the last MASK_BEFORE_CHUNKS chunks.
+    let last = i32::try_from(chunks.len() - 1).expect("seq");
+    let (page, ()) = job_log_decided(&w.t.db, project, (p, job), None, last, allow)
+        .await
+        .expect("read")
+        .expect("found");
+    let chunk_bound = usize::try_from(MASK_BEFORE_CHUNKS).expect("bound");
+    let expected: String = chunks[chunks.len() - 1 - chunk_bound..chunks.len() - 1].concat();
+    assert_eq!(page.before, expected);
+    assert!(!page.before.contains("BEGIN"));
     w.t.drop_now().await;
 }
 

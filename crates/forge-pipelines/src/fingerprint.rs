@@ -5,13 +5,18 @@
 //! output, whoever reads it, with [`MASKED`]: forge's own credentials (a
 //! personal, runner or job token `fg?_<16 hex>_<secret>`, a web session
 //! `gss_…` — a job prints its job token by `env` alone), an HTTP
-//! `Authorization:` value, the password of a URL's userinfo, and a PEM
-//! private key block. It runs on every page of a log (with the bytes around
-//! the page as context, so a secret cut by the page's edge is still found)
-//! and on every failure before it is fingerprinted or stored. The values of
-//! CI variables are masked by C6 (none exist before). A PEM block whose
-//! `BEGIN` line is outside the page and its context is not recognised:
-//! keys belong in CI variables (C6), never in a job's output.
+//! `Authorization` value (any case, quoted or not, `:` or `=`), the
+//! password of a URL's userinfo (`/` included), and a PEM private key
+//! block. It runs on every page of a log and on every failure before it is
+//! fingerprinted or stored, with the log around them as context (up to
+//! `MASK_BEFORE_BYTES` before: a secret cut by the edge, or a key whose
+//! `BEGIN` line is before the page, is still found). Each masked line stays
+//! one line (`[MASKED]` per line): line numbers never move. The base64
+//! lines just before an `END … PRIVATE KEY` line are a key's body even when
+//! its `BEGIN` line is beyond the context. The values of CI variables are
+//! masked by C6 (none exist before). A key body with neither its `BEGIN`
+//! line in the context nor its `END` line in page + context is not
+//! recognised: keys belong in CI variables (C6), never in a job's output.
 //!
 //! **Fingerprints** ([`digest`]): the failure lines at the end of a failed
 //! job's log — lines naming an error, a failure, a panic, a `FG-` code or a
@@ -48,19 +53,26 @@ static SECRETS: LazyLock<Regex> = LazyLock::new(|| {
         // forge's tokens and web sessions (ADR-0019, ADR-0021, ADR-0029)
         r"\bfg[a-z]_[0-9a-f]{16}_[0-9A-Za-z]{16,}",
         r"|\bgss_[0-9A-Za-z_-]{16,}",
-        // an HTTP Authorization value
-        r"|[Aa]uthorization\s*[:=]\s*(?:[Bb]earer|[Bb]asic|[Tt]oken|[Dd]igest)?\s*[^\s'\x22]+",
-        // a URL's userinfo password
-        r"|[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@",
+        // an HTTP Authorization value: any case, the name and the value
+        // optionally quoted (a JSON or YAML dump), on its line
+        r"|(?i-u:[\x22']?authorization[\x22']?[ \t]*[:=][ \t]*[\x22']?",
+        r"(?:(?:bearer|basic|token|digest)[ \t]+)?)[^\s'\x22]+",
+        // a URL's userinfo password (it may hold `/`)
+        r"|[A-Za-z][A-Za-z0-9+.-]*://[^/\s:@]+:[^\s@?#]+@",
         // a PEM private key block (to its END, or to the end of the text)
         r"|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----(?s:.*?)(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)",
+        // a key's body whose BEGIN line is beyond the context: the base64
+        // (and encryption header) lines just before its END line
+        r"|(?m:(?:^(?:[A-Za-z0-9+/=]+|Proc-Type:[^\n]*|DEK-Info:[^\n]*)\r?\n)+)",
+        r"-----END [A-Z0-9 ]*PRIVATE KEY-----",
     ))
 });
 
 /// `text` with every secret replaced by [`MASKED`]. `before` / `after` are
 /// the log around `text` (context only, never returned): a secret that
 /// starts in `before` or ends in `after` is masked where it overlaps
-/// `text`.
+/// `text`. A secret over several lines becomes one [`MASKED`] per line:
+/// `text` keeps its line count.
 pub fn mask(before: &str, text: &str, after: &str) -> String {
     let joined = format!("{before}{text}{after}");
     let (start, end) = (before.len(), before.len() + text.len());
@@ -68,16 +80,20 @@ pub fn mask(before: &str, text: &str, after: &str) -> String {
     let mut at = start;
     for m in SECRETS.find_iter(&joined) {
         let (s, e) = (m.start().max(start), m.end().min(end));
-        if s >= e {
+        if s >= e || s < at {
             continue;
         }
-        if s > at {
-            out.push_str(&joined[at..s]);
+        out.push_str(&joined[at..s]);
+        let mut lines = joined[s..e].split('\n').peekable();
+        while let Some(line) = lines.next() {
+            if !line.is_empty() {
+                out.push_str(MASKED);
+            }
+            if lines.peek().is_some() {
+                out.push('\n');
+            }
         }
-        if s >= at {
-            out.push_str(MASKED);
-        }
-        at = at.max(e);
+        at = e;
     }
     if at < end {
         out.push_str(&joined[at..end]);
@@ -169,12 +185,24 @@ fn bounded(text: &str, max: usize) -> &str {
 /// The fingerprint, error codes, masked excerpt and its lines of a failed
 /// job's log (module docs). Deterministic: the same log, the same digest.
 pub fn digest(log: &FailureLog) -> FailureDigest {
-    let masked = mask("", &log.tail, "");
-    let lines: Vec<(usize, String)> = masked
+    let masked = mask(&log.before, &log.tail, "");
+    let masked_lines: Vec<&str> = masked.split('\n').collect();
+    // Lines are numbered on the log as stored (`mask` keeps the line
+    // count); what is kept of each is its masked text (a line `mask` did
+    // not return is shown masked, never as stored).
+    let lines: Vec<(usize, String)> = log
+        .tail
         .split('\n')
-        .map(|l| ANSI.replace_all(l.trim_end_matches('\r'), "").into_owned())
         .enumerate()
-        .filter(|(_, l)| !l.trim().is_empty())
+        .filter(|(_, raw)| !ANSI.replace_all(raw, "").trim().is_empty())
+        .map(|(i, _)| {
+            let line = masked_lines.get(i).copied().unwrap_or(MASKED);
+            (
+                i,
+                ANSI.replace_all(line.trim_end_matches('\r'), "")
+                    .into_owned(),
+            )
+        })
         .collect();
     let failing: Vec<&(usize, String)> = lines
         .iter()
