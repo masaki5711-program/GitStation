@@ -11,6 +11,16 @@
 //! | `search_requirements` | `GET /api/v1/projects/{id}/specs/requirements?q=&ref=&limit=` |
 //! | `get_trace_matrix` | `GET /api/v1/projects/{id}/specs/trace?ref=` |
 //! | `get_merge_request_context` | `GET /api/v1/projects/{id}/merge-requests/{iid}/context` |
+//! | `list_documents` | `GET /api/v1/projects/{id}/documents?ref=&doctype=&limit=&after=` |
+//! | `get_document` | `GET /api/v1/projects/{id}/documents/{doc_id}?ref=&lang=` |
+//! | `get_document_block` | `GET /api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}?ref=&lang=` |
+//! | `get_document_referenced_by` | `GET /api/v1/projects/{id}/documents/{doc_id}/referenced-by?ref=&block=&limit=&after=` |
+//!
+//! A document or block id is checked as the server checks it before it is
+//! formatted into the path ([`crate::doc_view::parse_doc_id`]), a language
+//! as `en` / `pt-BR`, a limit as 1..=500: an invalid one is `-32602` and
+//! sends nothing. A confidential document is the server's not-found to an
+//! agent; the tool error carries its code, message and request id only.
 //!
 //! Every request carries `Forge-Context-Audience: agent`: whatever the
 //! token, the server never hands this process what is marked confidential
@@ -72,6 +82,33 @@ const REVISION: (&str, &str, bool, &str) = (
     "A commit id, a branch or a tag (default: the default branch).",
 );
 
+const DOCUMENT: (&str, &str, bool, &str) = (
+    "id",
+    "string",
+    true,
+    "The document id (RA-2026-014): ASCII letters, digits, '.', '_', '-', at most 128 bytes.",
+);
+const LANG: (&str, &str, bool, &str) = (
+    "lang",
+    "string",
+    false,
+    "A translation's language (en, pt-BR); default: the original.",
+);
+const LIMIT: (&str, &str, bool, &str) = (
+    "limit",
+    "integer",
+    false,
+    "At most this many, 1..=500 (default 100).",
+);
+const AFTER: (&str, &str, bool, &str) = (
+    "after",
+    "string",
+    false,
+    "The previous answer's next_after: the next page.",
+);
+/// The largest `limit` the server accepts.
+const MAX_LIMIT: i64 = 500;
+
 const TOOLS: &[Tool] = &[
     Tool {
         name: "get_work_item_context",
@@ -111,6 +148,45 @@ const TOOLS: &[Tool] = &[
         args: &[
             PROJECT,
             ("iid", "integer", true, "The merge request's number in the project."),
+        ],
+    },
+    Tool {
+        name: "list_documents",
+        description: "A project's documents (id, title, type, path, classification, translations), by id, paged with next_after. Confidential documents are left out (`withheld` counts them when unfiltered).",
+        args: &[
+            PROJECT,
+            REVISION,
+            ("doctype", "string", false, "Only documents of this type (safety.risk-assessment)."),
+            LIMIT,
+            AFTER,
+        ],
+    },
+    Tool {
+        name: "get_document",
+        description: "One document: its front matter, its sections of text and blocks, and every [[...]] reference resolved (a more confidential target is its id only). Cite its id and path.",
+        args: &[PROJECT, DOCUMENT, REVISION, LANG],
+    },
+    Tool {
+        name: "get_document_block",
+        description: "One block of a document (a hazard, a requirement, a step) alone, with its section and the references inside it.",
+        args: &[
+            PROJECT,
+            DOCUMENT,
+            ("block", "string", true, "The block id (H-01), as for the document id."),
+            REVISION,
+            LANG,
+        ],
+    },
+    Tool {
+        name: "get_document_referenced_by",
+        description: "The documents (and translations) that refer to a document, or to one block of it, with the lines; paged with next_after. A more confidential referrer is its id only.",
+        args: &[
+            PROJECT,
+            DOCUMENT,
+            ("block", "string", false, "Only the references to this block (H-01)."),
+            REVISION,
+            LIMIT,
+            AFTER,
         ],
     },
 ];
@@ -213,6 +289,46 @@ impl<'a> Args<'a> {
         self.text(name)?
             .ok_or_else(|| Invalid(format!("missing argument `{name}`")))
     }
+
+    /// A document or block id, as the server accepts it in the path.
+    fn doc_ref(&self, name: &str) -> std::result::Result<Option<String>, Invalid> {
+        match self.text(name)? {
+            None => Ok(None),
+            Some(raw) => crate::doc_view::parse_doc_id(&raw)
+                .map(Some)
+                .map_err(|why| Invalid(format!("`{name}`: {why}"))),
+        }
+    }
+
+    fn need_doc_ref(&self, name: &str) -> std::result::Result<String, Invalid> {
+        self.doc_ref(name)?
+            .ok_or_else(|| Invalid(format!("missing argument `{name}`")))
+    }
+
+    /// `en` or `pt-BR`, as the server accepts it.
+    fn lang(&self) -> std::result::Result<Option<String>, Invalid> {
+        let Some(raw) = self.text("lang")? else {
+            return Ok(None);
+        };
+        let (lang, region) = raw.split_once('-').unwrap_or((&raw, ""));
+        let ok = lang.len() == 2
+            && lang.bytes().all(|b| b.is_ascii_lowercase())
+            && (region.is_empty()
+                || region.len() == 2 && region.bytes().all(|b| b.is_ascii_uppercase()));
+        if ok {
+            Ok(Some(raw))
+        } else {
+            Err(Invalid("`lang` is a language like en or pt-BR".to_owned()))
+        }
+    }
+
+    /// `limit`, 1..=[`MAX_LIMIT`].
+    fn limit(&self) -> std::result::Result<Option<String>, Invalid> {
+        match self.id("limit")? {
+            Some(n) if n > MAX_LIMIT => Err(Invalid(format!("`limit` is at most {MAX_LIMIT}"))),
+            n => Ok(n.map(|n| n.to_string())),
+        }
+    }
 }
 
 /// The route of a call: path and query.
@@ -250,17 +366,40 @@ fn route_of(args: &Args<'_>) -> std::result::Result<(String, Vec<(String, String
         "search_requirements" => {
             push("ref", args.text("ref")?);
             push("q", args.text("query")?);
-            if let Some(n) = args.id("limit")? {
-                if n > 500 {
-                    return Err(Invalid("`limit` is at most 500".to_owned()));
-                }
-                push("limit", Some(n.to_string()));
-            }
+            push("limit", args.limit()?);
             format!("/api/v1/projects/{project}/specs/requirements")
         }
         "get_trace_matrix" => {
             push("ref", args.text("ref")?);
             format!("/api/v1/projects/{project}/specs/trace")
+        }
+        "list_documents" => {
+            push("ref", args.text("ref")?);
+            push("doctype", args.text("doctype")?);
+            push("limit", args.limit()?);
+            push("after", args.text("after")?);
+            format!("/api/v1/projects/{project}/documents")
+        }
+        "get_document" => {
+            let id = args.need_doc_ref("id")?;
+            push("ref", args.text("ref")?);
+            push("lang", args.lang()?);
+            format!("/api/v1/projects/{project}/documents/{id}")
+        }
+        "get_document_block" => {
+            let id = args.need_doc_ref("id")?;
+            let block = args.need_doc_ref("block")?;
+            push("ref", args.text("ref")?);
+            push("lang", args.lang()?);
+            format!("/api/v1/projects/{project}/documents/{id}/blocks/{block}")
+        }
+        "get_document_referenced_by" => {
+            let id = args.need_doc_ref("id")?;
+            push("ref", args.text("ref")?);
+            push("block", args.doc_ref("block")?);
+            push("limit", args.limit()?);
+            push("after", args.text("after")?);
+            format!("/api/v1/projects/{project}/documents/{id}/referenced-by")
         }
         other => return Err(Invalid(format!("unknown tool `{other}`"))),
     };
@@ -379,7 +518,7 @@ fn answer(api: &ApiClient, line: &str, stderr: &mut dyn Write) -> Option<Value> 
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}},
                     "serverInfo": {"name": "gstn", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": "GitStation's context, read-only, with your token: work items, requirements, the trace matrix and merge requests. Every item carries its source (project, commit, path, line): cite it. What is marked confidential is never returned (`withheld` counts it; asking for it is FG-AUTH-0021).",
+                    "instructions": "GitStation's context, read-only, with your token: work items, requirements, the trace matrix, merge requests and documents. Every item carries its source (project, commit, path, line): cite it. What is marked confidential is never returned (`withheld` counts it; asking for it is FG-AUTH-0021).",
                 }),
             )
         }

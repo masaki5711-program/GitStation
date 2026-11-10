@@ -158,8 +158,9 @@ pub enum Command {
     },
     /// A read-only MCP server on stdin / stdout (M3 X5) for an AI agent:
     /// get_work_item_context, get_requirement, search_requirements,
-    /// get_trace_matrix, get_merge_request_context — with your token, and
-    /// never what is marked confidential (plan 06 D-5).
+    /// get_trace_matrix, get_merge_request_context, list_documents,
+    /// get_document, get_document_block, get_document_referenced_by — with
+    /// your token, and never what is marked confidential (plan 06 D-5).
     ///
     /// Log in with a token issued with `is_agent` for the agent: a person's
     /// ordinary token is a person's on every other route.
