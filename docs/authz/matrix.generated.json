@@ -71,7 +71,7 @@
   { "action": "IntegrationEventRead", "allow": 5, "deny": 33, "public": false, "git_operation": false },
   { "action": "IntegrationEventCursorRead", "allow": 5, "deny": 33, "public": false, "git_operation": false },
   { "action": "IntegrationDevStatusRead", "allow": 5, "deny": 33, "public": false, "git_operation": false },
-  { "action": "ActAsConfirmView", "allow": 3, "deny": 8, "public": false, "git_operation": false },
+  { "action": "ActAsConfirmView", "allow": 6, "deny": 15, "public": false, "git_operation": false },
   { "action": "ActAsAssertionIssue", "allow": 6, "deny": 17, "public": false, "git_operation": false },
   { "action": "ActAsAssertionClaim", "allow": 1, "deny": 8, "public": false, "git_operation": false },
   { "action": "WebhookRead", "allow": 8, "deny": 12, "public": false, "git_operation": false },

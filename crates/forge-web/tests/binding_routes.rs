@@ -67,6 +67,14 @@ async fn send(
         .expect("request");
     if let Who::Person(principal, session) = who {
         req.extensions_mut().insert(principal);
+        // What the auth layer loads for a session (the screens show the person's name).
+        req.extensions_mut().insert(forge_web::CallerProfile {
+            username: "olga".to_owned(),
+            display_name: "Olga".to_owned(),
+            is_admin: true,
+            is_agent: false,
+            token_scopes: None,
+        });
         if let Some(id) = session {
             req.extensions_mut().insert(SessionCredential {
                 session_id: id,
@@ -638,5 +646,151 @@ async fn act_as_repository_searches_are_audited_and_limited() {
         tripped,
         Some((StatusCode::TOO_MANY_REQUESTS, "FG-WEB-0010".to_owned()))
     );
+    w.t.drop_now().await;
+}
+
+/// ADR-0025 Amendment X3 §4 (the screen promised for U3): what the binding
+/// confirmation screen shows — forge's own facts only (the repository, the
+/// kanflow project id the integration named, the setting, whether it is
+/// bound already, the receiving integration, the person) — to the person's
+/// web session with the intent's right (Maintainer); never to a token, never
+/// for a Developer, strictly parsed.
+#[tokio::test]
+async fn the_binding_confirmation_screen_shows_forges_facts_to_the_person_only() {
+    let w = world().await;
+    let person = || Who::Person(session_of(w.olga), Some(w.olga_session));
+    let uri = |project: i64, query: &str| {
+        format!("/api/v1/projects/{project}/integration-bindings/act-as-confirmation?{query}")
+    };
+    let set_q = |integration: i64, resolves: bool| {
+        format!("intent=binding_set&integration={integration}&kanflow_project_id=KF-7&resolves_work_items={resolves}")
+    };
+    let (status, shown) = send(
+        w.router.clone(),
+        "GET",
+        &uri(w.spec, &set_q(w.integration, false)),
+        person(),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["project_id"], json!(w.spec));
+    assert_eq!(shown["project_path"], json!("olga/spec-zeva"));
+    assert_eq!(shown["intent"], json!("binding_set"));
+    assert_eq!(shown["kanflow_project_id"], json!("KF-7"));
+    assert_eq!(shown["resolves_work_items"], json!(false));
+    assert_eq!(shown["bound"], json!(false));
+    assert_eq!(shown["integration_id"], json!(w.integration));
+    assert_eq!(shown["integration_kind"], json!("kanflow"));
+    assert_eq!(shown["integration_name"], json!("kanflow-sync"));
+    assert_eq!(shown["person_username"], json!("olga"));
+
+    // Bound (through the real confirm → claim → bind), the removal screen says so.
+    let (assertion, _) = w
+        .confirmed(w.spec, set(w.integration, "KF-7", false, &"s".repeat(43)))
+        .await;
+    let (status, bound) = w
+        .bind_as_olga(
+            Some(&assertion),
+            json!({"kanflow_project_id": "KF-7", "repository_id": w.spec, "settings": {"resolves_work_items": false}}),
+        )
+        .await;
+    assert_eq!(
+        (status, bound["outcome"].clone()),
+        (StatusCode::OK, json!("bound")),
+        "{bound}"
+    );
+    let remove_q = format!(
+        "intent=binding_remove&integration={}&kanflow_project_id=KF-7",
+        w.integration
+    );
+    let (status, shown) = send(
+        w.router.clone(),
+        "GET",
+        &uri(w.spec, &remove_q),
+        person(),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(
+        (shown["bound"].clone(), shown["resolves_work_items"].clone()),
+        (json!(true), Value::Null)
+    );
+
+    // Never to a token (the integration's own included): a person's web session only.
+    let (status, token) = send(
+        w.router.clone(),
+        "GET",
+        &uri(w.spec, &set_q(w.integration, false)),
+        w.kanflow(),
+        None,
+        &[],
+    )
+    .await;
+    assert!(
+        status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+        "{status} {token}"
+    );
+    // A Developer of the project cannot bind it: refused like the issue route.
+    let (status, dev) = send(
+        w.router.clone(),
+        "GET",
+        &uri(w.devonly, &set_q(w.integration, false)),
+        person(),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(
+        (status, code(&dev)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{dev}"
+    );
+    // An integration that does not exist: the same 404 as an invisible project.
+    let (status, none) = send(
+        w.router.clone(),
+        "GET",
+        &uri(w.spec, &set_q(999_999, false)),
+        person(),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{none}");
+    // Strict query: the setting only with binding_set, nothing unknown or repeated.
+    for bad in [
+        format!(
+            "intent=binding_set&integration={}&kanflow_project_id=KF-7",
+            w.integration
+        ),
+        format!(
+            "intent=binding_remove&integration={}&kanflow_project_id=KF-7&resolves_work_items=true",
+            w.integration
+        ),
+        format!(
+            "intent=approve&integration={}&kanflow_project_id=KF-7",
+            w.integration
+        ),
+        format!("{}&extra=1", set_q(w.integration, true)),
+        format!("{}&intent=binding_set", set_q(w.integration, true)),
+        format!(
+            "intent=binding_set&integration={}&kanflow_project_id=&resolves_work_items=true",
+            w.integration
+        ),
+    ] {
+        let (status, refused) = send(
+            w.router.clone(),
+            "GET",
+            &uri(w.spec, &bad),
+            person(),
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {refused}");
+    }
     w.t.drop_now().await;
 }

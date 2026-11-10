@@ -622,6 +622,16 @@ fn binding_routes(registry: Registry<AppState>) -> Registry<AppState> {
             b::confirm,
         )
         .responds_created::<b::BindingAssertionIssued>(Verb::Post, b::CONFIRM)
+        .route_with(
+            Verb::Get,
+            b::CONFIRMATION,
+            Action::ActAsConfirmView,
+            "What the binding confirmation screen shows: the repository, the kanflow project id the integration named, the setting, whether it is bound now, the receiving integration (a person's web session; Maintainer, the intent's action allowed for them)",
+            b::BindingConfirmationOf,
+            b::confirmation,
+        )
+        .responds::<b::BindingConfirmationBody>(Verb::Get, b::CONFIRMATION)
+        .queries(Verb::Get, b::CONFIRMATION, b::CONFIRMATION_QUERY)
 }
 
 /// Every route of the product. The `gen-authz` binary and the tests read the
@@ -2171,6 +2181,14 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 routes::act_as::PAGE,
                 Action::WebShell,
                 "SPA shell: act-as confirmation popup",
+                shell,
+            )
+            // The binding confirmation popup (ADR-0025 Amendment X3 §4).
+            .route(
+                verb,
+                routes::integration_bindings::PAGE,
+                Action::WebShell,
+                "SPA shell: act-as binding confirmation popup",
                 shell,
             )
             // The in-app notifications page (M3 U4).

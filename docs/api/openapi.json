@@ -593,6 +593,74 @@
         ],
         "type": "object"
       },
+      "BindingConfirmationBody": {
+        "additionalProperties": false,
+        "description": "`GET …/integration-bindings/act-as-confirmation` (forge's data only: the\nkanflow project id is shown as the identifier the integration named,\nnever with text the integration sent).",
+        "properties": {
+          "bound": {
+            "description": "The integration is bound to this repository for that kanflow project now.",
+            "type": "boolean"
+          },
+          "integration_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "integration_kind": {
+            "type": "string"
+          },
+          "integration_name": {
+            "type": "string"
+          },
+          "intent": {
+            "description": "`binding_set` or `binding_remove`.",
+            "type": "string"
+          },
+          "kanflow_project_id": {
+            "type": "string"
+          },
+          "person_display_name": {
+            "type": "string"
+          },
+          "person_username": {
+            "type": "string"
+          },
+          "project_display_name": {
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "The repository's path now (`group/name`).",
+            "type": "string"
+          },
+          "resolves_work_items": {
+            "description": "The setting confirmed (`binding_set`; `null` for `binding_remove`).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "project_path",
+          "project_display_name",
+          "intent",
+          "kanflow_project_id",
+          "resolves_work_items",
+          "bound",
+          "integration_id",
+          "integration_kind",
+          "integration_name",
+          "person_display_name",
+          "person_username"
+        ],
+        "type": "object"
+      },
       "BindingSettings": {
         "additionalProperties": false,
         "description": "A binding's settings.",
@@ -8666,6 +8734,68 @@
         "x-forge-action": "SessionLogout"
       }
     },
+    "/-/confirm/projects/{id}/integration-bindings": {
+      "get": {
+        "operationId": "get_confirm_projects_id_integration_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: act-as binding confirmation popup",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_confirm_projects_id_integration_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: act-as binding confirmation popup",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/confirm/projects/{id}/integration-bindings/assertions": {
       "post": {
         "operationId": "post_confirm_projects_id_integration_bindings_assertions",
@@ -11451,6 +11581,83 @@
         },
         "summary": "A project's integration binding, none or one (as reading the project)",
         "x-forge-action": "ProjectRead"
+      }
+    },
+    "/api/v1/projects/{id}/integration-bindings/act-as-confirmation": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_integration_bindings_act_as_confirmation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "binding_set or binding_remove",
+            "in": "query",
+            "name": "intent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the receiving integration's id",
+            "in": "query",
+            "name": "integration",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the kanflow project the integration named",
+            "in": "query",
+            "name": "kanflow_project_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "binding_set only: true (the code repository) or false (a shared specification repository)",
+            "in": "query",
+            "name": "resolves_work_items",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindingConfirmationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "What the binding confirmation screen shows: the repository, the kanflow project id the integration named, the setting, whether it is bound now, the receiving integration (a person's web session; Maintainer, the intent's action allowed for them)",
+        "x-forge-action": "ActAsConfirmView"
       }
     },
     "/api/v1/projects/{id}/integration-bindings/{integration_id}": {

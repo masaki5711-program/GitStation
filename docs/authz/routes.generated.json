@@ -64,6 +64,22 @@
     "word": "fixed"
   },
   {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/-/confirm/projects/{id}/integration-bindings",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/confirm/projects/{id}/integration-bindings",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ActAsAssertionIssue",
     "method": "POST",
     "path": "/-/confirm/projects/{id}/integration-bindings/assertions",
@@ -547,6 +563,14 @@
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/integration-bindings",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ActAsConfirmView",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/integration-bindings/act-as-confirmation",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

@@ -1005,6 +1005,25 @@
     "notFoundBody": "マージリクエストが見つからないか、見る権限がありません。",
     "invalidTitle": "リンクが正しくありません",
     "invalidBody": "アプリからもう一度開いてください。",
-    "tooSoon": "もう一度押してください。押した直後のクリックは受け付けません。"
+    "tooSoon": "もう一度押してください。押した直後のクリックは受け付けません。",
+    "binding": {
+      "leadSet": "{{app}} が、あなたの代わりに、このリポジトリを Kanflow のプロジェクトに結びつけようとしています。",
+      "leadRemove": "{{app}} が、あなたの代わりに、このリポジトリと Kanflow のプロジェクトの結びつけを外そうとしています。",
+      "pressSet": "内容を確かめて、よければ「結びつける」を押してください。違えば「やめる」を押してください。",
+      "pressRemove": "内容を確かめて、よければ「結びつけを外す」を押してください。違えば「やめる」を押してください。",
+      "actionSet": "リポジトリを結びつける",
+      "actionRemove": "リポジトリの結びつけを外す",
+      "confirmSet": "結びつける",
+      "confirmRemove": "結びつけを外す",
+      "rowRepository": "リポジトリ",
+      "rowKanflowProject": "Kanflow のプロジェクト（ID）",
+      "rowSetting": "結びつけの種類",
+      "settingCode": "コードのリポジトリ（PBI の番号をこのリポジトリの MR とブランチで探す。結べる Kanflow のプロジェクトは 1 つだけ）",
+      "settingShared": "共有する仕様のリポジトリ（PBI の番号は探さない。複数の Kanflow のプロジェクトに結べる）",
+      "rowNow": "今の状態",
+      "nowBound": "結びついています",
+      "nowUnbound": "結びついていません",
+      "notFoundBody": "リポジトリか連携が見つからないか、見る権限がありません。"
+    }
   }
 }

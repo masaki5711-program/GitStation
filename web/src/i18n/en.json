@@ -1005,6 +1005,25 @@
     "notFoundBody": "The merge request does not exist, or you may not see it.",
     "invalidTitle": "The link is not valid",
     "invalidBody": "Open it again from the app.",
-    "tooSoon": "Press once more. A click right after the button was armed is not accepted."
+    "tooSoon": "Press once more. A click right after the button was armed is not accepted.",
+    "binding": {
+      "leadSet": "{{app}} wants to bind this repository to a Kanflow project on your behalf.",
+      "leadRemove": "{{app}} wants to remove this repository's binding to a Kanflow project on your behalf.",
+      "pressSet": "Check the details. If they are right, press \"Bind\"; otherwise press \"Cancel\".",
+      "pressRemove": "Check the details. If they are right, press \"Remove binding\"; otherwise press \"Cancel\".",
+      "actionSet": "Bind the repository",
+      "actionRemove": "Remove the repository's binding",
+      "confirmSet": "Bind",
+      "confirmRemove": "Remove binding",
+      "rowRepository": "Repository",
+      "rowKanflowProject": "Kanflow project (ID)",
+      "rowSetting": "Kind of binding",
+      "settingCode": "Code repository (PBI numbers are looked up in this repository's merge requests and branches; one Kanflow project only)",
+      "settingShared": "Shared specification repository (PBI numbers are not looked up; can be bound to several Kanflow projects)",
+      "rowNow": "Now",
+      "nowBound": "Bound",
+      "nowUnbound": "Not bound",
+      "notFoundBody": "The repository or the integration was not found, or you may not see it."
+    }
   }
 }

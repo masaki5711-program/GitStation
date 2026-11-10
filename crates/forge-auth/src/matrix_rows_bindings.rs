@@ -217,6 +217,18 @@ pub(crate) const BINDING_ROWS: &[Row] = &[
     row(A::ActAsAssertionIssue, W::MaintainerTokenApi, confirm(false, true, false), deny(E::InsufficientScope)),
     row(A::ActAsAssertionIssue, BINDER, confirm(false, true, false), deny(E::Forbidden)),
     row(A::ActAsAssertionIssue, W::ServiceAccountAdminSession, confirm(false, true, false), deny(E::Forbidden)),
+    // 3. what the binding confirmation screen shows (`GET …/integration-bindings/act-as-confirmation`, ADR-0025
+    // Amendment X3 §4): decided exactly like the press — whoever may not press sees nothing.
+    row(A::ActAsConfirmView, W::Maintainer, confirm(false, true, false), Allow),
+    row(A::ActAsConfirmView, W::Maintainer, confirm(true, true, true), Allow),
+    row(A::ActAsConfirmView, W::Admin, confirm(false, true, false), Allow),
+    row(A::ActAsConfirmView, W::Maintainer, confirm(true, true, false), deny(E::Forbidden)),
+    row(A::ActAsConfirmView, W::Maintainer, confirm(false, false, false), deny(E::Forbidden)),
+    row(A::ActAsConfirmView, W::Developer, confirm(false, true, false), deny(E::Forbidden)),
+    row(A::ActAsConfirmView, W::NonMember, confirm(false, true, false), deny(E::NotFound)),
+    row(A::ActAsConfirmView, W::MaintainerTokenApi, confirm(false, true, false), deny(E::InsufficientScope)),
+    row(A::ActAsConfirmView, BINDER, confirm(false, true, false), deny(E::Forbidden)),
+    row(A::ActAsConfirmView, W::ServiceAccountAdminSession, confirm(false, true, false), deny(E::Forbidden)),
 ];
 
 const fn confirm(remove: bool, enabled: bool, bound: bool) -> F {

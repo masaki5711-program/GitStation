@@ -696,6 +696,11 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         Coverage::BrowserOnly("the act-as confirmation screen: a person's web session only; tokens are refused (FG-AUTH-0002 session_required)"),
     ),
     (
+        "GET",
+        "/api/v1/projects/{id}/integration-bindings/act-as-confirmation",
+        Coverage::BrowserOnly("the binding confirmation screen (M3 X3): a person's web session only; tokens are refused (FG-AUTH-0002 session_required)"),
+    ),
+    (
         "POST",
         "/api/v1/integrations/{id}/act-as/claim",
         Coverage::NotForCli("kanflow's server claims the assertion a person confirmed (an integration's act_as token); gstn never acts for a person"),

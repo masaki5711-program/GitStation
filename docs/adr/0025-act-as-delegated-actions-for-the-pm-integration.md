@@ -448,3 +448,17 @@ kanflow の画面で本人が「承認」/「取り消し」を押す
    - LOW（authz）: §4 の表が S2 の時点のまま（上に X3 の注記を足した）、`ListAsPerson` が §3 の例外（上に注記を足した）。
 2. **条件 2 は満たした**: 利用者が §1 の社員番号の守りを S2 の範囲に含めることを受け入れた（2026-11-09。S2 は実装済み）→ **accepted**。
 3. 条件 3 は未決のままでよい（変わらず）。
+
+## 結びつけの確認の画面（2026-11-10、クラウド）
+
+Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 で足す」を足した（kanflow の X3 の前提）。
+
+- `GET /api/v1/projects/{id}/integration-bindings/act-as-confirmation?intent&integration&kanflow_project_id[&resolves_work_items]`
+  （`ActAsConfirmView`、本人の Web セッションだけ、`Coverage::BrowserOnly`）。答えは forge が持つ事実だけ: リポジトリのパスと表示名、
+  kanflow のプロジェクトは **連携が名指した ID**（kanflow が送った文字は出さない）、設定、**いま結びついているか**、連携の種類と名前、本人。
+  問い合わせは厳しく読む（知らない・重なった引数、`binding_remove` の設定、`binding_set` の設定の欠けは 400）。判定は
+  `ActAsAssertionIssue` と同じ関数（`binding_confirm_lookup`）を通り、権限の無い人に連携の状態を言わない順（上の LOW a）も同じ。
+  `state` は GET に載せない（POST の本文だけ）。
+- 画面 `/-/confirm/projects/{id}/integration-bindings`（`ActAsBindingConfirm`）: MR の確認の画面と同じ守り（フレームに入れない・`useArmed`・
+  既定のフォーカスなし・`state` を読んだらアドレスから消す・不正な形のリンクは API に聞かずに断る）。結びついていない先の解除は押すものを出さない。
+- 権限の表に `ActAsConfirmView` の 10 行（binding の `ActAsAssertionIssue` の行と同じ組）、`binding_routes` と web の `act-as-binding-confirm` のテスト。

@@ -35,11 +35,11 @@ import { useArmed } from './useArmed';
  * assertion lives 5 minutes from the press; a page left open longer than this
  * shows a head the person saw long ago, so it asks to be opened again. */
 export const PAGE_TTL_MS = 10 * 60 * 1000;
-const PAGE_TTL_MINUTES = PAGE_TTL_MS / 60000;
+export const PAGE_TTL_MINUTES = PAGE_TTL_MS / 60000;
 
-type NoticeKind = 'invalidLink' | 'wrongPerson' | 'notFound' | 'expired' | 'alreadyDecided' | 'stale';
+export type NoticeKind = 'invalidLink' | 'wrongPerson' | 'notFound' | 'bindingNotFound' | 'expired' | 'alreadyDecided' | 'stale';
 
-type End = { kind: 'done' } | { kind: 'canceled' } | { kind: NoticeKind; requestId: string | null };
+export type End = { kind: 'done' } | { kind: 'canceled' } | { kind: NoticeKind; requestId: string | null };
 
 export function ActAsConfirm() {
   const { t } = useTranslation();
@@ -109,7 +109,7 @@ export function ActAsConfirm() {
   );
 }
 
-function CloseButton() {
+export function CloseButton() {
   const { t } = useTranslation();
   const [failed, setFailed] = useState(false);
   return (
@@ -130,12 +130,13 @@ function CloseButton() {
   );
 }
 
-function Notice({ kind, requestId }: { kind: NoticeKind; requestId: string | null }) {
+export function Notice({ kind, requestId }: { kind: NoticeKind; requestId: string | null }) {
   const { t } = useTranslation();
   const text = {
     invalidLink: [t('actAs.invalidTitle'), t('actAs.invalidBody')],
     wrongPerson: [t('actAs.wrongPersonTitle'), t('actAs.wrongPersonBody')],
     notFound: [t('actAs.notFoundTitle'), t('actAs.notFoundBody')],
+    bindingNotFound: [t('actAs.notFoundTitle'), t('actAs.binding.notFoundBody')],
     expired: [t('actAs.expiredTitle'), t('actAs.expiredBody')],
     alreadyDecided: [t('actAs.alreadyTitle'), t('actAs.alreadyBody')],
     stale: [t('actAs.staleTitle'), t('actAs.staleBody')],
@@ -158,7 +159,7 @@ function Notice({ kind, requestId }: { kind: NoticeKind; requestId: string | nul
   );
 }
 
-function Ended({ end }: { end: End }) {
+export function Ended({ end }: { end: End }) {
   const { t } = useTranslation();
   if (end.kind === 'done' || end.kind === 'canceled') {
     const done = end.kind === 'done';
@@ -173,7 +174,7 @@ function Ended({ end }: { end: End }) {
   return <Notice kind={end.kind} requestId={end.requestId} />;
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+export function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
       <dt>{label}</dt>

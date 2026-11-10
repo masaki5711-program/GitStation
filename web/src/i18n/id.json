@@ -1005,6 +1005,25 @@
     "notFoundBody": "Merge request tidak ada, atau Anda tidak boleh melihatnya.",
     "invalidTitle": "Tautan tidak valid",
     "invalidBody": "Buka lagi dari aplikasi.",
-    "tooSoon": "Tekan sekali lagi. Klik tepat setelah tombol diaktifkan tidak diterima."
+    "tooSoon": "Tekan sekali lagi. Klik tepat setelah tombol diaktifkan tidak diterima.",
+    "binding": {
+      "leadSet": "{{app}} ingin mengaitkan repositori ini ke proyek Kanflow atas nama Anda.",
+      "leadRemove": "{{app}} ingin melepas kaitan repositori ini dengan proyek Kanflow atas nama Anda.",
+      "pressSet": "Periksa rinciannya. Jika benar, tekan \"Kaitkan\"; jika tidak, tekan \"Batal\".",
+      "pressRemove": "Periksa rinciannya. Jika benar, tekan \"Lepas kaitan\"; jika tidak, tekan \"Batal\".",
+      "actionSet": "Kaitkan repositori",
+      "actionRemove": "Lepas kaitan repositori",
+      "confirmSet": "Kaitkan",
+      "confirmRemove": "Lepas kaitan",
+      "rowRepository": "Repositori",
+      "rowKanflowProject": "Proyek Kanflow (ID)",
+      "rowSetting": "Jenis kaitan",
+      "settingCode": "Repositori kode (nomor PBI dicari di merge request dan cabang repositori ini; hanya satu proyek Kanflow)",
+      "settingShared": "Repositori spesifikasi bersama (nomor PBI tidak dicari; dapat dikaitkan ke beberapa proyek Kanflow)",
+      "rowNow": "Saat ini",
+      "nowBound": "Terkait",
+      "nowUnbound": "Tidak terkait",
+      "notFoundBody": "Repositori atau integrasi tidak ditemukan, atau Anda tidak boleh melihatnya."
+    }
   }
 }

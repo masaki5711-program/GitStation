@@ -90,6 +90,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/confirm/projects/{id}/integration-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: act-as binding confirmation popup */
+        get: operations["get_confirm_projects_id_integration_bindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: act-as binding confirmation popup */
+        head: operations["head_confirm_projects_id_integration_bindings"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/confirm/projects/{id}/integration-bindings/assertions": {
         parameters: {
             query?: never;
@@ -765,6 +783,23 @@ export interface paths {
         };
         /** A project's integration binding, none or one (as reading the project) */
         get: operations["get_api_v1_projects_id_integration_bindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/integration-bindings/act-as-confirmation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the binding confirmation screen shows: the repository, the kanflow project id the integration named, the setting, whether it is bound now, the receiving integration (a person's web session; Maintainer, the intent's action allowed for them) */
+        get: operations["get_api_v1_projects_id_integration_bindings_act_as_confirmation"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2215,6 +2250,31 @@ export interface components {
         BindingAssertionIssued: {
             /** @description Always `issued`. */
             status: string;
+        };
+        /**
+         * @description `GET …/integration-bindings/act-as-confirmation` (forge's data only: the
+         *     kanflow project id is shown as the identifier the integration named,
+         *     never with text the integration sent).
+         */
+        BindingConfirmationBody: {
+            /** @description The integration is bound to this repository for that kanflow project now. */
+            bound: boolean;
+            /** Format: int64 */
+            integration_id: number;
+            integration_kind: string;
+            integration_name: string;
+            /** @description `binding_set` or `binding_remove`. */
+            intent: string;
+            kanflow_project_id: string;
+            person_display_name: string;
+            person_username: string;
+            project_display_name: string;
+            /** Format: int64 */
+            project_id: number;
+            /** @description The repository's path now (`group/name`). */
+            project_path: string;
+            /** @description The setting confirmed (`binding_set`; `null` for `binding_remove`). */
+            resolves_work_items: boolean | null;
         };
         /** @description A binding's settings. */
         BindingSettings: {
@@ -5329,6 +5389,50 @@ export interface operations {
             };
         };
     };
+    get_confirm_projects_id_integration_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_confirm_projects_id_integration_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_confirm_projects_id_integration_bindings_assertions: {
         parameters: {
             query?: never;
@@ -7237,6 +7341,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IntegrationBindingList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_integration_bindings_act_as_confirmation: {
+        parameters: {
+            query?: {
+                /** @description binding_set or binding_remove */
+                intent?: string;
+                /** @description the receiving integration's id */
+                integration?: string;
+                /** @description the kanflow project the integration named */
+                kanflow_project_id?: string;
+                /** @description binding_set only: true (the code repository) or false (a shared specification repository) */
+                resolves_work_items?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BindingConfirmationBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
