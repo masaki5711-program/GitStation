@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-config.toml or a GSTN_* variable is unreadable or invalid, no host is configured, the host is not an https URL (http is allowed only for loopback, or with `allow_http = true`), or the CA bundle file is unreadable.
+config.toml or a GSTN_* variable is unreadable or invalid, no host is configured, the host is not an https URL (http is allowed only for loopback, or with `allow_http = true`), or the CA bundle file is unreadable. Also `gstn mcp` when the agent tools manifest built into gstn (docs/api/agent-tools.toml) is invalid (`config_key=agent_tools reason=invalid`): a build defect the parity gate in forge-client stops first; nothing is served — use a gstn built from a commit whose tests pass.
 
 ## 調べ方 (diagnosis)
 

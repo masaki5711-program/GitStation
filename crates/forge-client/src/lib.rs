@@ -38,7 +38,9 @@ pub mod notifications;
 pub mod registry;
 pub mod review;
 pub mod specs;
-// M3 X5: the context API and the MCP server.
+// M3 X5: the context API and the MCP server; its tools are the agent tools
+// manifest (docs/api/agent-tools.toml).
+pub mod agent_tools;
 pub mod context;
 pub mod mcp;
 pub mod store;
@@ -52,5 +54,7 @@ pub mod pipelines;
 pub mod doc_migration;
 pub mod doc_view;
 
+#[cfg(test)]
+mod agent_tools_tests;
 #[cfg(test)]
 mod tests;

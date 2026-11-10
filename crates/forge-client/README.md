@@ -68,6 +68,12 @@ git clone https://git.example.internal/team/app.git     # 素の git が自動�
 - 専用のコマンドがない操作は `gstn api <METHOD> <path>`（`--field k=v`、`--field k:=<json>`、
   `--input file`、`--paginate`、`--dry-run`）。例: `gstn api GET /api/v1/projects --paginate --fields id,name`
 - エラーコードは `forge explain FG-…` か `docs/errors/` で原因と対処を引けます（クライアント側は `FG-CLI-*`）。
+- **MCP サーバー `gstn mcp`**（`claude mcp add gitstation -- gstn mcp`）: 道具の一覧は
+  **`docs/api/agent-tools.toml`** の 1 つだけ（`tools/list` も要求もここから作る）。読み取り（文脈・要件・文書・MR の一覧と
+  中身・差分・マージできない理由・議論・衝突の予測・チェック・パイプライン）と書き込み（MR の作成・題と説明と下書きの変更・
+  コメントと返信・閉じる・開き直す、パイプラインの実行・取り消し・再実行）。書き込みの道具には `readOnlyHint: false` と
+  `destructiveHint`・`idempotentHint`。**承認・マージ・議論の解決・デプロイの承認・トークン・管理・保護ブランチ・Webhook・
+  ミラー・連携の結びつけは人だけ**（manifest の `[[excluded]]` に理由つき）。トークンは `is_agent` で発行したものを使う。
 
 ### ホスティングのコマンド
 
@@ -191,6 +197,11 @@ gstn doc migration clear --project <id> --yes                    # 今すぐ終�
   `src/coverage.rs` に、対応するコマンド（`Command`）か、予定（`Planned`）の行を足す。
   ルートを呼ばないコマンド（`doc fmt` / `doc lint` など手元だけのもの）は `LOCAL_COMMANDS` に理由と一緒に書く
   （`commands_without_a_route_are_local` が確かめる）。
+- **MCP の道具のゲート**（`src/agent_tools_tests.rs`）: `gstn` のコマンドを足すと、`docs/api/agent-tools.toml` で
+  道具にする（`[[tool]]` の `gstn`）か、`[[excluded]]`（人だけ）・`[[not_api]]`（REST を呼ばない）・`[[deferred]]`（まだ道具に
+  しない）に理由と一緒に書くまで `every_gstn_command_has_an_agent_tool_decision` が落ちる。道具のルートと引数は
+  `openapi.json` に、ルートはそのコマンドの `routes` にあること、除外したコマンドの書き込みのルート（とその認可の Action）が
+  道具でないこと、`registry.rs` の `mcp` の `routes` が道具のルートと同じことも確かめる。
 - 構成: `config.rs`（設定の層）/ `store.rs`（トークンの保管、0600 のフォールバック）/ `http.rs`
   （タイムアウト、リダイレクトなし、ページ送り）/ `credential.rs`（git の資格情報ヘルパー）/
   `app.rs`（実行と出力）/ `coverage.rs`（C-1）。入出力は注入できるので、テストはプロセス内で stdout / stderr を検査する。

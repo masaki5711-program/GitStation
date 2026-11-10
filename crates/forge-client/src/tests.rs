@@ -65,9 +65,9 @@ fn registry_and_clap_describe_the_same_commands() {
 fn registry_routes_are_real_server_routes() {
     let routes = server_routes();
     for c in COMMANDS {
-        for r in c.routes {
+        for r in c.all_routes() {
             assert!(
-                routes.contains(&r.to_string()),
+                routes.contains(&r),
                 "{} claims {r}, which the server does not have",
                 c.name
             );
@@ -119,7 +119,7 @@ fn every_api_route_is_covered_or_planned() {
         if let Coverage::Command(name) = cov {
             let spec = find(name).unwrap_or_else(|| panic!("{m} {p}: no command {name}"));
             assert!(
-                spec.routes.contains(&format!("{m} {p}").as_str()),
+                spec.all_routes().contains(&format!("{m} {p}")),
                 "{name} does not call {m} {p}"
             );
         }
@@ -139,7 +139,7 @@ fn commands_without_a_route_are_local() {
     let mut without: Vec<&str> = COMMANDS
         .iter()
         // `api` calls whichever route it is given (C-6).
-        .filter(|c| c.routes.is_empty() && c.name != "api")
+        .filter(|c| c.all_routes().is_empty() && c.name != "api")
         .map(|c| c.name)
         .collect();
     without.sort_unstable();

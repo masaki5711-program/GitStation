@@ -170,11 +170,13 @@ pub enum Command {
         #[command(subcommand)]
         command: ContextCommand,
     },
-    /// A read-only MCP server on stdin / stdout (M3 X5) for an AI agent:
-    /// get_work_item_context, get_requirement, search_requirements,
-    /// get_trace_matrix, get_merge_request_context, list_documents,
-    /// get_document, get_document_block, get_document_referenced_by — with
-    /// your token, and never what is marked confidential (plan 06 D-5).
+    /// An MCP server on stdin / stdout (M3 X5) for an AI agent: the tools of
+    /// docs/api/agent-tools.toml (read the context, specification,
+    /// documents, merge requests, checks and pipelines; open, update,
+    /// comment on, close and reopen merge requests; run, cancel and retry
+    /// pipelines) — with your token, and never what is marked confidential
+    /// (plan 06 D-5). Approving, merging, resolving and deploying are kept
+    /// for people.
     ///
     /// Log in with a token issued with `is_agent` for the agent: a person's
     /// ordinary token is a person's on every other route.

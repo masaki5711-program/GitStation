@@ -448,3 +448,36 @@
      標準入力の終わり・閉じたパイプはきれいに終わり（終了コード 0）、それ以外の読み取りの失敗は新しいコード **`FG-CLI-0009` CliInputFailed**。
    - **LOW**: MR の文脈は compare も上限に数える（2 + エージェントは先端の 1）。要件の版の履歴は、エージェントには文書に印のあった版を出さない。
      `source` の `project` が読めないときは `FG-SYS-0001`（空の文字列にしない）。
+
+## Amendment 2026-11-10 — MCP の道具を `gstn` と同じ API に広げる（計画 01 §3.11「CLI と MCP は同じ API の 2 つの入り口」、計画 06 §4.5、計画 02 §6）
+
+X5 の 7 の「読み取りのみ」をやめる。Kanflow の PBI から始めた AI のセッションが、MCP から GitStation を操作できるようにするため（チームのバイブコーディングの環境、計画 07-team-vibe-coding）。
+
+1. **道具の一覧は 1 つ**: `docs/api/agent-tools.toml`（`openapi.json` と同じ契約のファイル）。道具ごとに名前・説明・写す `gstn` のコマンド・
+   メソッドと `openapi.json` のとおりのパス・引数（JSON Schema の型と上限、`path` / `query` / `body` のどこに置くか）・`read_only`・
+   書き込みは `destructive` と `idempotent`。`gstn mcp` はこのファイルを埋め込み、`tools/list` と要求をここから作る（Rust の表を別に持って
+   照らし合わせる形より、道具を足す場所が 1 つで済む。サーバーの予定の `/api/v1/ai-tools` もクレートに依存せず同じファイルを読める）。
+   埋め込みのファイルが読めないときは何も提供せず `FG-CLI-0005`（`config_key=agent_tools`）で止まる（ゲートが先に止めるので、ビルドの欠陥）。
+2. **道具**: X5 の 9 つはそのまま。読み取りに MR の一覧・1 件・版・版の差分・版の比較・マージできない理由（`…/status`）・議論・衝突の予測、
+   コミットのチェック、パイプラインの一覧と 1 件を足した。**書き込み**: MR の作成・変更（題・説明・下書き）・閉じる・開き直す・コメント
+   （全体か、版の差分の 1 行。版・パス・行はそろえて）・返信、パイプラインの実行・取り消し・再実行。書き込みは MCP の注釈
+   `readOnlyHint: false` と `destructiveHint`（変更・閉じる・取り消し）・`idempotentHint` を付ける。決まりは X5 と同じ: 呼ぶ人のトークン、
+   `Forge-Context-Audience: agent`、引数は送る前に確かめる（`-32602`、何も送らない。パスに入るのは整数・文書の ID・コミットの ID だけ）、
+   失敗は `error_code`・`user_message`・`request_id` だけ。書き込みは成功も stderr に 1 行（要求 ID つき）。
+3. **人だけのもの**（manifest の `[[excluded]]`、1 行の理由つき。道具にしない）: 承認と取り消し・マージ・議論の解決（ADR-0024 #2）・
+   デプロイの承認（`DeployApprove`、M4 C11）・版の ref の削除・トークンと認証・利用者とサービスアカウントと連携の管理・プロジェクトと
+   グループの作成・変更・移動・削除・公開範囲・所属・保護ブランチ・承認とマージの規則・CODEOWNERS の停止・Webhook・ミラー・連携の結びつけ・
+   チェックの報告（サービスアカウントのもの）・連携のフィード。サーバーの `authorize()` はこれまでどおり `is_agent` のトークンを拒む
+   （`people_only`）。manifest はその上の 2 つ目の守り。
+4. **ゲート**（forge-client の `agent_tools_tests.rs`）: `gstn` の葉のコマンドはすべて、道具の `gstn` か `[[excluded]]`・`[[not_api]]`
+   （REST を呼ばない）・`[[deferred]]`（エージェントに許されるが、まだ道具にしない）のどれか 1 つ（理由つき）。決まっていないコマンドは
+   何を足すかを書いて落ちる（並行の MR が先に入っても、後から入る側で落ちる）。道具のルートと引数の名前は `openapi.json` にあること、
+   ルートは写すコマンド自身の `routes` にあること（`mcp`・`api`・`help`・`schema` と `[[not_api]]` は道具のコマンドにならない）、
+   サーバーが人だけとする Action（`Action::is_people_only` を gen-authz が `routes.generated.json` の `people_only` に書き出す。
+   forge-client はクレートでなくデータを読む）を使う道具が GET も含めてないこと、除外したコマンドのルート（ほかの除外していない
+   コマンドも呼ぶものは除く）と、除外したコマンドの書き込みの Action と、除外した Action を使う道具がないこと。各検査は
+   （manifest・コマンド・openapi・ルート）の関数で、合成の入力で落ちることもテストする。`help --json` の `mcp` のルートは
+   手で書かず manifest から作る（`CommandSpec::all_routes`）。埋め込みの manifest が壊れているときの `FG-CLI-0005` は catalog の
+   cause に書いた。
+5. **残すもの**: `[[deferred]]` の読み取り（browse・spec の版と差分・承認の一覧など）は、Kanflow 側のセッションが送る「呼びたい操作の一覧」
+   （act-as と `/api/v1/ai-tools`、計画 02 §6）を受けて足す。`/api/v1/ai-tools` 自体はサーバーの別の MR。

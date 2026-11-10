@@ -28,6 +28,17 @@ pub struct CommandSpec {
     pub output: &'static str,
 }
 
+impl CommandSpec {
+    /// The API routes the command calls. `mcp`'s are its tools' routes,
+    /// read from docs/api/agent-tools.toml (one list, never kept by hand).
+    pub fn all_routes(&self) -> Vec<String> {
+        if self.name == "mcp" {
+            return crate::agent_tools::routes();
+        }
+        self.routes.iter().map(|r| (*r).to_owned()).collect()
+    }
+}
+
 const fn arg(
     name: &'static str,
     kind: &'static str,
@@ -1190,21 +1201,13 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "mcp",
-        summary: "Serve a read-only MCP server on stdin/stdout for an AI agent (tools get_work_item_context, get_requirement, search_requirements, get_trace_matrix, get_merge_request_context, list_documents, get_document, get_document_block, get_document_referenced_by), with your token (issue it with is_agent: a person's ordinary token is a person's); confidential items are never returned (M3 X5).",
+        summary: "Serve an MCP server on stdin/stdout for an AI agent: the tools of docs/api/agent-tools.toml — read context, requirements, documents, merge requests (diff, status, discussions, conflicts), check runs and pipelines; open, update, comment on, close and reopen merge requests; run, cancel and retry pipelines. Approve, merge, resolve, deploy approval, tokens and administration are kept for people. With your token (issue it with is_agent: a person's ordinary token is a person's); confidential items are never returned (M3 X5, ADR-0023 Amendment 2026-11-10).",
         args: &[],
         examples: &["gstn mcp", "claude mcp add gitstation -- gstn mcp"],
-        scopes: &["read_api"],
-        routes: &[
-            "GET /api/v1/projects/{id}/context/work-item",
-            "GET /api/v1/projects/{id}/context/requirement",
-            "GET /api/v1/projects/{id}/specs/requirements",
-            "GET /api/v1/projects/{id}/specs/trace",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}/context",
-            "GET /api/v1/projects/{id}/documents",
-            "GET /api/v1/projects/{id}/documents/{doc_id}",
-            "GET /api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}",
-            "GET /api/v1/projects/{id}/documents/{doc_id}/referenced-by",
-        ],
+        scopes: &["read_api", "api"],
+        // Derived from docs/api/agent-tools.toml (`CommandSpec::all_routes`),
+        // never written here.
+        routes: &[],
         output: r#"{"type":"null","description":"JSON-RPC 2.0 messages, one per line (the MCP stdio transport); no --json output"}"#,
     },
     CommandSpec {
@@ -1879,7 +1882,7 @@ pub fn command_json(c: &CommandSpec) -> Value {
         "args": c.args.iter().map(arg_json).collect::<Vec<_>>(),
         "examples": c.examples,
         "scopes": c.scopes,
-        "routes": c.routes,
+        "routes": c.all_routes(),
         "output": output,
     })
 }
