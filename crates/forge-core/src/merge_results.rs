@@ -11,14 +11,18 @@
 //!
 //! 1. a run on the current merge result (the row whose target is the live
 //!    tip) counts — [`Freshness::Fresh`];
-//! 2. otherwise a run on an earlier merge result of the head (the target
-//!    advanced since) is [`Freshness::Stale`]: it never counts, whatever its
-//!    conclusion (`required_check_stale`, FG-CI-0013);
-//! 3. otherwise a run on the head counts (external reporters: the Checks
-//!    API takes only commits a branch or tag reaches) — except
-//!    [`crate::checks::CI_PIPELINE_CHECK`], which forge reports for merge
-//!    requests on merge results only: a push pipeline's run on the head
-//!    never satisfies it;
+//! 2. for a name forge itself reports on merge results
+//!    ([`reported_on_merge_results`]: [`crate::checks::CI_PIPELINE_CHECK`],
+//!    the merge request pipeline's), a run on an earlier merge result of
+//!    the head (the target advanced since) is [`Freshness::Stale`]: it never
+//!    counts, whatever its conclusion (`required_check_stale`,
+//!    FG-CI-0013); a run on the head never counts for it either (a push
+//!    pipeline's run is not the merge result's);
+//! 3. for any other name (external reporters: the Checks API takes only
+//!    commits a branch or tag reaches) a run on the head counts, and a run
+//!    only an earlier merge result holds is ignored — rerunning the merge
+//!    request pipeline would never report it again (a removed or renamed
+//!    job), so it never holds the merge as stale (review MEDIUM);
 //! 4. otherwise no run (`required_check_missing`).
 
 use crate::checks::{CheckRun, CheckRunsOnHead, CI_PIPELINE_CHECK};
@@ -80,19 +84,22 @@ impl MergeCheckRuns {
         if let Some(run) = current.and_then(|c| c.runs.run(&c.result, name)) {
             return Some((run, Freshness::Fresh));
         }
-        let earlier = self
-            .results
+        if !reported_on_merge_results(name) {
+            return self.head.run(head, name).map(|run| (run, Freshness::Fresh));
+        }
+        self.results
             .iter()
             .filter(|r| Some(&r.target) != target_tip)
-            .find_map(|r| r.runs.run(&r.result, name));
-        if let Some(run) = earlier {
-            return Some((run, Freshness::Stale));
-        }
-        if name.as_str() == CI_PIPELINE_CHECK {
-            return None;
-        }
-        self.head.run(head, name).map(|run| (run, Freshness::Fresh))
+            .find_map(|r| r.runs.run(&r.result, name))
+            .map(|run| (run, Freshness::Stale))
     }
+}
+
+/// Whether forge itself reports `name` on merge results (the merge request
+/// pipeline's [`CI_PIPELINE_CHECK`]; forge reports no job-level names):
+/// only such a name can be stale (module docs, rule 2).
+pub fn reported_on_merge_results(name: &CheckName) -> bool {
+    name.as_str() == CI_PIPELINE_CHECK
 }
 
 #[cfg(test)]
@@ -178,13 +185,52 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_merge_result_run_wins_over_a_head_run() {
+    fn an_external_name_reported_on_the_head_counts_after_an_old_merge_result_report() {
+        // Review MEDIUM: a name forge does not report on merge results (an
+        // external reporter's) is never held stale by an older merge
+        // result: its head report counts.
         let runs = MergeCheckRuns {
             head: on('e', &["ci/gates"]),
             results: vec![result('2', 'b', &[]), result('1', 'a', &["ci/gates"])],
         };
         assert_eq!(
             runs.resolve(&oid('e'), Some(&oid('2')), &name("ci/gates")),
+            Some((success(), Freshness::Fresh))
+        );
+    }
+
+    #[test]
+    fn an_old_merge_result_report_of_an_external_name_never_blocks_forever() {
+        // A removed or renamed job name only an older merge result holds:
+        // not stale (rerunning the merge request pipeline would never
+        // report it), just missing until the reporter reports it again.
+        let runs = MergeCheckRuns {
+            head: on('e', &[]),
+            results: vec![result('2', 'b', &[]), result('1', 'a', &["ci/build"])],
+        };
+        assert_eq!(
+            runs.resolve(&oid('e'), Some(&oid('2')), &name("ci/build")),
+            None
+        );
+        // On the current merge result it still counts.
+        let current = MergeCheckRuns {
+            head: on('e', &[]),
+            results: vec![result('2', 'b', &["ci/build"])],
+        };
+        assert_eq!(
+            current.resolve(&oid('e'), Some(&oid('2')), &name("ci/build")),
+            Some((success(), Freshness::Fresh))
+        );
+    }
+
+    #[test]
+    fn ci_pipeline_on_an_old_merge_result_stays_stale_even_with_a_head_run() {
+        let runs = MergeCheckRuns {
+            head: on('e', &["ci/pipeline"]),
+            results: vec![result('2', 'b', &[]), result('1', 'a', &["ci/pipeline"])],
+        };
+        assert_eq!(
+            runs.resolve(&oid('e'), Some(&oid('2')), &name("ci/pipeline")),
             Some((success(), Freshness::Stale))
         );
     }

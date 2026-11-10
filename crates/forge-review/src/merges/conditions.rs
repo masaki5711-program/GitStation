@@ -15,9 +15,11 @@
 //! M4 C7: the snapshot also holds the runs of every merge result of the
 //! head ([`forge_core::MergeCheckRuns`]); each required name is resolved
 //! against the LIVE target tip (`forge_core::merge_results`): a run on the
-//! current merge result counts, a run on an earlier merge result only is
-//! stale (`required_check_stale`, FG-CI-0013), a head run counts for a
-//! head-reported name but never for `ci/pipeline`.
+//! current merge result counts; for `ci/pipeline` (the only name forge
+//! reports on merge results) a run on an earlier merge result only is
+//! stale (`required_check_stale`, FG-CI-0013) and a head run never counts;
+//! for any other name a head run counts and an earlier merge result's run
+//! is ignored.
 
 use forge_core::{Freshness, MergeMethod, ObjectId, ProtectionRules, RefName};
 use forge_db::review::StoredMergeSettings;

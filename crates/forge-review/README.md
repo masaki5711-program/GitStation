@@ -85,8 +85,8 @@ merge request in place (ADR-0024 §1).
   run's seq is the latest; a conflict / no target / unrelated / no version deletes the ref
   (`CheckReport::merge_result`, `merge_ref`; logs `forge.review.merge_result_updated` /
   `_removed`). Required checks are resolved against the live target tip
-  (`forge_core::MergeCheckRuns::resolve`, `conditions((target, tip), …)`): a run on an earlier
-  merge result only is `BlockReason::RequiredCheckStale` (`RequiredCheck::stale`), and `blocked()`
+  (`forge_core::MergeCheckRuns::resolve`, `conditions((target, tip), …)`): a `ci/pipeline` run on an
+  earlier merge result only is `BlockReason::RequiredCheckStale` (other names: the head's run counts) (`RequiredCheck::stale`), and `blocked()`
   answers FG-CI-0013 RequiredCheckStale when it is the first reason. `MergeStatus::merge_result_sha`.
   Tests in `tests/approvals_git.rs` (`a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge`
   and four more).
