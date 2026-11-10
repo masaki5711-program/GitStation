@@ -529,6 +529,18 @@ impl CopyMark {
             CopyMark::Undecided => "tip_undecided",
         }
     }
+
+    /// The log `reason` of a CI output refused on the pipeline's own mark
+    /// (M4 C5, `mark_of=pipeline`).
+    pub fn pipeline_reason(self) -> &'static str {
+        match self {
+            CopyMark::NotMeasured => "pipeline_not_measured",
+            CopyMark::Open => "pipeline_open",
+            CopyMark::Confidential => "pipeline_confidential",
+            CopyMark::Unborn => "pipeline_unborn",
+            CopyMark::Undecided => "pipeline_undecided",
+        }
+    }
 }
 
 /// What the action acts on.
@@ -726,10 +738,26 @@ pub enum Resource {
     /// as seen by the caller, the report name's namespace, and whether the
     /// caller holds a grant of that namespace (read by the loader, and
     /// again under the lock in the write transaction).
+    ///
+    /// `reserved`: the name is kept from HTTP although its namespace is
+    /// grantable (`ci/pipeline`, M4 C5, ADR-0029 decision 7): refused to
+    /// everyone (`reason=ci_namespace_internal`).
     CheckRun {
         project: ProjectView,
         namespace: forge_core::CheckNamespace,
         granted: bool,
+        reserved: bool,
+    },
+    /// A CI output (M4 C5, ADR-0029 decision 5): a job's log or a
+    /// pipeline's diagnosis (`CiLogRead`, `PipelineDiagnosisRead`), built by
+    /// `authorize_ci_output` only. The project as seen by the caller, the
+    /// pipeline's mark (`ci_pipelines.copy_mark`, measured at its
+    /// creation) and the default branch's tip now (`NotMeasured` for a
+    /// person).
+    CiOutput {
+        project: ProjectView,
+        pipeline_mark: CopyMark,
+        tip_mark: CopyMark,
     },
     /// An integration's event feed as its route loaded it
     /// (`IntegrationEventRead`, `IntegrationEventCursorRead`; M3 I1c).

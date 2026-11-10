@@ -1031,8 +1031,16 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
                 project,
                 namespace,
                 granted,
+                reserved,
             },
         ) => {
+            // M4 C5 (ADR-0029 decision 7): `ci/pipeline` is the system's,
+            // written by forge's worker; refused to everyone over HTTP —
+            // a granted service account and administrators included.
+            if *reserved {
+                return Err(refused("ci_namespace_internal")
+                    .with_context("namespace", namespace.as_str()));
+            }
             if principal.is_agent() {
                 return Err(refused("agent_token"));
             }
@@ -1239,6 +1247,45 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // cancelling and retrying: Developer and above by membership
         // (agents and service accounts included, plan 14 §4.2).
         (Action::PipelineRead, Resource::Project(p)) => need(Role::Reporter, read_role(p)),
+        // M4 C5 (ADR-0029 decision 5): a CI output is read like the
+        // project (the route's proof)...
+        (Action::CiLogRead | Action::PipelineDiagnosisRead, Resource::Project(p)) => {
+            need(Role::Reporter, read_role(p))
+        }
+        // ...then, with the marks (`authorize_ci_output`), an AI agent
+        // audience only when both the pipeline's mark and the default
+        // branch's tip are `Open`. The pipeline's mark first: it is what
+        // the job saw. `Undecided`, `Unborn` and `NotMeasured` are closed.
+        (
+            Action::CiLogRead | Action::PipelineDiagnosisRead,
+            Resource::CiOutput {
+                project,
+                pipeline_mark,
+                tip_mark,
+            },
+        ) => {
+            need(Role::Reporter, read_role(project))?;
+            if !principal.is_agent_audience() {
+                return Ok(());
+            }
+            let route = if action == Action::CiLogRead {
+                "ci_log"
+            } else {
+                "ci_diagnosis"
+            };
+            let (reason, mark_of) = if *pipeline_mark != CopyMark::Open {
+                (pipeline_mark.pipeline_reason(), "pipeline")
+            } else if *tip_mark != CopyMark::Open {
+                (tip_mark.as_str(), "tip")
+            } else {
+                return Ok(());
+            };
+            Err(deny(ErrorCode::RepositoryCopyWithheld)
+                .with_context("route", route)
+                .with_context("reason", reason)
+                .with_context("mark_of", mark_of)
+                .with_context("audience", audience_of(principal)))
+        }
         (
             Action::PipelineCreate | Action::PipelineCancel | Action::PipelineRetry,
             Resource::Project(p),
@@ -1347,6 +1394,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PushMirrorManage
             | Action::DocLintMigrationManage
             | Action::PipelineRead
+            | Action::CiLogRead
+            | Action::PipelineDiagnosisRead
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
@@ -1386,6 +1435,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::IntegrationFeed(_)
             | Resource::ProjectEvents { .. }
             | Resource::ActAsConfirm(_)
+            | Resource::CiOutput { .. }
             | Resource::RunnerJob(_),
         ) => wrong_resource(),
     }
@@ -1444,6 +1494,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::CodeownersEnforcement { project, .. }
         | Resource::MergeSettingsChange { project, .. }
         | Resource::CheckRun { project, .. }
+        | Resource::CiOutput { project, .. }
         | Resource::ProjectEvents { project, .. } => live(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
@@ -1538,6 +1589,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::CheckRun { .. }
+        | Resource::CiOutput { .. }
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)

@@ -18,6 +18,8 @@ mod act_as_ctx;
 mod action;
 mod authorize;
 mod codeowners_ctx;
+// M4 C5: the CI outputs (ADR-0029 decision 5).
+mod ci_output;
 mod contexts;
 mod feed_ctx;
 mod integration_ctx;
@@ -57,6 +59,8 @@ mod matrix_rows_mirror;
 mod matrix_rows_doc_lint;
 // M4 C2: CI pipelines.
 mod matrix_rows_pipelines;
+// M4 C5: CI outputs.
+mod matrix_rows_ci_outputs;
 // ── M3 X1 ──
 mod matrix_rows_spec_refs;
 // Plan 06 D-5 safety net: whole copies of a repository by agents.
@@ -68,6 +72,7 @@ pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action, CiRule};
 pub use authorize::authorize;
+pub use ci_output::{authorize_ci_output, CiOutputAllowed};
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
 pub use feed_ctx::{prove_visible, IntegrationFeedCtx, LoadedIntegrationFeed};
 pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};

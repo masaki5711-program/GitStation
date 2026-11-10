@@ -281,6 +281,7 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::CheckRun { .. }
+        | Resource::CiOutput { .. }
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
@@ -369,6 +370,23 @@ fn only_people_only_actions_refuse_by_account_kind() {
                         ) => {
                             e.code() == ErrorCode::RepositoryCopyWithheld
                                 && matches!(resource, crate::model::Resource::RepoCopy { .. })
+                        }
+                        // M4 C5 (ADR-0029 decision 5): a CI output whose
+                        // pipeline or tip is not open is refused to every
+                        // AI agent audience the same way.
+                        (
+                            AccountKind::ServiceAccount | AccountKind::Bot,
+                            "pipeline_confidential"
+                            | "pipeline_undecided"
+                            | "pipeline_unborn"
+                            | "pipeline_not_measured"
+                            | "tip_confidential"
+                            | "default_branch_unborn"
+                            | "tip_undecided"
+                            | "tip_not_measured",
+                        ) => {
+                            e.code() == ErrorCode::RepositoryCopyWithheld
+                                && matches!(resource, crate::model::Resource::CiOutput { .. })
                         }
                         // A Guest member of an internal project reads by
                         // its own role (a person reads it as a Reporter):

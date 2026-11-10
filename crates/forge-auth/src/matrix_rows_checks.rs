@@ -60,6 +60,10 @@ const KANFLOW: F = run(Ns::Kanflow, true, P::Private);
 const CI_INTERNAL: F = run(Ns::Ci, true, P::Internal);
 const CI_DELETED: F = run(Ns::Ci, true, P::Deleted);
 const FORGE: F = run(Ns::Forge, false, P::Private);
+/// `ci/pipeline` (M4 C5): forge's worker writes it; reserved from HTTP even
+/// for a reporter holding the `ci` grant.
+const CI_PIPELINE: F = F::CiPipelineCheckRun { granted: true };
+const CI_PIPELINE_UNGRANTED: F = F::CiPipelineCheckRun { granted: false };
 const EXT: F = run(Ns::Ext, false, P::Private);
 
 const SA: F = F::ServiceAccountTarget {
@@ -98,6 +102,16 @@ pub(crate) const CHECK_ROWS: &[Row] = &[
     row(A::CheckWrite, W::Admin, FORGE, deny(E::Forbidden)),
     row(A::CheckWrite, W::AdminTokenAdmin, FORGE, deny(E::Forbidden)),
     row(A::CheckWrite, W::ServiceAccountAdminTokenAdmin, FORGE, deny(E::Forbidden)),
+    // ci/pipeline is never written over HTTP, by anyone (M4 C5,
+    // ADR-0029 decision 7): the granted service account that may write
+    // every other ci/ name is refused too.
+    row(A::CheckWrite, W::ServiceAccountTokenApi, CI_PIPELINE, deny(E::Forbidden)),
+    row(A::CheckWrite, W::ServiceAccountOwnerTokenApi, CI_PIPELINE, deny(E::Forbidden)),
+    row(A::CheckWrite, W::ServiceAccountTokenApi, CI_PIPELINE_UNGRANTED, deny(E::Forbidden)),
+    row(A::CheckWrite, W::Admin, CI_PIPELINE, deny(E::Forbidden)),
+    row(A::CheckWrite, W::AdminTokenAdmin, CI_PIPELINE, deny(E::Forbidden)),
+    row(A::CheckWrite, W::AgentTokenApi, CI_PIPELINE, deny(E::Forbidden)),
+    row(A::CheckWrite, W::Developer, CI_PIPELINE, deny(E::Forbidden)),
     // ext/ is refused for everyone in C1.
     row(A::CheckWrite, W::DevTokenApi, EXT, deny(E::Forbidden)),
     row(A::CheckWrite, W::MaintainerTokenApi, EXT, deny(E::Forbidden)),
@@ -187,6 +201,13 @@ mod tests {
             (W::DevTokenApi, EXT, "ext_namespace_unavailable"),
             (W::AgentTokenApi, CI, "agent_token"),
             (W::AgentTokenApi, EXT, "agent_token"),
+            (
+                W::ServiceAccountTokenApi,
+                CI_PIPELINE,
+                "ci_namespace_internal",
+            ),
+            (W::Admin, CI_PIPELINE, "ci_namespace_internal"),
+            (W::AgentTokenApi, CI_PIPELINE, "ci_namespace_internal"),
         ];
         for (actor, fixture, reason) in cases {
             assert_eq!(reason_of(actor, fixture), reason, "{actor:?} {fixture:?}");

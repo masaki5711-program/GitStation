@@ -200,6 +200,7 @@ fn job(credential: &JobCredential, rule: CiRule, resource: &Resource) -> Result<
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::CheckRun { .. }
+        | Resource::CiOutput { .. }
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
