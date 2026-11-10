@@ -6764,6 +6764,8 @@
         "GET /api/v1/projects/{id}/commits/{sha}/checks",
         "GET /api/v1/projects/{id}/pipelines",
         "GET /api/v1/projects/{id}/pipelines/{pipeline_id}",
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log",
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis",
         "POST /api/v1/projects/{id}/merge-requests",
         "PATCH /api/v1/projects/{id}/merge-requests/{iid}",
         "POST /api/v1/projects/{id}/merge-requests/{iid}/close",
@@ -9626,6 +9628,111 @@
         "api"
       ],
       "summary": "Run a pipeline by hand on a branch's tip (Developer): pending, skipped or invalid. A manual run is never protected, so a job with secrets makes it invalid (secret_on_unprotected_ref). 404 FG-REPO-0023 without the branch or .forge-ci.yml; 503 FG-CI-0002 when the definition could not be read."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The pipeline id.",
+          "kind": "option",
+          "name": "--pipeline",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The job id (gstn pipeline show).",
+          "kind": "option",
+          "name": "--job",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The job's attempt, 1..=100 (default its current one).",
+          "kind": "option",
+          "name": "--attempt",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The first chunk, 0..=4095 (default 0).",
+          "kind": "option",
+          "name": "--from",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn pipeline log --project 7 --pipeline 42 --job 9",
+        "gstn pipeline log --project 7 --pipeline 42 --job 9 --from 256"
+      ],
+      "name": "pipeline log",
+      "output": {
+        "required": [
+          "pipeline_id",
+          "job_id",
+          "job",
+          "job_status",
+          "attempt",
+          "current_attempt",
+          "from",
+          "to",
+          "text",
+          "next_from",
+          "complete"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "One page of a CI job's log, secrets masked as [MASKED] (project readers): whole chunks from --from, at most 256 / 1 MiB; `more: --from N` names the next page. 403 FG-AUTH-0022 to an AI agent's token (and through gstn mcp) when the pipeline's commit or the default branch holds a confidential document."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The pipeline id.",
+          "kind": "option",
+          "name": "--pipeline",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn pipeline diagnosis --project 7 --pipeline 42"
+      ],
+      "name": "pipeline diagnosis",
+      "output": {
+        "required": [
+          "pipeline_id",
+          "status",
+          "error_code",
+          "failures"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Why a pipeline failed, deterministically (plan 04 P-9): each failed job's fingerprint, error codes, masked excerpt and its log lines, how often it failed in the project, and known fixes (a merge request whose pipeline later passed). A job not fingerprinted yet is `pending`. 403 FG-AUTH-0022 as for `pipeline log`."
     },
     {
       "args": [

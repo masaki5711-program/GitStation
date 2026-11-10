@@ -164,6 +164,16 @@ Runner の登録は管理者の Web のセッションだけ（`gstn` はトー�
 「Runner のホストの準備」。**Runner の登録の Web の画面はまだ無い**: 運用者のコマンド `forge admin runner register|list|disable`
 （`--admin` に有効な人の管理者を記録する）で代える。`gstn` のコマンドは足していない。
 
+**C5 の注記（2026-11-11）**: `ci/pipeline` は worker のタスク `ci_outputs` が system（ラベル `forge-ci`、報告者なし）で
+`checks::write_run` を通して書く（コミットの最新のパイプラインだけ。`ci_pipelines.check_status` で 1 状態 1 回）。`CheckWrite` は HTTP からの
+`ci/pipeline` を誰にも断る（`ci_namespace_internal`、`ci` の割り当てを持つサービスアカウントも）。`ci/` の他の名前は切り替え（X）までサービス
+アカウントのまま。Action `CiLogRead`・`PipelineDiagnosisRead`（ADR-0029 の `PipelineDiagnosisRead`）、`Resource::CiOutput`、
+`authorize_ci_output`（パイプラインの印と先端の印、`Forge-Context-Audience: agent` の宣言も AI として判定）。ルート
+`GET …/pipelines/{id}/jobs/{job_id}/log`・`…/diagnosis`、`gstn pipeline log` / `diagnosis`、MCP の `get_job_log` /
+`get_pipeline_diagnosis`（サーバーが判定し、`gstn mcp` は常に宣言する）。表 `failure_fingerprints`・`ci_job_failures`（抜粋はマスク済み、
+読み取り用の接続は読めない）、マイグレーション `20261206200000`、`check_runs_reporter` を `ci/pipeline` に広げた。FG-AUTH-0022 の文面に
+CI の出力を足した。**分けたもの**: 90 日の保持の削除（C5b）、CI 変数の値のマスク（C6）、成果物（C6）。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。

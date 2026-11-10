@@ -1,10 +1,12 @@
-# Runbook: checks-reporting（FG-DB-0022 / FG-REVIEW-0020 / FG-REVIEW-0021 / 報告できない必須のチェック）
+# Runbook: checks-reporting（FG-DB-0022 / FG-REVIEW-0020 / FG-REVIEW-0021 / 報告できない必須のチェック / `ci/pipeline` / CI のログと診断の FG-AUTH-0022）
 
 Checks API（M3 C1、ADR-0024 §10、`docs/api/checks.md`）で、CI や kanflow のサービスアカウントがコミットにチェックの結果を報告する。
 保護ブランチのマージの条件（必須のチェック）は、MR の **今の head** にその名前の `completed` / `success` の報告があるときだけ満たされる。
 
 - 報告は `POST /api/v1/projects/{id}/commits/{sha}/checks`（`gstn checks report`）。同じコミット・同じ名前の報告は **1 行を上書きする**（PATCH は無い）。
 - 名前は `<名前空間>/<名前>`。`ci/` と `kanflow/` は **名前空間を割り当てられたサービスアカウント** だけが書ける（割り当ては管理者。下の A）。
+  ただし **`ci/pipeline` は forge 自身の worker だけ**（計画 14 C5、ADR-0029 決定 7。HTTP からは `ci` の割り当てを持つサービスアカウントも
+  管理者も書けない: `FG-AUTH-0003 reason=ci_namespace_internal`）。読み方は下の G。
   `forge/` は forge 自身の worker だけ（HTTP からは管理者も書けない。forge 自身のチェックは X2 で入るので、それまで `forge/` の必須のチェックは
   報告されない）。`ext/` は C1 では誰も書けない（人が書ける名前でマージの条件を満たさせない）。
 - サービスアカウントは、そのプロジェクトの **Developer 以上のメンバー** でなければ報告できない（メンバーでないプロジェクトは見えないので 404）。
@@ -19,7 +21,7 @@ Checks API（M3 C1、ADR-0024 §10、`docs/api/checks.md`）で、CI や kanflow
   `unreportable_checks: [...]` が出た: その名前の名前空間を報告できる有効なサービスアカウントが **1 つも無い**。
 - `forge doctor` の `checks.reporters` が WARN: 必須のチェックに使われている名前空間に、割り当てられた有効なサービスアカウントが無い。
 - 報告が `FG-AUTH-0003`（403）で拒否された（`reason=namespace_not_granted` / `not_service_account` / `forge_namespace_internal` /
-  `ext_namespace_unavailable` / `agent_token`）、`FG-REPO-0005`（404、メンバーでない・コミットが無い・届かない）、`FG-REVIEW-0020`（422）、
+  `ci_namespace_internal` / `ext_namespace_unavailable` / `agent_token`）、`FG-REPO-0005`（404、メンバーでない・コミットが無い・届かない）、`FG-REVIEW-0020`（422）、
   `FG-REVIEW-0021`（409）。
 - `error_code=FG-DB-0022` CheckRunDataInvalid（alert）: 保存されたチェックの行を読めない。
 
@@ -143,6 +145,65 @@ SELECT created_at, resource_id AS project_id, details FROM forge.audit_log
 - 直し方: `.forge-ci.yml` を直して push する（新しい版がもう一度 lint される）。シークレットのジョブなら `merge_requests: false` にし、
   `branches` を保護されたブランチだけにするか、保護の規則を足す（`gstn protected-ref add`、Maintainer。`[MUTATING — needs approval]`、ロールバック: `gstn protected-ref remove`）。
 
+### G. `ci/pipeline`（計画 14 C5、ADR-0029 決定 7）
+
+forge の CI のパイプラインの状態を、そのコミットのチェックとして `forge worker` のタスク `ci_outputs`（5 秒ごと）が書く。actor は `system`、
+label は `forge-ci`、報告者なし（`reported_by` は NULL）。同じコミットに複数のパイプラインがあれば **最新のもの（id の大きい方）だけ** が書く。
+
+| パイプライン | `ci/pipeline` |
+|---|---|
+| `pending` | `queued` |
+| `running` | `in_progress` |
+| `succeeded`、`skipped`（選ばれたジョブが無い） | `completed` / `success` |
+| `failed`、`invalid`（FG-CI-0001） | `completed` / `failure` |
+| `error`（FG-CI-0002） | `completed` / `error` |
+| `canceled` | `completed` / `neutral`（必須のチェックを満たさない） |
+
+- 要約: `Pipeline #<id> <status>: <n> jobs, … [<code>]`、失敗があれば `gstn pipeline diagnosis --project <p> --pipeline <id>`。
+- 書かれない・古いまま: パイプラインの状態とチェックの記録を比べる（読み取りのみ）。
+
+  ```sql
+  SELECT id, sha, status, check_status FROM forge.ci_pipelines
+   WHERE project_id = <project_id> AND check_status IS DISTINCT FROM status ORDER BY id LIMIT 20;
+  ```
+
+  残り続けるなら worker が止まっている（`forge doctor`、ログの `task=ci_outputs` と `error_code`）か、1 つのパイプラインの書き込みが
+  失敗している（`event=forge.ci.pipeline_check_failed` の `pipeline_id`・`error_code`。次の周期でやり直す）。同じコミットの古い
+  パイプラインは書かない（`check_status` だけが進む）。
+- サービスアカウントが C5 の前に `ci/pipeline` を書いていた行（と注記）は、C5 の移行が消す（プロジェクトの監査ログに
+  `check_run.reserved_removed`、件数だけ）。古い成功が必須チェックを満たすことはない。forge のパイプラインがあるコミットは
+  worker が書き直す。パイプラインのないコミットは `ci/pipeline` が無いまま（必須ならマージは待つ。パイプラインを走らせる）。
+- 手で直さない。パイプラインを再実行すれば（`gstn pipeline retry`）チェックも追う。
+
+### H. CI のログと診断が読めない（FG-AUTH-0022、計画 14 C5、ADR-0029 決定 5）
+
+`GET …/pipelines/{id}/jobs/{job_id}/log`（`gstn pipeline log`、MCP `get_job_log`）と `GET …/pipelines/{id}/diagnosis`
+（`gstn pipeline diagnosis`、MCP `get_pipeline_diagnosis`）は、AI の相手（`is_agent` のトークン、サービスアカウント、ボット、
+`Forge-Context-Audience: agent` を送る要求 = `gstn mcp`）には、**パイプラインのコミットの印**（作成のときの `copy_mark`）と
+**既定のブランチの先端の印** の両方が `open` のときだけ答える。人は印で断られない。
+
+- ログ: `error_code=FG-AUTH-0022` の `route`（`ci_log` / `ci_diagnosis`）、`reason`（`pipeline_confidential` / `pipeline_undecided` /
+  `tip_confidential` / `tip_undecided` / `default_branch_unborn` / `tip_not_measured`）、`mark_of`（`pipeline` / `tip`）、`audience`
+  （`agent_token` / `service_account` / `bot` / `header`）、`pipeline_id`・`job_id`、先端なら `tip`・`paths`・`check_error`。
+- パイプラインの印を読む: `gstn pipeline show --project <id> --pipeline <pipeline_id>`（`copy_mark`）。先端は Runbook `smart-http` の
+  「エージェントと機密の文書」と同じ。
+- 想定どおりの拒否: 人のアカウントで読む。パイプラインの印は変わらない（作成のときに測った値）ので、機密の文書の無いコミットで新しい
+  パイプラインを走らせる。`*_undecided` は測定の失敗（閉じる）: やり直し、続くなら文書の上限・git の時間切れを Runbook `smart-http` で見る。
+- マスク: ログと抜粋の forge のトークン（`fgp_` / `fgr_` / `fgj_` / `gss_`）、`Authorization:` の値、URL のパスワード、PEM の秘密鍵は
+  誰にも `[MASKED]` で返す。ページの前後 512 バイトを見て、ページの端で切れたものも隠す。それ以外の秘密をジョブが出力した場合は
+  隠れない: そのジョブのスクリプトを直し、秘密を失効させる（漏えいとして `/incident`）。
+- 診断の `pending: true`: worker（`ci_outputs`）がまだ指紋を作っていない（数秒）。続くなら worker のログ `task=ci_outputs`。
+  指紋は `failure_fingerprints`（`occurrences`・`first_seen_at`・`fixed_by_merge_request_id`）。読み取りのみ:
+
+  ```sql
+  SELECT f.fingerprint, f.occurrences, f.first_seen_at, f.last_seen_at, f.fixed_by_merge_request_id
+    FROM forge.failure_fingerprints f WHERE f.project_id = <project_id> ORDER BY f.last_seen_at DESC LIMIT 20;
+  SELECT job_id, attempt, fingerprint_id, error_codes, first_line, last_line
+    FROM forge.ci_job_failures WHERE pipeline_id = <pipeline_id>;
+  ```
+
+  （`excerpt` とログの本文は読み取り用の接続では読めない。ADR-0029 決定 5）
+
 ## Verify
 
 - `gstn checks list --project <id> --sha <head_sha>` に報告が出る。
@@ -150,6 +211,7 @@ SELECT created_at, resource_id AS project_id, details FROM forge.audit_log
   `required_check_missing` が消える。
 - `forge doctor` の `checks.reporters` が OK。
 - `forge/ci-lint`: 直した head の `gstn checks list` で `forge/ci-lint` が `success`。
+- `ci/pipeline`: `gstn checks list --project <id> --sha <sha>` の `ci/pipeline` がパイプラインの状態（G の表）と一致する。
 
 ## Escalate
 

@@ -395,10 +395,23 @@ actions! {
     /// `GET /api/v1/projects/{id}/pipelines` and `…/pipelines/{pipeline_id}`:
     /// a project's pipelines and their jobs. As `RepoBrowse` (Reporter, or
     /// any signed-in person on an internal project); an agent audience is
-    /// allowed: the routes answer metadata only (no logs or artifacts
-    /// exist before C5, which decides CI outputs on their marks,
-    /// ADR-0029 decision 5); `read_api`.
+    /// allowed: the routes answer metadata only (the logs and the
+    /// diagnosis are `CiLogRead` / `PipelineDiagnosisRead`, decided on
+    /// their marks, ADR-0029 decision 5); `read_api`.
     PipelineRead,
+    /// `GET …/pipelines/{pipeline_id}/jobs/{job_id}/log` (M4 C5, ADR-0029
+    /// decision 5): a job's log, masked. On the project as `RepoBrowse`;
+    /// then `authorize_ci_output` on `Resource::CiOutput`: an agent
+    /// audience only when both the pipeline's mark (measured at its
+    /// creation) and the default branch's tip are `Open`, else
+    /// `FG-AUTH-0022` (`route=ci_log`). People are never refused by the
+    /// marks; `read_api`.
+    CiLogRead,
+    /// `GET …/pipelines/{pipeline_id}/diagnosis` (M4 C5, plan 04 P-6 / P-9,
+    /// the deterministic part): the failed jobs' fingerprints, excerpts,
+    /// error codes and known fixes. Decided as `CiLogRead`
+    /// (`route=ci_diagnosis`): the excerpts are log output.
+    PipelineDiagnosisRead,
     /// `POST /api/v1/projects/{id}/pipelines`: run a pipeline by hand on a
     /// branch's tip. Developer and above (agents and service accounts by
     /// their membership, plan 14 §4.2); `api`. A manual run is never
@@ -656,6 +669,8 @@ impl Action {
             | Action::WebhookDeliver
             | Action::PushMirrorRead
             | Action::PipelineRead
+            | Action::CiLogRead
+            | Action::PipelineDiagnosisRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -818,6 +833,9 @@ impl Action {
             | Action::DocLintMigrationManage
             // M4 C2: pipelines are no act-as action (ADR-0025 §4).
             | Action::PipelineRead
+            // M4 C5: nor are their outputs.
+            | Action::CiLogRead
+            | Action::PipelineDiagnosisRead
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
@@ -940,8 +958,11 @@ impl Action {
             | Action::PushMirrorRead
             | Action::PushMirrorManage
             | Action::DocLintMigrationManage
-            // M4 C2: a job never reads or changes pipelines (plan 14 §4.2).
+            // M4 C2: a job never reads or changes pipelines (plan 14 §4.2);
+            // M4 C5: nor their outputs (its own log goes through the runner).
             | Action::PipelineRead
+            | Action::CiLogRead
+            | Action::PipelineDiagnosisRead
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry

@@ -1816,6 +1816,36 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["id","project_id","ref","sha","source","merge_request_id","triggered_by","status","error_code","problems","copy_mark","definition_hash","created_at","updated_at","finished_at"]}"#,
     },
     CommandSpec {
+        name: "pipeline log",
+        summary: "One page of a CI job's log, secrets masked as [MASKED] (project readers): whole chunks from --from, at most 256 / 1 MiB; `more: --from N` names the next page. 403 FG-AUTH-0022 to an AI agent's token (and through gstn mcp) when the pipeline's commit or the default branch holds a confidential document.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--pipeline", "option", true, "The pipeline id."),
+            arg("--job", "option", true, "The job id (gstn pipeline show)."),
+            arg("--attempt", "option", false, "The job's attempt, 1..=100 (default its current one)."),
+            arg("--from", "option", false, "The first chunk, 0..=4095 (default 0)."),
+        ],
+        examples: &[
+            "gstn pipeline log --project 7 --pipeline 42 --job 9",
+            "gstn pipeline log --project 7 --pipeline 42 --job 9 --from 256",
+        ],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log"],
+        output: r#"{"type":"object","required":["pipeline_id","job_id","job","job_status","attempt","current_attempt","from","to","text","next_from","complete"]}"#,
+    },
+    CommandSpec {
+        name: "pipeline diagnosis",
+        summary: "Why a pipeline failed, deterministically (plan 04 P-9): each failed job's fingerprint, error codes, masked excerpt and its log lines, how often it failed in the project, and known fixes (a merge request whose pipeline later passed). A job not fingerprinted yet is `pending`. 403 FG-AUTH-0022 as for `pipeline log`.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--pipeline", "option", true, "The pipeline id."),
+        ],
+        examples: &["gstn pipeline diagnosis --project 7 --pipeline 42"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis"],
+        output: r#"{"type":"object","required":["pipeline_id","status","error_code","failures"]}"#,
+    },
+    CommandSpec {
         name: "api",
         summary: "Call any REST API v1 route: gstn api <METHOD> <path>. GET/DELETE fields become the query, other methods send a JSON body.",
         args: &[

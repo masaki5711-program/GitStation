@@ -1107,6 +1107,24 @@
     "word": "fixed"
   },
   {
+    "action": "PipelineDiagnosisRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CiLogRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "PipelineRetry",
     "method": "POST",
     "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry",

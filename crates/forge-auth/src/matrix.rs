@@ -377,6 +377,21 @@ pub(crate) enum Fixture {
         granted: bool,
         project: crate::matrix_review::MrProject,
     },
+    /// A report of `ci/pipeline` (M4 C5): reserved for forge's worker
+    /// although the caller may hold a grant of `ci` on a private project.
+    CiPipelineCheckRun {
+        granted: bool,
+    },
+    /// A CI output (M4 C5, `matrix_rows_ci_outputs.rs`) of a private
+    /// project (`internal`: an internal one) with the pipeline's mark and
+    /// the default branch's tip mark.
+    CiOutput {
+        internal: bool,
+        pipeline_mark: crate::model::CopyMark,
+        tip_mark: crate::model::CopyMark,
+        /// The request declared an agent audience (`gstn mcp`).
+        declared: bool,
+    },
     /// An integration's feed (M3 I1c): the caller is its service account
     /// (`own`), it is enabled, the request carried `Forge-Act-As`.
     IntegrationFeed {
@@ -1044,6 +1059,24 @@ impl Fixture {
                 },
                 namespace,
                 granted,
+                reserved: false,
+            },
+            Fixture::CiPipelineCheckRun { granted } => Resource::CheckRun {
+                project: private,
+                namespace: forge_core::CheckNamespace::Ci,
+                granted,
+                reserved: true,
+            },
+            Fixture::CiOutput {
+                internal: is_internal,
+                pipeline_mark,
+                tip_mark,
+                declared,
+            } => Resource::CiOutput {
+                project: if is_internal { internal } else { private },
+                pipeline_mark,
+                tip_mark,
+                declared_agent: declared,
             },
             Fixture::IntegrationFeed {
                 own,
@@ -1140,6 +1173,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_mirror::MIRROR_ROWS.as_slice(),
         crate::matrix_rows_doc_lint::DOC_LINT_ROWS,
         crate::matrix_rows_pipelines::PIPELINE_ROWS.as_slice(),
+        crate::matrix_rows_ci_outputs::CI_OUTPUT_ROWS.as_slice(),
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,
         crate::matrix_rows_spec_refs::CONTEXT_READ_ROWS,

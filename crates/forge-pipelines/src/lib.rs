@@ -714,6 +714,9 @@ fn failed(cause: ForgeError) -> ForgeError {
 
 // M4 C3: the runner API's commands.
 pub mod runners;
+// M4 C5: the CI outputs (logs, diagnosis, fingerprints, ci/pipeline).
+pub mod fingerprint;
+pub mod outputs;
 
 #[cfg(test)]
 mod tests;

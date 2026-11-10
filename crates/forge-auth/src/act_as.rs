@@ -199,6 +199,7 @@ fn decide_rule(
             | Resource::ServiceAccount(_)
             | Resource::ServiceAccountTokenRequest { .. }
             | Resource::CheckRun { .. }
+            | Resource::CiOutput { .. }
             | Resource::IntegrationFeed(_)
             | Resource::ProjectEvents { .. }
             | Resource::ActAs(_)
@@ -238,6 +239,7 @@ fn decide_rule(
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::CheckRun { .. }
+        | Resource::CiOutput { .. }
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAsConfirm(_)
@@ -381,6 +383,7 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::CheckRun { .. }
+        | Resource::CiOutput { .. }
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
@@ -468,6 +471,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
         | Resource::CheckRun { .. }
+        | Resource::CiOutput { .. }
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)

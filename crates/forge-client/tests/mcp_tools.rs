@@ -594,6 +594,8 @@ fn the_tool_list_is_exactly_the_manifest() {
             "list_check_runs",
             "list_pipelines",
             "get_pipeline",
+            "get_job_log",
+            "get_pipeline_diagnosis",
             "create_merge_request",
             "update_merge_request",
             "close_merge_request",
@@ -740,4 +742,56 @@ fn new_tools_fail_with_the_error_shape_only() {
         .map(|l| serde_json::from_str(l).expect("json"))
         .collect();
     assert_error_shape(&o, &out, &[1, 2], "FG-CLI-0003");
+}
+
+/// ADR-0029 decision 5 (M4 C5): the CI output tools send the agent
+/// audience header with the caller's token, and a refusal of a marked
+/// repository's log or diagnosis is a tool error carrying FG-AUTH-0022 —
+/// never the log text, whatever else the server's answer held.
+#[test]
+fn ci_output_tools_declare_the_agent_and_fail_closed() {
+    let srv = Mock::start(|_| {
+        Resp::json(
+            403,
+            r#"{"error_code":"FG-AUTH-0022","user_message":"This repository holds a confidential document (or it could not be checked), so an AI agent's account cannot clone, fetch or download an archive of it, or read its CI logs and diagnosis. Use a person's account.","request_id":"req-ci-22","text":"SECRET LOG LINE"}"#,
+        )
+    });
+    let (o, out) = mcp(
+        &srv,
+        &[
+            call(
+                1,
+                "get_job_log",
+                json!({"project_id":7,"pipeline_id":12,"job_id":9,"attempt":2,"from":0}),
+            ),
+            call(
+                2,
+                "get_pipeline_diagnosis",
+                json!({"project_id":7,"pipeline_id":12}),
+            ),
+        ],
+    );
+    for id in 1..=2 {
+        let r = &by_id(&out, id)["result"];
+        assert_eq!(r["isError"], true, "{id}");
+        assert_eq!(r["structuredContent"]["error_code"], "FG-AUTH-0022", "{id}");
+        assert_eq!(r["structuredContent"]["request_id"], "req-ci-22", "{id}");
+    }
+    assert!(!o.stdout.contains("SECRET LOG LINE"), "{}", o.stdout);
+    let seen = srv.seen();
+    let targets: Vec<&str> = seen.iter().map(|r| r.target.as_str()).collect();
+    assert_eq!(
+        targets,
+        [
+            "/api/v1/projects/7/pipelines/12/jobs/9/log?attempt=2&from=0",
+            "/api/v1/projects/7/pipelines/12/diagnosis",
+        ]
+    );
+    for r in &seen {
+        assert_eq!(r.method, "GET");
+        assert_eq!(
+            r.headers.get("forge-context-audience").map(String::as_str),
+            Some("agent")
+        );
+    }
 }

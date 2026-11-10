@@ -553,6 +553,22 @@ async fn finish_steps(
         "projects.purge.finish.merge_settings",
     )
     .await?;
+    // M4 C5: the job failures, then the fingerprints (they point at the
+    // jobs and the merge requests).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_job_failures WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_job_failures",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.failure_fingerprints WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.failure_fingerprints",
+    )
+    .await?;
     // M4 C3: the job logs and tokens (they point at the jobs).
     delete_rows(
         tx,

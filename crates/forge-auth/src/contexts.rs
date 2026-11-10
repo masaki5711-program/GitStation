@@ -838,6 +838,7 @@ impl ResourceCtx for CheckRunCtx {
             },
             namespace: self.name.namespace(),
             granted: self.granted,
+            reserved: forge_core::checks::reserved_from_http(&self.name),
         }
     }
     fn id(&self) -> (ProjectId, forge_core::ObjectId, forge_core::CheckName) {

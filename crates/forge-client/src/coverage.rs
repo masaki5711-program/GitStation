@@ -746,6 +746,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry",
         Coverage::Command("pipeline retry"),
     ),
+    // M4 C5 (plan 14): CI outputs, decided on their marks.
+    (
+        "GET",
+        "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log",
+        Coverage::Command("pipeline log"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis",
+        Coverage::Command("pipeline diagnosis"),
+    ),
     // M4 C3 (plan 14, ADR-0029): runners. The administration is an
     // administrator's web session; the runner API takes a runner's token
     // (forge-runner, C4), never a person's.

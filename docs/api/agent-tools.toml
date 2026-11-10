@@ -307,6 +307,39 @@ params = [
   { name = "pipeline_id", in = "path", type = "integer", required = true, description = "The pipeline id (list_pipelines)." },
 ]
 
+# M4 C5 (ADR-0029 decision 5): CI outputs. The server decides them on the
+# marks: gstn mcp declares an agent audience on every request, so the log and
+# the diagnosis of a pipeline whose commit, or whose repository's default
+# branch, holds a confidential document are refused (FG-AUTH-0022) whatever
+# the token — a tool result with isError, never the text.
+
+[[tool]]
+name = "get_job_log"
+gstn = "pipeline log"
+read_only = true
+method = "GET"
+path = "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log"
+description = "One page of a CI job's log (secrets masked): text, next_from for the next page, complete when the attempt is over. Refused (FG-AUTH-0022) for a repository with a confidential document."
+params = [
+  { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
+  { name = "pipeline_id", in = "path", type = "integer", required = true, description = "The pipeline id (list_pipelines)." },
+  { name = "job_id", in = "path", type = "integer", required = true, description = "The job id (get_pipeline)." },
+  { name = "attempt", in = "query", type = "integer", maximum = 100, description = "The job's attempt (default its current one)." },
+  { name = "from", in = "query", type = "integer", minimum = 0, maximum = 4095, description = "The first chunk: the previous page's next_from (default 0)." },
+]
+
+[[tool]]
+name = "get_pipeline_diagnosis"
+gstn = "pipeline diagnosis"
+read_only = true
+method = "GET"
+path = "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis"
+description = "Why a pipeline failed, deterministically: each failed job's fingerprint, error codes, masked excerpt with its log lines, how often it failed, and known fixes (merge requests that fixed the same fingerprint). Refused (FG-AUTH-0022) for a repository with a confidential document."
+params = [
+  { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
+  { name = "pipeline_id", in = "path", type = "integer", required = true, description = "The pipeline id (list_pipelines)." },
+]
+
 # ── write: merge requests and pipelines (Developers; an is_agent token may) ──
 
 [[tool]]

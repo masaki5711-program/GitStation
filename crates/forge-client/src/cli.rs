@@ -101,7 +101,7 @@ pub enum Command {
         #[command(subcommand)]
         command: MirrorCommand,
     },
-    /// A project's CI pipelines (M4 C2): list, show, cancel, retry, run
+    /// A project's CI pipelines (M4 C2, C5): list, show, cancel, retry, run, log, diagnosis
     /// (reading: project readers; the rest: Developers).
     #[command(disable_help_subcommand = true)]
     Pipeline {
@@ -1558,6 +1558,48 @@ pub enum PipelineCommand {
         #[arg(long = "ref", value_parser = parse_text, value_name = "BRANCH")]
         git_ref: String,
     },
+    /// One page of a job's log, secrets masked (M4 C5). An AI agent's
+    /// token is refused (FG-AUTH-0022) when the pipeline's commit or the
+    /// default branch holds a confidential document.
+    Log {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        job: i64,
+        /// The job's attempt (default its current one).
+        #[arg(long, value_parser = parse_attempt, value_name = "N")]
+        attempt: Option<u32>,
+        /// The first chunk (the previous page's `more: --from`; default 0).
+        #[arg(long, value_parser = parse_log_from, value_name = "CHUNK")]
+        from: Option<u32>,
+    },
+    /// A pipeline's deterministic diagnosis (M4 C5): each failed job's
+    /// fingerprint, error codes, excerpt and known fixes. Refused to an AI
+    /// agent's token as `log` is.
+    Diagnosis {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+    },
+}
+
+/// A job's attempt: 1..=100.
+fn parse_attempt(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(n) if (1..=100).contains(&n) => Ok(n),
+        _ => Err("--attempt is a whole number from 1 to 100".to_string()),
+    }
+}
+
+/// A log chunk: 0..=4095.
+fn parse_log_from(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(n) if n <= 4095 => Ok(n),
+        _ => Err("--from is a whole number from 0 to 4095".to_string()),
+    }
 }
 
 /// A check namespace a service account may be granted.

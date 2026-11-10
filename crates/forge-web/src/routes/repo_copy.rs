@@ -73,7 +73,7 @@ impl Measured {
         }
     }
 
-    fn undecided(tip: Option<String>, error: ForgeError) -> Self {
+    pub(crate) fn undecided(tip: Option<String>, error: ForgeError) -> Self {
         Self {
             mark: CopyMark::Undecided,
             tip,
@@ -224,7 +224,11 @@ pub(crate) async fn decide_copy(
     authorize_repo_copy(proof, measured.mark).map_err(|e| refusal_context(e, repo, &measured))
 }
 
-fn refusal_context(mut err: ForgeError, repo: RepoId, measured: &Measured) -> ForgeError {
+pub(crate) fn refusal_context(
+    mut err: ForgeError,
+    repo: RepoId,
+    measured: &Measured,
+) -> ForgeError {
     err = err.with_context("repo_id", repo.get());
     if let Some(tip) = &measured.tip {
         err = err.with_context("tip", tip.clone()); // clone: the log owns it

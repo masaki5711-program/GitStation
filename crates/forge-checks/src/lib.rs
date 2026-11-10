@@ -330,7 +330,8 @@ impl Checks {
     /// The required names among `names` nothing may report on `project`
     /// (the merge rule's `unreportable_checks`): a `forge/` name forge's
     /// own worker does not report (M3 X2: it reports `forge/spec-drift`,
-    /// [`forge_core::checks::FORGE_REPORTED_CHECKS`]) and every `ci/` /
+    /// [`forge_core::checks::SYSTEM_REPORTED_CHECKS`]; M4 C5 also
+    /// `ci/pipeline`) and every other `ci/` /
     /// `kanflow/` name whose namespace no active service account holds a
     /// grant of on that project.
     pub async fn unreportable(
@@ -344,7 +345,9 @@ impl Checks {
         let reported = checks::reported_namespaces(&self.db, project).await?;
         Ok(names
             .iter()
-            .filter(|n| !forge_core::checks::forge_reports(n) && !reported.contains(&n.namespace()))
+            .filter(|n| {
+                !forge_core::checks::system_reports(n) && !reported.contains(&n.namespace())
+            })
             .cloned() // clone: the answer owns its names
             .collect())
     }

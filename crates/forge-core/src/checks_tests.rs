@@ -87,7 +87,7 @@ fn forge_reports_exactly_its_own_checks() {
     assert_eq!(SPEC_TRACE_CHECK, "forge/spec-trace");
     assert_eq!(
         crate::checks::MAX_STORED_CHECK_RUNS_PER_COMMIT,
-        crate::checks::MAX_CHECK_RUNS_PER_COMMIT + 6
+        crate::checks::MAX_CHECK_RUNS_PER_COMMIT + 7
     );
     for raw in FORGE_REPORTED_CHECKS {
         let n = name(raw);
@@ -102,5 +102,33 @@ fn forge_reports_exactly_its_own_checks() {
         "ext/spec-drift",
     ] {
         assert!(!forge_reports(&name(raw)), "{raw}");
+    }
+}
+
+/// M4 C5: `ci/pipeline` is the system's (never over HTTP, outside the cap)
+/// while the rest of `ci/` stays the reporters'.
+#[test]
+fn ci_pipeline_is_reported_by_the_system_alone() {
+    use crate::checks::{
+        forge_reports, reserved_from_http, system_reports, CI_PIPELINE_CHECK,
+        FORGE_REPORTED_CHECKS, SYSTEM_REPORTED_CHECKS,
+    };
+    assert_eq!(CI_PIPELINE_CHECK, "ci/pipeline");
+    let pipeline = name(CI_PIPELINE_CHECK);
+    assert!(system_reports(&pipeline));
+    assert!(reserved_from_http(&pipeline));
+    assert!(!forge_reports(&pipeline));
+    for raw in FORGE_REPORTED_CHECKS {
+        assert!(system_reports(&name(raw)), "{raw}");
+        assert!(SYSTEM_REPORTED_CHECKS.contains(raw), "{raw}");
+    }
+    for raw in [
+        "ci/gates",
+        "ci/pipeline-x",
+        "ci/pipelines",
+        "kanflow/pipeline",
+    ] {
+        assert!(!system_reports(&name(raw)), "{raw}");
+        assert!(!reserved_from_http(&name(raw)), "{raw}");
     }
 }

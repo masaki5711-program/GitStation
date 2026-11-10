@@ -19,6 +19,9 @@ forge-core.workspace = true
 forge-db.workspace = true
 forge-errors.workspace = true
 forge-git.workspace = true
+# M4 C5: masking and failure fingerprints (plan 04 P-6).
+regex.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

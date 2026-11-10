@@ -101,6 +101,12 @@ C3 で満たした（2026-11-10）: 1 は `projects::delete_decided` と `namesp
 **C5（CI の出力）**
 4. ログ・成果物・診断のどの経路よりも先に、`Undecided`（測れなかった）の印でエージェントの相手の CI の出力の読み取りが断られる（閉じる）試験を入れる。
 
+C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output` を使う）: 4 は `an_undecided_mark_refuses_every_agent_audience_every_ci_output`
+（forge-auth）、`a_refused_decision_reads_nothing_and_answers_its_error`・`ci_log_text_is_read_only_after_a_decision`（forge-db: 判定の前に
+本文・抜粋を読まない）、`an_agent_is_refused_the_logs_of_a_marked_pipeline_or_tip`（forge-web: ルート）。`Resource::CiOutput` は決定 5 の
+2 つの印に加えて `declared_agent`（`Forge-Context-Audience: agent`。`gstn mcp` は常に送る）を持ち、人のトークンでも MCP の経路では AI として
+判定する（`audience=header`）。先端を測れない（Smart HTTP が無い、リポジトリの準備中、測定の失敗）ときは `Undecided`。
+
 **C3 / C6 / C11 / C12（C2 のレビュー、2026-11-10 で追加）**
 5. **シークレットを渡すかは作成時の記録だけで決める**: `ci_pipelines.source = 'push'` かつ `ci_pipelines.protected`（作成のときに保護されたブランチだったか、
    C2 で保存）のときだけ。`manual` / `merge_request` / `schedule` のパイプラインには **決して** 渡さない。実行の時点の保護の設定や ref 名から判定し直さない。
