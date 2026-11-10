@@ -237,6 +237,16 @@ async fn world() -> World {
             ("spec/core.md", &spec_v2),
             ("spec/secret.md", &secret),
             ("src/logout.rs", "fn logout() {}\n"),
+            // Plan 06 D-5 / ADR-0026 §6: a plan 13 document marked with
+            // `classification` (withheld from an agent) and an open one.
+            (
+                "docs/plan.md",
+                "---\nclassification: confidential\n---\nthe hidden plan\n",
+            ),
+            (
+                "docs/open.md",
+                "---\nclassification: internal\n---\nan open note\n",
+            ),
             (
                 "tests/login.rs",
                 "// @req PBI-43/AC-1\n// @req WEB-CORE-1\n",
@@ -508,7 +518,16 @@ async fn merge_request_context_carries_files_requirements_work_items_and_checks(
         .iter()
         .map(|f| f["source"]["path"].as_str().expect("path"))
         .collect();
-    assert_eq!(files, ["spec/core.md", "spec/secret.md", "src/logout.rs"]);
+    assert_eq!(
+        files,
+        [
+            "docs/open.md",
+            "docs/plan.md",
+            "spec/core.md",
+            "spec/secret.md",
+            "src/logout.rs"
+        ]
+    );
     let changes: Vec<(&str, &str)> = body["requirements"]
         .as_array()
         .expect("requirements")
@@ -582,8 +601,8 @@ async fn a_confidential_work_item_is_withheld_from_an_agent() {
         .iter()
         .map(|f| f["source"]["path"].as_str().expect("path"))
         .collect();
-    assert_eq!(files, ["spec/core.md", "src/logout.rs"]);
-    assert_eq!(body["withheld"]["files"], 1);
+    assert_eq!(files, ["docs/open.md", "spec/core.md", "src/logout.rs"]);
+    assert_eq!(body["withheld"]["files"], 2);
     assert!(!body.to_string().contains("the secret rule"));
     // The merge request's version diff gives an agent no patch of it.
     let (status, diff) = w
@@ -597,7 +616,9 @@ async fn a_confidential_work_item_is_withheld_from_an_agent() {
         .await;
     assert_eq!(status, StatusCode::OK, "{diff}");
     assert!(!diff.to_string().contains("the secret rule"));
-    assert_eq!(diff["diff"]["withheld"]["files"], 1);
+    assert!(!diff.to_string().contains("the hidden plan"));
+    assert!(diff.to_string().contains("an open note"));
+    assert_eq!(diff["diff"]["withheld"]["files"], 2);
     // A person sees the mark.
     let (_, person) = w.get(&w.mr(), session(w.dev)).await;
     let marked = person["work_items"]

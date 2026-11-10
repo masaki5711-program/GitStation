@@ -35,6 +35,7 @@ use forge_db::projects::ProjectAccessFacts;
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
+pub mod confidential;
 pub mod doc_lint;
 pub mod doc_migration;
 pub mod risk;

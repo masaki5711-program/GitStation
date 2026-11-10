@@ -5901,7 +5901,7 @@
       "scopes": [
         "read_api"
       ],
-      "summary": "A project's documents through the server's document API, by id: id, classification, type, path, title and translations (paged with --limit / --after). An AI agent's list leaves confidential documents out and counts them in withheld."
+      "summary": "A project's documents through the server's document API, by id: id, classification, type, path, title and translations (paged with --limit / --after). An AI agent's list leaves confidential documents out (without saying how many)."
     },
     {
       "args": [

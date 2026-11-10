@@ -26,8 +26,13 @@
 //! it is marked at the revision read **or at the default branch's tip**
 //! (review X5: an agent cannot pick an unmarked revision; history marked
 //! nowhere stays readable). The repository read routes (blob, raw, blame:
-//! refused; compare, a commit, a merge request's diffs: the file left out)
-//! apply the same rule through [`marked_paths`]. This is defense in depth
+//! refused; compare, a commit, a merge request's diffs and its context's
+//! changed files: the file left out) apply one rule to every file through
+//! [`marked_files`] ([`forge_checks::confidential`]): a specification
+//! document marked as above, and any plan 13 document whose
+//! `classification` (or older `confidential`) — with its type's default as
+//! a floor — is `confidential`, failing closed on an unreadable front
+//! matter or type definition. This is defense in depth
 //! on the HTTP read APIs: git clone / fetch and archives do not look at the
 //! mark, so a truly confidential specification belongs in a repository the
 //! agent's account cannot read (ADR-0023 Amendment X5).
@@ -36,6 +41,7 @@ use std::collections::BTreeSet;
 
 use axum::response::Response;
 use forge_auth::{AccountKind, MergeRequestCtx, ProjectCtx, ResourceCtx};
+use forge_checks::confidential::{confidential_at, Confidential, ConfidentialLimits};
 use forge_checks::spec_index::{index_commit, IndexLimits, Indexed, Tags};
 use forge_core::req_tags::TagTarget;
 use forge_core::spec_doc::RequirementId;
@@ -240,17 +246,8 @@ pub(crate) async fn marked_paths(
         .map(str::to_owned)
         .collect();
     let mut todo: Vec<String> = more.iter().map(|c| (*c).to_owned()).collect();
-    let list = browse.refs(repo).await?;
-    if let Some(branch) = list.default_branch.as_deref() {
-        match browse
-            .resolve_ref(repo, &format!("refs/heads/{branch}"), principal)
-            .await
-        {
-            Ok(tip) => todo.push(tip.commit),
-            // HEAD names a branch that does not exist yet: no tip.
-            Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => {}
-            Err(e) => return Err(e),
-        }
+    if let Some(tip) = default_tip(browse, repo, principal).await? {
+        todo.push(tip);
     }
     todo.sort();
     todo.dedup();
@@ -262,8 +259,59 @@ pub(crate) async fn marked_paths(
     Ok(out)
 }
 
-/// For an agent audience: `FG-AUTH-0021` when `path` is a marked
-/// specification document at `commit` (or the default tip).
+/// The files an agent audience is not given in `repo` (plan 06 D-5,
+/// ADR-0026 §6): confidential at one of `commits` or at the default
+/// branch's tip ([`forge_checks::confidential`]: both marks, the type's
+/// default as a floor, unreadable front matter / type definition and
+/// unread documents fail closed). The one rule of every read of file
+/// content (blob, raw, blame, compare, a commit, a merge request's diffs
+/// and context). With no default branch born, every `.md` is withheld
+/// (fail closed). Every commit is read at most once.
+pub(crate) async fn marked_files(
+    browse: &Browser,
+    repo: RepoId,
+    principal: &str,
+    commits: &[&str],
+) -> Result<Confidential, ForgeError> {
+    let mut todo: Vec<String> = commits.iter().map(|c| (*c).to_owned()).collect();
+    let mut out = Confidential::default();
+    match default_tip(browse, repo, principal).await? {
+        Some(tip) => todo.push(tip),
+        // No default branch born: nothing to measure a revision against,
+        // so every document is withheld (fail closed, as the document API).
+        None => out.extend(Confidential::every_document()),
+    }
+    todo.sort();
+    todo.dedup();
+    let limits = ConfidentialLimits::default();
+    for commit in todo {
+        out.extend(confidential_at(browse, repo, &commit, &limits).await?);
+    }
+    Ok(out)
+}
+
+/// The default branch's tip (`None`: HEAD names a branch not born yet).
+async fn default_tip(
+    browse: &Browser,
+    repo: RepoId,
+    principal: &str,
+) -> Result<Option<String>, ForgeError> {
+    let list = browse.refs(repo).await?;
+    let Some(branch) = list.default_branch.as_deref() else {
+        return Ok(None);
+    };
+    match browse
+        .resolve_ref(repo, &format!("refs/heads/{branch}"), principal)
+        .await
+    {
+        Ok(tip) => Ok(Some(tip.commit)),
+        Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// For an agent audience: `FG-AUTH-0021` when `path` is confidential at
+/// `commit` or the default tip ([`marked_files`]).
 pub(crate) async fn refuse_marked_path(
     audience: Audience,
     browse: &Browser,
@@ -275,7 +323,7 @@ pub(crate) async fn refuse_marked_path(
     if !audience.is_agent() {
         return Ok(());
     }
-    let marked = marked_paths(browse, repo, principal, &[], &[commit]).await?;
+    let marked = marked_files(browse, repo, principal, &[commit]).await?;
     if marked.contains(path) {
         return Err(refused(audience, "spec_confidential").with_context("path", path));
     }
@@ -284,8 +332,8 @@ pub(crate) async fn refuse_marked_path(
 
 /// `diff` without the files of `marked` paths (either side of a rename),
 /// and how many it left out.
-pub(crate) fn without_marked(diff: &Diff, marked: &BTreeSet<String>) -> (Diff, usize) {
-    let hit = |p: &Option<String>| p.as_ref().is_some_and(|p| marked.contains(p));
+pub(crate) fn without_marked(diff: &Diff, marked: &Confidential) -> (Diff, usize) {
+    let hit = |p: &Option<String>| p.as_deref().is_some_and(|p| marked.contains(p));
     let (hidden, shown): (Vec<_>, Vec<_>) = diff
         .files
         .iter()
@@ -980,18 +1028,17 @@ pub async fn merge_request(state: AppState, request: Dispatched<MergeRequestCtx>
                 let before = index_at(&t, base.as_str(), Tags::Skip).await?;
                 let after = index_at(&t, head_sha, Tags::Skip).await?;
                 reason = before.index.incomplete.or(after.index.incomplete);
-                let secret: BTreeSet<String> = if audience.is_agent() {
+                let secret = if audience.is_agent() {
                     charge(&state, caller_of(&request)?, 1)?;
-                    marked_paths(
+                    marked_files(
                         &t.smart.browse,
                         t.repository.id,
                         &t.principal,
-                        &[(base.as_str(), &before.index), (head_sha, &after.index)],
-                        &[],
+                        &[base.as_str(), head_sha],
                     )
                     .await?
                 } else {
-                    BTreeSet::new()
+                    Confidential::default()
                 };
                 let compared = t
                     .smart
@@ -1158,3 +1205,7 @@ impl ContextSourceBody {
 #[cfg(test)]
 #[path = "context_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "confidential_tests.rs"]
+mod confidential_tests;

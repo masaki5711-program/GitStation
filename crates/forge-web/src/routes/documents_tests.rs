@@ -316,8 +316,8 @@ async fn a_type_that_cannot_be_read_makes_a_document_confidential() {
     let body = ok(&get(&r, &format!("{API}/NT-1"), session()).await);
     assert_eq!(body["classification"], "confidential");
     let a = get(&r, &format!("{API}/NT-1"), agent()).await;
-    assert_eq!(a.status, StatusCode::FORBIDDEN);
-    assert_eq!(a.code(), ErrorCode::ContextWithheld.id());
+    assert_eq!(a.status, StatusCode::NOT_FOUND);
+    assert_eq!(a.code(), ErrorCode::NotFound.id());
 }
 
 #[tokio::test]
@@ -442,22 +442,33 @@ async fn the_document_api_needs_read_api_and_a_reader() {
     }
 }
 
+/// An agent is answered the invisible document's 404 for a confidential
+/// document (review stage 3 LOW: no existence oracle), at any revision
+/// (marked at the tip), through every kind of agent audience.
 #[tokio::test]
 async fn a_confidential_document_is_withheld_from_an_agent() {
     let r = fixture().await;
+    plumb(
+        &r.path,
+        &["update-ref", "refs/heads/unmarked", &v1_of(&r)],
+        None,
+    );
     let uri = format!("{API}/URS-L3-001");
     ok(&get(&r, &uri, session()).await);
     ok(&get(&r, &uri, token(&[Scope::ReadApi])).await);
+    let absent = without_request_id(&get(&r, &format!("{API}/NOPE-1"), agent()).await);
     let refusals = [
         get(&r, &uri, agent()).await,
         get(&r, &uri, service_account()).await,
         get_with_header(&r, &uri, session()).await,
         // A revision where it was not marked: still marked at the tip.
         get(&r, &format!("{uri}?ref=v1"), agent()).await,
+        // A branch where the mark was removed: the same.
+        get(&r, &format!("{uri}?ref=unmarked"), agent()).await,
     ];
     for a in &refusals {
-        assert_eq!(a.status, StatusCode::FORBIDDEN, "{:?}", a.json());
-        assert_eq!(a.code(), ErrorCode::ContextWithheld.id());
+        assert_eq!(a.status, StatusCode::NOT_FOUND, "{:?}", a.json());
+        assert_eq!(without_request_id(a), absent, "the same as an absent id");
         assert!(!text(a).contains(URS_TITLE), "{}", text(a));
     }
     // An internal document is given; its reference to the URS is the id only.
@@ -468,7 +479,9 @@ async fn a_confidential_document_is_withheld_from_an_agent() {
         "hidden"
     );
     assert!(!text(&a).contains(URS_TITLE));
-    // The list leaves it out and says so.
+    // The list leaves it out and does not say how many (review stage 3
+    // LOW: a count, or even a flag, with `after` / `doctype` would tell
+    // whether a confidential id lies in a range).
     let body = ok(&get(&r, API, agent()).await);
     let ids: Vec<&str> = body["documents"]
         .as_array()
@@ -477,10 +490,119 @@ async fn a_confidential_document_is_withheld_from_an_agent() {
         .map(|d| d["id"].as_str().expect("id"))
         .collect();
     assert_eq!(ids, ["QP-07-001", "RA-2026-014"]);
-    assert_eq!(body["withheld"]["error_code"], "FG-AUTH-0021");
-    assert_eq!(body["withheld"]["documents"], 2);
-    let body = ok(&get(&r, &format!("{API}?ref=v1"), agent()).await);
-    assert_eq!(body["withheld"]["documents"], 1, "marked at the tip");
+    assert_eq!(body["withheld"], Value::Null);
+    for q in ["?ref=v1", "?after=RA-2026-014", "?doctype=equipment.urs"] {
+        let body = ok(&get(&r, &format!("{API}{q}"), agent()).await);
+        assert_eq!(body["withheld"], Value::Null, "{q}");
+        assert!(!body.to_string().contains("URS-L3-001"), "{q}");
+    }
+}
+
+/// The tag `v1` of the fixture.
+fn v1_of(r: &Repo) -> String {
+    plumb(&r.path, &["rev-parse", "refs/tags/v1"], None)
+}
+
+/// Review stage 3 MEDIUM: a reference resolves for an agent against the
+/// target's classification at the revision **and** at the default tip — a
+/// target internal at `v1` but confidential at the tip is `hidden`, its
+/// title never given.
+#[tokio::test]
+async fn a_reference_to_a_document_confidential_at_the_tip_is_hidden_at_any_revision() {
+    let r = fixture().await;
+    let uri = format!("{API}/RA-2026-014?ref=v1");
+    let person = ok(&get(&r, &uri, session()).await);
+    let target = ref_of(&person, "URS-L3-001", Some("REQ-L3-012"));
+    assert_eq!(target["target"], "found");
+    assert!(person.to_string().contains("旧版"));
+    let a = get(&r, &uri, agent()).await;
+    let body = ok(&a);
+    let target = ref_of(&body, "URS-L3-001", Some("REQ-L3-012"));
+    assert_eq!(target["target"], "hidden");
+    assert_eq!(target["title"], Value::Null);
+    assert_eq!(target["block_kind"], Value::Null);
+    assert!(!text(&a).contains("旧版"), "{}", text(&a));
+}
+
+/// Review stage 3 LOW: an agent's read fails closed when the default
+/// branch is not born (no tip to measure against): every document is
+/// withheld; a person reads them.
+#[tokio::test]
+async fn without_a_default_tip_an_agent_is_given_no_document() {
+    let r = fixture().await;
+    plumb(
+        &r.path,
+        &["symbolic-ref", "HEAD", "refs/heads/unborn"],
+        None,
+    );
+    let one = format!("{API}/RA-2026-014?ref=main");
+    ok(&get(&r, &one, session()).await);
+    let refused = get(&r, &one, agent()).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::NOT_FOUND,
+        "{:?}",
+        refused.json()
+    );
+    let list = ok(&get(&r, &format!("{API}?ref=main"), agent()).await);
+    assert_eq!(list["documents"], Value::Array(Vec::new()));
+    let person = ok(&get(&r, &format!("{API}?ref=main"), session()).await);
+    assert_eq!(person["documents"].as_array().expect("docs").len(), 4);
+}
+
+/// Review stage 3 LOW: the tip is compared by path as well as by id — a
+/// document whose file at the tip cannot be read (no id to compare; fail
+/// closed) is not served to an agent at an older revision where it read
+/// `internal`.
+#[tokio::test]
+async fn a_file_confidential_at_the_tip_is_withheld_by_path() {
+    let r = fixture().await;
+    let tip = plumb(&r.path, &["rev-parse", "refs/heads/main"], None);
+    let readable = "---\ndoctype: qms.procedure\nid: QP-09-001\ntitle: Old\nowner: x\nclassification: internal\n---\n\n## A\n\nText.\n";
+    let broken = "---\ndoctype: qms.procedure\nid: [QP-09-001\n---\n\n## A\n\nText.\n";
+    let old = commit(
+        &r.path,
+        &[
+            (".forge/doctypes/qms.procedure.yml", T_QP),
+            ("qms/QP-09-001.md", readable),
+        ],
+        Some(&tip),
+    );
+    let new = commit(
+        &r.path,
+        &[
+            (".forge/doctypes/qms.procedure.yml", T_QP),
+            ("qms/QP-09-001.md", broken),
+        ],
+        Some(&old),
+    );
+    plumb(&r.path, &["update-ref", "refs/heads/old", &old], None);
+    plumb(&r.path, &["update-ref", "refs/heads/main", &new], None);
+    let uri = format!("{API}/QP-09-001?ref=old");
+    ok(&get(&r, &uri, session()).await);
+    let a = get(&r, &uri, agent()).await;
+    assert_eq!(a.status, StatusCode::NOT_FOUND, "{:?}", a.json());
+    let list = ok(&get(&r, &format!("{API}?ref=old"), agent()).await);
+    assert!(!list.to_string().contains("QP-09-001"));
+}
+
+/// Review stage 3 LOW: for an agent, a translation that is not there and a
+/// confidential document answer alike (the confidentiality is decided
+/// before the translation is looked up).
+#[tokio::test]
+async fn an_agent_cannot_tell_a_missing_translation_from_a_confidential_document() {
+    let r = fixture().await;
+    let absent = without_request_id(&get(&r, &format!("{API}/NOPE-1"), agent()).await);
+    for uri in [
+        format!("{API}/URS-L3-001?lang=en"),
+        format!("{API}/URS-L3-001?lang=id"),
+        format!("{API}/RA-2026-014?lang=id"),
+    ] {
+        let a = get(&r, &uri, agent()).await;
+        assert_eq!(a.status, StatusCode::NOT_FOUND, "{uri}: {:?}", a.json());
+        assert_eq!(without_request_id(&a), absent, "{uri}");
+    }
+    ok(&get(&r, &format!("{API}/RA-2026-014?lang=en"), agent()).await);
 }
 
 #[tokio::test]

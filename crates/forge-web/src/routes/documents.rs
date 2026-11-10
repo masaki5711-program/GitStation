@@ -32,10 +32,19 @@
 //!
 //! **Plan 06 D-5**: for an agent audience
 //! ([`crate::routes::context::audience`]) a `confidential` document is
-//! refused when asked for (`FG-AUTH-0021 reason=doc_confidential`) and
-//! left out of the list (counted in `withheld.documents`), when it is
-//! confidential at the revision read **or at the default branch's tip**
-//! (as the context API: an agent cannot pick an unmarked revision).
+//! answered as one that is not there (`FG-REPO-0005`, `reason=
+//! doc_confidential` and the event `forge.context.withheld` in the log:
+//! review stage 3, no existence oracle — decided before a translation is
+//! looked up) and left out of the list, which does not say how many it
+//! left out (`withheld` stays `null`: a count or a flag with `after` /
+//! `doctype` would tell whether a confidential id lies in a range). A
+//! document counts as confidential when it is at the revision read **or at
+//! the default branch's tip** (as the context API: an agent cannot pick an
+//! unmarked revision), by id and by the path of its file (the repository
+//! read routes' rule, [`forge_checks::confidential`]); with no default
+//! branch born every document does (fail closed). A reference's target is
+//! measured the same way for an agent, so one confidential at the tip is
+//! `hidden` at any revision.
 //!
 //! A document that is not there (no such id, a translation that is not
 //! there) answers what an invisible project answers: `FG-REPO-0005`
@@ -44,18 +53,15 @@
 //! two revisions under the spec API's budget, limit and in-flight cap
 //! ([`crate::routes::specs::respond`]).
 
-use std::collections::HashMap;
-
 use axum::http::request::Parts;
 use axum::response::Response;
 use forge_auth::ProjectCtx;
+use forge_checks::confidential::{confidential_in, type_defaults, type_of, Confidential};
 use forge_checks::doc_lint::{read_tree, DocLimits, DocTree};
 use forge_core::{parse_positive_id, ProjectId, UserId};
-use forge_doc::doctype::parse_doctype;
 use forge_doc::document::{
     parse_document, reference_of, Classification, Document, TypeDefault, Value,
 };
-use forge_doc::lint::DOCTYPES_DIR;
 use forge_doc::render::{
     display_markdown, view_with_body, DocumentView, Piece, Resolver, Target as RefTarget,
     TargetDoc, VIEW_VERSION,
@@ -70,7 +76,7 @@ use crate::registry::{Dispatched, LoadFuture, Loader, Lookup, QueryParam};
 use crate::routes::browse::{
     load_project_lookup, query, rev_body, take, RepositoryOf, RevBody, Target,
 };
-use crate::routes::context::{audience, refused, withheld, Audience, ContextWithheldBody};
+use crate::routes::context::{audience, withheld, Audience, ContextWithheldBody};
 use crate::routes::projects::PREFIX as PROJECT_PREFIX;
 use crate::routes::specs::{caller_of, charge, respond, revision};
 
@@ -201,7 +207,8 @@ pub struct DocumentListBody {
     pub next_after: Option<String>,
     #[schema(required = true)]
     pub incomplete: Option<DocIncompleteBody>,
-    /// What an agent's list left out (plan 06 D-5).
+    /// Always `null` (plan 06 D-5, review stage 3: an agent's list does not
+    /// say what it left out; the log does). Kept for the clients.
     #[schema(required = true)]
     pub withheld: Option<ContextWithheldBody>,
 }
@@ -371,6 +378,11 @@ pub(crate) struct DocIndex {
     pub(crate) originals: Vec<Entry>,
     /// By id, then language.
     pub(crate) translations: Vec<Entry>,
+    /// The files an agent is not given at this revision (the repository
+    /// read routes' rule, [`forge_checks::confidential::confidential_in`]):
+    /// compared by path, so a file that is no document here (a front matter
+    /// that cannot be read) still counts.
+    pub(crate) files: Confidential,
 }
 
 /// The file name without `.md` (`None`: not a `.md`).
@@ -378,27 +390,10 @@ fn stem_of(path: &str) -> Option<&str> {
     path.rsplit('/').next()?.strip_suffix(".md")
 }
 
-/// What is known of each type: its default classification when its
-/// definition can be read.
-fn types_of(tree: &DocTree) -> HashMap<String, TypeDefault> {
-    let prefix = format!("{DOCTYPES_DIR}/");
-    tree.doctypes
-        .iter()
-        .filter_map(|(path, bytes)| {
-            let stem = path.strip_prefix(&prefix)?.strip_suffix(".yml")?;
-            let ty = match parse_doctype(stem, bytes) {
-                Ok(t) => TypeDefault::Known(t.default_classification),
-                Err(_) => TypeDefault::Unresolved,
-            };
-            Some((stem.to_owned(), ty))
-        })
-        .collect()
-}
-
 impl DocIndex {
     /// Index `tree` (sorted by path: the first file by path keeps an id).
     pub(crate) fn build(tree: DocTree) -> Self {
-        let types = types_of(&tree);
+        let types = type_defaults(&tree);
         let mut originals: Vec<Entry> = Vec::new();
         let mut translations: Vec<Entry> = Vec::new();
         for (file, (path, bytes)) in tree.markdown.iter().enumerate() {
@@ -407,10 +402,7 @@ impl DocIndex {
             else {
                 continue;
             };
-            let ty = types
-                .get(doctype)
-                .copied()
-                .unwrap_or(TypeDefault::Unresolved);
+            let ty = type_of(&types, doctype);
             let (id, doctype) = (id.to_owned(), doctype.to_owned());
             let lang = doc.meta_text("lang").map(str::to_owned);
             let of = doc.meta_text("translation_of");
@@ -442,10 +434,12 @@ impl DocIndex {
         }
         originals.sort_by(|a, b| a.id.cmp(&b.id));
         translations.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.lang.cmp(&b.lang)));
+        let files = confidential_in(&tree);
         Self {
             tree,
             originals,
             translations,
+            files,
         }
     }
 
@@ -669,46 +663,98 @@ async fn index_at(t: &Target, rev: &ResolvedRev) -> Result<DocIndex, ForgeError>
     Ok(DocIndex::build(tree))
 }
 
-/// For an agent audience: the ids confidential at the default branch's tip
+/// What an answer is measured against at the default branch's tip
 /// (review X5 MEDIUM a: a revision of the agent's choosing does not unmark
-/// a document). `None` for a person, or when `rev` is the tip (its index
-/// already says). One more read, charged.
+/// a document).
+pub(crate) enum TipMarks {
+    /// A person's answer: nothing is withheld.
+    Person,
+    /// The revision read is the tip: its index already says.
+    IsTip,
+    /// The tip's index (one more read, charged).
+    Read(Box<DocIndex>),
+    /// The default branch is not born: nothing to measure against, so an
+    /// agent is given no document (review stage 3 LOW: fail closed).
+    NoTip,
+}
+
+impl TipMarks {
+    fn index(&self) -> Option<&DocIndex> {
+        match self {
+            Self::Read(i) => Some(i),
+            Self::Person | Self::IsTip | Self::NoTip => None,
+        }
+    }
+}
+
+/// [`TipMarks`] of `rev` for `who`.
 async fn tip_marks(
     state: &AppState,
     caller: UserId,
     t: &Target,
     who: Audience,
     rev: &ResolvedRev,
-) -> Result<Option<DocIndex>, ForgeError> {
+) -> Result<TipMarks, ForgeError> {
     if !who.is_agent() {
-        return Ok(None);
+        return Ok(TipMarks::Person);
     }
     let tip = match revision(t, None).await {
         Ok(tip) => tip,
-        // No default branch yet: no tip to read.
-        Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => return Ok(None),
+        Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => return Ok(TipMarks::NoTip),
         Err(e) => return Err(e),
     };
     if tip.commit == rev.commit {
-        return Ok(None);
+        return Ok(TipMarks::IsTip);
     }
     charge(state, caller, 1)?;
-    Ok(Some(index_at(t, &tip).await?))
+    Ok(TipMarks::Read(Box::new(index_at(t, &tip).await?)))
 }
 
-/// Whether an agent may not be given `id` (in `lang`): confidential in
-/// `index` or at the tip.
-fn secret(index: &DocIndex, tip: Option<&DocIndex>, id: &str, lang: Option<&str>) -> bool {
+/// Whether an agent may not be given `id` (in `lang`, when that
+/// translation is there): confidential at the revision or at the tip —
+/// by id, and by the path of its file(s) here (review stage 3 LOW: a file
+/// whose front matter cannot be read at the tip has no id to compare) —
+/// or there is no tip ([`TipMarks::NoTip`]). Always `false` for a person.
+fn secret(index: &DocIndex, tip: &TipMarks, id: &str, lang: Option<&str>) -> bool {
+    match tip {
+        TipMarks::Person => return false,
+        TipMarks::NoTip => return true,
+        TipMarks::IsTip | TipMarks::Read(_) => {}
+    }
+    let paths: Vec<&str> = [
+        index.original(id),
+        lang.and_then(|l| index.translation(id, l)),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|e| e.path.as_str())
+    .collect();
     let marked = |i: &DocIndex| {
-        let original = i
-            .original(id)
-            .is_some_and(|e| e.classification == Classification::Confidential);
-        let translated = lang
-            .and_then(|l| i.translation(id, l))
-            .is_some_and(|e| e.classification == Classification::Confidential);
-        original || translated
+        let by_id = [i.original(id), lang.and_then(|l| i.translation(id, l))]
+            .into_iter()
+            .flatten()
+            .any(|e| e.classification == Classification::Confidential);
+        by_id || paths.iter().any(|p| i.files.contains(p))
     };
-    marked(index) || tip.is_some_and(marked)
+    marked(index) || tip.index().is_some_and(marked)
+}
+
+/// The view's resolver for an agent (review stage 3 MEDIUM): a reference's
+/// target counts as `confidential` when [`secret`] says so — at the tip as
+/// well as at the revision — so the view hides it (its id only).
+struct AgentResolver<'a> {
+    index: &'a DocIndex,
+    tip: &'a TipMarks,
+}
+
+impl Resolver for AgentResolver<'_> {
+    fn document(&self, id: &str) -> Option<TargetDoc> {
+        let mut target = self.index.document(id)?;
+        if secret(self.index, self.tip, id, None) {
+            target.classification = Classification::Confidential;
+        }
+        Some(target)
+    }
 }
 
 fn not_found(reason: &'static str, index: &DocIndex) -> ForgeError {
@@ -745,7 +791,7 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
                 if after.is_some_and(|a| e.id.as_str() <= a) {
                     continue;
                 }
-                if who.is_agent() && secret(&index, tip.as_ref(), &e.id, None) {
+                if secret(&index, &tip, &e.id, None) {
                     withheld_documents += 1;
                     continue;
                 }
@@ -763,13 +809,16 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
                     translations: index.languages(&e.id),
                 });
             }
-            let withheld = withheld(&request, "documents_list", who, withheld_documents, 0, 0);
+            // Logged once; never answered (review stage 3 LOW: a count, or
+            // even a flag, with `after` / `doctype` tells whether a
+            // confidential id lies in a range).
+            let _logged = withheld(&request, "documents_list", who, withheld_documents, 0, 0);
             Ok(DocumentListBody {
                 rev: rev_body(&rev),
                 documents,
                 next_after,
                 incomplete: index.incomplete(),
-                withheld,
+                withheld: None,
             })
         },
     )
@@ -789,9 +838,21 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
             let lang = lang_param(take(&params, "lang"))?;
             let rev = revision(&t, take(&params, "ref")).await?;
             let index = index_at(&t, &rev).await?;
+            // Read before anything is looked up: the cost does not tell
+            // whether the document is there.
+            let caller = caller_of(&request)?;
+            let tip = tip_marks(&state, caller, &t, who, &rev).await?;
             let Some(original) = index.original(&id) else {
                 return Err(not_found("document_not_found", &index).with_context("doc_id", id));
             };
+            // Review stage 3 LOW: before the translation is looked up, and
+            // answered as an absent document (the log keeps the reason).
+            if secret(&index, &tip, &id, lang.as_deref()) {
+                let _logged = withheld(&request, "documents_show", who, 1, 0, 0);
+                return Err(not_found("doc_confidential", &index)
+                    .with_context("doc_id", id)
+                    .with_context("path", original.path.clone())); // clone: the log's copy
+            }
             let shown = match lang.as_deref() {
                 None => original,
                 Some(l) => index.translation(&id, l).ok_or_else(|| {
@@ -800,16 +861,14 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
                         .with_context("lang", l.to_owned())
                 })?,
             };
-            let caller = caller_of(&request)?;
-            let tip = tip_marks(&state, caller, &t, who, &rev).await?;
-            if who.is_agent() && secret(&index, tip.as_ref(), &id, lang.as_deref()) {
-                return Err(refused(who, "doc_confidential")
-                    .with_context("doc_id", id)
-                    .with_context("path", shown.path.clone())); // clone: the log's copy
-            }
+            let agent_view = AgentResolver {
+                index: &index,
+                tip: &tip,
+            };
+            let resolver: &dyn Resolver = if who.is_agent() { &agent_view } else { &index };
             let view = match index.text(shown) {
-                Some(text) => view_with_body(text, &shown.doc, shown.ty, &index),
-                None => forge_doc::render::view(&shown.doc, shown.ty, &index),
+                Some(text) => view_with_body(text, &shown.doc, shown.ty, resolver),
+                None => forge_doc::render::view(&shown.doc, shown.ty, resolver),
             };
             let (fields, sections, refs) = view_parts(&view);
             let classification = view.classification.max(original.classification);

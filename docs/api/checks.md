@@ -205,8 +205,11 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
   文書は `doctype` を書いた `.md` で、ファイル名が `<id>.md`（同じ id はパスの順で最初）。訳は `<id>.<lang>.md`（`lang` と `translation_of`）。
 - 区分は型の既定（`.forge/doctypes/<型>.yml` の `defaults.classification`）。型が読めないとき、自分で書いていない文書は `confidential`。
 - **参照先の方が機密（Q14）**: `hidden`。題名・ブロックの種類・本文は送らない（ID だけ）。
-- **AI エージェント（計画 06 D-5）**: 読んだ版か既定のブランチの先で `confidential` の文書は `403 FG-AUTH-0021`（`reason=doc_confidential`）。
-  一覧からは外し、`withheld.documents` に数える。
+- **AI エージェント（計画 06 D-5）**: 読んだ版か既定のブランチの先で `confidential` の文書（id でもファイルのパスでも見る。既定のブランチが無いときはすべて）は、
+  無い文書と同じ `404 FG-REPO-0005`（ログに `reason=doc_confidential`。有無を推し量らせない）。一覧からは外し、数は返さない（`withheld` は常に `null`。
+  数や有無の印があると `after`・`doctype` との組み合わせで機密の id の範囲が分かるため）。参照先も既定のブランチの先で機密なら `hidden`。
+- **リポジトリの読み取り（blob・raw・blame・compare・コミット・MR の差分と文脈）**: 同じ規則（`forge_checks::confidential`）で、機密のファイルは
+  `403 FG-AUTH-0021` または差分から外して `withheld.files` に数える。
 - 無い文書・無い訳は、見えないプロジェクトと同じ `404 FG-REPO-0005`（ログに `reason=document_not_found` / `translation_not_found`）。
 - 1 回の要求で読む版は 2 つまで。仕様の API と同じ時間の上限（30 秒）・呼び出しの制限・同時の数（`FG-WEB-0010`）。
 - `gstn doc show --project <id> <doc_id> [--ref] [--lang] [--json]`、`gstn doc list --project <id>`。画面は `/{プロジェクト}/-/documents` と

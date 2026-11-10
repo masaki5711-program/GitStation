@@ -3681,7 +3681,7 @@
               },
               {
                 "$ref": "#/components/schemas/ContextWithheldBody",
-                "description": "What an agent's list left out (plan 06 D-5)."
+                "description": "Always `null` (plan 06 D-5, review stage 3: an agent's list does not\nsay what it left out; the log does). Kept for the clients."
               }
             ]
           }

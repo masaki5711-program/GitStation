@@ -1060,7 +1060,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "doc list",
-        summary: "A project's documents through the server's document API, by id: id, classification, type, path, title and translations (paged with --limit / --after). An AI agent's list leaves confidential documents out and counts them in withheld.",
+        summary: "A project's documents through the server's document API, by id: id, classification, type, path, title and translations (paged with --limit / --after). An AI agent's list leaves confidential documents out (without saying how many).",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--ref", "option", false, "A commit id, a branch or a tag (default: the default branch)."),
