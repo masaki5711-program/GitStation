@@ -248,21 +248,33 @@ mod tests {
         assert_eq!(reason(&err), "invalid");
     }
 
+    /// `unix` as an absolute path of the host (Windows: on drive C:), so
+    /// the containment rule is what is tested, not `not_absolute`.
+    fn abs(unix: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{}", unix.replace('/', "\\"))
+        } else {
+            unix.to_owned()
+        }
+    }
+
     #[test]
     fn the_key_and_the_state_copy_stay_outside_the_backup_dir() {
-        let err = load(&[(DIR_KEY, "/srv/backup"), (KEY_FILE_KEY, "/srv/backup/key")])
-            .expect_err("key inside");
+        let (dir, key_in, state_in) = (
+            abs("/srv/backup"),
+            abs("/srv/backup/key"),
+            abs("/srv/backup/state"),
+        );
+        let err = load(&[(DIR_KEY, &dir), (KEY_FILE_KEY, &key_in)]).expect_err("key inside");
         assert_eq!(reason(&err), "inside_backup_dir");
-        let err = load(&[
-            (DIR_KEY, "/srv/backup"),
-            (STATE_COPY_DIR_KEY, "/srv/backup/state"),
-        ])
-        .expect_err("state inside");
+        let err =
+            load(&[(DIR_KEY, &dir), (STATE_COPY_DIR_KEY, &state_in)]).expect_err("state inside");
         assert_eq!(reason(&err), "inside_backup_dir");
+        let (key_out, state_out) = (abs("/etc/forge/backup.key"), abs("/srv/forge-state"));
         load(&[
-            (DIR_KEY, "/srv/backup"),
-            (KEY_FILE_KEY, "/etc/forge/backup.key"),
-            (STATE_COPY_DIR_KEY, "/srv/forge-state"),
+            (DIR_KEY, &dir),
+            (KEY_FILE_KEY, &key_out),
+            (STATE_COPY_DIR_KEY, &state_out),
         ])
         .expect("outside");
     }
