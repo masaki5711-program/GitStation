@@ -884,3 +884,35 @@ impl ResourceCtx for CheckNamespaceGrantCtx {
         (self.account, self.project, self.namespace)
     }
 }
+
+/// A CI job's lease as loaded for the runner API (M4 C3:
+/// `RunnerJobHeartbeat`, `RunnerLogAppend`, `RunnerJobComplete`): the job id
+/// and its `runner_id` / ended state from one row. The decision compares
+/// the holder with the requesting runner (`job.rs`); the id is the job's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunnerJobCtx {
+    job: i64,
+    lease: crate::model::RunnerJob,
+}
+
+impl RunnerJobCtx {
+    /// `holder`: `ci_jobs.runner_id`; `finished`: the job has ended.
+    pub fn new(job: i64, holder: Option<i64>, finished: bool) -> Self {
+        Self {
+            job,
+            lease: crate::model::RunnerJob::new(holder, finished),
+        }
+    }
+}
+
+impl sealed::Sealed for RunnerJobCtx {}
+
+impl ResourceCtx for RunnerJobCtx {
+    type Id = i64;
+    fn resource(&self) -> Resource {
+        Resource::RunnerJob(self.lease)
+    }
+    fn id(&self) -> i64 {
+        self.job
+    }
+}

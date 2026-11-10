@@ -178,6 +178,7 @@ fn decide_rule(
             | Resource::Namespace { .. }
             | Resource::RepoCopy { .. }
             | Resource::PinnedCopy(_)
+            | Resource::RunnerJob(_)
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
             | Resource::GroupTransfer { .. }
@@ -217,6 +218,7 @@ fn decide_rule(
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
         | Resource::PinnedCopy(_)
+        | Resource::RunnerJob(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -359,6 +361,7 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
         | Resource::PinnedCopy(_)
+        | Resource::RunnerJob(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -445,6 +448,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
         | Resource::PinnedCopy(_)
+        | Resource::RunnerJob(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

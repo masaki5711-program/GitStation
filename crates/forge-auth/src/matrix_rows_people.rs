@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 29] = [
+const GROUPS: [[Row; 2]; 31] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -96,6 +96,10 @@ const GROUPS: [[Row; 2]; 29] = [
     // administrator's session); reading them takes an administrator's
     // token; binding a project a Maintainer's.
     both!(A::IntegrationManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Instance),
+    // M4 C3: registering and managing CI runners is session only (the twin
+    // is the administrator's session).
+    both!(A::RunnerRegister, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Instance),
+    both!(A::RunnerManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Instance),
     both!(A::IntegrationRead, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Instance),
     both!(A::IntegrationBindingManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // M3 X3: removing one binding (as binding).

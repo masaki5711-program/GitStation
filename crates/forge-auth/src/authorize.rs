@@ -1170,6 +1170,20 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         (_, Resource::PinnedCopy(_)) => {
             Err(deny(ErrorCode::Forbidden).with_context("reason", "pinned_copy_without_job"))
         }
+        // --- CI runners (M4 C3, ADR-0029 §1) ---
+        // The runner API is a runner's alone (the job arm, returned above):
+        // a person, a token or a service account never reaches it.
+        (Action::RunnerJobRequest, Resource::Instance)
+        | (
+            Action::RunnerJobHeartbeat | Action::RunnerLogAppend | Action::RunnerJobComplete,
+            Resource::RunnerJob(_),
+        ) => Err(refused("runner_only")),
+        // Registering and managing runners: a person, an administrator's
+        // web session (a token was refused above as session-only).
+        (Action::RunnerRegister | Action::RunnerManage, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
         // Only the act-as arm (returned above) reads an act-as resource.
         (_, Resource::ActAs(_)) => {
             Err(deny(ErrorCode::Forbidden).with_context("reason", "act_as_resource_without_act_as"))
@@ -1336,6 +1350,12 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::RunnerRegister
+            | Action::RunnerManage
+            | Action::RunnerJobRequest
+            | Action::RunnerJobHeartbeat
+            | Action::RunnerLogAppend
+            | Action::RunnerJobComplete
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -1365,7 +1385,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::CheckRun { .. }
             | Resource::IntegrationFeed(_)
             | Resource::ProjectEvents { .. }
-            | Resource::ActAsConfirm(_),
+            | Resource::ActAsConfirm(_)
+            | Resource::RunnerJob(_),
         ) => wrong_resource(),
     }
 }
@@ -1459,6 +1480,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         // Decided in their own arms (the act-as arm; the confirmation
         // decides visibility on its merge request; the job arm).
         | Resource::PinnedCopy(_)
+        | Resource::RunnerJob(_)
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_) => None,
     }
@@ -1495,6 +1517,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::Ref { .. }
         | Resource::RepoCopy { .. }
         | Resource::PinnedCopy(_)
+        | Resource::RunnerJob(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

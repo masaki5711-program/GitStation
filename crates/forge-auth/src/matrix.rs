@@ -176,6 +176,12 @@ pub(crate) enum Fixture {
         other_project: bool,
         other_sha: bool,
     },
+    /// A CI job as the runner API sees it (M4 C3): leased to the row's
+    /// runner (or to another runner, or to none) and running (or ended).
+    RunnerJob {
+        holder: crate::matrix_rows_ci::Holder,
+        finished: bool,
+    },
     /// A ref update on a private project; `protected` = minimum push role.
     Ref {
         kind: RefKind,
@@ -765,6 +771,9 @@ impl Fixture {
                 other_project,
                 other_sha,
             } => crate::matrix_rows_ci::pinned_copy(other_project, other_sha),
+            Fixture::RunnerJob { holder, finished } => {
+                crate::matrix_rows_ci::runner_job(holder, finished)
+            }
             Fixture::Ref {
                 kind,
                 update,
@@ -1136,6 +1145,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_spec_refs::CONTEXT_READ_ROWS,
         crate::matrix_rows_repo_copy::REPO_COPY_ROWS,
         crate::matrix_rows_ci::CI_ROWS,
+        crate::matrix_rows_ci::RUNNER_ROWS.as_slice(),
         &crate::matrix_rows_ci::generated_denies(),
     ]
     .concat()

@@ -28,6 +28,8 @@ use crate::model::{CopyMark as M, JobTokenState as J};
 #[cfg(test)]
 use crate::model::{JobCredential, Principal, Resource, RunnerCredential};
 #[cfg(test)]
+use crate::prove::ResourceCtx;
+#[cfg(test)]
 use forge_core::{push::ObjectId, ProjectId};
 
 /// The job's project and pinned SHA in every job row.
@@ -82,7 +84,142 @@ pub(crate) const CI_ROWS: &[Row] = &[
     row(A::RepoRead, W::DevTokenReadRepository, OWN, deny(E::Forbidden)),
     row(A::RepoRead, W::AgentTokenReadRepository, OWN, deny(E::Forbidden)),
     row(A::RepoRead, W::ServiceAccountTokenReadRepository, OWN, deny(E::Forbidden)),
+    // 5. The runner API (M4 C3): a runner claims on the instance and
+    // works on the jobs it holds; people, tokens and service accounts
+    // never reach it (`runner_only`), a job neither (generated rows).
+    row(A::RunnerJobRequest, W::Runner, F::Instance, Allow),
+    row(A::RunnerJobRequest, W::Admin, F::Instance, deny(E::Forbidden)),
+    row(A::RunnerJobRequest, W::Developer, F::Instance, deny(E::Forbidden)),
+    row(A::RunnerJobRequest, W::AdminTokenAdmin, F::Instance, deny(E::Forbidden)),
+    row(A::RunnerJobRequest, W::AgentTokenApi, F::Instance, deny(E::Forbidden)),
+    row(A::RunnerJobRequest, W::ServiceAccountTokenApi, F::Instance, deny(E::Forbidden)),
+    row(A::RunnerJobRequest, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    row(A::RunnerJobRequest, W::Job(J::Live), F::Instance, deny(E::Forbidden)),
+    // A runner action on the wrong resource is refused, never decided.
+    row(A::RunnerJobRequest, W::Runner, LEASED, deny(E::Forbidden)),
+    row(A::RunnerJobHeartbeat, W::Runner, F::Instance, deny(E::Forbidden)),
 ];
+
+/// Who holds a job's lease in a [`F::RunnerJob`] row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Holder {
+    /// The row's runner (`runner()`).
+    Me,
+    /// Another runner.
+    Other,
+    /// No runner (waiting, or ended).
+    Nobody,
+}
+
+/// A running job leased to the row's runner.
+const LEASED: F = F::RunnerJob {
+    holder: Holder::Me,
+    finished: false,
+};
+
+/// The lease rows of one runner action on a job.
+macro_rules! lease_rows {
+    ($action:expr) => {
+        [
+            row($action, W::Runner, LEASED, Allow),
+            // A job cancelled while this runner held it: still its own
+            // (the heartbeat delivers the cancel, the completion acks it).
+            row(
+                $action,
+                W::Runner,
+                F::RunnerJob {
+                    holder: Holder::Me,
+                    finished: true,
+                },
+                Allow,
+            ),
+            row(
+                $action,
+                W::Runner,
+                F::RunnerJob {
+                    holder: Holder::Other,
+                    finished: false,
+                },
+                deny(E::Forbidden),
+            ),
+            row(
+                $action,
+                W::Runner,
+                F::RunnerJob {
+                    holder: Holder::Nobody,
+                    finished: false,
+                },
+                deny(E::Forbidden),
+            ),
+            row(
+                $action,
+                W::Runner,
+                F::RunnerJob {
+                    holder: Holder::Nobody,
+                    finished: true,
+                },
+                deny(E::Forbidden),
+            ),
+            row($action, W::Job(J::Live), LEASED, deny(E::Forbidden)),
+            row($action, W::Admin, LEASED, deny(E::Forbidden)),
+            row($action, W::AdminTokenAdmin, LEASED, deny(E::Forbidden)),
+            row($action, W::AgentTokenApi, LEASED, deny(E::Forbidden)),
+            row(
+                $action,
+                W::ServiceAccountTokenApi,
+                LEASED,
+                deny(E::Forbidden),
+            ),
+            row($action, W::Anonymous, LEASED, deny(E::Unauthenticated)),
+        ]
+    };
+}
+
+#[rustfmt::skip]
+const HEARTBEAT: [Row; 11] = lease_rows!(A::RunnerJobHeartbeat);
+#[rustfmt::skip]
+const LOG: [Row; 11] = lease_rows!(A::RunnerLogAppend);
+#[rustfmt::skip]
+const COMPLETE: [Row; 11] = lease_rows!(A::RunnerJobComplete);
+
+/// Registering and managing runners (M4 C3): an administrator's web
+/// session, people only (the service account and bot twins are in
+/// `matrix_rows_people.rs`).
+#[rustfmt::skip]
+const ADMIN: [Row; 12] = [
+    row(A::RunnerRegister, W::Admin, F::Instance, Allow),
+    row(A::RunnerRegister, W::AdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
+    row(A::RunnerRegister, W::AgentAdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
+    row(A::RunnerRegister, W::Developer, F::Instance, deny(E::Forbidden)),
+    row(A::RunnerRegister, W::DisabledAdmin, F::Instance, deny(E::AccountDisabled)),
+    row(A::RunnerRegister, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    row(A::RunnerManage, W::Admin, F::Instance, Allow),
+    row(A::RunnerManage, W::AdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
+    row(A::RunnerManage, W::AgentAdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
+    row(A::RunnerManage, W::Developer, F::Instance, deny(E::Forbidden)),
+    row(A::RunnerManage, W::DisabledAdmin, F::Instance, deny(E::AccountDisabled)),
+    row(A::RunnerManage, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+];
+
+/// The runner API's and the runner administration's rows (`matrix::ROWS`
+/// appends them).
+pub(crate) static RUNNER_ROWS: std::sync::LazyLock<Vec<Row>> =
+    std::sync::LazyLock::new(|| [HEARTBEAT.as_slice(), &LOG, &COMPLETE, &ADMIN].concat());
+
+/// The runner of every runner row.
+#[cfg(test)]
+const RUNNER_ID: i64 = 3;
+
+/// A job's lease as the runner API loads it.
+#[cfg(test)]
+pub(crate) fn runner_job(holder: Holder, finished: bool) -> Resource {
+    let holder = match holder {
+        Holder::Me => Some(RUNNER_ID),
+        Holder::Other => Some(RUNNER_ID + 1),
+        Holder::Nobody => None,
+    };
+    crate::contexts::RunnerJobCtx::new(41, holder, finished).resource()
+}
 
 /// Rows 1: every action a live job or a runner never performs
 /// (`ci_denied_for_<action>`, ADR-0029 §2), on a private project. The
@@ -110,7 +247,9 @@ pub(crate) fn generated_denies() -> Vec<Row> {
 /// The runner of every runner row.
 #[cfg(test)]
 pub(crate) fn runner() -> Principal {
-    Principal::runner(RunnerCredential { runner_id: 3 })
+    Principal::runner(RunnerCredential {
+        runner_id: RUNNER_ID,
+    })
 }
 
 /// The job of every job row, its token in `state`.

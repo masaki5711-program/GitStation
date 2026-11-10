@@ -78,18 +78,19 @@ pub use model::{
     AssertionFacts, AssertionSubject, BindingSubject, CodeownersToggle, CopyMark, Credential,
     IntegrationFeedView, JobCredential, JobTokenState, MembershipChange, MembershipScope,
     MergeRequestEdit, MergeRequestState, NamespaceView, PinnedCopy, Principal, ProjectView,
-    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, Scope,
-    ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility,
+    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob,
+    Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView,
+    Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
     GroupTransferCtx, InstanceCtx, LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent,
     LoadedProject, LoadedProtection, LoadedTarget, LoadedTombstone, LoadedTransferTarget,
     LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx, ProjectCtx, ProjectMemberCtx,
-    RefProtectionCtx, ResolvedCtx, ResourceCtx, ServiceAccountCtx, ServiceAccountTokenCtx,
-    ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx,
-    TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx, UserTargetCtx,
-    VisibilityChangeCtx,
+    RefProtectionCtx, ResolvedCtx, ResourceCtx, RunnerJobCtx, ServiceAccountCtx,
+    ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx,
+    TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx,
+    UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 pub use repo_copy::authorize_repo_copy;

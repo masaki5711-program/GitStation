@@ -408,6 +408,27 @@ actions! {
     PipelineCancel,
     /// `POST …/pipelines/{pipeline_id}/retry`: Developer and above; `api`.
     PipelineRetry,
+    // --- CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1) ---
+    /// `POST /api/v1/admin/runners`: register a runner and show its token
+    /// once. An administrator's web session, people only (a token is
+    /// `FG-AUTH-0002 reason=session_required`).
+    RunnerRegister,
+    /// `GET /api/v1/admin/runners`, `PATCH /api/v1/admin/runners/{id}`:
+    /// list the runners, enable / disable one, change its tags. As
+    /// `RunnerRegister`.
+    RunnerManage,
+    /// `POST /api/v1/runner/jobs/request`: a runner's long-poll for a job
+    /// (`CiRule::Runner`, on the instance). A runner only.
+    RunnerJobRequest,
+    /// `POST /api/v1/runner/jobs/{job_id}/heartbeat`: extend the lease and
+    /// learn of a cancel. A runner, on a job leased to it only.
+    RunnerJobHeartbeat,
+    /// `POST /api/v1/runner/jobs/{job_id}/log`: append a log chunk. As
+    /// `RunnerJobHeartbeat`.
+    RunnerLogAppend,
+    /// `POST /api/v1/runner/jobs/{job_id}/complete`: report the result (or
+    /// acknowledge a cancel). As `RunnerJobHeartbeat`.
+    RunnerJobComplete,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -503,6 +524,8 @@ impl Action {
                 | Action::IntegrationManage
                 | Action::ActAsConfirmView
                 | Action::ActAsAssertionIssue
+                | Action::RunnerRegister
+                | Action::RunnerManage
         )
     }
 
@@ -550,6 +573,8 @@ impl Action {
                 | Action::PushMirrorRead
                 | Action::PushMirrorManage
                 | Action::DocLintMigrationManage
+                | Action::RunnerRegister
+                | Action::RunnerManage
         )
     }
 
@@ -582,6 +607,14 @@ impl Action {
             | Action::IntegrationManage
             | Action::ActAsConfirmView
             | Action::ActAsAssertionIssue
+            | Action::RunnerRegister
+            | Action::RunnerManage
+            // M4 C3: the runner API is a runner's (`ci_rule`); no person's
+            // token reaches it (`authorize()`: `runner_only`).
+            | Action::RunnerJobRequest
+            | Action::RunnerJobHeartbeat
+            | Action::RunnerLogAppend
+            | Action::RunnerJobComplete
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -788,6 +821,13 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C3: runners are no act-as action.
+            | Action::RunnerRegister
+            | Action::RunnerManage
+            | Action::RunnerJobRequest
+            | Action::RunnerJobHeartbeat
+            | Action::RunnerLogAppend
+            | Action::RunnerJobComplete
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead
@@ -809,13 +849,20 @@ impl Action {
 
     /// How a CI principal may perform the action (M4 C0, ADR-0029 §2).
     /// Closed by default: every action is listed, so a new one does not
-    /// compile until it is decided here. No action is `Runner` yet (the
-    /// runner API's actions arrive with M4 C3).
+    /// compile until it is decided here.
     pub fn ci_rule(self) -> CiRule {
         match self {
             // A job's copy of its own project at its pinned SHA (§3), on
             // `Resource::PinnedCopy` only.
             Action::RepoRead => CiRule::Job,
+            // M4 C3: the runner API, on the instance (a claim) or on a job
+            // leased to the runner (`Resource::RunnerJob`).
+            Action::RunnerJobRequest
+            | Action::RunnerJobHeartbeat
+            | Action::RunnerLogAppend
+            | Action::RunnerJobComplete => CiRule::Runner,
+            // Registering and managing runners: a person's (§1).
+            Action::RunnerRegister | Action::RunnerManage => CiRule::Denied,
             // Push, checks, merge requests, secrets, other pipelines, the
             // context API, every read of the API and every administration
             // and session action: never (§8).
