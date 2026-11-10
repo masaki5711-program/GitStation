@@ -172,3 +172,33 @@
   gap: var(--gs-space-4);
   margin-top: var(--gs-space-4);
 }
+
+/* The referenced-by panel: a translation is a word badge; the referring
+ * lines sit under the title, one row of small muted items. */
+.langBadge {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-sm);
+  white-space: nowrap;
+}
+
+.refLines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--gs-space-3);
+  margin: var(--gs-space-1) 0 var(--gs-space-2);
+  padding: 0;
+  list-style: none;
+  font-size: var(--gs-font-size-sm);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

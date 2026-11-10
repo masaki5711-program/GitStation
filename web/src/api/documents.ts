@@ -2,7 +2,7 @@
 // `/api/v1/projects/{id}/documents[/{doc_id}]`): the document view as JSON.
 // A reference more confidential than the document comes as its id only
 // (plan 13 Q14): the page never has the target's title to show.
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 
 import { call } from './client';
 import { useApi } from './context';
@@ -44,6 +44,31 @@ export function useDocument(projectId: number, docId: string, ref?: string, lang
           },
         }),
       ),
+  });
+}
+
+/** The documents that refer to one document, a page at a time
+ * (`/referenced-by`, keyset by `next_after`). A more confidential referrer
+ * comes as its id only (plan 13 Q14). */
+export function useReferrers(projectId: number, docId: string, ref?: string) {
+  const api = useApi();
+  return useInfiniteQuery({
+    queryKey: ['referrers', projectId, docId, ref ?? null],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ signal, pageParam }) =>
+      call(() =>
+        api.GET('/api/v1/projects/{id}/documents/{doc_id}/referenced-by', {
+          signal,
+          params: {
+            path: { id: projectId, doc_id: docId },
+            query: {
+              ...(ref !== undefined ? { ref } : {}),
+              ...(pageParam !== undefined ? { after: pageParam } : {}),
+            },
+          },
+        }),
+      ),
+    getNextPageParam: (last) => last.next_after ?? undefined,
   });
 }
 

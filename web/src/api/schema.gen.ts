@@ -827,6 +827,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One block of a document alone, with the references inside it resolved (a missing block answers as a missing document) */
+        get: operations["get_api_v1_projects_id_documents_doc_id_blocks_block_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/documents/{doc_id}/referenced-by": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The documents that refer to one document (or one of its blocks), by id, paged (a more confidential referrer: its id only; an agent's answer leaves confidential ones out uncounted) */
+        get: operations["get_api_v1_projects_id_documents_doc_id_referenced_by"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/integration-bindings": {
         parameters: {
             query?: never;
@@ -3358,6 +3392,43 @@ export interface components {
             key: string;
             value: string;
         };
+        /** @description One block of a document, alone. */
+        DocumentBlockAloneBody: {
+            block: components["schemas"]["DocumentBlockAtBody"];
+            classification: string;
+            doctype: string;
+            id: string;
+            incomplete: null | components["schemas"]["DocIncompleteBody"];
+            lang: string | null;
+            path: string;
+            ref: components["schemas"]["RevBody"];
+            /**
+             * @description The `[[…]]` references inside the block, resolved as in the
+             *     document's view.
+             */
+            refs: components["schemas"]["DocumentRefBody"][];
+            /** @description The level-2 heading the block is under. */
+            section: string | null;
+            title: string | null;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description A block with where it is (the block route). */
+        DocumentBlockAtBody: {
+            /** @description In the written order. */
+            attrs: components["schemas"]["DocumentAttrBody"][];
+            /** @description The body as written. */
+            body: string;
+            deprecated: boolean;
+            /** @description The body for display (prose lines joined). */
+            display: string;
+            /** @description The closing `:::`. */
+            end_line: number;
+            id: string;
+            kind: string;
+            /** @description The opening line (1-based). */
+            line: number;
+        };
         /** @description A block (`::: <kind> <id> <attrs>`). */
         DocumentBlockBody: {
             /** @description In the written order. */
@@ -4494,6 +4565,46 @@ export interface components {
             target: string;
             /** @description `branch` or `tag`. */
             type: string;
+        };
+        /** @description A document (or translation) that refers to the target. */
+        ReferrerBody: {
+            classification: string | null;
+            doctype: string | null;
+            /**
+             * @description More confidential than the target (plan 13 Q14): its id only —
+             *     `title`, `doctype`, `path` and `classification` are `null`, `refs`
+             *     is empty.
+             */
+            hidden: boolean;
+            id: string;
+            /** @description A translation's language; `null`: the original. */
+            lang: string | null;
+            path: string | null;
+            /** @description Its references to the target, in the written order. */
+            refs: components["schemas"]["ReferrerRefBody"][];
+            title: string | null;
+        };
+        /** @description One reference of a referrer to the target. */
+        ReferrerRefBody: {
+            /** @description The block named (`[[ID#BLOCK]]`); `null`: the document. */
+            block: string | null;
+            line: number;
+        };
+        /** @description The documents that refer to one document (or one of its blocks). */
+        ReferrersBody: {
+            block: string | null;
+            id: string;
+            incomplete: null | components["schemas"]["DocIncompleteBody"];
+            /** @description More referrers follow: ask again with `after=<next_after>`. */
+            next_after: string | null;
+            ref: components["schemas"]["RevBody"];
+            /** @description By key (`<id>`, or `<id>.<lang>` for a translation). */
+            referrers: components["schemas"]["ReferrerBody"][];
+            /**
+             * @description Referrers in all (a person's answer); `null` for an agent audience
+             *     (plan 06 D-5: a count would tell what was left out).
+             */
+            total: number | null;
         };
         /** @description A repository's branches and tags. */
         RefsBody: {
@@ -7722,6 +7833,85 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_documents_doc_id_blocks_block_id: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+                /** @description A translation (<id>.<lang>.md, e.g. en); default: the original */
+                lang?: string;
+            };
+            header?: never;
+            path: {
+                block_id: number;
+                doc_id: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentBlockAloneBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_documents_doc_id_referenced_by: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+                /** @description Only the references to this block of the document (e.g. H-01) */
+                block?: string;
+                /** @description At most this many referrers (default 100) */
+                limit?: number;
+                /** @description The previous page's next_after: only referrers whose key (<id> or <id>.<lang>) sorts after it */
+                after?: string;
+            };
+            header?: never;
+            path: {
+                doc_id: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferrersBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

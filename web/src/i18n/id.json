@@ -1168,6 +1168,19 @@
       "broken": "Tidak ditemukan di repositori ini",
       "brokenShort": "tidak ditemukan",
       "external": "Di repositori lain"
+    },
+    "referrers": {
+      "title": "Dirujuk oleh",
+      "total_one": "{{count}} dokumen merujuk dokumen ini.",
+      "total_other": "{{count}} dokumen merujuk dokumen ini.",
+      "empty": "Belum ada dokumen yang merujuk dokumen ini. Tulis [[{{id}}]] di dokumen lain dan dokumen itu muncul di sini.",
+      "translation": "Terjemahan: {{lang}}",
+      "line": "Baris {{line}}",
+      "lineBlock": "Baris {{line}} (ke {{block}})",
+      "more": "Tampilkan lagi",
+      "loaded_one": "{{count}} dokumen lagi ditampilkan.",
+      "loaded_other": "{{count}} dokumen lagi ditampilkan.",
+      "incomplete": "Beberapa dokumen tidak dapat dibaca sepenuhnya, jadi dokumen yang merujuk mungkin tidak tercantum ({{code}})."
     }
   }
 }

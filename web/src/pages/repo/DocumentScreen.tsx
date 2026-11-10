@@ -4,7 +4,8 @@
 // joined the one-sentence-per-line prose: `display`), blocks grouped by kind
 // as tables (id, attributes, text; deprecated rows muted and said so), and
 // the references. A reference to a more confidential document is its id
-// only (Q14): the server never sends its title.
+// only (Q14): the server never sends its title. Below them, the documents
+// that refer to this one (`ReferencedBy`).
 import { Fragment, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router';
@@ -25,6 +26,7 @@ import {
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { NotFound } from '../NotFound';
 import { RepoError } from './common';
+import { ReferencedBy } from './ReferencedBy';
 import styles from './Documents.module.css';
 
 export function ClassificationBadge({ value }: { value: string }) {
@@ -182,6 +184,7 @@ function Document({
         ))}
       </div>
       <References refs={d.refs} project={project} keep={keep} />
+      <ReferencedBy projectId={projectId} project={project} docId={d.id} keep={keep} />
     </article>
   );
 }

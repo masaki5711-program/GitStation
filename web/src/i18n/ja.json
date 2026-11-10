@@ -1168,6 +1168,19 @@
       "broken": "このリポジトリに見つかりません",
       "brokenShort": "見つからない",
       "external": "ほかのリポジトリの文書"
+    },
+    "referrers": {
+      "title": "被参照",
+      "total_one": "{{count}} 件の文書がこの文書を参照しています。",
+      "total_other": "{{count}} 件の文書がこの文書を参照しています。",
+      "empty": "この文書を参照している文書はまだありません。ほかの文書に [[{{id}}]] と書くと、ここに出ます。",
+      "translation": "翻訳: {{lang}}",
+      "line": "{{line}} 行目",
+      "lineBlock": "{{line}} 行目（{{block}} を参照）",
+      "more": "もっと見る",
+      "loaded_one": "{{count}} 件を追加で表示しました。",
+      "loaded_other": "{{count}} 件を追加で表示しました。",
+      "incomplete": "一部の文書を読み切れなかったため、参照している文書が抜けている可能性があります（{{code}}）。"
     }
   }
 }
