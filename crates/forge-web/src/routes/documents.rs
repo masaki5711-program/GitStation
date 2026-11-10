@@ -1116,7 +1116,10 @@ pub async fn referenced_by(state: AppState, request: Dispatched<ProjectCtx>) -> 
             .map(|b| ref_id("block", b))
             .transpose()?;
         let limit = limit_param(&params)?;
-        let after = take(&params, "after").filter(|a| !a.is_empty());
+        let after = take(&params, "after")
+            .filter(|a| !a.is_empty())
+            .map(referrer_key_param)
+            .transpose()?;
         let rev = revision(&t, take(&params, "ref")).await?;
         let index = index_at(&t, &rev).await?;
         let caller = caller_of(&request)?;
@@ -1136,7 +1139,13 @@ pub async fn referenced_by(state: AppState, request: Dispatched<ProjectCtx>) -> 
             .collect();
         let docs: Vec<&Document> = entries.iter().map(|e| &e.doc).collect();
         let found = referrers(&docs, &id, block.as_deref());
-        let given = |e: &Entry| !secret(&index, &tip, &e.id, e.lang.as_deref());
+        // An agent is given neither a confidential referrer nor, by id, one
+        // more confidential than the target (plan 06 D-5: nothing it may not
+        // read enters its context); a person sees the latter by id only.
+        let given = |e: &Entry| {
+            !secret(&index, &tip, &e.id, e.lang.as_deref())
+                && !(who.is_agent() && more_confidential(e, &index, target.classification))
+        };
         // Only a document the audience may be given tells it something.
         let capped = found
             .capped
@@ -1161,7 +1170,7 @@ pub async fn referenced_by(state: AppState, request: Dispatched<ProjectCtx>) -> 
         let mut last: Option<&str> = None;
         let mut next_after = None;
         for (key, e, r) in &shown {
-            if after.is_some_and(|a| key.as_str() <= a) {
+            if after.as_deref().is_some_and(|a| key.as_str() <= a) {
                 continue;
             }
             if page.len() == limit {
@@ -1193,6 +1202,35 @@ pub async fn referenced_by(state: AppState, request: Dispatched<ProjectCtx>) -> 
     .await
 }
 
+/// A referrer's classification: a translation is at least as confidential
+/// as its original.
+fn effective_classification(e: &Entry, index: &DocIndex) -> Classification {
+    index
+        .original(&e.id)
+        .map_or(e.classification, |o| o.classification.max(e.classification))
+}
+
+/// Whether a referrer is more confidential than the target.
+fn more_confidential(e: &Entry, index: &DocIndex, target: Classification) -> bool {
+    effective_classification(e, index) > target
+}
+
+/// `after` of [`REFERENCED_BY`]: a referrer key, `<id>` or `<id>.<lang>`
+/// (`FG-WEB-0006 param=after`).
+fn referrer_key_param(raw: &str) -> Result<String, ForgeError> {
+    if ref_id("after", raw).is_ok() {
+        return Ok(raw.to_owned());
+    }
+    match raw.rsplit_once('.') {
+        Some((id, lang))
+            if ref_id("after", id).is_ok() && lang_param(Some(lang)).ok().flatten().is_some() =>
+        {
+            Ok(raw.to_owned())
+        }
+        _ => Err(param_invalid("after", "invalid")),
+    }
+}
+
 /// One referrer as answered: whole, or its id only when it is more
 /// confidential than the target (a translation is at least as confidential
 /// as its original).
@@ -1202,9 +1240,7 @@ fn referrer_body(
     index: &DocIndex,
     target: Classification,
 ) -> ReferrerBody {
-    let classification = index
-        .original(&e.id)
-        .map_or(e.classification, |o| o.classification.max(e.classification));
+    let classification = effective_classification(e, index);
     let id = e.id.clone(); // clone: the answer owns its strings
     let lang = e.lang.clone(); // clone: as above
     if classification > target {

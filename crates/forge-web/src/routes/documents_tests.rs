@@ -35,6 +35,9 @@ const T_RA: &str =
 const T_URS: &str =
     include_str!("../../../../docs/plan/13-examples/.forge/doctypes/equipment.urs.yml");
 
+/// A synthetic type whose documents may be public (the referrer tests).
+const T_NOTE_PUBLIC: &str = "name: note.public\nversion: 1\nlabel: { ja: 公開メモ, en: Public note, id: Catatan publik }\nid_pattern: '^P-\\d+$'\ndefaults: { classification: public }\nsections:\n  - { title: A }\n";
+
 const API: &str = "/api/v1/projects/7/documents";
 /// The URS's title: never in an answer about a less confidential document.
 const URS_TITLE: &str = "設備要求仕様書";
@@ -781,12 +784,14 @@ fn refs_files(sigma: &str) -> Vec<(String, String)> {
         fm("T-1", "Target", "internal")
     );
     let a1 = format!(
-        "{}\n## A\n\nSee [[T-1]].\nAnd [[T-1#B-1]] and [[C-1]].\n",
+        "{}\n## A\n\nSee [[T-1]].\nAnd [[T-1#B-1]] and [[C-1]].\nAlso [[P-1]].\n",
         fm("A-1", "Alpha", "internal")
     );
     let a2 = format!("{}\n## A\n\n[[T-1#B-2]]\n", fm("A-2", "Beta", "internal"));
     let a2_en = "---\ndoctype: qms.procedure\nid: A-2\ntitle: Beta en\nowner: x\nclassification: internal\nlang: en\ntranslation_of: A-2\n---\n\n[[T-1#B-1]]\n".to_owned();
     let a3 = format!("{}\n## A\n\n[[T-1]]\n", fm("A-3", "Gamma", "internal"));
+    // A public P-1 that the internal A-1 refers to (A-1 is more confidential).
+    let p1 = "---\ndoctype: note.public\nid: P-1\ntitle: Public one\nowner: x\nclassification: public\n---\n\n## A\n\nPublic.\n".to_owned();
     let s1 = format!("{}\n## A\n\n[[T-1#B-1]]\n", fm("S-1", SECRET_TITLE, sigma));
     let c1 = format!(
         "{}\n## A\n\n::: req B-1\nHidden.\n:::\n",
@@ -801,6 +806,11 @@ fn refs_files(sigma: &str) -> Vec<(String, String)> {
         ("d/A-3.md".into(), a3),
         ("d/S-1.md".into(), s1),
         ("d/C-1.md".into(), c1),
+        (
+            ".forge/doctypes/note.public.yml".into(),
+            T_NOTE_PUBLIC.into(),
+        ),
+        ("d/P-1.md".into(), p1),
     ]
 }
 
@@ -926,6 +936,18 @@ async fn a_more_confidential_referrer_is_shown_to_a_person_by_id_only() {
     let body = ok(&get(&r, &format!("{API}/C-1/referenced-by"), session()).await);
     assert_eq!(referrer_keys(&body), ["A-1"]);
     assert_eq!(referrer(&body, "A-1", None)["title"], "Alpha");
+}
+
+#[tokio::test]
+async fn a_more_confidential_referrer_is_left_out_for_an_agent_not_shown_by_id() {
+    let r = refs_fixture().await;
+    let person = ok(&get(&r, &format!("{API}/P-1/referenced-by"), session()).await);
+    assert_eq!(referrer_keys(&person), ["A-1"]);
+    assert_eq!(referrer(&person, "A-1", None)["hidden"], true);
+    let a = get(&r, &format!("{API}/P-1/referenced-by"), agent()).await;
+    let body = ok(&a);
+    assert!(referrer_keys(&body).is_empty(), "{body:?}");
+    assert!(!text(&a).contains("A-1"), "{}", text(&a));
 }
 
 #[tokio::test]
@@ -1068,6 +1090,8 @@ async fn bad_referrer_and_block_parameters_are_refused_before_git_runs() {
         format!("{API}/T-1/referenced-by?block=a%23b"),
         format!("{API}/T-1/referenced-by?lang=en"),
         format!("{API}/T-1/referenced-by?block=B-1&block=B-2"),
+        format!("{API}/T-1/referenced-by?after=a%2Fb"),
+        format!("{API}/T-1/referenced-by?after={}", "A".repeat(200)),
         format!("{API}/T-1/blocks/-x"),
         format!("{API}/T-1/blocks/a%2Fb"),
         format!("{API}/T-1/blocks/{}", "B".repeat(129)),
