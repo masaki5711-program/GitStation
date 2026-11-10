@@ -13,6 +13,9 @@
 //!   ref, the head's pusher as `triggered_by`). Two jobs racing on one pair:
 //!   `merge_result_refs_once` keeps the first row and the loser gets its
 //!   result back (`created: false`, nothing enqueued).
+//! - [`replace_merge_result`]: a stored result whose commit `gc` pruned is
+//!   written again by the job; the row points at the new commit and the
+//!   pipeline is asked for on it.
 //! - [`merge_runs_on`] / [`merge_runs_for`]: the runs a merge decision reads
 //!   for a head — on the head and on each merge result of the head (newest
 //!   first, at most [`MAX_MERGE_RESULTS_READ`]) — resolved by
@@ -43,7 +46,8 @@ pub struct RecordedResult {
     /// The pair's merge result (the caller's, or the one a racing job
     /// stored first).
     pub result: ObjectId,
-    /// The row is new (and the pipeline was enqueued with it).
+    /// The row is new, or its pruned result was replaced (and the pipeline
+    /// was enqueued with it).
     pub created: bool,
     /// The merge request pipeline job was enqueued (a deduplicated one is
     /// `false`).
@@ -215,6 +219,88 @@ pub async fn record_merge_result(
                     created: false,
                     pipeline_enqueued: false,
                 }
+            }
+        };
+        tx.commit().await.map_err(|e| query_error(QUERY, e))?;
+        Ok(Some(recorded))
+    })
+    .await
+}
+
+/// Point the row of (`head`, `target`) of `mr` from `old` to `result` —
+/// `old`'s commit is gone (`gc` pruned it once no ref kept it; the job
+/// wrote `result` afresh) — and, when it moved, enqueue the merge request
+/// pipeline on `result` in the same transaction (the runs on `old` belong
+/// to a commit nobody can fetch). A racing job that replaced it first wins:
+/// its result comes back (`created: false`). `Ok(None)`: the row or the
+/// merge request is gone.
+pub async fn replace_merge_result(
+    db: &Db,
+    origin: &RequestId,
+    mr: MergeRequestId,
+    (head, target): (&ObjectId, &ObjectId),
+    (old, result): (&ObjectId, &ObjectId),
+) -> Result<Option<RecordedResult>, ForgeError> {
+    const QUERY: &str = "review.merge_result_replace";
+    db.within(QUERY, async {
+        let mut tx = db
+            .write_pool()
+            .begin()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        let subject: Option<(i64, String)> = sqlx::query_as(
+            "SELECT project_id, source_branch FROM forge.merge_requests WHERE id = $1",
+        )
+        .bind(mr.get())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let Some((project, source)) = subject else {
+            return Ok(None);
+        };
+        let moved: Option<i64> = sqlx::query_scalar(
+            "UPDATE forge.merge_result_refs SET result_sha = $5              WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha = $3              AND result_sha = $4 RETURNING id",
+        )
+        .bind(mr.get())
+        .bind(head.as_str())
+        .bind(target.as_str())
+        .bind(old.as_str())
+        .bind(result.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let recorded = if moved.is_some() {
+            let enqueued = enqueue_pipeline(
+                &mut tx,
+                (ProjectId::new(project), mr),
+                &source,
+                head,
+                result,
+                origin,
+            )
+            .await?;
+            RecordedResult {
+                result: result.clone(), // clone: the answer owns its id
+                created: true,
+                pipeline_enqueued: enqueued,
+            }
+        } else {
+            let existing: Option<String> = sqlx::query_scalar(
+                "SELECT result_sha FROM forge.merge_result_refs                  WHERE merge_request_id = $1 AND head_sha = $2 AND target_sha = $3",
+            )
+            .bind(mr.get())
+            .bind(head.as_str())
+            .bind(target.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+            let Some(existing) = existing else {
+                return Ok(None);
+            };
+            RecordedResult {
+                result: oid(mr, "result_sha", &existing)?,
+                created: false,
+                pipeline_enqueued: false,
             }
         };
         tx.commit().await.map_err(|e| query_error(QUERY, e))?;

@@ -13,6 +13,8 @@
 //!   `update-ref` transaction on the value read just before. A lost swap is
 //!   read again: already at the wanted value is success, anything else is
 //!   the `FG-GIT-0003` of the refused transaction (the job retries).
+//! - [`Git::merge_result_exists`]: `cat-file -e` of a stored merge result
+//!   before it is reused (`gc` may have pruned it once the ref moved on).
 //!
 //! The ref is under `refs/merge-requests/`, so Smart HTTP never advertises
 //! it, receive-pack refuses to write it (FG-GIT-0010 first) and the want
@@ -22,11 +24,12 @@
 use std::time::Duration;
 
 use forge_core::{ObjectId, RefName, RepoId};
-use forge_errors::ForgeError;
+use forge_errors::{ErrorCode, ForgeError};
 
 use crate::command::Git;
 use crate::commit::{CommitIdentity, NewCommit};
 use crate::refs::RefChange;
+use crate::revision::Revision;
 use crate::storage::StorageRoot;
 
 /// The author and committer of every merge result (not a person: the
@@ -36,6 +39,9 @@ const IDENTITY: (&str, &str, &str) = (
     "merge-result@gitstation.invalid",
     "gitstation",
 );
+
+/// `cat-file -e` prints nothing on success; its output is capped tight.
+const EXISTS_OUTPUT_BYTES: usize = 1024;
 
 /// What [`Git::set_merge_result_ref`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +157,38 @@ impl Git {
                     .with_context("ref", name.as_str().to_owned())
                     .with_context("iid", iid))
             }
+        }
+    }
+
+    /// Whether the commit `result` is in repository `id` (`cat-file -e`:
+    /// exit 0 present, 1 absent; the id after `--end-of-options`). A merge
+    /// result stored for a pair is checked before it is reused: once the
+    /// ref moved on, `gc` may have pruned it (review MEDIUM).
+    /// `FG-GIT-0002` on timeout, `FG-GIT-0003` for any other exit.
+    pub async fn merge_result_exists(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        result: &ObjectId,
+        timeout: Duration,
+    ) -> Result<bool, ForgeError> {
+        let repo = storage.existing(id)?;
+        let captured = self
+            .command("cat-file")
+            .arg("-e")
+            .revision(Revision::object_id(result.as_str())?)
+            .repo(&repo)
+            .timeout(timeout)
+            .output_accepting(EXISTS_OUTPUT_BYTES, &[0, 1])
+            .await
+            .map_err(|e| e.with_context("repo_id", id.get()))?;
+        match captured.exit_code {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            Some(_) | None => Err(ForgeError::new(ErrorCode::GitProcessFailed)
+                .with_context("subcommand", "cat-file")
+                .with_context("reason", "unexpected_output")
+                .with_context("repo_id", id.get())),
         }
     }
 

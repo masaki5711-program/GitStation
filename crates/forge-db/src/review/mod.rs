@@ -78,7 +78,7 @@ pub use discussions::{
 };
 pub use merge_results::{
     merge_result_of, merge_result_of_read, merge_results, merge_runs_for, record_merge_result,
-    MergeResultRow, RecordedResult,
+    replace_merge_result, MergeResultRow, RecordedResult,
 };
 pub use mergeability::{
     begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,

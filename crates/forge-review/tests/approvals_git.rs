@@ -3145,3 +3145,59 @@ async fn a_run_superseded_while_it_waits_for_the_refs_lock_leaves_the_merge_ref(
     assert_eq!(w.merge_ref().as_deref(), Some(r2.as_str()));
     w.t.drop_now().await;
 }
+
+/// Review MEDIUM (M4 C7): a stored merge result is reused only while its
+/// commit exists. The target goes A → B → A after `gc` pruned the A-result
+/// (no ref keeps it once the merge ref moved on): a fresh commit is
+/// written, the row points at it, the ref moves to it and a pipeline is
+/// asked for on it.
+#[tokio::test]
+async fn a_pruned_merge_result_is_written_again_when_its_pair_returns() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let r1 = w.merge_ref().expect("merge ref");
+    w.advance_main(&[("README.md", "base\n"), ("other.txt", "o\n")])
+        .await;
+    let r2 = w.merge_ref().expect("moved");
+    assert_ne!(r2, r1);
+    // Pruned: the loose object of r1 is gone.
+    let loose = w.path.join("objects").join(&r1[..2]).join(&r1[2..]);
+    std::fs::remove_file(&loose).expect("remove the loose object");
+    // The target goes back: the pair (head, base) returns.
+    plumb(&w.path, &["update-ref", "refs/heads/main", &w.base], None);
+    w.browser.invalidate(w.repo);
+    let report = w.check_again().await;
+    let fresh = report.merge_result.expect("merge result");
+    assert_ne!(fresh.as_str(), r1, "a fresh commit, not the pruned one");
+    assert_eq!(w.merge_ref().as_deref(), Some(fresh.as_str()));
+    assert_eq!(
+        plumb(
+            &w.path,
+            &["rev-parse", &format!("{}^1", fresh.as_str())],
+            None
+        ),
+        w.base
+    );
+    let rows = forge_db::review::merge_results(&w.t.db, w.mr.id)
+        .await
+        .expect("rows");
+    assert_eq!(rows.len(), 2, "the pair's row is updated, not doubled");
+    let row = rows
+        .iter()
+        .find(|r| r.target.as_str() == w.base)
+        .expect("the base pair");
+    assert_eq!(row.result, fresh);
+    assert_eq!(
+        w.mr_pipeline_shas().await,
+        [r1, r2, fresh.as_str().to_owned()],
+        "a pipeline on the fresh merge result"
+    );
+    // A present result is still reused.
+    let again = w.check_again().await;
+    assert_eq!(again.merge_result.as_ref(), Some(&fresh));
+    assert_eq!(w.mr_pipeline_shas().await.len(), 3);
+    w.t.drop_now().await;
+}

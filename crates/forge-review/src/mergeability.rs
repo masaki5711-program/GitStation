@@ -24,7 +24,8 @@
 //!    a clean merge becomes the merge result — the commit of the trial
 //!    merge's tree with the parents (target tip, head), written once per
 //!    (head, target tip) pair (an earlier run's row is reused, no second
-//!    commit), stored in `merge_result_refs` with the merge request
+//!    commit, while its commit exists — a pruned one is written again and
+//!    replaces it in the row, with a pipeline on it), stored in `merge_result_refs` with the merge request
 //!    pipeline on it ([`forge_db::review::record_merge_result`]), and
 //!    `refs/merge-requests/<iid>/merge` pointed at it. A conflict (or no
 //!    target, unrelated histories, no version) deletes the ref: no merge
@@ -495,19 +496,49 @@ impl Mergeability {
             }
             return Ok((None, Some(change)));
         };
-        // Once per pair: an earlier run's result is reused (no commit).
+        // Once per pair: an earlier run's result is reused (no commit) —
+        // while its commit exists (`gc` may have pruned it once the ref moved
+        // on; then a fresh one replaces it in the row, review MEDIUM).
         let reused = review::merge_result_of(db, mr, head, tip).await?;
-        let written = match &reused {
-            Some(sha) => sha.clone(), // clone: the record step owns its id
-            None => {
-                self.git
+        let recorded = match reused {
+            Some(sha)
+                if self
+                    .git
+                    .merge_result_exists(&self.storage, repo, &sha, left(lock))
+                    .await? =>
+            {
+                review::record_merge_result(db, request_id, mr, (head, tip), &sha).await?
+            }
+            Some(pruned) => {
+                let fresh = self
+                    .git
                     .write_merge_result(&self.storage, repo, iid, (tree, tip, head), left(lock))
+                    .await?;
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.review.merge_result_rewritten",
+                    request_id = %request_id,
+                    merge_request_id = mr.get(),
+                    iid,
+                    check_seq = seq,
+                    head_sha = head.as_str(),
+                    target_sha = tip.as_str(),
+                    pruned_sha = pruned.as_str(),
+                    result_sha = fresh.as_str(),
+                    "a stored merge result was pruned; wrote it again"
+                );
+                review::replace_merge_result(db, request_id, mr, (head, tip), (&pruned, &fresh))
                     .await?
             }
+            None => {
+                let written = self
+                    .git
+                    .write_merge_result(&self.storage, repo, iid, (tree, tip, head), left(lock))
+                    .await?;
+                review::record_merge_result(db, request_id, mr, (head, tip), &written).await?
+            }
         };
-        let Some(recorded) =
-            review::record_merge_result(db, request_id, mr, (head, tip), &written).await?
-        else {
+        let Some(recorded) = recorded else {
             return Ok((None, None));
         };
         if !self.still_latest(db, mr, seq).await? {
