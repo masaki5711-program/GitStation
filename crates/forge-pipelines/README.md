@@ -61,7 +61,7 @@ push・MR の版から作られたパイプラインは人の操作ではない�
 
 - `forge doctor` の `ci.pipelines`: 24 時間以内の `error` のパイプライン、7 日以内に dead になった `ci.pipeline_create` のジョブで fail（FG-CI-0002、
   runbook `ci-pipelines`）。24 時間動いていない `pending` / `running` は warn。
-- 保持期間は 90 日（ログと同じ。計画 14 §4.1）。消すジョブは C5 で入れる。それまではプロジェクトの purge だけが消す。
+- 保持期間は 90 日（ログと同じ。計画 14 §4.1）。消すジョブは C5 の後の MR（C5b）。それまではプロジェクトの purge だけが消す。
 
 ## エラーコード
 
@@ -83,14 +83,29 @@ push・MR の版から作られたパイプラインは人の操作ではない�
 - ジョブの完了で、`needs` を満たしたジョブを `pending` に、失敗・取り消しの下流を `canceled` にし、パイプラインの状態をジョブから決める。
 - シークレット: 取得の応答の `secrets_allowed` は `StoredPipeline::secrets_allowed()` だけ。偽なら名前も渡さない（値は C6）。
 
+## CI の出力（M4 C5、`outputs`・`fingerprint`）
+
+- `Pipelines::job_log`（CiLogRead）・`Pipelines::diagnosis`（PipelineDiagnosisRead）: `forge_db::ci_outputs::*_decided` を通して読む。
+  `decide` は `forge_auth::authorize_ci_output`（パイプラインの印 `copy_mark` と、ルートが測った既定のブランチの先端の印、
+  `Forge-Context-Audience: agent` の宣言）。AI の相手は両方が `Open` のときだけ、それ以外は FG-AUTH-0022。判定の前に本文を読まない。
+- マスク（`fingerprint::mask`）: forge のトークン（`fg?_<16 hex>_…`、`gss_…`）、`Authorization:` の値、URL の userinfo のパスワード、
+  PEM の秘密鍵。ページの前後 512 バイトを文脈にして、ページの端で切れた秘密も隠す。読む人に関係なく、ログのどのページにも、指紋の抜粋にも。
+  CI 変数の値のマスクは C6。
+- 指紋（`fingerprint::digest`、計画 04 P-6）: 失敗したジョブのログの末尾 256 KiB の失敗の行（最後の 20 行）から、時刻・時間・UUID・
+  16 進の id・一時パス・数を除いて SHA-256、`fp_` + 16 桁。ジョブの名前は含めない。ログが無ければジョブのエラーコードで作る。
+- worker のタスク `ci_outputs`（5 秒ごと）: `report_pipeline_checks`（`ci/pipeline` を system・ラベル `forge-ci` で書く。pending →
+  queued、running → in_progress、succeeded / skipped → success、failed / invalid → failure、error → error、canceled → neutral。
+  コミットの最新のパイプラインだけが書く）と `fingerprint_failures`（1 回 20 件）。MR のパイプラインが成功すると、同じ MR の前の
+  パイプラインで失敗した指紋に「直した MR」を記録する（P-7、決定的）。
+
 ## 後の MR
 
 - C3（済み）: Runner がジョブを取り、状態とパイプラインの状態を進める（上の「Runner の API」）。
 - C4: ジョブの fetch の Smart HTTP（`refs/pipelines/<id>/head`）と `forge-runner`。スクリプトは `definition_hash` の `.forge-ci.yml` から読む。
-- C5: CI の出力の読み取りを `copy_mark` で判定する（`undecided` はエージェントに閉じる）。今のルートはメタデータだけ。
+- C5（済み）: CI の出力の読み取りを `copy_mark` と先端の印で判定する（`undecided` はエージェントに閉じる）。上の「CI の出力」。
 - C12: 手動・定期の実行の保護（今は保護されない扱い）。
 - C3 / C6: シークレットは `secrets_allowed()` だけで判定する（上）。C11: 再実行されたデプロイのジョブも人の `DeployApprove` を待つ。
-- C5: 90 日より古いパイプラインとジョブを消すジョブ。
+- C5b: 90 日より古いパイプライン・ジョブ・ログ・失敗の行を消すジョブ（C5 から分けた）。
 
 ## 依存の向き
 
