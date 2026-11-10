@@ -1081,7 +1081,9 @@
     "unbindBody": "This repository is unbound from {{name}} for every kanflow project below: all of them are removed together. Kanflow no longer sees its merge requests.",
     "unbindMembership": "The Reporter membership the binding gave the service account is removed.",
     "unbindAgain": "Binding it again is done from kanflow.",
-    "unbound": "The binding to {{name}} was removed."
+    "unbound": "The binding to {{name}} was removed.",
+    "settingCode": "code repository",
+    "settingShared": "shared specification repository"
   },
   "mrChecks": {
     "title": "Check results",

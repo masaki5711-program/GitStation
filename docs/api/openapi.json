@@ -3949,6 +3949,10 @@
             "format": "int64",
             "minimum": 1,
             "type": "integer"
+          },
+          "resolves_work_items": {
+            "description": "`true`: this is the kanflow project's code repository (its merge\nrequests resolve work items; one kanflow project only). `false`: a\nshared specification repository (03 §7.1, ADR-0016 Amendment X3).",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3957,6 +3961,7 @@
           "project_id",
           "external_project_id",
           "granted_membership",
+          "resolves_work_items",
           "created_by",
           "created_at"
         ],

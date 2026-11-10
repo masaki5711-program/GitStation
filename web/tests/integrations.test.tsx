@@ -39,6 +39,7 @@ const binding = (over: Record<string, unknown> = {}) => ({
   project_id: 7,
   external_project_id: 'KF-12',
   granted_membership: true,
+  resolves_work_items: true,
   created_by: 5,
   created_at: '2026-11-02T00:00:00Z',
   ...over,
@@ -310,7 +311,7 @@ describe('project settings: kanflow bindings', () => {
     // integration: the route removes every binding of the integration.
     const state = {
       items: [
-        binding({ external_project_id: 'KF-12', granted_membership: false }),
+        binding({ external_project_id: 'KF-12', granted_membership: false, resolves_work_items: false }),
         binding({ external_project_id: 'KF-30', granted_membership: true, created_at: '2026-11-03T00:00:00Z' }),
       ],
     };
@@ -329,6 +330,9 @@ describe('project settings: kanflow bindings', () => {
     expect(rows).toHaveLength(1);
     expect(within(rows[0] as HTMLElement).getByText('KF-12')).toBeTruthy();
     expect(within(rows[0] as HTMLElement).getByText('KF-30')).toBeTruthy();
+    // Each kanflow project shows its setting (code vs shared spec).
+    expect(within(rows[0] as HTMLElement).getByText('shared specification repository')).toBeTruthy();
+    expect(within(rows[0] as HTMLElement).getByText('code repository')).toBeTruthy();
     const buttons = within(section).getAllByRole('button', { name: /Unbind/ });
     expect(buttons).toHaveLength(1);
     expect(buttons[0]?.getAttribute('aria-label')).toBe('Unbind kanflow #4 (kanflow projects: KF-12, KF-30)');

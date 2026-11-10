@@ -1081,7 +1081,9 @@
     "unbindBody": "このリポジトリと {{name}} の結び付けを、下の Kanflow のプロジェクトすべてについて解除します。すべてまとめて解除され、Kanflow からこのリポジトリのマージリクエストが見えなくなります。",
     "unbindMembership": "結び付けでサービスアカウントに与えた Reporter のメンバーは削除されます。",
     "unbindAgain": "結び付け直すときは Kanflow から行います。",
-    "unbound": "{{name}} との結び付けを解除しました。"
+    "unbound": "{{name}} との結び付けを解除しました。",
+    "settingCode": "コードのリポジトリ",
+    "settingShared": "共有する仕様のリポジトリ"
   },
   "mrChecks": {
     "title": "チェックの結果",

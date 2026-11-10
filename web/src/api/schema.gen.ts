@@ -3480,6 +3480,12 @@ export interface components {
             kind: string;
             /** Format: int64 */
             project_id: number;
+            /**
+             * @description `true`: this is the kanflow project's code repository (its merge
+             *     requests resolve work items; one kanflow project only). `false`: a
+             *     shared specification repository (03 §7.1, ADR-0016 Amendment X3).
+             */
+            resolves_work_items: boolean;
         };
         /** @description Bindings (an integration's, or a project's: none or one). */
         IntegrationBindingList: {

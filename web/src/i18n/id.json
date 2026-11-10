@@ -1081,7 +1081,9 @@
     "unbindBody": "Repositori ini diputus dari {{name}} untuk setiap proyek kanflow di bawah: semuanya dihapus bersama. Kanflow tidak lagi melihat merge request-nya.",
     "unbindMembership": "Keanggotaan Reporter yang diberikan hubungan kepada akun layanan akan dihapus.",
     "unbindAgain": "Menghubungkan lagi dilakukan dari kanflow.",
-    "unbound": "Hubungan dengan {{name}} telah dihapus."
+    "unbound": "Hubungan dengan {{name}} telah dihapus.",
+    "settingCode": "repositori kode",
+    "settingShared": "repositori spesifikasi bersama"
   },
   "mrChecks": {
     "title": "Hasil pemeriksaan",

@@ -160,6 +160,10 @@ pub struct IntegrationBindingBody {
     /// The binding made the integration's service account a Reporter of
     /// the project (unbinding removes that membership).
     pub granted_membership: bool,
+    /// `true`: this is the kanflow project's code repository (its merge
+    /// requests resolve work items; one kanflow project only). `false`: a
+    /// shared specification repository (03 §7.1, ADR-0016 Amendment X3).
+    pub resolves_work_items: bool,
     #[schema(required = true)]
     pub created_by: Option<i64>,
     /// UTC, RFC 3339.
@@ -206,6 +210,7 @@ fn binding_body(b: IntegrationBinding) -> IntegrationBindingBody {
         project_id: b.project.get(),
         external_project_id: b.external_project_id,
         granted_membership: b.granted_membership,
+        resolves_work_items: b.resolves_work_items,
         created_by: b.created_by.map(UserId::get),
         created_at: b.created_at,
     }

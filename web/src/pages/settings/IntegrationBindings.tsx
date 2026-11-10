@@ -29,8 +29,10 @@ export function mayUnbind(role: Project['role'], isAdmin: boolean): boolean {
 export interface BindingGroup {
   integration_id: number;
   kind: string;
-  /** The kanflow project ids, in the server's order. */
-  projects: string[];
+  /** The kanflow projects, in the server's order, with their setting
+   * (`code`: this is that kanflow project's code repository; otherwise a
+   * shared specification repository). */
+  projects: { id: string; code: boolean }[];
   /** Any of them made the service account a Reporter. */
   granted_membership: boolean;
   /** The earliest binding. */
@@ -45,12 +47,12 @@ export function groupBindings(items: readonly IntegrationBinding[]): BindingGrou
       groups.set(b.integration_id, {
         integration_id: b.integration_id,
         kind: b.kind,
-        projects: [b.external_project_id],
+        projects: [{ id: b.external_project_id, code: b.resolves_work_items }],
         granted_membership: b.granted_membership,
         created_at: b.created_at,
       });
     } else {
-      g.projects.push(b.external_project_id);
+      g.projects.push({ id: b.external_project_id, code: b.resolves_work_items });
       g.granted_membership ||= b.granted_membership;
       if (b.created_at < g.created_at) g.created_at = b.created_at;
     }
@@ -70,8 +72,8 @@ export function IntegrationBindingsSection({ project }: { project: Project }) {
   const canUnbind = mayUnbind(project.role, session.user.is_admin);
   const nameOf = (b: Pick<BindingGroup, 'kind' | 'integration_id'>) =>
     t('integrations.name', { kind: b.kind, id: b.integration_id });
-  const listOf = (projects: string[]) =>
-    new Intl.ListFormat(i18n.language, { style: 'short', type: 'unit' }).format(projects);
+  const listOf = (projects: BindingGroup['projects']) =>
+    new Intl.ListFormat(i18n.language, { style: 'short', type: 'unit' }).format(projects.map((p) => p.id));
   const target = confirm.target;
   return (
     <Section id="integration-bindings-title" title={t('integrations.projectTitle')}>
@@ -110,8 +112,11 @@ export function IntegrationBindingsSection({ project }: { project: Project }) {
                     <td>
                       <ul className={styles.plainList}>
                         {b.projects.map((p) => (
-                          <li key={p}>
-                            <code>{p}</code>
+                          <li key={p.id}>
+                            <code>{p.id}</code>{' '}
+                            <span className={styles.muted}>
+                              {p.code ? t('integrations.settingCode') : t('integrations.settingShared')}
+                            </span>
                           </li>
                         ))}
                       </ul>
@@ -154,8 +159,8 @@ export function IntegrationBindingsSection({ project }: { project: Project }) {
             </p>
             <ul className={styles.plainList} aria-label={t('integrations.kanflowProject')}>
               {(target?.projects ?? []).map((p) => (
-                <li key={p}>
-                  <code>{p}</code>
+                <li key={p.id}>
+                  <code>{p.id}</code>
                 </li>
               ))}
             </ul>
