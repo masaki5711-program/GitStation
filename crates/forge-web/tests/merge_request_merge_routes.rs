@@ -2176,7 +2176,8 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
             "{why}: {body}"
         );
     }
-    for name in ["forge/risk", "ext/lint"] {
+    // Plan 14 C1: `forge/ci-lint` is forge's own, refused like every `forge/` name.
+    for name in ["forge/risk", "forge/ci-lint", "forge/doc-lint", "ext/lint"] {
         let mut r = report.clone();
         r["name"] = json!(name);
         let (status, body) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(r)).await;

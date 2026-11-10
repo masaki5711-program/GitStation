@@ -323,6 +323,7 @@ async fn a_failed_job_answers_error_for_every_check() {
     assert_eq!(
         names,
         vec![
+            ("forge/ci-lint", Some(CheckConclusion::Error)),
             ("forge/doc-lint", Some(CheckConclusion::Error)),
             ("forge/spec-lint", Some(CheckConclusion::Error)),
             ("forge/spec-trace", Some(CheckConclusion::Error)),

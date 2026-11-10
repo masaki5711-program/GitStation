@@ -14,6 +14,8 @@ publish.workspace = true
 # `CheckResultsSource`.
 [dependencies]
 forge-auth.workspace = true
+# Plan 14 C1: the pipeline definition lint (`forge/ci-lint`), pure.
+forge-ci.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
 # Plan 13 stage 2: the document lint (`forge/doc-lint`), pure.

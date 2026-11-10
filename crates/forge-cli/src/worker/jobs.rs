@@ -51,7 +51,8 @@ pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 /// `merge_request.conflict_scan` (M3 X6: conflicts between merge requests),
 /// `check.spec_drift` (M3 X2: `forge/spec-drift`), `check.risk` (M3 X7:
 /// `forge/risk`) and `check.spec_index` (M3 X4: `forge/spec-lint` and
-/// `forge/spec-trace`; plan 13 stage 2: `forge/doc-lint`).
+/// `forge/spec-trace`; plan 13 stage 2: `forge/doc-lint`; plan 14 C1:
+/// `forge/ci-lint`).
 pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHandler>>, ForgeError> {
     // clone: the handler owns its storage handles (paths and an Arc)
     let provision = ProvisionHandler::new(db, storage.clone())?;
