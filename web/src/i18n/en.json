@@ -1170,7 +1170,7 @@
       "external": "In another repository"
     },
     "referrers": {
-      "title": "Referenced by",
+      "title": "Documents that refer to this one",
       "total_one": "{{count}} document refers to this document.",
       "total_other": "{{count}} documents refer to this document.",
       "empty": "No document refers to this one yet. Write [[{{id}}]] in another document and it shows here.",
@@ -1180,7 +1180,11 @@
       "more": "Show more",
       "loaded_one": "{{count}} more document is shown.",
       "loaded_other": "{{count}} more documents are shown.",
-      "incomplete": "Some documents could not be read in full, so a referring document may be missing ({{code}})."
+      "incomplete": "Some documents could not be checked, so a document may be missing here. Reload in a while.",
+      "incompleteEmpty": "Not every document could be checked. Reload in a while.",
+      "code": "({{code}})",
+      "reload": "Reload",
+      "hidden": "You do not have access, so only its ID is shown."
     }
   }
 }

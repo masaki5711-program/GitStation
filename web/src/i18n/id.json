@@ -1170,7 +1170,7 @@
       "external": "Di repositori lain"
     },
     "referrers": {
-      "title": "Dirujuk oleh",
+      "title": "Dokumen yang merujuk dokumen ini",
       "total_one": "{{count}} dokumen merujuk dokumen ini.",
       "total_other": "{{count}} dokumen merujuk dokumen ini.",
       "empty": "Belum ada dokumen yang merujuk dokumen ini. Tulis [[{{id}}]] di dokumen lain dan dokumen itu muncul di sini.",
@@ -1180,7 +1180,11 @@
       "more": "Tampilkan lagi",
       "loaded_one": "{{count}} dokumen lagi ditampilkan.",
       "loaded_other": "{{count}} dokumen lagi ditampilkan.",
-      "incomplete": "Beberapa dokumen tidak dapat dibaca sepenuhnya, jadi dokumen yang merujuk mungkin tidak tercantum ({{code}})."
+      "incomplete": "Beberapa dokumen tidak dapat diperiksa, jadi mungkin ada dokumen yang tidak tercantum di sini. Muat ulang sebentar lagi.",
+      "incompleteEmpty": "Tidak semua dokumen dapat diperiksa. Muat ulang sebentar lagi.",
+      "code": "({{code}})",
+      "reload": "Muat ulang",
+      "hidden": "Anda tidak punya akses, jadi hanya ID-nya yang ditampilkan."
     }
   }
 }

@@ -184,7 +184,9 @@ function Document({
         ))}
       </div>
       <References refs={d.refs} project={project} keep={keep} />
-      <ReferencedBy projectId={projectId} project={project} docId={d.id} keep={keep} />
+      <ReferencedBy
+        key={`${d.id}@${ref_ ?? ''}`}
+        projectId={projectId} project={project} docId={d.id} keep={keep} />
     </article>
   );
 }

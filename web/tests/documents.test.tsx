@@ -157,8 +157,9 @@ const REFERRERS = {
     }),
     referrer({ id: 'QP-1', lang: 'en', title: 'Synthetic procedure (en)', refs: [{ line: 12, block: null }] }),
     referrer({ id: 'SEC-9', hidden: true, doctype: null, path: null, classification: null }),
+    referrer({ id: 'SEC-9', lang: 'id', hidden: true, doctype: null, path: null, classification: null }),
   ],
-  total: 3,
+  total: 4,
   next_after: null,
   incomplete: null,
 };
@@ -296,48 +297,53 @@ describe('the document screen', () => {
 });
 
 describe('the referenced-by panel', () => {
-  const panel = async () => {
-    const section = await screen.findByRole('region', { name: 'Referenced by' });
-    return section;
-  };
+  const RB = `${API}/RA-1/referenced-by`;
+  const panel = () => screen.findByRole('region', { name: 'Documents that refer to this one' });
+  const HIDDEN = 'You do not have access, so only its ID is shown.';
 
-  it('lists referrers with their lines, a translation badge, and a hidden one as its id only', async () => {
+  it('lists referrers with their lines and a translation badge; a hidden one is its id only', async () => {
     const { server } = await open(`${BASE}/RA-1?ref=v1.0`);
     const section = await panel();
     const link = await within(section).findByRole('link', { name: 'QP-1 Synthetic procedure' });
     expect(link.getAttribute('href')).toBe('/acme/forge-web/-/documents/QP-1?ref=v1.0');
+    expect(within(link).getByText('QP-1').tagName).toBe('CODE');
     const en = within(section).getByRole('link', { name: 'QP-1 Synthetic procedure (en)' });
     expect(en.getAttribute('href')).toBe('/acme/forge-web/-/documents/QP-1?ref=v1.0&lang=en');
     expect(within(section).getByText('Translation: en')).toBeTruthy();
     expect(within(section).getAllByText('Line 12')).toHaveLength(2);
     expect(within(section).getByText('Line 20 (to H-01)')).toBeTruthy();
-    expect(within(section).getByText('3 documents refer to this document.')).toBeTruthy();
-    // Hidden: the id and the note, no link, no title.
-    const hidden = within(section).getByText('SEC-9').closest('li') as HTMLElement;
-    expect(hidden.getAttribute('data-hidden')).toBe('true');
-    expect(within(hidden).queryByRole('link')).toBeNull();
-    expect(
-      within(hidden).getByText('More confidential than this document: only its ID is shown.'),
-    ).toBeTruthy();
-    expect(server.to('GET', `${API}/RA-1/referenced-by`)[0]?.query.get('ref')).toBe('v1.0');
+    expect(within(section).getByText('4 documents refer to this document.')).toBeTruthy();
+    // Hidden: the id, the referrer's own note and its language; no link, no title.
+    const hidden = within(section)
+      .getAllByText('SEC-9')
+      .map((e) => e.closest('li') as HTMLElement);
+    expect(hidden).toHaveLength(2);
+    for (const li of hidden) {
+      expect(li.getAttribute('data-hidden')).toBe('true');
+      expect(within(li).queryByRole('link')).toBeNull();
+      expect(within(li).getByText(HIDDEN)).toBeTruthy();
+    }
+    expect(within(hidden[1] as HTMLElement).getByText('Translation: id')).toBeTruthy();
+    expect(within(section).queryByText(/More confidential than this document/)).toBeNull();
+    expect(server.to('GET', RB)[0]?.query.get('ref')).toBe('v1.0');
     expect(server.unmatched).toEqual([]);
   });
 
   it('says what to write when nothing refers to the document', async () => {
     await open(`${BASE}/RA-1`, {
-      [`GET ${API}/RA-1/referenced-by`]: () =>
-        json(200, { ...REFERRERS, referrers: [], total: 0 }),
+      [`GET ${RB}`]: () => json(200, { ...REFERRERS, referrers: [], total: 0 }),
     });
     const section = await panel();
     expect((await within(section).findByTestId('referrers-empty')).textContent).toBe(
       'No document refers to this one yet. Write [[RA-1]] in another document and it shows here.',
     );
     expect(within(section).queryByRole('button', { name: 'Show more' })).toBeNull();
+    expect(within(section).queryByTestId('referrers-incomplete')).toBeNull();
   });
 
-  it('says a referrer may be missing when the read was incomplete, and shows no count for an agent', async () => {
-    await open(`${BASE}/RA-1`, {
-      [`GET ${API}/RA-1/referenced-by`]: () =>
+  it('keeps the list when the read was incomplete, says to reload, and shows no count for an agent', async () => {
+    const { server } = await open(`${BASE}/RA-1`, {
+      [`GET ${RB}`]: () =>
         json(200, {
           ...REFERRERS,
           total: null,
@@ -345,39 +351,122 @@ describe('the referenced-by panel', () => {
         }),
     });
     const section = await panel();
-    expect((await within(section).findByTestId('referrers-incomplete')).textContent).toBe(
-      'Some documents could not be read in full, so a referring document may be missing (FG-DOC-0002).',
+    const notice = await within(section).findByTestId('referrers-incomplete');
+    expect(notice.textContent).toContain(
+      'Some documents could not be checked, so a document may be missing here. Reload in a while.',
     );
+    expect(within(notice).getByText('(FG-DOC-0002)')).toBeTruthy();
+    expect(within(section).getByRole('link', { name: 'QP-1 Synthetic procedure' })).toBeTruthy();
     expect(within(section).queryByText(/refer to this document/)).toBeNull();
+    fireEvent.click(within(notice).getByRole('button', { name: 'Reload' }));
+    await waitFor(() => {
+      expect(server.to('GET', RB)).toHaveLength(2);
+    });
   });
 
-  it('pages on with Show more and moves the focus to the first new referrer', async () => {
-    const { server } = await open(`${BASE}/RA-1`, {
-      [`GET ${API}/RA-1/referenced-by`]: (c) =>
-        c.query.get('after') === 'QP-1.en'
-          ? json(200, {
-              ...REFERRERS,
-              referrers: [referrer({ id: 'WI-4', title: 'Synthetic instruction' })],
-              next_after: null,
-            })
-          : json(200, { ...REFERRERS, referrers: REFERRERS.referrers.slice(0, 2), next_after: 'QP-1.en' }),
+  it('says only that not everything was checked, with a reload, when the incomplete list is empty', async () => {
+    let incomplete = true;
+    await open(`${BASE}/RA-1`, {
+      [`GET ${RB}`]: () =>
+        json(
+          200,
+          incomplete
+            ? {
+                ...REFERRERS,
+                referrers: [],
+                total: 0,
+                incomplete: { error_code: 'FG-DOC-0002', reason: 'doc_files' },
+              }
+            : REFERRERS,
+        ),
     });
     const section = await panel();
-    const more = await within(section).findByRole('button', { name: 'Show more' });
-    fireEvent.click(more);
-    const next = await within(section).findByRole('link', { name: 'WI-4 Synthetic instruction' });
-    await waitFor(() => {
-      expect(document.activeElement).toBe(next);
+    const notice = await within(section).findByTestId('referrers-incomplete');
+    expect(notice.textContent).toContain('Not every document could be checked. Reload in a while.');
+    expect(within(section).queryByTestId('referrers-empty')).toBeNull();
+    incomplete = false;
+    fireEvent.click(within(notice).getByRole('button', { name: 'Reload' }));
+    expect(await within(section).findByRole('link', { name: 'QP-1 Synthetic procedure' })).toBeTruthy();
+    expect(within(section).queryByTestId('referrers-incomplete')).toBeNull();
+  });
+
+  it('pages on with Show more, moves the focus and announces the same words again', async () => {
+    const pages: Record<string, unknown> = {
+      '': { ...REFERRERS, referrers: [referrer({ id: 'A-1', title: 'First' })], next_after: 'A-1' },
+      'A-1': { ...REFERRERS, referrers: [referrer({ id: 'B-1', title: 'Second' })], next_after: 'B-1' },
+      'B-1': { ...REFERRERS, referrers: [referrer({ id: 'C-1', title: 'Third' })], next_after: null },
+    };
+    const { server } = await open(`${BASE}/RA-1`, {
+      [`GET ${RB}`]: (c) => json(200, pages[c.query.get('after') ?? '']),
     });
-    expect(server.to('GET', `${API}/RA-1/referenced-by`).at(-1)?.query.get('after')).toBe('QP-1.en');
-    expect(within(section).getByText('1 more document is shown.')).toBeTruthy();
+    const section = await panel();
+    fireEvent.click(await within(section).findByRole('button', { name: 'Show more' }));
+    const second = await within(section).findByRole('link', { name: 'B-1 Second' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(second);
+    });
+    const live = within(section).getByTestId('referrers-announce');
+    const firstSpan = live.firstElementChild;
+    expect(live.textContent).toBe('1 more document is shown.');
+    fireEvent.click(within(section).getByRole('button', { name: 'Show more' }));
+    const third = await within(section).findByRole('link', { name: 'C-1 Third' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(third);
+    });
+    // Same words, a new node: a screen reader announces it again.
+    expect(live.textContent).toBe('1 more document is shown.');
+    expect(live.firstElementChild).not.toBe(firstSpan);
+    expect(server.to('GET', RB).map((c) => c.query.get('after'))).toEqual([null, 'A-1', 'B-1']);
     expect(within(section).queryByRole('button', { name: 'Show more' })).toBeNull();
   });
 
-  it('shows the failure with its request id and retries', async () => {
+  it('keeps the list when Show more fails and shows the request id inline', async () => {
+    let fail = true;
+    await open(`${BASE}/RA-1`, {
+      [`GET ${RB}`]: (c) =>
+        c.query.get('after') === null
+          ? json(200, { ...REFERRERS, next_after: 'SEC-9.id' })
+          : fail
+            ? apiError(500, 'The documents could not be read.', 'req-refby-more', 'FG-DOC-0001')
+            : json(200, {
+                ...REFERRERS,
+                referrers: [referrer({ id: 'WI-4', title: 'Later' })],
+                next_after: null,
+              }),
+    });
+    const section = await panel();
+    fireEvent.click(await within(section).findByRole('button', { name: 'Show more' }));
+    expect(await within(section).findByText('The documents could not be read.')).toBeTruthy();
+    expect(within(section).getByText(/req-refby-more/)).toBeTruthy();
+    expect(within(section).getByRole('link', { name: 'QP-1 Synthetic procedure' })).toBeTruthy();
+    fail = false;
+    fireEvent.click(within(section).getByRole('button', { name: /try again/i }));
+    const later = await within(section).findByRole('link', { name: 'WI-4 Later' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(later);
+    });
+  });
+
+  it('starts over for another document', async () => {
+    const { server } = await open(`${BASE}/RA-1`, {
+      [`GET ${RB}`]: () => json(200, { ...REFERRERS, next_after: 'SEC-9.id' }),
+      [`GET ${API}/QP-1`]: () => json(200, { ...DOC, id: 'QP-1', title: 'Synthetic procedure' }),
+      [`GET ${API}/QP-1/referenced-by`]: () =>
+        json(200, { ...REFERRERS, id: 'QP-1', referrers: [], total: 0 }),
+    });
+    const section = await panel();
+    fireEvent.click(await within(section).findByRole('link', { name: 'QP-1 Synthetic procedure' }));
+    await screen.findByRole('heading', { level: 1, name: 'Synthetic procedure' });
+    const next = await panel();
+    expect(await within(next).findByTestId('referrers-empty')).toBeTruthy();
+    expect(server.to('GET', `${API}/QP-1/referenced-by`)[0]?.query.get('after')).toBeNull();
+    expect(within(next).getByTestId('referrers-announce').textContent).toBe('');
+  });
+
+  it('shows a first-read failure with its request id and retries', async () => {
     let fail = true;
     const { server } = await open(`${BASE}/RA-1`, {
-      [`GET ${API}/RA-1/referenced-by`]: () =>
+      [`GET ${RB}`]: () =>
         fail
           ? apiError(500, 'The documents could not be read.', 'req-refby-500', 'FG-DOC-0001')
           : json(200, REFERRERS),
@@ -388,9 +477,9 @@ describe('the referenced-by panel', () => {
     // The document itself is still shown.
     expect(screen.getByRole('heading', { level: 1, name: 'Synthetic assessment' })).toBeTruthy();
     fail = false;
-    fireEvent.click(within(section).getByRole('button', { name: /retry|try again/i }));
+    fireEvent.click(within(section).getByRole('button', { name: /try again/i }));
     expect(await within(section).findByRole('link', { name: 'QP-1 Synthetic procedure' })).toBeTruthy();
-    expect(server.to('GET', `${API}/RA-1/referenced-by`).length).toBeGreaterThan(1);
+    expect(server.to('GET', RB).length).toBeGreaterThan(1);
   });
 });
 

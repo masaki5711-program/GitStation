@@ -1,9 +1,11 @@
-// The "referenced by" panel of the document screen: the documents (and
-// translations) that refer to this one, with the lines that do, a page at a
-// time ("Show more" by `next_after`). A more confidential referrer is its id
-// only (plan 13 Q14): the server sends no title, and the panel says why.
-// When the server could not read every document, a notice says a referrer
-// may be missing; empty, loading and failure each say what to do next.
+// The "documents that refer to this one" panel of the document screen: the
+// documents (and translations) that refer to this one, with the lines that
+// do, a page at a time ("Show more" by `next_after`). A referrer the reader
+// may not see is its id only (plan 13 Q14): the server sends no title, and
+// the panel says why. When the server could not read every document, a
+// notice says so and offers a reload; empty, loading and failure each say
+// what to do next. The screen keys this panel by document and revision, so
+// a new document starts with a fresh paging state.
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
@@ -11,6 +13,7 @@ import { Link } from 'react-router';
 import { useReferrers } from '../../api/documents';
 import type { Referrer, Referrers } from '../../api/types';
 import { Loading } from '../../components/Loading';
+import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { documentUrl } from '../../features/repoUrls';
 import { RepoError } from './common';
@@ -33,7 +36,9 @@ export function ReferencedBy({
   const referrers = useReferrers(projectId, docId, keep.ref);
   const list = useRef<HTMLUListElement>(null);
   const before = useRef<number | null>(null);
-  const [announce, setAnnounce] = useState('');
+  // The live region's text and a counter: a new counter re-mounts the text,
+  // so the same words ("50 more", then "50 more") are announced again.
+  const [announce, setAnnounce] = useState({ text: '', n: 0 });
   const count = referrers.data?.pages.reduce((n, p) => n + p.referrers.length, 0) ?? 0;
   // After "Show more" the focus goes to the first new referrer, and the
   // live region says how many came (the button may be gone).
@@ -42,22 +47,25 @@ export function ReferencedBy({
     if (from === null || count <= from) return;
     const item = list.current?.querySelectorAll(':scope > li')[from];
     (item?.querySelector('a') ?? item?.querySelector('code'))?.focus();
-    setAnnounce(t('docs.referrers.loaded', { count: count - from }));
+    setAnnounce((a) => ({ text: t('docs.referrers.loaded', { count: count - from }), n: a.n + 1 }));
     before.current = null;
   }, [count, t]);
+  // A failed "Show more" moves nothing: a later success must not steal the
+  // focus for a click the reader no longer waits on.
+  useEffect(() => {
+    if (referrers.errorUpdatedAt > 0) before.current = null;
+  }, [referrers.errorUpdatedAt]);
+
+  const reload = () => {
+    before.current = null;
+    void referrers.refetch();
+  };
 
   let body;
   if (referrers.isPending) {
     body = <Loading />;
   } else if (referrers.isError && referrers.data === undefined) {
-    body = (
-      <RepoError
-        error={referrers.error}
-        onRetry={() => {
-          void referrers.refetch();
-        }}
-      />
-    );
+    body = <RepoError error={referrers.error} onRetry={reload} />;
   } else {
     const pages = referrers.data.pages;
     const first = pages[0];
@@ -66,12 +74,32 @@ export function ReferencedBy({
     body = (
       <>
         {incomplete !== undefined && (
-          <p className={styles.warning} role="status" data-testid="referrers-incomplete">
-            {t('docs.referrers.incomplete', { code: incomplete.error_code })}
-          </p>
+          <div className={styles.warning} role="status" data-testid="referrers-incomplete">
+            <p className={styles.warningText}>
+              {all.length === 0
+                ? t('docs.referrers.incompleteEmpty')
+                : t('docs.referrers.incomplete')}{' '}
+              <span className={styles.codeSuffix}>
+                {t('docs.referrers.code', { code: incomplete.error_code })}
+              </span>
+            </p>
+            <button
+              type="button"
+              className={`${controls.button} ${styles.busy}`}
+              aria-disabled={referrers.isFetching ? 'true' : undefined}
+              onClick={() => {
+                if (referrers.isFetching) return;
+                reload();
+              }}
+            >
+              {referrers.isFetching ? t('common.loading') : t('docs.referrers.reload')}
+            </button>
+          </div>
         )}
         {all.length === 0 ? (
-          <p data-testid="referrers-empty">{t('docs.referrers.empty', { id: docId })}</p>
+          incomplete === undefined && (
+            <p data-testid="referrers-empty">{t('docs.referrers.empty', { id: docId })}</p>
+          )
         ) : (
           <>
             {first !== undefined && first.total !== null && (
@@ -89,11 +117,11 @@ export function ReferencedBy({
             </ul>
           </>
         )}
-        <p role="status" className={styles.srOnly}>
-          {announce}
+        <p role="status" className={styles.srOnly} data-testid="referrers-announce">
+          <span key={announce.n}>{announce.text}</span>
         </p>
         {referrers.isError && (
-          <RepoError
+          <QueryError
             error={referrers.error}
             onRetry={() => {
               before.current = all.length;
@@ -105,7 +133,7 @@ export function ReferencedBy({
           <p>
             <button
               type="button"
-              className={controls.button}
+              className={`${controls.button} ${styles.busy}`}
               aria-disabled={referrers.isFetchingNextPage ? 'true' : undefined}
               onClick={() => {
                 if (referrers.isFetchingNextPage) return;
@@ -129,6 +157,17 @@ export function ReferencedBy({
   );
 }
 
+function LangBadge({ lang }: { lang: string | null }) {
+  const { t } = useTranslation();
+  if (lang === null) return null;
+  return (
+    <>
+      {' '}
+      <span className={styles.langBadge}>{t('docs.referrers.translation', { lang })}</span>
+    </>
+  );
+}
+
 function ReferrerItem({
   r,
   project,
@@ -142,7 +181,9 @@ function ReferrerItem({
   if (r.hidden) {
     return (
       <li data-hidden="true">
-        <code tabIndex={-1}>{r.id}</code> <span className={styles.refNote}>{t('docs.ref.hidden')}</span>
+        <code tabIndex={-1}>{r.id}</code>
+        <LangBadge lang={r.lang} />{' '}
+        <span className={styles.refNote}>{t('docs.referrers.hidden')}</span>
       </li>
     );
   }
@@ -150,16 +191,15 @@ function ReferrerItem({
   return (
     <li>
       <Link to={to}>
-        {r.id} {r.title ?? ''}
+        <code>{r.id}</code>
+        {r.title !== null && (
+          <>
+            {' '}
+            <span className={styles.refTitle}>{r.title}</span>
+          </>
+        )}
       </Link>
-      {r.lang !== null && (
-        <>
-          {' '}
-          <span className={styles.langBadge}>
-            {t('docs.referrers.translation', { lang: r.lang })}
-          </span>
-        </>
-      )}
+      <LangBadge lang={r.lang} />
       {r.refs.length > 0 && (
         <ul className={styles.refLines}>
           {r.refs.map((x, i) => (

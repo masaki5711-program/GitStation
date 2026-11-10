@@ -202,3 +202,23 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+.warningText {
+  margin: 0 0 var(--gs-space-2);
+}
+
+/* The error code after a notice: small, for whoever is asked for help. */
+.codeSuffix {
+  font-size: var(--gs-font-size-sm);
+  white-space: nowrap;
+}
+
+.refTitle {
+  margin-left: var(--gs-space-1);
+}
+
+/* "Show more" / reload under way: the button keeps the focus (aria-disabled). */
+.busy[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: progress;
+}
