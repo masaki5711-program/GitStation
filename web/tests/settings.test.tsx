@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { apiError, mockServer, type Call, type Handler, page, PROJECT, RESOLVE_GROUP, RESOLVE_PROJECT, SESSION, signedIn, GROUP } from './mock';
 import { json, renderApp } from './render';
+import { docLintMigration } from './merge-settings-fixtures';
 import { mergeSettings } from './mr-fixtures';
 import { repoRoutes } from './repo-fixtures';
 
@@ -23,6 +24,7 @@ const project = (over: Record<string, unknown> = {}) => ({
   'GET /api/v1/projects/7/merge-settings': () => json(200, mergeSettings()),
   'GET /api/v1/projects/7/approval-rules': () => json(200, { rules: [] }),
   'GET /api/v1/projects/7/integration-bindings': () => json(200, { items: [] }),
+  'GET /api/v1/projects/7/doc-lint/migration': () => json(200, docLintMigration()),
   'GET /api/v1/groups': () => page([]),
   'GET /api/v1/projects': () => page([]),
 });

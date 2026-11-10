@@ -3358,6 +3358,80 @@
         ],
         "type": "object"
       },
+      "DocLintMigrationBody": {
+        "additionalProperties": false,
+        "description": "A project's migration setting.",
+        "properties": {
+          "in_force": {
+            "description": "The date is today or later: broken references are warnings now.",
+            "type": "boolean"
+          },
+          "max_until": {
+            "description": "The latest date a new setting may name (today + 180 days).",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "set_at": {
+            "description": "When (UTC, RFC 3339; `null` without a setting).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "set_by": {
+            "description": "Who set the date last (`null` without a setting).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "today": {
+            "description": "The database's date (UTC), `YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/DocLintMigrationViewer"
+          },
+          "warn_until": {
+            "description": "`YYYY-MM-DD`, or `null` when there is no setting.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "warn_until",
+          "in_force",
+          "set_by",
+          "set_at",
+          "today",
+          "max_until",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "DocLintMigrationViewer": {
+        "additionalProperties": false,
+        "description": "What the caller could do now: a trial `authorize()` of the write (a\nhint for the screen; the route decides again).",
+        "properties": {
+          "can_manage": {
+            "description": "`PUT` / `DELETE …/doc-lint/migration`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_manage"
+        ],
+        "type": "object"
+      },
       "EntryBody": {
         "additionalProperties": false,
         "description": "One tree entry.",
@@ -5614,6 +5688,20 @@
         },
         "required": [
           "enforced"
+        ],
+        "type": "object"
+      },
+      "PutDocLintMigration": {
+        "additionalProperties": false,
+        "description": "`PUT …/doc-lint/migration`.",
+        "properties": {
+          "warn_until": {
+            "description": "`YYYY-MM-DD`: the last day (UTC) broken references are warnings.\nRequired; after today and at most 180 days ahead (the database's\ndate).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "warn_until"
         ],
         "type": "object"
       },
@@ -11545,6 +11633,129 @@
         },
         "summary": "A kanflow work item's context: the project's linked merge requests and the @req tests of its acceptance criteria, each with its source",
         "x-forge-action": "ContextRead"
+      }
+    },
+    "/api/v1/projects/{id}/doc-lint/migration": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_doc_lint_migration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "End the document lint migration now: broken document references are errors again (people only; Maintainer; 404 without a setting)",
+        "x-forge-action": "DocLintMigrationManage"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id_doc_lint_migration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocLintMigrationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's document lint migration: the date until which broken document references (ref_broken) are warnings in forge/doc-lint, whether it is in force, and the database's date and the latest date allowed (project read)",
+        "x-forge-action": "ProjectRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_doc_lint_migration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutDocLintMigration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocLintMigrationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Lower broken document references to warnings until warn_until (YYYY-MM-DD, after today and at most 180 days ahead by the database's date: 400 FG-DOC-0005); errors again from the next day by themselves (people only; Maintainer)",
+        "x-forge-action": "DocLintMigrationManage",
+        "x-forge-max-body-bytes": 1024
       }
     },
     "/api/v1/projects/{id}/integration-bindings": {

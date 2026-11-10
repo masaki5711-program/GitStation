@@ -1264,6 +1264,119 @@ async fn a_merge_request_version_gets_its_doc_lint_run() {
     w.t.drop_now().await;
 }
 
+/// Plan 13 Q13: the project's migration setting, written as a person's
+/// change would (an audit row in the same transaction). `days` after
+/// the database's date; a negative `days` is a setting that has ended
+/// (set 30 days before it ended).
+async fn migration_until(w: &World, days: i32) -> String {
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[format!(
+            "INSERT INTO forge.doc_lint_migrations (project_id, warn_until, set_by, set_at) \
+             VALUES ({p}, (now() AT TIME ZONE 'UTC')::date + {days}, {u}, \
+             now() + interval '1 day' * ({days} - 30))",
+            p = w.project.get(),
+            u = w.alice.get()
+        )],
+    )
+    .await;
+    let rows =
+        w.t.json_rows(&format!(
+            "SELECT to_char((now() AT TIME ZONE 'UTC')::date + {days}, 'YYYY-MM-DD') AS d"
+        ))
+        .await;
+    rows.first()
+        .and_then(|r| r.get("d"))
+        .and_then(serde_json::Value::as_str)
+        .expect("date")
+        .to_owned()
+}
+
+/// A merge request version whose only document problem is a broken
+/// reference; its `forge/doc-lint` run.
+async fn broken_reference_run(w: &mut World) -> forge_db::checks::StoredCheckRun {
+    let base = commit_files(&w.path, None, &[("README", "base\n")]);
+    w.push("main", Some(&base)).await;
+    let doc =
+        "---\ndoctype: qms.manual\nid: QM-001\ntitle: t\nowner: qa\n---\n\n本文。[[QM-404]]\n";
+    let head = commit_files(
+        &w.path,
+        Some(&base),
+        &[
+            (
+                ".forge/doctypes/qms.manual.yml",
+                "name: qms.manual\nid_pattern: '^QM-\\d{3}$'\n",
+            ),
+            ("qms/QM-001.md", doc),
+        ],
+    );
+    w.push("feature", Some(&head)).await;
+    let _mr = w.open("feature", "main").await;
+    w.drain().await;
+    doc_lint_run(w, &head).await.expect("a doc-lint run")
+}
+
+/// Plan 13 Q13: while the repository's migration date is in force (the
+/// database's date), a broken reference is a warning, the run passes and
+/// its summary says until when.
+#[tokio::test]
+async fn a_migration_in_force_lowers_broken_references_to_warnings() {
+    let mut w = World::new().await;
+    let until = migration_until(&w, 0).await;
+    let run = broken_reference_run(&mut w).await;
+    assert_eq!(
+        run.conclusion,
+        Some(forge_core::CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .starts_with(&format!("migrating: until {until}")),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary.contains("0 error(s) and 1 warning(s)"),
+        "{}",
+        run.summary
+    );
+    assert_eq!(run.annotations.len(), 1);
+    assert_eq!(
+        run.annotations[0].level,
+        forge_core::checks::CheckAnnotationLevel::Warning
+    );
+    w.t.drop_now().await;
+}
+
+/// Past its date the setting no longer applies — nothing was written at
+/// the expiry: the broken reference fails again and the summary does not
+/// say "migrating".
+#[tokio::test]
+async fn an_ended_migration_leaves_broken_references_errors() {
+    let mut w = World::new().await;
+    migration_until(&w, -1).await;
+    let run = broken_reference_run(&mut w).await;
+    assert_eq!(
+        run.conclusion,
+        Some(forge_core::CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(!run.summary.contains("migrating"), "{}", run.summary);
+    assert!(
+        run.summary
+            .contains("qms/QM-001.md:8 ref_broken — QM-404 [FG-DOC-0001]"),
+        "{}",
+        run.summary
+    );
+    assert_eq!(
+        run.annotations[0].level,
+        forge_core::checks::CheckAnnotationLevel::Failure
+    );
+    w.t.drop_now().await;
+}
+
 fn missing_spec_index_job(w: &World, attempts: u8, request: &str) -> forge_db::jobs::NewJob {
     let mut job = forge_db::checks::spec_index::spec_index_job(
         &forge_db::checks::spec_index::SpecIndexRequest {

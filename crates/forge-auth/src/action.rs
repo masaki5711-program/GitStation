@@ -383,6 +383,14 @@ actions! {
     /// mirror` works with an administrator's `admin` token. The URL passes
     /// the operator's mirror policy (`FG-INT-0021`) after the decision.
     PushMirrorManage,
+    // --- documents (plan 13 Q13, ADR-0026) ---
+    /// `PUT|DELETE /api/v1/projects/{id}/doc-lint/migration`: lower the
+    /// broken document references of `forge/doc-lint` to warnings until a
+    /// date (required, at most 180 days ahead), or end it now. A
+    /// repository governance setting like the merge settings: people only,
+    /// Maintainer and above; `api`; never acting for a person. Reading it
+    /// is `ProjectRead` (`GET …/doc-lint/migration`).
+    DocLintMigrationManage,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -524,6 +532,7 @@ impl Action {
                 | Action::WebhookDeliver
                 | Action::PushMirrorRead
                 | Action::PushMirrorManage
+                | Action::DocLintMigrationManage
         )
     }
 
@@ -635,6 +644,7 @@ impl Action {
             | Action::WebhookManage
             | Action::WebhookRedeliver
             | Action::PushMirrorManage
+            | Action::DocLintMigrationManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
@@ -750,6 +760,8 @@ impl Action {
             // M3 O2: the push mirror is an administrator's.
             | Action::PushMirrorRead
             | Action::PushMirrorManage
+            // Plan 13 Q13: a governance setting, a person's own decision.
+            | Action::DocLintMigrationManage
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

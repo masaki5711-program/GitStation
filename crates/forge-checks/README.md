@@ -80,8 +80,17 @@ taken from that listing, so the index equals `index_commit`'s). Documents are th
 `doctype` in any folder, their types `.forge/doctypes/*.yml`; the lint is `forge_doc::lint::lint`, the same
 as `gstn doc lint`. `success` / `failure` (FG-DOC-0001; FG-DOC-0003 for a type definition that cannot be
 used) / `neutral` (FG-DOC-0002: `DocLimits` — 50 000 tree entries, 2000 `.md`, 100 over the parser's limit (each read only up to the limit + 1 byte, like gstn), 32 MiB in all,
-64 definitions — never a silent pass). Broken references are errors (plan 13 Q13); the repository setting
-that lowers them during a migration is not built yet.
+64 definitions — never a silent pass). Broken references are errors (plan 13 Q13) unless the project's
+**migration setting** is in force: `doc_lint::assess_doc_lint_with(tree, Some(until))` lowers only `ref_broken`
+to warnings (annotations of level `warning`; only lowered problems → `success`, or `neutral` with a bound hit),
+and the summary's first line is `migrating: until YYYY-MM-DD`. The job reads the date in force with
+`forge_db::checks::doc_lint_migration::in_force`, compared in SQL with the database's date (UTC) — never this
+host's clock; past the date it is errors again with nothing written. `doc_migration::DocLintMigrations`
+(`Checks::doc_lint_migrations`) is the setting's read and its two commands for `GET|PUT|DELETE
+/api/v1/projects/{id}/doc-lint/migration` (`ProjectRead` / `DocLintMigrationManage`: people only,
+Maintainer): the date's shape here (`FG-WEB-0006 param=warn_until`), its bounds — after today, at most 180 days
+ahead — by forge-db (`FG-DOC-0005`), and the decision again inside the transaction (`Authorized::reconfirm`;
+`tests/decided_callers.rs` keeps `set_doc_lint_migration_decided` / `clear_doc_lint_migration_decided` here).
 
 **forge's risk check (M3 X7, ADR-0023 Amendment X7)**: `risk::Risk` evaluates `forge/risk` for one
 `check.risk` job (the same head; enqueued by forge-db's `risk` subscriber): the target branches of the

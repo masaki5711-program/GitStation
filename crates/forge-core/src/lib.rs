@@ -10,6 +10,7 @@ pub mod config;
 pub mod cursor;
 pub mod dedup_key;
 pub mod discussion;
+pub mod doc_lint_migration;
 pub mod event_type;
 // ── M3 I1c: the event feed's visible set and cursor position ──
 pub mod feed;

@@ -17,7 +17,8 @@
 //!    requirement and tag at the head is new);
 //! 4. [`assess_lint`] on the head and [`assess_trace`] on
 //!    `forge_core::spec_index::trace_merge_request`, and
-//!    [`crate::doc_lint::assess_doc_lint`] on the head's documents, all
+//!    [`crate::doc_lint::assess_doc_lint_with`] on the head's documents
+//!    (with the repository's migration date in force, plan 13 Q13), all
 //!    written with `forge_db::checks::record_forge_check_run` (no reporter).
 //!
 //! Conclusions — `forge/spec-lint`: `success` (no problem), `failure` (a
@@ -57,7 +58,7 @@ use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{Browser, RefLookup};
 
-use crate::doc_lint::{assess_doc_lint, DocLimits, DocTree};
+use crate::doc_lint::{assess_doc_lint_with, DocLimits, DocTree};
 use crate::spec_index::{index_commit, index_head, IndexLimits, Indexed, Tags};
 use crate::spec_refs::RepoConfigRead;
 
@@ -420,6 +421,8 @@ async fn record(
 struct Evaluated {
     head: Indexed,
     docs: DocTree,
+    /// The document lint's migration date in force (plan 13 Q13).
+    migration: Option<String>,
     trace: MrTrace,
     compared: Compared,
     links_truncated: bool,
@@ -475,7 +478,7 @@ impl SpecChecks {
         };
         let lint_run = assess_lint(&e.head)?;
         let trace_run = assess_trace(&e.trace, &e.compared, e.links_truncated)?;
-        let doc_run = assess_doc_lint(&e.docs)?;
+        let doc_run = assess_doc_lint_with(&e.docs, e.migration.as_deref())?;
         let lint = record(&self.db, request, request_id, &lint_run).await?;
         let trace = record(&self.db, request, request_id, &trace_run).await?;
         let doc_lint = record(&self.db, request, request_id, &doc_run).await?;
@@ -491,6 +494,7 @@ impl SpecChecks {
             doc_lint_conclusion = doc_run.conclusion.map(CheckConclusion::as_str),
             doc_files = e.docs.markdown.len(),
             doc_incomplete = e.docs.incomplete,
+            doc_migration_until = e.migration.as_deref(),
             documents = e.head.index.documents.len(),
             tags = e.head.index.tags.len(),
             incomplete = e.head.index.incomplete,
@@ -563,6 +567,14 @@ impl SpecChecks {
             .collect();
         linked.sort();
         linked.dedup();
+        // Plan 13 Q13: the migration date in force, compared with the
+        // database's date (never this host's clock).
+        let migration = within(
+            "doc_lint_migration_load",
+            LOOKUP_TIMEOUT,
+            forge_db::checks::doc_lint_migration::in_force(&self.db, project),
+        )
+        .await?;
         // One read of the head for both the index and the documents.
         let (head, docs) = index_head(
             &self.browse,
@@ -599,6 +611,7 @@ impl SpecChecks {
         Ok(Some(Evaluated {
             head,
             docs,
+            migration,
             trace,
             compared,
             links_truncated: links.truncated,

@@ -12,6 +12,9 @@ export function TextField({
   required,
   multiline,
   initialFocus,
+  type = 'text',
+  min,
+  max,
 }: {
   label: string;
   value: string;
@@ -22,6 +25,11 @@ export function TextField({
   multiline?: boolean;
   /** Modal: this field gets the focus when the dialog opens. */
   initialFocus?: boolean;
+  /** `date`: the browser's date picker (the value stays `YYYY-MM-DD`). */
+  type?: 'text' | 'date';
+  /** The bounds of a `date` field (`YYYY-MM-DD`). */
+  min?: string;
+  max?: string;
 }) {
   const id = useId();
   const helpId = `${id}-help`;
@@ -54,7 +62,9 @@ export function TextField({
       ) : (
         <input
           {...common}
-          type="text"
+          type={type}
+          min={min}
+          max={max}
           onChange={(e) => {
             onChange(e.target.value);
           }}

@@ -52,6 +52,8 @@ export type MergeAttempt = S['MergeAttemptBody'];
 export type LatestMerge = S['MergeStatusBody'];
 export type MergeSettings = S['MergeSettingsBody'];
 export type PutMergeSettingsBody = S['PutMergeSettings'];
+// Plan 13 Q13: the document lint migration setting.
+export type DocLintMigration = S['DocLintMigrationBody'];
 export type ApprovalRule = S['ApprovalRuleBody'];
 export type PutApprovalRuleBody = S['PutApprovalRule'];
 export type ProtectedRef = S['ProtectedRefBody'];

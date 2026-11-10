@@ -502,6 +502,23 @@
       "removeBody": "Merge ke {{pattern}} hanya memerlukan yang diminta aturan lain.",
       "removeConfirm": "Hapus syarat",
       "removed": "Syarat merge {{pattern}} dihapus."
+    },
+    "docLint": {
+      "title": "Pemeriksaan dokumen selama migrasi",
+      "intro": "Referensi rusak antar dokumen adalah error di pemeriksaan forge/doc-lint. Selama dokumen dipindahkan ke GitStation, Anda dapat menjadikannya peringatan sampai suatu tanggal. Setelah tanggal itu, otomatis menjadi error lagi.",
+      "none": "Referensi dokumen yang rusak adalah error.",
+      "inForce": "Migrasi: referensi rusak adalah peringatan sampai {{until}} (UTC). Mulai hari berikutnya menjadi error lagi.",
+      "ended": "Migrasi berakhir pada {{until}}: referensi rusak menjadi error lagi.",
+      "setAt": "Terakhir diatur {{at}}.",
+      "date": "Peringatan sampai (UTC)",
+      "help": "Wajib. Dari {{min}} sampai {{max}} (paling lama 180 hari). Tanggal mengikuti server (hari ini {{today}}, UTC).",
+      "required": "Masukkan hari terakhir migrasi.",
+      "range": "Masukkan tanggal dari {{min}} sampai {{max}}.",
+      "set": "Atur tanggal migrasi",
+      "clear": "Akhiri migrasi sekarang",
+      "saved": "Referensi rusak adalah peringatan sampai {{until}}.",
+      "cleared": "Migrasi berakhir: referensi rusak menjadi error lagi.",
+      "readOnly": "Hanya Pemelihara (atau lebih tinggi) yang dapat mengubah ini."
     }
   },
   "tokens": {

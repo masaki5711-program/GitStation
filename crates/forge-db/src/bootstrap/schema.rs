@@ -881,6 +881,8 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             [dml("forge_app"), ro("push_mirrors")?].concat(),
         ),
         ("forge.push_mirror_status", operational()),
+        // ── Plan 13 Q13: the document lint's migration (20261203100000) ──
+        ("forge.doc_lint_migrations", operational()),
     ])
 }
 
@@ -1035,6 +1037,8 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 O2: the push mirror (migration 20261130100000) ──
     "push_mirrors",
     "push_mirror_status",
+    // ── Plan 13 Q13: the document lint's migration (20261203100000) ──
+    "doc_lint_migrations",
 ];
 
 /// Every table the first migration creates.

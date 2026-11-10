@@ -774,6 +774,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/doc-lint/migration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's document lint migration: the date until which broken document references (ref_broken) are warnings in forge/doc-lint, whether it is in force, and the database's date and the latest date allowed (project read) */
+        get: operations["get_api_v1_projects_id_doc_lint_migration"];
+        /** Lower broken document references to warnings until warn_until (YYYY-MM-DD, after today and at most 180 days ahead by the database's date: 400 FG-DOC-0005); errors again from the next day by themselves (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_doc_lint_migration"];
+        post?: never;
+        /** End the document lint migration now: broken document references are errors again (people only; Maintainer; 404 without a setting) */
+        delete: operations["delete_api_v1_projects_id_doc_lint_migration"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/integration-bindings": {
         parameters: {
             query?: never;
@@ -3261,6 +3280,35 @@ export interface components {
             /** @description More than 500 discussions or 5 000 notes: the rest are not listed. */
             truncated: boolean;
         };
+        /** @description A project's migration setting. */
+        DocLintMigrationBody: {
+            /** @description The date is today or later: broken references are warnings now. */
+            in_force: boolean;
+            /** @description The latest date a new setting may name (today + 180 days). */
+            max_until: string;
+            /** Format: int64 */
+            project_id: number;
+            /** @description When (UTC, RFC 3339; `null` without a setting). */
+            set_at: string | null;
+            /**
+             * Format: int64
+             * @description Who set the date last (`null` without a setting).
+             */
+            set_by: number | null;
+            /** @description The database's date (UTC), `YYYY-MM-DD`. */
+            today: string;
+            viewer: components["schemas"]["DocLintMigrationViewer"];
+            /** @description `YYYY-MM-DD`, or `null` when there is no setting. */
+            warn_until: string | null;
+        };
+        /**
+         * @description What the caller could do now: a trial `authorize()` of the write (a
+         *     hint for the screen; the route decides again).
+         */
+        DocLintMigrationViewer: {
+            /** @description `PUT` / `DELETE …/doc-lint/migration`. */
+            can_manage: boolean;
+        };
         /** @description One tree entry. */
         EntryBody: {
             /** @description The octal mode as git prints it (`100644`, `040000`, …). */
@@ -4171,6 +4219,15 @@ export interface components {
              *     comes back by itself at the expiry).
              */
             for_minutes?: number | null;
+        };
+        /** @description `PUT …/doc-lint/migration`. */
+        PutDocLintMigration: {
+            /**
+             * @description `YYYY-MM-DD`: the last day (UTC) broken references are warnings.
+             *     Required; after today and at most 180 days ahead (the database's
+             *     date).
+             */
+            warn_until: string;
         };
         /**
          * @description `PUT …/merge-rule` (absent fields: off / 0, except
@@ -7317,6 +7374,101 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ContextWorkItemBody"];
                 };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_doc_lint_migration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocLintMigrationBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_doc_lint_migration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutDocLintMigration"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocLintMigrationBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_doc_lint_migration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error: registered code, localized message, request id */
             default: {

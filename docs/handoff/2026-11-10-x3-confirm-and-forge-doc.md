@@ -60,7 +60,10 @@ Kanflow v2: K4・承認待ちの欄・X3 を `main` に統合（`49720ae`）。�
 （`254c2e6`・`7d979bf`、レビューの修正済み、`main` には未統合）。
 
 **次にやること**
-1. Q13 のリポジトリの設定（追記のマイグレーション、Action と権限の表の行、ルートと `gstn`、`forge/doc-lint` で `ref_broken` を警告に、期限の表示）。
+1. ~~Q13 のリポジトリの設定（追記のマイグレーション、Action と権限の表の行、ルートと `gstn`、`forge/doc-lint` で `ref_broken` を警告に、期限の表示）。~~
+   **済み**（ブランチ `claude/clever-gates-j3elqg`）: 表 `doc_lint_migrations`（20261203100000）、`DocLintMigrationManage`（人だけ、Maintainer）、
+   `GET|PUT|DELETE …/doc-lint/migration`、`gstn doc migration`、`FG-DOC-0005`（期限は今日より後、180 日以内。今日は DB の日付）、
+   設定の画面の「移行中の文書の検査」。`docs/api/checks.md` の「移行中の警告」。
 2. `gstn doc fmt --migrate`、`spec_doc` の本文の読み取りを新しい解析に置き換える（`legacy` の比べる試験が条件）。
 3. 段 3（表示と文書の JSON）。Q14 の「ID だけ」はここで実装。
 4. Kanflow: パラメータの探索を `main` へ（利用者の指示の後）、AI が実績を読んで学習から外す候補を出す案（引き継ぎ 2026-11-05 の (1)）。

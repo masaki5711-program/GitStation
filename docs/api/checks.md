@@ -171,7 +171,27 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | `forge/doc-lint` | `forge/spec-lint` と同じ（同じジョブ `check.spec_index` が、同じ head の **1 回の木の一覧と読み取り**から書く。新しいジョブの種類は無い） | `success`: 文書（前付けに `doctype` を書いた `.md`、どのフォルダでも）が型（`.forge/doctypes/<型>.yml`）と他の文書に照らして規則を守る（文書が無ければ `success`）。`failure`: 規則違反（`FG-DOC-0001`、要約と注釈に `パス:行 規則 — 対象 [コード]`）、型の定義が使えない（`FG-DOC-0003`）。`neutral`: 違反は見つからないが上限に達した（`FG-DOC-0002`。上限のときは壊れた参照だけなら `neutral`）。`error`: 評価がやり直しても失敗した |
 
 - 検査は `gstn doc lint`（手元）と同じ `forge-doc` の lint を、同じバイトに対して行う（答えが一致する）。
-- 壊れた参照（`ref_broken`）は誤り（計画 13 Q13）。移行中に警告へ下げるリポジトリの設定（期限つき）は **まだ無い**。手元では `gstn doc lint --migration-warnings`。
+- 壊れた参照（`ref_broken`）は誤り（計画 13 Q13）。移行の間は、リポジトリの設定（下の「移行中の警告」）で期限まで **警告** に下げられる。
+  手元では `gstn doc lint --migration-warnings`（手元は DB を読めない。CI の答えが正）。
+
+#### 移行中の警告（計画 13 Q13、ADR-0026 の「決まったこと」）
+
+| 方法とパス | Action | 内容 |
+|---|---|---|
+| `GET /api/v1/projects/{id}/doc-lint/migration` | `ProjectRead`（`read_api`） | 設定（無ければ `warn_until: null`）、`in_force`（期限が今日以降）、`set_by` / `set_at`、サーバーの DB の日付 `today`（UTC）と、新しく決められる最後の日 `max_until`（today + 180 日）、`viewer.can_manage`（書き込みの試しの `authorize()`、目安だけ） |
+| `PUT …/doc-lint/migration` | `DocLintMigrationManage`（人だけ、Maintainer 以上、`api`、代理実行は不可） | 本文 `{"warn_until": "YYYY-MM-DD"}`（必須）。`200` で設定を返す。暦の日付でない: `400 FG-WEB-0006 param=warn_until`。今日以前か 180 日より先: `400 FG-DOC-0005`（`reason=not_in_future` / `too_far`、ログに `today`・`max_until`） |
+| `DELETE …/doc-lint/migration` | `DocLintMigrationManage` | `204`。設定が無ければ `404 FG-REPO-0005` |
+
+- **日付は DB の時計で比べる**: 「今日」は `(now() AT TIME ZONE 'UTC')::date`。Web サーバーや利用者の PC の時計は使わない。
+  期限の日（UTC）の終わりまで警告、翌日からは何も書かずに誤りへ戻る（期限の過ぎた行は残り、`in_force: false` と見える）。
+- 期限の上限は **180 日**（`forge_core::doc_lint_migration::MAX_DAYS`。表の CHECK `doc_lint_migrations_until` が裏付け）。延ばすときは
+  新しい日付を設定し直す（そのたびに監査の行が残る）。
+- 下げている間、`forge/doc-lint` の要約の 1 行目は `migrating: until YYYY-MM-DD — …`。`ref_broken` の注釈は `warning`、要約の行に
+  `(warning: migrating)`。壊れた参照**だけ**なら `success`（上限に達していれば `neutral`）。他の規則の違反と、ファイルごとの上限を超えて
+  並べなかった問題は誤りのまま（`failure`）。
+- 変更は監査の行 1 つ（プロジェクトに対して `doc_lint_migration.set`（`warn_until`・`previous`）/ `doc_lint_migration.cleared`、イベントなし）。
+  表は `forge.doc_lint_migrations`（マイグレーション 20261203100000、`audited`）。プロジェクトの削除（purge）で消える。
+- `gstn doc migration show|set|clear --project <id>`。画面はプロジェクトの設定の「移行中の文書の検査」。
 - 上限: 木の一覧 50,000 件、`.md` 2,000 個、解析の上限（1 MiB）を超える `.md` 100 個（それぞれ上限＋1 バイトだけ読む。`gstn` と同じ。`doctype` の無い大きな Markdown は上限に当たらない。超えると `doc_large_files`）、合計 32 MiB、型の定義 64 個。最初に当たった上限を要約に書く。
 
 ## 仕様の API（X4）

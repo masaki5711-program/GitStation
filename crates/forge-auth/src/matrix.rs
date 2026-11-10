@@ -1073,6 +1073,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         &crate::matrix_rows_act_as::generated_denies(),
         crate::matrix_rows_webhooks::WEBHOOK_ROWS.as_slice(),
         crate::matrix_rows_mirror::MIRROR_ROWS.as_slice(),
+        crate::matrix_rows_doc_lint::DOC_LINT_ROWS,
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,
         crate::matrix_rows_spec_refs::CONTEXT_READ_ROWS,

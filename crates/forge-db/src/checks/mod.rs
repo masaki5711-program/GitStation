@@ -1086,6 +1086,7 @@ pub use retention::{
     RETENTION_BATCH,
 };
 
+pub mod doc_lint_migration;
 pub mod risk;
 pub mod spec_drift;
 pub mod spec_index;

@@ -502,6 +502,23 @@
       "removeBody": "Merges into {{pattern}} will need only what the other rules ask for.",
       "removeConfirm": "Remove the conditions",
       "removed": "The merge conditions of {{pattern}} were removed."
+    },
+    "docLint": {
+      "title": "Document checks during a migration",
+      "intro": "Broken references between documents are errors in the forge/doc-lint check. While documents are being moved into GitStation, you can treat them as warnings until a date. After that date they are errors again by themselves.",
+      "none": "Broken document references are errors.",
+      "inForce": "Migrating: broken references are warnings until {{until}} (UTC). From the next day they are errors again.",
+      "ended": "The migration ended on {{until}}: broken references are errors again.",
+      "setAt": "Last set {{at}}.",
+      "date": "Warnings until (UTC)",
+      "help": "Required. From {{min}} to {{max}} (at most 180 days). Dates are the server's (today is {{today}}, UTC).",
+      "required": "Enter the last day of the migration.",
+      "range": "Enter a date from {{min}} to {{max}}.",
+      "set": "Set the migration date",
+      "clear": "End the migration now",
+      "saved": "Broken references are warnings until {{until}}.",
+      "cleared": "The migration ended: broken references are errors again.",
+      "readOnly": "Only a Maintainer (or higher) can change this."
     }
   },
   "tokens": {

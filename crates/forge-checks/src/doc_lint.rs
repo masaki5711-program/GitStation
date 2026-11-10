@@ -22,10 +22,16 @@
 //! `FG-DOC-0001`; a type definition that cannot be used: `FG-DOC-0003`),
 //! `neutral` (no problem, but a bound was hit; or only broken references
 //! while incomplete — the target may be in what was not read). Broken
-//! references are errors (plan 13 Q13); the repository setting that lowers
-//! them to warnings during a migration is not built yet.
+//! references are errors (plan 13 Q13) unless the repository's migration
+//! setting is in force ([`assess_doc_lint_with`]): then they are warnings
+//! (annotations of level `warning`), a run whose only problems they are
+//! concludes `success`, and the summary's first line is
+//! `migrating: until YYYY-MM-DD`. The date is the database's to compare
+//! (`forge_db::checks::doc_lint_migration`); past it, they are errors again
+//! with nothing written.
 
 use forge_core::checks::{CheckAnnotationLevel, CheckConclusion, DOC_LINT_CHECK};
+use forge_core::doc_lint_migration::LOWERED_RULE;
 use forge_doc::doctype::MAX_DOCTYPE_BYTES;
 use forge_doc::document::MAX_DOCUMENT_BYTES;
 use forge_doc::lint::{lint, FileReport, Source, DOCTYPES_DIR};
@@ -195,11 +201,12 @@ fn code_of(path: &str, rule: &str) -> ErrorCode {
     }
 }
 
-fn problem_line(path: &str, p: &forge_doc::document::Problem) -> String {
+fn problem_line(path: &str, p: &forge_doc::document::Problem, warning: bool) -> String {
     let code = code_of(path, p.rule).id();
+    let level = if warning { " (warning: migrating)" } else { "" };
     match &p.subject {
-        Some(s) => format!("{path}:{} {} — {s} [{code}]", p.line, p.rule),
-        None => format!("{path}:{} {} [{code}]", p.line, p.rule),
+        Some(s) => format!("{path}:{} {}{level} — {s} [{code}]", p.line, p.rule),
+        None => format!("{path}:{} {}{level} [{code}]", p.line, p.rule),
     }
 }
 
@@ -218,14 +225,50 @@ pub fn lint_tree(tree: &DocTree) -> Vec<FileReport> {
     lint(&doctypes, &documents)
 }
 
-/// The `forge/doc-lint` run of the head's documents (module docs).
+/// The `forge/doc-lint` run of the head's documents (module docs), with
+/// no migration in force.
 pub fn assess_doc_lint(tree: &DocTree) -> Result<forge_db::checks::NewCheckRun, ForgeError> {
+    assess_doc_lint_with(tree, None)
+}
+
+/// Whether `rule` is lowered to a warning while `migration` is in force.
+fn lowered(migration: Option<&str>, rule: &str) -> bool {
+    migration.is_some() && rule == LOWERED_RULE
+}
+
+/// The `forge/doc-lint` run of the head's documents (module docs).
+/// `migration`: the repository's migration date in force (plan 13 Q13,
+/// `forge_db::checks::doc_lint_migration::in_force`, compared with the
+/// database's date) — broken references (`ref_broken`) are then warnings
+/// and the summary's first line says `migrating: until <date>`. Every
+/// other rule, and the problems past a file's bound (their rule is not
+/// known), stay errors.
+pub fn assess_doc_lint_with(
+    tree: &DocTree,
+    migration: Option<&str>,
+) -> Result<forge_db::checks::NewCheckRun, ForgeError> {
     let reports = lint_tree(tree);
+    let warnings: usize = reports
+        .iter()
+        .map(|r| {
+            r.problems
+                .iter()
+                .filter(|p| lowered(migration, p.rule))
+                .count()
+        })
+        .sum();
     let problems: usize = reports
         .iter()
         .map(|r| r.problems.len().saturating_add(r.problems_dropped))
         .sum();
+    let errors = problems.saturating_sub(warnings);
     let mut lines = Vec::new();
+    if let Some(until) = migration {
+        lines.push(format!(
+            "migrating: until {until} — broken references ({LOWERED_RULE}) are warnings until \
+             then (repository setting; errors again from the next day, UTC)."
+        ));
+    }
     let conclusion = if problems == 0 {
         lines.push(format!(
             "No document problem at this commit ({} Markdown file(s) and {} type definition(s) \
@@ -244,18 +287,29 @@ pub fn assess_doc_lint(tree: &DocTree) -> Result<forge_db::checks::NewCheckRun, 
                 .iter()
                 .any(|p| code_of(&r.path, p.rule) == ErrorCode::DoctypeDefinitionInvalid)
         });
-        lines.push(format!(
-            "{problems} problem(s) in {} file(s) [{}]:",
-            reports.len(),
-            if definitions {
-                ErrorCode::DoctypeDefinitionInvalid.id()
-            } else {
-                ErrorCode::DocLintProblem.id()
-            }
-        ));
+        let code = if definitions {
+            ErrorCode::DoctypeDefinitionInvalid.id()
+        } else {
+            ErrorCode::DocLintProblem.id()
+        };
+        if migration.is_some() {
+            lines.push(format!(
+                "{errors} error(s) and {warnings} warning(s) in {} file(s) [{code}]:",
+                reports.len()
+            ));
+        } else {
+            lines.push(format!(
+                "{problems} problem(s) in {} file(s) [{code}]:",
+                reports.len()
+            ));
+        }
         let listed: Vec<String> = reports
             .iter()
-            .flat_map(|r| r.problems.iter().map(|p| problem_line(&r.path, p)))
+            .flat_map(|r| {
+                r.problems
+                    .iter()
+                    .map(|p| problem_line(&r.path, p, lowered(migration, p.rule)))
+            })
             .take(MAX_SUMMARY_PROBLEMS)
             .collect();
         let unlisted = problems.saturating_sub(listed.len());
@@ -266,7 +320,14 @@ pub fn assess_doc_lint(tree: &DocTree) -> Result<forge_db::checks::NewCheckRun, 
         let only_references = reports
             .iter()
             .all(|r| r.problems_dropped == 0 && r.problems.iter().all(|p| p.rule == "ref_broken"));
-        if tree.incomplete.is_some() && only_references {
+        if errors == 0 {
+            // Only lowered references: the migration lets them pass.
+            if tree.incomplete.is_some() {
+                CheckConclusion::Neutral
+            } else {
+                CheckConclusion::Success
+            }
+        } else if tree.incomplete.is_some() && only_references {
             CheckConclusion::Neutral
         } else {
             CheckConclusion::Failure
@@ -283,11 +344,16 @@ pub fn assess_doc_lint(tree: &DocTree) -> Result<forge_db::checks::NewCheckRun, 
         .iter()
         .flat_map(|r| {
             r.problems.iter().map(|p| {
+                let warning = lowered(migration, p.rule);
                 annotation(
                     &r.path,
                     p.line,
-                    CheckAnnotationLevel::Failure,
-                    problem_line(&r.path, p),
+                    if warning {
+                        CheckAnnotationLevel::Warning
+                    } else {
+                        CheckAnnotationLevel::Failure
+                    },
+                    problem_line(&r.path, p, warning),
                 )
             })
         })

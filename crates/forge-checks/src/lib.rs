@@ -36,6 +36,7 @@ use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
 pub mod doc_lint;
+pub mod doc_migration;
 pub mod risk;
 pub mod spec_checks;
 pub mod spec_drift;
@@ -43,6 +44,10 @@ pub mod spec_index;
 pub mod spec_refs;
 pub mod validate;
 
+pub use doc_migration::DocLintMigrations;
+pub use forge_db::checks::doc_lint_migration::{
+    DocLintMigration, MigrationRead, SetOutcome as MigrationSetOutcome,
+};
 pub use forge_db::checks::{
     CheckAnnotation, Grant, GrantOutcome, NewCheckRun, Reported, StoredCheckRun,
 };
@@ -169,6 +174,12 @@ fn ready(project: ProjectId, repo: ProjectRepository) -> Result<RepoId, ForgeErr
 impl Checks {
     pub fn new(db: Db, commits: Arc<dyn CommitProbe>) -> Self {
         Self { db, commits }
+    }
+
+    /// The document lint's migration setting on the same database (plan
+    /// 13 Q13).
+    pub fn doc_lint_migrations(&self) -> DocLintMigrations {
+        DocLintMigrations::new(self.db.clone()) // clone: pool handles
     }
 
     /// Whether `user` holds a grant of `namespace` on `project` now (the

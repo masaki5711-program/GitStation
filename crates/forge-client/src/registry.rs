@@ -1041,6 +1041,40 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &[],
         output: r#"{"type":"object","required":["files","errors","warnings","markdown_files","doctype_files","migration_warnings","incomplete"],"properties":{"files":{"type":"array","items":{"type":"object","required":["path","problems","problems_dropped"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","rule","subject","level","error_code"],"properties":{"line":{"type":"integer"},"rule":{"type":"string"},"subject":{"type":["string","null"]},"level":{"enum":["error","warning"]},"error_code":{"enum":["FG-DOC-0001","FG-DOC-0003"]}}}},"problems_dropped":{"type":"integer"}}}},"errors":{"type":"integer"},"warnings":{"type":"integer"},"markdown_files":{"type":"integer"},"doctype_files":{"type":"integer"},"migration_warnings":{"type":"boolean"},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
     },
+    // Plan 13 Q13: the repository setting (the server's forge/doc-lint).
+    CommandSpec {
+        name: "doc migration show",
+        summary: "A project's document lint migration: the date until which broken document references (ref_broken) are warnings in the server's forge/doc-lint, whether it is in force, and the server's date (UTC) and the latest date allowed.",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn doc migration show --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/doc-lint/migration"],
+        output: r#"{"type":"object","required":["project_id","warn_until","in_force","set_by","set_at","today","max_until","viewer"],"properties":{"warn_until":{"type":["string","null"]},"in_force":{"type":"boolean"},"today":{"type":"string"},"max_until":{"type":"string"},"viewer":{"type":"object","required":["can_manage"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc migration set",
+        summary: "Lower a project's broken document references to warnings in forge/doc-lint until a date (a Maintainer, a person). The date is required, after the server's today and at most 180 days ahead (400 FG-DOC-0005); from the next day they are errors again by themselves.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--until", "option", true, "The last day (UTC), YYYY-MM-DD."),
+        ],
+        examples: &["gstn doc migration set --project 7 --until 2027-03-31"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/doc-lint/migration"],
+        output: r#"{"type":"object","required":["project_id","warn_until","in_force","set_by","set_at","today","max_until","viewer"]}"#,
+    },
+    CommandSpec {
+        name: "doc migration clear",
+        summary: "End a project's document lint migration now: broken references are errors again (a Maintainer, a person; 404 FG-REPO-0005 without a setting). Needs --yes.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--yes", "flag", true, "Confirm."),
+        ],
+        examples: &["gstn doc migration clear --project 7 --yes"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/projects/{id}/doc-lint/migration"],
+        output: r#"{"type":"null"}"#,
+    },
     CommandSpec {
         name: "context work-item",
         summary: "Show a kanflow work item's context in a project: its linked merge requests and the @req tests of its acceptance criteria, each with its source (M3 X5).",

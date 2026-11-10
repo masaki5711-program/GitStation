@@ -44,6 +44,8 @@ pub mod store;
 pub mod webhooks;
 // M3 O2: the push mirror to GitLab.
 pub mod mirror;
+// Plan 13 Q13: the document lint migration setting.
+pub mod doc_migration;
 
 #[cfg(test)]
 mod tests;

@@ -75,6 +75,10 @@ pub struct AppState {
     /// serve` always sets them; without them those routes answer
     /// `FG-SYS-0001 reason=checks_unconfigured`).
     pub checks: Option<Arc<forge_checks::Checks>>,
+    /// The document lint's migration setting (plan 13 Q13; set with the
+    /// checks by [`AppState::with_checks`]; without it those routes answer
+    /// `FG-SYS-0001 reason=checks_unconfigured`).
+    pub doc_lint_migrations: Option<Arc<forge_checks::DocLintMigrations>>,
     /// The integrations' event feed (M3 I1c, ADR-0016 §7; `forge serve`
     /// always sets it; without it the feed routes answer `FG-SYS-0001
     /// reason=feed_unconfigured`).
@@ -176,6 +180,7 @@ impl AppState {
             hosting: None,
             review: None,
             checks: None,
+            doc_lint_migrations: None,
             feed: None,
             webhooks: None,
             push_mirrors: None,
@@ -266,6 +271,7 @@ impl AppState {
     /// The check run commands (M3 C1).
     #[must_use]
     pub fn with_checks(mut self, checks: forge_checks::Checks) -> Self {
+        self.doc_lint_migrations = Some(Arc::new(checks.doc_lint_migrations()));
         self.checks = Some(Arc::new(checks));
         self
     }
@@ -545,15 +551,50 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    binding_routes(act_as_routes(mirror_routes(webhook_routes(
-        notification_routes(check_routes(dev_status_routes(feed_routes(
-            integration_routes(service_account_routes(account_routes(history_routes(
-                browse_routes(git_routes(shell_routes(merge_request_routes(
-                    member_routes(move_routes(hosting_routes(fixed))),
+    doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
+        webhook_routes(notification_routes(check_routes(dev_status_routes(
+            feed_routes(integration_routes(service_account_routes(account_routes(
+                history_routes(browse_routes(git_routes(shell_routes(
+                    merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
                 )))),
             )))),
         )))),
     ))))
+}
+
+/// A project's document lint migration setting (plan 13 Q13, ADR-0026):
+/// broken document references lowered to warnings until a date.
+fn doc_lint_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::doc_lint_migration as d;
+    registry
+        .route_with(
+            Verb::Get,
+            d::ONE,
+            Action::ProjectRead,
+            "A project's document lint migration: the date until which broken document references (ref_broken) are warnings in forge/doc-lint, whether it is in force, and the database's date and the latest date allowed (project read)",
+            d::MigrationOf,
+            d::read,
+        )
+        .responds::<d::DocLintMigrationBody>(Verb::Get, d::ONE)
+        .route_with_body(
+            Verb::Put,
+            d::ONE,
+            Action::DocLintMigrationManage,
+            "Lower broken document references to warnings until warn_until (YYYY-MM-DD, after today and at most 180 days ahead by the database's date: 400 FG-DOC-0005); errors again from the next day by themselves (people only; Maintainer)",
+            d::MAX_BODY,
+            d::MigrationOf,
+            d::set,
+        )
+        .responds::<d::DocLintMigrationBody>(Verb::Put, d::ONE)
+        .route_with(
+            Verb::Delete,
+            d::ONE,
+            Action::DocLintMigrationManage,
+            "End the document lint migration now: broken document references are errors again (people only; Maintainer; 404 without a setting)",
+            d::MigrationOf,
+            d::clear,
+        )
+        .responds_no_content(Verb::Delete, d::ONE)
 }
 
 /// A kanflow project's repositories (M3 X3, plan 03 §7.1, ADR-0016

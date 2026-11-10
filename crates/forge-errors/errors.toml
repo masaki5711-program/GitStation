@@ -616,6 +616,19 @@ diagnosis = "gstn doc fmt --check --json lists `changed` (the files that would c
 fix = "Run gstn doc fmt (without --check) and commit the result."
 test = "fmt_check_exits_non_zero_when_a_file_would_change"
 
+[[error]]
+code = "FG-DOC-0005"
+name = "DocLintMigrationUntilInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "移行中の期限は、明日から 180 日後までの日付にしてください。"
+user_message_en = "The migration's end date must be between tomorrow and 180 days from today."
+user_message_id = "Tanggal akhir migrasi harus antara besok dan 180 hari dari hari ini."
+cause = "`PUT /api/v1/projects/{id}/doc-lint/migration` (plan 13 Q13, ADR-0026; `gstn doc migration set`) names a `warn_until` date that is today or earlier (`reason=not_in_future`) or more than 180 days after today (`reason=too_far`). Today is the database's date in UTC (`(now() AT TIME ZONE 'UTC')::date`), never the client's or the web server's clock. The bound keeps the downgrade of broken references (`ref_broken`) to warnings temporary: past its date they are errors again by themselves. A date that is not a calendar date `YYYY-MM-DD` is FG-WEB-0006 (`param=warn_until`). Nothing was stored."
+diagnosis = "The log event carries `reason`, `warn_until` (the date sent), `today` and `max_until` (the database's bounds at the time)."
+fix = "Choose a date between tomorrow and 180 days from today (UTC). To lengthen a migration, set a new date before or after the old one ends; to end it now, clear the setting (DELETE, `gstn doc migration clear`)."
+test = "a_migration_date_outside_the_bounds_is_refused"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]

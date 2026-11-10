@@ -49,6 +49,8 @@ mod webhook_ctx;
 // ── M3 O2: the push mirror ──
 mod matrix_rows_mirror;
 // ── end M3 O2 ──
+// Plan 13 Q13: the document lint's migration setting.
+mod matrix_rows_doc_lint;
 // ── M3 X1 ──
 mod matrix_rows_spec_refs;
 mod spec_ref;

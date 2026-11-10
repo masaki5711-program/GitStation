@@ -1817,6 +1817,41 @@ pub enum DocCommand {
         #[arg(long)]
         migration_warnings: bool,
     },
+    /// The repository setting that lowers broken references to warnings
+    /// in forge/doc-lint until a date (plan 13 Q13): show, set, clear.
+    #[command(disable_help_subcommand = true)]
+    Migration {
+        #[command(subcommand)]
+        command: DocMigrationCommand,
+    },
+}
+
+/// `gstn doc migration` (plan 13 Q13): the server's setting.
+#[derive(Subcommand, Debug)]
+pub enum DocMigrationCommand {
+    /// The project's migration date, whether it is in force, and the
+    /// server's date.
+    Show {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Lower broken references to warnings until a date (Maintainer).
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The last day (UTC), YYYY-MM-DD: after today and at most 180
+        /// days ahead.
+        #[arg(long, value_parser = parse_text, value_name = "YYYY-MM-DD")]
+        until: String,
+    },
+    /// End the migration now: broken references are errors again.
+    Clear {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// `gstn context` (M3 X5, plan 03 §6): the context API, read with your

@@ -4,7 +4,8 @@
 //! directory holding `.git`); its files are listed with `git ls-files`
 //! (tracked and untracked, `.gitignore` respected — what a commit would
 //! hold) and read from disk. Nothing is sent to the server, and no
-//! configuration or token is read.
+//! configuration or token is read. (`gstn doc migration`, the server's
+//! setting of plan 13 Q13, is [`crate::doc_migration`].)
 //!
 //! The lint and the format are forge-doc's, the same functions on the same
 //! bytes as the server's `forge/doc-lint` (forge-checks), so the answers
@@ -38,7 +39,7 @@ use forge_doc::lint::{lint as lint_documents, FileReport, Source, DOCTYPES_DIR};
 use forge_errors::ErrorCode;
 use serde_json::{json, Value};
 
-use crate::app::{emit, Io};
+use crate::app::{emit, EnvFn, Io};
 use crate::cli::{Cli, DocCommand};
 use crate::error::{ClientError, Result};
 
@@ -90,16 +91,23 @@ pub const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const BROKEN_REFERENCE: &str = "ref_broken";
 
 /// `gstn doc …` (module docs).
-pub fn doc(cli: &Cli, cmd: &DocCommand, io: &mut Io<'_>) -> Result<()> {
-    let cwd = std::env::current_dir().map_err(|e| {
-        ClientError::local(
-            ErrorCode::CliInputFailed,
-            format!("reason=cwd_unreadable kind={:?}", e.kind()),
-        )
-    })?;
-    let root = find_root(&cwd)?;
+/// `gstn doc migration` is the one subcommand that calls the server
+/// ([`crate::doc_migration`]); `fmt` and `lint` are local only.
+pub fn doc(cli: &Cli, cmd: &DocCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
+    let local = || -> Result<(PathBuf, PathBuf)> {
+        let cwd = std::env::current_dir().map_err(|e| {
+            ClientError::local(
+                ErrorCode::CliInputFailed,
+                format!("reason=cwd_unreadable kind={:?}", e.kind()),
+            )
+        })?;
+        let root = find_root(&cwd)?;
+        Ok((cwd, root))
+    };
     match cmd {
+        DocCommand::Migration { command } => crate::doc_migration::migration(cli, command, env, io),
         DocCommand::Fmt { check, paths } => {
+            let (cwd, root) = local()?;
             let targets = targets(&root, &cwd, paths)?;
             let out = fmt(&root, &targets, *check, &Limits::default())?;
             report_fmt(cli, io, &out)
@@ -108,6 +116,7 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, io: &mut Io<'_>) -> Result<()> {
             paths,
             migration_warnings,
         } => {
+            let (cwd, root) = local()?;
             let targets = targets(&root, &cwd, paths)?;
             let out = lint(&root, &targets, *migration_warnings, &Limits::default())?;
             report_lint(cli, io, &out)

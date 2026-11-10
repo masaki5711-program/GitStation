@@ -11,6 +11,8 @@ pub mod browse;
 pub mod checks;
 pub mod content;
 pub mod directory;
+// Plan 13 Q13: the document lint migration setting.
+pub mod doc_lint_migration;
 pub mod git;
 pub mod git_push;
 pub mod groups;

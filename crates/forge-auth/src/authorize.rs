@@ -1179,6 +1179,14 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             admin_only()
         }
 
+        // --- documents (plan 13 Q13, ADR-0026) ---
+        // The migration downgrade of broken references: a governance
+        // setting like the merge settings — people only, Maintainer.
+        (Action::DocLintMigrationManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1280,6 +1288,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::WebhookDeliver
             | Action::PushMirrorRead
             | Action::PushMirrorManage
+            | Action::DocLintMigrationManage
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }

@@ -661,6 +661,22 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
         Coverage::Command("webhook redeliver"),
     ),
+    // Plan 13 Q13 (ADR-0026): the document lint migration setting.
+    (
+        "GET",
+        "/api/v1/projects/{id}/doc-lint/migration",
+        Coverage::Command("doc migration show"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/doc-lint/migration",
+        Coverage::Command("doc migration set"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/doc-lint/migration",
+        Coverage::Command("doc migration clear"),
+    ),
     // M3 O2 (ADR-0024 Amendment O2): the push mirror to GitLab.
     (
         "GET",

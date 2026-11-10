@@ -108,3 +108,9 @@
 
 計画 13 §14 の Q13・Q14 は推奨で決まった（計画 13 §14 の末尾）。壊れた参照の「移行中は警告」はリポジトリの設定（DB）で、期限は必須
 （ADR-0027・0028 と同じく統制は DB）。機密の高い文書への参照は ID だけを見せる。
+
+**実装（2026-11-10）**: Q13 のリポジトリの設定を実装した。表 `forge.doc_lint_migrations`（追記のマイグレーション 20261203100000、
+監査つき）、Action `DocLintMigrationManage`（人だけ、Maintainer 以上。読むのは `ProjectRead`）、`GET|PUT|DELETE
+/api/v1/projects/{id}/doc-lint/migration`、`gstn doc migration show|set|clear`、プロジェクトの設定の画面。期限は必須で 180 日以内
+（`FG-DOC-0005`）、今日は DB の日付（UTC）。下げている間の `forge/doc-lint` は `ref_broken` だけを警告にし、要約の 1 行目に
+`migrating: until YYYY-MM-DD`。詳しくは `docs/api/checks.md` の「移行中の警告」。

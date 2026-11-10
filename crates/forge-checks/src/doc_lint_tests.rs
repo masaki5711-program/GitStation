@@ -5,7 +5,10 @@
 use forge_core::checks::{CheckAnnotationLevel, CheckConclusion};
 use forge_git::browse::{BlobListing, ListedBlob};
 
-use super::{assess_doc_lint, is_doctype_file, is_document_file, select, DocLimits, DocTree};
+use super::{
+    assess_doc_lint, assess_doc_lint_with, is_doctype_file, is_document_file, select, DocLimits,
+    DocTree,
+};
 
 const MANUAL_T: &str = "name: qms.manual\nid_pattern: '^QM-\\d{3}$'\n";
 
@@ -271,4 +274,78 @@ fn a_bound_hit_while_selecting_makes_the_run_neutral() {
         "{}",
         run.summary
     );
+}
+
+/// Plan 13 Q13: while the repository's migration date is in force, a
+/// broken reference is a warning (level `warning`), a run whose only
+/// problems they are passes, and the summary's first line says until when.
+#[test]
+fn a_migration_in_force_lowers_only_broken_references_to_warnings() {
+    let t = tree(
+        &[(".forge/doctypes/qms.manual.yml", MANUAL_T)],
+        &[("qms/QM-001.md", doc("QM-001", "本文。[[QM-404]]"))],
+    );
+    let run = assess_doc_lint_with(&t, Some("2026-12-31")).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    let first = run.summary.lines().next().expect("a line");
+    assert!(
+        first.starts_with("migrating: until 2026-12-31"),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains("0 error(s) and 1 warning(s) in 1 file(s)"),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains("qms/QM-001.md:8 ref_broken (warning: migrating) — QM-404 [FG-DOC-0001]"),
+        "{}",
+        run.summary
+    );
+    assert_eq!(run.annotations.len(), 1);
+    assert_eq!(run.annotations[0].level, CheckAnnotationLevel::Warning);
+
+    // Without the setting (or past its date: the caller passes None) the
+    // same tree fails, and nothing says "migrating".
+    let plain = assess_doc_lint_with(&t, None).expect("run");
+    assert_eq!(plain, assess_doc_lint(&t).expect("run"));
+    assert_eq!(plain.conclusion, Some(CheckConclusion::Failure));
+    assert!(!plain.summary.contains("migrating"), "{}", plain.summary);
+    assert_eq!(plain.annotations[0].level, CheckAnnotationLevel::Failure);
+}
+
+#[test]
+fn a_migration_never_lowers_another_rule() {
+    let t = tree(
+        &[(".forge/doctypes/qms.manual.yml", MANUAL_T)],
+        &[("qms/QM-001.md", doc("QM-1", "本文。[[QM-404]]"))],
+    );
+    let run = assess_doc_lint_with(&t, Some("2026-12-31")).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.starts_with("migrating: until 2026-12-31"));
+    assert!(run.summary.contains("1 warning(s)"), "{}", run.summary);
+    let levels: Vec<CheckAnnotationLevel> = run.annotations.iter().map(|a| a.level).collect();
+    assert!(levels.contains(&CheckAnnotationLevel::Warning));
+    assert!(levels.contains(&CheckAnnotationLevel::Failure));
+    // A bound hit with only lowered references: neutral, never a pass.
+    let mut cut = tree(
+        &[(".forge/doctypes/qms.manual.yml", MANUAL_T)],
+        &[("qms/QM-001.md", doc("QM-001", "本文。[[QM-404]]"))],
+    );
+    cut.left_out("doc_files");
+    let run = assess_doc_lint_with(&cut, Some("2026-12-31")).expect("run");
+    assert_eq!(run.conclusion, Some(CheckConclusion::Neutral));
 }

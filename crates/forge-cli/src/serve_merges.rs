@@ -135,6 +135,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DocIndexBounded
         | ErrorCode::DoctypeDefinitionInvalid
         | ErrorCode::DocFormatWouldChange
+        // Plan 13 Q13: an answer of the migration setting's route.
+        | ErrorCode::DocLintMigrationUntilInvalid
         // M3 X5: answers of the context API (never a merge's).
         | ErrorCode::RequirementNotFound
         | ErrorCode::ContextWithheld

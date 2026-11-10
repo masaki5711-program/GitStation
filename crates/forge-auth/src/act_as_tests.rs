@@ -110,6 +110,7 @@ fn act_as_merge_is_not_allowed() {
     for a in [
         Action::MergeRequestMerge,
         Action::MergeSettingsManage,
+        Action::DocLintMigrationManage,
         Action::ApprovalRuleManage,
         Action::CodeownersEnforcementToggle,
         Action::ProtectedRefManage,
