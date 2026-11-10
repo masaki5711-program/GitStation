@@ -606,3 +606,43 @@ async fn the_diagnosis_shows_the_fingerprinted_failure_masked() {
     assert!(!a.raw.contains(&JOB_TOKEN[..20]), "{}", a.raw);
     w.t.drop_now().await;
 }
+
+/// Review C5 (LOW): a pipeline or job of another project is the 404 of the
+/// path's project — for a person and an agent alike, the log and the
+/// diagnosis — and never another project's output.
+#[tokio::test]
+async fn another_projects_pipeline_or_job_is_not_found() {
+    let w = World::new().await;
+    let line = format!("{SECRET_LINE}\nerror: boom\n");
+    let theirs = w.failed(w.vault, CopyMark::Open, &[&line]).await;
+    let ours = w.failed(w.web, CopyMark::Open, &[&line]).await;
+    let crossed = [
+        theirs,
+        Ran {
+            pipeline: ours.pipeline,
+            job: theirs.job,
+        },
+    ];
+    for who in [|u| session(u), |u| agent(u)] {
+        for ran in crossed {
+            let a = w.log(w.web, ran, "", who(w.reporter)).await;
+            assert_eq!(
+                (a.status, a.code()),
+                (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+                "{ran:?}: {}",
+                a.raw
+            );
+            assert!(!a.raw.contains(SECRET_LINE), "{}", a.raw);
+        }
+        let a = w
+            .get(&diagnosis_uri(w.web, theirs), who(w.reporter), false)
+            .await;
+        assert_eq!(
+            (a.status, a.code()),
+            (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+            "{}",
+            a.raw
+        );
+    }
+    w.t.drop_now().await;
+}

@@ -151,6 +151,11 @@ pub struct AppState {
     pub spec_index_limiter: Arc<routes::namespaces::CallerLimiter>,
     /// M3 X4 review: the spec API's requests running per caller.
     pub spec_index_in_flight: Arc<routes::specs::InFlight>,
+    /// M4 C5 review: the CI log and diagnosis reads per caller
+    /// (`FG-WEB-0010 route=ci_output`) and those running per caller at
+    /// once (`reason=in_flight`).
+    pub ci_output_limiter: Arc<routes::namespaces::CallerLimiter>,
+    pub ci_output_in_flight: Arc<routes::specs::InFlight>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -207,6 +212,10 @@ impl AppState {
             spec_refs_budget: routes::spec_refs::BUDGET,
             spec_index_limiter: Arc::new(routes::specs::limiter()),
             spec_index_in_flight: Arc::default(),
+            ci_output_limiter: Arc::new(routes::pipelines::output_limiter()),
+            ci_output_in_flight: Arc::new(routes::specs::InFlight::new(
+                routes::pipelines::OUTPUT_MAX_IN_FLIGHT,
+            )),
         }
     }
 

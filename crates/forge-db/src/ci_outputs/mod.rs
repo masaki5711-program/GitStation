@@ -291,6 +291,34 @@ async fn read_page(
     ))
 }
 
+/// Whether `project` has `pipeline` (and, with `job`, that job in it):
+/// metadata only, on the read pool — what a CI output route looks up
+/// before it measures anything (a bogus id costs one indexed read).
+/// Errors: `FG-DB-*`.
+pub async fn output_exists(
+    db: &Db,
+    project: ProjectId,
+    pipeline: i64,
+    job: Option<i64>,
+) -> Result<bool, ForgeError> {
+    const QUERY: &str = "ci_outputs.output_exists";
+    db.within(QUERY, async {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM forge.ci_pipelines p \
+               WHERE p.id = $1 AND p.project_id = $2 \
+                 AND ($3::bigint IS NULL OR EXISTS (SELECT 1 FROM forge.ci_jobs j \
+                   WHERE j.id = $3 AND j.pipeline_id = p.id)))",
+        )
+        .bind(pipeline)
+        .bind(project.get())
+        .bind(job)
+        .fetch_one(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))
+    })
+    .await
+}
+
 // ── failure fingerprints (plan 04 P-6 / P-7) ──
 
 /// What the fingerprint sweep hands its `digest`: the end of one failed

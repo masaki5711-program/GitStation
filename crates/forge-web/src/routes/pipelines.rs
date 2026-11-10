@@ -635,6 +635,47 @@ pub async fn one(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     respond(&w.ctx, StatusCode::OK, built)
 }
 
+/// CI log and diagnosis reads per caller per [`OUTPUT_LIMIT_WINDOW`]
+/// (`FG-WEB-0010 route=ci_output`): each may measure the tip (git) and
+/// reads up to a 1 MiB page.
+pub const OUTPUT_LIMIT: u32 = 120;
+pub const OUTPUT_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+/// CI log and diagnosis reads one caller has running at once.
+pub const OUTPUT_MAX_IN_FLIGHT: usize = 2;
+
+/// The per-caller limit of the CI output reads.
+pub fn output_limiter() -> crate::routes::namespaces::CallerLimiter {
+    crate::routes::namespaces::CallerLimiter::new("ci_output", OUTPUT_LIMIT, OUTPUT_LIMIT_WINDOW)
+}
+
+/// The caller a CI output read counts against (an anonymous reader of a
+/// public project counts as one caller, id 0).
+fn caller_of(proof: &forge_auth::Authorized<ProjectCtx>) -> UserId {
+    proof.principal().user().unwrap_or(UserId::new(0))
+}
+
+/// A place for one more CI output read of `caller`: `FG-WEB-0010
+/// reason=in_flight` over [`OUTPUT_MAX_IN_FLIGHT`] running, `FG-WEB-0010
+/// route=ci_output` over the rate. Taken after the decision, before any
+/// lookup.
+fn output_gate(
+    state: &AppState,
+    caller: UserId,
+) -> Result<crate::routes::specs::Running<'_>, ForgeError> {
+    let Some(running) = state.ci_output_in_flight.enter(caller) else {
+        return Err(ForgeError::new(ErrorCode::RateLimited)
+            .with_context("route", "ci_output")
+            .with_context("reason", "in_flight")
+            .with_context("limit", OUTPUT_MAX_IN_FLIGHT)
+            .with_context(crate::error::RETRY_AFTER_CONTEXT, 1u64));
+    };
+    state
+        .ci_output_limiter
+        .check(caller, std::time::Instant::now())
+        .map_err(|retry| state.ci_output_limiter.refused(retry))?;
+    Ok(running)
+}
+
 /// The default branch's tip mark for a CI output (module docs): an AI
 /// agent audience is measured as a clone is; a person is not. A tip that
 /// cannot be measured — no Smart HTTP state, a repository not ready, a
@@ -747,11 +788,6 @@ pub async fn log(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
         TipTarget::Refused(e) => (TipTarget::Person, Some(e)),
         t @ (TipTarget::Person | TipTarget::Unmeasurable(..) | TipTarget::Measure(..)) => (t, None),
     };
-    let (tip_mark, measured) = tip_mark(&state, target).await;
-    let view = OutputView {
-        tip_mark,
-        declared_agent,
-    };
     let built = async {
         if let Some(e) = refused {
             return Err(e);
@@ -760,6 +796,23 @@ pub async fn log(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
         let (_, tail) = ids(&path)?;
         let Tail::Log(pipeline, job) = tail else {
             return Err(not_found());
+        };
+        let _running = output_gate(&state, caller_of(&w.proof))?;
+        // The project's pipeline and job first: a bogus id never measures
+        // the tip (git); the log itself is read after its decision.
+        let exists = bounded(
+            &state,
+            "pipeline_job_log",
+            pipelines(&state)?.output_exists(&w.proof, pipeline, Some(job)),
+        )
+        .await?;
+        if !exists {
+            return Err(ForgeError::new(ErrorCode::NotFound).with_context("resource", "job"));
+        }
+        let (tip_mark, measured) = tip_mark(&state, target).await;
+        let view = OutputView {
+            tip_mark,
+            declared_agent,
         };
         let page = bounded(
             &state,
@@ -858,17 +911,28 @@ pub async fn diagnosis(state: AppState, request: Dispatched<ProjectCtx>) -> Resp
         TipTarget::Refused(e) => (TipTarget::Person, Some(e)),
         t @ (TipTarget::Person | TipTarget::Unmeasurable(..) | TipTarget::Measure(..)) => (t, None),
     };
-    let (tip_mark, measured) = tip_mark(&state, target).await;
-    let view = OutputView {
-        tip_mark,
-        declared_agent,
-    };
     let built = async {
         if let Some(e) = refused {
             return Err(e);
         }
         let id = pipeline_id(&path)?;
         let project = *w.proof.id();
+        let _running = output_gate(&state, caller_of(&w.proof))?;
+        // As the log: the project's pipeline before the tip is measured.
+        let exists = bounded(
+            &state,
+            "pipeline_diagnosis",
+            pipelines(&state)?.output_exists(&w.proof, id, None),
+        )
+        .await?;
+        if !exists {
+            return Err(not_found());
+        }
+        let (tip_mark, measured) = tip_mark(&state, target).await;
+        let view = OutputView {
+            tip_mark,
+            declared_agent,
+        };
         let got = bounded(
             &state,
             "pipeline_diagnosis",
@@ -943,6 +1007,40 @@ pub async fn run(state: AppState, request: Dispatched<ProjectCtx, NewPipelineRun
 #[cfg(test)]
 mod unit {
     use super::*;
+
+    /// Review C5 (MEDIUM): a caller has at most OUTPUT_MAX_IN_FLIGHT CI
+    /// output reads running and OUTPUT_LIMIT a window; others are apart.
+    #[test]
+    fn the_ci_output_reads_are_capped_per_caller() {
+        let mut state = AppState::new(
+            "test",
+            Vec::new(),
+            crate::tests::no_tokens(),
+            crate::tests::no_lookups(),
+        );
+        state.ci_output_limiter = std::sync::Arc::new(
+            crate::routes::namespaces::CallerLimiter::new("ci_output", 3, OUTPUT_LIMIT_WINDOW),
+        );
+        let (rita, otto) = (UserId::new(7), UserId::new(8));
+        let first = output_gate(&state, rita).expect("first");
+        let second = output_gate(&state, rita).expect("second");
+        let third = output_gate(&state, rita).expect_err("in flight");
+        assert_eq!(third.code(), ErrorCode::RateLimited);
+        assert!(third
+            .context()
+            .iter()
+            .any(|(k, v)| *k == "reason" && v == "in_flight"));
+        let other = output_gate(&state, otto).expect("another caller");
+        drop((first, second, other));
+        // The third read of the window is counted; the fourth is refused.
+        drop(output_gate(&state, rita).expect("third of the window"));
+        let over = output_gate(&state, rita).expect_err("rate");
+        assert_eq!(over.code(), ErrorCode::RateLimited);
+        assert!(over
+            .context()
+            .iter()
+            .any(|(k, v)| *k == "route" && v == "ci_output"));
+    }
 
     #[test]
     fn the_paths_name_the_project_and_the_pipeline() {

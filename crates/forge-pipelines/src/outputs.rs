@@ -126,6 +126,27 @@ pub struct Diagnosis {
 }
 
 impl Pipelines {
+    /// Whether the project has `pipeline` (and, with `job`, that job in it):
+    /// what the log (`CiLogRead`, with `job`) and diagnosis
+    /// (`PipelineDiagnosisRead`) routes look up before they measure the
+    /// default branch's tip — a bogus id never starts git. Metadata only;
+    /// the output itself is still read after its decision. Errors:
+    /// `FG-SYS-0001` for another action, `FG-DB-*`.
+    pub async fn output_exists(
+        &self,
+        proof: &Authorized<ProjectCtx>,
+        pipeline: i64,
+        job: Option<i64>,
+    ) -> Result<bool, ForgeError> {
+        let action = if job.is_some() {
+            Action::CiLogRead
+        } else {
+            Action::PipelineDiagnosisRead
+        };
+        require(proof.action(), action)?;
+        db::output_exists(&self.db, *proof.id(), pipeline, job).await
+    }
+
     /// `GET …/pipelines/{pipeline_id}/jobs/{job_id}/log?attempt=&from=`
     /// (`CiLogRead`): one page from chunk `from` of `attempt` (default the
     /// current one), at most [`LOG_PAGE_MAX_CHUNKS`] chunks /
