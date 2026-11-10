@@ -8,7 +8,7 @@ use forge_core::{
     MergeRequestId, ObjectId, ProjectId, PushRecord, PushRecorder, PushUpdateKind, PushedRef,
     Pusher, RefName, RequestId, UserId,
 };
-use forge_errors::ErrorCode;
+use forge_errors::{ErrorCode, ForgeError};
 
 use super::subscriber::{PipelineRequests, PIPELINES_SUBSCRIBER};
 use super::*;
@@ -297,6 +297,7 @@ fn new_pipeline(project: ProjectId, source: Source, planned: Planned) -> NewPipe
         },
         request_id: "req-plan".to_owned(),
         definition_hash: (planned != Planned::Error).then(|| definition_hash(b"version: 1")),
+        protected: false,
         copy_mark: CopyMark::Open,
         planned,
     }
@@ -431,13 +432,29 @@ async fn force_status(t: &FreshDb, pipeline: i64, status: &str, jobs: &str) {
         .expect("jobs");
 }
 
-/// Cancel: pending → canceled (jobs too); a finished pipeline is
-/// FG-CI-0003. Retry: canceled / failed → pending with a new attempt;
-/// a pending one is FG-CI-0003.
+fn by(actor: Actor, request: &str) -> ChangeContext {
+    ChangeContext::new(actor, RequestId::parse(request).expect("request id"))
+}
+
+/// The audit rows of pipeline changes: action, actor kind, actor, details.
+async fn pipeline_audit(t: &FreshDb) -> Vec<(String, String, Option<i64>, serde_json::Value)> {
+    sqlx::query_as(
+        "SELECT action, actor_kind, actor_user_id, details FROM forge.audit_log \
+         WHERE action LIKE 'pipeline.%' AND outcome = 'succeeded' ORDER BY id",
+    )
+    .fetch_all(&mut t.superuser().await)
+    .await
+    .expect("audit")
+}
+
+/// Cancel: pending → canceled (jobs too), one `pipeline.canceled` row with
+/// the person; a finished pipeline is FG-CI-0003 and writes no row.
+/// Retry: canceled / failed → pending with a new attempt
+/// (`pipeline.retried`); a pending one is FG-CI-0003.
 #[tokio::test]
 async fn cancelling_a_finished_pipeline_is_a_state_conflict() {
     let t = FreshDb::migrated().await;
-    let (_, web) = web(&t).await;
+    let (alice, web) = web(&t).await;
     let p = web.project_id;
     let created = create(
         &t.db,
@@ -450,16 +467,23 @@ async fn cancelling_a_finished_pipeline_is_a_state_conflict() {
     .await
     .expect("create");
     let id = created.pipeline_id;
-    assert!(cancel(&t.db, p, id).await.expect("cancel"));
+    let user = |r: &str| by(Actor::User(alice), r);
+    cancel_pipeline_decided(&t.db, &user("req-cancel"), (p, id), alice, |_| Ok(()))
+        .await
+        .expect("cancel");
     let (stored, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
     assert_eq!(stored.status, PipelineStatus::Canceled);
     assert!(stored.finished_at.is_some());
     assert!(jobs.iter().all(|j| j.status == JobStatus::Canceled));
-    let again = cancel(&t.db, p, id).await.expect_err("finished");
+    let again = cancel_pipeline_decided(&t.db, &user("req-cancel-2"), (p, id), alice, |_| Ok(()))
+        .await
+        .expect_err("finished");
     assert_eq!(again.code(), ErrorCode::PipelineStateConflict);
     assert_reason_ctx(&again, "status", "canceled");
 
-    assert!(retry(&t.db, p, id).await.expect("retry"));
+    retry_pipeline_decided(&t.db, &user("req-retry"), (p, id), alice, |_| Ok(()))
+        .await
+        .expect("retry");
     let (stored, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
     assert_eq!(stored.status, PipelineStatus::Pending);
     assert_eq!(stored.finished_at, None);
@@ -469,7 +493,9 @@ async fn cancelling_a_finished_pipeline_is_a_state_conflict() {
         [(JobStatus::Pending, 2), (JobStatus::Created, 2)],
         "a new attempt, ready by its needs"
     );
-    let pending = retry(&t.db, p, id).await.expect_err("pending");
+    let pending = retry_pipeline_decided(&t.db, &user("req-retry-2"), (p, id), alice, |_| Ok(()))
+        .await
+        .expect_err("pending");
     assert_eq!(pending.code(), ErrorCode::PipelineStateConflict);
 
     // A failed pipeline retries its failed jobs only.
@@ -481,7 +507,9 @@ async fn cancelling_a_finished_pipeline_is_a_state_conflict() {
     .execute(&mut t.superuser().await)
     .await
     .expect("one failed");
-    assert!(retry(&t.db, p, id).await.expect("retry failed"));
+    retry_pipeline_decided(&t.db, &user("req-retry-3"), (p, id), alice, |_| Ok(()))
+        .await
+        .expect("retry failed");
     let (_, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
     let states: Vec<(&str, JobStatus, i32)> = jobs
         .iter()
@@ -494,10 +522,157 @@ async fn cancelling_a_finished_pipeline_is_a_state_conflict() {
             ("test", JobStatus::Created, 3)
         ]
     );
-    // Not in the project: not found, nothing changed.
-    assert!(!cancel(&t.db, ProjectId::new(p.get() + 1000), id)
+    // A refused decision changes nothing and writes no succeeded row.
+    let denied = cancel_pipeline_decided(&t.db, &user("req-denied"), (p, id), alice, |_| {
+        Err::<(), _>(ForgeError::new(ErrorCode::Forbidden))
+    })
+    .await
+    .expect_err("denied");
+    assert_eq!(denied.code(), ErrorCode::Forbidden);
+    // No such pipeline in the project.
+    let missing =
+        cancel_pipeline_decided(&t.db, &user("req-missing"), (p, id + 1000), alice, |_| {
+            Ok(())
+        })
         .await
-        .expect("other project"));
+        .expect_err("missing");
+    assert_eq!(missing.code(), ErrorCode::NotFound);
+    // One succeeded row per change, with the person and the counts.
+    let rows = pipeline_audit(&t).await;
+    let actions: Vec<(&str, &str, Option<i64>)> = rows
+        .iter()
+        .map(|(a, k, u, _)| (a.as_str(), k.as_str(), *u))
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            ("pipeline.canceled", "user", Some(alice.get())),
+            ("pipeline.retried", "user", Some(alice.get())),
+            ("pipeline.retried", "user", Some(alice.get())),
+        ]
+    );
+    assert_eq!(
+        rows[0].3,
+        serde_json::json!({"project_id": p.get(), "pipeline_id": id, "jobs": 2})
+    );
+    assert_eq!(rows[2].3["jobs"], 1);
+    t.drop_now().await;
+}
+
+/// A manual run by a service account: the pipeline and one
+/// `pipeline.run_manual` row naming the service account, in one
+/// transaction; a push pipeline is refused by the manual command.
+#[tokio::test]
+async fn a_manual_run_writes_its_audit_row_with_the_actor() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let sa = crate::service_accounts::create(
+        &t.db,
+        &system("req-sa"),
+        &crate::service_accounts::NewServiceAccount {
+            username: "kanflow-bot".to_owned(),
+            display_name: "Kanflow".to_owned(),
+            owner: alice,
+            purpose: "synthetic manual runs".to_owned(),
+        },
+        alice,
+    )
+    .await
+    .expect("sa")
+    .user_id;
+    let mut manual = new_pipeline(p, Source::Manual, Planned::Jobs(vec![a_job("build", &[])]));
+    manual.request.triggered_by = Some(sa);
+    let ctx = by(Actor::ServiceAccount(sa), "req-manual");
+    let (id, ()) = run_manual_decided(&t.db, &ctx, &manual, sa, |_| Ok(()))
+        .await
+        .expect("manual");
+    let (stored, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(stored.source, Source::Manual);
+    assert_eq!(stored.triggered_by, Some(sa));
+    assert_eq!(jobs.len(), 1);
+    let rows = pipeline_audit(&t).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "pipeline.run_manual");
+    assert_eq!(rows[0].1, "service_account");
+    assert_eq!(rows[0].2, Some(sa.get()));
+    assert_eq!(rows[0].3["pipeline_id"], id);
+    assert_eq!(rows[0].3["status"], "pending");
+    let push = new_pipeline(p, Source::Push, Planned::Jobs(Vec::new()));
+    let err = run_manual_decided(&t.db, &ctx, &push, sa, |_| Ok(()))
+        .await
+        .expect_err("not manual");
+    assert_reason(&err, ErrorCode::Internal, "not_a_manual_run");
+    t.drop_now().await;
+}
+
+/// THE secrets rule (ADR-0029, obligation of C3 / C6): only a push to a
+/// branch that was protected at creation. Whoever hands a job its secrets
+/// (the runner API, C3; the secret store, C6) asks
+/// `StoredPipeline::secrets_allowed` and must keep this test green. The
+/// table refuses a protected pipeline of another source, and a retry keeps
+/// the answer of the creation.
+#[tokio::test]
+async fn only_a_protected_push_may_release_secrets() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let deploy = || Planned::Jobs(vec![a_job("deploy", &[])]);
+    let stored = |id: i64| {
+        let db = t.db.clone(); // clone: a handle for the read
+        async move { get(&db, p, id).await.expect("get").expect("found").0 }
+    };
+
+    let mut push = new_pipeline(p, Source::Push, deploy());
+    push.protected = true;
+    let protected = create(&t.db, &push).await.expect("protected").pipeline_id;
+    let mut plain = new_pipeline(p, Source::Push, deploy());
+    plain.request.git_ref = branch("feature");
+    let plain = create(&t.db, &plain).await.expect("plain").pipeline_id;
+    let manual = create(&t.db, &new_pipeline(p, Source::Manual, deploy()))
+        .await
+        .expect("manual")
+        .pipeline_id;
+    assert!(stored(protected).await.secrets_allowed());
+    assert!(
+        !stored(plain).await.secrets_allowed(),
+        "an unprotected push"
+    );
+    assert!(!stored(manual).await.secrets_allowed(), "a manual run");
+
+    // Both columns decide: a row that says `protected` is still refused
+    // when it is not a push (it cannot be stored either, below).
+    for source in [Source::MergeRequest, Source::Manual, Source::Schedule] {
+        let mut other = stored(protected).await;
+        other.source = source;
+        assert!(!other.secrets_allowed(), "{source:?}");
+    }
+    for source in [Source::Manual, Source::Schedule] {
+        let mut wrong = new_pipeline(p, source, deploy());
+        wrong.protected = true;
+        wrong.request.git_ref = branch("release");
+        let _ = create(&t.db, &wrong)
+            .await
+            .expect_err("the table refuses it");
+    }
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM forge.ci_pipelines")
+        .fetch_one(&mut t.superuser().await)
+        .await
+        .expect("count");
+    assert_eq!(rows, 3, "nothing was written for the refused ones");
+
+    // Cancel and retry change neither column.
+    let user = |r: &str| by(Actor::User(alice), r);
+    for id in [protected, manual] {
+        cancel_pipeline_decided(&t.db, &user("req-c"), (p, id), alice, |_| Ok(()))
+            .await
+            .expect("cancel");
+        retry_pipeline_decided(&t.db, &user("req-r"), (p, id), alice, |_| Ok(()))
+            .await
+            .expect("retry");
+    }
+    assert!(stored(protected).await.secrets_allowed(), "after a retry");
+    assert!(!stored(manual).await.secrets_allowed(), "after a retry");
     t.drop_now().await;
 }
 

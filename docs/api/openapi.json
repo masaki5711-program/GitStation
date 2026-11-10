@@ -5856,6 +5856,10 @@
             "minimum": 1,
             "type": "integer"
           },
+          "protected": {
+            "description": "`true` only for a push to a branch that was protected when the\npipeline was created: the only pipelines whose jobs may be given\nsecrets (ADR-0029).",
+            "type": "boolean"
+          },
           "ref": {
             "description": "`refs/heads/…`.",
             "type": "string"
@@ -5894,6 +5898,7 @@
           "status",
           "error_code",
           "problems",
+          "protected",
           "copy_mark",
           "definition_hash",
           "created_at",

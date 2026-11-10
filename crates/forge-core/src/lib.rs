@@ -11,7 +11,9 @@ pub mod cursor;
 pub mod dedup_key;
 pub mod discussion;
 pub mod doc_lint_migration;
+// M4 C2: a person's change to a CI pipeline (audit details).
 pub mod event_type;
+pub mod pipeline;
 // ── M3 I1c: the event feed's visible set and cursor position ──
 pub mod feed;
 // ── end M3 I1c ──

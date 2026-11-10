@@ -78,7 +78,11 @@ impl JobHandler for PipelineHandler {
                 return Err(JobFailure::retry(e));
             }
             // Failed for good (dead after this): answer with an `error` row.
-            pipelines.fail(&request, &request_id, &e).await;
+            // If that write fails too, the job dies with its code (doctor's
+            // `ci.pipelines` and `jobs.dead` show it), never as answered.
+            if let Err(write) = pipelines.fail(&request, &request_id, &e).await {
+                return Err(JobFailure::retry(write));
+            }
             Err(if retryable(&e) {
                 JobFailure::retry(e)
             } else {

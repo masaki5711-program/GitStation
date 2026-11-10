@@ -97,6 +97,26 @@ fn with_secret_for_merge_requests() -> String {
     )
 }
 
+/// A deploy job with a secret that runs for pushes to `feature` only.
+fn with_secret_on_feature() -> String {
+    format!(
+        "version: 1
+stages: [deploy]
+jobs:
+  deploy:
+    stage: deploy
+    image: {i}
+    timeout: 10m
+    script: [./deploy.sh]
+    secrets: [DEPLOY_KEY]
+    rules:
+      branches: [feature]
+      merge_requests: false
+",
+        i = image()
+    )
+}
+
 fn ctx(request: &str) -> ChangeContext {
     ChangeContext::new(Actor::System, RequestId::parse(request).expect("id"))
 }
@@ -313,29 +333,85 @@ async fn a_merge_request_with_a_secret_job_is_invalid() {
     w.t.drop_now().await;
 }
 
+/// `ci_pipelines.protected` (what `StoredPipeline::secrets_allowed` reads,
+/// ADR-0029): `true` only for a push to a branch protected now. The same
+/// definition with a secret job, on the same protected branch: the push is
+/// planned and protected; the manual run is `invalid` and not protected.
+/// A push to another branch selects no job and is not protected.
+#[tokio::test]
+async fn only_a_push_to_a_protected_branch_is_recorded_as_protected() {
+    let w = World::new().await;
+    forge_db::protected_refs::create(
+        &w.t.db,
+        &ctx("req-protect"),
+        w.project,
+        &forge_core::RefPattern::parse("refs/heads/feature").expect("pattern"),
+        forge_core::Role::Maintainer,
+    )
+    .await
+    .expect("protect");
+    let sha = commit(&w.path, &[(".forge-ci.yml", &with_secret_on_feature())]);
+    let p = w.normal();
+    for (source, request_id) in [(Source::Push, "req-push"), (Source::Manual, "req-manual")] {
+        let out = p
+            .plan_and_record(&w.request(&sha, source), &rid(request_id))
+            .await
+            .expect("plan");
+        assert!(matches!(out, Outcome::Recorded { .. }), "{out:?}");
+    }
+    let mut other = w.request(&sha, Source::Push);
+    other.git_ref = RefName::parse("refs/heads/other").expect("ref");
+    let out = p
+        .plan_and_record(&other, &rid("req-other"))
+        .await
+        .expect("plan");
+    assert!(matches!(out, Outcome::Recorded { .. }), "{out:?}");
+    let rows: Vec<(String, String, bool, String)> =
+        sqlx::query_as("SELECT source, ref, protected, status FROM forge.ci_pipelines ORDER BY id")
+            .fetch_all(&mut w.t.superuser().await)
+            .await
+            .expect("rows");
+    let rows: Vec<(&str, &str, bool, &str)> = rows
+        .iter()
+        .map(|(s, r, p, st)| (s.as_str(), r.as_str(), *p, st.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("push", "refs/heads/feature", true, "pending"),
+            ("manual", "refs/heads/feature", false, "invalid"),
+            ("push", "refs/heads/other", false, "skipped"),
+        ]
+    );
+    w.t.drop_now().await;
+}
+
+/// An open merge request `feature` → `main`, written as rows: the review
+/// commands are forge-review's to call (its `decided_callers` guard).
 async fn open_merge_request(w: &World) -> MergeRequestId {
     let alice: i64 = sqlx::query_scalar("SELECT id FROM forge.users WHERE username = 'alice'")
         .fetch_one(&mut w.t.superuser().await)
         .await
         .expect("alice");
-    let alice = forge_core::UserId::new(alice);
-    let (mr, ()) = forge_db::review::open_mr_decided(
-        &w.t.db,
-        &ChangeContext::new(Actor::User(alice), rid("req-open")),
-        w.project,
-        alice,
-        &forge_db::review::NewMergeRequest {
-            title: "Feature".to_owned(),
-            description: String::new(),
-            source_branch: RefName::parse("refs/heads/feature").expect("ref"),
-            target_branch: RefName::parse("refs/heads/main").expect("ref"),
-            draft: false,
-        },
-        |_| Ok(()),
+    let p = w.project.get();
+    w.t.commit_audited(
+        ("project", p),
+        &[
+            format!(
+                "INSERT INTO forge.merge_request_counters (project_id, last_iid) VALUES ({p}, 1)"
+            ),
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id,                  source_branch, target_branch) VALUES ({p}, 1, 'Feature', {alice},                  'refs/heads/feature', 'refs/heads/main')"
+            ),
+        ],
     )
-    .await
-    .expect("open");
-    mr.id
+    .await;
+    let id: i64 = sqlx::query_scalar("SELECT id FROM forge.merge_requests WHERE project_id = $1")
+        .bind(p)
+        .fetch_one(&mut w.t.superuser().await)
+        .await
+        .expect("merge request");
+    MergeRequestId::new(id)
 }
 
 /// A git that never answers: the plan fails with the git timeout (the job
@@ -360,7 +436,9 @@ async fn a_git_timeout_retries_then_records_an_error_pipeline() {
         .expect_err("timed out");
     assert_eq!(err.code(), ErrorCode::GitTimeout, "{err:?}");
     assert!(w.rows().await.is_empty(), "nothing written on a failure");
-    slow.fail(&request, &rid("req-slow"), &err).await;
+    slow.fail(&request, &rid("req-slow"), &err)
+        .await
+        .expect("error row written");
     let rows = w.rows().await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, "error");
@@ -372,5 +450,29 @@ async fn a_git_timeout_retries_then_records_an_error_pipeline() {
         .await
         .expect("plan");
     assert!(matches!(after, Outcome::Recorded { created, .. } if created.existing));
+    w.t.drop_now().await;
+}
+
+/// Review C2 (MEDIUM): when the `error` row cannot be written either (here:
+/// a project that does not exist), `fail` returns the write's error with
+/// the cause's code — the job dies with it instead of ending as answered.
+#[tokio::test]
+async fn a_failed_error_row_is_returned_not_swallowed() {
+    let w = World::new().await;
+    let sha = commit(&w.path, &[(".forge-ci.yml", &valid())]);
+    let mut request = w.request(&sha, Source::Push);
+    request.project = ProjectId::new(w.project.get() + 1000);
+    let cause = forge_errors::ForgeError::new(ErrorCode::GitTimeout);
+    let err = w
+        .normal()
+        .fail(&request, &rid("req-gone"), &cause)
+        .await
+        .expect_err("the write fails");
+    assert_ne!(err.code(), ErrorCode::GitTimeout, "the write's own code");
+    assert!(err
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "cause_code" && v == "FG-GIT-0002"));
+    assert!(w.rows().await.is_empty());
     w.t.drop_now().await;
 }

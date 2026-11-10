@@ -40,13 +40,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_auth::{Action, Authorized, Principal, ProjectCtx};
+use forge_auth::{AccountFacts, Action, Authorized, LoadedProject, Principal, ProjectCtx};
 use forge_ci::{Event, LintContext, Problem, Trigger};
 use forge_core::{
     ObjectId, ProjectAccessLoader, ProjectId, ProtectionRules, RefName, RepoId, RepositoryState,
     RequestId, UserId,
 };
+use forge_db::change::{Actor, ChangeContext};
 use forge_db::pipelines as db;
+use forge_db::projects::ProjectAccessFacts;
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{Browser, RefLookup, RepoPath, SmallFile};
@@ -98,6 +100,19 @@ pub enum Outcome {
 /// (forge-checks `ci_lint::branch_patterns`; feature crates do not depend
 /// on each other, so it is repeated here).
 pub fn branch_patterns(rules: &ProtectionRules) -> Vec<String> {
+    branch_patterns_of(rules)
+}
+
+/// Is `request` a push to a branch that is protected now? The one answer
+/// both the plan (`Trigger::protected`: may a job name secrets) and the
+/// stored row (`ci_pipelines.protected`: may they be released, ADR-0029
+/// obligation of C3/C6) are made from. A merge request's pipeline and a
+/// manual or scheduled run never, whatever the branch (C12).
+fn protected_push(request: &PipelineRequest, rules: &ProtectionRules) -> bool {
+    request.source == Source::Push && !rules.levels(&request.git_ref).is_empty()
+}
+
+fn branch_patterns_of(rules: &ProtectionRules) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for rule in rules.rules() {
         for raw in [rule.pattern.as_str(), rule.pattern.key()] {
@@ -225,6 +240,27 @@ impl Pipelines {
         request: &PipelineRequest,
         request_id: &RequestId,
     ) -> Result<Outcome, ForgeError> {
+        let new = match self.prepare(request, request_id).await? {
+            Ok(new) => new,
+            Err(outcome) => return Ok(outcome),
+        };
+        let created = db::create(&self.db, &new).await?;
+        let (status, jobs) = status_of(&new.planned);
+        Self::log_recorded(&new, created, status, jobs);
+        Ok(Outcome::Recorded {
+            created,
+            status,
+            jobs,
+        })
+    }
+
+    /// Everything before the write: the pipeline to write, or the outcome
+    /// that writes nothing (`NoDefinition`, `ProjectGone`).
+    async fn prepare(
+        &self,
+        request: &PipelineRequest,
+        request_id: &RequestId,
+    ) -> Result<Result<db::NewPipeline, Outcome>, ForgeError> {
         let project = request.project;
         let loaded =
             match tokio::time::timeout(LOOKUP_TIMEOUT, self.db.load_project(project, None)).await {
@@ -243,7 +279,7 @@ impl Pipelines {
                 project_id = project.get(),
                 "the project is gone; no pipeline"
             );
-            return Ok(Outcome::ProjectGone);
+            return Ok(Err(Outcome::ProjectGone));
         };
         let repo = record.repository;
         if repo.state != RepositoryState::Ready {
@@ -272,7 +308,7 @@ impl Pipelines {
                     source = request.source.as_str(),
                     "no .forge-ci.yml at the commit; no pipeline"
                 );
-                return Ok(Outcome::NoDefinition);
+                return Ok(Err(Outcome::NoDefinition));
             }
             SmallFile::NotAFile => (Vec::new(), Some("not_a_file")),
             SmallFile::TooLarge => (Vec::new(), Some("too_large")),
@@ -288,26 +324,14 @@ impl Pipelines {
             None => Self::plan(request, &bytes, &rules)?,
         };
         let copy_mark = self.marks.measure(repo.id, &request.sha).await;
-        let new = db::NewPipeline {
+        Ok(Ok(db::NewPipeline {
             request: request.clone(), // clone: the row owns it
             request_id: request_id.to_string(),
             definition_hash: unreadable.is_none().then(|| db::definition_hash(&bytes)),
+            protected: protected_push(request, &rules),
             copy_mark,
             planned,
-        };
-        let created = db::create(&self.db, &new).await?;
-        let (status, jobs) = match &new.planned {
-            db::Planned::Jobs(jobs) if jobs.is_empty() => (PipelineStatus::Skipped, 0),
-            db::Planned::Jobs(jobs) => (PipelineStatus::Pending, jobs.len()),
-            db::Planned::Invalid(_) => (PipelineStatus::Invalid, 0),
-            db::Planned::Error => (PipelineStatus::Error, 0),
-        };
-        Self::log_recorded(&new, created, status, jobs);
-        Ok(Outcome::Recorded {
-            created,
-            status,
-            jobs,
-        })
+        }))
     }
 
     /// Lint and plan `bytes` for `request` (pure).
@@ -332,9 +356,7 @@ impl Pipelines {
                 Source::Push | Source::Manual | Source::Schedule => Event::Push,
             },
             branch: branch.to_owned(),
-            // Only a push to a protected branch may use secrets; a merge
-            // request's pipeline and a manual or scheduled run never (C12).
-            protected: request.source == Source::Push && !rules.levels(&request.git_ref).is_empty(),
+            protected: protected_push(request, rules),
         };
         match forge_ci::plan(&def, &trigger) {
             Ok(plan) => Ok(db::Planned::Jobs(jobs_of(&plan)?)),
@@ -384,18 +406,22 @@ impl Pipelines {
 
     /// The last attempt failed for good: record the pipeline as `error`
     /// (`FG-CI-0002`, logged once at warn with `cause_code`) so the push
-    /// is answered. A failed write is logged too (the job runner logs the
-    /// cause as well).
+    /// is answered. A write that fails is returned (and logged with the
+    /// cause): the job must not end as if the push had been answered — it
+    /// dies with that code, which doctor's `ci.pipelines` and `jobs.dead`
+    /// show.
     pub async fn fail(
         &self,
         request: &PipelineRequest,
         request_id: &RequestId,
         cause: &ForgeError,
-    ) {
+    ) -> Result<(), ForgeError> {
         let new = db::NewPipeline {
             request: request.clone(), // clone: the row owns it
             request_id: request_id.to_string(),
             definition_hash: None,
+            // Nothing was read, the rules included: never protected.
+            protected: false,
             copy_mark: CopyMark::Undecided,
             planned: db::Planned::Error,
         };
@@ -403,7 +429,8 @@ impl Pipelines {
         let err = ForgeError::new(ErrorCode::PipelineCreateFailed)
             .with_context("cause_code", cause.code().id());
         match written {
-            Ok(created) => tracing::warn!(
+            Ok(created) => {
+                tracing::warn!(
                 target: "forge_pipelines",
                 event = "forge.ci.pipeline_create_failed",
                 error_code = err.code().id(),
@@ -417,8 +444,11 @@ impl Pipelines {
                 sha = request.sha.as_str(),
                 source = request.source.as_str(),
                 "the pipeline could not be planned; recorded as error"
-            ),
-            Err(e) => tracing::error!(
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
                 target: "forge_pipelines",
                 event = "forge.ci.pipeline_create_failed",
                 error_code = e.code().id(),
@@ -429,7 +459,9 @@ impl Pipelines {
                 sha = request.sha.as_str(),
                 source = request.source.as_str(),
                 "the pipeline could not be planned, and its error row could not be written"
-            ),
+                );
+                Err(e.with_context("cause_code", cause.code().id()))
+            }
         }
     }
 
@@ -466,58 +498,62 @@ impl Pipelines {
             .map(|(pipeline, jobs)| PipelineDetail { pipeline, jobs }))
     }
 
-    /// `POST …/cancel` (`PipelineCancel`): the pipeline after the change;
-    /// `None` when there is no such pipeline; `FG-CI-0003` when it is
-    /// finished.
+    /// `POST …/cancel` (`PipelineCancel`): the pipeline after the change,
+    /// with one `pipeline.canceled` audit row (decided again in the
+    /// transaction). `FG-REPO-0005 resource=pipeline` when there is no
+    /// such pipeline; `FG-CI-0003` when it is finished.
     pub async fn cancel(
         &self,
+        request: &ChangeRequest,
         proof: &Authorized<ProjectCtx>,
         pipeline: i64,
-        request_id: &RequestId,
-    ) -> Result<Option<PipelineDetail>, ForgeError> {
+    ) -> Result<PipelineDetail, ForgeError> {
         require(proof.action(), Action::PipelineCancel)?;
         let user = caller(proof.principal(), Action::PipelineCancel)?;
-        let done = db::cancel(&self.db, *proof.id(), pipeline).await?;
-        if done {
-            tracing::info!(
-                target: "forge_pipelines",
-                event = "forge.ci.pipeline_cancelled",
-                request_id = %request_id,
-                project_id = proof.id().get(),
-                pipeline_id = pipeline,
-                user_id = user.get(),
-                "pipeline cancelled"
-            );
-            return Ok(Some(read_back(&self.db, *proof.id(), pipeline).await?));
-        }
-        Ok(None)
+        let ctx = change_context(request, proof.principal(), user);
+        db::cancel_pipeline_decided(&self.db, &ctx, (*proof.id(), pipeline), user, |facts| {
+            reconfirm(proof, facts)
+        })
+        .await?;
+        tracing::info!(
+            target: "forge_pipelines",
+            event = "forge.ci.pipeline_cancelled",
+            request_id = %request.request_id,
+            project_id = proof.id().get(),
+            pipeline_id = pipeline,
+            user_id = user.get(),
+            "pipeline cancelled"
+        );
+        read_back(&self.db, *proof.id(), pipeline).await
     }
 
-    /// `POST …/retry` (`PipelineRetry`): the pipeline after the change;
-    /// `None` when there is no such pipeline; `FG-CI-0003` unless it is
-    /// `failed` or `canceled`.
+    /// `POST …/retry` (`PipelineRetry`): the pipeline after the change,
+    /// with one `pipeline.retried` audit row. `FG-REPO-0005
+    /// resource=pipeline` when there is no such pipeline; `FG-CI-0003`
+    /// unless it is `failed` or `canceled`.
     pub async fn retry(
         &self,
+        request: &ChangeRequest,
         proof: &Authorized<ProjectCtx>,
         pipeline: i64,
-        request_id: &RequestId,
-    ) -> Result<Option<PipelineDetail>, ForgeError> {
+    ) -> Result<PipelineDetail, ForgeError> {
         require(proof.action(), Action::PipelineRetry)?;
         let user = caller(proof.principal(), Action::PipelineRetry)?;
-        let done = db::retry(&self.db, *proof.id(), pipeline).await?;
-        if done {
-            tracing::info!(
-                target: "forge_pipelines",
-                event = "forge.ci.pipeline_retried",
-                request_id = %request_id,
-                project_id = proof.id().get(),
-                pipeline_id = pipeline,
-                user_id = user.get(),
-                "pipeline retried"
-            );
-            return Ok(Some(read_back(&self.db, *proof.id(), pipeline).await?));
-        }
-        Ok(None)
+        let ctx = change_context(request, proof.principal(), user);
+        db::retry_pipeline_decided(&self.db, &ctx, (*proof.id(), pipeline), user, |facts| {
+            reconfirm(proof, facts)
+        })
+        .await?;
+        tracing::info!(
+            target: "forge_pipelines",
+            event = "forge.ci.pipeline_retried",
+            request_id = %request.request_id,
+            project_id = proof.id().get(),
+            pipeline_id = pipeline,
+            user_id = user.get(),
+            "pipeline retried"
+        );
+        read_back(&self.db, *proof.id(), pipeline).await
     }
 
     /// `POST …/pipelines` (`PipelineCreate`): plan the tip of `branch`
@@ -526,10 +562,11 @@ impl Pipelines {
     /// the definition or the protected branches could not be read; no row).
     pub async fn run_manual(
         &self,
+        request: &ChangeRequest,
         proof: &Authorized<ProjectCtx>,
         branch: &RefName,
-        request_id: &RequestId,
     ) -> Result<ManualRun, ForgeError> {
+        let request_id = &request.request_id;
         require(proof.action(), Action::PipelineCreate)?;
         let user = caller(proof.principal(), Action::PipelineCreate)?;
         let project: ProjectId = *proof.id();
@@ -543,7 +580,7 @@ impl Pipelines {
             Err(e) => return Err(failed(e)),
         };
         let sha = ObjectId::parse(&tip).map_err(|_| internal("invalid_commit_id"))?;
-        let request = PipelineRequest {
+        let planned = PipelineRequest {
             project,
             git_ref: branch.clone(), // clone: the request owns it
             sha,
@@ -551,18 +588,35 @@ impl Pipelines {
             merge_request: None,
             triggered_by: Some(user),
         };
-        match self.plan_and_record(&request, request_id).await {
-            Ok(Outcome::Recorded { created, .. }) => Ok(ManualRun::Recorded(Box::new(
-                read_back(&self.db, project, created.pipeline_id).await?,
-            ))),
-            Ok(Outcome::NoDefinition) => Ok(ManualRun::NoDefinition),
+        let new = match self.prepare(&planned, request_id).await {
+            Ok(Ok(new)) => new,
+            Ok(Err(Outcome::NoDefinition)) => return Ok(ManualRun::NoDefinition),
             // The proof was decided on a live project: it went meanwhile.
-            Ok(Outcome::ProjectGone) => Err(ForgeError::new(ErrorCode::NotFound)
-                .with_context("reason", "project_gone")
-                .with_context("project_id", project.get())),
-            Err(e) if e.code() == ErrorCode::RepositoryNotReady => Err(e),
-            Err(e) => Err(failed(e)),
-        }
+            Ok(Err(Outcome::ProjectGone | Outcome::Recorded { .. })) => {
+                return Err(ForgeError::new(ErrorCode::NotFound)
+                    .with_context("reason", "project_gone")
+                    .with_context("project_id", project.get()))
+            }
+            Err(e) if e.code() == ErrorCode::RepositoryNotReady => return Err(e),
+            Err(e) => return Err(failed(e)),
+        };
+        let ctx = change_context(request, proof.principal(), user);
+        let (pipeline, ()) =
+            db::run_manual_decided(&self.db, &ctx, &new, user, |facts| reconfirm(proof, facts))
+                .await?;
+        let (status, jobs) = status_of(&new.planned);
+        Self::log_recorded(
+            &new,
+            Created {
+                pipeline_id: pipeline,
+                existing: false,
+            },
+            status,
+            jobs,
+        );
+        Ok(ManualRun::Recorded(Box::new(
+            read_back(&self.db, project, pipeline).await?,
+        )))
     }
 
     async fn ready_repo(&self, project: ProjectId) -> Result<RepoId, ForgeError> {
@@ -588,6 +642,59 @@ impl Pipelines {
                 .with_context("state", record.repository.state.as_str()));
         }
         Ok(record.repository.id)
+    }
+}
+
+/// The request a person's change belongs to: its id and the token it came
+/// with (the audit row's `credential_id`).
+#[derive(Debug, Clone)]
+pub struct ChangeRequest {
+    pub request_id: RequestId,
+    pub credential_id: Option<i64>,
+}
+
+/// The audit context of a person's change: the actor (a service account's
+/// own kind), the request, the token and its scopes.
+fn change_context(request: &ChangeRequest, principal: &Principal, user: UserId) -> ChangeContext {
+    let actor = match principal.account_kind() {
+        forge_auth::AccountKind::ServiceAccount => Actor::ServiceAccount(user),
+        forge_auth::AccountKind::Human | forge_auth::AccountKind::Bot => Actor::User(user),
+    };
+    let mut ctx = ChangeContext::new(actor, request.request_id.clone()); // clone: the context owns it
+    ctx.credential_id = request.credential_id;
+    ctx.effective_scope = principal.scope_names();
+    ctx
+}
+
+/// The route's decision made again on the facts locked by the change.
+fn reconfirm(
+    proof: &Authorized<ProjectCtx>,
+    facts: &forge_db::projects::ProjectUpdateFacts,
+) -> Result<(), ForgeError> {
+    let account = AccountFacts {
+        active: facts.account.active,
+        is_admin: facts.account.is_admin,
+    };
+    let fresh = ProjectCtx::new(loaded(&facts.project));
+    proof.reconfirm(account, fresh).map(drop)
+}
+
+fn loaded(facts: &ProjectAccessFacts) -> LoadedProject {
+    LoadedProject {
+        id: facts.project,
+        visibility: facts.access.visibility,
+        role: facts.access.role,
+        pending_deletion: facts.access.pending_deletion,
+    }
+}
+
+/// The status and job count a plan is written with.
+fn status_of(planned: &db::Planned) -> (PipelineStatus, usize) {
+    match planned {
+        db::Planned::Jobs(jobs) if jobs.is_empty() => (PipelineStatus::Skipped, 0),
+        db::Planned::Jobs(jobs) => (PipelineStatus::Pending, jobs.len()),
+        db::Planned::Invalid(_) => (PipelineStatus::Invalid, 0),
+        db::Planned::Error => (PipelineStatus::Error, 0),
     }
 }
 

@@ -206,6 +206,7 @@ impl World {
                 },
                 request_id: "req-seed".to_owned(),
                 definition_hash: Some(db::definition_hash(b"version: 1")),
+                protected: false,
                 copy_mark: CopyMark::Open,
                 planned: Planned::Jobs(vec![NewCiJob {
                     name: "build".to_owned(),
@@ -222,6 +223,16 @@ impl World {
         .await
         .expect("seed")
         .pipeline_id
+    }
+
+    /// The succeeded pipeline audit rows: action, actor kind, actor.
+    async fn audit(&self) -> Vec<(String, String, Option<i64>)> {
+        sqlx::query_as(
+            "SELECT action, actor_kind, actor_user_id FROM forge.audit_log              WHERE action LIKE 'pipeline.%' AND outcome = 'succeeded' ORDER BY id",
+        )
+        .fetch_all(&mut self.t.superuser().await)
+        .await
+        .expect("audit")
     }
 
     async fn call(&self, method: &str, path: &str, who: Principal, body: Option<Value>) -> Answer {
@@ -316,6 +327,7 @@ async fn readers_list_and_read_pipelines_and_others_are_refused() {
     assert_eq!(a.json["jobs"][0]["name"], "build");
     assert_eq!(a.json["jobs"][0]["secrets"], json!(["DEPLOY_KEY"]));
     assert_eq!(a.json["copy_mark"], "open");
+    assert_eq!(a.json["protected"], false);
     // No such pipeline in the project.
     let a = w.call("GET", "/999999", session(w.reporter), None).await;
     assert_eq!(
@@ -410,6 +422,23 @@ async fn developers_cancel_and_retry_and_a_finished_pipeline_conflicts() {
         (a.status, a.code()),
         (StatusCode::NOT_FOUND, "FG-REPO-0005")
     );
+    // One audit row per change, naming who: the agent's person, then the
+    // service account (refusals and conflicts write no succeeded row).
+    assert_eq!(
+        w.audit().await,
+        [
+            (
+                "pipeline.canceled".to_owned(),
+                "user".to_owned(),
+                Some(w.dev.get())
+            ),
+            (
+                "pipeline.retried".to_owned(),
+                "service_account".to_owned(),
+                Some(w.sa.get())
+            ),
+        ]
+    );
     w.t.drop_now().await;
 }
 
@@ -464,5 +493,21 @@ async fn a_developer_runs_a_pipeline_by_hand_and_a_reporter_cannot() {
         )
         .await;
     assert_eq!(a.status, StatusCode::BAD_REQUEST);
+    // Two manual runs, two audit rows (a manual run has no idempotency key).
+    assert_eq!(
+        w.audit().await,
+        [
+            (
+                "pipeline.run_manual".to_owned(),
+                "user".to_owned(),
+                Some(w.dev.get())
+            ),
+            (
+                "pipeline.run_manual".to_owned(),
+                "user".to_owned(),
+                Some(w.dev.get())
+            ),
+        ]
+    );
     w.t.drop_now().await;
 }

@@ -25,12 +25,14 @@ use axum::response::{IntoResponse, Response};
 use forge_auth::ProjectCtx;
 use forge_core::{parse_positive_id, ProjectId, RefName, UserId};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_pipelines::{ManualRun, PipelineDetail, Pipelines, StoredJob, StoredPipeline};
+use forge_pipelines::{
+    ChangeRequest, ManualRun, PipelineDetail, Pipelines, StoredJob, StoredPipeline,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::body::param_invalid;
-use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, QueryParam};
+use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, QueryParam, WriteParts};
 use crate::routes::projects::{self, PREFIX};
 use crate::routes::write::{absent, bounded, json, no_store};
 
@@ -141,6 +143,10 @@ pub struct PipelineBody {
     pub error_code: Option<String>,
     /// Why `invalid` (at most 20).
     pub problems: Vec<PipelineProblemBody>,
+    /// `true` only for a push to a branch that was protected when the
+    /// pipeline was created: the only pipelines whose jobs may be given
+    /// secrets (ADR-0029).
+    pub protected: bool,
     /// The confidential marks at `sha` when it was created: `open`,
     /// `confidential`, `undecided` (ADR-0029 decision 5).
     pub copy_mark: String,
@@ -205,6 +211,7 @@ fn body(p: StoredPipeline, jobs: Option<Vec<StoredJob>>) -> PipelineBody {
                 subject: x.subject,
             })
             .collect(),
+        protected: p.protected,
         copy_mark: p.copy_mark.as_str().to_owned(),
         definition_hash: p.definition_hash,
         created_at: p.created_at,
@@ -413,6 +420,14 @@ fn respond(
     }
 }
 
+/// The request a change belongs to (the audit row's request and token).
+fn change_request<B>(w: &WriteParts<ProjectCtx, B>) -> ChangeRequest {
+    ChangeRequest {
+        request_id: w.ctx.request_id.clone(), // clone: the context stays for the error path
+        credential_id: w.credential_id,
+    }
+}
+
 /// `GET …/pipelines` → `200`.
 pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let query = request.raw_query().map(str::to_owned);
@@ -471,9 +486,9 @@ pub async fn cancel(state: AppState, request: Dispatched<ProjectCtx>) -> Respons
     let built = async {
         let id = pipeline_id(&path)?;
         let done = pipelines(&state)?
-            .cancel(&w.proof, id, &w.ctx.request_id)
+            .cancel(&change_request(&w), &w.proof, id)
             .await?;
-        json(detail_body(done.ok_or_else(not_found)?))
+        json(detail_body(done))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
@@ -486,9 +501,9 @@ pub async fn retry(state: AppState, request: Dispatched<ProjectCtx>) -> Response
     let built = async {
         let id = pipeline_id(&path)?;
         let done = pipelines(&state)?
-            .retry(&w.proof, id, &w.ctx.request_id)
+            .retry(&change_request(&w), &w.proof, id)
             .await?;
-        json(detail_body(done.ok_or_else(not_found)?))
+        json(detail_body(done))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
@@ -500,7 +515,7 @@ pub async fn run(state: AppState, request: Dispatched<ProjectCtx, NewPipelineRun
     let built = async {
         let git_ref = branch(&w.input.git_ref, "ref")?;
         match pipelines(&state)?
-            .run_manual(&w.proof, &git_ref, &w.ctx.request_id)
+            .run_manual(&change_request(&w), &w.proof, &git_ref)
             .await?
         {
             ManualRun::Recorded(detail) => json(detail_body(*detail)),

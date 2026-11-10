@@ -3,10 +3,18 @@
 --
 -- DERIVED state (tables.toml kind = "derived"): a pipeline is what forge
 -- planned from `.forge-ci.yml` at one commit (forge_ci::plan), and its jobs'
--- progress; forge_app writes it (the `ci.pipeline_create` job, the cancel /
--- retry / manual commands) and deletes it in the project purge
--- (projects/purge.rs). Who cancelled, retried or started one by hand is in
--- `triggered_by` / the structured logs (`forge.ci.pipeline_*`).
+-- progress; forge_app writes it (the `ci.pipeline_create` job, later the
+-- runner API) and deletes it in the project purge (projects/purge.rs).
+-- Most writes are the worker's, with no person behind them, so the tables
+-- carry no txn_audited trigger. What a PERSON does is audited by the command,
+-- in the same transaction as the change (forge_db::pipelines, ChangeTx):
+-- `pipeline.canceled`, `pipeline.retried`, `pipeline.run_manual` in
+-- forge.audit_log (resource_type `project`, the actor and its credential).
+--
+-- Retention (plan 14 §4.1): a pipeline and its jobs are kept 90 days, like
+-- the job logs; the purge job comes with the logs (C5) and reads by
+-- `created_at` (it adds its own index then). Nothing is deleted before that
+-- except by the project purge.
 --
 -- forge.ci_pipelines
 --   ref              the branch (`refs/heads/…`): the pushed one, a merge
@@ -19,6 +27,12 @@
 --   definition_hash  sha256 (hex) of the `.forge-ci.yml` bytes planned
 --                    (NULL when no bytes were read: `error`, or an
 --                    `invalid` entry that is no file or is too large)
+--   protected        true only for a push to a branch that was protected when
+--                    the pipeline was created. Secrets may be released to its
+--                    jobs from this column and `source = 'push'` alone
+--                    (ADR-0029, obligation of C3/C6); never to a
+--                    merge_request, manual or scheduled pipeline, which the
+--                    CHECK `ci_pipelines_protected` makes unrepresentable
 --   copy_mark        the confidential marks at `sha`, measured at creation
 --                    (open | confidential | undecided; ADR-0029 decision 5:
 --                    the CI outputs inherit it, C5)
@@ -56,6 +70,7 @@ CREATE TABLE forge.ci_pipelines (
     triggered_by     bigint REFERENCES forge.users (id),
     definition_hash  text CONSTRAINT ci_pipelines_definition_hash
         CHECK (definition_hash ~ '^[0-9a-f]{64}$'),
+    protected        boolean NOT NULL DEFAULT false,
     copy_mark        text NOT NULL CONSTRAINT ci_pipelines_copy_mark
         CHECK (copy_mark IN ('open', 'confidential', 'undecided')),
     status           text NOT NULL CONSTRAINT ci_pipelines_status CHECK (status IN
@@ -75,7 +90,9 @@ CREATE TABLE forge.ci_pipelines (
     CONSTRAINT ci_pipelines_error
         CHECK ((status IN ('invalid', 'error')) = (error_code IS NOT NULL)),
     CONSTRAINT ci_pipelines_definition
-        CHECK (status <> 'error' OR definition_hash IS NULL)
+        CHECK (status <> 'error' OR definition_hash IS NULL),
+    CONSTRAINT ci_pipelines_protected
+        CHECK (NOT protected OR source = 'push')
 );
 -- Exactly once per event (module comment).
 CREATE UNIQUE INDEX ci_pipelines_once ON forge.ci_pipelines
