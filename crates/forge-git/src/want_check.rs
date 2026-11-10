@@ -30,18 +30,26 @@
 //! ([`HIDDEN_REF_GLOB`], from the same constant as the hideRefs value)
 //! right before their `--all` (`--exclude` applies to the next `--all`
 //! only; argv pinned by tests). git 2.42's `--exclude-hidden=uploadpack`
-//! is not used: the minimum is 2.38 (ADR-0007 amendment, M3 R1b).
+//! is not used: the minimum is 2.38 (ADR-0007 amendment, M3 R1b). M4 C4
+//! hides `refs/pipelines/` the same way (a second `--exclude`).
+//!
+//! A CI job's fetch (M4 C4, ADR-0029 §3, [`Git::check_wants_pinned`]) is
+//! checked against its pinned commit only: the walks are `--stdin
+//! --end-of-options ^<sha>` and `--objects --end-of-options <sha>` instead
+//! of the refs, so a job reaches that commit and its ancestors, nothing
+//! else of the repository.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use forge_core::RepoId;
+use forge_core::{ObjectId, RepoId};
 use forge_errors::{ErrorCode, ForgeError};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::command::Git;
-use crate::hidden_refs::HIDDEN_REF_GLOB;
+use crate::hidden_refs::{HIDDEN_REF_GLOB, PIPELINE_REF_GLOB};
+use crate::revision::Revision;
 use crate::storage::StorageRoot;
 use crate::upload_request::is_object_id;
 
@@ -104,7 +112,31 @@ pub struct WantLimits {
     pub max_object_wants: usize,
 }
 
+/// What the wants must be reachable from.
+#[derive(Debug, Clone, Copy)]
+enum Reach<'a> {
+    /// Every ref but the hidden ones (a person's clone and fetch).
+    Refs,
+    /// One commit (a CI job's pinned commit).
+    Pinned(&'a ObjectId),
+}
+
 impl Git {
+    /// [`Git::check_wants`] for a CI job's fetch (M4 C4): every want must be
+    /// reachable from `tip` (the job's pinned commit), not from the refs.
+    pub async fn check_wants_pinned(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        wants: &[String],
+        tip: &ObjectId,
+        principal: &str,
+        limits: WantLimits,
+    ) -> Result<WantCheck, ForgeError> {
+        self.check_wants_from(storage, id, wants, Reach::Pinned(tip), principal, limits)
+            .await
+    }
+
     /// Check that every id in `wants` is reachable from a ref of repository
     /// `id` (see the module docs). `principal` is the caller's stream key
     /// (step 3 runs as a stream, counted against the caller's cap);
@@ -118,6 +150,19 @@ impl Git {
         storage: &StorageRoot,
         id: RepoId,
         wants: &[String],
+        principal: &str,
+        limits: WantLimits,
+    ) -> Result<WantCheck, ForgeError> {
+        self.check_wants_from(storage, id, wants, Reach::Refs, principal, limits)
+            .await
+    }
+
+    async fn check_wants_from(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        wants: &[String],
+        reach: Reach<'_>,
         principal: &str,
         limits: WantLimits,
     ) -> Result<WantCheck, ForgeError> {
@@ -171,7 +216,7 @@ impl Git {
             // printed id is the first one of the walk (a want, or an
             // unreachable commit between a want and the reachable history).
             if let Some(first) = self
-                .first_unreachable_commit(&repo, &commits, left(deadline, timeout)?)
+                .first_unreachable_commit(&repo, &commits, reach, left(deadline, timeout)?)
                 .await?
             {
                 check.unreachable += 1;
@@ -180,7 +225,7 @@ impl Git {
         }
         if !objects.is_empty() {
             let (missing, walked) = self
-                .objects_not_reached(&repo, objects, principal, left(deadline, timeout)?)
+                .objects_not_reached(&repo, objects, reach, principal, left(deadline, timeout)?)
                 .await?;
             check.walked = walked;
             unreachable.extend(missing);
@@ -237,7 +282,44 @@ impl Git {
             .arg("--stdin")
             .arg("--not")
             .exclude_glob(HIDDEN_REF_GLOB)
+            .exclude_glob(PIPELINE_REF_GLOB)
             .arg("--all")
+    }
+
+    /// The walk of step 2 for a pinned commit: the wants (stdin) minus what
+    /// `tip` reaches (`^<tip>` after `--end-of-options`).
+    pub(crate) fn pinned_commit_walk(
+        &self,
+        tip: &ObjectId,
+    ) -> Result<crate::GitCommand, ForgeError> {
+        let tip = Revision::object_id(tip.as_str())?;
+        Ok(self
+            .command("rev-list")
+            .arg("--max-count=1")
+            .arg("--stdin")
+            .revision(tip.excluding()))
+    }
+
+    /// The walk of step 3 for a pinned commit: every object `tip` reaches.
+    pub(crate) fn pinned_object_walk(
+        &self,
+        tip: &ObjectId,
+    ) -> Result<crate::GitCommand, ForgeError> {
+        let tip = Revision::object_id(tip.as_str())?;
+        Ok(self
+            .command("rev-list")
+            .arg("--objects")
+            .arg("--no-object-names")
+            .revision(tip))
+    }
+
+    fn walk(&self, reach: Reach<'_>, objects: bool) -> Result<crate::GitCommand, ForgeError> {
+        match (reach, objects) {
+            (Reach::Refs, false) => Ok(self.commit_walk()),
+            (Reach::Refs, true) => Ok(self.object_walk()),
+            (Reach::Pinned(tip), false) => self.pinned_commit_walk(tip),
+            (Reach::Pinned(tip), true) => self.pinned_object_walk(tip),
+        }
     }
 
     /// The walk of step 3: every object a ref other than the hidden ones
@@ -246,6 +328,7 @@ impl Git {
         self.command("rev-list")
             .arg("--objects")
             .exclude_glob(HIDDEN_REF_GLOB)
+            .exclude_glob(PIPELINE_REF_GLOB)
             .arg("--all")
             .arg("--no-object-names")
     }
@@ -256,10 +339,11 @@ impl Git {
         &self,
         repo: &Path,
         commits: &[&str],
+        reach: Reach<'_>,
         timeout: Duration,
     ) -> Result<Option<String>, ForgeError> {
         let out = self
-            .commit_walk()
+            .walk(reach, false)?
             .repo(repo)
             .stdin(lines(commits.iter().copied()))
             .timeout(timeout)
@@ -279,11 +363,12 @@ impl Git {
         &self,
         repo: &Path,
         mut objects: BTreeSet<&'w str>,
+        reach: Reach<'_>,
         principal: &str,
         timeout: Duration,
     ) -> Result<(Vec<&'w str>, u64), ForgeError> {
         let mut stream = self
-            .object_walk()
+            .walk(reach, true)?
             .repo(repo)
             .timeout(timeout)
             .spawn_stream(principal)

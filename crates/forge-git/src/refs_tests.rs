@@ -352,3 +352,31 @@ async fn version_ref_write_during_pack_refs_is_retried() {
     );
     assert!(f.refs("refs/merge-requests/2").await.is_empty());
 }
+
+/// M4 C4: the pipeline ref is created once and kept; a pipeline ref at
+/// another commit is a defect, never moved.
+#[tokio::test]
+async fn the_pipeline_ref_is_created_once_and_never_moved() {
+    let f = fixture().await;
+    let c1 = commit(&f.path, "one\n", None);
+    let c2 = commit(&f.path, "two\n", Some(c1.as_str()));
+    let made = f
+        .git
+        .ensure_pipeline_ref(&f.root, f.id, 3, &c1, T)
+        .await
+        .expect("created");
+    assert_eq!(made.as_str(), "refs/pipelines/3/head");
+    // Again: kept as is.
+    f.git
+        .ensure_pipeline_ref(&f.root, f.id, 3, &c1, T)
+        .await
+        .expect("kept");
+    assert_eq!(f.refs("refs/pipelines").await.get(&made), Some(&c1));
+    let err = f
+        .git
+        .ensure_pipeline_ref(&f.root, f.id, 3, &c2, T)
+        .await
+        .expect_err("moved");
+    assert_eq!(err.code(), ErrorCode::Internal);
+    assert_eq!(f.refs("refs/pipelines").await.get(&made), Some(&c1));
+}

@@ -365,6 +365,7 @@ fn want_walks_exclude_the_hidden_refs() {
     let home = tempfile::tempdir().expect("home");
     let git = Git::new(GitConfig::new("git", home.path()));
     let exclude = format!("--exclude={}*", crate::hidden_refs::HIDDEN_REF_PREFIX);
+    let pipelines = format!("--exclude={}*", crate::hidden_refs::PIPELINE_REF_PREFIX);
     assert_eq!(
         strings(&git.commit_walk().argv()),
         [
@@ -373,6 +374,7 @@ fn want_walks_exclude_the_hidden_refs() {
             "--stdin",
             "--not",
             exclude.as_str(),
+            pipelines.as_str(),
             "--all"
         ]
     );
@@ -382,6 +384,7 @@ fn want_walks_exclude_the_hidden_refs() {
             "rev-list",
             "--objects",
             exclude.as_str(),
+            pipelines.as_str(),
             "--all",
             "--no-object-names"
         ]
@@ -420,4 +423,89 @@ async fn objects_reachable_only_from_merge_request_refs_are_refused() {
     }
     // A branch-reachable object stays fetchable next to the hidden refs.
     assert_eq!(f.check(&[&h.c2, &h.b1]).await.unreachable, 0);
+}
+
+/// M4 C4: a commit only a pipeline ref reaches is hidden from a person's
+/// fetch like a merge request version.
+#[tokio::test]
+async fn objects_reachable_only_from_pipeline_refs_are_refused() {
+    let f = fixture().await;
+    let h = history(&f.path);
+    plumb(
+        &f.path,
+        &["update-ref", "refs/pipelines/9/head", &h.s1],
+        None,
+    );
+    let check = f.check(&[&h.s1]).await;
+    assert_eq!(check.unreachable, 1, "{check:?}");
+    assert_eq!(f.check(&[&h.secret]).await.unreachable, 1);
+}
+
+impl Fixture {
+    async fn check_pinned(&self, wants: &[&str], tip: &str) -> crate::WantCheck {
+        let wants: Vec<String> = wants.iter().map(|w| (*w).to_owned()).collect();
+        let tip = forge_core::ObjectId::parse(tip).expect("tip");
+        self.git
+            .check_wants_pinned(&self.root, self.id, &wants, &tip, "job:1", limits(30))
+            .await
+            .expect("check")
+    }
+}
+
+/// M4 C4 (ADR-0029 §3): a job's fetch reaches its pinned commit and its
+/// ancestors only — not another branch's commit, not a newer commit on the
+/// same branch, not an object outside the pinned history.
+#[tokio::test]
+async fn a_pinned_fetch_reaches_only_the_pinned_commit_and_its_ancestors() {
+    let f = fixture().await;
+    let h = history(&f.path);
+    // Pinned at c1: c1, its tree and blob pass.
+    assert_eq!(
+        f.check_pinned(&[&h.c1, &h.t1, &h.b1], &h.c1)
+            .await
+            .unreachable,
+        0
+    );
+    // c2 (a newer commit on main) and its blob are not the job's.
+    for want in [&h.c2, &h.b2, &h.s1, &h.secret, &h.loose] {
+        let check = f.check_pinned(&[want], &h.c1).await;
+        assert_eq!(check.unreachable, 1, "{want}: {check:?}");
+        let err = check.into_result().expect_err("refused");
+        assert_eq!(err.code(), ErrorCode::GitProtocolInvalid);
+    }
+    // Pinned at s1 (reachable from no ref): s1 and its ancestors pass.
+    assert_eq!(
+        f.check_pinned(&[&h.s1, &h.c1, &h.secret], &h.s1)
+            .await
+            .unreachable,
+        0
+    );
+}
+
+#[test]
+fn pinned_walks_put_the_commit_after_end_of_options() {
+    let home = tempfile::tempdir().expect("home");
+    let git = Git::new(GitConfig::new("git", home.path()));
+    let tip = forge_core::ObjectId::parse(&"a".repeat(40)).expect("tip");
+    let not_tip = format!("^{}", "a".repeat(40));
+    assert_eq!(
+        strings(&git.pinned_commit_walk(&tip).expect("walk").argv()),
+        [
+            "rev-list",
+            "--max-count=1",
+            "--stdin",
+            "--end-of-options",
+            not_tip.as_str()
+        ]
+    );
+    assert_eq!(
+        strings(&git.pinned_object_walk(&tip).expect("walk").argv()),
+        [
+            "rev-list",
+            "--objects",
+            "--no-object-names",
+            "--end-of-options",
+            "a".repeat(40).as_str()
+        ]
+    );
 }

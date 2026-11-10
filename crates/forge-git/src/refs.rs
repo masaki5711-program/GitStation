@@ -186,6 +186,49 @@ impl Git {
     }
 }
 
+impl Git {
+    /// `refs/pipelines/<pipeline_id>/head` at `sha` (M4 C4, ADR-0029 §3):
+    /// created when missing, kept when it already points there. A pipeline
+    /// ref at another commit is a defect (`FG-SYS-0001
+    /// reason=pipeline_ref_moved`; pipeline ids are never reused and
+    /// receive-pack cannot write the hidden prefix). Two jobs creating it at
+    /// once: the loser reads it back.
+    pub async fn ensure_pipeline_ref(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        pipeline_id: i64,
+        sha: &ObjectId,
+        timeout: Duration,
+    ) -> Result<RefName, ForgeError> {
+        let name = crate::hidden_refs::pipeline_head_ref(pipeline_id)?;
+        let moved = |at: &ObjectId| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "pipeline_ref_moved")
+                .with_context("pipeline_id", pipeline_id)
+                .with_context("repo_id", id.get())
+                .with_context("at", at.as_str().to_owned())
+        };
+        match self.read_ref(storage, id, &name, timeout).await? {
+            Some(at) if at == *sha => return Ok(name),
+            Some(at) => return Err(moved(&at)),
+            None => {}
+        }
+        let create = [RefChange::Create {
+            name: name.clone(), // clone: the caller gets the name back
+            new: sha.clone(),   // clone: the change owns its id
+        }];
+        match self.update_refs(storage, id, &create, timeout).await {
+            Ok(_) => Ok(name),
+            Err(e) => match self.read_ref(storage, id, &name, timeout).await? {
+                Some(at) if at == *sha => Ok(name),
+                Some(at) => Err(moved(&at)),
+                None => Err(e.with_context("pipeline_id", pipeline_id)),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "refs_tests.rs"]
 mod tests;
