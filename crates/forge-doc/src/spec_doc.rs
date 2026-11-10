@@ -38,6 +38,11 @@
 //!   a block: specifications show the syntax in examples. The blocks are
 //!   read by [`crate::document`] (ADR-0026 "one parser"; the mapping onto
 //!   these rules is the `blocks` section below).
+//! - **Plan 13 front matter** (ADR-0026 §7): `doctype: spec.system` is the
+//!   type the older format is; its front matter is read with the same rule
+//!   names (`id` is the name, `retired` deprecates, `classification` is the
+//!   mark; `plan13_meta_of`). A document of any other `doctype` is no
+//!   specification document (doc-lint's, never indexed here).
 //! - **Spec document**: a file with a front matter or a requirement block
 //!   ([`SpecDocument::is_spec`]); any other Markdown file under a
 //!   specification directory (a README) is not indexed.
@@ -234,6 +239,9 @@ pub struct SpecDocument {
     spec: bool,
     /// The file opens with a front matter (read or not).
     front_matter: bool,
+    /// The front matter names a `doctype` other than `spec.system`: a
+    /// plan 13 document of another type, no specification.
+    other_type: bool,
 }
 
 impl SpecDocument {
@@ -290,6 +298,10 @@ fn parse_with(bytes: &[u8], read_blocks: ReadBlocks) -> SpecDocument {
         .map(|l| l.strip_suffix('\r').unwrap_or(l))
         .collect();
     let body_start = front_matter(&lines, &mut doc);
+    if doc.other_type {
+        // Another type's document: not this reader's (doc-lint's).
+        return SpecDocument::default();
+    }
     let saw_requirement = read_blocks(&lines, body_start, &mut doc);
     if saw_requirement && !doc.spec {
         doc.problem(1, "front_matter_missing");
@@ -360,6 +372,14 @@ fn meta_of(root: &Node, shift: impl Fn(usize) -> usize, doc: &mut SpecDocument) 
             return;
         }
     };
+    if let Some(f) = fields.iter().find(|f| f.key == "doctype") {
+        if text(f.value, f.line, "doctype").ok() == Some(crate::legacy::SPEC_SYSTEM) {
+            plan13_meta_of(&fields, shift, doc);
+        } else {
+            doc.other_type = true;
+        }
+        return;
+    }
     let mut spec = None;
     let mut title = None;
     let mut status = None;
@@ -420,6 +440,102 @@ fn meta_of(root: &Node, shift: impl Fn(usize) -> usize, doc: &mut SpecDocument) 
         title,
         status,
         owners,
+        confidential,
+    });
+}
+
+/// The front matter of a plan 13 `doctype: spec.system` document
+/// (ADR-0026 §7: the type the older format is). Read with the older
+/// format's rule names, so spec-lint answers alike for both:
+///
+/// - `id` is the specification's name (`spec_missing` / `spec_invalid`);
+///   `title` as in the older format;
+/// - `retired` (any value; its shape is doc-lint's) makes the document
+///   [`SpecStatus::Deprecated`]; the plan 13 format keeps no other state in
+///   the file, so a document not retired reads [`SpecStatus::Approved`]:
+///   the text in force at that commit (its approval is the merge
+///   request's);
+/// - `classification: confidential` (or the older `confidential: true`,
+///   or both keys) marks it confidential, as
+///   [`crate::document::Document::classification`] with the type's default
+///   `internal`; a value that is no classification is `confidential_invalid`
+///   (the front matter is then not used: withheld, fail closed);
+/// - the other base keys (`owner`, `review_cycle`, `related`, `lang`,
+///   `translation_of`) are accepted (doc-lint checks them); any other key
+///   (`spec`, `status`, `owners`, a type's own field) is
+///   `front_matter_unknown_key`.
+fn plan13_meta_of(
+    fields: &[crate::yaml::Field<'_>],
+    shift: impl Fn(usize) -> usize,
+    doc: &mut SpecDocument,
+) {
+    use crate::document::Classification;
+    let mut id = None;
+    let mut title = None;
+    let mut retired = false;
+    let mut classification: Option<Classification> = None;
+    let mut older_mark: Option<bool> = None;
+    let mut ok = true;
+    let mut bad = |doc: &mut SpecDocument, line: usize, rule: &'static str| {
+        doc.problem(shift(line), rule);
+        ok = false;
+    };
+    for f in fields {
+        match f.key {
+            "doctype" | "owner" | "review_cycle" | "related" | "lang" | "translation_of" => {}
+            "id" => match meta_text(f.value, f.line, "spec_invalid") {
+                Ok(v) => id = Some((v, f.line)),
+                Err((l, r)) => bad(doc, l, r),
+            },
+            "title" => match meta_text(f.value, f.line, "title_invalid") {
+                Ok(v) => title = Some(v),
+                Err((l, r)) => bad(doc, l, r),
+            },
+            "retired" => retired = true,
+            "classification" => match text(f.value, f.line, "confidential_invalid")
+                .ok()
+                .and_then(Classification::parse)
+            {
+                Some(c) => classification = Some(c),
+                None => bad(doc, f.line, "confidential_invalid"),
+            },
+            "confidential" => match text(f.value, f.line, "confidential_invalid") {
+                Ok("true") => older_mark = Some(true),
+                Ok("false") => older_mark = Some(false),
+                _ => bad(doc, f.line, "confidential_invalid"),
+            },
+            _ => bad(doc, f.line, "front_matter_unknown_key"),
+        }
+    }
+    if !ok {
+        return;
+    }
+    let (Some((spec, spec_line)), Some(title)) = (id, title) else {
+        let rule = if fields.iter().all(|f| f.key != "id") {
+            "spec_missing"
+        } else {
+            "title_missing"
+        };
+        doc.problem(1, rule);
+        return;
+    };
+    let confidential = match (classification, older_mark) {
+        // Both written: fail closed (as Document::classification).
+        (Some(_), Some(_)) => true,
+        (Some(c), None) => c >= Classification::Confidential,
+        (None, Some(mark)) => mark,
+        (None, None) => false,
+    };
+    doc.meta = Some(SpecMeta {
+        spec,
+        spec_line: shift(spec_line),
+        title,
+        status: if retired {
+            SpecStatus::Deprecated
+        } else {
+            SpecStatus::Approved
+        },
+        owners: Vec::new(),
         confidential,
     });
 }
@@ -770,3 +886,7 @@ mod oracle;
 #[cfg(test)]
 #[path = "spec_doc_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "spec_doc_plan13_tests.rs"]
+mod plan13_tests;

@@ -210,19 +210,16 @@ fn comments_line_endings_and_the_byte_order_mark_are_kept() {
     );
 }
 
-/// A migrated file is no longer in the older format: `spec_doc` (and so
-/// forge/spec-lint and the spec index) refuses its front matter until the
-/// spec index reads the plan 13 format — what `gstn` warns about. Its
-/// requirements are still read, and it is withheld from an AI (fail closed).
+/// A migrated file is read by `spec_doc` as the older one was (plan 13
+/// `doctype: spec.system`): the same name, title and requirements, no
+/// problem (the owner TODO is doc-lint's), not withheld.
 #[test]
-fn a_migrated_file_leaves_the_older_reader() {
+fn a_migrated_file_is_read_by_the_spec_reader_as_before() {
     let m = migrate(PLAN_EXAMPLE);
     let older = crate::spec_doc::parse_spec_document(m.text.as_bytes());
-    assert!(older.meta.is_none());
-    assert!(older
-        .problems
-        .iter()
-        .any(|p| p.rule == "front_matter_unknown_key"));
+    assert!(older.problems.is_empty(), "{:?}", older.problems);
+    let meta = older.meta.as_ref().expect("meta");
+    assert_eq!(meta.spec, "zeva-engine/config");
     assert_eq!(older.requirements.len(), 2);
-    assert!(older.confidential());
+    assert!(!older.confidential());
 }

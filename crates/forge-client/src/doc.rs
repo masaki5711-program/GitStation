@@ -845,8 +845,7 @@ pub fn report_fmt(cli: &Cli, io: &mut Io<'_>, out: &FmtOutcome) -> Result<()> {
     if !out.migrated.is_empty() {
         human.push(
             "Migrated files: fill in each TODO(gstn doc fmt --migrate) (gstn doc lint names \
-             field_missing owner). They are no longer in the older format forge/spec-lint \
-             reads."
+             field_missing owner)."
                 .to_owned(),
         );
     }
