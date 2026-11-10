@@ -19,6 +19,7 @@ function status(
     schema_version: 1,
     iid: 3,
     head_sha: '2'.repeat(40),
+    merge_result_sha: null,
     target_branch: 'main',
     method: 'merge_commit',
     mergeable,
@@ -147,6 +148,17 @@ describe('blockedReason: reasons with a detail', () => {
     });
   });
 
+  it('required_check_stale (M4 C7) carries the check name and waits', () => {
+    const r = blockedReason(
+      status([{ reason: 'required_check_stale', detail: 'name=ci/pipeline' }]),
+    );
+    expect(r).toEqual({
+      key: 'mr.status.checkStale',
+      values: { name: 'ci/pipeline' },
+      next: 'wait',
+    });
+  });
+
   it('required_check_not_successful carries name, status, conclusion; next is push', () => {
     const r = blockedReason(
       status([
@@ -190,6 +202,7 @@ describe('blockedReason: malformed detail never throws', () => {
     ['approvals_missing', 'rule=x required=1'],
     ['codeowner_approval_missing', 'pattern='],
     ['required_check_missing', 'nonsense=1'],
+    ['required_check_stale', null],
     ['required_check_not_successful', 'name=x'],
     ['unresolved_discussions', 'count=-1'],
     ['unresolved_discussions', 'count=abc'],
@@ -218,6 +231,7 @@ describe('blockedReason: next never points at approve or merge (U2)', () => {
       'codeowner_approval_missing',
       'codeowners_invalid',
       'required_check_missing',
+      'required_check_stale',
       'required_check_not_successful',
       'unresolved_discussions',
       'config_change_needs_maintainer_approval',
@@ -235,6 +249,7 @@ describe('statusHint / statusTone (U1 review: name what is waited for)', () => {
     ['approvals_missing', 'mr.status.hint.approvals'],
     ['codeowner_approval_missing', 'mr.status.hint.owners'],
     ['required_check_missing', 'mr.status.hint.checks'],
+    ['required_check_stale', 'mr.status.hint.checksStale'],
     ['merge_in_progress', 'mr.status.hint.merging'],
     ['config_change_needs_maintainer_approval', 'mr.status.hint.maintainer'],
     ['changed_paths_unknown', 'mr.status.hint.retry'],
