@@ -793,6 +793,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A revision's documents in the plan 13 format: id, title, type, path, classification (paged; an agent's list leaves confidential ones out) */
+        get: operations["get_api_v1_projects_id_documents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/documents/{doc_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One document's view: front matter, sections of text and blocks, references resolved (a more confidential target: its id only) */
+        get: operations["get_api_v1_projects_id_documents_doc_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/integration-bindings": {
         parameters: {
             query?: never;
@@ -3280,6 +3314,16 @@ export interface components {
             /** @description More than 500 discussions or 5 000 notes: the rest are not listed. */
             truncated: boolean;
         };
+        /** @description A bound the read of the documents hit. */
+        DocIncompleteBody: {
+            /** @description `FG-DOC-0002`. */
+            error_code: string;
+            /**
+             * @description `doc_tree`, `doc_files`, `doc_large_files`, `doc_bytes` or
+             *     `doctype_files`.
+             */
+            reason: string;
+        };
         /** @description A project's migration setting. */
         DocLintMigrationBody: {
             /** @description The date is today or later: broken references are warnings now. */
@@ -3308,6 +3352,139 @@ export interface components {
         DocLintMigrationViewer: {
             /** @description `PUT` / `DELETE …/doc-lint/migration`. */
             can_manage: boolean;
+        };
+        /** @description A block's attribute, as written. */
+        DocumentAttrBody: {
+            key: string;
+            value: string;
+        };
+        /** @description A block (`::: <kind> <id> <attrs>`). */
+        DocumentBlockBody: {
+            /** @description In the written order. */
+            attrs: components["schemas"]["DocumentAttrBody"][];
+            /** @description The body as written (one sentence per line). */
+            body: string;
+            /** @description `status=deprecated`. */
+            deprecated: boolean;
+            /**
+             * @description The body for display: Markdown with the prose lines joined
+             *     (`forge_doc::render::display_markdown`, plan 13 §4.1).
+             */
+            display: string;
+            /** @description `null` for a plain container (`::: note`). */
+            id: string | null;
+            kind: string;
+        };
+        /** @description One document's view (plan 13 §7.3). */
+        DocumentBody: {
+            /**
+             * @description `public`, `internal` or `confidential` (the type's default when
+             *     the document has none; `confidential` when the type cannot be read).
+             */
+            classification: string;
+            doctype: string;
+            fields: components["schemas"]["DocumentFieldBody"][];
+            id: string;
+            incomplete: null | components["schemas"]["DocIncompleteBody"];
+            /** @description The translation shown; `null`: the original. */
+            lang: string | null;
+            owner: string | null;
+            /** @description The file shown (the translation's when `lang` is set). */
+            path: string;
+            /** @description Problems in all (with those not listed). */
+            problem_count: number;
+            /** @description The first parse problems ([`MAX_PROBLEMS`]). */
+            problems: components["schemas"]["DocumentProblemBody"][];
+            ref: components["schemas"]["RevBody"];
+            refs: components["schemas"]["DocumentRefBody"][];
+            sections: components["schemas"]["DocumentSectionBody"][];
+            title: string | null;
+            /** @description The languages of the document's translations, sorted. */
+            translations: string[];
+            /**
+             * Format: int32
+             * @description The view's schema version (`forge_doc::render::VIEW_VERSION`): a
+             *     change that removes or renames a field raises it.
+             */
+            version: number;
+        };
+        /** @description A front matter field the base keys do not cover. */
+        DocumentFieldBody: {
+            key: string;
+            /** @description As written: a string, a list, a map or `null`. */
+            value: unknown;
+        };
+        /** @description A revision's documents. */
+        DocumentListBody: {
+            /** @description By id. */
+            documents: components["schemas"]["DocumentSummaryBody"][];
+            incomplete: null | components["schemas"]["DocIncompleteBody"];
+            /** @description More documents follow: ask again with `after=<next_after>`. */
+            next_after: string | null;
+            ref: components["schemas"]["RevBody"];
+            withheld: null | components["schemas"]["ContextWithheldBody"];
+        };
+        /** @description A piece of a section, in order: Markdown text, or a block. */
+        DocumentPieceBody: {
+            block: null | components["schemas"]["DocumentBlockBody"];
+            /** @description The text for display (`type: text`): prose lines joined. */
+            display: string | null;
+            /** @description 1-based. */
+            line: number;
+            /** @description The text as written (`type: text`; `null` for a block). */
+            markdown: string | null;
+            /** @description `text` or `block`. */
+            type: string;
+        };
+        /**
+         * @description A rule the document's text breaks (the parser's; `gstn doc lint` lists
+         *     them all with the type's).
+         */
+        DocumentProblemBody: {
+            line: number;
+            rule: string;
+            subject: string | null;
+        };
+        /** @description A `[[…]]` reference and how it resolved. */
+        DocumentRefBody: {
+            block: string | null;
+            /** @description `found` with a block only: the block's kind. */
+            block_kind: string | null;
+            doc: string;
+            line: number;
+            /** @description Another repository's (`[[repo:ID]]`); `null` for this one. */
+            repo: string | null;
+            /**
+             * @description `found` (a document of this repository the reader may be shown),
+             *     `hidden` (more confidential than this document: its id only — plan
+             *     13 Q14), `broken` (no such document or block) or `external` (another
+             *     repository's; not resolved here).
+             */
+            target: string;
+            /** @description `found` only. */
+            title: string | null;
+        };
+        /** @description A level-2 section. */
+        DocumentSectionBody: {
+            /** @description `null`: the text before the first heading. */
+            heading: string | null;
+            line: number;
+            pieces: components["schemas"]["DocumentPieceBody"][];
+        };
+        /** @description One document of the list. */
+        DocumentSummaryBody: {
+            /**
+             * @description `public`, `internal` or `confidential` (plan 06 D-5: how an AI may
+             *     be given it; not access control).
+             */
+            classification: string;
+            doctype: string;
+            id: string;
+            path: string;
+            /** @description `null` when the front matter has none. */
+            title: string | null;
+            /** @description The languages of its translations, sorted. */
+            translations: string[];
         };
         /** @description One tree entry. */
         EntryBody: {
@@ -7469,6 +7646,83 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_documents: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+                /** @description Only documents of this type (e.g. safety.risk-assessment) */
+                doctype?: string;
+                /** @description At most this many documents (default 100) */
+                limit?: number;
+                /** @description The previous page's next_after: only documents whose id sorts after it */
+                after?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentListBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_documents_doc_id: {
+        parameters: {
+            query?: {
+                /** @description A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch */
+                ref?: string;
+                /** @description A translation (<id>.<lang>.md, e.g. en); default: the original */
+                lang?: string;
+            };
+            header?: never;
+            path: {
+                doc_id: string;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentBody"];
+                };
             };
             /** @description Error: registered code, localized message, request id */
             default: {

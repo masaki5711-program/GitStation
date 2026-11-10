@@ -186,7 +186,8 @@
     "emptyFile": "This file is empty.",
     "lineLabel": "Line {{n}}",
     "gotoLine": "Go to line",
-    "gotoGo": "Go"
+    "gotoGo": "Go",
+    "openDocument": "Open as a document"
   },
   "blame": {
     "title": "Blame",
@@ -1126,5 +1127,47 @@
     "scanFailed": "The conflict prediction could not run. It runs again on the next push.",
     "scanIncomplete": "Not every other merge request was compared.",
     "scanStale": "This prediction was made for an earlier version or target."
+  },
+  "docs": {
+    "title": "Documents",
+    "listLabel": "Documents of the project",
+    "backToList": "All documents",
+    "id": "ID",
+    "docTitle": "Title",
+    "doctype": "Type",
+    "owner": "Owner",
+    "classification": "Classification",
+    "revision": "Revision",
+    "file": "File",
+    "none": "—",
+    "translations": "Translations",
+    "original": "Original",
+    "class": {
+      "public": "Public",
+      "internal": "Internal",
+      "confidential": "Confidential"
+    },
+    "incomplete": "The repository has too many or too large documents; only part of it was read ({{code}}). References may show as not found although the document exists.",
+    "problems_one": "This document has {{count}} problem. Run gstn doc lint to see it.",
+    "problems_other": "This document has {{count}} problems. Run gstn doc lint to see them.",
+    "withheld_one": "{{count}} confidential document is not shown to an AI agent.",
+    "withheld_other": "{{count}} confidential documents are not shown to an AI agent.",
+    "empty": "There are no documents in this revision. A document is a Markdown file whose front matter names a doctype.",
+    "blocksOf": "Blocks: {{kind}}",
+    "blockId": "ID",
+    "blockText": "Text",
+    "deprecated": "Deprecated",
+    "references": "References",
+    "pages": "Pages",
+    "firstPage": "First page",
+    "nextPage": "Next page",
+    "ref": {
+      "line": "Line {{line}}:",
+      "hidden": "More confidential than this document: only its ID is shown.",
+      "hiddenShort": "more confidential",
+      "broken": "Not found in this repository",
+      "brokenShort": "not found",
+      "external": "In another repository"
+    }
   }
 }

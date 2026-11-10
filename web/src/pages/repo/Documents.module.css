@@ -1,0 +1,174 @@
+/* The document screens (plan 13 stage 3). Colours are the design tokens;
+ * a classification is a word on a colour, never the colour alone. */
+.document {
+  max-width: 72rem;
+}
+
+.title {
+  margin: 0 0 var(--gs-space-3);
+  overflow-wrap: anywhere;
+}
+
+.back {
+  margin: 0 0 var(--gs-space-2);
+}
+
+.meta {
+  color: var(--gs-color-text-muted);
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2) var(--gs-space-6);
+  margin: 0 0 var(--gs-space-4);
+}
+
+.summary div {
+  display: flex;
+  gap: var(--gs-space-2);
+}
+
+.summary dt {
+  color: var(--gs-color-text-muted);
+}
+
+.summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.public,
+.internal,
+.confidential {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-sm);
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.public {
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.internal {
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text);
+}
+
+.confidential {
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+  border-color: var(--gs-color-danger-border);
+}
+
+.translations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin-bottom: var(--gs-space-4);
+}
+
+.translations ul {
+  display: flex;
+  gap: var(--gs-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.warning {
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.section {
+  margin-top: var(--gs-space-6);
+}
+
+.scroll {
+  overflow-x: auto;
+  margin: var(--gs-space-3) 0;
+}
+
+.scroll:focus-visible {
+  outline: 2px solid var(--gs-color-focus);
+  outline-offset: 2px;
+}
+
+.blocks {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.blocks caption {
+  text-align: left;
+  font-weight: bold;
+  padding-bottom: var(--gs-space-1);
+}
+
+.blocks th,
+.blocks td {
+  padding: var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.blocks thead th {
+  background: var(--gs-color-surface);
+}
+
+.blocks tr:target {
+  outline: 2px solid var(--gs-color-focus);
+}
+
+.deprecated td,
+.deprecated th {
+  color: var(--gs-color-text-muted);
+  background: var(--gs-color-surface);
+}
+
+.deprecatedLabel {
+  display: block;
+  font-size: var(--gs-font-size-sm);
+  font-weight: normal;
+}
+
+.note {
+  margin: var(--gs-space-3) 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-left: 4px solid var(--gs-color-border);
+  background: var(--gs-color-surface);
+}
+
+.noteKind {
+  margin: 0;
+  font-weight: bold;
+  color: var(--gs-color-text-muted);
+}
+
+.refs {
+  padding-left: var(--gs-space-4);
+}
+
+.refLine,
+.refNote {
+  color: var(--gs-color-text-muted);
+}
+
+.broken {
+  color: var(--gs-color-danger-text);
+}
+
+.pages {
+  display: flex;
+  gap: var(--gs-space-4);
+  margin-top: var(--gs-space-4);
+}

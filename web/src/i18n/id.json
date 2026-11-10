@@ -186,7 +186,8 @@
     "emptyFile": "Berkas ini kosong.",
     "lineLabel": "Baris {{n}}",
     "gotoLine": "Ke baris",
-    "gotoGo": "Pergi"
+    "gotoGo": "Pergi",
+    "openDocument": "Buka sebagai dokumen"
   },
   "blame": {
     "title": "Penulis per baris",
@@ -1126,5 +1127,47 @@
     "scanFailed": "Prediksi konflik tidak dapat dijalankan. Akan dijalankan lagi pada push berikutnya.",
     "scanIncomplete": "Tidak semua merge request lain dibandingkan.",
     "scanStale": "Prediksi ini dibuat untuk versi atau target sebelumnya."
+  },
+  "docs": {
+    "title": "Dokumen",
+    "listLabel": "Dokumen proyek",
+    "backToList": "Semua dokumen",
+    "id": "ID",
+    "docTitle": "Judul",
+    "doctype": "Tipe",
+    "owner": "Penanggung jawab",
+    "classification": "Klasifikasi",
+    "revision": "Revisi",
+    "file": "Berkas",
+    "none": "—",
+    "translations": "Terjemahan",
+    "original": "Asli",
+    "class": {
+      "public": "Publik",
+      "internal": "Internal",
+      "confidential": "Rahasia"
+    },
+    "incomplete": "Repositori memiliki terlalu banyak atau terlalu besar dokumen; hanya sebagian yang terbaca ({{code}}). Referensi dapat tampil tidak ditemukan walaupun dokumennya ada.",
+    "problems_one": "Dokumen ini memiliki {{count}} masalah. Jalankan gstn doc lint untuk melihatnya.",
+    "problems_other": "Dokumen ini memiliki {{count}} masalah. Jalankan gstn doc lint untuk melihatnya.",
+    "withheld_one": "{{count}} dokumen rahasia tidak ditampilkan kepada agen AI.",
+    "withheld_other": "{{count}} dokumen rahasia tidak ditampilkan kepada agen AI.",
+    "empty": "Tidak ada dokumen pada revisi ini. Dokumen adalah berkas Markdown yang front matter-nya menyebut doctype.",
+    "blocksOf": "Blok: {{kind}}",
+    "blockId": "ID",
+    "blockText": "Teks",
+    "deprecated": "Usang",
+    "references": "Referensi",
+    "pages": "Halaman",
+    "firstPage": "Halaman pertama",
+    "nextPage": "Halaman berikutnya",
+    "ref": {
+      "line": "Baris {{line}}:",
+      "hidden": "Lebih rahasia daripada dokumen ini: hanya ID-nya yang ditampilkan.",
+      "hiddenShort": "lebih rahasia",
+      "broken": "Tidak ditemukan di repositori ini",
+      "brokenShort": "tidak ditemukan",
+      "external": "Di repositori lain"
+    }
   }
 }

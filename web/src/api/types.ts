@@ -59,3 +59,12 @@ export type PutApprovalRuleBody = S['PutApprovalRule'];
 export type ProtectedRef = S['ProtectedRefBody'];
 export type MergeRule = S['MergeRuleBody'];
 export type PutMergeRuleBody = S['PutMergeRule'];
+
+// Documents (plan 13 stage 3).
+export type DocumentListBody = S['DocumentListBody'];
+export type DocumentSummary = S['DocumentSummaryBody'];
+export type DocumentBody = S['DocumentBody'];
+export type DocumentSection = S['DocumentSectionBody'];
+export type DocumentPiece = S['DocumentPieceBody'];
+export type DocumentBlock = S['DocumentBlockBody'];
+export type DocumentRef = S['DocumentRefBody'];

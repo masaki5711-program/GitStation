@@ -20,6 +20,8 @@ import { BlobScreen } from './BlobScreen';
 import { CommitScreen } from './CommitScreen';
 import { CommitsScreen } from './CommitsScreen';
 import { CompareScreen } from './CompareScreen';
+import { DocumentScreen } from './DocumentScreen';
+import { DocumentsScreen } from './DocumentsScreen';
 import { RefsScreen } from './RefsScreen';
 import { RepoError } from './common';
 import { TreeScreen } from './TreeScreen';
@@ -34,7 +36,7 @@ import { MembersScreen } from '../settings/Members';
 import { ProjectSettings } from '../settings/ProjectSettings';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents'];
 
 export function RepoViews({
   projectId,
@@ -126,6 +128,16 @@ export function RepoViews({
           <NotFound />
         );
       break;
+    case 'documents':
+      screen =
+        tail.length === 0 ? (
+          <DocumentsScreen projectId={projectId} project={project} />
+        ) : tail.length === 1 ? (
+          <DocumentScreen projectId={projectId} project={project} docId={tail[0] ?? ''} />
+        ) : (
+          <NotFound />
+        );
+      break;
     case 'settings':
       screen = <ProjectSettings projectId={projectId} />;
       break;
@@ -162,6 +174,7 @@ export function RepoViews({
     { words: ['tags'], to: `${base}/-/tags`, label: t('repo.tags') },
     { words: ['compare'], to: `${base}/-/compare`, label: t('repo.compare') },
     { words: ['pulls', 'pull'], to: `${base}/-/pulls`, label: t('repo.pulls') },
+    { words: ['documents'], to: `${base}/-/documents`, label: t('docs.title') },
     { words: ['members'], to: `${base}/-/members`, label: t('members.title') },
     ...(canManageHooks
       ? [{ words: ['webhooks'], to: `${base}/-/webhooks`, label: t('webhooks.title') }]

@@ -186,7 +186,8 @@
     "emptyFile": "このファイルは空です。",
     "lineLabel": "{{n}} 行目",
     "gotoLine": "行へ移動",
-    "gotoGo": "移動"
+    "gotoGo": "移動",
+    "openDocument": "文書として開く"
   },
   "blame": {
     "title": "行ごとの履歴",
@@ -1126,5 +1127,47 @@
     "scanFailed": "衝突の予測を実行できませんでした。次のプッシュでもう一度実行されます。",
     "scanIncomplete": "ほかのマージリクエストの一部とは比べていません。",
     "scanStale": "この予測は前の版または前のターゲットについてのものです。"
+  },
+  "docs": {
+    "title": "文書",
+    "listLabel": "プロジェクトの文書",
+    "backToList": "文書の一覧へ",
+    "id": "文書番号",
+    "docTitle": "題名",
+    "doctype": "型",
+    "owner": "責任者",
+    "classification": "機密区分",
+    "revision": "版（ブランチ・タグ）",
+    "file": "ファイル",
+    "none": "—",
+    "translations": "訳",
+    "original": "原文",
+    "class": {
+      "public": "公開",
+      "internal": "社内",
+      "confidential": "機密"
+    },
+    "incomplete": "リポジトリの文書が多すぎるか大きすぎるため、一部しか読めていません（{{code}}）。文書があっても、参照が「見つからない」と出ることがあります。",
+    "problems_one": "この文書には問題が {{count}} 件あります。gstn doc lint で確かめてください。",
+    "problems_other": "この文書には問題が {{count}} 件あります。gstn doc lint で確かめてください。",
+    "withheld_one": "機密の文書 {{count}} 件は AI エージェントには表示しません。",
+    "withheld_other": "機密の文書 {{count}} 件は AI エージェントには表示しません。",
+    "empty": "この版には文書がありません。文書は、frontmatter に doctype を書いた Markdown のファイルです。",
+    "blocksOf": "ブロック: {{kind}}",
+    "blockId": "ID",
+    "blockText": "本文",
+    "deprecated": "廃止",
+    "references": "参照",
+    "pages": "ページ",
+    "firstPage": "最初のページ",
+    "nextPage": "次のページ",
+    "ref": {
+      "line": "{{line}} 行目:",
+      "hidden": "この文書より機密の高い文書です。ID だけを表示します。",
+      "hiddenShort": "機密が高い",
+      "broken": "このリポジトリに見つかりません",
+      "brokenShort": "見つからない",
+      "external": "ほかのリポジトリの文書"
+    }
   }
 }
