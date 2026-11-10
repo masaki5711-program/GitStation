@@ -11,7 +11,10 @@
 //! ```
 //!
 //! - The image is the claim's, and must be pinned by digest
-//!   ([`valid_image`]); it comes after `--`, so it can never be an option.
+//!   ([`valid_image`]) and come from an allowed registry
+//!   ([`PodmanPlan::image_allowed`], the runner's `image_registries`;
+//!   FG-CI-0011 before any pull); it comes after `--`, so it can never be
+//!   an option.
 //! - The job's script lines are written to `script.sh` in a directory
 //!   mounted read-only; they never reach argv, and only the container's
 //!   own shell reads them (the job's sandbox). The runner host runs no
@@ -83,6 +86,9 @@ pub fn container_name(job: i64, attempt: i32) -> String {
 pub struct PodmanPlan {
     podman: PathBuf,
     limits: Limits,
+    /// The registry prefixes an image must start with (none: every image
+    /// is refused).
+    registries: Vec<String>,
 }
 
 /// What one container runs.
@@ -100,7 +106,29 @@ pub struct Container<'a> {
 
 impl PodmanPlan {
     pub fn new(podman: PathBuf, limits: Limits) -> Self {
-        Self { podman, limits }
+        Self {
+            podman,
+            limits,
+            registries: Vec::new(),
+        }
+    }
+
+    /// Allow images under these registry prefixes (the runner's
+    /// `image_registries`, each ending at a `/`).
+    #[must_use]
+    pub fn with_registries(mut self, registries: Vec<String>) -> Self {
+        self.registries = registries;
+        self
+    }
+
+    /// A digest-pinned image ([`valid_image`]) under one of the allowed
+    /// registry prefixes (FG-CI-0011 otherwise, before any pull).
+    pub fn image_allowed(&self, image: &str) -> bool {
+        valid_image(image)
+            && self
+                .registries
+                .iter()
+                .any(|p| image.starts_with(p.as_str()))
     }
 
     fn cmd(&self) -> Cmd {

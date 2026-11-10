@@ -9,6 +9,7 @@
 //! # allow_insecure_http = false             # http only with this set to true
 //! token_file = "/etc/forge-runner/token"    # or FORGE_RUNNER_TOKEN
 //! work_dir = "/var/lib/forge-runner"        # the job's directories
+//! image_registries = ["registry.internal/"] # a job's image must start with one
 //! # ca_file = "/etc/forge-runner/internal-ca.pem"  # the API client's and git's CA
 //! # git = "git"
 //! # podman = "podman"
@@ -43,6 +44,8 @@ struct Raw {
     #[serde(default)]
     allow_insecure_http: bool,
     #[serde(default)]
+    image_registries: Vec<String>,
+    #[serde(default)]
     git: Option<PathBuf>,
     #[serde(default)]
     podman: Option<PathBuf>,
@@ -61,6 +64,9 @@ pub struct RunnerConfig {
     pub token_file: Option<PathBuf>,
     pub work_dir: PathBuf,
     pub ca_file: Option<PathBuf>,
+    /// The registry prefixes a job's image must start with (each ends at
+    /// a `/`).
+    pub image_registries: Vec<String>,
     pub git: PathBuf,
     pub podman: PathBuf,
     pub limits: Limits,
@@ -100,6 +106,27 @@ fn has_mount_separator(path: &Path) -> bool {
     text.contains([':', ','])
 }
 
+/// `registry.internal/ci/`: a lower-case registry path (the characters
+/// of `podman::valid_image`'s name) that starts with a letter or digit,
+/// ends at a `/` (so `registry.internal` never matches
+/// `registry.internal.evil/`) and has no empty or dot-only component.
+fn valid_registry_prefix(prefix: &str) -> bool {
+    let Some(path) = prefix.strip_suffix('/') else {
+        return false;
+    };
+    prefix.len() <= 255
+        && prefix
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && prefix
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-/:".contains(&b))
+        && path
+            .split('/')
+            .all(|c| !c.is_empty() && c.bytes().any(|b| b != b'.'))
+}
+
 impl RunnerConfig {
     /// Parse and check the TOML text.
     pub fn parse(text: &str) -> Result<Self, ForgeError> {
@@ -137,11 +164,22 @@ impl RunnerConfig {
         if limits.pids == 0 {
             return Err(invalid("pids_limit", "zero"));
         }
+        if raw.image_registries.is_empty() {
+            return Err(invalid("image_registries", "missing"));
+        }
+        if !raw
+            .image_registries
+            .iter()
+            .all(|p| valid_registry_prefix(p))
+        {
+            return Err(invalid("image_registries", "not_a_prefix"));
+        }
         Ok(Self {
             server,
             token_file: raw.token_file,
             work_dir: raw.work_dir,
             ca_file: raw.ca_file,
+            image_registries: raw.image_registries,
             git: raw.git.unwrap_or_else(|| PathBuf::from("git")),
             podman: raw.podman.unwrap_or_else(|| PathBuf::from("podman")),
             limits,
@@ -194,6 +232,44 @@ mod tests {
 
     use super::*;
 
+    /// The registries line every valid test configuration carries.
+    const REG: &str = "image_registries = [\"registry.internal/\"]\n";
+
+    /// M4 C4 review: the allowed image registries are required, and each
+    /// is a registry path prefix ending at a `/`.
+    #[test]
+    fn image_registries_are_required_prefixes() {
+        let work = if cfg!(windows) { "C:/r" } else { "/r" };
+        let base = format!("server = \"https://x\"\nwork_dir = \"{work}\"\n");
+        for (line, want) in [
+            ("", "missing"),
+            ("image_registries = []\n", "missing"),
+            (
+                "image_registries = [\"registry.internal\"]\n",
+                "not_a_prefix",
+            ),
+            ("image_registries = [\"/\"]\n", "not_a_prefix"),
+            (
+                "image_registries = [\"Registry.internal/\"]\n",
+                "not_a_prefix",
+            ),
+            ("image_registries = [\"r/../x/\"]\n", "not_a_prefix"),
+        ] {
+            let text = format!("{line}{base}");
+            let err = RunnerConfig::parse(&text).expect_err(&text);
+            assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+            assert_eq!(reason(&err), want, "{text}");
+        }
+        let cfg = RunnerConfig::parse(&format!(
+            "image_registries = [\"registry.internal/ci/\", \"mirror.internal:5000/\"]\n{base}"
+        ))
+        .expect("valid");
+        assert_eq!(
+            cfg.image_registries,
+            ["registry.internal/ci/", "mirror.internal:5000/"]
+        );
+    }
+
     fn reason(err: &ForgeError) -> String {
         err.context()
             .iter()
@@ -210,7 +286,7 @@ mod tests {
             "/var/lib/forge-runner"
         };
         let cfg = RunnerConfig::parse(&format!(
-            "server = \"https://git.example.test\"\nwork_dir = \"{work}\"\n"
+            "{REG}server = \"https://git.example.test\"\nwork_dir = \"{work}\"\n"
         ));
         let cfg = cfg.expect("valid");
         assert_eq!(cfg.git, PathBuf::from("git"));
@@ -262,7 +338,7 @@ mod tests {
             assert_eq!(reason(&err), "mount_separator", "{text}");
         }
         RunnerConfig::parse(&format!(
-            "server = \"https://x\"\nwork_dir = \"{work}/forge-runner_1.d\""
+            "{REG}server = \"https://x\"\nwork_dir = \"{work}/forge-runner_1.d\""
         ))
         .expect("a plain path");
     }
@@ -278,7 +354,7 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::ConfigInvalid);
         assert_eq!(reason(&err), "insecure_http");
         let cfg = RunnerConfig::parse(&format!(
-            "server = \"http://git.example.test\"\nwork_dir = \"{work}\"\nallow_insecure_http = true"
+            "{REG}server = \"http://git.example.test\"\nwork_dir = \"{work}\"\nallow_insecure_http = true"
         ))
         .expect("opted in");
         assert_eq!(cfg.server.scheme(), "http");
@@ -291,7 +367,7 @@ mod tests {
         std::fs::write(&file, "fgr_0011_secret\n").expect("write");
         let work = dir.path().to_string_lossy().replace('\\', "/");
         let cfg = RunnerConfig::parse(&format!(
-            "server = \"https://x\"\nwork_dir = \"{work}\"\ntoken_file = \"{}\"",
+            "{REG}server = \"https://x\"\nwork_dir = \"{work}\"\ntoken_file = \"{}\"",
             file.to_string_lossy().replace('\\', "/")
         ))
         .expect("valid");

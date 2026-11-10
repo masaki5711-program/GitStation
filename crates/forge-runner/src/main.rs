@@ -90,7 +90,8 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
     let token = cfg.token(&|k| std::env::var(k).ok())?;
     let (empty_config, empty_hooks) = runner_files(&cfg)?;
     let proc: Arc<dyn ProcessRunner> = Arc::new(SystemRunner);
-    let podman = PodmanPlan::new(cfg.podman.clone(), cfg.limits.clone()); // clone: the plan owns its copy
+    let podman = PodmanPlan::new(cfg.podman.clone(), cfg.limits.clone()) // clone: the plan owns its copy
+        .with_registries(cfg.image_registries.clone()); // clone: as above
     rootless(proc.as_ref(), &podman)?;
     let client_cfg = forge_client::config::Config {
         dir: cfg.work_dir.clone(), // clone: the client's config owns it

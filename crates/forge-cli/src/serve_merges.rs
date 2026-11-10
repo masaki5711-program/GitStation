@@ -160,6 +160,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobDefinitionMismatch
         | ErrorCode::JobFetchFailed
         | ErrorCode::JobTimedOut
+        | ErrorCode::JobImageNotAllowed
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

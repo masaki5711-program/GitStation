@@ -1,4 +1,4 @@
-# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0010。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
+# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0011。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
 
 M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブの取得の long-poll、心拍とリース、ログ、完了、リースの回収）が
 期待どおりに動かないとき。表 `forge.ci_runners`・`forge.ci_job_tokens`・`forge.ci_log_chunks`・`forge.ci_jobs`（`runner_id`・`lease_until`・
@@ -17,7 +17,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
 - 利用者から「パイプラインが `pending` のまま進まない」と問い合わせがあった
 - Runner のホストのログ（`journalctl -u forge-runner`、JSON）に FG-CI-0007（コンテナを起動できない・ホストが rootless でない・
   ジョブのディレクトリを消せない）、FG-CI-0008（`.forge-ci.yml` が `definition_hash` と一致しない）、FG-CI-0009（固定した
-  コミットを取得できない）、FG-CI-0010（ジョブの時間切れ）。ジョブのログの最後の行にも同じコード
+  コミットを取得できない）、FG-CI-0010（ジョブの時間切れ）、FG-CI-0011（ジョブのイメージが `image_registries` の外）。
+  ジョブのログの最後の行にも同じコード
 
 ## Impact
 
@@ -58,6 +59,9 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    - FG-CI-0009: `step=fetch` で `git_stderr` が 401 なら、ジョブがもう終わっていた（トークンは終わりで失効する）。404 は
      他のプロジェクト・他のコミットのジョブの経路（Runner の不具合）。接続の失敗は Runner のホストから
      `curl -sS https://<forge>/healthz`。forge の側のログは同じ `job_id` で `route=job_info_refs|job_upload_pack`
+   - FG-CI-0011: `context` の `image` が設定の `image_registries` のどの接頭辞でも始まらない。git も pull もコンテナも動いていない。
+     イメージを社内のミラーに入れて `.forge-ci.yml` の `image` をミラーのもの（ダイジェストで固定）に直す。レジストリを足すのは
+     レビューの後（設定を変えて `systemctl restart forge-runner`）
    - FG-CI-0010: ジョブの `timeout` を超えた。コンテナは `podman kill` と `podman rm --force` で消えている
      （`podman ps -a --filter name=forge-job-` で残りが無いこと）
 
@@ -83,7 +87,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    ```toml
    server = "https://git.example.internal"
    token_file = "/etc/forge-runner/token"
-   work_dir = "/var/lib/forge-runner"      # forge-runner の利用者が書けること
+   work_dir = "/var/lib/forge-runner"      # forge-runner の利用者が書けること（`:` と `,` は使えない）
+   image_registries = ["registry.internal/"]   # 必須。ジョブのイメージはこのどれかで始まる（`/` で終わる接頭辞）
    # ca_file = "/etc/forge-runner/internal-ca.pem"   # API と git の fetch（GIT_SSL_CAINFO）の両方が信頼する CA
    # allow_insecure_http = false   # http の server は true のときだけ（既定は https 必須、FG-SYS-0002 reason=insecure_http）
    # memory = "4g"   pids_limit = 4096   tmpfs_size = "1g"

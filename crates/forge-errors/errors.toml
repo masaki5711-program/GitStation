@@ -2538,3 +2538,17 @@ diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (
 fix = "Make the job faster or raise its `timeout` (at most 4 hours) in `.forge-ci.yml`, then push."
 runbook = "ci-runner"
 test = "a_job_past_its_timeout_kills_and_removes_its_container"
+
+[[error]]
+code = "FG-CI-0011"
+name = "JobImageNotAllowed"
+http_status = 409
+severity = "warn"
+user_message_ja = "CI のジョブのイメージは、この Runner で許可されたレジストリのものではありません。ジョブは実行されませんでした。"
+user_message_en = "The CI job's image is not from a registry this runner allows. The job was not run."
+user_message_id = "Image tugas CI bukan dari registri yang diizinkan runner ini. Tugas tidak dijalankan."
+cause = "M4 C4 review: `forge-runner` runs only images whose name starts with one of the prefixes in its configuration's `image_registries` (the internal registry mirror, plan 14 §9.3). The claimed job's image is outside every prefix, so the job fails before any git call, pull or container."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (warn) with `error_code`, `request_id` and in `context` `job_id`, `attempt`, `pipeline_id`, `project_id` and `image`; the job's log ends with the same code. Compare the image with `image_registries` in /etc/forge-runner/config.toml."
+fix = "Follow runbook ci-runner: mirror the image into the internal registry and change the job's `image` in `.forge-ci.yml` to the mirror (pinned by digest), or — after review — add the registry prefix to `image_registries` and restart the runner."
+runbook = "ci-runner"
+test = "an_image_outside_the_allowed_registries_is_refused_before_any_call"

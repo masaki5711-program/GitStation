@@ -1,7 +1,7 @@
 //! One job attempt on the runner host (M4 C4, plan 14 §3.1, ADR-0029):
 //!
 //! 1. the claim is checked (the SHA is 40 / 64 lower-case hex, a timeout,
-//!    a definition hash);
+//!    a definition hash, an image from an allowed registry: `FG-CI-0011`);
 //! 2. the job directory is wiped and created empty ([`Workspace`]);
 //! 3. git: `init`, the fetch of `refs/pipelines/<id>/head` with the job's
 //!    token (its own route; the token only in git's environment), the
@@ -255,6 +255,10 @@ impl Executor {
             .ok()
             .filter(|t| *t > 0)
             .ok_or_else(|| mismatch("claim_invalid"))?;
+        if !self.podman.image_allowed(&job.image) {
+            return Err(ForgeError::new(ErrorCode::JobImageNotAllowed)
+                .with_context("image", job.image.chars().take(300).collect::<String>()));
+        }
         // 2. A fresh job directory.
         self.workspace
             .wipe()

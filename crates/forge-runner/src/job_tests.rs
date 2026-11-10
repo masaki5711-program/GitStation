@@ -230,7 +230,8 @@ fn setup(fake: &Arc<Fake>) -> Setup {
             root.join("empty.gitconfig"),
             root.join("hooks"),
         ),
-        podman: PodmanPlan::new(PathBuf::from("podman"), Limits::default()),
+        podman: PodmanPlan::new(PathBuf::from("podman"), Limits::default())
+            .with_registries(vec!["registry.internal/".to_owned()]),
         workspace: Workspace::new(root.clone()),
         git_limits: GitLimits::default(),
         fetch_url: Box::new(|job| {
@@ -271,7 +272,8 @@ fn command_injection_in_the_claim_or_script_never_reaches_a_shell() {
             assert!(!a.contains("$(id)"), "{c:?}");
         }
     }
-    // The image is after `--`; an image that is an option never runs.
+    // The image is after `--`; an image that is an option never runs (it
+    // is refused with the claim, before any call: no allowed registry).
     let mut evil = claim(8, "fgj_8_secret", &def);
     evil.image = format!("--privileged@sha256:{}", "a".repeat(64));
     let fake = Fake::new(&def, Podman::Exit(0));
@@ -279,9 +281,9 @@ fn command_injection_in_the_claim_or_script_never_reaches_a_shell() {
     let out = run(&s, &evil, &forge);
     assert_eq!(
         out.error.expect("refused").code(),
-        ErrorCode::JobDefinitionMismatch
+        ErrorCode::JobImageNotAllowed
     );
-    assert!(fake.by("podman", "run").is_empty());
+    assert!(fake.calls().is_empty());
     // A SHA that is an option is refused before any git.
     let mut evil = claim(9, "fgj_9_secret", &def);
     evil.sha = "--upload-pack=touch /tmp/x".to_owned();
@@ -609,4 +611,29 @@ fn the_git_calls_run_as_written_on_the_real_git() {
     assert_eq!(String::from_utf8_lossy(&def.stdout), definition("make"));
     let checkout = run(&plan.checkout(&work, &oid));
     assert!(checkout.ok(), "{checkout:?}");
+}
+
+/// M4 C4 review: an image outside the configured registries is refused
+/// before any git call, pull or container (FG-CI-0011).
+#[test]
+fn an_image_outside_the_allowed_registries_is_refused_before_any_call() {
+    let def = definition("make");
+    let fake = Fake::new(&def, Podman::Exit(0));
+    let s = setup(&fake);
+    let forge = Forge::default();
+    for image in [
+        format!("docker.io/library/alpine@sha256:{}", "a".repeat(64)),
+        // A look-alike host: the prefix ends at a `/`.
+        format!("registry.internal.evil.test/rust@sha256:{}", "a".repeat(64)),
+    ] {
+        let mut c = claim(7, "fgj_7_secret", &def);
+        c.image = image.clone(); // clone: the assertion names it
+        let out = run(&s, &c, &forge);
+        assert_eq!(out.result, JobResult::Failed);
+        let err = out.error.expect("refused");
+        assert_eq!(err.code(), ErrorCode::JobImageNotAllowed, "{image}");
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+    }
+    let logs = forge.logs.lock().unwrap().join("");
+    assert!(logs.contains("FG-CI-0011"), "{logs}");
 }
