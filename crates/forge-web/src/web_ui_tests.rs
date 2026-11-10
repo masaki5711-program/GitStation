@@ -137,6 +137,8 @@ const SHELL_PATHS: &[&str] = &[
     "/-/projects/42/-/commits/main",
     // The act-as confirmation popup (U3): the same shell for everyone.
     "/-/confirm/projects/42/merge-requests/7",
+    // The binding confirmation popup (X3).
+    "/-/confirm/projects/42/integration-bindings",
     // The in-app notifications page (U4).
     "/-/notifications",
 ];
@@ -180,10 +182,18 @@ async fn the_shell_is_byte_identical_for_every_path_by_hash() {
 #[tokio::test]
 async fn the_act_as_confirmation_page_cannot_be_framed() {
     let page = "/-/confirm/projects/42/merge-requests/7";
-    for (method, query) in [
-        ("GET", ""),
-        ("HEAD", ""),
-        ("GET", "?intent=approve&sha=abc&integration=3&state=s"),
+    let binding = "/-/confirm/projects/42/integration-bindings";
+    for (page, method, query) in [
+        (page, "GET", ""),
+        (page, "HEAD", ""),
+        (page, "GET", "?intent=approve&sha=abc&integration=3&state=s"),
+        (binding, "GET", ""),
+        (binding, "HEAD", ""),
+        (
+            binding,
+            "GET",
+            "?intent=binding_set&integration=3&kanflow_project_id=KF-1&resolves_work_items=false&state=s",
+        ),
     ] {
         let a = send_with(AppConfig::default(), method, &format!("{page}{query}"), &[]).await;
         assert_eq!(a.status, StatusCode::OK, "{method} {query}");

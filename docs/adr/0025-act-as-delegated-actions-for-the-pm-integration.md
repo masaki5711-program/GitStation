@@ -462,3 +462,9 @@ Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 �
 - 画面 `/-/confirm/projects/{id}/integration-bindings`（`ActAsBindingConfirm`）: MR の確認の画面と同じ守り（フレームに入れない・`useArmed`・
   既定のフォーカスなし・`state` を読んだらアドレスから消す・不正な形のリンクは API に聞かずに断る）。結びついていない先の解除は押すものを出さない。
 - 権限の表に `ActAsConfirmView` の 10 行（binding の `ActAsAssertionIssue` の行と同じ組）、`binding_routes` と web の `act-as-binding-confirm` のテスト。
+- 独立レビュー（2026-11-10、`security-reviewer`）: HIGH 1 件を直した — 問い合わせの値を百分率の復号をせずに比べていたため、ブラウザーが `:` を
+  `%3A` にした kanflow のプロジェクト ID が 400 になった → 値ごとに厳しく復号してから検査（壊れた `%` は 400。テストで `KF%3A7` と `KF%2F7`）。
+  LOW: フレーム・COOP・殻の同一性のテストに結びつけの画面の経路を足した。残した指摘: (MEDIUM) 結べない Developer には 403、存在しない連携には 404
+  なので、プロジェクトの読み手は連携の ID の有無を確かめられる（MR の確認の画面と同じ振る舞い。連携の ID は秘密ではなく、読めるのは有無だけ）→
+  押せない人にはすべて 404 にするかを後で決める。(LOW) 画面は 403 をすべて「この人では行えない」と言う（連携の無効なども含む）→ 中立の文と
+  `request_id` の表示を MR の画面と一緒に直す。

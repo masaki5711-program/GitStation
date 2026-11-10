@@ -334,7 +334,11 @@ fn search_query(query: Option<&str>) -> Result<(String, usize), ForgeError> {
         if pair.is_empty() {
             continue;
         }
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let (key, raw) = pair.split_once('=').unwrap_or((pair, ""));
+        // Browsers escape `:` (allowed in a kanflow project id) as `%3A`:
+        // decode strictly (a malformed escape is refused, never passed on).
+        let value = crate::routes::namespaces::percent_decode(raw)
+            .ok_or_else(|| param_invalid("query", "malformed"))?;
         let (slot, param) = match key {
             "q" => (&mut q, "q"),
             "limit" => (&mut limit, "limit"),
@@ -818,7 +822,11 @@ fn binding_confirm_query(
         if pair.is_empty() {
             continue;
         }
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let (key, raw) = pair.split_once('=').unwrap_or((pair, ""));
+        // Browsers escape `:` (allowed in a kanflow project id) as `%3A`:
+        // decode strictly (a malformed escape is refused, never passed on).
+        let value = crate::routes::namespaces::percent_decode(raw)
+            .ok_or_else(|| param_invalid("query", "malformed"))?;
         let (slot, param) = match key {
             "intent" => (&mut intent, "intent"),
             "integration" => (&mut integration, "integration"),
@@ -830,23 +838,24 @@ fn binding_confirm_query(
             return Err(param_invalid(param, "repeated"));
         }
     }
-    let intent = match intent {
+    let intent = match intent.as_deref() {
         Some(raw) => Intent::parse(raw)
             .filter(|i| matches!(i, Intent::BindingSet | Intent::BindingRemove))
             .ok_or_else(|| param_invalid("intent", "unknown_intent"))?,
         None => return Err(param_invalid("intent", "missing")),
     };
     let integration = integration
+        .as_deref()
         .and_then(parse_positive_id)
         .ok_or_else(|| param_invalid("integration", "not_positive_decimal"))?;
     let kanflow = kanflow.ok_or_else(|| param_invalid("kanflow_project_id", "missing"))?;
-    let resolves = match resolves {
+    let resolves = match resolves.as_deref() {
         None => None,
         Some("true") => Some(true),
         Some("false") => Some(false),
         Some(_) => return Err(param_invalid("resolves_work_items", "not_a_bool")),
     };
-    Ok((intent, integration, kanflow.to_owned(), resolves))
+    Ok((intent, integration, kanflow, resolves))
 }
 
 /// `GET …/integration-bindings/act-as-confirmation`'s loader.

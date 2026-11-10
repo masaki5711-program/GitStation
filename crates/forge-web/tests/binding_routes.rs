@@ -720,6 +720,25 @@ async fn the_binding_confirmation_screen_shows_forges_facts_to_the_person_only()
         (json!(true), Value::Null)
     );
 
+    // A browser escapes `:` (allowed in a kanflow project id) as `%3A`.
+    let (status, escaped) = send(
+        w.router.clone(),
+        "GET",
+        &uri(
+            w.spec,
+            &format!(
+                "intent=binding_set&integration={}&kanflow_project_id=KF%3A7&resolves_work_items=true",
+                w.integration
+            ),
+        ),
+        person(),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{escaped}");
+    assert_eq!(escaped["kanflow_project_id"], json!("KF:7"));
+
     // Never to a token (the integration's own included): a person's web session only.
     let (status, token) = send(
         w.router.clone(),
@@ -778,6 +797,15 @@ async fn the_binding_confirmation_screen_shows_forges_facts_to_the_person_only()
         format!("{}&intent=binding_set", set_q(w.integration, true)),
         format!(
             "intent=binding_set&integration={}&kanflow_project_id=&resolves_work_items=true",
+            w.integration
+        ),
+        // A malformed escape, and an escape that decodes to a refused character.
+        format!(
+            "intent=binding_set&integration={}&kanflow_project_id=KF%2&resolves_work_items=true",
+            w.integration
+        ),
+        format!(
+            "intent=binding_set&integration={}&kanflow_project_id=KF%2F7&resolves_work_items=true",
             w.integration
         ),
     ] {
