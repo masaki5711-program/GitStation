@@ -368,22 +368,24 @@ fn only_people_only_actions_refuse_by_account_kind() {
                             | "tip_undecided"
                             | "tip_not_measured",
                         ) => {
+                            // M4 C5 (ADR-0029 decision 5): a CI output
+                            // whose tip is not open is refused the same way.
                             e.code() == ErrorCode::RepositoryCopyWithheld
-                                && matches!(resource, crate::model::Resource::RepoCopy { .. })
+                                && matches!(
+                                    resource,
+                                    crate::model::Resource::RepoCopy { .. }
+                                        | crate::model::Resource::CiOutput { .. }
+                                )
                         }
                         // M4 C5 (ADR-0029 decision 5): a CI output whose
-                        // pipeline or tip is not open is refused to every
-                        // AI agent audience the same way.
+                        // pipeline is not open is refused to every AI agent
+                        // audience the same way.
                         (
                             AccountKind::ServiceAccount | AccountKind::Bot,
                             "pipeline_confidential"
                             | "pipeline_undecided"
                             | "pipeline_unborn"
-                            | "pipeline_not_measured"
-                            | "tip_confidential"
-                            | "default_branch_unborn"
-                            | "tip_undecided"
-                            | "tip_not_measured",
+                            | "pipeline_not_measured",
                         ) => {
                             e.code() == ErrorCode::RepositoryCopyWithheld
                                 && matches!(resource, crate::model::Resource::CiOutput { .. })

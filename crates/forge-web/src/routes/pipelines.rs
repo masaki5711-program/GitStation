@@ -746,7 +746,7 @@ pub async fn log(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
     let w = request.into_write();
     let (target, refused) = match target {
         TipTarget::Refused(e) => (TipTarget::Person, Some(e)),
-        t => (t, None),
+        t @ (TipTarget::Person | TipTarget::Unmeasurable(..) | TipTarget::Measure(..)) => (t, None),
     };
     let (tip_mark, measured) = tip_mark(&state, target).await;
     let view = OutputView {
@@ -857,7 +857,7 @@ pub async fn diagnosis(state: AppState, request: Dispatched<ProjectCtx>) -> Resp
     let w = request.into_write();
     let (target, refused) = match target {
         TipTarget::Refused(e) => (TipTarget::Person, Some(e)),
-        t => (t, None),
+        t @ (TipTarget::Person | TipTarget::Unmeasurable(..) | TipTarget::Measure(..)) => (t, None),
     };
     let (tip_mark, measured) = tip_mark(&state, target).await;
     let view = OutputView {
