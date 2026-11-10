@@ -3,6 +3,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -11,6 +12,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -19,6 +21,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/-/assets/{file}",
+    "people_only": false,
     "public": true,
     "scope": "instance",
     "word": "assets"
@@ -27,6 +30,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/-/assets/{file}",
+    "people_only": false,
     "public": true,
     "scope": "instance",
     "word": "assets"
@@ -35,6 +39,7 @@
     "action": "OidcBackchannelLogout",
     "method": "POST",
     "path": "/-/auth/backchannel-logout",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -43,6 +48,7 @@
     "action": "WebLogin",
     "method": "GET",
     "path": "/-/auth/callback",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -51,6 +57,7 @@
     "action": "WebLogin",
     "method": "GET",
     "path": "/-/auth/login",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -59,6 +66,7 @@
     "action": "SessionLogout",
     "method": "POST",
     "path": "/-/auth/logout",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -67,6 +75,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/-/confirm/projects/{id}/integration-bindings",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -75,6 +84,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/-/confirm/projects/{id}/integration-bindings",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -83,6 +93,7 @@
     "action": "ActAsAssertionIssue",
     "method": "POST",
     "path": "/-/confirm/projects/{id}/integration-bindings/assertions",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -91,6 +102,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/-/confirm/projects/{id}/merge-requests/{iid}",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -99,6 +111,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/-/confirm/projects/{id}/merge-requests/{iid}",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -107,6 +120,7 @@
     "action": "ActAsAssertionIssue",
     "method": "POST",
     "path": "/-/confirm/projects/{id}/merge-requests/{iid}/assertions",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -115,6 +129,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/-/notifications",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -123,6 +138,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/-/notifications",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -131,6 +147,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/-/projects/{id}/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "instance",
     "word": "project_permalink"
@@ -139,6 +156,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/-/projects/{id}/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "instance",
     "word": "project_permalink"
@@ -147,6 +165,7 @@
     "action": "IntegrationRead",
     "method": "GET",
     "path": "/api/v1/admin/integrations",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -155,6 +174,7 @@
     "action": "IntegrationManage",
     "method": "POST",
     "path": "/api/v1/admin/integrations",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -163,6 +183,7 @@
     "action": "IntegrationRead",
     "method": "GET",
     "path": "/api/v1/admin/integrations/{id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -171,6 +192,7 @@
     "action": "IntegrationManage",
     "method": "PATCH",
     "path": "/api/v1/admin/integrations/{id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -179,6 +201,7 @@
     "action": "IntegrationRead",
     "method": "GET",
     "path": "/api/v1/admin/integrations/{id}/bindings",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -211,6 +234,7 @@
     "action": "ServiceAccountList",
     "method": "GET",
     "path": "/api/v1/admin/service-accounts",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -219,6 +243,7 @@
     "action": "ServiceAccountCreate",
     "method": "POST",
     "path": "/api/v1/admin/service-accounts",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -227,6 +252,7 @@
     "action": "ServiceAccountRead",
     "method": "GET",
     "path": "/api/v1/admin/service-accounts/{id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -235,6 +261,7 @@
     "action": "ServiceAccountUpdate",
     "method": "PATCH",
     "path": "/api/v1/admin/service-accounts/{id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -243,6 +270,7 @@
     "action": "ServiceAccountRead",
     "method": "GET",
     "path": "/api/v1/admin/service-accounts/{id}/check-grants",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -251,6 +279,7 @@
     "action": "CheckNamespaceGrantManage",
     "method": "PUT",
     "path": "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -259,6 +288,7 @@
     "action": "CheckNamespaceGrantManage",
     "method": "DELETE",
     "path": "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -267,6 +297,7 @@
     "action": "ServiceAccountTokenList",
     "method": "GET",
     "path": "/api/v1/admin/service-accounts/{id}/tokens",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -275,6 +306,7 @@
     "action": "ServiceAccountTokenIssue",
     "method": "POST",
     "path": "/api/v1/admin/service-accounts/{id}/tokens",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -283,6 +315,7 @@
     "action": "ServiceAccountTokenRevoke",
     "method": "DELETE",
     "path": "/api/v1/admin/service-accounts/{id}/tokens/{token_id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -291,6 +324,7 @@
     "action": "UserAdminList",
     "method": "GET",
     "path": "/api/v1/admin/users",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -299,6 +333,7 @@
     "action": "UserDisable",
     "method": "POST",
     "path": "/api/v1/admin/users/{id}/disable",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -307,6 +342,7 @@
     "action": "AdminSessionList",
     "method": "GET",
     "path": "/api/v1/admin/users/{id}/sessions",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -315,6 +351,7 @@
     "action": "AdminSessionRevoke",
     "method": "DELETE",
     "path": "/api/v1/admin/users/{id}/sessions",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -323,6 +360,7 @@
     "action": "GroupList",
     "method": "GET",
     "path": "/api/v1/groups",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -331,6 +369,7 @@
     "action": "GroupCreateTopLevel",
     "method": "POST",
     "path": "/api/v1/groups",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -339,6 +378,7 @@
     "action": "GroupRead",
     "method": "GET",
     "path": "/api/v1/groups/{id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -347,6 +387,7 @@
     "action": "GroupUpdate",
     "method": "PATCH",
     "path": "/api/v1/groups/{id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -355,6 +396,7 @@
     "action": "MemberList",
     "method": "GET",
     "path": "/api/v1/groups/{id}/members",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -363,6 +405,7 @@
     "action": "MemberManage",
     "method": "POST",
     "path": "/api/v1/groups/{id}/members",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -371,6 +414,7 @@
     "action": "MemberManage",
     "method": "PATCH",
     "path": "/api/v1/groups/{id}/members/{user_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -379,6 +423,7 @@
     "action": "MemberManage",
     "method": "DELETE",
     "path": "/api/v1/groups/{id}/members/{user_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -387,6 +432,7 @@
     "action": "SubgroupCreate",
     "method": "POST",
     "path": "/api/v1/groups/{id}/subgroups",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -395,6 +441,7 @@
     "action": "GroupTransfer",
     "method": "POST",
     "path": "/api/v1/groups/{id}/transfer",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -403,6 +450,7 @@
     "action": "ActAsAssertionClaim",
     "method": "POST",
     "path": "/api/v1/integrations/{id}/act-as/claim",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -411,6 +459,7 @@
     "action": "IntegrationBindingList",
     "method": "GET",
     "path": "/api/v1/integrations/{id}/bindings",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -419,6 +468,7 @@
     "action": "IntegrationBindingManage",
     "method": "POST",
     "path": "/api/v1/integrations/{id}/bindings",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -427,6 +477,7 @@
     "action": "IntegrationBindingManage",
     "method": "PATCH",
     "path": "/api/v1/integrations/{id}/bindings/{binding_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -435,6 +486,7 @@
     "action": "IntegrationBindingRemove",
     "method": "DELETE",
     "path": "/api/v1/integrations/{id}/bindings/{binding_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -443,6 +495,7 @@
     "action": "IntegrationDevStatusRead",
     "method": "GET",
     "path": "/api/v1/integrations/{id}/dev-status",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -451,6 +504,7 @@
     "action": "IntegrationEventRead",
     "method": "GET",
     "path": "/api/v1/integrations/{id}/events",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -459,6 +513,7 @@
     "action": "IntegrationEventCursorRead",
     "method": "GET",
     "path": "/api/v1/integrations/{id}/events/cursor",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -467,6 +522,7 @@
     "action": "IntegrationDevStatusRead",
     "method": "GET",
     "path": "/api/v1/integrations/{id}/work-items/{ref}/dev-status",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -475,6 +531,7 @@
     "action": "PathResolve",
     "method": "GET",
     "path": "/api/v1/namespaces/resolve",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -483,6 +540,7 @@
     "action": "NamespaceTombstoneRelease",
     "method": "POST",
     "path": "/api/v1/namespaces/tombstones/release",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -491,6 +549,7 @@
     "action": "ProjectList",
     "method": "GET",
     "path": "/api/v1/projects",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -499,6 +558,7 @@
     "action": "ProjectCreate",
     "method": "POST",
     "path": "/api/v1/projects",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -507,6 +567,7 @@
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -515,6 +576,7 @@
     "action": "ProjectUpdate",
     "method": "PATCH",
     "path": "/api/v1/projects/{id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -523,6 +585,7 @@
     "action": "ProjectDelete",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -531,6 +594,7 @@
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/approval-rules",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -539,6 +603,7 @@
     "action": "ApprovalRuleManage",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/approval-rules/{name}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -547,6 +612,7 @@
     "action": "ApprovalRuleManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/approval-rules/{name}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -555,6 +621,7 @@
     "action": "CheckRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/commits/{sha}/checks",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -563,6 +630,7 @@
     "action": "CheckWrite",
     "method": "POST",
     "path": "/api/v1/projects/{id}/commits/{sha}/checks",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -571,6 +639,7 @@
     "action": "ContextRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/context/requirement",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -579,6 +648,7 @@
     "action": "ContextRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/context/work-item",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -587,6 +657,7 @@
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/doc-lint/migration",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -595,6 +666,7 @@
     "action": "DocLintMigrationManage",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/doc-lint/migration",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -603,6 +675,7 @@
     "action": "DocLintMigrationManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/doc-lint/migration",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -611,6 +684,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/documents",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -619,6 +693,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/documents/{doc_id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -627,6 +702,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -635,6 +711,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/documents/{doc_id}/referenced-by",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -643,6 +720,7 @@
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/integration-bindings",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -651,6 +729,7 @@
     "action": "ActAsConfirmView",
     "method": "GET",
     "path": "/api/v1/projects/{id}/integration-bindings/act-as-confirmation",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -659,6 +738,7 @@
     "action": "IntegrationBindingManage",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/integration-bindings/{integration_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -667,6 +747,7 @@
     "action": "IntegrationBindingManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/integration-bindings/{integration_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -675,6 +756,7 @@
     "action": "MemberList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/members",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -683,6 +765,7 @@
     "action": "MemberManage",
     "method": "POST",
     "path": "/api/v1/projects/{id}/members",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -691,6 +774,7 @@
     "action": "MemberManage",
     "method": "PATCH",
     "path": "/api/v1/projects/{id}/members/{user_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -699,6 +783,7 @@
     "action": "MemberManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/members/{user_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -707,6 +792,7 @@
     "action": "MergeRequestList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -715,6 +801,7 @@
     "action": "MergeRequestCreate",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -723,6 +810,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -731,6 +819,7 @@
     "action": "MergeRequestUpdate",
     "method": "PATCH",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -739,6 +828,7 @@
     "action": "ActAsConfirmView",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/act-as-confirmation",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -747,6 +837,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/approvals",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -755,6 +846,7 @@
     "action": "MergeRequestApprove",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/approve",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -763,6 +855,7 @@
     "action": "MergeRequestClose",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/close",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -771,6 +864,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/compare",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -779,6 +873,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/conflicts",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -787,6 +882,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/context",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -795,6 +891,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -803,6 +900,7 @@
     "action": "MergeRequestComment",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -811,6 +909,7 @@
     "action": "MergeRequestComment",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -819,6 +918,7 @@
     "action": "DiscussionResolve",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/resolve",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -827,6 +927,7 @@
     "action": "DiscussionResolve",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -835,6 +936,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/merge",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -843,6 +945,7 @@
     "action": "MergeRequestMerge",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/merge",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -851,6 +954,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/mergeability",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -859,6 +963,7 @@
     "action": "MergeRequestReopen",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/reopen",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -867,6 +972,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/status",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -875,6 +981,7 @@
     "action": "MergeRequestUnapprove",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/unapprove",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -883,6 +990,7 @@
     "action": "MergeRequestVersionRefsPurge",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -891,6 +999,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/versions",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -899,6 +1008,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -907,6 +1017,7 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/work-items",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -915,6 +1026,7 @@
     "action": "WorkItemLink",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -923,6 +1035,7 @@
     "action": "WorkItemLink",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -931,6 +1044,7 @@
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-settings",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -939,6 +1053,7 @@
     "action": "MergeSettingsManage",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/merge-settings",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -947,6 +1062,7 @@
     "action": "CodeownersEnforcementToggle",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/merge-settings/codeowners-enforcement",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -955,6 +1071,7 @@
     "action": "PipelineRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/pipelines",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -963,6 +1080,7 @@
     "action": "PipelineCreate",
     "method": "POST",
     "path": "/api/v1/projects/{id}/pipelines",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -971,6 +1089,7 @@
     "action": "PipelineRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -979,6 +1098,7 @@
     "action": "PipelineCancel",
     "method": "POST",
     "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/cancel",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -987,6 +1107,7 @@
     "action": "PipelineRetry",
     "method": "POST",
     "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -995,6 +1116,7 @@
     "action": "ProtectedRefList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/protected-refs",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1003,6 +1125,7 @@
     "action": "ProtectedRefManage",
     "method": "POST",
     "path": "/api/v1/projects/{id}/protected-refs",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1011,6 +1134,7 @@
     "action": "ProtectedRefManage",
     "method": "PATCH",
     "path": "/api/v1/projects/{id}/protected-refs/{rule_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1019,6 +1143,7 @@
     "action": "ProtectedRefManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/protected-refs/{rule_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1027,6 +1152,7 @@
     "action": "ProtectedRefManage",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1035,6 +1161,7 @@
     "action": "ProtectedRefManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1043,6 +1170,7 @@
     "action": "PushMirrorRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/push-mirror",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1051,6 +1179,7 @@
     "action": "PushMirrorManage",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/push-mirror",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1059,6 +1188,7 @@
     "action": "PushMirrorManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/push-mirror",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1067,6 +1197,7 @@
     "action": "PushMirrorManage",
     "method": "POST",
     "path": "/api/v1/projects/{id}/push-mirror/sync",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1075,6 +1206,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/blame",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1083,6 +1215,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/blob",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1091,6 +1224,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/commits",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1099,6 +1233,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/commits/{oid}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1107,6 +1242,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/compare",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1115,6 +1251,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/refs",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1123,6 +1260,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/resolve",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1131,6 +1269,7 @@
     "action": "SpecRefRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/spec-refs",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1139,6 +1278,7 @@
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/tree",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1147,6 +1287,7 @@
     "action": "ProjectRestore",
     "method": "POST",
     "path": "/api/v1/projects/{id}/restore",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1155,6 +1296,7 @@
     "action": "SpecRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/specs/diff",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1163,6 +1305,7 @@
     "action": "SpecRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/specs/requirements",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1171,6 +1314,7 @@
     "action": "SpecRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/specs/trace",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1179,6 +1323,7 @@
     "action": "SpecRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/specs/versions",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1187,6 +1332,7 @@
     "action": "ProjectTransfer",
     "method": "POST",
     "path": "/api/v1/projects/{id}/transfer",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1195,6 +1341,7 @@
     "action": "ProjectVisibilityChange",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/visibility",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1203,6 +1350,7 @@
     "action": "WebhookRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/webhooks",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1211,6 +1359,7 @@
     "action": "WebhookManage",
     "method": "POST",
     "path": "/api/v1/projects/{id}/webhooks",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1219,6 +1368,7 @@
     "action": "WebhookRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/webhooks/event-types",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1227,6 +1377,7 @@
     "action": "WebhookRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1235,6 +1386,7 @@
     "action": "WebhookManage",
     "method": "PATCH",
     "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1243,6 +1395,7 @@
     "action": "WebhookManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/webhooks/{webhook_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1251,6 +1404,7 @@
     "action": "WebhookDeliveryRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1259,6 +1413,7 @@
     "action": "WebhookRedeliver",
     "method": "POST",
     "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1267,6 +1422,7 @@
     "action": "WebhookManage",
     "method": "POST",
     "path": "/api/v1/projects/{id}/webhooks/{webhook_id}/secret",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1275,6 +1431,7 @@
     "action": "RepositorySearch",
     "method": "GET",
     "path": "/api/v1/repositories",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1315,6 +1472,7 @@
     "action": "SessionRead",
     "method": "GET",
     "path": "/api/v1/session",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1323,6 +1481,7 @@
     "action": "UserSelfRead",
     "method": "GET",
     "path": "/api/v1/user",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1331,6 +1490,7 @@
     "action": "NotificationPreferencesRead",
     "method": "GET",
     "path": "/api/v1/user/notification-preferences",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1339,6 +1499,7 @@
     "action": "NotificationPreferencesWrite",
     "method": "PUT",
     "path": "/api/v1/user/notification-preferences",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1347,6 +1508,7 @@
     "action": "NotificationInboxRead",
     "method": "GET",
     "path": "/api/v1/user/notifications",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1355,6 +1517,7 @@
     "action": "NotificationInboxUpdate",
     "method": "POST",
     "path": "/api/v1/user/notifications/read-all",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1363,6 +1526,7 @@
     "action": "NotificationInboxRead",
     "method": "GET",
     "path": "/api/v1/user/notifications/unread-count",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1371,6 +1535,7 @@
     "action": "NotificationInboxUpdate",
     "method": "POST",
     "path": "/api/v1/user/notifications/{id}/read",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1379,6 +1544,7 @@
     "action": "SessionList",
     "method": "GET",
     "path": "/api/v1/user/sessions",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1387,6 +1553,7 @@
     "action": "SessionRevoke",
     "method": "DELETE",
     "path": "/api/v1/user/sessions/{public_id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1395,6 +1562,7 @@
     "action": "TokenList",
     "method": "GET",
     "path": "/api/v1/user/tokens",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1403,6 +1571,7 @@
     "action": "TokenCreate",
     "method": "POST",
     "path": "/api/v1/user/tokens",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1411,6 +1580,7 @@
     "action": "TokenRevoke",
     "method": "DELETE",
     "path": "/api/v1/user/tokens/{id}",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1419,6 +1589,7 @@
     "action": "UserSearch",
     "method": "GET",
     "path": "/api/v1/users",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1427,6 +1598,7 @@
     "action": "UserRename",
     "method": "POST",
     "path": "/api/v1/users/{id}/rename",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1435,6 +1607,7 @@
     "action": "Health",
     "method": "GET",
     "path": "/healthz",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -1443,6 +1616,7 @@
     "action": "Health",
     "method": "GET",
     "path": "/readyz",
+    "people_only": false,
     "public": true,
     "scope": "fixed",
     "word": "fixed"
@@ -1451,6 +1625,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}",
+    "people_only": false,
     "public": true,
     "scope": "namespace",
     "word": "home"
@@ -1459,6 +1634,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}",
+    "people_only": false,
     "public": true,
     "scope": "namespace",
     "word": "home"
@@ -1467,6 +1643,7 @@
     "action": "RepoPush",
     "method": "POST",
     "path": "/{namespace}.git/git-receive-pack",
+    "people_only": false,
     "public": false,
     "scope": "project_git",
     "word": "receive_pack"
@@ -1475,6 +1652,7 @@
     "action": "RepoRead",
     "method": "POST",
     "path": "/{namespace}.git/git-upload-pack",
+    "people_only": false,
     "public": false,
     "scope": "project_git",
     "word": "upload_pack"
@@ -1483,6 +1661,7 @@
     "action": "RepoPush",
     "method": "GET",
     "path": "/{namespace}.git/info/refs",
+    "people_only": false,
     "public": false,
     "query_key": [
       "service",
@@ -1495,6 +1674,7 @@
     "action": "RepoRead",
     "method": "GET",
     "path": "/{namespace}.git/info/refs",
+    "people_only": false,
     "public": false,
     "query_key": [
       "service",
@@ -1507,6 +1687,7 @@
     "action": "RepoPush",
     "method": "HEAD",
     "path": "/{namespace}.git/info/refs",
+    "people_only": false,
     "public": false,
     "query_key": [
       "service",
@@ -1519,6 +1700,7 @@
     "action": "RepoRead",
     "method": "HEAD",
     "path": "/{namespace}.git/info/refs",
+    "people_only": false,
     "public": false,
     "query_key": [
       "service",
@@ -1531,6 +1713,7 @@
     "action": "RepoRead",
     "method": "GET",
     "path": "/{namespace}/-/archive/{*rest}",
+    "people_only": false,
     "public": false,
     "scope": "project",
     "word": "archive"
@@ -1539,6 +1722,7 @@
     "action": "RepoRead",
     "method": "HEAD",
     "path": "/{namespace}/-/archive/{*rest}",
+    "people_only": false,
     "public": false,
     "scope": "project",
     "word": "archive"
@@ -1547,6 +1731,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/blame/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "blame"
@@ -1555,6 +1740,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/blame/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "blame"
@@ -1563,6 +1749,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/blob/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "blob"
@@ -1571,6 +1758,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/blob/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "blob"
@@ -1579,6 +1767,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/branches/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "branches"
@@ -1587,6 +1776,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/branches/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "branches"
@@ -1595,6 +1785,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/commit/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "commit"
@@ -1603,6 +1794,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/commit/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "commit"
@@ -1611,6 +1803,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/commits/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "commits"
@@ -1619,6 +1812,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/commits/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "commits"
@@ -1627,6 +1821,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/compare/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "compare"
@@ -1635,6 +1830,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/compare/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "compare"
@@ -1643,6 +1839,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/documents/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "documents"
@@ -1651,6 +1848,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/documents/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "documents"
@@ -1659,6 +1857,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/members/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "group",
     "word": "members"
@@ -1667,6 +1866,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/members/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "group",
     "word": "members"
@@ -1675,6 +1875,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/members/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "members"
@@ -1683,6 +1884,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/members/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "members"
@@ -1691,6 +1893,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/pull/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "pull"
@@ -1699,6 +1902,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/pull/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "pull"
@@ -1707,6 +1911,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/pulls/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "pulls"
@@ -1715,6 +1920,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/pulls/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "pulls"
@@ -1723,6 +1929,7 @@
     "action": "RepoRead",
     "method": "GET",
     "path": "/{namespace}/-/raw/{*rest}",
+    "people_only": false,
     "public": false,
     "scope": "project",
     "word": "raw"
@@ -1731,6 +1938,7 @@
     "action": "RepoRead",
     "method": "HEAD",
     "path": "/{namespace}/-/raw/{*rest}",
+    "people_only": false,
     "public": false,
     "scope": "project",
     "word": "raw"
@@ -1739,6 +1947,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/settings/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "group",
     "word": "settings"
@@ -1747,6 +1956,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/settings/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "group",
     "word": "settings"
@@ -1755,6 +1965,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/settings/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "settings"
@@ -1763,6 +1974,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/settings/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "settings"
@@ -1771,6 +1983,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/tags/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "tags"
@@ -1779,6 +1992,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/tags/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "tags"
@@ -1787,6 +2001,7 @@
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/tree/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "tree"
@@ -1795,6 +2010,7 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/{namespace}/-/tree/{*rest}",
+    "people_only": false,
     "public": true,
     "scope": "project",
     "word": "tree"

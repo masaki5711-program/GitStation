@@ -134,7 +134,8 @@ fn merge_request_human(body: &Value) -> String {
 /// One call: its path, its query and how its answer is shown.
 type Request = (String, Vec<(String, String)>, fn(&Value) -> String);
 
-/// The request of one command (also the MCP server's).
+/// The request of one command (the MCP tools are the same routes, from
+/// docs/api/agent-tools.toml).
 pub(crate) fn request_of(cmd: &ContextCommand) -> Request {
     match cmd {
         ContextCommand::WorkItem { project, reference } => (

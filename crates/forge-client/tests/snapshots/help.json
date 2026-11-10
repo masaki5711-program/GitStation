@@ -6752,12 +6752,33 @@
         "GET /api/v1/projects/{id}/documents",
         "GET /api/v1/projects/{id}/documents/{doc_id}",
         "GET /api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}",
-        "GET /api/v1/projects/{id}/documents/{doc_id}/referenced-by"
+        "GET /api/v1/projects/{id}/documents/{doc_id}/referenced-by",
+        "GET /api/v1/projects/{id}/merge-requests",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/versions",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/compare",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/status",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/discussions",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts",
+        "GET /api/v1/projects/{id}/commits/{sha}/checks",
+        "GET /api/v1/projects/{id}/pipelines",
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}",
+        "POST /api/v1/projects/{id}/merge-requests",
+        "PATCH /api/v1/projects/{id}/merge-requests/{iid}",
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/close",
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/reopen",
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions",
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes",
+        "POST /api/v1/projects/{id}/pipelines",
+        "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/cancel",
+        "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/retry"
       ],
       "scopes": [
-        "read_api"
+        "read_api",
+        "api"
       ],
-      "summary": "Serve a read-only MCP server on stdin/stdout for an AI agent (tools get_work_item_context, get_requirement, search_requirements, get_trace_matrix, get_merge_request_context, list_documents, get_document, get_document_block, get_document_referenced_by), with your token (issue it with is_agent: a person's ordinary token is a person's); confidential items are never returned (M3 X5)."
+      "summary": "Serve an MCP server on stdin/stdout for an AI agent: the tools of docs/api/agent-tools.toml — read context, requirements, documents, merge requests (diff, status, discussions, conflicts), check runs and pipelines; open, update, comment on, close and reopen merge requests; run, cancel and retry pipelines. Approve, merge, resolve, deploy approval, tokens and administration are kept for people. With your token (issue it with is_agent: a person's ordinary token is a person's); confidential items are never returned (M3 X5, ADR-0023 Amendment 2026-11-10)."
     },
     {
       "args": [

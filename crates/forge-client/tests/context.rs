@@ -172,8 +172,10 @@ fn mcp_lists_read_only_tools_and_calls_the_api_as_an_agent() {
         .iter()
         .map(|t| t["name"].as_str().expect("name"))
         .collect();
+    // The X5 and document tools come first, unchanged and read-only; the
+    // merge request and pipeline tools follow (tests/mcp_tools.rs).
     assert_eq!(
-        names,
+        names[..9],
         [
             "get_work_item_context",
             "get_requirement",
@@ -186,7 +188,7 @@ fn mcp_lists_read_only_tools_and_calls_the_api_as_an_agent() {
             "get_document_referenced_by"
         ]
     );
-    for t in by_id(2)["result"]["tools"].as_array().expect("tools") {
+    for t in &by_id(2)["result"]["tools"].as_array().expect("tools")[..9] {
         assert_eq!(t["annotations"]["readOnlyHint"], true);
         assert_eq!(t["inputSchema"]["additionalProperties"], false);
     }
