@@ -169,7 +169,21 @@ describe('the binding confirmation', () => {
     window.sessionStorage.clear();
     await open(routes({ [`GET ${CONFIRM}`]: () => apiError(404, 'Not found.', 'req-404') }));
     expect(await screen.findByRole('heading', { name: 'Not found' })).toBeTruthy();
-    expect(screen.getByText('The repository or the integration was not found, or you may not see it.')).toBeTruthy();
+    // ADR-0025 (decision of 2026-11-10): every refusal is this one 404 — the
+    // same neutral notice as the merge request's screen, never the server's detail.
+    expect(screen.getByText('What this confirmation is for was not found, or this account cannot confirm it. If you think this is wrong, tell an administrator the request ID below.')).toBeTruthy();
+    expect(screen.queryByText(/Not found\./)).toBeNull();
+    expect(screen.getByTestId('request-id').textContent).toBe('req-404');
+  });
+
+  it('says the same neutral not found when the press is answered 404', async () => {
+    await open(routes({ [`POST ${ISSUE}`]: () => apiError(404, 'Not found.', 'req-404p') }));
+    const button = await screen.findByRole('button', { name: 'Bind' });
+    await arm(button);
+    fireEvent.click(button);
+    expect(await screen.findByRole('heading', { name: 'Not found' })).toBeTruthy();
+    expect(screen.getByText('What this confirmation is for was not found, or this account cannot confirm it. If you think this is wrong, tell an administrator the request ID below.')).toBeTruthy();
+    expect(screen.getByTestId('request-id').textContent).toBe('req-404p');
   });
 
   it('says it in Japanese too', async () => {

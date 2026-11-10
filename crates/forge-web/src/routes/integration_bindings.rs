@@ -26,6 +26,11 @@
 //!   (`ActAsAssertionIssue`, a person's web session, CSRF): the person
 //!   confirms `binding_set` (with the setting) or `binding_remove` for one
 //!   kanflow project; a pending assertion for the integration to claim.
+//!   Whoever may not press it — and the screen's facts (`GET
+//!   …/act-as-confirmation`) alike — a Developer, a token, an integration
+//!   that is absent or disabled, a binding state that does not fit the
+//!   intent — gets the invisible project's `FG-REPO-0005`, the cause only in
+//!   the log (`refused_code`; ADR-0025, decision of 2026-11-10).
 //!
 //! The loaders of the three binding writes add, for an act-as request, the
 //! binding the request writes (the assertion is compared with it); the

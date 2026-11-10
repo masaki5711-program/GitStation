@@ -57,6 +57,10 @@
 //!    whose merge rule forbids direct pushes, M3 R6) for everyone too, and
 //!    `FG-GIT-0008` below the minimum push role (administrators pass the
 //!    minimum role).
+//! 10. an act-as confirmation (`ActAsConfirmView`, `ActAsAssertionIssue`,
+//!     ADR-0025 decision of 2026-11-10): every refusal but `FG-AUTH-0001` /
+//!     `FG-AUTH-0004` becomes `FG-REPO-0005` (the invisible project's 404),
+//!     the cause kept in the log as `refused_code` and its context.
 
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -77,6 +81,46 @@ pub fn authorize(
     action: Action,
     resource: &Resource,
 ) -> Result<(), ForgeError> {
+    let decided = decide(principal, action, resource);
+    if matches!(
+        action,
+        Action::ActAsConfirmView | Action::ActAsAssertionIssue
+    ) {
+        return decided.map_err(confirmation_refused);
+    }
+    decided
+}
+
+/// ADR-0025 (decision of 2026-11-10): an act-as confirmation answers
+/// whoever may not press it — no right for the intent, a token, an act-as
+/// request, a service account or a bot, a pending deletion, a disabled
+/// integration, a binding state that does not fit the intent — with the
+/// invisible project's `FG-REPO-0005`, so nobody learns whether an
+/// integration exists or what the binding state is. The log keeps the
+/// cause: the refusal's own code as `refused_code` and its context.
+/// No credential (`FG-AUTH-0001`) and a disabled account (`FG-AUTH-0004`)
+/// say nothing about the confirmation and stay as they are; so does a
+/// defect (`FG-SYS-0001`, a resource of the wrong shape).
+fn confirmation_refused(refusal: ForgeError) -> ForgeError {
+    let code = refusal.code();
+    // `Internal` (a resource of the wrong shape) is a defect, not a refusal.
+    if matches!(
+        code,
+        ErrorCode::NotFound
+            | ErrorCode::Unauthenticated
+            | ErrorCode::AccountDisabled
+            | ErrorCode::Internal
+    ) {
+        return refusal;
+    }
+    refusal.context().iter().fold(
+        ForgeError::new(ErrorCode::NotFound).with_context("refused_code", code.id()),
+        |hidden, (key, value)| hidden.with_context(key, value),
+    )
+}
+
+/// The decision itself (see [`authorize`]).
+fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<(), ForgeError> {
     let deny = |code: ErrorCode| ForgeError::new(code).with_context("action", action.name());
 
     // Acting for a person (M3 S2, ADR-0025): its own arm, before anything

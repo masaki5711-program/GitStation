@@ -1002,7 +1002,7 @@
     "refusedTitle": "Tidak dapat dikonfirmasi",
     "refusedBody": "Konfirmasi ini tidak dapat dilakukan dengan akun ini sekarang. Penyebabnya bisa izin Anda atau pengaturan aplikasi. Jika menurut Anda ini keliru, beri tahu administrator ID permintaan di bawah.",
     "notFoundTitle": "Tidak ditemukan",
-    "notFoundBody": "Merge request tidak ada, atau Anda tidak boleh melihatnya.",
+    "notFoundBody": "Yang akan dikonfirmasi tidak ditemukan, atau akun ini tidak dapat mengonfirmasinya. Jika menurut Anda ini keliru, beri tahu administrator ID permintaan di bawah.",
     "invalidTitle": "Tautan tidak valid",
     "invalidBody": "Buka lagi dari aplikasi.",
     "tooSoon": "Tekan sekali lagi. Klik tepat setelah tombol diaktifkan tidak diterima.",
@@ -1022,8 +1022,7 @@
       "settingShared": "Repositori spesifikasi bersama (nomor PBI tidak dicari; dapat dikaitkan ke beberapa proyek Kanflow)",
       "rowNow": "Saat ini",
       "nowBound": "Terkait",
-      "nowUnbound": "Tidak terkait",
-      "notFoundBody": "Repositori atau integrasi tidak ditemukan, atau Anda tidak boleh melihatnya."
+      "nowUnbound": "Tidak terkait"
     }
   }
 }

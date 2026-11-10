@@ -16,6 +16,11 @@
 //!   it; the assertion's secret is created now and answered once
 //!   (`Cache-Control: no-store`). 120 per integration a minute.
 //!
+//! Whoever may not press the confirmation (no right for the intent, a
+//! token, an integration that is absent, unbound or disabled) gets the
+//! invisible project's `FG-REPO-0005` on both confirmation routes, the cause
+//! only in the log (`refused_code`; ADR-0025, decision of 2026-11-10).
+//!
 //! The answer of a claim and the request's `state` are never logged.
 
 use std::time::{Duration, Instant};

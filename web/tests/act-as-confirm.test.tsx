@@ -483,9 +483,14 @@ describe('the states', () => {
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
 
-  it('says not found on 404, with the request id', async () => {
+  // ADR-0025 (decision of 2026-11-10): whoever may not press gets the
+  // invisible project's 404: one neutral notice (the binding screen's too),
+  // never the server's detail.
+  it('says not found on 404 with the neutral sentence and the request id', async () => {
     await open(routes({ [`GET ${CONFIRM}`]: () => apiError(404, 'Not found.', 'req-404') }));
     expect(await screen.findByRole('heading', { name: 'Not found' })).toBeTruthy();
+    expect(screen.getByText('What this confirmation is for was not found, or this account cannot confirm it. If you think this is wrong, tell an administrator the request ID below.')).toBeTruthy();
+    expect(screen.queryByText(/Not found\./)).toBeNull();
     expect(screen.getByTestId('request-id').textContent).toBe('req-404');
   });
 

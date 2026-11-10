@@ -1002,7 +1002,7 @@
     "refusedTitle": "This cannot be confirmed",
     "refusedBody": "This confirmation cannot be done with this account now. The reason may be your permissions or the app's settings. If you think this is wrong, tell an administrator the request ID below.",
     "notFoundTitle": "Not found",
-    "notFoundBody": "The merge request does not exist, or you may not see it.",
+    "notFoundBody": "What this confirmation is for was not found, or this account cannot confirm it. If you think this is wrong, tell an administrator the request ID below.",
     "invalidTitle": "The link is not valid",
     "invalidBody": "Open it again from the app.",
     "tooSoon": "Press once more. A click right after the button was armed is not accepted.",
@@ -1022,8 +1022,7 @@
       "settingShared": "Shared specification repository (PBI numbers are not looked up; can be bound to several Kanflow projects)",
       "rowNow": "Now",
       "nowBound": "Bound",
-      "nowUnbound": "Not bound",
-      "notFoundBody": "The repository or the integration was not found, or you may not see it."
+      "nowUnbound": "Not bound"
     }
   }
 }

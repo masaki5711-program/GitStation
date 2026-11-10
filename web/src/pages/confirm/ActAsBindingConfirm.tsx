@@ -68,10 +68,13 @@ export function ActAsBindingConfirm() {
     const e = confirmation.error;
     const f = e instanceof ApiFailure && e.failure.kind === 'api' ? e.failure : null;
     if (f?.status === 403) {
-      // Neutral (a disabled integration is a 403 too), with the request id.
+      // Neutral (what is left as a 403 is the server's set-up, e.g. acting
+      // for people not configured), with the request id.
       body = <Notice kind="refused" requestId={f.requestId} />;
     } else if (f?.status === 404) {
-      body = <Notice kind="bindingNotFound" requestId={f.requestId} />;
+      // The same neutral notice as the merge request's screen (ADR-0025,
+      // decision of 2026-11-10: every refusal is the invisible project's 404).
+      body = <Notice kind="notFound" requestId={f.requestId} />;
     } else if (f?.status === 400) {
       body = <Notice kind="invalidLink" requestId={f.requestId} />;
     } else {
@@ -130,7 +133,7 @@ function Confirmation({
         const requestId = e.failure.requestId;
         if (e.failure.status === 409) onEnd({ kind: 'stale', requestId });
         else if (e.failure.status === 400) onEnd({ kind: 'alreadyDecided', requestId });
-        else if (e.failure.status === 404) onEnd({ kind: 'bindingNotFound', requestId });
+        else if (e.failure.status === 404) onEnd({ kind: 'notFound', requestId });
       },
     });
   };

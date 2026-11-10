@@ -63,7 +63,7 @@ export function shortTitle(text: string, max = TITLE_MAX_CHARS): string {
   return chars.length <= max ? chars.join('') : `${chars.slice(0, max).join('')}…`;
 }
 
-export type NoticeKind = 'invalidLink' | 'refused' | 'notFound' | 'bindingNotFound' | 'expired' | 'alreadyDecided' | 'stale';
+export type NoticeKind = 'invalidLink' | 'refused' | 'notFound' | 'expired' | 'alreadyDecided' | 'stale';
 
 export type End = { kind: 'done' } | { kind: 'canceled' } | { kind: NoticeKind; requestId: string | null };
 
@@ -110,11 +110,14 @@ export function ActAsConfirm() {
     const e = confirmation.error;
     const f = e instanceof ApiFailure && e.failure.kind === 'api' ? e.failure : null;
     if (f?.status === 403) {
-      // The refusal says nothing more: not who may, not why (a 403 is also a
-      // disabled integration, so it never blames the person). The request
-      // id lets an administrator find the logged reason.
+      // The refusal says nothing more: not who may, not why (what is left as
+      // a 403 is the server's set-up, so it never blames the person). The
+      // request id lets an administrator find the logged reason.
       body = <Notice kind="refused" requestId={f.requestId} />;
     } else if (f?.status === 404) {
+      // ADR-0025 (decision of 2026-11-10): whoever may not press gets the
+      // invisible project's 404 - one neutral notice on both confirmation
+      // screens, whatever the logged cause.
       body = <Notice kind="notFound" requestId={f.requestId} />;
     } else {
       body = (
@@ -164,7 +167,6 @@ export function Notice({ kind, requestId }: { kind: NoticeKind; requestId: strin
     invalidLink: [t('actAs.invalidTitle'), t('actAs.invalidBody')],
     refused: [t('actAs.refusedTitle'), t('actAs.refusedBody')],
     notFound: [t('actAs.notFoundTitle'), t('actAs.notFoundBody')],
-    bindingNotFound: [t('actAs.notFoundTitle'), t('actAs.binding.notFoundBody')],
     expired: [t('actAs.expiredTitle'), t('actAs.expiredBody')],
     alreadyDecided: [t('actAs.alreadyTitle'), t('actAs.alreadyBody')],
     stale: [t('actAs.staleTitle'), t('actAs.staleBody')],
