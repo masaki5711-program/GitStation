@@ -547,6 +547,24 @@ impl FreshDb {
         superuser(&self.name).await
     }
 
+    /// Hold an ACCESS EXCLUSIVE lock on `table` (schema-qualified, e.g.
+    /// `forge.event_feed_state`) as the superuser until
+    /// [`HeldLock::release`], so a race test can park a request on it.
+    /// Transaction control stays here in forge-db (db-write-boundary rule 2).
+    /// `table` is spliced into the SQL: pass a trusted literal only.
+    pub async fn lock_table(&self, table: &str) -> HeldLock {
+        let mut conn = self.superuser().await;
+        sqlx::raw_sql("BEGIN")
+            .execute(&mut conn)
+            .await
+            .unwrap_or_else(|e| panic!("begin the lock holder: {e}"));
+        sqlx::raw_sql(&format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"))
+            .execute(&mut conn)
+            .await
+            .unwrap_or_else(|e| panic!("lock {table}: {e}"));
+        HeldLock(conn)
+    }
+
     /// The rows of `sql` as JSON objects, read as the superuser (to inspect
     /// from crates without sqlx).
     pub async fn json_rows(&self, sql: &str) -> Vec<serde_json::Value> {
@@ -623,6 +641,21 @@ impl HeldChange {
 
     pub async fn commit(self) {
         self.0.commit().await.expect("commit the held change");
+    }
+}
+
+/// A table lock held by [`FreshDb::lock_table`]. Dropping it drops the
+/// connection; the server then aborts the transaction and frees the lock
+/// once it sees the socket close.
+#[must_use = "dropping the HeldLock releases the lock immediately"]
+pub struct HeldLock(PgConnection);
+
+impl HeldLock {
+    pub async fn release(mut self) {
+        sqlx::raw_sql("COMMIT")
+            .execute(&mut self.0)
+            .await
+            .unwrap_or_else(|e| panic!("release the held lock: {e}"));
     }
 }
 
