@@ -77,7 +77,7 @@ use serde_json::{json, Map, Value};
 use crate::agent_tools::{manifest, Invalid, Manifest};
 use crate::app::{EnvFn, Io};
 use crate::cli::Cli;
-use crate::error::{ClientError, Result};
+use crate::error::{sanitize, ClientError, Result};
 use crate::hosting::client;
 use crate::http::ApiClient;
 
@@ -122,7 +122,7 @@ fn call_tool(
         .tools
         .iter()
         .find(|t| t.name == name)
-        .ok_or_else(|| Invalid(format!("unknown tool `{name}`")))?;
+        .ok_or_else(|| Invalid(format!("unknown tool `{}`", sanitize(name))))?;
     let empty = Map::new();
     let given = match params.get("arguments") {
         None | Some(Value::Null) => &empty,

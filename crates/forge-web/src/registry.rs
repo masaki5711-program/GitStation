@@ -1399,6 +1399,10 @@ pub fn routes_json_with(
                 "word": d.word(),
                 "action": d.action.name(),
                 "public": d.action.is_public(),
+                // Kept for people (`Action::is_people_only`): data for the
+                // agent tools gate of forge-client, which depends on no
+                // server crate (ADR-0023 Amendment 2026-11-10).
+                "people_only": d.action.is_people_only(),
             });
             if let (Some((key, value)), Some(obj)) = (d.query_key, entry.as_object_mut()) {
                 obj.insert("query_key".into(), json!([key, value]));

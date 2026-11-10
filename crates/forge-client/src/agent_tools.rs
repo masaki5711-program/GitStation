@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::error::sanitize;
 use crate::http::Method;
 
 /// The manifest, embedded at build time.
@@ -204,7 +205,7 @@ impl ToolSpec {
             .ok_or_else(|| Invalid(format!("tool `{}` is misdefined", self.name)))?;
         for key in given.keys() {
             if self.param(key).is_none() {
-                return Err(Invalid(format!("unknown argument `{key}`")));
+                return Err(Invalid(format!("unknown argument `{}`", sanitize(key))));
             }
         }
         let present = |name: &str| given.get(name).is_some_and(|v| !v.is_null());
@@ -403,6 +404,19 @@ pub fn manifest() -> Result<&'static Manifest, &'static str> {
         .map_err(String::as_str)
 }
 
+/// Every tool's route (`METHOD /path`), once each, in manifest order;
+/// none when the embedded manifest is invalid (the gate fails first).
+pub fn routes() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in manifest().map(|m| m.tools.as_slice()).unwrap_or_default() {
+        let r = format!("{} {}", t.method, t.path);
+        if !out.contains(&r) {
+            out.push(r);
+        }
+    }
+    out
+}
+
 /// Read a manifest and check what a request needs of it.
 pub fn parse(text: &str) -> Result<Manifest, String> {
     let m: Manifest = toml::from_str(text).map_err(|e| format!("not a manifest: {e}"))?;
@@ -439,6 +453,17 @@ pub fn parse(text: &str) -> Result<Manifest, String> {
         for p in &t.params {
             if !seen.insert(p.name.as_str()) {
                 return Err(format!("tool {}: argument {} twice", t.name, p.name));
+            }
+            // The JSON key is stated, never implied by the argument's name.
+            let wire_ok = p
+                .wire
+                .as_deref()
+                .is_some_and(|w| !w.is_empty() && w.split('.').all(|seg| !seg.is_empty()));
+            if p.location == Location::Body && !wire_ok {
+                return Err(format!(
+                    "tool {}: body argument {} states its JSON key (wire)",
+                    t.name, p.name
+                ));
             }
             if p.location == Location::Path {
                 if !p.required {

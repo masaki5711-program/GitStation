@@ -16,8 +16,8 @@
 #   params              in order: the query string keeps this order
 #     name              the argument's name
 #     in                path | query | body
-#     wire              the name on the wire when it differs ("position.line":
-#                       nested in the JSON body)
+#     wire              the name on the wire when it differs; always stated for
+#                       body ("position.line": nested in the JSON body)
 #     type              integer | string | boolean
 #     required          default false
 #     minimum, maximum  integers (minimum defaults to 1)
@@ -34,8 +34,10 @@
 # [[excluded]] (kept for people), [[not_api]] (no REST call of its own) or
 # [[deferred]] (an agent may, not a tool yet) with a reason. The parity gate
 # (crates/forge-client/src/agent_tools_tests.rs) fails on a command without a
-# decision, a route missing from openapi.json, or an excluded operation that
-# is a tool.
+# decision, a route missing from openapi.json, a tool on a command that calls
+# no route of its own (mcp, api, help, schema), or a tool on what is kept for
+# people: a people_only action (docs/authz/routes.generated.json), a route
+# of an excluded command, or the action of an excluded command's write.
 
 version = 1
 
@@ -318,11 +320,11 @@ path = "/api/v1/projects/{id}/merge-requests"
 description = "Open a merge request from an existing branch into another. Push the branch with git first. A person approves it; an agent never merges."
 params = [
   { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
-  { name = "source_branch", in = "body", type = "string", required = true, description = "The source branch (feature/x or refs/heads/feature/x); it must exist." },
-  { name = "target_branch", in = "body", type = "string", required = true, description = "The target branch, another than the source; it must exist." },
-  { name = "title", in = "body", type = "string", max_bytes = 1024, required = true, description = "The title, 1..=255 characters." },
-  { name = "description", in = "body", type = "string", format = "markdown", max_bytes = 32768, allow_empty = true, description = "The description (Markdown)." },
-  { name = "draft", in = "body", type = "boolean", description = "Open it as a draft (default false)." },
+  { name = "source_branch", in = "body", wire = "source_branch", type = "string", required = true, description = "The source branch (feature/x or refs/heads/feature/x); it must exist." },
+  { name = "target_branch", in = "body", wire = "target_branch", type = "string", required = true, description = "The target branch, another than the source; it must exist." },
+  { name = "title", in = "body", wire = "title", type = "string", max_bytes = 1024, required = true, description = "The title, 1..=255 characters." },
+  { name = "description", in = "body", wire = "description", type = "string", format = "markdown", max_bytes = 32768, allow_empty = true, description = "The description (Markdown)." },
+  { name = "draft", in = "body", wire = "draft", type = "boolean", description = "Open it as a draft (default false)." },
 ]
 
 [[tool]]
@@ -338,9 +340,9 @@ at_least_one = ["title", "description", "draft"]
 params = [
   { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
   { name = "iid", in = "path", type = "integer", required = true, description = "The merge request's number in the project." },
-  { name = "title", in = "body", type = "string", max_bytes = 1024, description = "The new title, 1..=255 characters." },
-  { name = "description", in = "body", type = "string", format = "markdown", max_bytes = 32768, allow_empty = true, description = "The new description (Markdown); replaces the old one." },
-  { name = "draft", in = "body", type = "boolean", description = "true: a draft; false: ready for review." },
+  { name = "title", in = "body", wire = "title", type = "string", max_bytes = 1024, description = "The new title, 1..=255 characters." },
+  { name = "description", in = "body", wire = "description", type = "string", format = "markdown", max_bytes = 32768, allow_empty = true, description = "The new description (Markdown); replaces the old one." },
+  { name = "draft", in = "body", wire = "draft", type = "boolean", description = "true: a draft; false: ready for review." },
 ]
 
 [[tool]]
@@ -385,7 +387,7 @@ requires = [["side", "version"]]
 params = [
   { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
   { name = "iid", in = "path", type = "integer", required = true, description = "The merge request's number in the project." },
-  { name = "body", in = "body", type = "string", format = "markdown", max_bytes = 32768, required = true, description = "The note (plain text / Markdown)." },
+  { name = "body", in = "body", wire = "body", type = "string", format = "markdown", max_bytes = 32768, required = true, description = "The note (plain text / Markdown)." },
   { name = "version", in = "body", wire = "position.version", type = "integer", description = "An inline discussion: the version whose diff the line is in." },
   { name = "path", in = "body", wire = "position.path", type = "string", max_bytes = 4096, description = "An inline discussion: the file's path on that side of the diff." },
   { name = "line", in = "body", wire = "position.line", type = "integer", description = "An inline discussion: the line, inside a hunk of that file." },
@@ -405,7 +407,7 @@ params = [
   { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
   { name = "iid", in = "path", type = "integer", required = true, description = "The merge request's number in the project." },
   { name = "discussion_id", in = "path", type = "integer", required = true, description = "The discussion (list_merge_request_discussions)." },
-  { name = "body", in = "body", type = "string", format = "markdown", max_bytes = 32768, required = true, description = "The note (plain text / Markdown)." },
+  { name = "body", in = "body", wire = "body", type = "string", format = "markdown", max_bytes = 32768, required = true, description = "The note (plain text / Markdown)." },
 ]
 
 [[tool]]
@@ -419,7 +421,7 @@ path = "/api/v1/projects/{id}/pipelines"
 description = "Run a pipeline by hand on a branch's tip (never as protected: a job with secrets makes it invalid)."
 params = [
   { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
-  { name = "ref", in = "body", type = "string", required = true, description = "The branch (main or refs/heads/main)." },
+  { name = "ref", in = "body", wire = "ref", type = "string", required = true, description = "The branch (main or refs/heads/main)." },
 ]
 
 [[tool]]
@@ -452,8 +454,9 @@ params = [
 
 # ── kept for people: never a tool (plan 06 §4.5, plan 01 §3.11 C-9, ADR-0017 §4.0, ADR-0025 §4) ──
 # `gstn` names a command; `action` an authz action with no command yet. The
-# gate also refuses a tool on any write route of an excluded command, or on
-# any route whose authz action such a route has.
+# gate also refuses a tool on any route of an excluded command (unless a
+# command not excluded calls it too), on the authz action of an excluded
+# command's write, and on every people_only action of the server.
 
 [[excluded]]
 gstn = "mr approve"

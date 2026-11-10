@@ -28,6 +28,17 @@ pub struct CommandSpec {
     pub output: &'static str,
 }
 
+impl CommandSpec {
+    /// The API routes the command calls. `mcp`'s are its tools' routes,
+    /// read from docs/api/agent-tools.toml (one list, never kept by hand).
+    pub fn all_routes(&self) -> Vec<String> {
+        if self.name == "mcp" {
+            return crate::agent_tools::routes();
+        }
+        self.routes.iter().map(|r| (*r).to_owned()).collect()
+    }
+}
+
 const fn arg(
     name: &'static str,
     kind: &'static str,
@@ -1194,37 +1205,9 @@ pub const COMMANDS: &[CommandSpec] = &[
         args: &[],
         examples: &["gstn mcp", "claude mcp add gitstation -- gstn mcp"],
         scopes: &["read_api", "api"],
-        routes: &[
-            "GET /api/v1/projects/{id}/context/work-item",
-            "GET /api/v1/projects/{id}/context/requirement",
-            "GET /api/v1/projects/{id}/specs/requirements",
-            "GET /api/v1/projects/{id}/specs/trace",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}/context",
-            "GET /api/v1/projects/{id}/documents",
-            "GET /api/v1/projects/{id}/documents/{doc_id}",
-            "GET /api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}",
-            "GET /api/v1/projects/{id}/documents/{doc_id}/referenced-by",
-            "GET /api/v1/projects/{id}/merge-requests",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}/versions",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}/compare",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}/status",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}/discussions",
-            "GET /api/v1/projects/{id}/merge-requests/{iid}/conflicts",
-            "GET /api/v1/projects/{id}/commits/{sha}/checks",
-            "GET /api/v1/projects/{id}/pipelines",
-            "GET /api/v1/projects/{id}/pipelines/{pipeline_id}",
-            "POST /api/v1/projects/{id}/merge-requests",
-            "PATCH /api/v1/projects/{id}/merge-requests/{iid}",
-            "POST /api/v1/projects/{id}/merge-requests/{iid}/close",
-            "POST /api/v1/projects/{id}/merge-requests/{iid}/reopen",
-            "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions",
-            "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes",
-            "POST /api/v1/projects/{id}/pipelines",
-            "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/cancel",
-            "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/retry",
-        ],
+        // Derived from docs/api/agent-tools.toml (`CommandSpec::all_routes`),
+        // never written here.
+        routes: &[],
         output: r#"{"type":"null","description":"JSON-RPC 2.0 messages, one per line (the MCP stdio transport); no --json output"}"#,
     },
     CommandSpec {
@@ -1899,7 +1882,7 @@ pub fn command_json(c: &CommandSpec) -> Value {
         "args": c.args.iter().map(arg_json).collect::<Vec<_>>(),
         "examples": c.examples,
         "scopes": c.scopes,
-        "routes": c.routes,
+        "routes": c.all_routes(),
         "output": output,
     })
 }

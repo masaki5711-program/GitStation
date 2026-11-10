@@ -555,3 +555,189 @@ fn invalid_arguments_of_the_new_tools_send_nothing() {
     }
     assert!(srv.seen().is_empty(), "no invalid call reached the server");
 }
+
+/// The whole tool list, in order: adding or removing a tool is a decision
+/// this test makes visible.
+#[test]
+fn the_tool_list_is_exactly_the_manifest() {
+    let srv = ok_server();
+    let (_, out) = mcp(
+        &srv,
+        &[json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})],
+    );
+    let names: Vec<&str> = by_id(&out, 1)["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|t| t["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "get_work_item_context",
+            "get_requirement",
+            "search_requirements",
+            "get_trace_matrix",
+            "get_merge_request_context",
+            "list_documents",
+            "get_document",
+            "get_document_block",
+            "get_document_referenced_by",
+            "list_merge_requests",
+            "get_merge_request",
+            "list_merge_request_versions",
+            "get_merge_request_diff",
+            "compare_merge_request_versions",
+            "get_merge_request_status",
+            "list_merge_request_discussions",
+            "get_merge_request_conflicts",
+            "list_check_runs",
+            "list_pipelines",
+            "get_pipeline",
+            "create_merge_request",
+            "update_merge_request",
+            "close_merge_request",
+            "reopen_merge_request",
+            "comment_on_merge_request",
+            "reply_to_discussion",
+            "run_pipeline",
+            "cancel_pipeline",
+            "retry_pipeline",
+        ]
+    );
+}
+
+/// For every tool, dropping any one required argument is `-32602` and
+/// nothing reaches the server.
+#[test]
+fn every_missing_required_argument_is_refused_before_sending() {
+    let manifest = forge_client::agent_tools::manifest().expect("manifest");
+    let mut calls = Vec::new();
+    let mut id = 0;
+    for t in &manifest.tools {
+        let required: Vec<&forge_client::agent_tools::Param> =
+            t.params.iter().filter(|p| p.required).collect();
+        for dropped in &required {
+            let mut args = serde_json::Map::new();
+            for p in required.iter().filter(|p| p.name != dropped.name) {
+                let v = match (p.kind, p.format) {
+                    (forge_client::agent_tools::Kind::Integer, _) => json!(7),
+                    (_, forge_client::agent_tools::Format::Oid) => json!(OID),
+                    _ => json!("PBI-1"),
+                };
+                args.insert(p.name.clone(), v);
+            }
+            if let Some(first) = t.at_least_one.first() {
+                args.insert(first.clone(), json!("x"));
+            }
+            id += 1;
+            calls.push((
+                id,
+                t.name.clone(),
+                dropped.name.clone(),
+                call(id, &t.name, Value::Object(args)),
+            ));
+        }
+    }
+    assert!(calls.len() > 40, "{}", calls.len());
+    let srv = ok_server();
+    let messages: Vec<Value> = calls.iter().map(|c| c.3.clone()).collect();
+    let (_, out) = mcp(&srv, &messages);
+    for (id, tool, dropped, _) in &calls {
+        let e = &by_id(&out, *id)["error"];
+        assert_eq!(e["code"], -32602, "{tool} without {dropped}");
+        assert_eq!(
+            e["message"],
+            format!("missing argument `{dropped}`"),
+            "{tool}"
+        );
+    }
+    assert!(
+        srv.seen().is_empty(),
+        "no call without a required argument was sent"
+    );
+}
+
+fn assert_error_shape(o: &Out, out: &[Value], ids: &[i64], code: &str) {
+    for id in ids {
+        let r = &by_id(out, *id)["result"];
+        assert_eq!(r["isError"], true, "{id}");
+        let mut keys: Vec<&str> = r["structuredContent"]
+            .as_object()
+            .expect("structuredContent")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["error_code", "request_id", "user_message"], "{id}");
+        assert_eq!(r["structuredContent"]["error_code"], code, "{id}");
+        assert!(!r["structuredContent"]["user_message"]
+            .as_str()
+            .expect("message")
+            .is_empty());
+    }
+    assert!(!o.stdout.contains(TOKEN) && !o.stderr.contains(TOKEN));
+}
+
+/// A new read tool and a new write tool against a 404, an HTML 502 (a proxy
+/// page) and an unreachable server: the code, the message and the request
+/// id only — never the page, a path or the token.
+#[test]
+fn new_tools_fail_with_the_error_shape_only() {
+    let calls = [
+        call(1, "get_pipeline", json!({"project_id":7,"pipeline_id":12})),
+        call(
+            2,
+            "create_merge_request",
+            json!({"project_id":7,"source_branch":"a","target_branch":"main","title":"t"}),
+        ),
+    ];
+    let srv = Mock::start(|_| {
+        Resp::json(
+            404,
+            r#"{"error_code":"FG-REPO-0005","user_message":"The project or repository was not found.","request_id":"req-404","internal":"/srv/forge/repos/x.git"}"#,
+        )
+    });
+    let (o, out) = mcp(&srv, &calls);
+    assert_error_shape(&o, &out, &[1, 2], "FG-REPO-0005");
+    assert_eq!(
+        by_id(&out, 2)["result"]["structuredContent"]["request_id"],
+        "req-404"
+    );
+    assert!(!o.stdout.contains("/srv/forge"), "{}", o.stdout);
+
+    let srv = Mock::start(|_| Resp {
+        status: 502,
+        headers: vec![("Content-Type".into(), "text/html".into())],
+        body: "<html><body>Bad Gateway at proxy-01.internal</body></html>".into(),
+    });
+    let (o, out) = mcp(&srv, &calls);
+    let code = by_id(&out, 1)["result"]["structuredContent"]["error_code"]
+        .as_str()
+        .expect("code")
+        .to_owned();
+    assert!(code.starts_with("FG-"), "{code}");
+    assert_error_shape(&o, &out, &[1, 2], &code);
+    assert!(
+        !o.stdout.contains("proxy-01") && !o.stdout.contains("<html"),
+        "{}",
+        o.stdout
+    );
+
+    // Nothing listens on port 1.
+    let sb = Sandbox::new();
+    let input: String = calls.iter().map(|m| format!("{m}\n")).collect();
+    let o = sb.run_env(
+        "http://127.0.0.1:1",
+        &["mcp"],
+        &input,
+        &[("GSTN_TOKEN", TOKEN)],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let out: Vec<Value> = o
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("json"))
+        .collect();
+    assert_error_shape(&o, &out, &[1, 2], "FG-CLI-0003");
+}

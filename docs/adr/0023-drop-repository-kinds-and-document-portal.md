@@ -472,7 +472,12 @@ X5 の 7 の「読み取りのみ」をやめる。Kanflow の PBI から始め�
 4. **ゲート**（forge-client の `agent_tools_tests.rs`）: `gstn` の葉のコマンドはすべて、道具の `gstn` か `[[excluded]]`・`[[not_api]]`
    （REST を呼ばない）・`[[deferred]]`（エージェントに許されるが、まだ道具にしない）のどれか 1 つ（理由つき）。決まっていないコマンドは
    何を足すかを書いて落ちる（並行の MR が先に入っても、後から入る側で落ちる）。道具のルートと引数の名前は `openapi.json` にあること、
-   ルートは写すコマンドの `routes` にあること、除外したコマンドの書き込みのルートと、その認可の Action（`routes.generated.json`）と、
-   除外した Action を使う道具がないこと、`help --json` の `mcp` のルートが道具のルートと同じこと。
+   ルートは写すコマンド自身の `routes` にあること（`mcp`・`api`・`help`・`schema` と `[[not_api]]` は道具のコマンドにならない）、
+   サーバーが人だけとする Action（`Action::is_people_only` を gen-authz が `routes.generated.json` の `people_only` に書き出す。
+   forge-client はクレートでなくデータを読む）を使う道具が GET も含めてないこと、除外したコマンドのルート（ほかの除外していない
+   コマンドも呼ぶものは除く）と、除外したコマンドの書き込みの Action と、除外した Action を使う道具がないこと。各検査は
+   （manifest・コマンド・openapi・ルート）の関数で、合成の入力で落ちることもテストする。`help --json` の `mcp` のルートは
+   手で書かず manifest から作る（`CommandSpec::all_routes`）。埋め込みの manifest が壊れているときの `FG-CLI-0005` は catalog の
+   cause に書いた。
 5. **残すもの**: `[[deferred]]` の読み取り（browse・spec の版と差分・承認の一覧など）は、Kanflow 側のセッションが送る「呼びたい操作の一覧」
    （act-as と `/api/v1/ai-tools`、計画 02 §6）を受けて足す。`/api/v1/ai-tools` 自体はサーバーの別の MR。
