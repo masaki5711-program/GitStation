@@ -155,6 +155,15 @@ doctor `ci.runners`、runbook `ci-runner`。ジョブのスクリプトは表に
 確かめて読む（C4）。ジョブの fetch の Smart HTTP（`refs/pipelines/<id>/head`、`authorize_pinned_copy`）は C4 に回した（`git-protocol-reviewer` が見る MR）。
 Runner の登録は管理者の Web のセッションだけ（`gstn` はトークンなので呼べない。画面は後の MR）。
 
+**C4 の注記（2026-11-11）**: クレート `forge-runner`（バイナリ。依存は forge-core・forge-errors・forge-client だけ、forge-ci は
+`forge_client::forge_ci` の再公開で使う）。git と Podman は `ProcessRunner` の trait の向こう（argv だけ、環境を消す、時間切れ、
+停止の旗）で、試験は偽物で argv を確かめる。本物の Podman の試験は Runner のホストができるまで `#[ignore]`（§10.1）。
+`.forge-ci.yml` は `LintContext::pinned_by_server`（シークレットの保護の規則だけはサーバーの `secrets_allowed` に任せる）で読み直す。
+サーバーの側はジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`（`RepoRead` × `PinnedCopyCtx`、`refs/pipelines/<id>/head`
+だけを広告、want は固定したコミットから、`refs/pipelines/` は人の Smart HTTP から隠す）。FG-CI-0007〜0010、runbook `ci-runner` の
+「Runner のホストの準備」。**Runner の登録の Web の画面はまだ無い**: 運用者のコマンド `forge admin runner register|list|disable`
+（`--admin` に有効な人の管理者を記録する）で代える。`gstn` のコマンドは足していない。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。
