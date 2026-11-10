@@ -34,11 +34,13 @@
 -- the check; an older one is only marked.
 --
 -- forge.check_runs: `ci/pipeline` is written by forge's worker with no
--- reporter (like `forge/`). check_runs_reporter now allows a NULL reporter
--- for `ci/pipeline` too, and still requires it for every other `ci/` name.
--- A `ci/pipeline` row a service account reported before C5 (no rule stopped
--- it then) keeps its reporter until the worker overwrites it, so the
--- constraint allows both shapes for that one name.
+-- reporter (like `forge/`). A `ci/pipeline` run an account reported before
+-- C5 (no rule stopped it then) is removed with its annotations — audited
+-- on its project (`check_run.reserved_removed`, counts only) — so a stale
+-- success can never satisfy a required `ci/pipeline`; the worker writes
+-- the check again for every pipeline (check_status starts NULL). Then
+-- check_runs_reporter requires no reporter (and no credential) exactly for
+-- `forge/` names and `ci/pipeline`, and a reporter for every other name.
 --
 -- forge.ci_log_chunks: unchanged. The read pool still never sees `body`;
 -- the only read of it is forge_db::ci_outputs on the write pool, after
@@ -104,16 +106,34 @@ CREATE INDEX ci_pipelines_check_due ON forge.ci_pipelines (id)
 -- The newest pipeline of a commit (only it writes the check).
 CREATE INDEX ci_pipelines_commit ON forge.ci_pipelines (project_id, sha, id DESC);
 
+-- One audit row per project whose reported `ci/pipeline` runs go (the
+-- audit triggers of check_runs / check_annotations need it in this
+-- transaction), then the annotations, then the runs.
+INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id,
+    project_id, request_id, details)
+SELECT 'system', 'check_run.reserved_removed', 'succeeded', 'project', g.project_id,
+    g.project_id, 'db.migrate',
+    jsonb_build_object('project_id', g.project_id, 'name', 'ci/pipeline', 'runs', g.runs,
+        'annotations', (SELECT count(*) FROM forge.check_annotations a
+                        JOIN forge.check_runs r ON r.id = a.check_run_id
+                        WHERE r.project_id = g.project_id AND r.name = 'ci/pipeline'
+                          AND r.reported_by IS NOT NULL),
+        'version', 20261206200000)
+FROM (SELECT project_id, count(*) AS runs FROM forge.check_runs
+      WHERE name = 'ci/pipeline' AND reported_by IS NOT NULL GROUP BY project_id) g;
+DELETE FROM forge.check_annotations a USING forge.check_runs r
+    WHERE a.check_run_id = r.id AND r.name = 'ci/pipeline' AND r.reported_by IS NOT NULL;
+DELETE FROM forge.check_runs WHERE name = 'ci/pipeline' AND reported_by IS NOT NULL;
+-- The deferred audit checks of those deletes run now: ALTER TABLE refuses
+-- a table with pending trigger events.
+SET CONSTRAINTS ALL IMMEDIATE;
+
 ALTER TABLE forge.check_runs DROP CONSTRAINT check_runs_reporter;
 ALTER TABLE forge.check_runs ADD CONSTRAINT check_runs_reporter
-    CHECK ((name LIKE 'forge/%' AND reported_by IS NULL)
-        OR (name = 'ci/pipeline')
-        OR (name NOT LIKE 'forge/%' AND reported_by IS NOT NULL))
+    CHECK ((reported_by IS NULL) = (name LIKE 'forge/%' OR name = 'ci/pipeline')
+        AND (reported_by IS NOT NULL OR credential_id IS NULL))
     NOT VALID;
 ALTER TABLE forge.check_runs VALIDATE CONSTRAINT check_runs_reporter;
-ALTER TABLE forge.check_runs ADD CONSTRAINT check_runs_reporter_credential
-    CHECK (reported_by IS NOT NULL OR credential_id IS NULL) NOT VALID;
-ALTER TABLE forge.check_runs VALIDATE CONSTRAINT check_runs_reporter_credential;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON forge.failure_fingerprints TO forge_app;
 GRANT SELECT ON forge.failure_fingerprints TO forge_ro;

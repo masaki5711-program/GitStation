@@ -170,7 +170,9 @@ label は `forge-ci`、報告者なし（`reported_by` は NULL）。同じコ�
   残り続けるなら worker が止まっている（`forge doctor`、ログの `task=ci_outputs` と `error_code`）か、1 つのパイプラインの書き込みが
   失敗している（`event=forge.ci.pipeline_check_failed` の `pipeline_id`・`error_code`。次の周期でやり直す）。同じコミットの古い
   パイプラインは書かない（`check_status` だけが進む）。
-- サービスアカウントが C5 の前に `ci/pipeline` を書いていた行は、worker が次に書くときに報告者なしで上書きする。
+- サービスアカウントが C5 の前に `ci/pipeline` を書いていた行（と注記）は、C5 の移行が消す（プロジェクトの監査ログに
+  `check_run.reserved_removed`、件数だけ）。古い成功が必須チェックを満たすことはない。forge のパイプラインがあるコミットは
+  worker が書き直す。パイプラインのないコミットは `ci/pipeline` が無いまま（必須ならマージは待つ。パイプラインを走らせる）。
 - 手で直さない。パイプラインを再実行すれば（`gstn pipeline retry`）チェックも追う。
 
 ### H. CI のログと診断が読めない（FG-AUTH-0022、計画 14 C5、ADR-0029 決定 5）

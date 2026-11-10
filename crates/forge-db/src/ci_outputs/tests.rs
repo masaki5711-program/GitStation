@@ -656,3 +656,125 @@ async fn ci_log_text_is_read_only_after_a_decision() {
     assert_eq!(module.matches("jf.excerpt").count(), 1);
     t.drop_now().await;
 }
+
+/// Migration 20261206200000 on a database a service account had written
+/// `ci/pipeline` into before C5 (no rule stopped it then): those runs and
+/// their annotations are removed (audited on the project), so a stale
+/// success can never satisfy a required `ci/pipeline`; every other run is
+/// kept, and afterwards no account can hold a `ci/pipeline` run
+/// (check_runs_reporter).
+#[tokio::test]
+async fn the_migration_removes_ci_pipeline_runs_a_service_account_reported() {
+    const C5: i64 = 20261206200000;
+    let t = FreshDb::new().await;
+    let before = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            crate::MIGRATOR
+                .iter()
+                .filter(|m| m.version < C5)
+                .cloned()
+                .collect(),
+        ),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    for m in [&before, &crate::MIGRATOR] {
+        let mut mc = Db::connect_migrator(&t.migrate_config(&[]).db)
+            .await
+            .expect("migrator");
+        let applied = crate::migrate(&mut mc, m, std::time::Duration::from_secs(60))
+            .await
+            .expect("migrate");
+        mc.close().await;
+        if std::ptr::eq(m, &before) {
+            let alice = users::create(
+                &t.db,
+                &ctx(Actor::System, "req-user-alice"),
+                &NewUser::human("alice", "alice", "alice@example.test"),
+            )
+            .await
+            .expect("alice");
+            let web = projects::create(
+                &t.db,
+                &ctx(Actor::System, "req-project-web"),
+                &NewProject::new("web", alice.namespace_id, "Web", alice.user_id),
+            )
+            .await
+            .expect("web");
+            let (p, a) = (web.project_id.get(), alice.user_id.get());
+            let run = |name: &str, c: char| {
+                format!(
+                    "INSERT INTO forge.check_runs (project_id, head_sha, name, status, \
+                     conclusion, completed_at, reported_by, credential_id, request_id) VALUES \
+                     ({p}, repeat('{c}', 40), '{name}', 'completed', 'success', now(), {a}, 7, \
+                     'req-old')"
+                )
+            };
+            t.commit_audited(
+                ("project", p),
+                &[
+                    run(CI_PIPELINE_CHECK, 'a'),
+                    run(CI_PIPELINE_CHECK, 'b'),
+                    run("ci/gates", 'a'),
+                    format!(
+                        "INSERT INTO forge.check_annotations (check_run_id, project_id, \
+                         position, path, start_line, end_line, level, message) SELECT id, {p}, \
+                         0, 'src/lib.rs', 1, 1, 'failure', 'stale' FROM forge.check_runs \
+                         WHERE name = '{CI_PIPELINE_CHECK}' AND head_sha = repeat('a', 40)"
+                    ),
+                ],
+            )
+            .await;
+        } else {
+            assert_eq!(applied, vec![C5]);
+        }
+    }
+    let rows = t
+        .json_rows(
+            "SELECT name, reported_by IS NOT NULL AS reported FROM forge.check_runs ORDER BY name",
+        )
+        .await;
+    assert_eq!(
+        rows,
+        vec![serde_json::json!({"name": "ci/gates", "reported": true})]
+    );
+    let left = t
+        .json_rows("SELECT count(*) AS n FROM forge.check_annotations")
+        .await;
+    assert_eq!(left, vec![serde_json::json!({"n": 0})]);
+    let audit = t
+        .json_rows(
+            "SELECT action, resource_type, details -> 'runs' AS runs, \
+             details -> 'annotations' AS annotations FROM forge.audit_log \
+             WHERE action = 'check_run.reserved_removed'",
+        )
+        .await;
+    assert_eq!(
+        audit,
+        vec![serde_json::json!({
+            "action": "check_run.reserved_removed",
+            "resource_type": "project",
+            "runs": 2,
+            "annotations": 1,
+        })]
+    );
+    let mut su = t.superuser().await;
+    let p: i64 = sqlx::query_scalar("SELECT id FROM forge.projects LIMIT 1")
+        .fetch_one(&mut su)
+        .await
+        .expect("project");
+    let a: i64 = sqlx::query_scalar("SELECT id FROM forge.users WHERE username = 'alice'")
+        .fetch_one(&mut su)
+        .await
+        .expect("alice");
+    let sql = format!(
+        "INSERT INTO forge.check_runs (project_id, head_sha, name, status, reported_by, \
+         request_id) VALUES ({p}, repeat('c', 40), '{CI_PIPELINE_CHECK}', 'queued', {a}, 'req-x')"
+    );
+    let constraint = match sqlx::query(&sql).execute(&mut su).await {
+        Err(sqlx::Error::Database(e)) => e.constraint().map(str::to_owned),
+        _ => None,
+    };
+    assert_eq!(constraint.as_deref(), Some("check_runs_reporter"));
+    drop(su);
+    t.drop_now().await;
+}
