@@ -319,8 +319,13 @@ short-lived token, decided by the same `authorize()` in their own arm
   `ci_job_tokens`); forge-web's authentication builds the principals
   (`Principal::runner` / `Principal::job`); `Authorized::reconfirm` keeps a CI
   principal as it is. Rows: `RUNNER_ROWS` in `src/matrix_rows_ci.rs`.
-- Not yet (C4): the Smart HTTP route for a job (`refs/pipelines/<id>/head`
-  only) that calls `authorize_pinned_copy`.
+- M4 C4: `PinnedCopyCtx` (the job fetch route's context: the job, its
+  pipeline, the pipeline's project and SHA, the project's repository, from
+  one row) is the second builder of `Resource::PinnedCopy` and decides
+  exactly like `authorize_pinned_copy` (test
+  `the_job_fetch_context_decides_like_the_pinned_copy`). The route is
+  forge-web's `routes::job_fetch` (`/api/v1/runner/jobs/{job_id}/repo.git`,
+  `RepoRead`), which advertises only `refs/pipelines/<id>/head`.
 
 **Error codes owned**: FG-AUTH-0001..0004, FG-REPO-0005..0006,
 FG-GIT-0007..0010 (all `info`, no runbook: expected client conditions).

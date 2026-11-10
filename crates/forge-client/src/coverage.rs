@@ -784,6 +784,18 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/runner/jobs/{job_id}/complete",
         Coverage::NotForCli("the runner API: forge-runner (M4 C4) reports the job's result"),
     ),
+    // M4 C4 (ADR-0029 §3): the job's fetch of its pinned commit, git's
+    // Smart HTTP with the job's token only.
+    (
+        "GET",
+        "/api/v1/runner/jobs/{job_id}/repo.git/info/refs",
+        Coverage::NotForCli("Smart HTTP for a CI job: forge-runner's git fetches the pipeline's pinned commit with the job's token fgj_...; a person's token is refused"),
+    ),
+    (
+        "POST",
+        "/api/v1/runner/jobs/{job_id}/repo.git/git-upload-pack",
+        Coverage::NotForCli("Smart HTTP for a CI job: upload-pack of the pinned commit (forge-runner's git, the job's token only)"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

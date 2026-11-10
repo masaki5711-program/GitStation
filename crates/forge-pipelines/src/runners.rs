@@ -20,6 +20,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{caller, change_context, require, ChangeRequest, Pipelines};
 
+pub use forge_db::ci_runners::lease::JobCopy;
 pub use forge_db::ci_runners::lease::{
     Appended as LogAppended, Claimed as ClaimedJob, Completed as JobCompleted,
     Heartbeat as JobHeartbeat, JobResult as RunnerJobResult,
@@ -128,6 +129,13 @@ impl Pipelines {
     /// finished)`, `None` without such a job.
     pub async fn lease_of(&self, job: i64) -> Result<Option<(Option<i64>, bool)>, ForgeError> {
         lease::lease_of(&self.db, job).await
+    }
+
+    /// What the job fetch route (M4 C4) decides on: the job's pipeline, its
+    /// project and pinned SHA, and the project's repository; `None` without
+    /// such a job. The decision is `authorize()`'s on the route's context.
+    pub async fn job_copy(&self, job: i64) -> Result<Option<JobCopy>, ForgeError> {
+        lease::job_copy(&self.db, job).await
     }
 
     /// `POST /api/v1/runner/jobs/request` (`RunnerJobRequest`): claim a

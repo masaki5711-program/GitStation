@@ -58,6 +58,8 @@ pub mod push_mirror;
 pub mod pipelines;
 // ── M4 C3: CI runners and the runner API ──
 pub mod runners;
+// M4 C4: a CI job's fetch of its pinned commit.
+pub mod job_fetch;
 // ── M3 I2: project webhooks (ADR-0016 §8) ──
 pub mod webhooks;
 // ── end M3 I2 ──

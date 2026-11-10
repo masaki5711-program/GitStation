@@ -370,3 +370,47 @@ fn only_forge_web_builds_ci_principals() {
         "only forge-web's authentication builds a CI principal: {offenders:?}"
     );
 }
+
+/// M4 C4: the job fetch route's context decides exactly like
+/// `authorize_pinned_copy` — its own project at its own SHA while live; another
+/// project or SHA is the invisible project's 404; an ended job is
+/// `FG-AUTH-0001`; a person is refused.
+#[test]
+fn the_job_fetch_context_decides_like_the_pinned_copy() {
+    use crate::{prove, PinnedCopyCtx};
+    use forge_core::{ProjectRepository, RepoId, RepositoryState};
+    let repo = ProjectRepository {
+        id: RepoId::new(3),
+        state: RepositoryState::Ready,
+    };
+    let at = |project: ProjectId, raw: &str| PinnedCopyCtx::new(41, 9, project, sha(raw), repo);
+    let live = job(JobTokenState::Live);
+    let proof = prove(&live, Action::RepoRead, at(JOB_PROJECT, JOB_SHA)).expect("own copy");
+    assert_eq!(*proof.id(), 41);
+    assert_eq!(proof.ctx().pipeline(), 9);
+    assert_eq!(proof.ctx().sha().as_str(), JOB_SHA);
+    assert_eq!(proof.ctx().repository(), repo);
+    let other = prove(&live, Action::RepoRead, at(ProjectId::new(8), JOB_SHA))
+        .expect_err("another project");
+    assert_eq!(other.code(), ErrorCode::NotFound);
+    assert_eq!(ctx(&other, "reason"), Some("job_other_project"));
+    let other = prove(
+        &live,
+        Action::RepoRead,
+        at(JOB_PROJECT, "2222222222222222222222222222222222222222"),
+    )
+    .expect_err("another sha");
+    assert_eq!(ctx(&other, "reason"), Some("job_sha_mismatch"));
+    for state in [JobTokenState::Revoked, JobTokenState::Expired] {
+        let ended =
+            prove(&job(state), Action::RepoRead, at(JOB_PROJECT, JOB_SHA)).expect_err("ended job");
+        assert_eq!(ended.code(), ErrorCode::Unauthenticated);
+    }
+    let person = prove(
+        &token(AccountKind::Human, false),
+        Action::RepoRead,
+        at(JOB_PROJECT, JOB_SHA),
+    )
+    .expect_err("a person");
+    assert_eq!(ctx(&person, "reason"), Some("pinned_copy_without_job"));
+}

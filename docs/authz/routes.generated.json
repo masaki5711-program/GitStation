@@ -1476,6 +1476,24 @@
     "word": "fixed"
   },
   {
+    "action": "RepoRead",
+    "method": "POST",
+    "path": "/api/v1/runner/jobs/{job_id}/repo.git/git-upload-pack",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoRead",
+    "method": "GET",
+    "path": "/api/v1/runner/jobs/{job_id}/repo.git/info/refs",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "SessionRead",
     "method": "GET",
     "path": "/api/v1/session",

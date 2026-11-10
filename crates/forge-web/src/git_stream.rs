@@ -388,6 +388,25 @@ impl StreamLog {
         }
     }
 
+    /// A CI job's fetch (M4 C4, `routes::job_fetch`): no namespace route,
+    /// the target from the job's proof.
+    pub(crate) fn for_job(
+        request_id: forge_core::RequestId,
+        project_id: i64,
+        repo_id: i64,
+        route: &'static str,
+    ) -> Self {
+        Self {
+            request_id,
+            route,
+            project_id,
+            repo_id,
+            command: None,
+            wants: None,
+            check_ms: None,
+        }
+    }
+
     /// The upload-pack request's command and want check.
     pub(crate) fn with_check(
         mut self,
