@@ -799,6 +799,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "dbus-secret-service-keyring-store",
+ "forge-ci",
  "forge-client",
  "forge-doc",
  "forge-errors",

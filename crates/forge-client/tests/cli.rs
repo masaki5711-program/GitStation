@@ -944,6 +944,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "doc migration show",
             "doc migration set",
             "doc migration clear",
+            "ci lint",
+            "ci plan",
             "context work-item",
             "context requirement",
             "context merge-request",

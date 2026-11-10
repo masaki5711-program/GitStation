@@ -136,6 +136,11 @@ M4-0 [root] ─▶ ADR-0029 / C0（Job の主体）─▶ C1（定義）─▶ C
 | C13 `feat/git-ssh-transport` | SSH の git 転送（M4 の終盤、R1 の外） | RepoRead / RepoPush の SSH 経路 | GIT-next | — | `git-protocol-reviewer`、`security-reviewer` | `smart-http` 相当 |
 | **X★** `chore/ops-ci-cutover` | `ci/gates` のスクリプトと `ci/pipeline` を並行し、5 回一致したら必須チェックを `ci/pipeline` に替え、`ci/` の割り当てを外す | — | — | — / 5 回の一致の記録 | `ci-runner-security-reviewer` | `checks-reporting` |
 
+**C1 の注記（2026-11-10）**: 契約 9 を改め（エージェントモデル 813c66e）、`forge-ci` を純粋な層（`forge-core → forge-ci → forge-doc → forge-errors`）に置いた。
+`gstn` は `forge-ci` に依存してよい（ADR-0020 の Amendment）。パイプラインの作成・実行（C2 以降、DB とイベント）は機能クレート（仮称 `forge-pipelines`）に置く。
+`forge/ci-lint` は C1 では入れず後の MR に回した（`check.spec_index` のジョブに `.forge-ci.yml` の読み取りと保護ブランチの一覧の DB の読み取りを足す必要があり、
+`forge/doc-lint` の機械的な写しにならないため）。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。

@@ -2,8 +2,9 @@
 //! The dependency direction gate (CLAUDE.md §3-9, ADR-0001 and its M1 phase
 //! 8b amendment): `forge-web / forge-cli → feature crates (forge-hosting,
 //! forge-review, forge-checks, forge-integ, forge-notify, forge-oidc) →
-//! forge-auth / forge-git / forge-db → forge-core → forge-doc → forge-errors`
-//! (forge-doc: plan 13 stage 2, ADR-0026 §8). Every
+//! forge-auth / forge-git / forge-db → forge-core → forge-ci → forge-doc →
+//! forge-errors` (forge-doc: plan 13 stage 2, ADR-0026 §8; forge-ci: M4 C1,
+//! the pure `.forge-ci.yml` parse / lint / plan). Every
 //! workspace crate's normal and build dependencies on other forge crates
 //! are checked against the layer table; a crate missing from the table
 //! fails too, so a new crate must be placed before it builds green.
@@ -16,10 +17,11 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("forge-errors", &[]),
     // Plan 13 stage 2 (ADR-0026 §8): pure document parsing, shared with gstn.
     ("forge-doc", &["forge-errors"]),
-    ("forge-core", &["forge-doc", "forge-errors"]),
-    // M4 C1 (plan 14): the pure `.forge-ci.yml` parse / lint / plan. Like
-    // forge-doc it does no I/O; it reads YAML with forge-doc's strict tree.
+    // M4 C1 (contract 9): the pure `.forge-ci.yml` parse / lint / plan,
+    // below forge-core. Like forge-doc it does no I/O and no DB; it reads
+    // YAML with forge-doc's strict tree.
     ("forge-ci", &["forge-doc", "forge-errors"]),
+    ("forge-core", &["forge-ci", "forge-doc", "forge-errors"]),
     ("forge-auth", &["forge-core", "forge-errors"]),
     ("forge-git", &["forge-core", "forge-errors"]),
     ("forge-db", &["forge-core", "forge-errors"]),
@@ -57,6 +59,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-git",
             "forge-db",
             "forge-core",
+            "forge-ci",
             "forge-doc",
             "forge-errors",
         ],
@@ -114,8 +117,9 @@ const ALLOWED: &[(&str, &[&str])] = &[
         ],
     ),
     // The `gstn` client sits outside the server graph (ADR-0020); it may
-    // share the pure document parsing (ADR-0020 Amendment, ADR-0026 §8).
-    ("forge-client", &["forge-errors", "forge-doc"]),
+    // share the pure document parsing (ADR-0020 Amendment, ADR-0026 §8) and
+    // the pure `.forge-ci.yml` lint and plan (ADR-0020 Amendment, M4 C1).
+    ("forge-client", &["forge-errors", "forge-doc", "forge-ci"]),
 ];
 
 /// The forge crates `table` names (a `[dependencies]`-like table).

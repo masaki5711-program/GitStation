@@ -1124,6 +1124,33 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["DELETE /api/v1/projects/{id}/doc-lint/migration"],
         output: r#"{"type":"null"}"#,
     },
+    // M4 C1 (plan 04 P-3): the .forge-ci.yml lint and plan, local only.
+    CommandSpec {
+        name: "ci lint",
+        summary: "Check the working tree's .forge-ci.yml with the same lint as the forge/ci-lint check: schema (unknown keys refused), needs (unknown, later stage, cycles), required timeouts (at most 4h), images pinned by digest, secrets only on jobs limited to protected branches, bounds. Exit 1 with FG-CI-0001 and every problem's line and reason. Local only: nothing is sent to the server.",
+        args: &[
+            ArgSpec { name: "path", kind: "positional", required: false, repeatable: false, description: "The file (default: .forge-ci.yml at the root of the repository found upward)." },
+            ArgSpec { name: "--protected", kind: "option", required: false, repeatable: true, description: "The repository's protected branch patterns, comma-separated (e.g. main,release/*). Without it no branch counts as protected: a job with secrets is secret_protection_unknown." },
+        ],
+        examples: &["gstn ci lint", "gstn ci lint --protected main,release/* --json", "gstn ci lint ci/other.yml"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["path","problems"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","reason","subject"],"properties":{"line":{"type":"integer"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}}}}"#,
+    },
+    CommandSpec {
+        name: "ci plan",
+        summary: "Show which jobs of the working tree's .forge-ci.yml a push to a branch (or a merge request) would run and in what order: waves of jobs that may run together, after the previous stage and their needs. Nothing runs. A job with secrets on an unprotected branch or in a merge request makes the plan fail (FG-CI-0001 secret_on_unprotected_ref). Local only.",
+        args: &[
+            ArgSpec { name: "path", kind: "positional", required: false, repeatable: false, description: "The file (default: .forge-ci.yml at the root of the repository found upward)." },
+            arg("--branch", "option", true, "The branch pushed (for --event mr: the source branch); --ref is the same."),
+            arg("--event", "option", false, "push (default) or mr."),
+            ArgSpec { name: "--protected", kind: "option", required: false, repeatable: true, description: "The repository's protected branch patterns, comma-separated; the branch is protected when one matches." },
+        ],
+        examples: &["gstn ci plan --branch main --protected main", "gstn ci plan --branch feature-x --event mr --json"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["path","event","branch","protected","jobs"],"properties":{"path":{"type":"string"},"event":{"enum":["push","merge_request"]},"branch":{"type":"string"},"protected":{"type":"boolean"},"jobs":{"type":"array","items":{"type":"object","required":["name","stage","wave","after","image","timeout_secs","tags","secrets","script_lines"],"properties":{"wave":{"type":"integer"},"after":{"type":"array","items":{"type":"string"}}}}}}}"#,
+    },
     CommandSpec {
         name: "context work-item",
         summary: "Show a kanflow work item's context in a project: its linked merge requests and the @req tests of its acceptance criteria, each with its source (M3 X5).",

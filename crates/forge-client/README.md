@@ -141,6 +141,15 @@ gstn mr resolve --project 7 --iid 3 --discussion 12 [--unresolve] # スレッド
 `--iid` はプロジェクトの中の番号（`!3`）。ブランチ名・タイトル・説明は JSON の本文で送り、パスには入れない。
 同じ source / target の開いている MR が既にあると FG-REVIEW-0001（終了コード 5）。
 
+### CI の定義のコマンド（M4 C1。手元だけ）
+
+```
+gstn ci lint [<パス>] [--protected main,release/*] [--json]               # .forge-ci.yml を検査（forge-ci の lint）。問題があれば終了コード 1（FG-CI-0001）
+gstn ci plan [<パス>] --branch <b> [--event push|mr] [--protected …] [--json]  # 動くジョブと順番（wave）を表示。何も実行しない
+```
+
+`--protected` を渡さないと、どのブランチも保護されていない扱い（シークレットを持つジョブは `secret_protection_unknown`）。
+
 ### 文書のコマンド（計画 13 段 2。手元だけ）
 
 ```
