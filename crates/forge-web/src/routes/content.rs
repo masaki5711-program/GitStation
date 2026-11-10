@@ -16,7 +16,10 @@
 //!   removed once, the rest must be exactly a revision (no path);
 //!   `git archive` streams below `<project>-<commit 12>/` as
 //!   `application/zip` / `application/gzip`, `attachment;
-//!   filename="<project>-<ref>.<ext>"`.
+//!   filename="<project>-<ref>.<ext>"`. An AI agent audience gets an
+//!   archive only while the default branch's tip has no confidential file
+//!   (plan 06 D-5 safety net, `routes::repo_copy`: `FG-AUTH-0022`, 403),
+//!   whatever revision it asks for; `HEAD` too.
 //!
 //! Every answer: `Content-Disposition` per RFC 6266 (an ASCII `filename`
 //! and the UTF-8 `filename*`), `Cache-Control: private, no-store`, `Vary:
@@ -40,6 +43,7 @@ use crate::app::AppState;
 use crate::git_stream::{GitResponse, StreamLog};
 use crate::registry::Dispatched;
 use crate::routes::git::{principal_key, ready};
+use crate::routes::repo_copy::decide_copy;
 
 const OCTET: &str = "application/octet-stream";
 const TEXT: &str = "text/plain; charset=utf-8";
@@ -275,6 +279,9 @@ async fn archive_inner(
     let mut segments: Vec<&str> = rest.iter().map(String::as_str).collect();
     segments.push(stem);
     let principal = principal_key(&request)?;
+    // A whole copy (plan 06 D-5 safety net): decided before the revision
+    // is even resolved, so a refused agent learns nothing about it.
+    decide_copy(&smart, request.proof(), repository.id, &principal).await?;
     let spec = smart
         .browse
         .resolve_spec(repository.id, &segments, &principal)

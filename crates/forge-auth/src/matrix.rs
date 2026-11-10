@@ -136,6 +136,12 @@ pub(crate) enum Actor {
     /// A disabled service account that is a Developer member, with a
     /// `read_api` token (M3 I1c).
     ServiceAccountDisabledTokenReadApi,
+    /// A Developer with a `read_repository` token issued with `is_agent`,
+    /// and the service account / bot twins of `DevTokenReadRepository`
+    /// (plan 06 D-5 safety net: whole copies, `matrix_rows_repo_copy.rs`).
+    AgentTokenReadRepository,
+    ServiceAccountTokenReadRepository,
+    BotTokenReadRepository,
     /// An integration's service account with an `act_as` token (M3 S2:
     /// the claim), and its agent twin.
     ServiceAccountTokenActAs,
@@ -153,6 +159,12 @@ pub(crate) enum Fixture {
     DeletedProject,
     /// An internal project pending deletion (every signed-in user sees it).
     InternalDeletedProject,
+    /// A whole copy (clone / fetch, an archive) of a private project's
+    /// repository whose default tip was measured as the mark says (plan 06
+    /// D-5 safety net).
+    RepoCopy(crate::model::CopyMark),
+    /// The same of an internal project.
+    InternalRepoCopy(crate::model::CopyMark),
     /// A ref update on a private project; `protected` = minimum push role.
     Ref {
         kind: RefKind,
@@ -503,6 +515,15 @@ impl Actor {
                 Credential::Token(vec![Scope::ReadApi]),
                 AccountKind::ServiceAccount,
             ),
+            Actor::AgentTokenReadRepository => {
+                token(false, &[Scope::ReadRepository]).as_agent(true)
+            }
+            Actor::ServiceAccountTokenReadRepository => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::ReadRepository])
+            }
+            Actor::BotTokenReadRepository => {
+                token_of(AccountKind::Bot, false, &[Scope::ReadRepository])
+            }
             Actor::ServiceAccountTokenActAs => {
                 token_of(AccountKind::ServiceAccount, false, &[Scope::ActAs])
             }
@@ -546,7 +567,10 @@ impl Actor {
             | Actor::DevTokenUserEmail
             | Actor::ServiceAccountTokenReadApi
             | Actor::ServiceAccountAgentTokenReadApi
-            | Actor::ServiceAccountDisabledTokenReadApi => Some(Role::Developer),
+            | Actor::ServiceAccountDisabledTokenReadApi
+            | Actor::AgentTokenReadRepository
+            | Actor::ServiceAccountTokenReadRepository
+            | Actor::BotTokenReadRepository => Some(Role::Developer),
             Actor::ServiceAccountTokenActAs | Actor::ServiceAccountAgentTokenActAs => {
                 Some(Role::Reporter)
             }
@@ -653,6 +677,9 @@ impl Actor {
             | Actor::ServiceAccountDisabledTokenReadApi
             | Actor::ServiceAccountTokenActAs
             | Actor::ServiceAccountAgentTokenActAs
+            | Actor::AgentTokenReadRepository
+            | Actor::ServiceAccountTokenReadRepository
+            | Actor::BotTokenReadRepository
             | Actor::ActAs(_) => None,
         }
     }
@@ -709,6 +736,14 @@ impl Fixture {
                 visibility: Visibility::Internal,
                 ..deleted
             }),
+            Fixture::RepoCopy(mark) => Resource::RepoCopy {
+                project: private,
+                mark,
+            },
+            Fixture::InternalRepoCopy(mark) => Resource::RepoCopy {
+                project: internal,
+                mark,
+            },
             Fixture::Ref {
                 kind,
                 update,
@@ -1077,6 +1112,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,
         crate::matrix_rows_spec_refs::CONTEXT_READ_ROWS,
+        crate::matrix_rows_repo_copy::REPO_COPY_ROWS,
     ]
     .concat()
 });

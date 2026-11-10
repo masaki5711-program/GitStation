@@ -80,6 +80,19 @@ Kanflow v2: K4・承認待ちの欄・X3 を `main` に統合（`49720ae`）。�
 4. Kanflow: パラメータの探索を `main` へ（利用者の指示の後）、AI が実績を読んで学習から外す候補を出す案（引き継ぎ 2026-11-05 の (1)）。
 5. PC 側: ワークスペース全体の試験、M3 の完了の条件、計画 13 の段 1。
 
+**AI エージェントの複製と機密の文書（2026-11-10、利用者の決定「推奨で」、ブランチ `claude/clever-gates-j3elqg`）**:
+c5260bc（読み取りの経路は 1 つの規則 `forge_checks::confidential` で機密のファイルをエージェントに渡さない）の残りの穴 —
+アーカイブと Smart HTTP の clone / fetch は印を見ていなかった。決定: (1) 運用の規則 = 機密の文書はエージェントのアカウントが
+読めないリポジトリに置く、(2) 安全網 = 既定のブランチの先端に機密のファイルがあれば、エージェントの相手（`is_agent` のトークン・
+サービスアカウント・bot = `Principal::is_agent_audience`、文脈の API と同じ）には clone・fetch・アーカイブを全体として断る
+（`FG-AUTH-0022` RepositoryCopyWithheld、git は `ERR` の行 `remote error: … (request_id: …)`、アーカイブは 403）。
+判定は `authorize()`（`RepoRead` の `Resource::RepoCopy`、`forge_auth::authorize_repo_copy`、権限の表 `matrix_rows_repo_copy.rs`）、
+測るのは `forge-web/src/routes/repo_copy.rs`（キャッシュは（リポジトリ、先端）ごと、最大 4096、失敗は持たない）。測れない
+（時間切れ・上限・git の失敗）・既定のブランチが無く他の ref がある → 断る。ref が 1 つも無い → 通す。人・push は変わらない。
+記録: ADR-0026 の末尾、ADR-0023 X5 の一文、runbook `smart-http` の末尾の節、`FG-AUTH-0022`。
+**残り**: 先端だけを見る（履歴・他のブランチは見ない）ので、運用の規則が先。サービスアカウントの CI が機密の文書の
+リポジトリを clone する運用が出たら、そのリポジトリを分ける（この網はサービスアカウントも断る）。
+
 **注意**: このクラウドの容器はディスクが約 10 GB しか空かない。並行の Rust のビルドで満杯になり、開発用の PostgreSQL が 2 回止まった。
 `find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete` と `rm -rf target/debug/incremental` で空ける。
 Kanflow の `origin` の URL は旧い名前（GitHub が `KandlowVer2` に転送）。Kanflow のコミットの作成者は CLAUDE.md の規則どおり利用者の名前

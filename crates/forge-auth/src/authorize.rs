@@ -57,6 +57,11 @@
 //!    whose merge rule forbids direct pushes, M3 R6) for everyone too, and
 //!    `FG-GIT-0008` below the minimum push role (administrators pass the
 //!    minimum role).
+//!    A whole copy of a repository (`RepoRead` on `RepoCopy`: clone /
+//!    fetch, an archive; plan 06 D-5 safety net) is read like the project,
+//!    then refused to an AI agent audience unless the default tip was
+//!    measured open → `FG-AUTH-0022` (`tip_confidential`,
+//!    `default_branch_unborn`, `tip_undecided`, `tip_not_measured`);
 //! 10. an act-as confirmation (`ActAsConfirmView`, `ActAsAssertionIssue`,
 //!     ADR-0025 decision of 2026-11-10): every refusal but `FG-AUTH-0001` /
 //!     `FG-AUTH-0004` becomes `FG-REPO-0005` (the invisible project's 404),
@@ -68,10 +73,10 @@ use crate::action::Action;
 use forge_core::merge_conditions::MAX_CODEOWNERS_SUSPENSION_MINUTES;
 
 use crate::model::{
-    AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,
-    MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefUpdate, ResolvedVia,
-    Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
-    Visibility,
+    AccountKind, AdmissionAccount, CodeownersToggle, CopyMark, Credential, MembershipChange,
+    MembershipScope, MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefUpdate,
+    ResolvedVia, Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget,
+    UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -325,6 +330,21 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::ProjectRead,
             Resource::Project(p),
         ) => need(Role::Reporter, read_role(p)),
+
+        // A whole copy of the repository (clone / fetch, an archive; plan
+        // 06 D-5, ADR-0026 decision of 2026-11-10): read like the project,
+        // then an AI agent audience (an `is_agent` credential, a service
+        // account, a bot) only when the default tip was measured open. Push
+        // is not a copy and stays `RepoPush`'s.
+        (Action::RepoRead, Resource::RepoCopy { project, mark }) => {
+            need(Role::Reporter, read_role(project))?;
+            if !principal.is_agent_audience() || *mark == CopyMark::Open {
+                return Ok(());
+            }
+            Err(deny(ErrorCode::RepositoryCopyWithheld)
+                .with_context("reason", mark.as_str())
+                .with_context("audience", audience_of(principal)))
+        }
 
         // Before receive-pack starts (no ref is known yet): may this caller
         // push to the project at all? Stops non-developers from uploading
@@ -1294,6 +1314,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::Group { .. }
             | Resource::Namespace { .. }
             | Resource::Project(_)
+            | Resource::RepoCopy { .. }
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
             | Resource::GroupTransfer { .. }
@@ -1319,6 +1340,19 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::ProjectEvents { .. }
             | Resource::ActAsConfirm(_),
         ) => wrong_resource(),
+    }
+}
+
+/// Why `principal` counts as an AI agent audience (the log `audience`,
+/// as the context API names it).
+fn audience_of(principal: &Principal) -> &'static str {
+    if principal.is_agent() {
+        return "agent_token";
+    }
+    match principal.account_kind() {
+        AccountKind::ServiceAccount => "service_account",
+        AccountKind::Bot => "bot",
+        AccountKind::Human => "person",
     }
 }
 
@@ -1352,6 +1386,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
     let live = |p| Some((p, ResolvedVia::Live));
     match resource {
         Resource::Project(p) => live(p),
+        Resource::RepoCopy { project, .. } => live(project),
         Resource::Ref { project, .. } => live(project),
         Resource::Transfer { source, .. } => live(source),
         Resource::RefProtectionChange { project, .. }
@@ -1430,6 +1465,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::Namespace { .. }
         | Resource::Project(_)
         | Resource::Ref { .. }
+        | Resource::RepoCopy { .. }
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

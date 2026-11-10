@@ -33,9 +33,13 @@
 //! `classification` (or older `confidential`) — with its type's default as
 //! a floor — is `confidential`, failing closed on an unreadable front
 //! matter or type definition. This is defense in depth
-//! on the HTTP read APIs: git clone / fetch and archives do not look at the
-//! mark, so a truly confidential specification belongs in a repository the
-//! agent's account cannot read (ADR-0023 Amendment X5).
+//! on the HTTP read APIs. A whole copy — git clone / fetch, an archive —
+//! cannot leave single files out: it is refused to an agent audience as a
+//! whole while the default branch's tip has any confidential file
+//! (`FG-AUTH-0022`, [`crate::routes::repo_copy`]; history and other
+//! branches are not looked at), so a truly confidential document belongs
+//! in a repository the agent's account cannot read (ADR-0023 Amendment X5,
+//! ADR-0026 decision of 2026-11-10).
 
 use std::collections::BTreeSet;
 

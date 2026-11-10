@@ -140,6 +140,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // M3 X5: answers of the context API (never a merge's).
         | ErrorCode::RequirementNotFound
         | ErrorCode::ContextWithheld
+        // Plan 06 D-5 safety net: a whole copy refused to an agent (git
+        // routes; never a merge's).
+        | ErrorCode::RepositoryCopyWithheld
         // M3 X7: notices named in a `forge/risk` run (never a merge's).
         | ErrorCode::RiskStop
         | ErrorCode::RiskWarn

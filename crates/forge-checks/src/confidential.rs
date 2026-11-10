@@ -100,6 +100,17 @@ impl Confidential {
     pub fn is_partial(&self) -> bool {
         !self.partial.is_empty()
     }
+
+    /// Whether no path is confidential (no mark, and no bound left a
+    /// `.md` unread). A partial answer is never empty (fail closed).
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty() && self.partial.is_empty()
+    }
+
+    /// Some confidential paths (at most `n`, in order) — for a log line.
+    pub fn first(&self, n: usize) -> Vec<&str> {
+        self.paths.iter().take(n).map(String::as_str).collect()
+    }
 }
 
 /// Each type's default classification when its definition can be read
@@ -286,6 +297,13 @@ mod tests {
             assert!(!c.contains(p), "{p} must be open");
         }
         assert!(!c.is_partial());
+        assert!(!c.is_empty());
+        assert_eq!(c.first(2), vec!["C.md", "D.md"]);
+        let open = tree(
+            &[NOTE_TYPE, ("G.md", &internal), ("README.md", "# hi\n")],
+            None,
+        );
+        assert!(confidential_in(&open).is_empty(), "nothing marked");
     }
 
     #[test]
@@ -319,6 +337,7 @@ mod tests {
         let t = tree(&[NOTE_TYPE, ("A.md", &d)], Some("doc_files"));
         let c = confidential_in(&t);
         assert!(c.is_partial());
+        assert!(!c.is_empty(), "a partial answer is never empty");
         assert!(!c.contains("A.md"), "read and open");
         assert!(c.contains("unread.md"));
         assert!(!c.contains("src/main.rs"), "only documents are unknown");

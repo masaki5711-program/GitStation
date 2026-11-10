@@ -17,6 +17,7 @@ pub mod doc_lint_migration;
 pub mod documents;
 pub mod git;
 pub mod git_push;
+// Plan 06 D-5 safety net: whole copies (clone / fetch, archives) by agents.
 pub mod groups;
 pub mod health;
 pub mod history;
@@ -24,6 +25,7 @@ pub mod lists;
 pub mod members;
 pub mod merge_requests;
 pub mod moves;
+pub mod repo_copy;
 // M3 N1: the caller's notification settings.
 pub mod in_app_notifications;
 pub mod namespaces;

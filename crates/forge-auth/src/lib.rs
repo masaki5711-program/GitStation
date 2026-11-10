@@ -41,6 +41,7 @@ mod merge_request_ctx;
 mod model;
 mod prove;
 mod ref_updates;
+mod repo_copy;
 mod viewer;
 // ── M3 I2 ──
 mod matrix_rows_webhooks;
@@ -53,6 +54,8 @@ mod matrix_rows_mirror;
 mod matrix_rows_doc_lint;
 // ── M3 X1 ──
 mod matrix_rows_spec_refs;
+// Plan 06 D-5 safety net: whole copies of a repository by agents.
+mod matrix_rows_repo_copy;
 mod spec_ref;
 // ── end M3 X1 ──
 
@@ -66,7 +69,7 @@ pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
-    AssertionFacts, AssertionSubject, BindingSubject, CodeownersToggle, Credential,
+    AssertionFacts, AssertionSubject, BindingSubject, CodeownersToggle, CopyMark, Credential,
     IntegrationFeedView, MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState,
     NamespaceView, Principal, ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia,
     Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
@@ -83,6 +86,7 @@ pub use prove::{
     VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
+pub use repo_copy::authorize_repo_copy;
 pub use spec_ref::{prove_spec_ref, prove_spec_ref_for_every_person};
 pub use viewer::{
     ActAsTipGate, ActAsTrial, ActAsViewer, MergeRequestViewer, MergeSettingsViewer,

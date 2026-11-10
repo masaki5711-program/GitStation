@@ -114,3 +114,22 @@
 /api/v1/projects/{id}/doc-lint/migration`、`gstn doc migration show|set|clear`、プロジェクトの設定の画面。期限は必須で 180 日以内
 （`FG-DOC-0005`）、今日は DB の日付（UTC）。下げている間の `forge/doc-lint` は `ref_broken` だけを警告にし、要約の 1 行目に
 `migrating: until YYYY-MM-DD`。詳しくは `docs/api/checks.md` の「移行中の警告」。
+
+**エージェントの複製と機密の文書（2026-11-10、利用者の決定「推奨で」）**: c5260bc で blob / raw / blame / compare / 差分 / MR の
+読み取りは 1 つの規則（`forge_checks::confidential`）で機密のファイルを AI エージェントに渡さなくなったが、アーカイブと
+Smart HTTP の clone / fetch は印を見ていなかった（ファイルを抜けない複製なので、エージェントが読めるリポジトリの機密の文書はすべて渡る）。
+決めたこと:
+
+1. **運用の規則**: 機密の文書は、AI エージェントのアカウント（`is_agent` のトークン・サービスアカウント・bot。
+   `Principal::is_agent_audience`、文脈の API と同じ定義）が読めないリポジトリに置く。これが本当の境界。
+2. **安全網**: 既定のブランチの先端に機密のファイルが 1 つでもある（`marked_files` が空でない）リポジトリは、エージェントの相手には
+   clone・fetch（upload-pack の広告と RPC、v0 / v2）・アーカイブを全体として断る（`FG-AUTH-0022` RepositoryCopyWithheld、
+   git には `ERR` の行で `remote error: … (request_id: …)`、アーカイブは 403）。判定は `authorize()` の 1 か所（`RepoRead` の
+   `Resource::RepoCopy`、`forge_auth::authorize_repo_copy`、ディスパッチャーの `RepoRead` の証明の後）で、経路は測るだけ。
+   測れないときは断る: 時間切れ（20 秒）・文書の読みの上限・git の失敗（`tip_undecided`）。既定のブランチが生まれていないとき、
+   ref が 1 つも無ければ複製するものが無いので通し、他の ref があれば断る（`default_branch_unborn`。読み取りの経路がそのとき
+   すべての文書を伏せるのと同じ考え）。人・push は変わらない。結果は（リポジトリ、先端のコミット）ごとにメモリに持つ
+   （最大 4096、リポジトリごとに 1 つ、失敗は持たない）。
+   限界: 見るのは先端だけで、履歴・他のブランチにだけある機密のファイルは見ない — だから 1. が先。
+   手順は runbook `smart-http` の「AI エージェントと機密の文書」。
+
