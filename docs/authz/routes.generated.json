@@ -210,6 +210,7 @@
     "action": "RunnerManage",
     "method": "GET",
     "path": "/api/v1/admin/runners",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -218,6 +219,7 @@
     "action": "RunnerRegister",
     "method": "POST",
     "path": "/api/v1/admin/runners",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -226,6 +228,7 @@
     "action": "RunnerManage",
     "method": "PATCH",
     "path": "/api/v1/admin/runners/{runner_id}",
+    "people_only": true,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1440,6 +1443,7 @@
     "action": "RunnerJobRequest",
     "method": "POST",
     "path": "/api/v1/runner/jobs/request",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1448,6 +1452,7 @@
     "action": "RunnerJobComplete",
     "method": "POST",
     "path": "/api/v1/runner/jobs/{job_id}/complete",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1456,6 +1461,7 @@
     "action": "RunnerJobHeartbeat",
     "method": "POST",
     "path": "/api/v1/runner/jobs/{job_id}/heartbeat",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -1464,6 +1470,7 @@
     "action": "RunnerLogAppend",
     "method": "POST",
     "path": "/api/v1/runner/jobs/{job_id}/log",
+    "people_only": false,
     "public": false,
     "scope": "fixed",
     "word": "fixed"
