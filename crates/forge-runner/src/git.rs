@@ -13,7 +13,8 @@
 //!   on the fetch only;
 //! - no system or global configuration (`GIT_CONFIG_NOSYSTEM`,
 //!   `GIT_CONFIG_GLOBAL` = an empty file the runner owns), no credential
-//!   helper, no prompt, no hooks, only http(s) transports.
+//!   helper, no prompt, no hooks, only http(s) transports, no redirects
+//!   (`http.followRedirects=false`: the token never follows one).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -62,6 +63,9 @@ impl GitPlan {
             .arg("protocol.https.allow=always")
             .arg("-c")
             .arg("protocol.http.allow=always")
+            .arg("-c")
+            // A redirect never carries the job's token to another URL.
+            .arg("http.followRedirects=false")
             .arg("-c")
             .arg("advice.detachedHead=false")
             .arg("-C")
@@ -173,6 +177,8 @@ mod tests {
             "credential.helper=",
             "protocol.allow=never",
             "protocol.https.allow=always",
+            // M4 C4 review: a redirect never takes the token elsewhere.
+            "http.followRedirects=false",
         ] {
             assert!(argv.iter().any(|a| a == hardening), "{hardening}");
         }
