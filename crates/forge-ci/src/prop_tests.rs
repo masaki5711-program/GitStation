@@ -65,9 +65,9 @@ proptest! {
     #[test]
     fn a_dag_is_accepted_and_its_plan_respects_needs_and_stages((stages, needs) in dag()) {
         let text = render(&stages, &needs);
-        let def = check(text.as_bytes(), &LintContext::default())
+        let def = check(text.as_bytes(), &LintContext::with_protected_branches(vec!["main".to_owned()]))
             .unwrap_or_else(|p| panic!("{p:?}\n{text}"));
-        let p = plan(&def, &Trigger { event: Event::Push, branch: "main".into() }).expect("plan");
+        let p = plan(&def, &Trigger { event: Event::Push, branch: "main".into(), protected: true }).expect("plan");
         prop_assert_eq!(p.jobs.len(), stages.len());
         let wave = |i: usize| p.jobs.iter().find(|j| j.name == format!("j{i}")).map(|j| j.wave).unwrap();
         let pos = |i: usize| p.jobs.iter().position(|j| j.name == format!("j{i}")).unwrap();
@@ -94,7 +94,7 @@ proptest! {
         if !needs[hi].contains(&lo) { needs[hi].push(lo); }
         needs[lo].push(hi);
         let text = render(&stages, &needs);
-        let found = lint(text.as_bytes(), &LintContext::default());
+        let found = lint(text.as_bytes(), &LintContext::with_protected_branches(vec!["main".to_owned()]));
         let cyc: Vec<String> = found.iter().filter(|p| p.reason == "needs_cycle").filter_map(|p| p.subject.clone()).collect();
         prop_assert!(cyc.contains(&format!("j{lo}")), "{:?}", found);
         prop_assert!(cyc.contains(&format!("j{hi}")), "{:?}", found);

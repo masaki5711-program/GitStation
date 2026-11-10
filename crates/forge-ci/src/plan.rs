@@ -48,11 +48,22 @@ impl fmt::Display for Event {
     }
 }
 
-/// The event and the branch (for a merge request: its source branch).
+/// The event, the branch (for a merge request: its source branch) and
+/// whether that branch is protected (the caller decides it from the
+/// repository's settings; a merge request's pipeline is never protected).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trigger {
     pub event: Event,
     pub branch: String,
+    pub protected: bool,
+}
+
+impl Trigger {
+    /// Whether this pipeline may hand secrets to a job: only a push to a
+    /// protected branch.
+    pub fn may_use_secrets(&self) -> bool {
+        self.protected && self.event == Event::Push
+    }
 }
 
 /// The jobs to run, in execution order.
@@ -84,8 +95,11 @@ fn selected(job: &Job, trigger: &Trigger) -> bool {
     }
 }
 
-/// The plan for `trigger`, or `needs_not_in_pipeline` for a selected job
-/// that needs a job the trigger does not run.
+/// The plan for `trigger`, or the problems: `needs_not_in_pipeline` for a
+/// selected job that needs a job the trigger does not run, and
+/// `secret_on_unprotected_ref` for a selected job with secrets when the
+/// trigger may not use secrets (a merge request, or an unprotected branch).
+/// The plan fails rather than drop the secrets silently.
 pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
     let chosen: BTreeMap<&str, &Job> = def
         .jobs
@@ -95,6 +109,13 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
         .collect();
     let mut problems = Vec::new();
     for job in chosen.values() {
+        if !job.secrets.is_empty() && !trigger.may_use_secrets() {
+            problems.push(Problem::about(
+                job.line,
+                "secret_on_unprotected_ref",
+                job.name.as_str(),
+            ));
+        }
         for need in &job.needs {
             if !chosen.contains_key(need.as_str()) {
                 problems.push(Problem::about(
@@ -157,6 +178,7 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
     }
     let mut jobs: Vec<PlannedJob> = chosen
         .values()
+        // clone: the plan owns its values, independent of the definition
         .map(|job| PlannedJob {
             name: job.name.clone(),
             stage: job.stage.clone(),
@@ -181,6 +203,7 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
         key(a).cmp(&key(b)).then_with(|| a.name.cmp(&b.name))
     });
     Ok(Plan {
+        // clone: the plan records the trigger it was made for
         trigger: trigger.clone(),
         jobs,
     })

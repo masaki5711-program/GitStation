@@ -53,8 +53,13 @@ jobs:
     )
 }
 
+/// The server's context for the tests: `main` is protected.
+fn ctx() -> LintContext {
+    LintContext::with_protected_branches(vec!["main".to_owned()])
+}
+
 fn problems(text: &str) -> Vec<Problem> {
-    lint(text.as_bytes(), &LintContext::default())
+    lint(text.as_bytes(), &ctx())
 }
 
 /// The reasons found, in order.
@@ -77,7 +82,7 @@ fn base_job() -> String {
 
 #[test]
 fn a_valid_definition_has_no_problems() {
-    let def = check(valid().as_bytes(), &LintContext::default()).expect("valid");
+    let def = check(valid().as_bytes(), &ctx()).expect("valid");
     assert_eq!(def.stages, ["build", "test", "deploy"]);
     let names: Vec<&str> = def.jobs.iter().map(|j| j.name.as_str()).collect();
     assert_eq!(names, ["build", "unit", "integration", "deploy"]);
@@ -222,7 +227,7 @@ fn a_secret_on_a_job_that_runs_for_merge_requests_is_refused() {
 }
 
 #[test]
-fn a_secret_on_a_wildcard_branch_is_refused_without_the_protected_list() {
+fn a_secret_on_an_unprotected_wildcard_branch_is_refused() {
     let text = valid().replace("branches: [main]", "branches: [\"release/*\"]");
     assert_eq!(reasons(&text), ["secret_on_unprotected_ref"]);
     // Default rules (every branch) are refused too.
@@ -238,8 +243,8 @@ fn a_secret_on_a_wildcard_branch_is_refused_without_the_protected_list() {
 
 #[test]
 fn a_secret_lint_uses_the_protected_branches_when_known() {
-    let ctx = |list: &[&str]| LintContext {
-        protected_branches: Some(list.iter().map(|s| (*s).to_owned()).collect()),
+    let ctx = |list: &[&str]| {
+        LintContext::with_protected_branches(list.iter().map(|s| (*s).to_owned()).collect())
     };
     let release = valid().replace("branches: [main]", "branches: [main, \"release/*\"]");
     assert!(lint(release.as_bytes(), &ctx(&["main", "release/*"])).is_empty());
@@ -250,6 +255,126 @@ fn a_secret_lint_uses_the_protected_branches_when_known() {
     let feature = valid().replace("branches: [main]", "branches: [feature-x]");
     assert_eq!(lint(feature.as_bytes(), &ctx(&["main"])).len(), 1);
     assert!(lint(feature.as_bytes(), &ctx(&["feature-*"])).is_empty());
+}
+
+#[test]
+fn a_local_check_counts_no_branch_as_protected() {
+    // Conservative: without the list even `main` is unknown.
+    let found = lint(valid().as_bytes(), &LintContext::local_check());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].reason, "secret_protection_unknown");
+    assert_eq!(found[0].subject.as_deref(), Some("main"));
+    // A file without secrets passes the local check.
+    let no_secrets = valid().replace("    secrets: [DEPLOY_KEY]\n", "");
+    assert!(lint(no_secrets.as_bytes(), &LintContext::local_check()).is_empty());
+}
+
+#[test]
+fn a_protected_wildcard_covers_only_the_same_wildcard() {
+    let ctx = LintContext::with_protected_branches(vec!["release/*".to_owned()]);
+    let narrower = valid().replace("branches: [main]", "branches: [\"release/v1*\"]");
+    // Deliberately conservative: a narrower wildcard is not proven covered.
+    assert_eq!(
+        lint(narrower.as_bytes(), &ctx)[0].reason,
+        "secret_on_unprotected_ref"
+    );
+    let exact = valid().replace("branches: [main]", "branches: [release/v1]");
+    assert!(lint(exact.as_bytes(), &ctx).is_empty());
+}
+
+#[test]
+fn problems_are_capped_with_too_many_problems() {
+    // 48 jobs, each with three independent schema problems.
+    let mut text = String::from("version: 1\nstages: [build]\njobs:\n");
+    for i in 0..MAX_JOBS {
+        text.push_str(&format!(
+            "  j{i}:\n    stage: nope\n    image: x\n    timeout: 9h\n    script: [make]\n"
+        ));
+    }
+    let found = problems(&text);
+    assert_eq!(found.len(), MAX_PROBLEMS + 1);
+    assert_eq!(found.last().map(|p| p.reason), Some("too_many_problems"));
+}
+
+#[test]
+fn a_subject_is_cut_to_64_characters_and_a_bad_secret_name_is_not_echoed() {
+    let long = "x".repeat(300);
+    let text = one_job(&format!("{}{long}: 1\n", base_job()));
+    let found = problems(&text);
+    assert_eq!(found[0].reason, "key_unknown");
+    assert_eq!(
+        found[0].subject.as_deref().map(str::len),
+        Some(MAX_SUBJECT_CHARS)
+    );
+    let leaked = valid().replace("[DEPLOY_KEY]", "[\"hunter2-secret-value\"]");
+    let found = problems(&leaked);
+    assert_eq!(found[0].reason, "secret_name_invalid");
+    assert_eq!(found[0].subject, None);
+}
+
+#[test]
+fn a_script_line_with_a_control_character_or_too_long_is_refused() {
+    for bad in ["\"make\\0x\"", "\"make\\rrm -rf\"", "\"a\\e[2Kb\""] {
+        let text = one_job(&base_job().replace("[make]", &format!("[{bad}]")));
+        assert_eq!(reasons(&text), ["script_line_invalid"], "{bad}");
+    }
+    let tab = one_job(&base_job().replace("[make]", "[\"make\\tall\"]"));
+    assert!(problems(&tab).is_empty());
+    let long = "x".repeat(MAX_SCRIPT_LINE_BYTES + 1);
+    let text = one_job(&base_job().replace("[make]", &format!("[{long}]")));
+    assert_eq!(reasons(&text), ["script_line_too_long"]);
+}
+
+#[test]
+fn image_references_follow_the_oci_grammar() {
+    let ok = [
+        format!("rust@sha256:{D}"),
+        format!("library/rust@sha256:{D}"),
+        format!("registry.internal:5000/team/rust:1.88-slim@sha256:{D}"),
+        format!("localhost/ci/build_tools__x@sha256:{D}"),
+        format!("a--b.c/d@sha256:{D}"),
+    ];
+    for img in &ok {
+        assert!(definition::is_pinned_image(img), "{img}");
+    }
+    let bad = [
+        format!("-v/x@sha256:{D}"),
+        format!("--privileged@sha256:{D}"),
+        format!("Registry/Rust@sha256:{D}"),
+        format!("rust;id@sha256:{D}"),
+        format!("rust'x@sha256:{D}"),
+        format!("rust\"x@sha256:{D}"),
+        format!("rust x@sha256:{D}"),
+        format!("rust:-x@sha256:{D}"),
+        format!("rust/@sha256:{D}"),
+        format!("rust..x@sha256:{D}"),
+        format!("-host.io/rust@sha256:{D}"),
+        format!("host.io:port/rust@sha256:{D}"),
+        format!("rust@sha256:{D}x"),
+    ];
+    for img in &bad {
+        assert!(!definition::is_pinned_image(img), "{img}");
+    }
+    let text = one_job(&base_job().replace(&image(), &format!("\"-v/x@sha256:{D}\"")));
+    assert_eq!(reasons(&text), ["image_not_pinned"]);
+}
+
+#[test]
+fn artifact_paths_refuse_git_and_globs() {
+    for bad in [
+        ".git/config",
+        "a/.GIT/x",
+        "target/*",
+        "a?b",
+        "a[1]",
+        "{a,b}",
+        "!x",
+    ] {
+        let text = valid().replace("target/release/app", &format!("\"{bad}\""));
+        assert_eq!(reasons(&text), ["artifact_path_invalid"], "{bad}");
+    }
+    let ok = valid().replace("target/release/app", ".gitignore");
+    assert!(problems(&ok).is_empty());
 }
 
 #[test]
@@ -307,7 +432,7 @@ fn nesting_beyond_the_bound_is_too_deep() {
 
 #[test]
 fn bytes_that_are_not_utf8_are_not_utf8() {
-    let found = lint(b"version: 1\n\xff\n", &LintContext::default());
+    let found = lint(b"version: 1\n\xff\n", &ctx());
     assert_eq!(found[0].reason, "not_utf8");
 }
 
@@ -461,15 +586,54 @@ fn a_problem_displays_line_reason_and_subject() {
 
 // ── plan ───────────────────────────────────────────────────────────────
 
+/// `main` is the protected branch.
 fn plan_for(text: &str, event: Event, branch: &str) -> Result<Plan, Vec<Problem>> {
-    let def = check(text.as_bytes(), &LintContext::default()).expect("valid");
+    let def = check(text.as_bytes(), &ctx()).expect("valid");
     plan(
         &def,
         &Trigger {
             event,
             branch: branch.to_owned(),
+            protected: branch == "main",
         },
     )
+}
+
+#[test]
+fn a_plan_with_a_secret_job_on_an_unprotected_trigger_is_refused() {
+    let def = check(valid().as_bytes(), &ctx()).expect("valid");
+    // `main` told unprotected (e.g. its protection was removed): refused.
+    let unprotected = Trigger {
+        event: Event::Push,
+        branch: "main".to_owned(),
+        protected: false,
+    };
+    let err = plan(&def, &unprotected).expect_err("secrets on an unprotected ref");
+    assert_eq!(err[0].reason, "secret_on_unprotected_ref");
+    assert_eq!(err[0].subject.as_deref(), Some("deploy"));
+    // A merge request never gets secrets, even claimed protected.
+    let any = valid().replace(
+        "      merge_requests: false\n",
+        "      merge_requests: true\n",
+    );
+    let lenient = LintContext::with_protected_branches(vec!["main".to_owned()]);
+    assert!(
+        check(any.as_bytes(), &lenient).is_err(),
+        "the lint refuses it first"
+    );
+    let mr = Trigger {
+        event: Event::MergeRequest,
+        branch: "main".to_owned(),
+        protected: true,
+    };
+    let no_secret_jobs = plan(&def, &mr).expect("deploy is not selected for an MR");
+    assert!(no_secret_jobs.jobs.iter().all(|j| j.secrets.is_empty()));
+    let mut forced = def.clone();
+    if let Some(job) = forced.jobs.iter_mut().find(|j| j.name == "deploy") {
+        job.rules.merge_requests = true;
+    }
+    let err = plan(&forced, &mr).expect_err("an MR pipeline with secrets");
+    assert_eq!(err[0].reason, "secret_on_unprotected_ref");
 }
 
 fn order(p: &Plan) -> Vec<(&str, usize)> {

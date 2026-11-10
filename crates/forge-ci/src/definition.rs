@@ -30,38 +30,91 @@ pub const MAX_ARTIFACT_PATHS: usize = 16;
 pub const MAX_BRANCHES: usize = 16;
 /// The longest `timeout` a job may ask for: 4 hours (`timeout_too_long`).
 pub const MAX_TIMEOUT_SECS: u32 = 4 * 60 * 60;
+/// The longest script line in bytes (`script_line_too_long`).
+pub const MAX_SCRIPT_LINE_BYTES: usize = 4096;
 /// The longest name (job, stage, tag, secret) and pattern / path.
 const MAX_NAME: usize = 63;
 const MAX_PATH: usize = 255;
 
-/// A valid pipeline definition (only [`crate::check`] builds one).
+/// A valid pipeline definition. Only [`crate::check`] builds one, so every
+/// value read through the accessors has passed the lint (the fields are
+/// private to the crate to keep that invariant).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
-    pub stages: Vec<String>,
+    pub(crate) stages: Vec<String>,
     /// In file order.
-    pub jobs: Vec<Job>,
+    pub(crate) jobs: Vec<Job>,
 }
 
-/// One job.
+impl Definition {
+    pub fn stages(&self) -> &[String] {
+        &self.stages
+    }
+
+    /// In file order.
+    pub fn jobs(&self) -> &[Job] {
+        &self.jobs
+    }
+}
+
+/// One job of a valid definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
-    pub name: String,
+    pub(crate) name: String,
     /// The line of the job's key.
-    pub line: usize,
-    pub stage: String,
+    pub(crate) line: usize,
+    pub(crate) stage: String,
     /// The position of `stage` in [`Definition::stages`].
-    pub stage_index: usize,
-    pub needs: Vec<String>,
-    /// `<name>@sha256:<64 hex>`.
-    pub image: String,
+    pub(crate) stage_index: usize,
+    pub(crate) needs: Vec<String>,
+    /// An OCI reference pinned by digest (`...@sha256:<64 hex>`).
+    pub(crate) image: String,
     /// Text for the runner; never interpreted here.
-    pub script: Vec<String>,
-    pub timeout_secs: u32,
-    pub tags: Vec<String>,
+    pub(crate) script: Vec<String>,
+    pub(crate) timeout_secs: u32,
+    pub(crate) tags: Vec<String>,
     /// Names only; values live on the server (C6).
-    pub secrets: Vec<String>,
-    pub rules: Rules,
-    pub artifacts: Vec<String>,
+    pub(crate) secrets: Vec<String>,
+    pub(crate) rules: Rules,
+    pub(crate) artifacts: Vec<String>,
+}
+
+impl Job {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    /// The line of the job's key.
+    pub fn line(&self) -> usize {
+        self.line
+    }
+    pub fn stage(&self) -> &str {
+        &self.stage
+    }
+    pub fn needs(&self) -> &[String] {
+        &self.needs
+    }
+    pub fn image(&self) -> &str {
+        &self.image
+    }
+    /// Text for the runner; never interpreted here.
+    pub fn script(&self) -> &[String] {
+        &self.script
+    }
+    pub fn timeout_secs(&self) -> u32 {
+        self.timeout_secs
+    }
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+    pub fn secrets(&self) -> &[String] {
+        &self.secrets
+    }
+    pub fn rules(&self) -> &Rules {
+        &self.rules
+    }
+    pub fn artifacts(&self) -> &[String] {
+        &self.artifacts
+    }
 }
 
 /// When a job runs.
@@ -69,14 +122,15 @@ pub struct Job {
 pub struct Rules {
     /// Branch patterns for a push: exact names, or a prefix ending in `*`
     /// (`*` alone: every branch). Default `["*"]`.
-    pub branches: Vec<String>,
+    pub(crate) branches: Vec<String>,
     /// Whether the job runs in a merge request's pipeline. Default `true`.
-    pub merge_requests: bool,
+    pub(crate) merge_requests: bool,
 }
 
 impl Default for Rules {
     fn default() -> Self {
         Self {
+            // clone: an owned default pattern
             branches: vec!["*".to_owned()],
             merge_requests: true,
         }
@@ -84,6 +138,14 @@ impl Default for Rules {
 }
 
 impl Rules {
+    pub fn branches(&self) -> &[String] {
+        &self.branches
+    }
+
+    pub fn merge_requests(&self) -> bool {
+        self.merge_requests
+    }
+
     /// Whether a push to `branch` runs the job.
     pub fn matches_branch(&self, branch: &str) -> bool {
         self.branches.iter().any(|p| pattern_matches(p, branch))
@@ -358,6 +420,7 @@ fn read_job(
         return None;
     }
     Some(Job {
+        // clone: the key is borrowed from the tree
         name: name.to_owned(),
         line: at,
         stage: stage?.1,
@@ -390,6 +453,19 @@ fn read_script(
     }
     if let Some((line, _)) = items.iter().find(|(_, s)| s.trim().is_empty()) {
         problems.push(Problem::about(*line, "script_empty", job));
+        return None;
+    }
+    // A tab is the only control character a line may hold (no NUL, no
+    // carriage return or escape sequence that could hide text in a log).
+    if let Some((line, _)) = items
+        .iter()
+        .find(|(_, s)| s.chars().any(|c| c.is_control() && c != '\t'))
+    {
+        problems.push(Problem::about(*line, "script_line_invalid", job));
+        return None;
+    }
+    if let Some((line, _)) = items.iter().find(|(_, s)| s.len() > MAX_SCRIPT_LINE_BYTES) {
+        problems.push(Problem::about(*line, "script_line_too_long", job));
         return None;
     }
     Some(items.into_iter().map(|(_, s)| s).collect())
@@ -482,9 +558,14 @@ fn bounded_names(
     let mut out = Vec::with_capacity(items.len());
     for (line, item) in items {
         if let Some(reason) = bad(&item) {
-            problems.push(Problem::about(line, reason, item));
+            // A malformed secret name may be a pasted value: never echo it.
+            problems.push(if reason == "secret_name_invalid" {
+                Problem::new(line, reason)
+            } else {
+                Problem::about(line, reason, item)
+            });
+        // clone: the set owns its keys; `item` itself goes to `out`
         } else if !seen.insert(item.clone()) {
-            // clone: the set owns its keys
             problems.push(Problem::about(line, "field_invalid", item));
         } else {
             out.push(item);
@@ -507,6 +588,7 @@ fn texts(
             let mut out = Vec::with_capacity(items.len());
             for item in items {
                 match &item.kind {
+                    // clone: the tree is borrowed; the definition owns its text
                     Kind::Text(t) => out.push((item.line, t.clone())),
                     Kind::Null | Kind::List(_) | Kind::Map(_) => {
                         problems.push(Problem::about(item.line, "field_invalid", field));
@@ -530,6 +612,7 @@ fn one_text(
     problems: &mut Vec<Problem>,
 ) -> Option<String> {
     match yaml::text(node, at, "field_missing") {
+        // clone: the tree is borrowed; the definition owns its text
         Ok(t) if !t.trim().is_empty() => Some(t.to_owned()),
         Ok(_) => {
             problems.push(Problem::about(at, "field_missing", field));
@@ -564,21 +647,88 @@ fn is_secret_name(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// `<name>@sha256:<64 lowercase hex>`; the name has no space or control
-/// character.
-fn is_pinned_image(s: &str) -> bool {
-    let Some((name, digest)) = s.split_once("@sha256:") else {
+/// An OCI image reference pinned by digest, in the distribution reference
+/// grammar: `[host[:port]/]component(/component)*[:tag]@sha256:<64 hex>`.
+/// A component is lowercase `[a-z0-9]+` joined by `.`, `_`, `__` or `-`s;
+/// a host is `[A-Za-z0-9-]` labels joined by `.` (or `localhost`); a tag is
+/// `[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}`. So no leading `-`, quote, `;`,
+/// whitespace or anything else a command line could read as more.
+pub(crate) fn is_pinned_image(s: &str) -> bool {
+    let Some((reference, digest)) = s.split_once("@sha256:") else {
         return false;
     };
-    !name.is_empty()
-        && name.len() <= MAX_PATH
-        && !name
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || c == '@')
-        && digest.len() == 64
+    let hex = digest.len() == 64
         && digest
             .chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
+    if !hex || reference.is_empty() || reference.len() > MAX_PATH || !reference.is_ascii() {
+        return false;
+    }
+    // The tag: after a `:` that follows the last `/`.
+    let last_slash = reference.rfind('/').map_or(0, |i| i + 1);
+    let (name, tag) = match reference.get(last_slash..).and_then(|t| t.rfind(':')) {
+        Some(i) => (
+            reference.get(..last_slash + i).unwrap_or_default(),
+            reference.get(last_slash + i + 1..),
+        ),
+        None => (reference, None),
+    };
+    if let Some(tag) = tag {
+        let mut chars = tag.chars();
+        let ok = tag.len() <= 128
+            && chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c));
+        if !ok {
+            return false;
+        }
+    }
+    let mut parts: Vec<&str> = name.split('/').collect();
+    // A first part with `.` or `:`, or `localhost`, is the registry host.
+    if parts.len() > 1 {
+        let first = parts.first().copied().unwrap_or_default();
+        if first.contains('.') || first.contains(':') || first == "localhost" {
+            if !is_registry_host(first) {
+                return false;
+            }
+            parts.remove(0);
+        }
+    }
+    !parts.is_empty() && parts.iter().all(|p| is_path_component(p))
+}
+
+/// `host[:port]`: labels of `[A-Za-z0-9-]` (not starting or ending in `-`)
+/// joined by `.`, and an optional decimal port.
+fn is_registry_host(s: &str) -> bool {
+    let (host, port) = match s.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (s, None),
+    };
+    let port_ok =
+        port.is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit()));
+    port_ok
+        && !host.is_empty()
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+}
+
+/// `[a-z0-9]+` joined by one `.`, one or two `_`, or any number of `-`.
+fn is_path_component(s: &str) -> bool {
+    let alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let starts = s.chars().next().is_some_and(alnum);
+    let ends = s.chars().last().is_some_and(alnum);
+    if !starts || !ends {
+        return false;
+    }
+    // Every run of non-alphanumerics is one allowed separator.
+    s.split(alnum).all(|sep| {
+        sep.is_empty() || sep == "." || sep == "_" || sep == "__" || sep.chars().all(|c| c == '-')
+    })
 }
 
 /// `<n>s`, `<n>m` or `<n>h`, `n` ≥ 1 (decimal digits).
@@ -616,13 +766,16 @@ fn is_branch_pattern(s: &str) -> bool {
 }
 
 /// A relative path inside the work tree: no leading `/`, no `\`, no drive,
-/// no `.` / `..` component, no control character.
+/// no `.` / `..` / `.git` component, no glob metacharacter (a path names
+/// one file or directory; the runner collects it without following links,
+/// confined to the work tree - C4), no control character.
 fn is_artifact_path(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= MAX_PATH
         && !s.starts_with('/')
         && !s.contains('\\')
         && !s.contains(':')
-        && !s.chars().any(char::is_control)
-        && s.split('/').all(|c| !c.is_empty() && c != "." && c != "..")
+        && !s.chars().any(|c| c.is_control() || "*?[]{}!".contains(c))
+        && s.split('/')
+            .all(|c| !c.is_empty() && c != "." && c != ".." && !c.eq_ignore_ascii_case(".git"))
 }

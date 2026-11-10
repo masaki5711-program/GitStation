@@ -85,8 +85,8 @@ pub(crate) fn cyclic(def: &Definition) -> Vec<&str> {
 
 /// A job with secrets must not run in a merge request's pipeline (its
 /// source branch is not protected) and every branch pattern must be
-/// protected: covered by the repository's protected patterns when known,
-/// otherwise an exact name (never a wildcard).
+/// protected: covered by the repository's protected patterns. Without the
+/// list ([`LintContext::local_check`]) none is: `secret_protection_unknown`.
 fn lint_secrets(job: &Job, ctx: &LintContext, problems: &mut Vec<Problem>) {
     if job.secrets.is_empty() {
         return;
@@ -99,12 +99,20 @@ fn lint_secrets(job: &Job, ctx: &LintContext, problems: &mut Vec<Problem>) {
         ));
     }
     for pattern in &job.rules.branches {
-        let protected = match &ctx.protected_branches {
-            None => !pattern.ends_with('*'),
-            Some(list) => list
-                .iter()
-                .any(|p| p == pattern || (!pattern.ends_with('*') && pattern_matches(p, pattern))),
+        let list = match ctx.protected_branches() {
+            None => {
+                problems.push(Problem::about(
+                    job.line,
+                    "secret_protection_unknown",
+                    pattern.as_str(),
+                ));
+                continue;
+            }
+            Some(list) => list,
         };
+        let protected = list
+            .iter()
+            .any(|p| p == pattern || (!pattern.ends_with('*') && pattern_matches(p, pattern)));
         if !protected {
             problems.push(Problem::about(
                 job.line,

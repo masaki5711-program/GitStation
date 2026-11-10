@@ -23,7 +23,7 @@ pub mod plan;
 
 pub use definition::{
     Definition, Job, Rules, MAX_ARTIFACT_PATHS, MAX_BRANCHES, MAX_BYTES, MAX_JOBS, MAX_NEEDS,
-    MAX_SCRIPT_LINES, MAX_SECRETS, MAX_STAGES, MAX_TAGS, MAX_TIMEOUT_SECS,
+    MAX_SCRIPT_LINES, MAX_SCRIPT_LINE_BYTES, MAX_SECRETS, MAX_STAGES, MAX_TAGS, MAX_TIMEOUT_SECS,
 };
 pub use plan::{plan, Event, Plan, PlannedJob, Trigger};
 
@@ -50,11 +50,17 @@ impl Problem {
         }
     }
 
+    /// A problem about `subject`, cut to [`MAX_SUBJECT_CHARS`] characters
+    /// (a subject is the file's own text: it must stay short in a log).
     pub(crate) fn about(line: usize, reason: &'static str, subject: impl Into<String>) -> Self {
+        let mut subject: String = subject.into();
+        if let Some((cut, _)) = subject.char_indices().nth(MAX_SUBJECT_CHARS) {
+            subject.truncate(cut);
+        }
         Self {
             line,
             reason,
-            subject: Some(subject.into()),
+            subject: Some(subject),
         }
     }
 }
@@ -70,13 +76,52 @@ impl fmt::Display for Problem {
     }
 }
 
-/// What the lint knows about the repository beyond the file.
-#[derive(Debug, Clone, Default)]
+/// At most this many problems are reported; then one `too_many_problems`.
+pub const MAX_PROBLEMS: usize = 100;
+/// A problem's subject is cut to this many characters.
+pub const MAX_SUBJECT_CHARS: usize = 64;
+
+/// What the lint knows about the repository beyond the file. There is no
+/// default: the caller says whether it knows the protected branches.
+#[derive(Debug, Clone)]
 pub struct LintContext {
     /// The repository's protected branch patterns (exact names, or a prefix
-    /// ending in `*`). `None`: unknown (a local check) — then a job asking
-    /// for secrets may only name exact branches, never a wildcard.
-    pub protected_branches: Option<Vec<String>>,
+    /// ending in `*`); `None` for [`LintContext::local_check`].
+    protected_branches: Option<Vec<String>>,
+}
+
+impl LintContext {
+    /// The repository's protected branch patterns are known (the server
+    /// passes the real list; `gstn ci lint --protected` passes the user's).
+    /// A secret job's branch pattern must be one of them, or an exact name
+    /// one of them matches (deliberately conservative: a wildcard pattern
+    /// counts only when the same wildcard is protected).
+    pub fn with_protected_branches(patterns: Vec<String>) -> Self {
+        Self {
+            protected_branches: Some(patterns),
+        }
+    }
+
+    /// A local check that does not know the protected branches: no branch
+    /// counts as protected, so every branch pattern of a job with secrets
+    /// is `secret_protection_unknown` (pass the list to check it).
+    pub fn local_check() -> Self {
+        Self {
+            protected_branches: None,
+        }
+    }
+
+    /// Whether `branch` is protected by the known patterns (always `false`
+    /// for [`LintContext::local_check`]): the caller's [`Trigger::protected`].
+    pub fn is_protected(&self, branch: &str) -> bool {
+        self.protected_branches
+            .as_deref()
+            .is_some_and(|list| list.iter().any(|p| definition::pattern_matches(p, branch)))
+    }
+
+    pub(crate) fn protected_branches(&self) -> Option<&[String]> {
+        self.protected_branches.as_deref()
+    }
 }
 
 /// Parse and lint `bytes`: the definition, or every problem found, sorted by
@@ -92,6 +137,10 @@ pub fn check(bytes: &[u8], ctx: &LintContext) -> Result<Definition, Vec<Problem>
         _ => {
             problems.sort();
             problems.dedup();
+            if problems.len() > MAX_PROBLEMS {
+                problems.truncate(MAX_PROBLEMS);
+                problems.push(Problem::new(0, "too_many_problems"));
+            }
             Err(problems)
         }
     }
