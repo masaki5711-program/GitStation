@@ -109,6 +109,19 @@ fn start_failed(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::ContainerStartFailed).with_context("reason", reason)
 }
 
+/// `forge-job-<job>-<attempt>` (decimal numbers), as
+/// [`container_name`] builds it.
+fn is_job_container(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("forge-job-") else {
+        return false;
+    };
+    let Some((job, attempt)) = rest.split_once('-') else {
+        return false;
+    };
+    let number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    number(job) && number(attempt)
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -407,6 +420,55 @@ impl Executor {
             Exit::TimedOut => Err(fetch_failed("read_definition", "timeout")),
             Exit::Stopped => Err(fetch_failed("read_definition", "stopped")),
         }
+    }
+
+    /// At startup (before the work directory is wiped): remove every job
+    /// container a crashed or killed earlier run left
+    /// (`forge-job-<job>-<attempt>`; other names are left alone). Returns
+    /// how many were removed; a Podman failure is `FG-CI-0007
+    /// reason=stale_containers` (the runner does not start).
+    pub fn remove_stale_containers(&self) -> Result<usize, ForgeError> {
+        let failed = |ran: Option<Ran>| {
+            let e = start_failed("stale_containers");
+            match ran {
+                Some(r) => e.with_context("podman_stderr", r.stderr_tail),
+                None => e,
+            }
+        };
+        let listed = self
+            .proc
+            .run(&self.podman.stale(), PODMAN_CLEANUP, &|| false, &mut |_| {})
+            .map_err(|e| failed(None).with_source(e))?;
+        if !listed.ok() {
+            return Err(failed(Some(listed)));
+        }
+        let mut removed = 0;
+        for name in String::from_utf8_lossy(&listed.stdout).lines() {
+            let name = name.trim();
+            if !is_job_container(name) {
+                continue;
+            }
+            let ran = self
+                .proc
+                .run(
+                    &self.podman.remove(name),
+                    PODMAN_CLEANUP,
+                    &|| false,
+                    &mut |_| {},
+                )
+                .map_err(|e| failed(None).with_source(e))?;
+            if !ran.ok() {
+                return Err(failed(Some(ran)).with_context("container", name.to_owned()));
+            }
+            tracing::warn!(
+                target: "forge_runner",
+                event = "forge.runner.stale_container_removed",
+                container = %name,
+                "removed a job container an earlier run left"
+            );
+            removed += 1;
+        }
+        Ok(removed)
     }
 
     /// After `podman start` exited 125: whether the container ran the

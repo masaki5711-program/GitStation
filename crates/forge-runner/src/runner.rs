@@ -2,6 +2,11 @@
 //! runs (a cancel or a lost lease raises the job's stop flag), run it
 //! ([`Executor::execute`]), report the result. One job at a time; the next
 //! claim only after the job directory was removed.
+//!
+//! A shutdown (SIGTERM / Ctrl-C: `forge-runner`'s `main` raises
+//! [`Runner::shutdown`]) stops the running job like a cancel — its
+//! container is killed and removed, its directory wiped, the result
+//! reported — and the loop claims nothing more.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -36,6 +41,8 @@ pub struct Runner {
     pub api: Arc<dyn RunnerApi>,
     pub exec: Executor,
     pub heartbeat_every: Duration,
+    /// Raised by the signal handler: stop the running job, claim no more.
+    pub shutdown: Arc<AtomicBool>,
 }
 
 fn sleep_unless(flag: &AtomicBool, total: Duration) {
@@ -111,8 +118,34 @@ impl Runner {
                 }
             })
         };
+        // A shutdown stops the job at once (the heartbeat may be 30 s away).
+        let watch = {
+            let (stop, done, shutdown) = (
+                Arc::clone(&stop),
+                Arc::clone(&done),
+                Arc::clone(&self.shutdown),
+            );
+            std::thread::spawn(move || {
+                while !done.load(Ordering::SeqCst) {
+                    if shutdown.load(Ordering::SeqCst) {
+                        stop.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            })
+        };
         let outcome = self.exec.execute(&job, self.api.as_ref(), &stop);
         done.store(true, Ordering::SeqCst);
+        if watch.join().is_err() {
+            tracing::error!(
+                target: "forge_runner",
+                event = "forge.runner.shutdown_watch_panicked",
+                error_code = ErrorCode::Internal.id(),
+                job_id = job.job_id,
+                "the shutdown watch thread panicked"
+            );
+        }
         if beat.join().is_err() {
             tracing::error!(
                 target: "forge_runner",
@@ -164,9 +197,11 @@ impl Runner {
         }
     }
 
-    /// Claim and run jobs until `shutdown` (checked between claims) or the
-    /// job directory could not be cleaned (then an error: a host problem).
-    pub fn run_forever(&self, shutdown: &AtomicBool) -> Result<(), ForgeError> {
+    /// Claim and run jobs until [`Runner::shutdown`] (a running job is
+    /// stopped; checked again between claims) or the job directory could
+    /// not be cleaned (then an error: a host problem).
+    pub fn run_forever(&self) -> Result<(), ForgeError> {
+        let shutdown = self.shutdown.as_ref();
         while !shutdown.load(Ordering::SeqCst) {
             match self.run_once(CLAIM_WAIT_S) {
                 Ok(Handled::Idle) => {}

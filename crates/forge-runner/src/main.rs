@@ -119,20 +119,76 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
             fetch_url: Box::new(move |job| fetch_cfg.fetch_url(job)),
         },
         heartbeat_every: HEARTBEAT_EVERY,
+        shutdown: Arc::new(AtomicBool::new(false)),
     };
     if matches!(cli.command, Some(Command::Check)) {
         println!("ok: configuration, token, rootless podman");
         return Ok(());
     }
-    // Anything a crashed earlier run left.
+    // Anything a crashed earlier run left: its containers first (they
+    // hold the work directory's mount), then the directory.
+    let stale = runner.exec.remove_stale_containers()?;
     runner.exec.workspace.wipe().map_err(|e| {
         ForgeError::new(ErrorCode::ContainerStartFailed)
             .with_context("reason", "workspace_dirty")
             .with_source(e)
     })?;
-    tracing::info!(target: "forge_runner", event = "forge.runner.started", server = %cfg.server, "runner started");
-    let shutdown = AtomicBool::new(false);
-    runner.run_forever(&shutdown)
+    tracing::info!(target: "forge_runner", event = "forge.runner.started", server = %cfg.server, stale_containers_removed = stale, "runner started");
+    on_shutdown_signal(Arc::clone(&runner.shutdown))?;
+    let ended = runner.run_forever();
+    tracing::info!(target: "forge_runner", event = "forge.runner.stopped", "runner stopped");
+    ended
+}
+
+/// Raise `flag` on SIGTERM (systemd's stop) or Ctrl-C / SIGINT, on a thread
+/// of its own (a small Tokio runtime only for the signals): the loop stops
+/// the running job, removes its container and exits.
+fn on_shutdown_signal(flag: Arc<AtomicBool>) -> Result<(), ForgeError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()
+        .map_err(|e| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "signal_runtime")
+                .with_source(e)
+        })?;
+    #[cfg(unix)]
+    let mut term = {
+        let _entered = runtime.enter();
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(|e| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "signal_handler")
+                .with_source(e)
+        })?
+    };
+    std::thread::spawn(move || {
+        runtime.block_on(async {
+            #[cfg(unix)]
+            let signal = tokio::select! {
+                r = tokio::signal::ctrl_c() => r.map(|()| "interrupt"),
+                _ = term.recv() => Ok("terminate"),
+            };
+            #[cfg(not(unix))]
+            let signal = tokio::signal::ctrl_c().await.map(|()| "interrupt");
+            match signal {
+                Ok(signal) => tracing::info!(
+                    target: "forge_runner",
+                    event = "forge.runner.shutdown_requested",
+                    signal,
+                    "stopping: the running job is stopped and its container removed"
+                ),
+                Err(e) => tracing::error!(
+                    target: "forge_runner",
+                    event = "forge.runner.signal_failed",
+                    error_code = ErrorCode::Internal.id(),
+                    error = %e,
+                    "the signal handler failed; stopping"
+                ),
+            }
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+    });
+    Ok(())
 }
 
 fn main() -> ExitCode {

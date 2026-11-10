@@ -254,6 +254,17 @@ impl PodmanPlan {
             .arg(name)
     }
 
+    /// `podman ps --all --filter=name=^forge-job- --format={{.Names}}`: the
+    /// job containers that exist (at startup: a crashed run's leftovers).
+    pub fn stale(&self) -> Cmd {
+        self.cmd()
+            .arg("ps")
+            .arg("--all")
+            .arg("--filter=name=^forge-job-")
+            .arg("--format={{.Names}}")
+            .captured()
+    }
+
     /// `podman info --format={{.Host.Security.Rootless}}`: `true` on a
     /// rootless host (the runner refuses to run jobs otherwise).
     pub fn rootless(&self) -> Cmd {

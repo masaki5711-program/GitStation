@@ -115,7 +115,11 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    `Restart=on-failure`）で起動する。ログは JSON（`journalctl -u forge-runner`）。
 
 **ジョブの間で状態を残さない**: ジョブごとに `<work_dir>/job` を消してから空で作り、終わると消す（コンテナの作ったファイルは
-`podman unshare rm -rf` で消す）。コンテナは `podman create` → `podman start --attach` で動かし、終わると `podman rm --force` で必ず消える。ジョブのトークンは git の環境の設定
+`podman unshare rm -rf` で消す）。**止めるとき**（`systemctl stop forge-runner` の SIGTERM、Ctrl-C）は、実行中のジョブを取り消しと同じように止め、
+コンテナを `podman kill` と `podman rm --force` で消し、ディレクトリを消して結果（失敗）を報告してから終わる（`forge.runner.shutdown_requested`
+→ `forge.runner.stopped`）。ユニットの `TimeoutStopSec` は 90 秒以上にする。**起動のとき**は、前の実行が残した `forge-job-*` のコンテナを
+すべて `podman rm --force` で消してから（`forge.runner.stale_container_removed`、warn）ジョブのディレクトリを消す。消せなければ
+FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podman create` → `podman start --attach` で動かし、終わると `podman rm --force` で必ず消える。ジョブのトークンは git の環境の設定
 （`http.extraHeader`）でだけ渡し、argv・コンテナの環境・ログに出さない（ログでは `[masked]`）。
 
 **本物の Podman の試験**: ホストを用意したら、そのホストで

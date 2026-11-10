@@ -74,6 +74,8 @@ enum Podman {
     /// Created, but `podman start` fails before the script runs (125;
     /// the container is still `created`).
     NeverStarted,
+    /// The script runs until the stop flag is raised.
+    UntilStopped,
 }
 
 /// A fake host: answers git and podman by subcommand and records every
@@ -85,6 +87,8 @@ struct Fake {
     podman: Podman,
     /// The work directory of the last `podman create`.
     work: Mutex<Option<PathBuf>>,
+    /// What `podman ps` prints (the containers a crashed run left).
+    ps: String,
 }
 
 impl Fake {
@@ -95,6 +99,7 @@ impl Fake {
             fetch_exit: 0,
             podman,
             work: Mutex::new(None),
+            ps: String::new(),
         })
     }
 
@@ -139,7 +144,7 @@ impl ProcessRunner for Fake {
         &self,
         cmd: &Cmd,
         _limit: Duration,
-        _stop: &dyn Fn() -> bool,
+        stop: &dyn Fn() -> bool,
         out: &mut dyn FnMut(&[u8]),
     ) -> std::io::Result<Ran> {
         self.calls.lock().unwrap().push(cmd.clone());
@@ -164,7 +169,11 @@ impl ProcessRunner for Fake {
                     stdout: Vec::new(),
                     stderr_tail: "Error: image not known".to_owned(),
                 },
-                Podman::Exit(_) | Podman::TimedOut | Podman::Litter | Podman::NeverStarted => {
+                Podman::Exit(_)
+                | Podman::TimedOut
+                | Podman::Litter
+                | Podman::NeverStarted
+                | Podman::UntilStopped => {
                     *self.work.lock().unwrap() = Some(work_mount(cmd));
                     ok(b"0123abcd\n".to_vec())
                 }
@@ -200,11 +209,24 @@ impl ProcessRunner for Fake {
                     ok(Vec::new())
                 }
                 Podman::CreateFails => panic!("never started"),
+                Podman::UntilStopped => {
+                    let until = std::time::Instant::now() + Duration::from_secs(20);
+                    while !stop() {
+                        assert!(std::time::Instant::now() < until, "never stopped");
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Ran {
+                        exit: Exit::Stopped,
+                        stdout: Vec::new(),
+                        stderr_tail: String::new(),
+                    }
+                }
             },
+            ("podman", "ps") => ok(self.ps.clone().into_bytes()),
             ("podman", "inspect") => match self.podman {
                 Podman::NeverStarted => ok(b"created 0\n".to_vec()),
                 Podman::Exit(code) => ok(format!("exited {code}\n").into_bytes()),
-                Podman::TimedOut | Podman::Litter | Podman::CreateFails => {
+                Podman::TimedOut | Podman::Litter | Podman::CreateFails | Podman::UntilStopped => {
                     ok(b"exited 0\n".to_vec())
                 }
             },
@@ -509,6 +531,7 @@ fn a_failed_fetch_is_job_fetch_failed() {
         fetch_exit: 128,
         podman: Podman::Exit(0),
         work: Mutex::new(None),
+        ps: String::new(),
     });
     let s = setup(&fake);
     let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
@@ -542,6 +565,7 @@ fn a_claimed_job_is_run_and_reported() {
         api: Arc::clone(&forge) as Arc<dyn RunnerApi>,
         exec: s.exec,
         heartbeat_every: Duration::from_millis(50),
+        shutdown: Arc::new(AtomicBool::new(false)),
     };
     match runner.run_once(0).expect("claim") {
         Handled::Ran {
@@ -737,4 +761,90 @@ fn a_work_directory_past_its_bound_fails_the_job_and_is_wiped() {
     s.exec.work_dir_max_bytes = Some(1 << 20);
     let out = run(&s, &claim(8, "fgj_8_secret", &def), &forge);
     assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+}
+
+/// M4 C4 review: a shutdown (SIGTERM / Ctrl-C) during a job stops it,
+/// kills and removes its container, reports it and ends the loop.
+#[test]
+fn a_shutdown_kills_and_removes_the_running_container() {
+    let def = definition("sleep 100000");
+    let fake = Fake::new(&def, Podman::UntilStopped);
+    let s = setup(&fake);
+    let forge = Arc::new(Forge::default());
+    forge
+        .claims
+        .lock()
+        .unwrap()
+        .push(claim(7, "fgj_7_secret", &def));
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let runner = Runner {
+        api: Arc::clone(&forge) as Arc<dyn RunnerApi>,
+        exec: s.exec,
+        heartbeat_every: Duration::from_secs(30),
+        shutdown: Arc::clone(&shutdown),
+    };
+    let signal = {
+        let (fake, shutdown) = (Arc::clone(&fake), Arc::clone(&shutdown));
+        std::thread::spawn(move || {
+            // The signal arrives once the container is running.
+            let until = std::time::Instant::now() + Duration::from_secs(20);
+            while fake.by("podman", "start").is_empty() {
+                assert!(std::time::Instant::now() < until, "never started");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+    };
+    let started = std::time::Instant::now();
+    runner.run_forever().expect("a clean stop");
+    signal.join().expect("signal thread");
+    assert!(started.elapsed() < Duration::from_secs(15));
+    let order: Vec<String> = fake
+        .calls()
+        .iter()
+        .filter(|c| c.program_name() == "podman")
+        .map(subcommand)
+        .collect();
+    assert_eq!(order, ["create", "start", "kill", "rm"]);
+    assert_eq!(
+        forge.completed.lock().unwrap().as_slice(),
+        [(7, JobResult::Failed, None)]
+    );
+    assert!(runner.exec.workspace.is_clean());
+}
+
+/// M4 C4 review: at startup every container a crashed run left
+/// (`forge-job-<job>-<attempt>`) is removed; another name is left alone.
+#[test]
+fn stale_job_containers_are_removed_at_startup() {
+    let def = definition("make");
+    let fake = Arc::new(Fake {
+        calls: Mutex::new(Vec::new()),
+        definition: Mutex::new(def.clone()),
+        fetch_exit: 0,
+        podman: Podman::Exit(0),
+        work: Mutex::new(None),
+        ps: "forge-job-7-1\nforge-job-12-3\nforge-job-x\n".to_owned(),
+    });
+    let s = setup(&fake);
+    assert_eq!(s.exec.remove_stale_containers().expect("removed"), 2);
+    let ps = fake.by("podman", "ps");
+    assert_eq!(ps.len(), 1);
+    assert_eq!(
+        ps[0].argv(),
+        [
+            "ps",
+            "--all",
+            "--filter=name=^forge-job-",
+            "--format={{.Names}}"
+        ]
+    );
+    let removed: Vec<Vec<String>> = fake.by("podman", "rm").iter().map(Cmd::argv).collect();
+    assert_eq!(
+        removed,
+        [
+            ["rm", "--force", "--ignore", "--", "forge-job-7-1"],
+            ["rm", "--force", "--ignore", "--", "forge-job-12-3"],
+        ]
+    );
 }
