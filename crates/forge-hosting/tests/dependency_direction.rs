@@ -137,6 +137,12 @@ const ALLOWED: &[(&str, &[&str])] = &[
     // share the pure document parsing (ADR-0020 Amendment, ADR-0026 §8) and
     // the pure `.forge-ci.yml` lint and plan (ADR-0020 Amendment, M4 C1).
     ("forge-client", &["forge-errors", "forge-doc", "forge-ci"]),
+    // The CI runner binary (M4 C4, contract 9, ADR-0029): the client side
+    // only, never a server crate; no row lists it, so nothing depends on it.
+    (
+        "forge-runner",
+        &["forge-core", "forge-errors", "forge-client"],
+    ),
 ];
 
 /// The forge crates `table` names (a `[dependencies]`-like table).

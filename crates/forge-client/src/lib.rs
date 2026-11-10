@@ -12,6 +12,11 @@
 //! else. No server crate may depend on it. `Cargo.toml` of the server crates
 //! is checked by `client_depends_only_on_forge_errors_and_forge_doc` below.
 
+/// The pure `.forge-ci.yml` parse and lint, re-exported for the runner
+/// binary (M4 C4, contract 9: `forge-runner` depends on forge-client, not
+/// on forge-ci directly).
+pub use forge_ci;
+
 pub mod admin;
 pub mod app;
 pub mod browse;

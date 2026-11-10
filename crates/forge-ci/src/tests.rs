@@ -269,6 +269,18 @@ fn a_local_check_counts_no_branch_as_protected() {
     assert!(lint(no_secrets.as_bytes(), &LintContext::local_check()).is_empty());
 }
 
+/// M4 C4: the runner re-reads bytes the server linted with the real
+/// protected branches; it does not know them, so the secret-protection rule
+/// is the server's (`secrets_allowed`), but every other rule still holds.
+#[test]
+fn the_runners_reading_leaves_secret_protection_to_the_server() {
+    let ctx = LintContext::pinned_by_server();
+    assert!(lint(valid().as_bytes(), &ctx).is_empty());
+    assert!(!ctx.is_protected("main"));
+    let broken = valid().replace("stage: build", "stage: nowhere");
+    assert!(!lint(broken.as_bytes(), &ctx).is_empty());
+}
+
 #[test]
 fn a_protected_wildcard_covers_only_the_same_wildcard() {
     let ctx = LintContext::with_protected_branches(vec!["release/*".to_owned()]);
