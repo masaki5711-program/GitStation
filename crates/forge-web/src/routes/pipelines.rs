@@ -46,7 +46,6 @@ use serde::{Deserialize, Serialize};
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, QueryParam, WriteParts};
-use crate::routes::git::principal_key;
 use crate::routes::projects::{self, PREFIX};
 use crate::routes::repo_copy::{measure, refusal_context, Measured};
 use crate::routes::write::{absent, bounded, json, no_store};
@@ -678,11 +677,11 @@ fn tip_target(state: &AppState, request: &Dispatched<ProjectCtx>) -> TipTarget {
         Ok(_) => return TipTarget::Person,
         Err(e) => return TipTarget::Refused(e),
     }
-    let ready = crate::routes::git::ready(state, request)
-        .and_then(|(_, repo)| Ok((repo.id, principal_key(request)?)));
-    match ready {
-        Ok((repo, key)) => TipTarget::Measure(repo, key),
-        Err(e) => TipTarget::Unmeasurable(request.repository().map(|r| r.id), e),
+    // A fixed route carries no dispatcher repository: the loader's project
+    // row names it (as for browse).
+    match crate::routes::browse::Target::of(state, request) {
+        Ok(t) => TipTarget::Measure(t.repository.id, t.principal),
+        Err(e) => TipTarget::Unmeasurable(request.project().map(|r| r.repository.id), e),
     }
 }
 
