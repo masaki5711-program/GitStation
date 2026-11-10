@@ -56,7 +56,9 @@ describe('merge request check runs', () => {
     expect(within(box).getAllByText('Namespace: ci')).toHaveLength(2);
     expect(within(box).getByText('Namespace: kanflow')).toBeTruthy();
     expect(within(box).getByText('2 tests failed')).toBeTruthy();
-    const link = within(box).getByRole('link', { name: 'Open the details of ci/build' });
+    const link = within(box).getByRole('link', { name: 'Open the details of ci/build (opens another site)' });
+    // A visible cue too, not for the screen reader (it reads the words).
+    expect(link.querySelector('[aria-hidden="true"]')).not.toBeNull();
     expect(link.getAttribute('href')).toBe('https://ci.example.test/runs/1');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
     // Annotations are collapsed behind their count.

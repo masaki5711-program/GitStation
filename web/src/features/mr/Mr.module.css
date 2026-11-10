@@ -390,3 +390,20 @@
 .levelOther {
   color: var(--gs-color-text-muted);
 }
+
+/* A link that leaves GitStation: an arrow for the eye (the words are in .srOnly). */
+.externalMark::after {
+  content: '\2197';
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

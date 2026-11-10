@@ -114,7 +114,10 @@ function Run({ run, project, head }: { run: CheckRun; project: string; head: str
       {link !== null && (
         <p className={styles.runSummary}>
           <a href={link} rel="noopener noreferrer">
-            {t('mrChecks.details', { name: run.name })}
+            {t('mrChecks.details', { name: run.name })}{' '}
+            {/* The cue: words for a screen reader, an arrow (CSS) for the eye. */}
+            <span className={styles.srOnly}>{t('mrChecks.externalSite')}</span>
+            <span aria-hidden="true" className={styles.externalMark} />
           </a>
         </p>
       )}

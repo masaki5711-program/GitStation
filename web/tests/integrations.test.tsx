@@ -289,7 +289,7 @@ describe('project settings: kanflow bindings', () => {
       }),
     );
     await renderApp({ fetch: server.fetch, path: SETTINGS, lang: 'en' });
-    fireEvent.click(await screen.findByRole('button', { name: 'Unbind kanflow #4 from kanflow project KF-12' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Unbind kanflow #4 (kanflow projects: KF-12)' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/Reporter membership/)).toBeTruthy();
     expect(server.to('DELETE', `${BINDINGS}/4`)).toHaveLength(0);
@@ -303,6 +303,56 @@ describe('project settings: kanflow bindings', () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Kanflow' }));
     });
+  });
+
+  it('two bindings of one integration are one row with one unbind that names both and removes both', async () => {
+    // A shared spec repository bound to two kanflow projects through one
+    // integration: the route removes every binding of the integration.
+    const state = {
+      items: [
+        binding({ external_project_id: 'KF-12', granted_membership: false }),
+        binding({ external_project_id: 'KF-30', granted_membership: true, created_at: '2026-11-03T00:00:00Z' }),
+      ],
+    };
+    const server = mockServer(
+      routes('maintainer', {
+        [`GET ${BINDINGS}`]: () => json(200, { items: state.items }),
+        [`DELETE ${BINDINGS}/4`]: () => {
+          state.items = [];
+          return new Response(null, { status: 204 });
+        },
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: SETTINGS, lang: 'en' });
+    const section = (await screen.findByRole('heading', { name: 'Kanflow' })).closest('section') as HTMLElement;
+    const rows = await within(section).findAllByRole('row', { name: /kanflow #4/ });
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0] as HTMLElement).getByText('KF-12')).toBeTruthy();
+    expect(within(rows[0] as HTMLElement).getByText('KF-30')).toBeTruthy();
+    const buttons = within(section).getAllByRole('button', { name: /Unbind/ });
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.getAttribute('aria-label')).toBe('Unbind kanflow #4 (kanflow projects: KF-12, KF-30)');
+    fireEvent.click(buttons[0] as HTMLElement);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/all of them are removed together/)).toBeTruthy();
+    const listed = within(within(dialog).getByRole('list', { name: 'Kanflow project' })).getAllByRole('listitem');
+    expect(listed.map((li) => li.textContent)).toEqual(['KF-12', 'KF-30']);
+    // One of the two gave the service account its membership.
+    expect(within(dialog).getByText(/Reporter membership/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unbind' }));
+    await waitFor(() => {
+      expect(server.to('DELETE', `${BINDINGS}/4`)).toHaveLength(1);
+    });
+    expect(server.calls.filter((c) => c.method === 'DELETE')).toHaveLength(1);
+    expect(await screen.findByText(/not bound to a kanflow project/)).toBeTruthy();
+  });
+
+  it('no membership line when no binding of the integration gave one', async () => {
+    const server = mockServer(routes('maintainer', { [`GET ${BINDINGS}`]: () => json(200, { items: [binding({ granted_membership: false })] }) }));
+    await renderApp({ fetch: server.fetch, path: SETTINGS, lang: 'en' });
+    fireEvent.click(await screen.findByRole('button', { name: /Unbind kanflow #4/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByText(/Reporter membership/)).toBeNull();
   });
 
   it('a refused unbind stays in the dialog with its reason and request id', async () => {
