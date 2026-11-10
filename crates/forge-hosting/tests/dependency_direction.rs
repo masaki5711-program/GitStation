@@ -45,7 +45,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ),
     // M3 C1 (ADR-0024 §11): check runs, beside forge-review (and never
     // depending on it: the merge conditions read the runs through
-    // forge-core's `CheckResultsSource`).
+    // forge-core's `CheckResultsSource`). Plan 13 stage 2: forge-doc for
+    // `forge/doc-lint` (the same lint as `gstn doc lint`).
     (
         "forge-checks",
         &[
@@ -53,6 +54,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-git",
             "forge-db",
             "forge-core",
+            "forge-doc",
             "forge-errors",
         ],
     ),

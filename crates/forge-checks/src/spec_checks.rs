@@ -1,6 +1,7 @@
 //! `forge/spec-lint` and `forge/spec-trace` (M3 X4, plan 03 §5.4, plan 06
-//! D-7, ADR-0023 Amendment X4). Deterministic: the same commits, links and
-//! files give the same runs.
+//! D-7, ADR-0023 Amendment X4), and `forge/doc-lint` (plan 13 stage 2,
+//! [`crate::doc_lint`]). Deterministic: the same commits, links and files
+//! give the same runs.
 //!
 //! [`SpecChecks::run`] evaluates one `check.spec_index` job (a merge
 //! request version's head, or its head again after a work item link
@@ -9,13 +10,15 @@
 //! 1. the project (gone: nothing recorded) and its ready repository;
 //! 2. the merge request (gone: nothing recorded) and its open work item
 //!    links;
-//! 3. the head, indexed ([`crate::spec_index::index_commit`]), and the merge
-//!    base with the target branch's tip, indexed the same way (no target
+//! 3. the head, read once for the index and the documents
+//!    ([`crate::spec_index::index_head`]), and the merge base with the
+//!    target branch's tip ([`crate::spec_index::index_commit`]; no target
 //!    branch or no common history: nothing to compare with, every
 //!    requirement and tag at the head is new);
 //! 4. [`assess_lint`] on the head and [`assess_trace`] on
-//!    `forge_core::spec_index::trace_merge_request`, both written with
-//!    `forge_db::checks::record_forge_check_run` (no reporter).
+//!    `forge_core::spec_index::trace_merge_request`, and
+//!    [`crate::doc_lint::assess_doc_lint`] on the head's documents, all
+//!    written with `forge_db::checks::record_forge_check_run` (no reporter).
 //!
 //! Conclusions — `forge/spec-lint`: `success` (no problem), `failure` (a
 //! problem, `FG-REPO-0028`), `neutral` (no problem found, but the index hit
@@ -38,7 +41,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::checks::{
-    CheckAnnotationLevel, CheckConclusion, CheckStatus, MAX_CHECK_ANNOTATIONS,
+    CheckAnnotationLevel, CheckConclusion, CheckStatus, DOC_LINT_CHECK, MAX_CHECK_ANNOTATIONS,
     MAX_CHECK_SUMMARY_BYTES, SPEC_LINT_CHECK, SPEC_TRACE_CHECK,
 };
 use forge_core::namespace_resolver::ProjectAccessLoader;
@@ -54,7 +57,8 @@ use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{Browser, RefLookup};
 
-use crate::spec_index::{index_commit, IndexLimits, Indexed, Tags};
+use crate::doc_lint::{assess_doc_lint, DocLimits, DocTree};
+use crate::spec_index::{index_commit, index_head, IndexLimits, Indexed, Tags};
 use crate::spec_refs::RepoConfigRead;
 
 /// One database lookup (the project, the merge request, its links).
@@ -63,7 +67,9 @@ pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// bounded by the browse limits and `IndexLimits::grep_timeout`).
 pub const EVALUATION_BUDGET: Duration = Duration::from_secs(70);
 /// One write of a run.
-pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Three runs and, on the last attempt, three `error` writes: 70 s + 6 × 8 s
+/// = 118 s, inside the job's 120 s (plan 13 stage 2 added `forge/doc-lint`).
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// The longest annotation message (the table's CHECK, 4 KiB).
 const MAX_MESSAGE_BYTES: usize = 4096;
@@ -84,7 +90,7 @@ fn clip(mut text: String, max: usize) -> String {
     text
 }
 
-fn annotation(
+pub(crate) fn annotation(
     path: &str,
     line: usize,
     level: CheckAnnotationLevel,
@@ -109,7 +115,7 @@ fn name(raw: &str) -> Result<CheckName, ForgeError> {
     })
 }
 
-fn completed(
+pub(crate) fn completed(
     check: &str,
     conclusion: CheckConclusion,
     lines: &[String],
@@ -355,6 +361,7 @@ pub struct SpecChecks {
     projects: Arc<dyn ProjectAccessLoader>,
     budget: Duration,
     limits: IndexLimits,
+    doc_limits: DocLimits,
 }
 
 impl std::fmt::Debug for SpecChecks {
@@ -369,6 +376,8 @@ pub enum Ran {
     Recorded {
         lint: Box<Reported>,
         trace: Box<Reported>,
+        /// `forge/doc-lint` (plan 13 stage 2).
+        doc_lint: Box<Reported>,
     },
     /// The project or the merge request is gone: nothing to record.
     Gone,
@@ -409,6 +418,7 @@ async fn record(
 /// Everything read before the runs are assessed.
 struct Evaluated {
     head: Indexed,
+    docs: DocTree,
     trace: MrTrace,
     compared: Compared,
     links_truncated: bool,
@@ -423,7 +433,15 @@ impl SpecChecks {
             projects,
             budget: EVALUATION_BUDGET,
             limits: IndexLimits::default(),
+            doc_limits: DocLimits::default(),
         }
+    }
+
+    /// The same, with other bounds for the documents (tests).
+    #[must_use]
+    pub fn with_doc_limits(mut self, doc_limits: DocLimits) -> Self {
+        self.doc_limits = doc_limits;
+        self
     }
 
     /// The same, with another evaluation budget and index bounds (tests).
@@ -434,9 +452,10 @@ impl SpecChecks {
         self
     }
 
-    /// Evaluate `request` and record both runs. Errors (nothing written,
-    /// or only `forge/spec-lint` when the second write fails — the retry
-    /// writes both again): a lookup (`FG-DB-*`, `FG-WEB-0002`), the
+    /// Evaluate `request` and record the three runs (`forge/spec-lint`,
+    /// `forge/spec-trace`, `forge/doc-lint`). Errors (nothing written, or
+    /// only the first runs when a later write fails — the retry writes all
+    /// again): a lookup (`FG-DB-*`, `FG-WEB-0002`), the
     /// repository not ready (`FG-REPO-0016`), git (`FG-GIT-*`, the browse
     /// limits), the budget (`FG-WEB-0002 operation=spec_index`), a write.
     pub async fn run(
@@ -455,8 +474,10 @@ impl SpecChecks {
         };
         let lint_run = assess_lint(&e.head)?;
         let trace_run = assess_trace(&e.trace, &e.compared, e.links_truncated)?;
+        let doc_run = assess_doc_lint(&e.docs)?;
         let lint = record(&self.db, request, request_id, &lint_run).await?;
         let trace = record(&self.db, request, request_id, &trace_run).await?;
+        let doc_lint = record(&self.db, request, request_id, &doc_run).await?;
         tracing::info!(
             target: "forge_checks",
             event = "forge.spec_index.recorded",
@@ -466,14 +487,18 @@ impl SpecChecks {
             head_sha = request.head.as_str(),
             lint_conclusion = lint_run.conclusion.map(CheckConclusion::as_str),
             trace_conclusion = trace_run.conclusion.map(CheckConclusion::as_str),
+            doc_lint_conclusion = doc_run.conclusion.map(CheckConclusion::as_str),
+            doc_files = e.docs.markdown.len(),
+            doc_incomplete = e.docs.incomplete,
             documents = e.head.index.documents.len(),
             tags = e.head.index.tags.len(),
             incomplete = e.head.index.incomplete,
-            "spec lint and trace evaluated"
+            "spec lint, trace and doc lint evaluated"
         );
         Ok(Ran::Recorded {
             lint: Box::new(lint),
             trace: Box::new(trace),
+            doc_lint: Box::new(doc_lint),
         })
     }
 
@@ -486,7 +511,7 @@ impl SpecChecks {
             iid = request.iid,
             head_sha = request.head.as_str(),
             gone = what,
-            "nothing to evaluate; no spec lint or trace run recorded"
+            "nothing to evaluate; no spec lint, trace or doc lint run recorded"
         );
     }
 
@@ -537,12 +562,13 @@ impl SpecChecks {
             .collect();
         linked.sort();
         linked.dedup();
-        let head = index_commit(
+        // One read of the head for both the index and the documents.
+        let (head, docs) = index_head(
             &self.browse,
             repo.id,
             request.head.as_str(),
             &self.limits,
-            Tags::Read,
+            &self.doc_limits,
         )
         .await?;
         let compared = match self.browse.find_ref(repo.id, &mr.target_branch).await? {
@@ -571,6 +597,7 @@ impl SpecChecks {
         let trace = trace_merge_request(&base, &head.index, &linked, &head.external);
         Ok(Some(Evaluated {
             head,
+            docs,
             trace,
             compared,
             links_truncated: links.truncated,
@@ -578,8 +605,8 @@ impl SpecChecks {
     }
 
     /// The job failed for good (its last attempt, or a failure that can
-    /// never succeed): record `error` on the head for both checks, so they
-    /// are never left without an answer.
+    /// never succeed): record `error` on the head for its three checks, so
+    /// they are never left without an answer.
     pub async fn fail(
         &self,
         request: &SpecIndexRequest,
@@ -590,7 +617,8 @@ impl SpecChecks {
     }
 }
 
-/// Record `error` for `forge/spec-lint` and `forge/spec-trace` on
+/// Record `error` for `forge/spec-lint`, `forge/spec-trace` and
+/// `forge/doc-lint` on
 /// `request`'s head (the job's last failure: `code`): [`SpecChecks::fail`]
 /// and the worker's sweep of a job that died without an answer. Each write
 /// is bounded by [`WRITE_TIMEOUT`]; a failure to record is logged here
@@ -602,7 +630,7 @@ pub async fn record_errors(
     code: &str,
 ) -> bool {
     let mut all = true;
-    for check in [SPEC_LINT_CHECK, SPEC_TRACE_CHECK] {
+    for check in [SPEC_LINT_CHECK, SPEC_TRACE_CHECK, DOC_LINT_CHECK] {
         let new = name(check).map(|name| NewCheckRun {
             name,
             status: CheckStatus::Completed,
@@ -631,7 +659,7 @@ pub async fn record_errors(
                 project_id = request.project.get(),
                 iid = request.iid,
                 head_sha = request.head.as_str(),
-                "the failed spec check could not be recorded as error"
+                "the failed spec or doc check could not be recorded as error"
             );
         }
     }

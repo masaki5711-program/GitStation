@@ -1,6 +1,6 @@
 //! The `check.spec_index` job and the `spec-index` subscriber (M3 X4,
 //! ADR-0023 Amendment X4): `forge/spec-lint` and `forge/spec-trace` of a
-//! merge request version's head. The job is run by `forge worker` through
+//! merge request version's head, and `forge/doc-lint` (plan 13 stage 2). The job is run by `forge worker` through
 //! forge-checks (`spec_checks::SpecChecks`), which writes both runs with
 //! [`super::record_forge_check_run`].
 //!
@@ -134,7 +134,8 @@ pub const UNANSWERED_WINDOW_DAYS: i32 = 7;
 
 /// At most `limit` [`UnansweredJob`]s, the oldest first: dead within
 /// [`UNANSWERED_WINDOW_DAYS`], of a project that still exists, whose head
-/// has no `forge/spec-lint` or no `forge/spec-trace` run. The partial index
+/// lacks one of `forge/spec-lint`, `forge/spec-trace` and `forge/doc-lint`
+/// (plan 13 stage 2: the same job writes all three). The partial index
 /// `jobs_dead_kind` (X2) serves the lookup. A payload this build cannot
 /// read is passed over (logged at warn: forge wrote it).
 pub async fn unanswered_dead_jobs(db: &Db, limit: i64) -> Result<Vec<UnansweredJob>, ForgeError> {
@@ -142,6 +143,7 @@ pub async fn unanswered_dead_jobs(db: &Db, limit: i64) -> Result<Vec<UnansweredJ
     let names: Vec<&str> = vec![
         forge_core::checks::SPEC_LINT_CHECK,
         forge_core::checks::SPEC_TRACE_CHECK,
+        forge_core::checks::DOC_LINT_CHECK,
     ];
     let rows: Vec<(i64, serde_json::Value, String, Option<String>)> = db
         .within(QUERY, async {
@@ -153,13 +155,14 @@ pub async fn unanswered_dead_jobs(db: &Db, limit: i64) -> Result<Vec<UnansweredJ
                  WHERE j.kind = $1 AND j.state = 'dead' \
                  AND j.finished_at > now() - make_interval(days => $2) \
                  AND (SELECT count(*) FROM forge.check_runs r WHERE r.project_id = p.id \
-                 AND r.head_sha = j.payload->>'head_sha' AND r.name = ANY($3)) < 2 \
+                 AND r.head_sha = j.payload->>'head_sha' AND r.name = ANY($3)) < $5 \
                  ORDER BY j.finished_at, j.id LIMIT $4",
             )
             .bind(SPEC_INDEX_JOB)
             .bind(UNANSWERED_WINDOW_DAYS)
             .bind(&names)
             .bind(limit)
+            .bind(i64::try_from(names.len()).unwrap_or(i64::MAX))
             .fetch_all(db.pool().executor())
             .await
             .map_err(|e| read_query_error(QUERY, e))

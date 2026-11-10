@@ -27,7 +27,7 @@
 //! (`spec_drift_sweep`, M3 X2: every 60 s, `error` for dead
 //! `check.spec_drift` jobs left without a run), and the risk sweep
 //! (`risk_sweep`, M3 X7: the same for `check.risk`), the spec index sweep
-//! (`spec_index_sweep`, M3 X4: every 60 s, `error` for both runs of dead
+//! (`spec_index_sweep`, M3 X4: every 60 s, `error` for the three runs of dead
 //! `check.spec_index` jobs), the rejection of expired act-as
 //! assertions (`act_as_sweep`, M3 S2: every 60 s), and the repository
 //! maintenance (`maintenance`, M3 O3: its OWN job runner for

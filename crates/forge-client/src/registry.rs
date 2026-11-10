@@ -1015,6 +1015,32 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["GET /api/v1/projects/{id}/specs/trace"],
         output: r#"{"type":"object","required":["ref","requirements","references","incomplete","withheld"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"requirements":{"type":"array","items":{"type":"object","required":["id","source","path","line","deprecated","status","test_count","tests"],"properties":{"status":{"enum":["tested","untested"]}}}},"references":{"type":"array","items":{"type":"object","required":["line","repo","status","error_code","requirements"],"properties":{"status":{"enum":["resolved","version_not_found","unavailable"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
     },
+    // Plan 13 stage 2 (ADR-0026): local only — no route, no token
+    // (coverage.rs LOCAL_COMMANDS).
+    CommandSpec {
+        name: "doc fmt",
+        summary: "Format the documents of the working tree's repository (one sentence per line; the type's field and attribute order). Local only: nothing is sent to the server.",
+        args: &[
+            arg("--check", "flag", false, "Write nothing; exit 1 (FG-DOC-0004) when a file would change."),
+            ArgSpec { name: "path", kind: "positional", required: false, repeatable: true, description: "Files or directories (default: the whole repository found upward from the current directory)." },
+        ],
+        examples: &["gstn doc fmt", "gstn doc fmt --check --json", "gstn doc fmt qms/procedures/QP-07-001.md"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["check","changed","unchanged","skipped","incomplete"],"properties":{"check":{"type":"boolean"},"changed":{"type":"array","items":{"type":"string"}},"unchanged":{"type":"integer"},"skipped":{"type":"array","items":{"type":"object","required":["path","reason"],"properties":{"reason":{"enum":["not_utf8","too_large","not_a_document","doctype_invalid"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc lint",
+        summary: "Check the working tree's documents against their types (.forge/doctypes) and each other: the same lint as the forge/doc-lint check. Local only: nothing is sent to the server.",
+        args: &[
+            ArgSpec { name: "path", kind: "positional", required: false, repeatable: true, description: "Report only these files or directories (every document is read; default: the whole repository)." },
+            arg("--migration-warnings", "flag", false, "Report broken references (ref_broken) as warnings while migrating; the server's forge/doc-lint decides."),
+        ],
+        examples: &["gstn doc lint", "gstn doc lint safety --json", "gstn doc lint --migration-warnings"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["files","errors","warnings","markdown_files","doctype_files","migration_warnings","incomplete"],"properties":{"files":{"type":"array","items":{"type":"object","required":["path","problems","problems_dropped"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","rule","subject","level","error_code"],"properties":{"line":{"type":"integer"},"rule":{"type":"string"},"subject":{"type":["string","null"]},"level":{"enum":["error","warning"]},"error_code":{"enum":["FG-DOC-0001","FG-DOC-0003"]}}}},"problems_dropped":{"type":"integer"}}}},"errors":{"type":"integer"},"warnings":{"type":"integer"},"markdown_files":{"type":"integer"},"doctype_files":{"type":"integer"},"migration_warnings":{"type":"boolean"},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
     CommandSpec {
         name: "context work-item",
         summary: "Show a kanflow work item's context in a project: its linked merge requests and the @req tests of its acceptance criteria, each with its source (M3 X5).",

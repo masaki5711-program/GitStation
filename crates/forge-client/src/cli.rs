@@ -142,6 +142,13 @@ pub enum Command {
         #[command(subcommand)]
         command: SpecCommand,
     },
+    /// Documents in the plan 13 format, on your working tree only (never
+    /// the server): fmt, lint.
+    #[command(disable_help_subcommand = true)]
+    Doc {
+        #[command(subcommand)]
+        command: DocCommand,
+    },
     /// The context API (M3 X5): a work item's, a requirement's or a merge
     /// request's context, every item with its source.
     #[command(disable_help_subcommand = true)]
@@ -1782,6 +1789,33 @@ pub enum SpecCommand {
         /// A commit id, a branch or a tag (default: the default branch).
         #[arg(long = "ref", value_parser = parse_text)]
         rev: Option<String>,
+    },
+}
+
+/// `gstn doc` (plan 13 stage 2, ADR-0026): the document format's tools on
+/// the working tree. Local only: the files and `.forge/doctypes/` of the
+/// repository found upward from the current directory; nothing is sent.
+#[derive(Subcommand, Debug)]
+pub enum DocCommand {
+    /// Format documents: one sentence per line, the front matter's keys
+    /// and the blocks' attributes in their type's order.
+    Fmt {
+        /// Write nothing; exit 1 (FG-DOC-0004) when a file would change.
+        #[arg(long)]
+        check: bool,
+        /// Files or directories (default: the whole repository).
+        paths: Vec<PathBuf>,
+    },
+    /// Check documents against their types and each other (the same lint
+    /// as the forge/doc-lint check).
+    Lint {
+        /// Report only these files or directories (every document is
+        /// read: references are checked against the whole repository).
+        paths: Vec<PathBuf>,
+        /// Report broken references as warnings while migrating (plan 13
+        /// Q13; the server's forge/doc-lint decides).
+        #[arg(long)]
+        migration_warnings: bool,
     },
 }
 

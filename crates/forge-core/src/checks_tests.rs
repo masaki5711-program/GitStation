@@ -63,26 +63,29 @@ fn a_snapshot_answers_only_for_its_own_head() {
 #[test]
 fn forge_reports_exactly_its_own_checks() {
     use crate::checks::{
-        forge_reports, FORGE_REPORTED_CHECKS, RISK_CHECK, SPEC_DRIFT_CHECK, SPEC_LINT_CHECK,
-        SPEC_TRACE_CHECK,
+        forge_reports, DOC_LINT_CHECK, FORGE_REPORTED_CHECKS, RISK_CHECK, SPEC_DRIFT_CHECK,
+        SPEC_LINT_CHECK, SPEC_TRACE_CHECK,
     };
     use crate::merge_conditions::CheckNamespace;
-    // M3 X7 adds forge/risk, M3 X4 forge/spec-lint and forge/spec-trace.
+    // M3 X7 adds forge/risk, M3 X4 forge/spec-lint and forge/spec-trace,
+    // plan 13 stage 2 forge/doc-lint.
     assert_eq!(
         FORGE_REPORTED_CHECKS,
         &[
             SPEC_DRIFT_CHECK,
             RISK_CHECK,
             SPEC_LINT_CHECK,
-            SPEC_TRACE_CHECK
+            SPEC_TRACE_CHECK,
+            DOC_LINT_CHECK
         ]
     );
+    assert_eq!(DOC_LINT_CHECK, "forge/doc-lint");
     assert_eq!(RISK_CHECK, "forge/risk");
     assert_eq!(SPEC_LINT_CHECK, "forge/spec-lint");
     assert_eq!(SPEC_TRACE_CHECK, "forge/spec-trace");
     assert_eq!(
         crate::checks::MAX_STORED_CHECK_RUNS_PER_COMMIT,
-        crate::checks::MAX_CHECK_RUNS_PER_COMMIT + 4
+        crate::checks::MAX_CHECK_RUNS_PER_COMMIT + 5
     );
     for raw in FORGE_REPORTED_CHECKS {
         let n = name(raw);

@@ -16,6 +16,8 @@ publish.workspace = true
 forge-auth.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
+# Plan 13 stage 2: the document lint (`forge/doc-lint`), pure.
+forge-doc.workspace = true
 forge-errors.workspace = true
 forge-git.workspace = true
 serde_json.workspace = true

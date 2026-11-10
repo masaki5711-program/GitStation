@@ -1,6 +1,7 @@
 //! The `check.spec_index` job handler (M3 X4, ADR-0023 Amendment X4): one
-//! run of [`forge_checks::spec_checks::SpecChecks`] — `forge/spec-lint`
-//! and `forge/spec-trace` on a merge request version's head. The job is
+//! run of [`forge_checks::spec_checks::SpecChecks`] — `forge/spec-lint`,
+//! `forge/spec-trace` and `forge/doc-lint` (plan 13 stage 2) on a merge
+//! request version's head. The job is
 //! enqueued by forge-db's `spec-index` subscriber (registered in
 //! [`super::registry_with`]).
 //!
@@ -9,8 +10,8 @@
 //! queue's backoff): git timeouts / busy / process failures, storage I/O,
 //! the database, a repository still being provisioned, a lookup or the
 //! evaluation running out of time. On the last attempt, or a failure that
-//! can never succeed, both runs are recorded as `error` first
-//! ([`forge_checks::spec_checks::SpecChecks::fail`]) so neither check stays
+//! can never succeed, the three runs are recorded as `error` first
+//! ([`forge_checks::spec_checks::SpecChecks::fail`]) so no check stays
 //! without an answer; a malformed payload is dead at once (`FG-DB-0006`,
 //! an operator looks: there is no head to answer on).
 

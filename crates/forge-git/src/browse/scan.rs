@@ -95,6 +95,30 @@ impl Browser {
         if dirs.is_empty() {
             return Ok(BlobListing::default());
         }
+        self.list_blobs(repo, commit, &dirs, max).await
+    }
+
+    /// Every regular file of `commit`'s tree, at most `max` (more, or more
+    /// than the tree output cap: `truncated`). The document lint's one
+    /// listing of a head (plan 13 stage 2): documents may be in any folder,
+    /// and the specification directories are taken from the same listing.
+    pub async fn blobs_in_tree(
+        &self,
+        repo: RepoId,
+        commit: &str,
+        max: usize,
+    ) -> Result<BlobListing, ForgeError> {
+        self.list_blobs(repo, commit, &[], max).await
+    }
+
+    /// `ls-tree -r` of `commit` (limited to `dirs` when there are any).
+    async fn list_blobs(
+        &self,
+        repo: RepoId,
+        commit: &str,
+        dirs: &[&str],
+        max: usize,
+    ) -> Result<BlobListing, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         let dir = self.storage.existing(repo)?;
         let _slot = self.claim(repo)?;
@@ -106,7 +130,7 @@ impl Browser {
             .arg("--long")
             .arg("--full-tree")
             .revision(Revision::object_id(commit)?);
-        for d in &dirs {
+        for d in dirs {
             cmd = cmd.path(d);
         }
         let (out, cut) = cmd

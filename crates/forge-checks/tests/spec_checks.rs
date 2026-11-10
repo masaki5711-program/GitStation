@@ -10,8 +10,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use forge_checks::doc_lint::{assess_doc_lint, DocLimits};
 use forge_checks::spec_checks::{record_errors, Ran, SpecChecks};
-use forge_checks::spec_index::{index_commit, IndexLimits, Tags};
+use forge_checks::spec_index::{index_commit, index_head, IndexLimits, Tags};
 use forge_checks::spec_refs::RepoConfigRead;
 use forge_core::checks::CheckConclusion;
 use forge_core::{ObjectId, RequestId, Visibility};
@@ -296,7 +297,7 @@ async fn a_merge_request_that_is_gone_records_nothing() {
 }
 
 #[tokio::test]
-async fn a_failed_job_answers_error_for_both_checks() {
+async fn a_failed_job_answers_error_for_every_check() {
     let (t, _r, project) = project_world().await;
     let request = SpecIndexRequest {
         project,
@@ -322,6 +323,7 @@ async fn a_failed_job_answers_error_for_both_checks() {
     assert_eq!(
         names,
         vec![
+            ("forge/doc-lint", Some(CheckConclusion::Error)),
             ("forge/spec-lint", Some(CheckConclusion::Error)),
             ("forge/spec-trace", Some(CheckConclusion::Error)),
         ]
@@ -384,4 +386,74 @@ Test it with `@req ZEVA-CFG-1`.
         forge_core::spec_index::lint(&i.index, &i.external).is_empty(),
         "the fenced example names no broken reference"
     );
+}
+
+const MANUAL_T: &[u8] = b"name: qms.manual\nid_pattern: '^QM-\\d{3}$'\n";
+
+fn manual(id: &str, body: &str) -> Vec<u8> {
+    format!("---\ndoctype: qms.manual\nid: {id}\ntitle: t\nowner: qa\n---\n\n{body}\n").into_bytes()
+}
+
+/// Plan 13 stage 2: the job's head is listed and read once; the index is
+/// the one [`index_commit`] builds, and the documents (`.md` naming a
+/// `doctype`, in any folder) and their types come from the same read.
+#[tokio::test]
+async fn the_head_is_read_once_for_the_index_and_the_documents() {
+    let r = repo().await;
+    let qm1 = manual("QM-001", "本文。[[QM-002]]");
+    let qm2 = manual("QM-002", "本文。[[QM-404]]");
+    let c = commit(
+        &r.path,
+        &[
+            (".forge/doctypes/qms.manual.yml", MANUAL_T),
+            ("spec/a.md", SPEC_A),
+            ("spec/QM-001.md", &qm1),
+            ("qms/deep/QM-002.md", &qm2),
+            ("specs-not/x.md", b"# x\n"),
+            ("tests/t.rs", b"// @req ZEVA-CFG-1\n"),
+        ],
+    );
+    let limits = IndexLimits::default();
+    let (head, docs) = index_head(&r.browser, r.id, &c, &limits, &DocLimits::default())
+        .await
+        .expect("head");
+    let alone = index_commit(&r.browser, r.id, &c, &limits, Tags::Read)
+        .await
+        .expect("index");
+    assert_eq!(head, alone, "the same index as index_commit");
+    let paths: Vec<&str> = docs.markdown.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "qms/deep/QM-002.md",
+            "spec/QM-001.md",
+            "spec/a.md",
+            "specs-not/x.md"
+        ]
+    );
+    assert_eq!(docs.doctypes.len(), 1);
+    assert_eq!(docs.incomplete, None);
+    let run = assess_doc_lint(&docs).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains("qms/deep/QM-002.md:8 ref_broken — QM-404"),
+        "{}",
+        run.summary
+    );
+    // A listing cut at its bound leaves both incomplete.
+    let cut = DocLimits {
+        max_tree_entries: 2,
+        ..DocLimits::default()
+    };
+    let (head, docs) = index_head(&r.browser, r.id, &c, &limits, &cut)
+        .await
+        .expect("head");
+    assert_eq!(head.index.incomplete, Some("spec_files"));
+    assert_eq!(docs.incomplete, Some("doc_tree"));
 }

@@ -5412,6 +5412,211 @@
     {
       "args": [
         {
+          "description": "Write nothing; exit 1 (FG-DOC-0004) when a file would change.",
+          "kind": "flag",
+          "name": "--check",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Files or directories (default: the whole repository found upward from the current directory).",
+          "kind": "positional",
+          "name": "path",
+          "repeatable": true,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn doc fmt",
+        "gstn doc fmt --check --json",
+        "gstn doc fmt qms/procedures/QP-07-001.md"
+      ],
+      "name": "doc fmt",
+      "output": {
+        "properties": {
+          "changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "check": {
+            "type": "boolean"
+          },
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "skipped": {
+            "items": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "not_utf8",
+                    "too_large",
+                    "not_a_document",
+                    "doctype_invalid"
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "reason"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "unchanged": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "check",
+          "changed",
+          "unchanged",
+          "skipped",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Format the documents of the working tree's repository (one sentence per line; the type's field and attribute order). Local only: nothing is sent to the server."
+    },
+    {
+      "args": [
+        {
+          "description": "Report only these files or directories (every document is read; default: the whole repository).",
+          "kind": "positional",
+          "name": "path",
+          "repeatable": true,
+          "required": false
+        },
+        {
+          "description": "Report broken references (ref_broken) as warnings while migrating; the server's forge/doc-lint decides.",
+          "kind": "flag",
+          "name": "--migration-warnings",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn doc lint",
+        "gstn doc lint safety --json",
+        "gstn doc lint --migration-warnings"
+      ],
+      "name": "doc lint",
+      "output": {
+        "properties": {
+          "doctype_files": {
+            "type": "integer"
+          },
+          "errors": {
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "problems": {
+                  "items": {
+                    "properties": {
+                      "error_code": {
+                        "enum": [
+                          "FG-DOC-0001",
+                          "FG-DOC-0003"
+                        ]
+                      },
+                      "level": {
+                        "enum": [
+                          "error",
+                          "warning"
+                        ]
+                      },
+                      "line": {
+                        "type": "integer"
+                      },
+                      "rule": {
+                        "type": "string"
+                      },
+                      "subject": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "line",
+                      "rule",
+                      "subject",
+                      "level",
+                      "error_code"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "problems_dropped": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "path",
+                "problems",
+                "problems_dropped"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "incomplete": {
+            "required": [
+              "error_code",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "markdown_files": {
+            "type": "integer"
+          },
+          "migration_warnings": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "files",
+          "errors",
+          "warnings",
+          "markdown_files",
+          "doctype_files",
+          "migration_warnings",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Check the working tree's documents against their types (.forge/doctypes) and each other: the same lint as the forge/doc-lint check. Local only: nothing is sent to the server."
+    },
+    {
+      "args": [
+        {
           "description": "The project id.",
           "kind": "option",
           "name": "--project",

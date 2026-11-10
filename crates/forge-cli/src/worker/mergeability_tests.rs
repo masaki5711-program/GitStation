@@ -1213,6 +1213,57 @@ async fn a_broken_specification_fails_spec_lint() {
     w.t.drop_now().await;
 }
 
+async fn doc_lint_run(w: &World, head: &str) -> Option<forge_db::checks::StoredCheckRun> {
+    forge_db::checks::check_runs(&w.t.db, w.project, &oid(head))
+        .await
+        .expect("runs")
+        .into_iter()
+        .find(|r| r.name.as_str() == forge_core::checks::DOC_LINT_CHECK)
+}
+
+/// Plan 13 stage 2: the same `check.spec_index` job writes `forge/doc-lint`
+/// for the head's documents (`.md` naming a `doctype`, any folder): a
+/// broken reference is a `failure` (Q13). (`success` / `neutral`:
+/// forge-checks' doc_lint tests.)
+#[tokio::test]
+async fn a_merge_request_version_gets_its_doc_lint_run() {
+    let mut w = World::new().await;
+    let base = commit_files(&w.path, None, &[("README", "base\n")]);
+    w.push("main", Some(&base)).await;
+    let doc =
+        "---\ndoctype: qms.manual\nid: QM-001\ntitle: t\nowner: qa\n---\n\n本文。[[QM-404]]\n";
+    let head = commit_files(
+        &w.path,
+        Some(&base),
+        &[
+            (
+                ".forge/doctypes/qms.manual.yml",
+                "name: qms.manual\nid_pattern: '^QM-\\d{3}$'\n",
+            ),
+            ("qms/QM-001.md", doc),
+        ],
+    );
+    w.push("feature", Some(&head)).await;
+    let _mr = w.open("feature", "main").await;
+    w.drain().await;
+    let run = doc_lint_run(&w, &head).await.expect("a doc-lint run");
+    assert_eq!(
+        run.conclusion,
+        Some(forge_core::CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains("qms/QM-001.md:8 ref_broken — QM-404 [FG-DOC-0001]"),
+        "{}",
+        run.summary
+    );
+    assert_eq!(run.annotations.len(), 1);
+    assert_eq!(run.reported_by, None);
+    w.t.drop_now().await;
+}
+
 fn missing_spec_index_job(w: &World, attempts: u8, request: &str) -> forge_db::jobs::NewJob {
     let mut job = forge_db::checks::spec_index::spec_index_job(
         &forge_db::checks::spec_index::SpecIndexRequest {
@@ -1256,8 +1307,10 @@ async fn a_spec_index_job_that_dies_answers_error_for_both_checks() {
         matches!(second, forge_db::jobs::Ran::Dead { .. }),
         "{second:?}"
     );
-    let runs = spec_runs(&w, &"d".repeat(40)).await;
+    let mut runs = spec_runs(&w, &"d".repeat(40)).await;
     assert_eq!(runs.len(), 2, "{runs:?}");
+    runs.extend(doc_lint_run(&w, &"d".repeat(40)).await);
+    assert_eq!(runs.len(), 3, "forge/doc-lint too: {runs:?}");
     for run in &runs {
         assert_eq!(run.conclusion, Some(forge_core::CheckConclusion::Error));
         assert!(run.summary.contains("req-index-dies"), "{}", run.summary);
@@ -1291,8 +1344,10 @@ async fn the_sweep_answers_a_reaped_spec_index_job_once() {
     crate::worker::spec_index_sweep::run_spec_index_sweep(&w.t.db)
         .await
         .expect("sweep");
-    let runs = spec_runs(&w, &"d".repeat(40)).await;
+    let mut runs = spec_runs(&w, &"d".repeat(40)).await;
     assert_eq!(runs.len(), 2, "{runs:?}");
+    runs.extend(doc_lint_run(&w, &"d".repeat(40)).await);
+    assert_eq!(runs.len(), 3, "forge/doc-lint too: {runs:?}");
     for run in &runs {
         assert_eq!(run.conclusion, Some(forge_core::CheckConclusion::Error));
         assert!(run.summary.contains("FG-DB-0007"), "{}", run.summary);

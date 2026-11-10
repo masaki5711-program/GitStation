@@ -130,6 +130,11 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::RequirementUntested
         | ErrorCode::RequirementTagUnknown
         | ErrorCode::SpecIndexIncomplete
+        // Plan 13 stage 2: document lint outcomes (never a merge's).
+        | ErrorCode::DocLintProblem
+        | ErrorCode::DocIndexBounded
+        | ErrorCode::DoctypeDefinitionInvalid
+        | ErrorCode::DocFormatWouldChange
         // M3 X5: answers of the context API (never a merge's).
         | ErrorCode::RequirementNotFound
         | ErrorCode::ContextWithheld

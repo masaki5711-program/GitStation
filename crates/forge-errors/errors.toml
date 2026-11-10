@@ -562,6 +562,60 @@ diagnosis = "The log event carries `route`, `project_id`, `requirement` and `com
 fix = "Use an id the revision defines, or the revision that defines it (gstn spec versions --project <id>)."
 test = "an_unknown_requirement_is_not_found"
 
+# --- DOC: documents in the plan 13 format (forge-doc; ADR-0026) ---------------
+
+[[error]]
+code = "FG-DOC-0001"
+name = "DocLintProblem"
+http_status = 422
+severity = "info"
+user_message_ja = "文書が規則に合っていません。一覧のファイルと行を直してください。"
+user_message_en = "A document breaks a rule. Fix the files and lines listed."
+user_message_id = "Sebuah dokumen melanggar aturan. Perbaiki berkas dan baris yang dicantumkan."
+cause = "The document lint (forge_doc::lint, plan 13 §5, ADR-0026) found a problem in a document: a `.md` file whose front matter names a `doctype`, in any folder. Two places run the same lint on the same bytes: the check `forge/doc-lint` (written by the `check.spec_index` job on a merge request version's head; it concludes `failure`) and `gstn doc lint` on the working tree (exit 1). Each problem is `path:line rule [subject]`. Rules: the text (forge_doc::document: too_large over 1 MiB, not_utf8, front matter syntax, blocks, references, html_not_allowed), the front matter (field_missing, field_invalid, field_unknown, classification_invalid / _below_default / _conflict, id_invalid, id_not_filename, id_duplicate, translation_invalid, retired_invalid), the type (doctype_unknown: no `.forge/doctypes/<type>.yml`; doctype_invalid: that definition cannot be used — FG-DOC-0003), the body (section_missing, section_order, block_kind_unknown, block_id_missing / _invalid / _duplicate, block_body_empty, block_outside_section, attr_unknown, attr_invalid, replaced_by_not_deprecated), references (ref_broken: the id or block is not in this repository; ref_kind_mismatch, ref_doctype_mismatch) and the type's own rules (e.g. every_hazard_has_control). Broken references are errors (plan 13 Q13); `gstn doc lint --migration-warnings` reports `ref_broken` as a warning instead, locally only (the repository setting that lowers them on the server with an expiry is not built yet). Not a server fault: the files are the repository's content."
+diagnosis = "Locally: gstn doc lint (or gstn doc lint <path> --json: each problem with path, line, rule, subject, level). On the server: gstn checks list --project <id> --sha <head> (forge/doc-lint; the summary and the annotations list each problem). The job's log event `forge.spec_index.recorded` carries `request_id`, `project_id`, `iid`, `head_sha` and `doc_lint_conclusion`."
+fix = "Correct the document (or its type's definition) at the listed line in the merge request; run gstn doc lint before pushing. A reference to a document not yet in GitStation: add that document first (or, while migrating locally, pass --migration-warnings). Nothing to change on the server."
+test = "a_doc_lint_problem_fails_with_doc_lint_problem"
+
+[[error]]
+code = "FG-DOC-0002"
+name = "DocIndexBounded"
+http_status = 409
+severity = "warn"
+user_message_ja = "文書が多すぎるか大きすぎるため、一部しか検査できていません。結果は読めた範囲のものです。"
+user_message_en = "Only part of the documents could be checked: there are too many, or they are too large. The results are about what was read."
+user_message_id = "Hanya sebagian dokumen yang dapat diperiksa: terlalu banyak atau terlalu besar. Hasilnya hanya untuk bagian yang terbaca."
+cause = "Reading a revision's documents for the document lint stops at its bounds rather than run unbounded, and says so instead of passing. Server (`forge/doc-lint`, forge-checks doc_lint DocLimits): the head's tree listing over 50000 entries or 8 MiB (`doc_tree`), more than 2000 `.md` files (`doc_files`), a `.md` over 4 MiB (`doc_file_too_large`: not read), more than 32 MiB of `.md` in all (`doc_bytes`), more than 64 type definitions (`doctype_files`); the run concludes `neutral` when it found no problem (a broken reference alone is no failure then: the target may be in what was not read). Client (`gstn doc lint` / `gstn doc fmt`, forge-client doc): more than 5000 `.md` files (`doc_files`), more than 64 MiB of `.md` (`doc_bytes`), a `git ls-files` listing over 16 MiB (`doc_tree`), more than 64 type definitions (`doctype_files`), or a file name that is not UTF-8 (`path_not_utf8`); gstn exits 1 with this code when it found no other problem. Not a server fault."
+diagnosis = "The run's summary (server) or the warning line on stderr / `incomplete.reason` in --json (gstn) names the bound. Count the Markdown files: git ls-files '*.md' | wc -l. The job's log event `forge.spec_index.recorded` carries `doc_incomplete` with `request_id`."
+fix = "Keep the repository within the bounds: fewer or smaller Markdown files (split a large document; plan 13 §8.2 suggests at most 1500 lines), or move generated Markdown out of the repository. Nothing to change on the server."
+test = "a_bounded_doc_index_is_never_a_silent_pass"
+
+[[error]]
+code = "FG-DOC-0003"
+name = "DoctypeDefinitionInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "文書の型の定義（.forge/doctypes/ の YAML）を読めません。型の定義を直してください。その型の文書は検査できません。"
+user_message_en = "A document type definition (the YAML under .forge/doctypes/) cannot be read. Fix the definition; documents of that type cannot be checked."
+user_message_id = "Definisi tipe dokumen (YAML di .forge/doctypes/) tidak dapat dibaca. Perbaiki definisinya; dokumen bertipe itu tidak dapat diperiksa."
+cause = "`.forge/doctypes/<type>.yml` (forge_doc::doctype::parse_doctype, plan 13 §5, ADR-0026) is refused: over 64 KiB (doctype_too_large), not UTF-8 (doctype_not_utf8), its `name` is not its file name (doctype_name_not_filename), an unknown key (doctype_unknown_key), an unknown rule (doctype_rule_unknown), a pattern that is not a valid regular expression (doctype_pattern_invalid), an unknown value type (doctype_type_unknown), or another shape error (doctype_invalid). The definition's own problem is reported on the `.yml` file; every document of that type gets `doctype_invalid` (its type's rules cannot be applied). `forge/doc-lint` concludes `failure`; `gstn doc lint` exits 1 with this code; `gstn doc fmt` leaves the documents of that type as they are (their field and attribute order is the type's) and exits 1 with this code. Not a server fault."
+diagnosis = "gstn doc lint .forge/doctypes --json lists the definition's problem with its line and rule; on the server the forge/doc-lint run's annotations name `.forge/doctypes/<type>.yml`."
+fix = "Correct the definition at the listed line (plan 13 §5 describes the keys), then run gstn doc lint again."
+test = "an_invalid_doctype_definition_is_doctype_definition_invalid"
+
+[[error]]
+code = "FG-DOC-0004"
+name = "DocFormatWouldChange"
+http_status = 422
+severity = "info"
+user_message_ja = "整形されていない文書があります。gstn doc fmt で整形してください。"
+user_message_en = "Some documents are not formatted. Format them with gstn doc fmt."
+user_message_id = "Ada dokumen yang belum diformat. Format dengan gstn doc fmt."
+cause = "`gstn doc fmt --check` (forge_doc::fmt::format_document, ADR-0026 §4: one sentence per line, the front matter's keys and a block's attributes in the type's order) found a document whose formatted bytes differ from the file. Nothing was written (--check never writes). Only documents in the plan 13 format are formatted: an older `spec:` document or a Markdown file without a `doctype` is left alone."
+diagnosis = "gstn doc fmt --check --json lists `changed` (the files that would change). Run gstn doc fmt <path> and look at git diff to see what the formatting does."
+fix = "Run gstn doc fmt (without --check) and commit the result."
+test = "fmt_check_exits_non_zero_when_a_file_would_change"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]
@@ -1705,8 +1759,8 @@ severity = "warn"
 user_message_ja = "出力を書き込めませんでした。出力先が閉じられていないか確認してください。"
 user_message_en = "The output could not be written. Check that the output is not closed."
 user_message_id = "Output tidak dapat ditulis. Pastikan tujuan output tidak tertutup."
-cause = "Writing to standard output or standard error failed (a closed pipe, a full disk, a redirected file that cannot be written) after the command ran."
-diagnosis = "The detail line carries `stream` (stdout or stderr) and the OS error kind. A command that changes state (`auth login`, `auth logout`, `api` with a body) has already done its work when this code appears: check with `gstn auth status`."
+cause = "Writing to standard output or standard error failed (a closed pipe, a full disk, a redirected file that cannot be written) after the command ran. Also `gstn doc fmt` (plan 13 stage 2) failing to write a formatted document (`stream=file reason=write_failed`): it writes a temporary file beside the document and renames it over the document, so a document is never half written; the temporary file is removed on failure."
+diagnosis = "The detail line carries `stream` (stdout, stderr, or file for `gstn doc fmt`) and the OS error kind. A command that changes state (`auth login`, `auth logout`, `api` with a body) has already done its work when this code appears: check with `gstn auth status`."
 fix = "Fix the redirection or the reader of the pipe and run the read-only command again; exit code 1."
 test = "closed_stdout_is_output_failed"
 
@@ -1731,8 +1785,8 @@ severity = "info"
 user_message_ja = "入力を読めませんでした。gstn を起動したプログラム（AI エージェントの MCP クライアントなど）を確かめてください。"
 user_message_en = "The input could not be read. Check the program that started gstn (an AI agent's MCP client, for example)."
 user_message_id = "Masukan tidak dapat dibaca. Periksa program yang menjalankan gstn (misalnya klien MCP agen AI)."
-cause = "`gstn mcp` (M3 X5) reads JSON-RPC messages from stdin and the read failed with an I/O error other than the end of input (a closed pipe or an unexpected end of file end the server cleanly with exit 0). The MCP client's transport broke: the process that started gstn went away abnormally, or stdin is something unreadable. Nothing on the server is affected."
-diagnosis = "The detail line carries `reason=stdin_unreadable` and `kind` (the I/O error kind). Look at the MCP client's own log for why its pipe failed; run `gstn mcp < /dev/null` to see that gstn itself starts and ends cleanly."
+cause = "`gstn mcp` (M3 X5) reads JSON-RPC messages from stdin and the read failed with an I/O error other than the end of input (a closed pipe or an unexpected end of file end the server cleanly with exit 0). The MCP client's transport broke: the process that started gstn went away abnormally, or stdin is something unreadable. Nothing on the server is affected. Also `gstn doc fmt` / `gstn doc lint` (plan 13 stage 2, local only) when the working tree cannot be read: `reason=cwd_unreadable` (the current directory), `reason=git_ls_files_failed` (`git ls-files` in the repository's root is not runnable, fails, or passes its 30 s limit: git_not_runnable, exit <n>, git_timeout), or `reason=file_unreadable` (a listed document or type definition cannot be opened or read; a file deleted from the working tree is passed over, not an error)."
+diagnosis = "The detail line carries `reason=stdin_unreadable` and `kind` (the I/O error kind); for gstn doc, the reason above and `kind`: run `git ls-files` in the repository yourself and check the file's permissions. Look at the MCP client's own log for why its pipe failed; run `gstn mcp < /dev/null` to see that gstn itself starts and ends cleanly."
 fix = "Restart the MCP client. If it keeps failing, check that the client starts gstn with a pipe on stdin (stdio transport), not a terminal or a file it closes."
 test = "a_broken_input_is_an_input_failure"
 

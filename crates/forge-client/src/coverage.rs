@@ -6,6 +6,11 @@
 //! gains a route that is not in this table (the C-1 gate), or when the table
 //! names a route the server no longer has.
 //!
+//! Commands that call no route at all are listed in [`LOCAL_COMMANDS`] with
+//! why (e.g. `doc fmt` / `doc lint`, plan 13 stage 2: they work on the
+//! working tree and never contact the server); the test
+//! `commands_without_a_route_are_local` keeps that list exact.
+//!
 //! Every route is already callable through `gstn api` (C-6); `Command` means a
 //! dedicated command exists, `Planned` names the series that adds it, and
 //! `BrowserOnly` marks a route only a web session can use (gstn holds a
@@ -736,6 +741,29 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/users/{id}/rename",
         Coverage::Command("user rename"),
     ),
+];
+
+/// Commands that call no API route, and why: local work only (C-1 counts
+/// them as "local", not as uncovered).
+pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
+    (
+        "auth logout",
+        "removes the token stored on this computer (never revokes it on the server)",
+    ),
+    (
+        "auth git-credential",
+        "the git credential helper: answers git from the stored token, or edits the global git config",
+    ),
+    (
+        "doc fmt",
+        "plan 13 stage 2: formats the working tree's documents with forge-doc; nothing is sent",
+    ),
+    (
+        "doc lint",
+        "plan 13 stage 2: the forge/doc-lint lint on the working tree with forge-doc; nothing is sent",
+    ),
+    ("help", "describes the commands from the registry"),
+    ("schema", "describes one command from the registry"),
 ];
 
 /// Routes outside `/api/v1` and how they are covered.
