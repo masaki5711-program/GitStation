@@ -349,6 +349,81 @@ pub fn join_cjk_lines(text: &str) -> String {
     out
 }
 
+/// For display: a section's Markdown (a [`Piece::Text`] or a block's body)
+/// with [`join_cjk_lines`] applied to its prose only. A paragraph's lines,
+/// and a list item with its continuation lines, are joined; code fences
+/// (kept byte for byte), headings, table rows, block quotes, thematic
+/// breaks and setext underlines are left as they are, one per line, so the
+/// Markdown keeps its structure. The web screen, MCP and an export draw
+/// this; the view keeps the text as written.
+pub fn display_markdown(markdown: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut run: Vec<&str> = Vec::new();
+    let mut fence: Option<&str> = None;
+    let flush = |run: &mut Vec<&str>, out: &mut Vec<String>| {
+        if !run.is_empty() {
+            out.push(join_cjk_lines(&run.join("\n")));
+            run.clear();
+        }
+    };
+    for line in markdown.split('\n') {
+        let trimmed = line.trim_start();
+        if let Some(marker) = fence {
+            out.push(line.to_owned());
+            if trimmed.starts_with(marker) {
+                fence = None;
+            }
+            continue;
+        }
+        let opens_fence = ["```", "~~~"].into_iter().find(|m| trimmed.starts_with(m));
+        if let Some(marker) = opens_fence {
+            flush(&mut run, &mut out);
+            out.push(line.to_owned());
+            fence = Some(marker);
+            continue;
+        }
+        if trimmed.is_empty() || is_structural(trimmed) {
+            flush(&mut run, &mut out);
+            out.push(line.to_owned());
+            continue;
+        }
+        if is_list_item(trimmed) {
+            flush(&mut run, &mut out);
+        }
+        run.push(line);
+    }
+    flush(&mut run, &mut out);
+    out.join("\n")
+}
+
+/// A line Markdown gives its own meaning (never joined with another).
+fn is_structural(trimmed: &str) -> bool {
+    let only = |c: char| {
+        let t = trimmed.trim_end();
+        t.len() >= 3 && t.chars().all(|x| x == c || x == ' ')
+    };
+    trimmed.starts_with('#')
+        || trimmed.starts_with('|')
+        || trimmed.starts_with('>')
+        || trimmed.starts_with("<!--")
+        || only('-')
+        || only('*')
+        || only('_')
+        || (trimmed.trim_end().chars().all(|c| c == '=') && !trimmed.trim_end().is_empty())
+}
+
+/// `- `, `* `, `+ `, `1. ` or `1) ` (a list item's first line).
+fn is_list_item(trimmed: &str) -> bool {
+    if ["- ", "* ", "+ "].iter().any(|m| trimmed.starts_with(m)) {
+        return true;
+    }
+    let digits = trimmed.bytes().take_while(u8::is_ascii_digit).count();
+    (1..=9).contains(&digits)
+        && trimmed
+            .get(digits..)
+            .is_some_and(|rest| rest.starts_with(". ") || rest.starts_with(") "))
+}
+
 /// CJK ideographs, kana, full-width forms and CJK punctuation.
 fn is_cjk(c: char) -> bool {
     matches!(c as u32,

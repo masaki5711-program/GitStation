@@ -3,7 +3,10 @@
 //! The document view on the synthetic examples of plan 13
 //! (`docs/plan/13-examples/`, synthetic data only).
 
-use super::{join_cjk_lines, view_with_body, Piece, Resolver, Target, TargetDoc, VIEW_VERSION};
+use super::{
+    display_markdown, join_cjk_lines, view_with_body, Piece, Resolver, Target, TargetDoc,
+    VIEW_VERSION,
+};
 use crate::document::{parse_document, Classification, TypeDefault};
 
 const QP: &str = include_str!("../../../docs/plan/13-examples/qms/procedures/QP-07-001.md");
@@ -225,4 +228,29 @@ fn japanese_lines_join_without_a_space_and_others_with_one() {
     assert_eq!(join_cjk_lines("あ。\nい。\nう。"), "あ。い。う。");
     // List continuation indentation goes with the break.
     assert_eq!(join_cjk_lines("- あ。\n  い。"), "- あ。い。");
+}
+
+#[test]
+fn display_markdown_joins_prose_and_leaves_structure_alone() {
+    // Prose: one sentence per line becomes one paragraph.
+    assert_eq!(display_markdown("一つ目。\n二つ目。"), "一つ目。二つ目。");
+    assert_eq!(display_markdown("one.\ntwo."), "one. two.");
+    // A list: every item stays an item; an item's own lines are joined.
+    assert_eq!(
+        display_markdown("- あ。\n  い。\n- う。\n1. え。\n2) お。"),
+        "- あ。い。\n- う。\n1. え。\n2) お。"
+    );
+    // Headings, tables, quotes, rules and setext underlines are not joined.
+    assert_eq!(
+        display_markdown(
+            "### 見出し\n本文。\n続き。\n| a | b |\n|---|---|\n> 引用。\n> 続き。\n---\n題\n==="
+        ),
+        "### 見出し\n本文。続き。\n| a | b |\n|---|---|\n> 引用。\n> 続き。\n---\n題\n==="
+    );
+    // Code fences are kept byte for byte, whatever is inside.
+    let code = "前。\n```\nfn a() {}\n日本\n語\n```\n後。\n~~~\nx\ny\n~~~";
+    assert_eq!(display_markdown(code), code);
+    // Paragraph ends stay.
+    assert_eq!(display_markdown("一。\n\n二。\n三。"), "一。\n\n二。三。");
+    assert_eq!(display_markdown(""), "");
 }
