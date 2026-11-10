@@ -211,8 +211,9 @@ pub async fn register(
 }
 
 /// Change a runner (`ci_runner.updated`); `None`: no such runner.
-/// Disabling it also stops its token at the next request (authentication
-/// reads `enabled`). An update that changes nothing writes nothing.
+/// Disabling it also stops its token and the job tokens it holds at the
+/// next request (authentication reads `enabled` for both; the jobs come
+/// back through the reaper once their leases end). An update that changes nothing writes nothing.
 pub async fn update(
     db: &Db,
     ctx: &ChangeContext,
@@ -349,7 +350,8 @@ fn matches(
 }
 
 /// Resolve a presented CI token (module docs). `FG-AUTH-0001` (`reason`
-/// `malformed`, `unknown`, `mismatch`, `runner_disabled`; `credential`);
+/// `malformed`, `unknown`, `mismatch`, `runner_disabled` — a runner token,
+/// or a job token its disabled runner holds; `credential`);
 /// a job token that expired or was revoked is returned with its state
 /// (`authorize()` refuses it with the job's id). The runner's
 /// `last_contact_at` is written at most every [`CONTACT_INTERVAL_S`]; a
@@ -437,7 +439,7 @@ async fn touch(conn: &mut PgConnection, request_id: &RequestId, runner: i64) {
     }
 }
 
-type JobTokenRow = (i64, Vec<u8>, i64, i64, i64, String, bool, bool);
+type JobTokenRow = (i64, Vec<u8>, i64, i64, i64, String, bool, bool, bool);
 
 async fn job_identity(
     conn: &mut PgConnection,
@@ -447,20 +449,28 @@ async fn job_identity(
     let kind = CiTokenKind::Job;
     // The expiry is the database's clock (ADR-0029 obligation 2).
     let row: Option<JobTokenRow> = sqlx::query_as(
-        "SELECT id, secret_sha256, job_id, runner_id, project_id, sha, \
-           revoked_at IS NOT NULL, expires_at <= now() \
-         FROM forge.ci_job_tokens WHERE public_id = $1",
+        "SELECT t.id, t.secret_sha256, t.job_id, t.runner_id, t.project_id, t.sha, \
+           t.revoked_at IS NOT NULL, t.expires_at <= now(), r.enabled \
+         FROM forge.ci_job_tokens t JOIN forge.ci_runners r ON r.id = t.runner_id \
+         WHERE t.public_id = $1",
     )
     .bind(public_id)
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| query_error("ci_runners.authenticate.job", e))?;
-    let Some((id, hash, job_id, runner_id, project, sha, revoked, expired)) = row else {
+    let Some((id, hash, job_id, runner_id, project, sha, revoked, expired, enabled)) = row else {
         std::hint::black_box(token::verify(&DUMMY_HASH, plain.secret()));
         return Err(rejected(kind, "unknown"));
     };
     if !matches(kind, id, &hash, plain.secret())? {
         return Err(rejected(kind, "mismatch").with_context("public_id", public_id));
+    }
+    // A disabled runner's job tokens stop with its runner token (M4 C3
+    // review): disabling is the administrator's stop for that runner.
+    if !enabled {
+        return Err(rejected(kind, "runner_disabled")
+            .with_context("runner_id", runner_id)
+            .with_context("job_id", job_id));
     }
     let sha = ObjectId::parse(&sha).map_err(|_| {
         ForgeError::new(ErrorCode::CredentialDataInvalid)

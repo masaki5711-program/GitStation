@@ -866,10 +866,11 @@ impl Transition {
                    updated_at = now(), finished_at = now() \
                  WHERE pipeline_id = $1 AND status IN ('created', 'pending', 'running')"
             }
+            // A retry starts the lease-loss count again (M4 C3 review).
             Self::Retry => {
                 "UPDATE forge.ci_jobs SET \
                    status = CASE WHEN cardinality(needs) = 0 THEN 'pending' ELSE 'created' END, \
-                   attempt = attempt + 1, runner_id = NULL, lease_until = NULL, \
+                   attempt = attempt + 1, runner_id = NULL, lease_until = NULL, lease_losses = 0, \
                    error_code = NULL, started_at = NULL, finished_at = NULL, updated_at = now() \
                  WHERE pipeline_id = $1 AND status IN ('failed', 'canceled')"
             }

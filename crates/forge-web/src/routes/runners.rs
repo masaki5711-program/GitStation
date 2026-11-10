@@ -548,6 +548,9 @@ pub async fn append_log(
         if input.text.is_empty() {
             return Err(param_invalid("text", "empty"));
         }
+        if input.text.contains('\0') {
+            return Err(param_invalid("text", "nul"));
+        }
         if !(0..runners::MAX_LOG_CHUNKS).contains(&input.seq) {
             return Err(param_invalid("seq", "out_of_range"));
         }

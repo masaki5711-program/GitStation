@@ -17,6 +17,15 @@
 //! `running` with a lease, the pipeline `running`, and one job token is
 //! issued (expiring after the job's timeout + [`TOKEN_GRACE_S`]).
 //!
+//! The same pick holds the project row and its namespace row `FOR SHARE
+//! SKIP LOCKED` until the token is in (ADR-0029 obligation 1): a deletion
+//! locks the project row `FOR UPDATE` and a move (a group's too) locks the
+//! subtree's namespace rows `FOR NO KEY UPDATE` before they revoke the
+//! project's tokens, so a claim either skips a project being deleted or
+//! moved, or commits its token before their revocation runs (which then
+//! waits for it, sees the token and revokes it). The claim waits on neither
+//! (`SKIP LOCKED`), so no lock cycle with them exists.
+//!
 //! **Lock order** (no deadlock with cancel / retry, which lock the pipeline
 //! first): completion and the reaper lock the pipeline row, then the job.
 //!
@@ -147,10 +156,11 @@ pub async fn claim(db: &Db, runner: i64) -> Result<Option<Claimed>, ForgeError> 
                 "SELECT j.id, j.pipeline_id FROM forge.ci_jobs j \
                  JOIN forge.ci_pipelines p ON p.id = j.pipeline_id \
                  JOIN forge.projects pr ON pr.id = j.project_id \
+                 JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = pr.id \
                  WHERE j.status = 'pending' AND j.tags <@ $1::text[] \
                    AND p.status IN ('pending', 'running') AND pr.deleted_at IS NULL \
                  ORDER BY j.id LIMIT 1 \
-                 FOR UPDATE OF j, p SKIP LOCKED",
+                 FOR UPDATE OF j, p SKIP LOCKED FOR SHARE OF pr, n SKIP LOCKED",
             )
             .bind(&tags)
             .fetch_optional(&mut *tx)
@@ -308,7 +318,8 @@ pub enum Appended {
 /// Append `body` as chunk `seq` of `job`'s attempt `attempt` (append only).
 /// Errors: `FG-CI-0004` (the lease, as [`heartbeat`]), `FG-CI-0006` past
 /// [`MAX_LOG_CHUNKS`] / [`MAX_LOG_BYTES`], `FG-WEB-0006` for an empty or
-/// oversized chunk or a `seq` out of range (the route checks first).
+/// oversized chunk, one with a NUL, or a `seq` out of range (the route
+/// checks first).
 pub async fn append_log(
     db: &Db,
     runner: i64,
@@ -318,7 +329,13 @@ pub async fn append_log(
     body: &str,
 ) -> Result<Appended, ForgeError> {
     const QUERY: &str = "ci_runners.append_log";
-    if body.is_empty() || body.len() > MAX_LOG_CHUNK || !(0..MAX_LOG_CHUNKS).contains(&seq) {
+    // PostgreSQL `text` cannot hold U+0000: refused here, not as a
+    // database error.
+    if body.is_empty()
+        || body.len() > MAX_LOG_CHUNK
+        || body.contains('\0')
+        || !(0..MAX_LOG_CHUNKS).contains(&seq)
+    {
         return Err(ForgeError::new(ErrorCode::RequestInvalid)
             .with_context("reason", "log_chunk_invalid")
             .with_context("job_id", job)
@@ -578,12 +595,23 @@ pub struct Reaped {
     pub lease_losses: i32,
 }
 
+/// What one reaper pass did: the jobs taken back, and the jobs it could not
+/// take back (each with its error; the caller logs them). One failing job
+/// never stops the pass.
+#[derive(Debug, Default)]
+pub struct ReapPass {
+    pub reaped: Vec<Reaped>,
+    pub failed: Vec<(i64, ForgeError)>,
+}
+
 /// One reaper pass (module docs): at most [`REAP_BATCH`] held jobs whose
 /// lease ended, one transaction each (pipeline, then job: the lock order of
 /// cancel and completion). A job another pass or a completion holds is
 /// skipped (`SKIP LOCKED`), and the statement re-checks the lease, so a
-/// job is returned to the queue exactly once.
-pub async fn reap(db: &Db) -> Result<Vec<Reaped>, ForgeError> {
+/// job is returned to the queue exactly once. A job whose transaction
+/// fails is rolled back and listed in [`ReapPass::failed`]; the pass goes
+/// on with the next. Errors: only the scan itself.
+pub async fn reap(db: &Db) -> Result<ReapPass, ForgeError> {
     const QUERY: &str = "ci_runners.reap";
     let due: Vec<(i64, i64)> = db
         .within(QUERY, async {
@@ -598,13 +626,18 @@ pub async fn reap(db: &Db) -> Result<Vec<Reaped>, ForgeError> {
             .map_err(|e| query_error(QUERY, e))
         })
         .await?;
-    let mut out = Vec::with_capacity(due.len());
+    let mut pass = ReapPass {
+        reaped: Vec::with_capacity(due.len()),
+        failed: Vec::new(),
+    };
     for (job, pipeline) in due {
-        if let Some(reaped) = db.within(QUERY, reap_one(db, job, pipeline)).await? {
-            out.push(reaped);
+        match db.within(QUERY, reap_one(db, job, pipeline)).await {
+            Ok(Some(reaped)) => pass.reaped.push(reaped),
+            Ok(None) => {}
+            Err(e) => pass.failed.push((job, e.with_context("job_id", job))),
         }
     }
-    Ok(out)
+    Ok(pass)
 }
 
 type ReapRow = (i64, i64, String, i32, i32);

@@ -426,13 +426,14 @@ async fn an_expired_lease_is_returned_to_the_queue_exactly_once() {
     let (a, b) = tokio::join!(lease::reap(&w.t.db), lease::reap(&w.t.db));
     let reaped: Vec<_> = a
         .expect("reap")
+        .reaped
         .into_iter()
-        .chain(b.expect("reap"))
+        .chain(b.expect("reap").reaped)
         .collect();
     assert_eq!(reaped.len(), 1, "{reaped:?}");
     assert_eq!(reaped[0].outcome, "requeued");
     assert_eq!(reaped[0].runner_id, r);
-    assert!(lease::reap(&w.t.db).await.expect("reap").is_empty());
+    assert!(lease::reap(&w.t.db).await.expect("reap").reaped.is_empty());
     assert_eq!(
         w.scalar(&format!(
             "SELECT status || ':' || attempt || ':' || lease_losses FROM forge.ci_jobs WHERE id = {}",
@@ -473,7 +474,7 @@ async fn the_third_lost_lease_fails_the_job() {
         c.job_id
     ))
     .await;
-    let reaped = lease::reap(&w.t.db).await.expect("reap");
+    let reaped = lease::reap(&w.t.db).await.expect("reap").reaped;
     assert_eq!(reaped.len(), 1);
     assert_eq!((reaped[0].outcome, reaped[0].lease_losses), ("failed", 3));
     assert_eq!(
@@ -755,4 +756,233 @@ async fn ci_logs_have_no_read_path_before_c5() {
     let lease = include_str!("lease.rs");
     assert!(!lease.contains("SELECT body"));
     t.drop_now().await;
+}
+
+/// Wait (bounded, 10 s) until `task` finished or a backend waits on a lock
+/// in a statement containing `fragment` — whichever the code under test
+/// does — so a race test drives one fixed interleaving either way.
+async fn until_done_or_waiting<T>(t: &FreshDb, task: &tokio::task::JoinHandle<T>, fragment: &str) {
+    let mut su = t.superuser().await;
+    for _ in 0..500 {
+        if task.is_finished() {
+            return;
+        }
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' \
+             AND datname = current_database() AND strpos(query, $1) > 0",
+        )
+        .bind(fragment)
+        .fetch_one(&mut su)
+        .await
+        .expect("pg_stat_activity");
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the claim neither finished nor waited on a lock within 10 s");
+}
+
+/// Review fix (ADR-0029 obligation 1): a project deletion or move that
+/// revokes the project's job tokens while a claim is between its pick and
+/// its token INSERT never leaves a live token behind. The deletion / move
+/// is held open right after its revocation (the moment of the race); the
+/// claim runs, then the deletion / move commits.
+#[tokio::test]
+async fn a_delete_or_move_racing_a_claim_never_leaves_a_live_token() {
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    let project = w.web.project_id.get();
+    let alice = w.alice.get();
+    let racing = [
+        (
+            "project_deleted",
+            vec![
+                format!("SELECT 1 FROM forge.projects WHERE id = {project} FOR UPDATE"),
+                format!(
+                    "UPDATE forge.projects SET deleted_at = now(), \
+                     purge_after = now() + interval '1 day', deleted_by = {alice} \
+                     WHERE id = {project}"
+                ),
+            ],
+        ),
+        (
+            "project_moved",
+            // A group's move locks the subtree's namespace rows, not the
+            // project row.
+            vec![format!(
+                "SELECT 1 FROM forge.namespaces WHERE kind = 'project' AND owner_id = {project} \
+                 FOR NO KEY UPDATE"
+            )],
+        ),
+    ];
+    // The move first: after the deletion the project is pending deletion
+    // and no claim would pick it anyway.
+    for (why, mut statements) in racing.into_iter().rev() {
+        w.pipeline(
+            if why == "project_moved" { 'b' } else { 'c' },
+            false,
+            vec![job("build", &[], &[], &[])],
+        )
+        .await;
+        statements.push(format!(
+            "UPDATE forge.ci_job_tokens SET revoked_at = now(), revoked_reason = '{why}' \
+             WHERE project_id = {project} AND revoked_at IS NULL"
+        ));
+        let held = w.t.hold_audited(("project", project), &statements).await;
+        let db = w.t.db.clone();
+        let claim = tokio::spawn(async move { lease::claim(&db, r).await });
+        until_done_or_waiting(&w.t, &claim, "ci_job_tokens").await;
+        held.commit().await;
+        let claimed = claim.await.expect("join").expect("claim");
+        assert_eq!(
+            w.scalar(&format!(
+                "SELECT count(*)::text FROM forge.ci_job_tokens \
+                 WHERE project_id = {project} AND revoked_at IS NULL"
+            ))
+            .await,
+            "0",
+            "{why}: a live job token survived the race (claimed {:?})",
+            claimed.map(|c| c.job_id)
+        );
+    }
+    w.t.drop_now().await;
+}
+
+/// Review fix: a retry starts the lease-loss count again, so a job that
+/// failed at its third lost lease survives its first loss after a retry.
+#[tokio::test]
+async fn a_retried_job_survives_its_first_lost_lease() {
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    let p = w
+        .pipeline('b', false, vec![job("build", &[], &[], &[])])
+        .await;
+    let c = lease::claim(&w.t.db, r).await.expect("claim").expect("job");
+    let expire = format!(
+        "UPDATE forge.ci_jobs SET lease_until = now() - interval '1 second' WHERE id = {}",
+        c.job_id
+    );
+    w.exec(&format!(
+        "UPDATE forge.ci_jobs SET lease_losses = 2 WHERE id = {}",
+        c.job_id
+    ))
+    .await;
+    w.exec(&expire).await;
+    let reaped = lease::reap(&w.t.db).await.expect("reap").reaped;
+    assert_eq!(reaped[0].outcome, "failed");
+    pipelines::retry_pipeline_decided(
+        &w.t.db,
+        &ctx(Actor::User(w.alice), "req-retry"),
+        (w.web.project_id, p),
+        w.alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect("retry");
+    let again = lease::claim(&w.t.db, r).await.expect("claim").expect("job");
+    assert_eq!(again.job_id, c.job_id);
+    w.exec(&expire).await;
+    let reaped = lease::reap(&w.t.db).await.expect("reap").reaped;
+    assert_eq!((reaped[0].outcome, reaped[0].lease_losses), ("requeued", 1));
+    w.t.drop_now().await;
+}
+
+/// Review fix: disabling a runner stops the job tokens it holds too.
+#[tokio::test]
+async fn disabling_a_runner_refuses_its_job_tokens() {
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    w.pipeline('b', false, vec![job("build", &[], &[], &[])])
+        .await;
+    let c = lease::claim(&w.t.db, r).await.expect("claim").expect("job");
+    update(
+        &w.t.db,
+        &ctx(Actor::User(w.alice), "req-disable"),
+        r,
+        &RunnerUpdate {
+            enabled: Some(false),
+            ..RunnerUpdate::default()
+        },
+    )
+    .await
+    .expect("update")
+    .expect("runner");
+    let err = authenticate(&w.t.db, &rid(), &c.token.reveal())
+        .await
+        .expect_err("a disabled runner's job token");
+    assert_reason(&err, ErrorCode::Unauthenticated, "runner_disabled");
+    w.t.drop_now().await;
+}
+
+/// Review fix: a NUL character (PostgreSQL text cannot hold it) is a bad
+/// request, not a database error.
+#[tokio::test]
+async fn a_log_chunk_with_a_nul_is_a_bad_request() {
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    w.pipeline('b', false, vec![job("build", &[], &[], &[])])
+        .await;
+    let c = lease::claim(&w.t.db, r).await.expect("claim").expect("job");
+    let err = lease::append_log(&w.t.db, r, c.job_id, c.attempt, 0, "a\0b")
+        .await
+        .expect_err("nul");
+    assert_reason(&err, ErrorCode::RequestInvalid, "log_chunk_invalid");
+    w.t.drop_now().await;
+}
+
+/// Review fix: one job the reaper cannot take back does not stop the pass;
+/// the others are still returned to the queue.
+#[tokio::test]
+async fn one_failing_job_does_not_stop_the_reaper_pass() {
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    w.pipeline(
+        'b',
+        false,
+        vec![job("a", &[], &[], &[]), job("b", &[], &[], &[])],
+    )
+    .await;
+    let first = lease::claim(&w.t.db, r).await.expect("claim").expect("job");
+    let second = lease::claim(&w.t.db, r).await.expect("claim").expect("job");
+    // The first is reaped first (the older lease end) and its update fails.
+    w.exec(&format!(
+        "UPDATE forge.ci_jobs SET lease_until = now() - interval '2 seconds' WHERE id = {}; \
+         UPDATE forge.ci_jobs SET lease_until = now() - interval '1 second' WHERE id = {}; \
+         CREATE FUNCTION forge.test_refuse_reap() RETURNS trigger LANGUAGE plpgsql AS \
+           $fn$BEGIN RAISE EXCEPTION 'test: refused'; END$fn$; \
+         CREATE TRIGGER test_refuse_reap BEFORE UPDATE ON forge.ci_jobs FOR EACH ROW \
+           WHEN (OLD.id = {}) EXECUTE FUNCTION forge.test_refuse_reap();",
+        first.job_id, second.job_id, first.job_id
+    ))
+    .await;
+    let pass = lease::reap(&w.t.db).await;
+    assert_eq!(
+        w.scalar(&format!(
+            "SELECT status || ':' || attempt FROM forge.ci_jobs WHERE id = {}",
+            second.job_id
+        ))
+        .await,
+        "pending:2",
+        "the pass stopped at the failing job"
+    );
+    let pass = pass.expect("only the scan fails a pass");
+    assert_eq!(
+        pass.reaped.iter().map(|r| r.job_id).collect::<Vec<_>>(),
+        vec![second.job_id]
+    );
+    assert_eq!(pass.failed.len(), 1);
+    assert_eq!(pass.failed[0].0, first.job_id);
+    assert_eq!(pass.failed[0].1.code(), ErrorCode::DbQueryFailed);
+    // The failed job's transaction was rolled back: still held, retried by
+    // the next pass.
+    assert_eq!(
+        w.scalar(&format!(
+            "SELECT status || ':' || attempt FROM forge.ci_jobs WHERE id = {}",
+            first.job_id
+        ))
+        .await,
+        "running:1"
+    );
+    w.t.drop_now().await;
 }

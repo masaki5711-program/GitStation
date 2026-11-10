@@ -222,9 +222,14 @@ impl Pipelines {
 
 /// One reaper pass (the worker, every few seconds): each held job whose
 /// lease ended is requeued, failed (`FG-CI-0004`) or released, and logged
-/// once here as `forge.ci.job_lease_lost` (warn, `FG-CI-0004`).
+/// once here as `forge.ci.job_lease_lost` (warn, `FG-CI-0004`). A job the
+/// pass could not take back does not stop it: after the pass, the first
+/// such failure is returned (the worker's supervisor logs it with
+/// `error_code` and `job_id`) and every further one is logged here as
+/// `forge.ci.job_reap_failed` (error, its `error_code`), so each is logged
+/// once.
 pub async fn reap_leases(db: &Db, request_id: &RequestId) -> Result<usize, ForgeError> {
-    let reaped = lease::reap(db).await?;
+    let lease::ReapPass { reaped, failed } = lease::reap(db).await?;
     for r in &reaped {
         tracing::warn!(
             target: "forge_pipelines",
@@ -240,7 +245,22 @@ pub async fn reap_leases(db: &Db, request_id: &RequestId) -> Result<usize, Forge
             "job lease lost"
         );
     }
-    Ok(reaped.len())
+    let mut failed = failed.into_iter();
+    let Some((_, first)) = failed.next() else {
+        return Ok(reaped.len());
+    };
+    for (job_id, e) in failed {
+        tracing::error!(
+            target: "forge_pipelines",
+            event = "forge.ci.job_reap_failed",
+            request_id = %request_id,
+            error_code = e.code().id(),
+            job_id,
+            error = %e,
+            "job lease not taken back"
+        );
+    }
+    Err(first)
 }
 
 /// The worker's `FG-CI-0005` check: jobs waiting past

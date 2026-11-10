@@ -462,6 +462,21 @@ async fn a_lost_lease_is_a_conflict_and_bad_requests_are_refused() {
         )
         .await;
     assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
+    // A NUL cannot be stored as text: a bad request, not a database error.
+    let nul = w
+        .call(
+            "POST",
+            &job_uri(job_id, "log"),
+            Who::Bearer(token.clone()),
+            Some(json!({"attempt": attempt, "seq": 0, "text": "a\u{0}b"})),
+        )
+        .await;
+    assert_eq!(
+        (nul.status, nul.code()),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006"),
+        "{}",
+        nul.json
+    );
     w.t.exec_superuser(&format!(
         "UPDATE forge.ci_jobs SET lease_until = now() - interval '1 second' WHERE id = {job_id}"
     ))

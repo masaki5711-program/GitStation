@@ -8,7 +8,10 @@
 //!
 //! A failed run (the database: `FG-DB-0001` / `FG-DB-0002`) is returned and
 //! logged once per failure streak by the supervisor with `error_code` and
-//! `task=ci_lease_reaper`, then retried after the backoff.
+//! `task=ci_lease_reaper`, then retried after the backoff. A single job
+//! the pass could not take back does not stop the pass: the others are
+//! taken back first, then the first such failure is returned the same way
+//! (`reap_leases` logs any further ones itself).
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
