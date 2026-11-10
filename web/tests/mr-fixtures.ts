@@ -161,6 +161,50 @@ export function attempt(state: string, over: Record<string, unknown> = {}) {
   };
 }
 
+/** The check runs of the default head (`b` × 40). */
+export const CHECKS_API = `/api/v1/projects/7/commits/${'b'.repeat(40)}/checks`;
+
+export function checkRun(id: number, name: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    name,
+    head_sha: 'b'.repeat(40),
+    status: 'completed',
+    conclusion: 'success',
+    summary: '',
+    details_url: null,
+    annotations: [],
+    reported_by: { id: 9, username: 'sa-ci' },
+    revision: 1,
+    created_at: '2026-11-03T01:00:00.000000Z',
+    updated_at: '2026-11-03T01:00:00.000000Z',
+    completed_at: '2026-11-03T01:00:00.000000Z',
+    ...over,
+  };
+}
+
+export const checkRuns = (runs: unknown[]) => ({ schema_version: 1, head_sha: 'b'.repeat(40), check_runs: runs });
+
+export function conflicts(predictions: unknown[], scan: Record<string, unknown> = {}) {
+  return {
+    iid: 3,
+    head_sha: 'b'.repeat(40),
+    predictions,
+    scan: {
+      status: predictions.length === 0 ? 'none' : 'scanned',
+      reason: null,
+      stale: false,
+      scanned_head_sha: null,
+      scanned_target_sha: null,
+      scanned_at: null,
+      peers: 0,
+      pairs_tried: 0,
+      pairs_skipped: 0,
+      ...scan,
+    },
+  };
+}
+
 export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Handler> {
   return repoRoutes({
     [`GET ${MR_API}`]: () => json(200, { merge_requests: [mr(3)], next_before: null }),
@@ -172,6 +216,9 @@ export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Han
     [`GET ${MR_API}/3/versions/1/diff`]: () => json(200, versionDiff(1, DIFF)),
     // U2: the latest merge attempt (read while a merge runs).
     [`GET ${MR_API}/3/merge`]: () => json(200, { iid: 3, merge: null }),
+    // The detail under the status: the head's check runs and the predicted conflicts.
+    [`GET ${CHECKS_API}`]: () => json(200, checkRuns([])),
+    [`GET ${MR_API}/3/conflicts`]: () => json(200, conflicts([])),
     ...over,
   });
 }

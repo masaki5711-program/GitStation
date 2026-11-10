@@ -22,6 +22,7 @@ const project = (over: Record<string, unknown> = {}) => ({
   // U2: the merge sections (read-only here: no viewer flag).
   'GET /api/v1/projects/7/merge-settings': () => json(200, mergeSettings()),
   'GET /api/v1/projects/7/approval-rules': () => json(200, { rules: [] }),
+  'GET /api/v1/projects/7/integration-bindings': () => json(200, { items: [] }),
   'GET /api/v1/groups': () => page([]),
   'GET /api/v1/projects': () => page([]),
 });

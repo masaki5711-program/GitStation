@@ -18,13 +18,14 @@ import { formatDateTime } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { SESSION_KEY, useSession } from '../../session/session';
 import { AdminUsers } from './AdminUsers';
+import { Integrations } from './Integrations';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
 import { Notifications } from './Notifications';
 import { ServiceAccounts } from './ServiceAccounts';
 import { Tokens } from './Tokens';
 
-type Tab = 'tokens' | 'sessions' | 'notifications' | 'trash' | 'admin' | 'service-accounts';
+type Tab = 'tokens' | 'sessions' | 'notifications' | 'trash' | 'admin' | 'service-accounts' | 'integrations';
 
 export function Account({ path }: { path: string }) {
   const { t } = useTranslation();
@@ -32,7 +33,7 @@ export function Account({ path }: { path: string }) {
   const [params] = useSearchParams();
   const wanted = params.get('tab');
   const tab: Tab =
-    wanted === 'sessions' || wanted === 'notifications' || wanted === 'trash' || ((wanted === 'admin' || wanted === 'service-accounts') && session.user.is_admin)
+    wanted === 'sessions' || wanted === 'notifications' || wanted === 'trash' || ((wanted === 'admin' || wanted === 'service-accounts' || wanted === 'integrations') && session.user.is_admin)
       ? wanted
       : 'tokens';
   const base = `/${path}/-/settings`;
@@ -45,6 +46,7 @@ export function Account({ path }: { path: string }) {
       ? [
           { id: 'admin' as const, label: t('admin.title') },
           { id: 'service-accounts' as const, label: t('sa.title') },
+          { id: 'integrations' as const, label: t('integrations.title') },
         ]
       : []),
   ];
@@ -74,6 +76,7 @@ export function Account({ path }: { path: string }) {
       {tab === 'trash' && <Trash />}
       {tab === 'admin' && <AdminUsers />}
       {tab === 'service-accounts' && <ServiceAccounts base={base} />}
+      {tab === 'integrations' && <Integrations base={base} />}
     </>
   );
 }

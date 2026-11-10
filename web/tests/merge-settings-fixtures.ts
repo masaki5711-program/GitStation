@@ -44,6 +44,8 @@ export function settingsRoutes(over: Record<string, Handler> = {}): Record<strin
     [`GET ${API}/protected-refs`]: () => json(200, { rules: [] }),
     [`GET ${API}/merge-settings`]: () => json(200, mergeSettings({ viewer: MANAGER })),
     [`GET ${API}/approval-rules`]: () => json(200, { rules: [] }),
+    // The kanflow bindings (IntegrationBindings.tsx): none.
+    [`GET ${API}/integration-bindings`]: () => json(200, { items: [] }),
     // The rules name their approvers: no member list is read for them.
     'GET /api/v1/groups': () =>
       page([

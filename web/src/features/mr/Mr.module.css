@@ -333,3 +333,60 @@
 .empty {
   margin: 0;
 }
+
+/* The detail under the status (CheckRuns.tsx): check runs and predicted conflicts. */
+.detailSection {
+  margin: 0 0 var(--gs-space-6);
+}
+
+.detailTitle {
+  margin: var(--gs-space-6) 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-lg);
+  color: var(--gs-brand-navy);
+}
+
+.detailGroup {
+  margin: var(--gs-space-2) 0;
+}
+
+.runList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run {
+  margin: 0 0 var(--gs-space-2);
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+  overflow-wrap: anywhere;
+}
+
+.runHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  margin: 0;
+}
+
+.runSummary {
+  margin: var(--gs-space-1) 0 0;
+  white-space: pre-line;
+}
+
+.annotation {
+  margin: 0 0 var(--gs-space-1);
+}
+
+/* A word, never the colour alone. */
+.levelFailure {
+  color: var(--gs-color-warning-text);
+  font-weight: bold;
+}
+
+.levelOther {
+  color: var(--gs-color-text-muted);
+}

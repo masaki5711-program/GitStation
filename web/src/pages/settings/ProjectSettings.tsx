@@ -1,5 +1,6 @@
 // `/{project}/-/settings`: name and description, visibility, protected refs,
-// merging, approval rules and merge conditions (U2, MergeSettings.tsx),
+// merging, approval rules and merge conditions (U2, MergeSettings.tsx), the
+// kanflow bindings (IntegrationBindings.tsx),
 // move / rename and delete. The older sections show every control to everyone
 // who can see the page; what the person may not do is refused by the server
 // with its reason (user_message + request_id), shown at the control. The merge
@@ -22,6 +23,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import { GeneralForm, MoveForm } from './Forms';
+import { IntegrationBindingsSection } from './IntegrationBindings';
 import { ApprovalRulesSection, MergeConditionsSection, MergingSection, useMergeViewer } from './MergeSettings';
 import { patternProblem } from './patterns';
 import styles from './Settings.module.css';
@@ -79,6 +81,7 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       <MergingSection projectId={projectId} />
       <ApprovalRulesSection projectId={projectId} canManage={viewer.can_manage} />
       <MergeConditionsSection projectId={projectId} canManage={viewer.can_manage} />
+      <IntegrationBindingsSection project={p} />
       <Section id="move-title" title={t('settings.move.title')}>
         <MoveForm kind="project" id={projectId} path={p.path} />
       </Section>
