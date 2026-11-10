@@ -90,10 +90,15 @@ pub fn format_document(bytes: &[u8], doctype: Option<&Doctype>) -> Result<String
 
     let mut out: Vec<String> = Vec::with_capacity(lines.len() + 8);
     out.push(lines.first().copied().unwrap_or_default().to_owned());
-    out.extend(front_matter(
-        lines.get(1..close).unwrap_or_default(),
-        doctype,
-    ));
+    let fm = lines.get(1..close).unwrap_or_default();
+    let reordered = front_matter(fm, doctype);
+    // Reordering must never change what the YAML says (review MR2b): when
+    // it would, the front matter stays as written.
+    if same_meaning(fm, &reordered) {
+        out.extend(reordered);
+    } else {
+        out.extend(fm.iter().map(|l| (*l).to_owned()));
+    }
     out.push(lines.get(close).copied().unwrap_or_default().to_owned());
     body(
         lines.get(close + 1..).unwrap_or_default(),
@@ -114,16 +119,17 @@ fn front_matter(lines: &[&str], doctype: Option<&Doctype>) -> Vec<String> {
     for line in lines {
         let top = !line.starts_with([' ', '\t']) && !line.trim().is_empty();
         let comment = line.trim_start().starts_with('#');
-        if top && !comment {
-            let key = line.split_once(':').map(|(k, _)| k.trim().to_owned());
+        let key = if top && !comment { key_of(line) } else { None };
+        if let Some(key) = key {
             let mut own = std::mem::take(&mut pending);
             own.push(line);
-            chunks.push((key, own));
-        } else if top || line.trim().is_empty() {
+            chunks.push((Some(key), own));
+        } else if (top && comment) || line.trim().is_empty() {
             // A comment or a blank line: it belongs to the next key.
             pending.push(line);
         } else if let Some((_, own)) = chunks.last_mut() {
-            // A continuation (an indented value).
+            // A continuation: an indented value, or a sequence item / a
+            // flow collection's end written at column 0 (review MR2b).
             own.append(&mut pending);
             own.push(line);
         } else {
@@ -152,12 +158,72 @@ fn front_matter(lines: &[&str], doctype: Option<&Doctype>) -> Vec<String> {
     out
 }
 
+/// A top-level key line's key (`key:`, `"key":`): `None` for anything
+/// else at column 0 (`- item`, `]`, `}`), which continues the key above.
+fn key_of(line: &str) -> Option<String> {
+    if line.starts_with(['-', '[', ']', '{', '}', '?', '&', '*', '!', '|', '>', '#']) {
+        return None;
+    }
+    let (key, _) = line.split_once(':')?;
+    let key = key.trim().trim_matches(['"', '\'']);
+    let ok = key
+        .bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b' '));
+    ok.then(|| key.to_owned())
+}
+
+/// Whether two front matters mean the same: the same top-level keys with
+/// the same values (lines and the top-level order aside).
+fn same_meaning(before: &[&str], after: &[String]) -> bool {
+    use crate::yaml::{read_tree, Kind, Node};
+    fn eq(a: &Node, b: &Node) -> bool {
+        match (&a.kind, &b.kind) {
+            (Kind::Null, Kind::Null) => true,
+            (Kind::Text(x), Kind::Text(y)) => x == y,
+            (Kind::List(x), Kind::List(y)) => {
+                x.len() == y.len() && x.iter().zip(y).all(|(p, q)| eq(p, q))
+            }
+            (Kind::Map(x), Kind::Map(y)) => {
+                x.len() == y.len()
+                    && x.iter()
+                        .zip(y)
+                        .all(|((k1, v1), (k2, v2))| eq(k1, k2) && eq(v1, v2))
+            }
+            _ => false,
+        }
+    }
+    let key = |n: &Node| match &n.kind {
+        Kind::Text(t) => t.clone(),
+        Kind::Null | Kind::List(_) | Kind::Map(_) => String::new(),
+    };
+    let (Ok(Some(a)), Ok(Some(b))) = (read_tree(&before.join("\n")), read_tree(&after.join("\n")))
+    else {
+        return false;
+    };
+    let (Kind::Map(a), Kind::Map(b)) = (&a.kind, &b.kind) else {
+        return false;
+    };
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().all(|(k, v)| {
+        b.iter()
+            .find(|(k2, _)| key(k2) == key(k))
+            .is_some_and(|(_, v2)| eq(v, v2))
+    })
+}
+
 // ── the body ───────────────────────────────────────────────────────────
 
 fn body(lines: &[&str], doctype: Option<&Doctype>, out: &mut Vec<String>) {
     let mut fence: Option<crate::spec_doc::Fence> = None;
     let mut in_comment = false;
-    for raw in lines {
+    let mut in_table = false;
+    for (i, raw) in lines.iter().enumerate() {
         if let Some(open) = &fence {
             let closes = fence_of(raw).is_some_and(|f| {
                 f.0 == open.0 && f.1 >= open.1 && raw.trim().bytes().all(|b| b == open.0)
@@ -191,7 +257,18 @@ fn body(lines: &[&str], doctype: Option<&Doctype>, out: &mut Vec<String>) {
             continue;
         }
         let indent = raw.len() - t.len();
+        // A table runs from its header (the line before a delimiter row) to
+        // the next blank line, with or without leading pipes.
+        if t.is_empty() {
+            in_table = false;
+        } else if is_delimiter_row(raw)
+            || lines.get(i + 1).is_some_and(|next| is_delimiter_row(next))
+        {
+            in_table = true;
+        }
         let untouched = t.is_empty()
+            || in_table
+            || t.starts_with('<')
             || t.starts_with('|')
             || t.starts_with('#')
             || raw.starts_with('\t')
@@ -331,8 +408,18 @@ fn quoted_len(s: &str) -> Option<usize> {
 fn continuation(raw: &str) -> (String, usize) {
     let indent = raw.len() - raw.trim_start().len();
     let t = raw.trim_start();
-    if t.starts_with("> ") {
-        return (format!("{}> ", &raw[..indent]), indent + 2);
+    // A quote, nested or not (`> > `): every marker continues.
+    let bytes = raw.as_bytes();
+    let mut j = indent;
+    while bytes.get(j) == Some(&b'>') {
+        j += 1;
+        if bytes.get(j) == Some(&b' ') {
+            j += 1;
+        }
+    }
+    if j > indent {
+        let prefix = raw.get(..j).unwrap_or_default();
+        return (prefix.to_owned(), j);
     }
     for marker in ["- ", "* ", "+ "] {
         if t.starts_with(marker) {
@@ -350,6 +437,30 @@ fn continuation(raw: &str) -> (String, usize) {
     (raw[..indent].to_owned(), indent)
 }
 
+/// Whether `t` (trimmed at its start) would open a block at a line start.
+fn starts_block(t: &str) -> bool {
+    let marker = [
+        "- ", "* ", "+ ", "#", ">", "|", ":::", "```", "~~~", "---", "===", "___", "***", "<",
+    ]
+    .iter()
+    .any(|m| t.starts_with(m))
+        || matches!(t, "-" | "*" | "+");
+    let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+    let ordered = (1..=9).contains(&digits)
+        && t.get(digits..)
+            .is_some_and(|a| a.starts_with(". ") || a.starts_with(") "));
+    marker || ordered
+}
+
+/// A GFM table's delimiter row (`|---|:-:|`, `--|--`).
+fn is_delimiter_row(line: &str) -> bool {
+    let t = line.trim();
+    t.contains('|')
+        && t.contains('-')
+        && t.bytes()
+            .all(|b| matches!(b, b'|' | b'-' | b':' | b' ' | b'\t'))
+}
+
 /// Split one prose line after each sentence end (module docs).
 fn split_sentences(raw: &str) -> Vec<String> {
     let (cont, own) = continuation(raw);
@@ -365,7 +476,8 @@ fn split_sentences(raw: &str) -> Vec<String> {
     let mut prev: Option<char> = None;
     for (i, c) in text.char_indices() {
         if let Some(run) = code {
-            if c == '`' {
+            // Only a whole run of the same length closes the span.
+            if c == '`' && prev != Some('`') {
                 let n = bytes
                     .get(i..)
                     .map_or(0, |b| b.iter().take_while(|x| **x == b'`').count());
@@ -392,7 +504,10 @@ fn split_sentences(raw: &str) -> Vec<String> {
             ')' if paren_link > 0 => paren_link -= 1,
             '。' | '！' | '？' if depth == 0 && link == 0 && paren_link == 0 => {
                 let end = i + c.len_utf8();
-                if text.get(end..).is_some_and(|r| !r.trim().is_empty()) {
+                // No cut before text that would become another block once it
+                // starts a line (a list item, a heading, a rule …).
+                let rest = text.get(end..).unwrap_or_default().trim_start();
+                if !rest.is_empty() && !starts_block(rest) {
                     cuts.push(end);
                 }
             }
@@ -407,10 +522,12 @@ fn split_sentences(raw: &str) -> Vec<String> {
     let mut start = 0usize;
     for (n, cut) in cuts.iter().chain(std::iter::once(&text.len())).enumerate() {
         let piece = text.get(start..*cut).unwrap_or_default();
-        let piece = if n == 0 {
-            piece.trim_end()
-        } else {
-            piece.trim()
+        // The last piece keeps its trailing spaces (a hard line break).
+        let last = n == cuts.len();
+        let piece = match (n == 0, last) {
+            (true, _) => piece.trim_end(),
+            (false, true) => piece.trim_start(),
+            (false, false) => piece.trim(),
         };
         let prefix = if n == 0 {
             raw.get(..own).unwrap_or_default()

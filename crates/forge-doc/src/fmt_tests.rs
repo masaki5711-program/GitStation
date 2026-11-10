@@ -123,3 +123,86 @@ fn what_is_no_document_is_refused_not_guessed() {
     let big = vec![b'a'; crate::document::MAX_DOCUMENT_BYTES + 1];
     assert_eq!(refuse(&big), Some(FmtRefusal::TooLarge));
 }
+
+/// Format, then check the output is a document again and a fixed point.
+fn fixed(text: &str) -> String {
+    let once = fmt(text, None);
+    assert_eq!(fmt(&once, None), once, "not idempotent for {text:?}");
+    once
+}
+
+#[test]
+fn a_sequence_at_column_zero_stays_with_its_key() {
+    let src =
+        "---\nrelated:\n- A-2\n- A-3\nlang: ja\nowner: g\ndoctype: t.x\nid: A-1\ntitle: T\n---\n";
+    let want =
+        "---\ndoctype: t.x\nid: A-1\ntitle: T\nowner: g\nrelated:\n- A-2\n- A-3\nlang: ja\n---\n";
+    assert_eq!(fixed(src), want);
+    // A flow collection closing at column 0.
+    let src = "---\nrelated: [\n  A-2,\n]\ndoctype: t.x\nid: A-1\ntitle: T\nowner: g\n---\n";
+    let out = fixed(src);
+    assert!(
+        crate::document::parse_document(out.as_bytes())
+            .meta
+            .is_some(),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_reorder_that_would_change_the_yaml_keeps_it_as_written() {
+    // A block scalar whose body sits at column 0 is no valid YAML anyway;
+    // a key-looking line inside a literal block is kept with its key.
+    let src = "---\ntitle: |\n  一行目\n  doctype: x\ndoctype: t.x\nid: A-1\nowner: g\n---\n";
+    let want = "---\ndoctype: t.x\nid: A-1\ntitle: |\n  一行目\n  doctype: x\nowner: g\n---\n";
+    assert_eq!(fixed(src), want);
+}
+
+#[test]
+fn quotes_keep_their_depth_and_lines_keep_a_hard_break() {
+    assert_eq!(
+        fixed(&format!("{FRONT}> > あ。い。\n")),
+        format!("{FRONT}> > あ。\n> > い。\n")
+    );
+    assert_eq!(
+        fixed(&format!("{FRONT}あ。い。  \n")),
+        format!("{FRONT}あ。\nい。  \n")
+    );
+}
+
+#[test]
+fn no_cut_turns_the_rest_into_another_block() {
+    for rest in [
+        "- い",
+        "# い",
+        "---",
+        "1. い",
+        "> い",
+        "| い",
+        "::: note",
+        "<b>い</b>",
+        "*",
+        "=== ",
+    ] {
+        let src = format!("{FRONT}あ。{rest}\n");
+        assert_eq!(fixed(&src), src, "{rest}");
+    }
+}
+
+#[test]
+fn tables_without_leading_pipes_and_html_lines_are_kept() {
+    let src = format!("{FRONT}a | b\n--|--\nあ。い。 | x\n\n<pre>あ。い。</pre>\n");
+    assert_eq!(fixed(&src), src);
+    // After the blank line prose is prose again.
+    let src = format!("{FRONT}|a|b|\n|-|-|\n|1|2|\n\nあ。い。\n");
+    assert_eq!(
+        fixed(&src),
+        format!("{FRONT}|a|b|\n|-|-|\n|1|2|\n\nあ。\nい。\n")
+    );
+}
+
+#[test]
+fn a_code_span_ends_only_on_its_own_run() {
+    let src = format!("{FRONT}`a``。b` と続く。終わり。\n");
+    assert_eq!(fixed(&src), format!("{FRONT}`a``。b` と続く。\n終わり。\n"));
+}
