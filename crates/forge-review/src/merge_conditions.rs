@@ -72,6 +72,19 @@ pub struct MergeStatus {
     pub target_protection: Option<Option<forge_auth::RefProtection>>,
 }
 
+impl MergeStatus {
+    /// Whether `check` waits for a clean merge result (review LOW, M4 C7):
+    /// a name only the merge request pipeline reports
+    /// (`forge_core::merge_results::reported_on_merge_results`, i.e.
+    /// `ci/pipeline`) while there is no current merge result — a conflict,
+    /// no target, unrelated histories, a failed or pending check — so no
+    /// pipeline runs for it until the merge is clean.
+    pub fn waits_for_merge_result(&self, check: &RequiredCheck) -> bool {
+        self.merge_result_sha.is_none()
+            && forge_core::merge_results::reported_on_merge_results(&check.name)
+    }
+}
+
 /// The settings as locked are the ones the caller read (U2): the same
 /// `updated_at`, or both the defaults. `FG-REVIEW-0017` otherwise.
 fn unchanged_since(

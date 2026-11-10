@@ -3281,3 +3281,33 @@ async fn a_closed_merge_request_loses_its_merge_ref_and_unpinned_rows() {
         .is_empty());
     w.t.drop_now().await;
 }
+
+/// Review LOW (M4 C7): with no clean merge result (here a conflict) the
+/// status says the required `ci/pipeline` waits for one — its pipeline runs
+/// only on a merge result; an external name never waits; once the merge is
+/// clean nothing waits.
+#[tokio::test]
+async fn the_status_says_ci_pipeline_waits_for_a_clean_merge_result() {
+    let w = world(&[("README.md", "base\n")], &[("README.md", "head\n")]).await;
+    w.protect("developer", 0, &["ci/pipeline", "ci/gates"], false, false)
+        .await;
+    let clean = w.status().await;
+    assert!(clean.merge_result_sha.is_some());
+    assert!(clean
+        .checks
+        .iter()
+        .all(|c| !clean.waits_for_merge_result(c)));
+    let next = commit(&w.path, &[("README.md", "main\n")], Some(&w.base));
+    plumb(&w.path, &["update-ref", "refs/heads/main", &next], None);
+    w.browser.invalidate(w.repo);
+    w.check_again().await;
+    let status = w.status().await;
+    assert_eq!(status.merge_result_sha, None);
+    let waits: Vec<(&str, bool)> = status
+        .checks
+        .iter()
+        .map(|c| (c.name.as_str(), status.waits_for_merge_result(c)))
+        .collect();
+    assert_eq!(waits, [("ci/gates", false), ("ci/pipeline", true)]);
+    w.t.drop_now().await;
+}

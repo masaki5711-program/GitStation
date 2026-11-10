@@ -9173,13 +9173,18 @@
               "string",
               "null"
             ]
+          },
+          "waits_for_merge_result": {
+            "description": "M4 C7 review (added within `schema_version` 1): the check is the\nmerge request pipeline's (`ci/pipeline`) and there is no clean merge\nresult (`merge_result_sha` null: a conflict, no target, unrelated\nhistories, or the mergeability check failed or is pending) — its\npipeline waits for one and runs only once the merge is clean.",
+            "type": "boolean"
           }
         },
         "required": [
           "name",
           "status",
           "conclusion",
-          "stale"
+          "stale",
+          "waits_for_merge_result"
         ],
         "type": "object"
       },

@@ -607,6 +607,7 @@
         "owners": "そのファイルの担当者の承認を待っています。",
         "checks": "チェックの結果を待っています。",
         "checksStale": "取り込み先が進みました。新しいマージ結果で確認が終わるのを待っています。",
+        "checksWaitMergeResult": "衝突のないマージ結果を待っています。できるとパイプラインが動きます。",
         "merging": "マージが終わるのを待っています。",
         "maintainer": "Maintainer の承認を待っています。",
         "retry": "しばらくしてから開き直してください。続くときは管理者に知らせてください。",
@@ -708,6 +709,7 @@
       "notCounted": "{{name}}: 数えません（{{why}}）",
       "codeownersSuspended": "CODEOWNERS の承認は {{until}} まで止めています。",
       "checks": "必須のチェック",
+      "waitsForMergeResult": "この確認は、衝突のないマージ結果ができてから動きます。",
       "unread": "条件を読めませんでした。問い合わせ番号は上のメッセージにあります。"
     },
     "uncounted": {

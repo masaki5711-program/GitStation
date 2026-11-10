@@ -607,6 +607,7 @@
         "owners": "Waiting for an owner of those files to approve.",
         "checks": "Waiting for the check result.",
         "checksStale": "The target branch moved. Waiting for the checks on the new merge result.",
+        "checksWaitMergeResult": "Waiting for a merge result without conflicts; the pipeline runs on it.",
         "merging": "Waiting for the merge to finish.",
         "maintainer": "Waiting for a maintainer to approve.",
         "retry": "Open this page again in a while. If it stays, tell an administrator.",
@@ -708,6 +709,7 @@
       "notCounted": "{{name}}: does not count ({{why}})",
       "codeownersSuspended": "CODEOWNERS approval is suspended until {{until}}.",
       "checks": "Required checks",
+      "waitsForMergeResult": "This check runs only once there is a merge result without conflicts.",
       "unread": "The conditions could not be read. The message above has the request ID."
     },
     "uncounted": {

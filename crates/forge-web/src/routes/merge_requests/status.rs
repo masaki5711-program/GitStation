@@ -179,6 +179,12 @@ pub struct StatusCheckBody {
     /// merge result of the head (the target advanced since); it does not
     /// count (`required_check_stale`).
     pub stale: bool,
+    /// M4 C7 review (added within `schema_version` 1): the check is the
+    /// merge request pipeline's (`ci/pipeline`) and there is no clean merge
+    /// result (`merge_result_sha` null: a conflict, no target, unrelated
+    /// histories, or the mergeability check failed or is pending) — its
+    /// pipeline waits for one and runs only once the merge is clean.
+    pub waits_for_merge_result: bool,
 }
 
 /// The discussions condition.
@@ -383,6 +389,7 @@ pub(super) fn status_body(
                     .and_then(|r| r.conclusion)
                     .map(|k| k.as_str().to_owned()),
                 stale: c.stale,
+                waits_for_merge_result: s.waits_for_merge_result(c),
             })
             .collect(),
         discussions: s

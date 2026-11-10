@@ -2295,7 +2295,13 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
     assert_eq!(status, StatusCode::OK, "{s}");
     assert_eq!(
         s["checks"],
-        json!([{"name": "ci/gates", "status": "completed", "conclusion": "success", "stale": false}])
+        json!([{
+            "name": "ci/gates",
+            "status": "completed",
+            "conclusion": "success",
+            "stale": false,
+            "waits_for_merge_result": false
+        }])
     );
     assert_eq!(s["mergeable"], true, "{s}");
     // M4 C7: the current merge result is in the contract (the check is clean).

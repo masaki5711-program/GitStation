@@ -5755,6 +5755,14 @@ export interface components {
             stale: boolean;
             /** @description `null`: no run reported (never success). */
             status: string | null;
+            /**
+             * @description M4 C7 review (added within `schema_version` 1): the check is the
+             *     merge request pipeline's (`ci/pipeline`) and there is no clean merge
+             *     result (`merge_result_sha` null: a conflict, no target, unrelated
+             *     histories, or the mergeability check failed or is pending) — its
+             *     pipeline waits for one and runs only once the merge is clean.
+             */
+            waits_for_merge_result: boolean;
         };
         /** @description One CODEOWNERS rule the changes need. */
         StatusCodeownerBody: {

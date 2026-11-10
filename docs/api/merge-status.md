@@ -31,7 +31,7 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
 | `mergeable` | 真偽 | 止める理由が無い |
 | `reasons[]` | 配列 | `{ "reason": 名前, "detail": 文字列 / null }`。下の表 |
 | `approvals` | オブジェクト / null | 承認の側（版が無いと null）: `rules[]`（`name`、`applies`、`required`、`counted`。保護ブランチの最低の承認数は `name = "@protected_branch"`）、`approvals[]`（`approver_id`、`username`、`counted`、`uncounted_reason`）、`codeowners[]`（`pattern`、`owners`、`satisfied`。CODEOWNERS の強制が一時停止中は空） |
-| `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion", "stale" }`。**`status: null` は報告が無い**（成功ではない）。値は Checks API（`docs/api/checks.md`、M3 C1）で **今の head** に報告された結果（古い head への報告は数えない）。M4 C7: 今のマージ結果への報告があればそれ、`ci/pipeline` で前のマージ結果への報告しか無ければそれで `stale: true`（数えない）。下の「マージ結果と鮮度」 |
+| `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion", "stale", "waits_for_merge_result" }`。**`status: null` は報告が無い**（成功ではない）。値は Checks API（`docs/api/checks.md`、M3 C1）で **今の head** に報告された結果（古い head への報告は数えない）。M4 C7: 今のマージ結果への報告があればそれ、`ci/pipeline` で前のマージ結果への報告しか無ければそれで `stale: true`（数えない）。下の「マージ結果と鮮度」 |
 | `discussions` | オブジェクト / null | マージの条件がスレッドの解決を求めるとき `{ "unresolved": 件数 }`、求めないとき null |
 | `work_item_link` | オブジェクト / null | M3 I1d で追加。マージの条件が作業項目のリンクを求めるとき `{ "linked": 真偽 }`（プロジェクトの **今の** 連携の結びつけの作業項目への開いたリンクがあるか）、求めないとき null |
 | `codeowners` | オブジェクト | `{ "enforced": 真偽, "suspended_until": 文字列 / null }`（一時停止中だけ期限。期限を過ぎれば `enforced: true`） |
@@ -149,7 +149,7 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
 
 ## マージ結果と鮮度（M4 C7）
 
-この契約の版は変えずに、`merge_result_sha` と `checks[].stale` と理由 `required_check_stale` を足した（ADR-0024 Amendment 2026-11-11、
+この契約の版は変えずに、`merge_result_sha` と `checks[].stale`・`checks[].waits_for_merge_result` と理由 `required_check_stale` を足した（ADR-0024 Amendment 2026-11-11、
 計画 04 M-1・M-2）。
 
 - forge は MR の head を target の今の先端へマージした結果を、判定のジョブで隠した ref `refs/merge-requests/<iid>/merge` に作る（衝突のときは
@@ -158,6 +158,9 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   結果（target が進む前）への報告（`stale: true`、`required_check_stale`。数えない。head への報告も数えない）、それ以外の名前（外部の
   報告者）なら head への報告（前のマージ結果への報告は無視する。消えた・名前の変わったジョブで止まり続けない） → 無し
   （`required_check_missing`）。
+- 衝突のないマージ結果が無いとき（`merge_result_sha` が null: 衝突、target が無い、履歴がつながらない、判定の失敗・判定中）、必須の
+  `ci/pipeline` は `checks[].waits_for_merge_result: true`（同じ版の中で足した）。MR のパイプラインはマージ結果でしか動かないので、
+  **次の手** は衝突などの最初の理由を解くこと。画面は「衝突のないマージ結果ができてから動く」と出す。外部の名前は常に false。
 - target が進むと、前のマージ結果で出た `ci/pipeline` は古くなる。マージの要求は FG-CI-0013（最初の理由のとき）で断られる。**次の手**:
   新しいマージ結果（`merge_result_sha`）で動くパイプラインが終わるのを待つ（失敗なら `gstn pipeline retry`）。
 

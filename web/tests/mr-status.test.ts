@@ -265,6 +265,33 @@ describe('statusHint / statusTone (U1 review: name what is waited for)', () => {
     expect(statusHint(status([{ reason, detail: null }]))).toBe(hint);
   });
 
+  it('a required ci/pipeline with no clean merge result says it waits for one (M4 C7 review)', () => {
+    const pipeline: MergeStatus['checks'][number] = {
+      name: 'ci/pipeline',
+      status: null,
+      conclusion: null,
+      stale: false,
+      waits_for_merge_result: true,
+    };
+    const waiting: MergeStatus = {
+      ...status([
+        { reason: 'conflict', detail: null },
+        { reason: 'required_check_missing', detail: 'name=ci/pipeline' },
+      ]),
+      checks: [pipeline],
+    };
+    // The first reason (the conflict) keeps its own line and no hint ...
+    expect(statusHint(waiting)).toBeNull();
+    // ... and once the missing check is first, the hint names the wait.
+    const first: MergeStatus = { ...waiting, reasons: waiting.reasons.slice(1) };
+    expect(statusHint(first)).toBe('mr.status.hint.checksWaitMergeResult');
+    const ready: MergeStatus = {
+      ...first,
+      checks: [{ ...pipeline, waits_for_merge_result: false }],
+    };
+    expect(statusHint(ready)).toBe('mr.status.hint.checks');
+  });
+
   it('a mergeable status has no hint', () => {
     expect(statusHint(status([], true))).toBeNull();
   });

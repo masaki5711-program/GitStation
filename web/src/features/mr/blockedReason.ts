@@ -176,8 +176,13 @@ export function statusHint(status: MergeStatus): string | null {
       return t('mr.status.hint.approvals');
     case 'codeowner_approval_missing':
       return t('mr.status.hint.owners');
-    case 'required_check_missing':
-      return t('mr.status.hint.checks');
+    case 'required_check_missing': {
+      // M4 C7 review: the merge request pipeline runs only on a clean merge
+      // result; without one (conflict, no target, failed check) say so.
+      const name = parseDetail(status.reasons[0]?.detail ?? null).name;
+      const waits = status.checks.some((c) => c.name === name && c.waits_for_merge_result);
+      return waits ? t('mr.status.hint.checksWaitMergeResult') : t('mr.status.hint.checks');
+    }
     case 'required_check_stale':
       return t('mr.status.hint.checksStale');
     case 'merge_in_progress':
