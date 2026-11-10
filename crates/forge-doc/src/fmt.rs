@@ -20,7 +20,7 @@
 //! It refuses — never guesses — a file that is not a document in this
 //! format: not UTF-8, too large, no readable front matter naming a
 //! `doctype` (an older `spec:` document is changed only by an explicit
-//! migration, ADR-0026 §7).
+//! migration, ADR-0026 §7: [`migrate_legacy`], `gstn doc fmt --migrate`).
 
 use crate::doctype::Doctype;
 use crate::document::{parse_document, MAX_DOCUMENT_BYTES};
@@ -33,6 +33,11 @@ pub enum FmtRefusal {
     TooLarge,
     /// No front matter naming a `doctype`, or one that cannot be read.
     NotADocument,
+    /// `--migrate`: not an older-format file (`spec:` and no `doctype:`).
+    NotOlderFormat,
+    /// `--migrate`: an older-format file whose front matter breaks a rule
+    /// of [`crate::spec_doc`] (`forge/spec-lint` names it): fixed first.
+    OlderFormatInvalid,
 }
 
 impl FmtRefusal {
@@ -41,6 +46,8 @@ impl FmtRefusal {
             Self::NotUtf8 => "not_utf8",
             Self::TooLarge => "too_large",
             Self::NotADocument => "not_a_document",
+            Self::NotOlderFormat => "not_older_format",
+            Self::OlderFormatInvalid => "older_format_invalid",
         }
     }
 }
@@ -111,9 +118,12 @@ pub fn format_document(bytes: &[u8], doctype: Option<&Doctype>) -> Result<String
 
 // ── the front matter ───────────────────────────────────────────────────
 
-/// Reorder the top-level keys; each key takes the comment and blank lines
-/// above it and its own continuation lines.
-fn front_matter(lines: &[&str], doctype: Option<&Doctype>) -> Vec<String> {
+/// The front matter's top-level keys, each with the comment and blank
+/// lines above it and its own continuation lines, and the comment and
+/// blank lines after the last one.
+type Chunks<'a> = (Vec<(Option<String>, Vec<&'a str>)>, Vec<&'a str>);
+
+fn chunks<'a>(lines: &[&'a str]) -> Chunks<'a> {
     let mut chunks: Vec<(Option<String>, Vec<&str>)> = Vec::new();
     let mut pending: Vec<&str> = Vec::new();
     for line in lines {
@@ -136,6 +146,13 @@ fn front_matter(lines: &[&str], doctype: Option<&Doctype>) -> Vec<String> {
             pending.push(line);
         }
     }
+    (chunks, pending)
+}
+
+/// Reorder the top-level keys; each key takes the comment and blank lines
+/// above it and its own continuation lines.
+fn front_matter(lines: &[&str], doctype: Option<&Doctype>) -> Vec<String> {
+    let (mut chunks, pending) = chunks(lines);
     let rank = |key: &Option<String>| -> (usize, usize) {
         let Some(k) = key else {
             return (2, 0);
@@ -540,6 +557,199 @@ fn split_sentences(raw: &str) -> Vec<String> {
     out
 }
 
+// ── the migration of the older format (ADR-0026 §7) ────────────────────
+
+/// What a migration leaves to a person (reported, never guessed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationNote {
+    /// No `owner`: the older `owners` are people, not a group, so none is
+    /// written; a `TODO` comment in the front matter says what to fill in,
+    /// and the lint reports `field_missing owner` until it is.
+    OwnerMissing,
+    /// `status: deprecated` became `retired: {}`: the day it was deprecated
+    /// is not in the file (a `TODO` comment asks for `date:`).
+    RetiredDateUnknown,
+    /// `status: draft / review / approved` was dropped: the plan 13 format
+    /// does not keep a state in the file (the merge request's approval is).
+    StatusDropped,
+}
+
+impl MigrationNote {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OwnerMissing => "owner_missing",
+            Self::RetiredDateUnknown => "retired_date_unknown",
+            Self::StatusDropped => "status_dropped",
+        }
+    }
+}
+
+/// A migrated and formatted document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Migrated {
+    pub text: String,
+    pub notes: Vec<MigrationNote>,
+}
+
+/// The comment a migration leaves for the owner.
+const OWNER_TODO: &str = "# TODO(gstn doc fmt --migrate): owner: <the owning group>";
+/// The comment a migration leaves for the retirement date.
+const RETIRED_TODO: &str =
+    "# TODO(gstn doc fmt --migrate): retired: date: YYYY-MM-DD (the day it was deprecated)";
+
+/// Rewrite an older-format specification (`spec:` front matter, M3 X4)
+/// into the plan 13 format, then [`format_document`] it (ADR-0026 §7;
+/// `gstn doc fmt --migrate`). Pure, and refuses — never guesses — anything
+/// else: a file that is not in the older format, or whose older front
+/// matter breaks a rule of [`crate::spec_doc`], is
+/// [`FmtRefusal::NotOlderFormat`] / [`FmtRefusal::OlderFormatInvalid`]. A
+/// migrated file is in the newer format, so a second migration refuses it
+/// (`gstn` then formats it as any document: running twice changes nothing).
+///
+/// - `spec: X` → `doctype: spec.system` and `id: X` (the value as written);
+///   `title` is kept;
+/// - `owners: [..]` is removed and **no `owner` is written**: they are
+///   people's addresses, not a group (ADR-0026 §7). A `TODO` comment names
+///   the people the older file listed; the lint reports `field_missing
+///   owner` until a person fills it ([`MigrationNote::OwnerMissing`]);
+/// - `status: deprecated` → `retired: {}` with a `TODO` comment for its
+///   `date` — no date is invented: the migration's day is not the day it
+///   was deprecated, and forge-doc has no clock
+///   ([`MigrationNote::RetiredDateUnknown`]); any other `status` is
+///   dropped ([`MigrationNote::StatusDropped`]);
+/// - `confidential: true` / `false` → `classification: confidential` /
+///   `internal` (ADR-0026 §6); without it nothing is written (the type's
+///   default applies, never lower than `internal`);
+/// - comments and blank lines of the front matter are kept (an end-of-line
+///   comment of a removed key goes with it); the body is not touched
+///   before the format.
+pub fn migrate_legacy(bytes: &[u8], doctype: Option<&Doctype>) -> Result<Migrated, FmtRefusal> {
+    use crate::legacy::{is_legacy, SPEC_SYSTEM};
+    if bytes.len() > MAX_DOCUMENT_BYTES {
+        return Err(FmtRefusal::TooLarge);
+    }
+    let (bom, rest) = match bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", bytes),
+    };
+    let text = std::str::from_utf8(rest).map_err(|_| FmtRefusal::NotUtf8)?;
+    let parsed = parse_document(bytes);
+    if !is_legacy(&parsed) {
+        return Err(FmtRefusal::NotOlderFormat);
+    }
+    let older = crate::spec_doc::parse_spec_document(bytes);
+    let meta = older.meta.as_ref().ok_or(FmtRefusal::OlderFormatInvalid)?;
+    let crlf = text.contains("\r\n");
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .collect();
+    let close = lines
+        .iter()
+        .skip(1)
+        .position(|l| matches!(l.trim_end(), "---" | "..."))
+        .map(|i| i + 1)
+        .ok_or(FmtRefusal::OlderFormatInvalid)?;
+    let (chunks, trailing) = chunks(lines.get(1..close).unwrap_or_default());
+
+    let mut notes = Vec::new();
+    let mut fm: Vec<String> = vec![format!("doctype: {SPEC_SYSTEM}")];
+    let mut added: Vec<String> = Vec::new();
+    for (key, own) in &chunks {
+        let Some(key) = key.as_deref() else {
+            return Err(FmtRefusal::OlderFormatInvalid);
+        };
+        // The comment and blank lines above the key, and the key's lines.
+        let at = own
+            .iter()
+            .position(|l| key_of(l).as_deref() == Some(key))
+            .ok_or(FmtRefusal::OlderFormatInvalid)?;
+        let (above, keyed) = own.split_at(at);
+        fm.extend(above.iter().map(|l| (*l).to_owned()));
+        match key {
+            "spec" => {
+                let first = keyed.first().ok_or(FmtRefusal::OlderFormatInvalid)?;
+                let (_, value) = first
+                    .split_once(':')
+                    .ok_or(FmtRefusal::OlderFormatInvalid)?;
+                fm.push(format!("id:{value}"));
+                fm.extend(keyed.iter().skip(1).map(|l| (*l).to_owned()));
+            }
+            "title" => fm.extend(keyed.iter().map(|l| (*l).to_owned())),
+            "status" | "owners" | "confidential" => {}
+            _ => return Err(FmtRefusal::OlderFormatInvalid),
+        }
+    }
+    if let Some(f) = parsed.meta_field("confidential") {
+        let class = match f.value.as_text() {
+            Some("true") => "confidential",
+            Some("false") => "internal",
+            _ => return Err(FmtRefusal::OlderFormatInvalid),
+        };
+        added.push(format!("classification: {class}"));
+    }
+    let deprecated = meta.status == crate::spec_doc::SpecStatus::Deprecated;
+    if deprecated {
+        added.push("retired: {}".to_owned());
+        notes.push(MigrationNote::RetiredDateUnknown);
+    } else {
+        notes.push(MigrationNote::StatusDropped);
+    }
+    fm.extend(added);
+    fm.extend(trailing.iter().map(|l| (*l).to_owned()));
+    fm.push(OWNER_TODO.to_owned());
+    if !meta.owners.is_empty() {
+        fm.push(format!(
+            "# (the older file named people: {})",
+            meta.owners.join(", ")
+        ));
+    }
+    notes.insert(0, MigrationNote::OwnerMissing);
+    if deprecated {
+        fm.push(RETIRED_TODO.to_owned());
+    }
+
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 8);
+    out.push(lines.first().copied().unwrap_or_default().to_owned());
+    out.extend(fm);
+    out.extend(
+        lines
+            .get(close..)
+            .unwrap_or_default()
+            .iter()
+            .map(|l| (*l).to_owned()),
+    );
+    let migrated = format!("{bom}{}", out.join(if crlf { "\r\n" } else { "\n" }));
+
+    // Never guess: the result must say what the older file said.
+    let check = parse_document(migrated.as_bytes());
+    let classification = parsed.meta_field("confidential").map(|_| {
+        if meta.confidential {
+            "confidential"
+        } else {
+            "internal"
+        }
+    });
+    let same = check.doctype() == Some(SPEC_SYSTEM)
+        && check.id() == Some(meta.spec.as_str())
+        && check.meta_text("title").map(str::trim) == Some(meta.title.as_str())
+        && check.meta_text("classification") == classification
+        && check.meta_field("retired").is_some() == deprecated
+        && ["spec", "status", "owners", "confidential", "owner"]
+            .iter()
+            .all(|k| check.meta_field(k).is_none())
+        && check.blocks.len() == parsed.blocks.len();
+    if !same {
+        return Err(FmtRefusal::OlderFormatInvalid);
+    }
+    let text = format_document(migrated.as_bytes(), doctype)?;
+    Ok(Migrated { text, notes })
+}
+
 #[cfg(test)]
 #[path = "fmt_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "fmt_migrate_tests.rs"]
+mod migrate_tests;

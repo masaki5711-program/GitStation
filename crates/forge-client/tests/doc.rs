@@ -329,3 +329,72 @@ fn fmt_check_fails_for_a_file_it_could_not_check() {
         o.stdout
     );
 }
+
+/// ADR-0026 §7: an older-format specification (`spec:`) is rewritten only
+/// with `--migrate`; `--check` works with it; a second run changes nothing.
+const OLDER: &str = "---\nspec: zeva-engine/config\ntitle: 設定管理\nstatus: deprecated\nowners: [po@example.internal]\nconfidential: true\n---\n\n::: req ZEVA-CFG-012 priority=must\n設定は 10 秒以内に反映されること。\n:::\n";
+
+#[test]
+fn fmt_migrate_rewrites_an_older_specification_only_when_asked() {
+    let r = repo(&[
+        ("spec/config.md", OLDER),
+        (
+            "spec/broken.md",
+            "---\nspec: a\ntitle: t\nstatus: nope\n---\n",
+        ),
+        ("qms/QM-001.md", &doc("QM-001", "一文目。")),
+    ]);
+    // Without --migrate the older files are no concern of fmt.
+    let o = gstn(r.path(), &["doc", "fmt", "--check"]);
+    assert_eq!(o.code, 0, "{}{}", o.stdout, o.stderr);
+    // --migrate --check: nothing written, exit 1 (FG-DOC-0004).
+    let o = gstn(r.path(), &["doc", "fmt", "--migrate", "--check", "--json"]);
+    assert_eq!(o.code, 1, "{}{}", o.stdout, o.stderr);
+    assert_eq!(o.err_json()["error_code"], "FG-DOC-0004");
+    let v = o.json();
+    assert_eq!(v["changed"], serde_json::json!(["spec/config.md"]));
+    assert_eq!(
+        v["migrated"],
+        serde_json::json!([{"path": "spec/config.md", "notes": ["owner_missing", "retired_date_unknown"]}])
+    );
+    assert_eq!(
+        v["skipped"],
+        serde_json::json!([{"path": "spec/broken.md", "reason": "older_format_invalid"}])
+    );
+    assert_eq!(
+        std::fs::read_to_string(r.path().join("spec/config.md")).unwrap(),
+        OLDER,
+        "--check writes nothing"
+    );
+    // --migrate writes the file in the plan 13 format.
+    let o = gstn(r.path(), &["doc", "fmt", "--migrate", "spec/config.md"]);
+    assert_eq!(o.code, 0, "{}{}", o.stdout, o.stderr);
+    assert!(
+        o.stdout
+            .contains("formatted: spec/config.md (migrated; owner_missing, retired_date_unknown)"),
+        "{}",
+        o.stdout
+    );
+    let migrated = std::fs::read_to_string(r.path().join("spec/config.md")).unwrap();
+    assert!(
+        migrated.starts_with(
+            "---\ndoctype: spec.system\nid: zeva-engine/config\ntitle: 設定管理\nclassification: confidential\nretired: {}\n# TODO(gstn doc fmt --migrate): owner: <the owning group>\n"
+        ),
+        "{migrated}"
+    );
+    assert!(migrated.ends_with(
+        "---\n\n::: req ZEVA-CFG-012 priority=must\n設定は 10 秒以内に反映されること。\n:::\n"
+    ));
+    // Idempotent: a second run (with or without --migrate) changes nothing.
+    for args in [
+        &["doc", "fmt", "--migrate", "--check", "spec/config.md"][..],
+        &["doc", "fmt", "--check", "spec/config.md"],
+    ] {
+        let o = gstn(r.path(), args);
+        assert_eq!(o.code, 0, "{args:?}: {}{}", o.stdout, o.stderr);
+    }
+    // The lint asks a person for the owner.
+    let o = gstn(r.path(), &["doc", "lint", "spec/config.md"]);
+    assert_eq!(o.code, 1);
+    assert!(o.stdout.contains("field_missing owner"), "{}", o.stdout);
+}

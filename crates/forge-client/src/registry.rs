@@ -1022,12 +1022,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Format the documents of the working tree's repository (one sentence per line; the type's field and attribute order). Local only: nothing is sent to the server.",
         args: &[
             arg("--check", "flag", false, "Write nothing; exit 1 (FG-DOC-0004) when a file would change."),
+            arg("--migrate", "flag", false, "Also rewrite older-format specifications (spec: front matter) into the plan 13 format (ADR-0026 §7): no owner is invented (a TODO comment; the lint reports field_missing owner), status: deprecated becomes retired: {} without a date. Never without this flag."),
             ArgSpec { name: "path", kind: "positional", required: false, repeatable: true, description: "Files or directories (default: the whole repository found upward from the current directory)." },
         ],
-        examples: &["gstn doc fmt", "gstn doc fmt --check --json", "gstn doc fmt qms/procedures/QP-07-001.md"],
+        examples: &["gstn doc fmt", "gstn doc fmt --check --json", "gstn doc fmt qms/procedures/QP-07-001.md", "gstn doc fmt --migrate --check spec"],
         scopes: &[],
         routes: &[],
-        output: r#"{"type":"object","required":["check","changed","unchanged","skipped","incomplete"],"properties":{"check":{"type":"boolean"},"changed":{"type":"array","items":{"type":"string"}},"unchanged":{"type":"integer"},"skipped":{"type":"array","items":{"type":"object","required":["path","reason"],"properties":{"reason":{"enum":["not_utf8","too_large","not_a_document","doctype_invalid"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+        output: r#"{"type":"object","required":["check","changed","unchanged","skipped","migrated","incomplete"],"properties":{"check":{"type":"boolean"},"changed":{"type":"array","items":{"type":"string"}},"unchanged":{"type":"integer"},"skipped":{"type":"array","items":{"type":"object","required":["path","reason"],"properties":{"reason":{"enum":["not_utf8","too_large","not_a_document","doctype_invalid","older_format_invalid"]}}}},"migrated":{"type":"array","items":{"type":"object","required":["path","notes"],"properties":{"path":{"type":"string"},"notes":{"type":"array","items":{"enum":["owner_missing","retired_date_unknown","status_dropped"]}}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
     },
     CommandSpec {
         name: "doc lint",

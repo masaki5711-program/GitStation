@@ -337,17 +337,36 @@ impl Document {
             .any(|p| matches!(p.rule, "not_utf8" | "too_large"))
     }
 
+    /// While parsing every problem is kept, in the order found; the cap
+    /// is applied once at the end ([`parse_document`]).
     fn problem(&mut self, line: usize, rule: &'static str) {
-        if self.problems.len() < MAX_PROBLEMS_PER_DOCUMENT {
-            self.problems.push(Problem::new(line, rule));
-        } else {
-            self.problems_dropped += 1;
-        }
+        self.problems.push(Problem::new(line, rule));
     }
 }
 
 /// Parse one document (module docs).
 pub fn parse_document(bytes: &[u8]) -> Document {
+    let mut doc = read(bytes);
+    // The first problems found are kept, the rest counted.
+    if doc.problems.len() > MAX_PROBLEMS_PER_DOCUMENT {
+        doc.problems_dropped = doc.problems.len() - MAX_PROBLEMS_PER_DOCUMENT;
+        doc.problems.truncate(MAX_PROBLEMS_PER_DOCUMENT);
+    }
+    doc.problems.sort();
+    doc
+}
+
+/// [`parse_document`] with every problem kept (no cap; in line order):
+/// for [`crate::spec_doc`], which maps the problems onto the older rules
+/// and applies its own cap. Bounded by [`MAX_DOCUMENT_BYTES`].
+pub(crate) fn parse_document_uncapped(bytes: &[u8]) -> Document {
+    let mut doc = read(bytes);
+    doc.problems.sort();
+    doc
+}
+
+/// The parse itself; problems in the order found.
+fn read(bytes: &[u8]) -> Document {
     let mut doc = Document::default();
     if bytes.len() > MAX_DOCUMENT_BYTES {
         doc.problem(0, "too_large");
@@ -364,7 +383,6 @@ pub fn parse_document(bytes: &[u8]) -> Document {
         .collect();
     let start = front_matter(&lines, &mut doc);
     body(&lines, start, &mut doc);
-    doc.problems.sort();
     doc
 }
 

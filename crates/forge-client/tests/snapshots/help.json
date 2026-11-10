@@ -5419,6 +5419,13 @@
           "required": false
         },
         {
+          "description": "Also rewrite older-format specifications (spec: front matter) into the plan 13 format (ADR-0026 §7): no owner is invented (a TODO comment; the lint reports field_missing owner), status: deprecated becomes retired: {} without a date. Never without this flag.",
+          "kind": "flag",
+          "name": "--migrate",
+          "repeatable": false,
+          "required": false
+        },
+        {
           "description": "Files or directories (default: the whole repository found upward from the current directory).",
           "kind": "positional",
           "name": "path",
@@ -5429,7 +5436,8 @@
       "examples": [
         "gstn doc fmt",
         "gstn doc fmt --check --json",
-        "gstn doc fmt qms/procedures/QP-07-001.md"
+        "gstn doc fmt qms/procedures/QP-07-001.md",
+        "gstn doc fmt --migrate --check spec"
       ],
       "name": "doc fmt",
       "output": {
@@ -5453,6 +5461,31 @@
               "null"
             ]
           },
+          "migrated": {
+            "items": {
+              "properties": {
+                "notes": {
+                  "items": {
+                    "enum": [
+                      "owner_missing",
+                      "retired_date_unknown",
+                      "status_dropped"
+                    ]
+                  },
+                  "type": "array"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "notes"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "skipped": {
             "items": {
               "properties": {
@@ -5461,7 +5494,8 @@
                     "not_utf8",
                     "too_large",
                     "not_a_document",
-                    "doctype_invalid"
+                    "doctype_invalid",
+                    "older_format_invalid"
                   ]
                 }
               },
@@ -5482,6 +5516,7 @@
           "changed",
           "unchanged",
           "skipped",
+          "migrated",
           "incomplete"
         ],
         "type": "object"

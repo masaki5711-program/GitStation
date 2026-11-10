@@ -7,12 +7,15 @@
 //! [`requirements`] gives its requirements as [`crate::spec_doc`] does, so
 //! the two parsers can be compared (`legacy_tests.rs`: on every generated
 //! document that the older parser reads without a problem, both give the
-//! same requirements — the condition before `spec_doc`'s body reading is
-//! replaced).
+//! same requirements). Since 2026-11-10 `spec_doc` reads its blocks
+//! through the newer parser too ([`requirement`] builds each requirement);
+//! `spec_doc_oracle.rs` keeps the older scanner, test only, and checks that
+//! spec-lint's answers (requirements and problems) did not change.
 //!
-//! Known, intended differences (the newer parser is stricter; they matter
-//! only for documents the older parser already reports or that the older
-//! format never had):
+//! Known, intended differences of the newer parser (they matter only for
+//! documents the older parser already reports or that the older format
+//! never had). `spec_doc` keeps the older answer for all but the first
+//! (a requirement inside an HTML comment is no longer read):
 //! - a `:::` line inside an HTML comment is no block marker;
 //! - a container with an id other than `req` (`::: note N-1`) counts as a
 //!   block with an id, so a `req` inside it is `block_nested`;
@@ -21,7 +24,7 @@
 //! - an unclosed plain container (`::: note` never closed) is
 //!   `block_unclosed` (the older parser says nothing).
 
-use crate::document::Document;
+use crate::document::{Block, Document};
 use crate::spec_doc::{Priority, Requirement, RequirementId};
 
 /// The type of the older format (ADR-0026 §7).
@@ -47,19 +50,27 @@ pub fn requirements(doc: &Document) -> Vec<Requirement> {
     let document_deprecated = doc.meta_text("status") == Some("deprecated");
     doc.blocks
         .iter()
-        .filter(|b| b.kind == "req")
-        .filter_map(|b| {
-            let id = RequirementId::parse(b.id.as_deref()?)?;
-            Some(Requirement {
-                id,
-                line: b.line,
-                end_line: b.end_line,
-                priority: b.attr("priority").and_then(Priority::parse),
-                deprecated: document_deprecated || b.deprecated(),
-                body: b.body.clone(),
-            })
-        })
+        .filter_map(|b| requirement(b, document_deprecated))
         .collect()
+}
+
+/// One block as a requirement: a `req` block with a valid requirement id
+/// (`None` otherwise); deprecated when it says so or `document_deprecated`.
+/// The one place a block becomes a [`Requirement`] (also for
+/// [`crate::spec_doc`], which reads its blocks through the newer parser).
+pub fn requirement(b: &Block, document_deprecated: bool) -> Option<Requirement> {
+    if b.kind != "req" {
+        return None;
+    }
+    let id = RequirementId::parse(b.id.as_deref()?)?;
+    Some(Requirement {
+        id,
+        line: b.line,
+        end_line: b.end_line,
+        priority: b.attr("priority").and_then(Priority::parse),
+        deprecated: document_deprecated || b.deprecated(),
+        body: b.body.clone(),
+    })
 }
 
 #[cfg(test)]

@@ -1803,6 +1803,10 @@ pub enum DocCommand {
         /// Write nothing; exit 1 (FG-DOC-0004) when a file would change.
         #[arg(long)]
         check: bool,
+        /// Also rewrite older-format specifications (`spec:` front matter)
+        /// into the plan 13 format (ADR-0026 §7); never without it.
+        #[arg(long)]
+        migrate: bool,
         /// Files or directories (default: the whole repository).
         paths: Vec<PathBuf>,
     },

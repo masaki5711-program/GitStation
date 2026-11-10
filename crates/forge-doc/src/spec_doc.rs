@@ -35,11 +35,16 @@
 //!   Attributes: `priority` (`must`, `should`, `could`, `wont`) and
 //!   `status` (`active`, `deprecated` — an id is never removed, plan 03
 //!   §4.2). Inside a fenced code block (```` ``` ```` / `~~~`) nothing is
-//!   a block: specifications show the syntax in examples.
+//!   a block: specifications show the syntax in examples. The blocks are
+//!   read by [`crate::document`] (ADR-0026 "one parser"; the mapping onto
+//!   these rules is the `blocks` section below).
 //! - **Spec document**: a file with a front matter or a requirement block
 //!   ([`SpecDocument::is_spec`]); any other Markdown file under a
 //!   specification directory (a README) is not indexed.
 
+use std::collections::HashSet;
+
+use crate::document::{parse_document_uncapped, MAX_DOCUMENT_BYTES};
 use crate::yaml::{mapping, read_tree, text, Kind, Node};
 
 /// The longest requirement id (`requirement_id_invalid`).
@@ -58,8 +63,6 @@ pub const MAX_REQUIREMENTS_PER_DOCUMENT: usize = 2_000;
 /// At most this many problems are kept per document (the rest are
 /// counted in [`SpecDocument::problems_dropped`]).
 pub const MAX_PROBLEMS_PER_DOCUMENT: usize = 200;
-/// The deepest nesting of containers (`too_deep`).
-const MAX_CONTAINER_DEPTH: usize = 16;
 
 /// The first segment kanflow's work items own (`PBI-43`): never a
 /// requirement family, so `@req PBI-43/AC-2` is never mistaken for one.
@@ -266,6 +269,14 @@ impl SpecDocument {
 
 /// Parse one document (module docs).
 pub fn parse_spec_document(bytes: &[u8]) -> SpecDocument {
+    parse_with(bytes, blocks)
+}
+
+/// How the body's blocks are read (the older scanner is kept for the
+/// tests only, `spec_doc_oracle.rs`).
+type ReadBlocks = fn(&[&str], usize, &mut SpecDocument) -> bool;
+
+fn parse_with(bytes: &[u8], read_blocks: ReadBlocks) -> SpecDocument {
     let mut doc = SpecDocument::default();
     // Review X4: an editor's UTF-8 byte order mark before the front matter.
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
@@ -279,7 +290,7 @@ pub fn parse_spec_document(bytes: &[u8]) -> SpecDocument {
         .map(|l| l.strip_suffix('\r').unwrap_or(l))
         .collect();
     let body_start = front_matter(&lines, &mut doc);
-    let saw_requirement = blocks(&lines, body_start, &mut doc);
+    let saw_requirement = read_blocks(&lines, body_start, &mut doc);
     if saw_requirement && !doc.spec {
         doc.problem(1, "front_matter_missing");
         doc.spec = true;
@@ -450,21 +461,48 @@ fn owners_of(node: &Node) -> Option<Vec<String>> {
 }
 
 // ── the blocks ─────────────────────────────────────────────────────────
+//
+// ADR-0026 "one parser": which lines are block markers, which code fences
+// hide them, how containers nest and close, and each block's body and
+// lines come from [`crate::document::parse_document`]. What stays here is
+// the older format's own reading of a `::: req` opening line (its id and
+// `priority` / `status` attributes, with the older rule names) and the
+// mapping of the newer parser's answer onto the older rules, so that
+// spec-lint, spec-trace and the spec API answer as before.
+//
+// The newer parser is stricter on a requirement's opening line (it refuses
+// a line whose attributes it cannot read, and a block with an id inside
+// another block with an id), and the older format knew neither rule. So the
+// text is read twice: once to learn which lines the newer parser takes as
+// block openings, then again with each such line rewritten to a canonical
+// form the older format means by it — `::: req <id> [priority=…]
+// [status=deprecated]` for a requirement (`invalid` standing for an id the
+// older format refuses: still a requirement container, never indexed), and
+// `::: note` for any other container (never a block with an id). Opening
+// lines are never part of a body, so the rewrite changes no body.
+//
+// Kept differences (the newer parser's; listed in `crate::legacy`): a `:::`
+// line inside an HTML comment is no marker; a document over
+// [`crate::document::MAX_DOCUMENT_BYTES`] is `file_too_large` (forge-checks
+// never reads one over 256 KiB); past
+// [`crate::document::MAX_BLOCKS_PER_DOCUMENT`] blocks (plain containers
+// included) the rest are not read.
 
-/// A container being read.
-enum Open {
-    /// A requirement: its id (when valid), opening line, attributes and
-    /// body lines.
-    Req {
-        id: Option<RequirementId>,
-        line: usize,
-        priority: Option<Priority>,
-        deprecated: bool,
-        body: Vec<String>,
-    },
-    /// Any other container (`::: note`), or a nested `::: req`.
-    Other,
-}
+/// The rules of the newer parser that mark a line as a block opening it
+/// did not keep as a block.
+const OPENING_RULES: &[&str] = &[
+    "block_kind_invalid",
+    "attr_invalid",
+    "attr_duplicate",
+    "block_nested",
+    "too_deep",
+    "too_many_blocks",
+];
+
+/// The deepest nesting of containers (`too_deep`, as
+/// [`crate::document`]'s).
+#[cfg(test)]
+const MAX_CONTAINER_DEPTH: usize = 16;
 
 /// A code fence: its character and length (shared with [`crate::document`]).
 pub(crate) struct Fence(pub(crate) u8, pub(crate) usize);
@@ -505,122 +543,33 @@ fn container_of(line: &str) -> Option<Option<(&str, &str)>> {
     Some(Some((name, attrs.trim())))
 }
 
-/// Read the blocks into `doc`; whether any `::: req` line was seen.
-fn blocks(lines: &[&str], start: usize, doc: &mut SpecDocument) -> bool {
-    let mut saw_requirement = false;
-    let mut stack: Vec<Open> = Vec::new();
-    let mut fence: Option<Fence> = None;
-    // Review X4: where the open fence started, and whether it hides a
-    // requirement block (an unclosed fence is never a silent drop).
-    let mut fence_line = 0usize;
-    let mut req_in_fence = false;
-    let mut last_line = start;
-    for (i, raw) in lines.iter().enumerate().skip(start) {
-        let line = i + 1;
-        last_line = line;
-        if let Some(open) = &fence {
-            let closes = fence_of(raw).is_some_and(|f| {
-                f.0 == open.0 && f.1 >= open.1 && raw.trim().bytes().all(|b| b == open.0)
-            });
-            if closes {
-                fence = None;
-                req_in_fence = false;
-            } else if matches!(container_of(raw), Some(Some(("req", _)))) {
-                req_in_fence = true;
-            }
-            push_body(&mut stack, raw);
-            continue;
-        }
-        if let Some(f) = fence_of(raw) {
-            fence = Some(f);
-            fence_line = line;
-            push_body(&mut stack, raw);
-            continue;
-        }
-        match container_of(raw) {
-            None => push_body(&mut stack, raw),
-            Some(None) => match stack.pop() {
-                None => doc.problem(line, "close_unmatched"),
-                Some(Open::Other) => {}
-                Some(Open::Req {
-                    id,
-                    line: opened,
-                    priority,
-                    deprecated,
-                    body,
-                }) => finish(doc, (id, opened, line, true), priority, deprecated, &body),
-            },
-            Some(Some((name, attrs))) => {
-                if stack.len() >= MAX_CONTAINER_DEPTH {
-                    doc.problem(line, "too_deep");
-                    stack.push(Open::Other);
-                    continue;
-                }
-                if name != "req" {
-                    stack.push(Open::Other);
-                    continue;
-                }
-                saw_requirement = true;
-                if stack.iter().any(|o| matches!(o, Open::Req { .. })) {
-                    doc.problem(line, "block_nested");
-                    stack.push(Open::Other);
-                    continue;
-                }
-                stack.push(open_req(doc, line, attrs));
-            }
-        }
-    }
-    if fence.is_some() {
-        doc.problem(fence_line, "unclosed_fence");
-        saw_requirement |= req_in_fence;
-    }
-    // Unclosed containers: a requirement is still kept (its problem says
-    // where it opened).
-    while let Some(open) = stack.pop() {
-        if let Open::Req {
-            id,
-            line,
-            priority,
-            deprecated,
-            body,
-        } = open
-        {
-            doc.problem(line, "block_unclosed");
-            finish(
-                doc,
-                (id, line, last_line, false),
-                priority,
-                deprecated,
-                &body,
-            );
-        }
-    }
-    saw_requirement
+/// Whether `raw` opens a requirement in the older format (`::: req …`).
+fn opens_req(raw: &str) -> bool {
+    matches!(container_of(raw), Some(Some(("req", _))))
 }
 
-fn push_body(stack: &mut [Open], raw: &str) {
-    // The innermost requirement takes the line (a nested container's text
-    // is its text too).
-    if let Some(Open::Req { body, .. }) = stack
-        .iter_mut()
-        .rev()
-        .find(|o| matches!(o, Open::Req { .. }))
-    {
-        body.push(raw.to_owned());
-    }
+/// A `::: req` opening line as the older format reads it.
+struct ReqHeader {
+    id: Option<RequirementId>,
+    priority: Option<Priority>,
+    deprecated: bool,
+    /// The rules the line breaks, in the order they are found.
+    problems: Vec<&'static str>,
 }
 
-fn open_req(doc: &mut SpecDocument, line: usize, attrs: &str) -> Open {
+/// Read the text after `::: req` (the id, then `key=value` attributes).
+fn req_header(attrs: &str) -> ReqHeader {
+    let mut problems = Vec::new();
     let mut tokens = attrs.split_whitespace();
     let id = match tokens.next() {
         None => {
-            doc.problem(line, "requirement_id_missing");
+            problems.push("requirement_id_missing");
             None
         }
         Some(raw) => {
             let id = RequirementId::parse(raw);
             if id.is_none() {
-                doc.problem(line, "requirement_id_invalid");
+                problems.push("requirement_id_invalid");
             }
             id
         }
@@ -629,74 +578,194 @@ fn open_req(doc: &mut SpecDocument, line: usize, attrs: &str) -> Open {
     let mut status = None;
     for token in tokens {
         let Some((key, value)) = token.split_once('=') else {
-            doc.problem(line, "attribute_invalid");
+            problems.push("attribute_invalid");
             continue;
         };
         match key {
             "priority" => {
                 if priority.is_some() {
-                    doc.problem(line, "attribute_duplicate");
+                    problems.push("attribute_duplicate");
                     continue;
                 }
                 match Priority::parse(value) {
                     Some(p) => priority = Some(p),
-                    None => doc.problem(line, "priority_invalid"),
+                    None => problems.push("priority_invalid"),
                 }
             }
             "status" => {
                 if status.is_some() {
-                    doc.problem(line, "attribute_duplicate");
+                    problems.push("attribute_duplicate");
                     continue;
                 }
                 match value {
                     "active" => status = Some(false),
                     "deprecated" => status = Some(true),
-                    _ => doc.problem(line, "requirement_status_invalid"),
+                    _ => problems.push("requirement_status_invalid"),
                 }
             }
-            _ => doc.problem(line, "attribute_unknown"),
+            _ => problems.push("attribute_unknown"),
         }
     }
-    Open::Req {
+    ReqHeader {
         id,
-        line,
         priority,
         deprecated: status.unwrap_or(false),
-        body: Vec::new(),
+        problems,
     }
 }
 
-/// Keep a read block: `(id, line, end_line, closed)`; an unclosed block's
-/// one problem is `block_unclosed` (its body may simply not have started).
-fn finish(
-    doc: &mut SpecDocument,
-    (id, line, end_line, closed): (Option<RequirementId>, usize, usize, bool),
-    priority: Option<Priority>,
-    deprecated: bool,
-    body: &[String],
-) {
-    let body = body.join("\n").trim().to_owned();
-    if body.is_empty() && closed {
-        doc.problem(line, "body_empty");
-    } else if body.len() > MAX_REQUIREMENT_BODY_BYTES {
-        doc.problem(line, "body_too_long");
+/// The canonical opening line the older format means by `raw`, an opening
+/// line of the newer parser (module comment above).
+fn canonical_opening(raw: &str) -> Option<String> {
+    match container_of(raw)? {
+        Some(("req", attrs)) => {
+            let head = req_header(attrs);
+            let mut line = format!(
+                "::: req {}",
+                head.id.as_ref().map_or("invalid", RequirementId::as_str)
+            );
+            if let Some(p) = head.priority {
+                line.push_str(" priority=");
+                line.push_str(p.as_str());
+            }
+            if head.deprecated {
+                line.push_str(" status=deprecated");
+            }
+            Some(line)
+        }
+        Some(_) => Some("::: note".to_owned()),
+        None => None,
     }
-    let Some(id) = id else {
-        return;
-    };
-    if doc.requirements.len() >= MAX_REQUIREMENTS_PER_DOCUMENT {
-        doc.problem(line, "too_many_requirements");
-        return;
-    }
-    doc.requirements.push(Requirement {
-        id,
-        line,
-        end_line,
-        priority,
-        deprecated,
-        body,
-    });
 }
+
+/// Read the blocks into `doc` (module comment above); whether any
+/// `::: req` line was seen.
+fn blocks(lines: &[&str], _start: usize, doc: &mut SpecDocument) -> bool {
+    let text = lines.join("\n");
+    if text.len() > MAX_DOCUMENT_BYTES {
+        // The newer parser reads none of it (never a part); forge-checks
+        // never hands over a file this large (`file_too_large` there too).
+        doc.spec = true;
+        doc.problem(0, "file_too_large");
+        return false;
+    }
+    let first = parse_document_uncapped(text.as_bytes());
+    let openings: HashSet<usize> = first
+        .blocks
+        .iter()
+        .map(|b| b.line)
+        .chain(
+            first
+                .problems
+                .iter()
+                .filter(|p| OPENING_RULES.contains(&p.rule))
+                .map(|p| p.line),
+        )
+        .collect();
+    let normalized: Vec<String> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, raw)| {
+            let rewritten = openings
+                .contains(&(i + 1))
+                .then(|| canonical_opening(raw))
+                .flatten();
+            rewritten.unwrap_or_else(|| (*raw).to_owned())
+        })
+        .collect();
+    let read = parse_document_uncapped(normalized.join("\n").as_bytes());
+    let raw_line = |line: usize| line.checked_sub(1).and_then(|i| lines.get(i)).copied();
+    let opens_req_at = |line: usize| raw_line(line).is_some_and(opens_req);
+
+    // Each problem with the time the older scanner found it (the line it
+    // was reading; `end` and after: at the end of the file), so the cap on
+    // problems keeps the same ones.
+    let end = lines.len() + 1;
+    let mut found: Vec<(usize, SpecProblem)> = Vec::new();
+    let mut saw_requirement = false;
+    let mut unclosed: HashSet<usize> = HashSet::new();
+    for p in &read.problems {
+        let at = |rule| (p.line, SpecProblem { line: p.line, rule });
+        match p.rule {
+            "close_unmatched" | "too_deep" => found.push(at(p.rule)),
+            "block_nested" if opens_req_at(p.line) => {
+                saw_requirement = true;
+                found.push(at("block_nested"));
+            }
+            "unclosed_fence" => {
+                found.push((
+                    end,
+                    SpecProblem {
+                        line: p.line,
+                        rule: "unclosed_fence",
+                    },
+                ));
+                // A requirement block the fence hides still makes the file
+                // a specification document (review X4).
+                saw_requirement |= lines.iter().skip(p.line).any(|raw| opens_req(raw));
+            }
+            "block_unclosed" => {
+                unclosed.insert(p.line);
+            }
+            // Past the newer parser's block cap: the requirement is not
+            // read (its body is unknown), as past the older one's.
+            "too_many_blocks" => {
+                if let Some(Some(("req", attrs))) = raw_line(p.line).and_then(container_of) {
+                    saw_requirement = true;
+                    let head = req_header(attrs);
+                    for rule in head.problems {
+                        found.push(at(rule));
+                    }
+                    if head.id.is_some() {
+                        found.push(at("too_many_requirements"));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut kept = 0usize;
+    for b in read.blocks.iter().filter(|b| b.kind == "req") {
+        let Some(Some(("req", attrs))) = raw_line(b.line).and_then(container_of) else {
+            continue;
+        };
+        saw_requirement = true;
+        let head = req_header(attrs);
+        for rule in head.problems {
+            found.push((b.line, SpecProblem { line: b.line, rule }));
+        }
+        // Requirements never nest, so at most one is open at the end.
+        let closed = !unclosed.contains(&b.line);
+        let time = if closed { b.end_line } else { end + 1 };
+        let mut at = |rule| found.push((time, SpecProblem { line: b.line, rule }));
+        if !closed {
+            at("block_unclosed");
+        }
+        if b.body.is_empty() && closed {
+            at("body_empty");
+        } else if b.body.len() > MAX_REQUIREMENT_BODY_BYTES {
+            at("body_too_long");
+        }
+        let Some(requirement) = crate::legacy::requirement(b, false) else {
+            continue;
+        };
+        if kept >= MAX_REQUIREMENTS_PER_DOCUMENT {
+            at("too_many_requirements");
+            continue;
+        }
+        kept += 1;
+        doc.requirements.push(requirement);
+    }
+    found.sort_by_key(|(time, _)| *time);
+    for (_, p) in found {
+        doc.problem(p.line, p.rule);
+    }
+    saw_requirement
+}
+
+#[cfg(test)]
+#[path = "spec_doc_oracle.rs"]
+mod oracle;
 
 #[cfg(test)]
 #[path = "spec_doc_tests.rs"]

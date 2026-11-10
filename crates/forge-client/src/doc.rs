@@ -34,7 +34,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use forge_doc::doctype::{parse_doctype, Doctype, MAX_DOCTYPE_BYTES};
 use forge_doc::document::{parse_document, Problem, MAX_DOCUMENT_BYTES};
-use forge_doc::fmt::{format_document, FmtRefusal};
+use forge_doc::fmt::{format_document, migrate_legacy, FmtRefusal, MigrationNote};
+use forge_doc::legacy::{is_legacy, SPEC_SYSTEM};
 use forge_doc::lint::{lint as lint_documents, FileReport, Source, DOCTYPES_DIR};
 use forge_errors::ErrorCode;
 use serde_json::{json, Value};
@@ -106,10 +107,18 @@ pub fn doc(cli: &Cli, cmd: &DocCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Resu
     };
     match cmd {
         DocCommand::Migration { command } => crate::doc_migration::migration(cli, command, env, io),
-        DocCommand::Fmt { check, paths } => {
+        DocCommand::Fmt {
+            check,
+            migrate,
+            paths,
+        } => {
             let (cwd, root) = local()?;
             let targets = targets(&root, &cwd, paths)?;
-            let out = fmt(&root, &targets, *check, &Limits::default())?;
+            let mode = FmtMode {
+                check: *check,
+                migrate: *migrate,
+            };
+            let out = fmt(&root, &targets, mode, &Limits::default())?;
             report_fmt(cli, io, &out)
         }
         DocCommand::Lint {
@@ -632,6 +641,18 @@ pub struct FmtOutcome {
     pub skipped: Vec<(String, &'static str)>,
     pub definitions_invalid: bool,
     pub incomplete: Option<&'static str>,
+    /// `--migrate`: the older-format files rewritten (or, with --check,
+    /// that would be), with what a person must still fill in.
+    pub migrated: Vec<(String, Vec<MigrationNote>)>,
+}
+
+/// How `fmt` runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FmtMode {
+    /// Write nothing.
+    pub check: bool,
+    /// Also migrate older-format specifications (ADR-0026 §7).
+    pub migrate: bool,
 }
 
 /// Write `bytes` over `path` through a new temporary file in the same
@@ -693,8 +714,12 @@ fn names_doctype(bytes: &[u8]) -> bool {
 }
 
 /// Format the documents under `targets` (all: the whole repository);
-/// `check`: write nothing.
-pub fn fmt(root: &Path, targets: &[String], check: bool, limits: &Limits) -> Result<FmtOutcome> {
+/// `mode.check`: write nothing; `mode.migrate`: an older-format
+/// specification (`spec:`, no `doctype:`) is migrated first
+/// ([`migrate_legacy`]), with the repository's `spec.system` type when it
+/// defines one. Without `--migrate` such a file is never touched.
+pub fn fmt(root: &Path, targets: &[String], mode: FmtMode, limits: &Limits) -> Result<FmtOutcome> {
+    let check = mode.check;
     let files = read_files(root, |p| selected(targets, p), limits)?;
     let mut types: HashMap<String, Option<Doctype>> = HashMap::new();
     for (path, bytes) in &files.doctypes {
@@ -712,7 +737,12 @@ pub fn fmt(root: &Path, targets: &[String], check: bool, limits: &Limits) -> Res
     };
     for (path, bytes) in &files.markdown {
         let named = targets.iter().any(|t| t == path);
-        let doctype_name = parse_document(bytes).doctype().map(str::to_owned);
+        let parsed = parse_document(bytes);
+        if mode.migrate && is_legacy(&parsed) {
+            migrate_one(root, path, bytes, &types, &files, &mut out)?;
+            continue;
+        }
+        let doctype_name = parsed.doctype().map(str::to_owned);
         let ty = match doctype_name.as_deref().map(|n| types.get(n)) {
             // A definition that cannot be used: its order is unknown.
             Some(Some(None)) => {
@@ -745,13 +775,62 @@ pub fn fmt(root: &Path, targets: &[String], check: bool, limits: &Limits) -> Res
     Ok(out)
 }
 
+/// Migrate (then format) one older-format file into `out`.
+fn migrate_one(
+    root: &Path,
+    path: &String,
+    bytes: &[u8],
+    types: &HashMap<String, Option<Doctype>>,
+    files: &Files,
+    out: &mut FmtOutcome,
+) -> Result<()> {
+    let ty = match types.get(SPEC_SYSTEM) {
+        Some(None) => {
+            out.definitions_invalid = true;
+            out.skipped.push((path.clone(), "doctype_invalid")); // clone: the answer owns its paths
+            return Ok(());
+        }
+        Some(Some(t)) => Some(t),
+        None => None,
+    };
+    match migrate_legacy(bytes, ty) {
+        Ok(m) => {
+            if !out.check {
+                replace_file(&root.join(path), m.text.as_bytes(), files.stamps.get(path))?;
+            }
+            out.changed.push(path.clone()); // clone: as above
+            out.migrated.push((path.clone(), m.notes)); // clone: as above
+        }
+        // An older file this cannot read safely: named, never skipped
+        // silently (the person asked for the migration).
+        Err(why) => out.skipped.push((path.clone(), why.as_str())), // clone: as above
+    }
+    Ok(())
+}
+
 pub fn report_fmt(cli: &Cli, io: &mut Io<'_>, out: &FmtOutcome) -> Result<()> {
     let verb = if out.check {
         "would change"
     } else {
         "formatted"
     };
-    let mut human: Vec<String> = out.changed.iter().map(|p| format!("{verb}: {p}")).collect();
+    let notes_of = |p: &String| {
+        out.migrated
+            .iter()
+            .find(|(m, _)| m == p)
+            .map(|(_, notes)| notes)
+    };
+    let mut human: Vec<String> = out
+        .changed
+        .iter()
+        .map(|p| match notes_of(p) {
+            Some(notes) => {
+                let todo: Vec<&str> = notes.iter().map(|n| n.as_str()).collect();
+                format!("{verb}: {p} (migrated; {})", todo.join(", "))
+            }
+            None => format!("{verb}: {p}"),
+        })
+        .collect();
     human.extend(
         out.skipped
             .iter()
@@ -763,6 +842,14 @@ pub fn report_fmt(cli: &Cli, io: &mut Io<'_>, out: &FmtOutcome) -> Result<()> {
         out.unchanged,
         out.skipped.len()
     ));
+    if !out.migrated.is_empty() {
+        human.push(
+            "Migrated files: fill in each TODO(gstn doc fmt --migrate) (gstn doc lint names \
+             field_missing owner). They are no longer in the older format forge/spec-lint \
+             reads."
+                .to_owned(),
+        );
+    }
     if let Some(reason) = out.incomplete {
         human.push(format!(
             "Only part of the repository was read ({reason}) [{}].",
@@ -771,6 +858,10 @@ pub fn report_fmt(cli: &Cli, io: &mut Io<'_>, out: &FmtOutcome) -> Result<()> {
     }
     let value = json!({
         "check": out.check,
+        "migrated": out.migrated.iter().map(|(p, notes)| json!({
+            "path": p,
+            "notes": notes.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
         "changed": out.changed,
         "unchanged": out.unchanged,
         "skipped": out.skipped.iter().map(|(p, why)| json!({"path": p, "reason": why})).collect::<Vec<_>>(),
