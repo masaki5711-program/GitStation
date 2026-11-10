@@ -5687,6 +5687,20 @@
         ],
         "type": "object"
       },
+      "NewPipelineRun": {
+        "additionalProperties": false,
+        "description": "`POST …/pipelines`.",
+        "properties": {
+          "ref": {
+            "description": "The branch: `main` or `refs/heads/main`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "type": "object"
+      },
       "NewRepositoryBinding": {
         "additionalProperties": false,
         "description": "`POST /api/v1/integrations/{id}/bindings`.",
@@ -5775,6 +5789,265 @@
           "id",
           "username",
           "active"
+        ],
+        "type": "object"
+      },
+      "PipelineBody": {
+        "additionalProperties": false,
+        "description": "A pipeline (with its jobs on the one-pipeline routes).",
+        "properties": {
+          "copy_mark": {
+            "description": "The confidential marks at `sha` when it was created: `open`,\n`confidential`, `undecided` (ADR-0029 decision 5).",
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "definition_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "jobs": {
+            "description": "The jobs (only on `GET …/{pipeline_id}` and the changes).",
+            "items": {
+              "$ref": "#/components/schemas/PipelineJobBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "merge_request_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "problems": {
+            "description": "Why `invalid` (at most 20).",
+            "items": {
+              "$ref": "#/components/schemas/PipelineProblemBody"
+            },
+            "type": "array"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "ref": {
+            "description": "`refs/heads/…`.",
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "source": {
+            "description": "`push`, `merge_request`, `schedule`, `manual`.",
+            "type": "string"
+          },
+          "status": {
+            "description": "`pending`, `running`, `succeeded`, `failed`, `canceled`, `skipped`,\n`invalid` (FG-CI-0001), `error` (FG-CI-0002).",
+            "type": "string"
+          },
+          "triggered_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "ref",
+          "sha",
+          "source",
+          "merge_request_id",
+          "triggered_by",
+          "status",
+          "error_code",
+          "problems",
+          "copy_mark",
+          "definition_hash",
+          "created_at",
+          "updated_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "PipelineJobBody": {
+        "additionalProperties": false,
+        "description": "One job of a pipeline.",
+        "properties": {
+          "attempt": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "image": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "needs": {
+            "description": "The jobs it waits for.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "secrets": {
+            "description": "The secret names (never a value).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`created`, `pending`, `running`, `succeeded`, `failed`, `canceled`.",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timeout_s": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "wave": {
+            "description": "Jobs of one wave may run at once.",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "stage",
+          "wave",
+          "needs",
+          "image",
+          "timeout_s",
+          "tags",
+          "secrets",
+          "status",
+          "attempt",
+          "error_code",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "PipelinePage": {
+        "additionalProperties": false,
+        "description": "`GET …/pipelines`.",
+        "properties": {
+          "next_before": {
+            "description": "Pass as `before` for the next page; `null` on the last.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pipelines": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pipelines",
+          "next_before"
+        ],
+        "type": "object"
+      },
+      "PipelineProblemBody": {
+        "additionalProperties": false,
+        "description": "One problem of an invalid definition (FG-CI-0001).",
+        "properties": {
+          "line": {
+            "description": "1-based; 0 for the whole file.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "The stable reason (crates/forge-ci/README.md).",
+            "type": "string"
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "line",
+          "reason",
+          "subject"
         ],
         "type": "object"
       },
@@ -14940,6 +15213,281 @@
         "summary": "Suspend CODEOWNERS enforcement for 1 to 1440 minutes or enforce it again (people only; Maintainer at or above every protection of the project)",
         "x-forge-action": "CodeownersEnforcementToggle",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/pipelines": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipelines",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Only the pipelines of this branch (`main` or `refs/heads/main`)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only pipelines with an id below this one (the previous page's `next_before`)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At most this many pipelines (default 20)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelinePage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit (project readers; metadata only)",
+        "x-forge-action": "PipelineRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_pipelines",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPipelineRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Run a pipeline by hand on a branch's tip ({\"ref\": \"main\"}): 201 the pipeline (pending, skipped or invalid; a manual run is never protected, so a job with secrets is invalid); 404 FG-REPO-0023 without the branch or .forge-ci.yml; 503 FG-CI-0002 when the definition could not be read (Developer)",
+        "x-forge-action": "PipelineCreate",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipelines_pipeline_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt); 404 FG-REPO-0005 when the project has no such pipeline (project readers; metadata only)",
+        "x-forge-action": "PipelineRead"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/cancel": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_pipelines_pipeline_id_cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Cancel a pending or running pipeline and its unfinished jobs; 409 FG-CI-0003 when it is finished (Developer)",
+        "x-forge-action": "PipelineCancel"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_pipelines_pipeline_id_retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Retry a failed or cancelled pipeline: its failed and cancelled jobs get a new attempt; 409 FG-CI-0003 in any other state (Developer)",
+        "x-forge-action": "PipelineRetry"
       }
     },
     "/api/v1/projects/{id}/protected-refs": {

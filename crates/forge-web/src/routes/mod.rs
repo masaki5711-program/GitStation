@@ -54,6 +54,8 @@ pub mod users;
 // ── M3 O2: the push mirror's administration ──
 pub mod push_mirror;
 // ── end M3 O2 ──
+// ── M4 C2: CI pipelines ──
+pub mod pipelines;
 // ── M3 I2: project webhooks (ADR-0016 §8) ──
 pub mod webhooks;
 // ── end M3 I2 ──
