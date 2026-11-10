@@ -651,6 +651,23 @@ fn runner_routes(registry: Registry<AppState>) -> Registry<AppState> {
             r::complete,
         )
         .responds::<r::CompleteAnswer>(Verb::Post, r::COMPLETE)
+        // M4 C4 (ADR-0029 §3): the job's fetch of its pinned commit.
+        .route_with(
+            Verb::Get,
+            routes::job_fetch::INFO_REFS,
+            Action::RepoRead,
+            "Smart HTTP for a CI job (?service=git-upload-pack): the advertisement of refs/pipelines/<pipeline_id>/head only (a live job's token fgj_... of that project and commit; 404 FG-REPO-0005 otherwise, 401 FG-AUTH-0001 once the job ended)",
+            routes::job_fetch::COPY_INFO_REFS,
+            routes::job_fetch::advertise,
+        )
+        .route_with(
+            Verb::Post,
+            routes::job_fetch::UPLOAD_PACK,
+            Action::RepoRead,
+            "Smart HTTP for a CI job: upload-pack; every want checked reachable from the pipeline's pinned commit (a live job's token fgj_... of that project and commit)",
+            routes::job_fetch::COPY_UPLOAD_PACK,
+            routes::job_fetch::upload_pack,
+        )
 }
 
 /// A project's CI pipelines (M4 C2, plan 14 §4.2): read (metadata only),
@@ -2638,13 +2655,14 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 /// as the dispatcher reads it): exempt from the request timeout.
 pub(crate) fn is_git_rpc(req: &Request) -> bool {
     req.method() == axum::http::Method::POST
-        && matches!(
-            parse_web_path(req.uri().path(), req.uri().query()),
-            Ok(ParsedPath::Git {
-                route: GitRoute::UploadPack | GitRoute::ReceivePack,
-                ..
-            })
-        )
+        && (routes::job_fetch::is_job_upload_pack(req.uri().path())
+            || matches!(
+                parse_web_path(req.uri().path(), req.uri().query()),
+                Ok(ParsedPath::Git {
+                    route: GitRoute::UploadPack | GitRoute::ReceivePack,
+                    ..
+                })
+            ))
 }
 
 async fn request_timeout(

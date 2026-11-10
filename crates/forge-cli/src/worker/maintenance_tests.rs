@@ -33,6 +33,15 @@ fn rid(request: &str) -> RequestId {
 /// A ready repository of a new user `name`, created on disk by the real
 /// provisioning handler.
 async fn ready_repo(t: &FreshDb, storage: &Storage, name: &str) -> RepoId {
+    ready_project(t, storage, name).await.0
+}
+
+/// [`ready_repo`] with its project.
+async fn ready_project(
+    t: &FreshDb,
+    storage: &Storage,
+    name: &str,
+) -> (RepoId, forge_core::ProjectId) {
     let p = project(t, name).await;
     let mut runner = JobRunner::new(t.db.clone(), WorkerId::generate()); // clone: pool handles
     runner
@@ -42,7 +51,7 @@ async fn ready_repo(t: &FreshDb, storage: &Storage, name: &str) -> RepoId {
         .expect("register");
     let ran = runner.run_once().await.expect("claim").expect("a job ran");
     assert!(matches!(ran, Ran::Succeeded(_)), "{ran:?}");
-    p.repository_id
+    (p.repository_id, p.project_id)
 }
 
 /// Plumbing on the bare repository (test setup only).
@@ -868,5 +877,84 @@ async fn the_schedule_reaps_a_lost_run_outside_the_window() {
         job_state(&t, MAINTAIN_JOB).await.is_empty(),
         "nothing enqueued outside the window"
     );
+    t.drop_now().await;
+}
+
+/// M4 C4 review: the run deletes the pipeline refs of every pipeline that
+/// is not live (finished, or unknown) and keeps a live one's; the count is
+/// logged with the job's request id.
+#[tokio::test]
+async fn a_maintenance_run_deletes_finished_pipelines_refs() {
+    use forge_db::pipelines::{
+        create, definition_hash, CopyMark, NewCiJob, NewPipeline, PipelineRequest, Planned, Source,
+    };
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = storage();
+    let (repo, project) = ready_project(&t, &storage, "pip").await;
+    let path = storage.root.path_for(repo);
+    with_history(&path);
+    let live = create(
+        &t.db,
+        &NewPipeline {
+            request: PipelineRequest {
+                project,
+                git_ref: forge_core::RefName::parse("refs/heads/main").expect("ref"),
+                sha: forge_core::ObjectId::parse(&"b".repeat(40)).expect("sha"),
+                source: Source::Manual,
+                merge_request: None,
+                triggered_by: None,
+            },
+            request_id: "req-plan".to_owned(),
+            definition_hash: Some(definition_hash(b"version: 1")),
+            protected: false,
+            copy_mark: CopyMark::Open,
+            planned: Planned::Jobs(vec![NewCiJob {
+                name: "build".to_owned(),
+                stage: "test".to_owned(),
+                wave: 0,
+                needs: Vec::new(),
+                image: format!("registry.internal/rust@sha256:{}", "a".repeat(64)),
+                timeout_s: 600,
+                tags: Vec::new(),
+                secrets: Vec::new(),
+            }]),
+        },
+    )
+    .await
+    .expect("pipeline")
+    .pipeline_id;
+    let main = plumb(&path, &["rev-parse", "refs/heads/main"], None);
+    let gone = live + 1000;
+    for id in [live, gone] {
+        plumb(
+            &path,
+            &["update-ref", &format!("refs/pipelines/{id}/head"), &main],
+            None,
+        );
+    }
+    let inner = handler(&t, &storage).inner();
+    let logs = Captured::default();
+    let guard = logs.install();
+    inner
+        .maintain_repo(repo, &rid("req-maint-pipes"), 1, BUDGET)
+        .await
+        .expect("run");
+    drop(guard);
+    let left = plumb(
+        &path,
+        &["for-each-ref", "--format=%(refname)", "refs/pipelines"],
+        None,
+    );
+    assert_eq!(left, format!("refs/pipelines/{live}/head"));
+    let row = ledger::row(&t.db, repo)
+        .await
+        .expect("row")
+        .expect("exists");
+    assert_eq!(row.outcome, Some(Outcome::Succeeded));
+    let events = logs.events();
+    let pruned = events_named(&events, "forge.git.pipeline_refs_pruned");
+    assert_eq!(pruned.len(), 1, "{events:?}");
+    assert_eq!(pruned[0]["fields"]["deleted"], 1);
+    assert_eq!(pruned[0]["fields"]["request_id"], "req-maint-pipes");
     t.drop_now().await;
 }

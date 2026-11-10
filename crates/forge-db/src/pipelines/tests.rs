@@ -683,3 +683,34 @@ fn assert_reason_ctx(err: &forge_errors::ForgeError, key: &str, value: &str) {
         err.context()
     );
 }
+
+/// M4 C4 review: the maintenance sweep keeps only the refs of live
+/// pipelines (`pending` / `running`); a finished or unknown id is not live.
+#[tokio::test]
+async fn only_pending_and_running_pipelines_are_live() {
+    let t = FreshDb::migrated().await;
+    let (_, web) = web(&t).await;
+    let p = web.project_id;
+    let mut ids = Vec::new();
+    for (n, status) in ["pending", "running", "succeeded", "failed", "canceled"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut new = new_pipeline(p, Source::Manual, Planned::Jobs(vec![a_job("build", &[])]));
+        new.request.git_ref = branch(&format!("b{n}"));
+        let id = create(&t.db, &new).await.expect("create").pipeline_id;
+        let job = if status == "running" {
+            "pending"
+        } else {
+            status
+        };
+        force_status(&t, id, status, job).await;
+        ids.push(id);
+    }
+    let mut asked = ids.clone();
+    asked.push(ids.iter().max().copied().unwrap_or(0) + 1000);
+    let live = live_among(&t.db, &asked).await.expect("live");
+    assert_eq!(live, ids[..2].to_vec());
+    assert!(live_among(&t.db, &[]).await.expect("none").is_empty());
+    t.drop_now().await;
+}

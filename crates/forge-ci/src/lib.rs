@@ -88,6 +88,9 @@ pub struct LintContext {
     /// The repository's protected branch patterns (exact names, or a prefix
     /// ending in `*`); `None` for [`LintContext::local_check`].
     protected_branches: Option<Vec<String>>,
+    /// [`LintContext::pinned_by_server`]: the secret-protection rule was
+    /// decided by the server when it planned these bytes.
+    secrets_decided: bool,
 }
 
 impl LintContext {
@@ -99,6 +102,7 @@ impl LintContext {
     pub fn with_protected_branches(patterns: Vec<String>) -> Self {
         Self {
             protected_branches: Some(patterns),
+            secrets_decided: false,
         }
     }
 
@@ -108,6 +112,21 @@ impl LintContext {
     pub fn local_check() -> Self {
         Self {
             protected_branches: None,
+            secrets_decided: false,
+        }
+    }
+
+    /// The runner's reading of bytes the server already linted and planned
+    /// with the real protected branches (M4 C4): the runner holds them only
+    /// when their sha256 equals the pipeline's `definition_hash`, and
+    /// whether a job may get secrets is the server's `secrets_allowed`, so
+    /// the secret-protection rule (which needs the protected branches the
+    /// runner does not know) is not checked again. Every other rule is.
+    /// No branch counts as protected.
+    pub fn pinned_by_server() -> Self {
+        Self {
+            protected_branches: None,
+            secrets_decided: true,
         }
     }
 
@@ -117,6 +136,10 @@ impl LintContext {
         self.protected_branches
             .as_deref()
             .is_some_and(|list| list.iter().any(|p| definition::pattern_matches(p, branch)))
+    }
+
+    pub(crate) fn secrets_decided(&self) -> bool {
+        self.secrets_decided
     }
 
     pub(crate) fn protected_branches(&self) -> Option<&[String]> {

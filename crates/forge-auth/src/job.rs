@@ -35,12 +35,13 @@ use forge_core::ProjectId;
 
 /// `authorize(principal, RepoRead, PinnedCopy { project, sha })`: a CI
 /// job's clone / fetch of its own project at its pipeline's pinned SHA
-/// (ADR-0029 §3). The only builder of [`Resource::PinnedCopy`]; holds no
-/// rule of its own. Every principal but a live job of that project and
-/// SHA is refused (a person or a service account: `FG-AUTH-0003
-/// reason=pinned_copy_without_job`). The Smart HTTP route that calls it
-/// and advertises only `refs/pipelines/<id>/head` lands with the
-/// pipelines (M4 C2/C3).
+/// (ADR-0029 §3). It and [`crate::PinnedCopyCtx`] (the job fetch route's
+/// context, M4 C4) are the only builders of [`Resource::PinnedCopy`]; both
+/// decide through `authorize()` and hold no rule of their own. Every
+/// principal but a live job of that project and SHA is refused (a person or
+/// a service account: `FG-AUTH-0003 reason=pinned_copy_without_job`). The
+/// Smart HTTP route (`/api/v1/runner/jobs/{job_id}/repo.git`) advertises
+/// only `refs/pipelines/<id>/head`.
 pub fn authorize_pinned_copy(
     principal: &Principal,
     project: ProjectId,

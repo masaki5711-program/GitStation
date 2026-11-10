@@ -918,3 +918,37 @@ async fn one_failing_job_does_not_stop_the_reaper_pass() {
     );
     w.t.drop_now().await;
 }
+
+/// M4 C4: the job fetch route's facts — the pipeline, its project and SHA,
+/// the project's repository — in one read; no job, no row.
+#[tokio::test]
+async fn a_jobs_copy_names_its_pipelines_project_sha_and_repository() {
+    let w = world().await;
+    let (r, _) = w.runner("r", &[]).await;
+    let p = w
+        .pipeline('c', false, vec![job("build", &[], &[], &[])])
+        .await;
+    let claimed = lease::claim(&w.t.db, r).await.expect("claim").expect("job");
+    let copy = lease::job_copy(&w.t.db, claimed.job_id)
+        .await
+        .expect("read")
+        .expect("a job");
+    assert_eq!(copy.job_id, claimed.job_id);
+    assert_eq!(copy.pipeline_id, p);
+    assert_eq!(copy.project, w.web.project_id);
+    assert_eq!(copy.sha.as_str(), "c".repeat(40));
+    let repo: i64 = w
+        .scalar(&format!(
+            "SELECT id::text FROM forge.repositories WHERE project_id = {}",
+            w.web.project_id.get()
+        ))
+        .await
+        .parse()
+        .expect("id");
+    assert_eq!(copy.repository.id.get(), repo);
+    assert!(lease::job_copy(&w.t.db, claimed.job_id + 1000)
+        .await
+        .expect("read")
+        .is_none());
+    w.t.drop_now().await;
+}

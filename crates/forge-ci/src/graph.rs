@@ -88,7 +88,7 @@ pub(crate) fn cyclic(def: &Definition) -> Vec<&str> {
 /// protected: covered by the repository's protected patterns. Without the
 /// list ([`LintContext::local_check`]) none is: `secret_protection_unknown`.
 fn lint_secrets(job: &Job, ctx: &LintContext, problems: &mut Vec<Problem>) {
-    if job.secrets.is_empty() {
+    if job.secrets.is_empty() || ctx.secrets_decided() {
         return;
     }
     if job.rules.merge_requests {

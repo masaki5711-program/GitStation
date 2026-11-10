@@ -24,7 +24,10 @@
 //!   `413 FG-CI-0006` past the job's limit.
 //! - `POST …/{job_id}/complete` (`RunnerJobComplete`): `{"attempt",
 //!   "result": "succeeded"|"failed", "exit_code"?}` → `{"status",
-//!   "pipeline_status"}`.
+//!   "pipeline_status"}`. A completion that ends the pipeline deletes its
+//!   ref `refs/pipelines/<id>/head` (M4 C4 review; a failure is logged as
+//!   `forge.ci.pipeline_ref_delete_failed` with its code and left to the
+//!   maintenance sweep — the completion itself stands).
 //!
 //! The job routes are decided on the job's lease (`RunnerJobCtx`): another
 //! runner's job or an ended one is `403 FG-AUTH-0003`; a lease that ran out
@@ -586,6 +589,12 @@ pub async fn complete(
                 w.input.exit_code,
             )
             .await?;
+        if matches!(
+            done.pipeline_status.as_str(),
+            "succeeded" | "failed" | "canceled"
+        ) {
+            drop_pipeline_ref(&state, &w.ctx.request_id, done.job_id, done.pipeline_id).await;
+        }
         json(CompleteAnswer {
             status: done.status.to_owned(),
             pipeline_status: done.pipeline_status,
@@ -593,6 +602,48 @@ pub async fn complete(
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
+}
+
+/// Delete the ended pipeline's ref (M4 C4 review). Never fails the
+/// completion: a failure is logged once here with its code, and the
+/// maintenance sweep deletes the ref later. Without Smart HTTP no job
+/// fetch ran, so there is no ref.
+async fn drop_pipeline_ref(
+    state: &AppState,
+    request_id: &forge_core::RequestId,
+    job: i64,
+    pipeline: i64,
+) {
+    let Some(smart) = state.smart_http.as_deref() else {
+        return;
+    };
+    let deleted = async {
+        let copy = pipelines(state)?.job_copy(job).await?.ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "completed_job_missing")
+        })?;
+        smart
+            .git
+            .delete_pipeline_ref(
+                &smart.storage,
+                copy.repository.id,
+                pipeline,
+                smart.limits.want_check_timeout,
+            )
+            .await
+    }
+    .await;
+    if let Err(e) = deleted {
+        tracing::warn!(
+            target: "forge_web",
+            event = "forge.ci.pipeline_ref_delete_failed",
+            error_code = e.code().id(),
+            request_id = %request_id,
+            job_id = job,
+            pipeline_id = pipeline,
+            error = %e,
+            "the ended pipeline's ref was not deleted; the maintenance sweep deletes it"
+        );
+    }
 }
 
 #[cfg(test)]

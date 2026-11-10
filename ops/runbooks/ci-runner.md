@@ -1,8 +1,10 @@
-# Runbook: ci-runner（FG-CI-0004、FG-CI-0005。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
+# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
 
 M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブの取得の long-poll、心拍とリース、ログ、完了、リースの回収）が
 期待どおりに動かないとき。表 `forge.ci_runners`・`forge.ci_job_tokens`・`forge.ci_log_chunks`・`forge.ci_jobs`（`runner_id`・`lease_until`・
-`lease_losses`）、worker のタスク `ci_lease_reaper`、doctor `ci.runners`。
+`lease_losses`）、worker のタスク `ci_lease_reaper`、doctor `ci.runners`。M4 C4 で Runner の本体 `forge-runner`（別の Linux ホスト、rootless
+Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`（隠した ref `refs/pipelines/<pipeline_id>/head` だけ）、
+運用者のコマンド `forge admin runner register|list|disable` が入った。
 
 ## Trigger
 
@@ -13,6 +15,11 @@ M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブ
 - Runner のホストのログに 409 `FG-CI-0004`（その Runner はジョブを止める）、401 `FG-AUTH-0001`（`reason=runner_disabled|unknown|mismatch`）、
   403 `FG-AUTH-0003`（`reason=lease_other_runner|job_finished`）、413 `FG-CI-0006`（ログの上限）
 - 利用者から「パイプラインが `pending` のまま進まない」と問い合わせがあった
+- Runner のホストのログ（`journalctl -u forge-runner`、JSON）に FG-CI-0007（コンテナを起動できない・ホストが rootless でない・
+  ジョブのディレクトリを消せない）、FG-CI-0008（`.forge-ci.yml` が `definition_hash` と一致しない）、FG-CI-0009（固定した
+  コミットを取得できない）、FG-CI-0010（ジョブの時間切れ）、FG-CI-0011（ジョブのイメージが `image_registries` の外）、
+  FG-CI-0012（ジョブの作業ディレクトリが `work_dir_max_bytes` を超えた）。
+  ジョブのログの最後の行にも同じコード
 
 ## Impact
 
@@ -43,13 +50,93 @@ M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブ
 6. 401 `FG-AUTH-0001` の Runner: ログの `credential=runner`・`reason`。`runner_disabled` は管理者が無効にした、`unknown` / `mismatch` は
    トークンのファイルが古い・壊れた（再登録が要る。トークンは登録のときに 1 回しか表示されない）。
 
+7. Runner のホストでの失敗（M4 C4）。ログの `context` の `reason`・`step` で分ける:
+   - FG-CI-0007 `podman_exit`（`step=create|start`、`podman_stderr`）: イメージが社内のミラーに無い・ダイジェストが違う・ストレージが一杯。
+     スクリプトが自分で 125 で終わったときは FG-CI-0007 ではなく、終了コード 125 の失敗（`podman inspect` で `exited` を確かめて分ける）。
+     Runner の利用者で `podman image exists <image>`、`podman system df`。`not_rootless` / `runs_as_root`: 下の「ホストの準備」と違う。
+     `workspace_dirty`: ジョブのディレクトリが消せず、**Runner は次のジョブを取らずに終了した**（`ls -la <work_dir>/job`）
+   - FG-CI-0008: `reason=hash_mismatch` は `expected`・`actual` を DB と比べる:
+     `SELECT definition_hash, sha FROM forge.ci_pipelines WHERE id = <pipeline_id>;` と、forge のホストのリポジトリで
+     `git --git-dir <repo> cat-file blob <sha>:.forge-ci.yml | sha256sum`。健全なリポジトリで一致しないなら不具合（request_id を添えて報告）
+   - FG-CI-0009: `step=fetch` で `git_stderr` が 401 なら、ジョブがもう終わっていた（トークンは終わりで失効する）。404 は
+     他のプロジェクト・他のコミットのジョブの経路（Runner の不具合）。接続の失敗は Runner のホストから
+     `curl -sS https://<forge>/healthz`。forge の側のログは同じ `job_id` で `route=job_info_refs|job_upload_pack`
+   - FG-CI-0011: `context` の `image` が設定の `image_registries` のどの接頭辞でも始まらない。git も pull もコンテナも動いていない。
+     イメージを社内のミラーに入れて `.forge-ci.yml` の `image` をミラーのもの（ダイジェストで固定）に直す。レジストリを足すのは
+     レビューの後（設定を変えて `systemctl restart forge-runner`）
+   - FG-CI-0012: `context` の `bytes`・`limit_bytes`。ジョブの終わりに `<work_dir>/job/work` がそれより大きかった（ジョブは失敗、
+     ディレクトリは消えている）。`forge.runner.workspace_unmeasured`（warn）は測れなかっただけでジョブは失敗にしない
+   - FG-CI-0010: ジョブの `timeout` を超えた。コンテナは `podman kill` と `podman rm --force` で消えている
+     （`podman ps -a --filter name=forge-job-` で残りが無いこと）
+
+## Runner のホストの準備（M4 C4、forge-runner）
+
+前提: forge とは別の Linux ホスト（計画 14 §10.1）、git 2.38 以上、Podman 4 以上。**Runner は root で動かない**（起動を拒む）。
+
+1. 専用の利用者を作り、rootless Podman を使えるようにする（変更は人の承認のあと）:
+   `useradd --create-home --shell /usr/sbin/nologin forge-runner`、`/etc/subuid`・`/etc/subgid` に範囲
+   （例 `forge-runner:200000:65536`）、`loginctl enable-linger forge-runner`。確かめる:
+   `sudo -u forge-runner podman info --format '{{.Host.Security.Rootless}}'` が `true`。
+2. ジョブのイメージは社内のレジストリのミラーだけ（ダイジェストで固定。計画 14 §9.3）。ジョブのコンテナはネットワークを持たない
+   （`--network=none`）。イメージの取得はホストの Podman がする（`--pull=missing`）。
+3. forge の管理者が forge のホストで登録し、表示されたトークンを 1 回だけ控える（再表示は無い）:
+   `forge admin runner register --name linux-1 --tags linux,podman --admin <管理者のユーザー名>`
+   （`--admin` は記録される登録者。有効な人の管理者でなければ FG-AUTH-0003）。一覧 `forge admin runner list`、
+   無効にする `forge admin runner disable <runner_id> --admin <管理者のユーザー名>`（監査の記録の操作者。そのトークンとジョブのトークンが次の要求から拒まれる）。
+   Web の管理画面はまだ無い（API の `POST /api/v1/admin/runners` は管理者の Web のセッションだけ）。
+4. トークンを Runner のホストのファイルに置く（ADR-0013）: `/etc/forge-runner/token`、所有者 `forge-runner`、モード 0600。
+   環境変数 `FORGE_RUNNER_TOKEN` でもよい（ファイルより優先）。`fgr_` で始まらないものは拒む（FG-SYS-0002）。
+5. 設定 `/etc/forge-runner/config.toml`:
+
+   ```toml
+   server = "https://git.example.internal"
+   token_file = "/etc/forge-runner/token"
+   work_dir = "/var/lib/forge-runner"      # forge-runner の利用者が書けること（`:` と `,` は使えない）
+   image_registries = ["registry.internal/"]   # 必須。ジョブのイメージはこのどれかで始まる（`/` で終わる接頭辞）
+   # ca_file = "/etc/forge-runner/internal-ca.pem"   # API と git の fetch（GIT_SSL_CAINFO）の両方が信頼する CA
+   # allow_insecure_http = false   # http の server は true のときだけ（既定は https 必須、FG-SYS-0002 reason=insecure_http）
+   # memory = "4g"   pids_limit = 4096   tmpfs_size = "1g"
+   # file_size_limit = "4g"   nofile_limit = 4096     # --ulimit=fsize / nofile
+   # work_dir_max_bytes = 21474836480                 # ジョブの終わりに確かめる（超えたら FG-CI-0012）
+   ```
+
+   **`work_dir` は容量の上限（クォータ）のあるファイルシステムに置く（必須）**。ジョブのコンテナは `/workspace`（= `<work_dir>/job/work`）に
+   書けるので、上限が無いとジョブがホストのディスクを使い切れる。コンテナには `--memory`・`--memory-swap`（同じ値、スワップを足さない）・
+   `--pids-limit`・`--ulimit=fsize`（1 ファイル）・`--ulimit=nofile` が付くが、ファイルの合計はファイルシステムでしか止められない。
+   どちらか（変更は人の承認のあと）:
+   - XFS のプロジェクトのクォータ: `work_dir` を `prjquota` 付きでマウントした XFS に置き、
+     `xfs_quota -x -c 'project -s -p /var/lib/forge-runner 42' /var/lib`、`xfs_quota -x -c 'limit -p bhard=20g 42' /var/lib`
+   - ループバックのファイルシステム: `fallocate -l 20G /var/lib/forge-runner.img`、`mkfs.ext4 /var/lib/forge-runner.img`、
+     `/etc/fstab` に `/var/lib/forge-runner.img /var/lib/forge-runner ext4 loop,nodev,nosuid 0 2`
+   `work_dir_max_bytes` はクォータより小さくする（ジョブの後の確かめ。クォータが無い・大きすぎるホストの網）。
+
+6. 確かめる: `sudo -u forge-runner forge-runner --config /etc/forge-runner/config.toml check`（設定・トークン・rootless）。
+7. systemd のユニット（`User=forge-runner`、`ExecStart=/usr/local/bin/forge-runner --config /etc/forge-runner/config.toml run`、
+   `Restart=on-failure`）で起動する。ログは JSON（`journalctl -u forge-runner`）。
+
+**ジョブの間で状態を残さない**: ジョブごとに `<work_dir>/job` を消してから空で作り、終わると消す（コンテナの作ったファイルは
+`podman unshare rm -rf` で消す）。**止めるとき**（`systemctl stop forge-runner` の SIGTERM、Ctrl-C）は、実行中のジョブを取り消しと同じように止め、
+コンテナを `podman kill` と `podman rm --force` で消し、ディレクトリを消して結果（失敗）を報告してから終わる（`forge.runner.shutdown_requested`
+→ `forge.runner.stopped`）。ユニットの `TimeoutStopSec` は 90 秒以上にする。**起動のとき**は、前の実行が残した `forge-job-*` のコンテナを
+すべて `podman rm --force` で消してから（`forge.runner.stale_container_removed`、warn）ジョブのディレクトリを消す。消せなければ
+FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podman create` → `podman start --attach` で動かし、終わると `podman rm --force` で必ず消える。ジョブのトークンは git の環境の設定
+（`http.extraHeader`）でだけ渡し、argv・コンテナの環境・ログに出さない（ログでは `[masked]`）。
+
+**本物の Podman の試験**: ホストを用意したら、そのホストで
+`FORGE_RUNNER_TEST_IMAGE=<image@sha256:…> cargo nextest run -p forge-runner --run-ignored only`
+（`a_real_container_runs_without_network_and_is_removed`）。
+
 ## Mitigate（変更は人の承認のあと）
 
-- Runner のプロセスを起こす・ホストを直す（C4 の `forge-runner`）。回収されたジョブは自動でやり直される（新しい `attempt`）。
+- Runner のプロセスを起こす・ホストを直す（`systemctl restart forge-runner`）。回収されたジョブは自動でやり直される（新しい `attempt`）。
+- FG-CI-0007 `workspace_dirty` で止まった Runner: Runner の利用者で `podman unshare rm -rf <work_dir>/job` の後に起動する。
+- FG-CI-0007 `podman_exit`: イメージを社内のミラーに入れる・`podman system prune`（Runner の利用者）の後、パイプラインを再実行する。
 - 無効にした Runner を有効に戻す（管理者の Web のセッション）: `PATCH /api/v1/admin/runners/{id}` `{"enabled": true}`。
 - ジョブのタグに合う Runner が無い: 管理者がタグを足す（`PATCH … {"tags": [...]}`）か、そのタグの Runner を登録する
-  （`POST /api/v1/admin/runners` `{"name", "tags"}`、応答の `token` を Runner のホストのトークンのファイルに置く。ADR-0013）。
-- トークンが漏れた・失われた: その Runner を無効にし、新しい名前で登録し直す（Runner は消さない。ジョブの記録が `runner_id` を持つ）。
+  （`forge admin runner register …` または `POST /api/v1/admin/runners` `{"name", "tags"}`、表示された `token` を Runner の
+  ホストのトークンのファイルに置く。ADR-0013）。
+- トークンが漏れた・失われた: その Runner を無効にし（`forge admin runner disable <id> --admin <管理者>`）、新しい名前で登録し直す（Runner は消さない。
+  ジョブの記録が `runner_id` を持つ）。
 - FG-CI-0004 で `failed` になったジョブ: Runner が健全になってから、パイプラインを再実行する（`gstn pipeline retry --project <id> <pipeline_id>`）。
 - **行を直接書き換えない**。`lease_until` や `status` を手で変えると、Runner と DB の状態が食い違い、同じジョブが 2 回動く。
 
@@ -70,8 +157,15 @@ M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブ
 - **ログ**: 追記だけ（`seq` の再送は何もしない）。1 チャンク 64 KiB（JSON で送るので文字は 32 KiB まで）、1 試行 4096 チャンク・16 MiB まで
   （FG-CI-0006）。**C3 にはログを読む経路が無い**。読み取りは C5 で、出力の機密の印を継いでエージェントに FG-AUTH-0022 を返す（ADR-0029 決定 5）。
 - **Runner のトークンはリポジトリも API も読めない**（FG-AUTH-0003）。ジョブのトークンは自分のプロジェクトの固定した SHA の複製
-  （`PinnedCopy`）だけで、それ以外の API は見えないプロジェクトと同じ FG-REPO-0005。ジョブの fetch の Smart HTTP の経路は C4 で入れる。
+  （`PinnedCopy`）だけで、それ以外の API は見えないプロジェクトと同じ FG-REPO-0005。ジョブの fetch の経路（C4）は
+  `refs/pipelines/<pipeline_id>/head` だけを広告し（初めての fetch で固定した SHA に作る。人の clone・push からは隠す）、want は
+  固定したコミットから届くものだけ（それ以外は帯域内の FG-GIT-0014）。終わったジョブのトークンは FG-AUTH-0001。
+- **`refs/pipelines/<id>/head` は動いている間だけ**: パイプラインを終わらせた完了の呼び出しが消す（失敗は forge のログの
+  `forge.ci.pipeline_ref_delete_failed`、warn、そのコード。完了そのものは成り立つ）。取り消し・回収で終わったものや消し損ねたものは、
+  リポジトリの保守（`repository.maintain`、runbook `repo-maintenance`）が `pending` / `running` でないパイプラインの ref をまとめて消す
+  （`forge.git.pipeline_refs_pruned`、`deleted`・`kept`。失敗は保守の `step=pipeline_refs`）。再実行したパイプラインは次のジョブの fetch で作り直す。
 
 ## 関連
 
-- 計画 14（M4）§4・§5 C3・§6、ADR-0029、runbook `ci-pipelines`、`crates/forge-pipelines/README.md`、`crates/forge-auth/README.md`（CI principals）。
+- 計画 14（M4）§4・§5 C3・C4・§6、ADR-0029、runbook `ci-pipelines`、`crates/forge-pipelines/README.md`、`crates/forge-auth/README.md`（CI principals）、
+  `crates/forge-runner/README.md`、`crates/forge-web/src/routes/job_fetch.rs`。

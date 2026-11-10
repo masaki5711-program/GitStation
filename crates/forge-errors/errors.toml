@@ -2482,3 +2482,87 @@ cause = "M4 C3: a runner appended a log chunk (`POST /api/v1/runner/jobs/{job_id
 diagnosis = "The log event carries `job_id`, `runner_id`, `attempt`, `seq`, `stored_bytes` and `limit_bytes` (or `chunks`). Read: SELECT count(*), sum(octet_length(body)) FROM forge.ci_log_chunks WHERE job_id = <job_id> AND attempt = <attempt>;"
 fix = "Make the job print less (quiet flags, write long reports to an artifact once C6 lands). Nothing to change on the server."
 test = "a_log_past_the_job_limit_is_refused"
+
+[[error]]
+code = "FG-CI-0007"
+name = "ContainerStartFailed"
+http_status = 503
+severity = "warn"
+user_message_ja = "CI のジョブのコンテナを起動できませんでした。ジョブは失敗として報告されました。"
+user_message_en = "The CI job's container could not be started. The job was reported as failed."
+user_message_id = "Kontainer tugas CI tidak dapat dijalankan. Tugas dilaporkan gagal."
+cause = "M4 C4 (plan 14, ADR-0029): `forge-runner` runs each job in a throwaway rootless Podman container (`podman create --network=none --read-only …`, then `podman start --attach`, argv only). Podman itself failed before the job's script ran: `podman create` failed (`step=create`: the image could not be pulled from the internal mirror or its digest is unknown, the storage is full, the user namespace is not set up), `podman start` exited 125 for a container `podman inspect` still shows as never started (`step=start`), or podman could not be started at all (the `podman` binary is missing or not executable). Also the runner host itself: the host is not rootless or the runner runs as root (it refuses to run jobs), or the job directory could not be created, written or removed (`workspace_unusable` / `workspace_dirty`: the runner then takes no further job). Not a fault of the job's script (that is a plain `failed` result with its exit code; 125 from a container that exited, and 126 / 127, are the script's)."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs the failure once (warn) with `error_code`, `request_id` and in `context` `job_id`, `attempt`, `pipeline_id`, `project_id`, `reason` (`podman_exit` with `step` create / start / `spawn_failed` / `not_rootless` / `runs_as_root` / `workspace_unusable` / `workspace_dirty`), `exit_code` and `podman_stderr` (the last 2 KiB of Podman's own stderr), or `path` for the job directory; the job's log ends with the same code. `forge-runner check` repeats the host checks. On the runner host (as the runner's user): `podman info --format '{{.Host.Security.Rootless}}'` (must be true), `podman image exists <image>`, `podman system df`."
+fix = "Follow runbook ci-runner (Runner host): pull or mirror the image into the internal registry, free container storage (`podman system prune` as the runner's user), or repair the rootless setup (subuid / subgid ranges). Then retry the pipeline (gstn pipeline retry --project <id> <pipeline_id>)."
+runbook = "ci-runner"
+test = "a_podman_error_exit_is_container_start_failed"
+
+[[error]]
+code = "FG-CI-0008"
+name = "JobDefinitionMismatch"
+http_status = 409
+severity = "warn"
+user_message_ja = "CI のジョブの定義がパイプラインを作ったときのものと一致しません。ジョブは実行されませんでした。"
+user_message_en = "The CI job's definition does not match the one the pipeline was planned from. The job was not run."
+user_message_id = "Definisi tugas CI tidak cocok dengan definisi saat pipeline direncanakan. Tugas tidak dijalankan."
+cause = "M4 C4 (plan 14 C3 note, ADR-0029): the server keeps no job script; `forge-runner` reads `.forge-ci.yml` at the job's pinned commit and runs it only when its sha256 equals the claimed job's `definition_hash` (the bytes the pipeline was planned from), the file parses, and it still has the job with the claimed image and timeout. Any difference — the file is missing, its bytes changed (a corrupted repository, a forged pipeline row, a server bug), the job or its image is not in it, or the claim had no hash — fails the job before any container starts."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs the failure once (warn) with `error_code`, `request_id` and in `context` `job_id`, `attempt`, `pipeline_id`, `project_id`, `reason` (`claim_invalid` / `hash_mismatch` / `no_hash` / `definition_missing` / `definition_invalid` / `job_missing` / `image_mismatch` / `timeout_mismatch`) and, for a hash mismatch, `expected` and `actual`; the job's log ends with the same code. Compare with SELECT definition_hash, sha FROM forge.ci_pipelines WHERE id = <pipeline_id>; and `git cat-file blob <sha>:.forge-ci.yml | sha256sum` in the repository."
+fix = "Follow runbook ci-runner: a mismatch on a healthy repository is a defect (report it with the request id); a damaged repository is restored from backup. Push a new commit (or run the pipeline again) to plan a fresh pipeline."
+runbook = "ci-runner"
+test = "a_definition_hash_mismatch_fails_the_job_before_any_container"
+
+[[error]]
+code = "FG-CI-0009"
+name = "JobFetchFailed"
+http_status = 502
+severity = "warn"
+user_message_ja = "CI のジョブがリポジトリの固定したコミットを取得できませんでした。ジョブは失敗として報告されました。"
+user_message_en = "The CI job could not fetch the pinned commit of the repository. The job was reported as failed."
+user_message_id = "Tugas CI tidak dapat mengambil commit yang dipatok dari repositori. Tugas dilaporkan gagal."
+cause = "M4 C4: `forge-runner` fetches only the job's pinned commit, over Smart HTTP with the job's token (`/api/v1/runner/jobs/{job_id}/repo.git`, which advertises only `refs/pipelines/<pipeline_id>/head`), into a fresh work directory. git failed or ran out of time (`git init`, `git fetch`, `git checkout`), the fetched commit was not the pinned one, or the server refused the copy (the job ended and its token was revoked: FG-AUTH-0001; another project or commit: FG-REPO-0005)."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs the failure once (warn) with `error_code`, `request_id` and in `context` `job_id`, `attempt`, `pipeline_id`, `project_id`, `step` (`init` / `fetch` / `verify` / `checkout` / `read_definition`), `reason` (`exit` / `timeout` / `spawn_failed` / `sha_mismatch`), `exit_code` and `git_stderr` (the last 2 KiB, never the token). On the server, the job route logs the same `job_id` with `route=job_info_refs` / `job_upload_pack`."
+fix = "Follow runbook ci-runner: check that the runner host reaches forge over HTTPS (`curl -sS https://<forge>/healthz`), that git is installed (`git --version`, 2.38 or newer) and that the job was still running. Then retry the pipeline."
+runbook = "ci-runner"
+test = "a_failed_fetch_is_job_fetch_failed"
+
+[[error]]
+code = "FG-CI-0010"
+name = "JobTimedOut"
+http_status = 504
+severity = "info"
+user_message_ja = "CI のジョブが時間切れで止められました。"
+user_message_en = "The CI job was stopped because it ran out of time."
+user_message_id = "Tugas CI dihentikan karena waktunya habis."
+cause = "M4 C4: the job ran longer than its `timeout` in `.forge-ci.yml`. `forge-runner` killed its container (`podman kill`, then `podman rm -f`), removed the work directory and reported the job as failed."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (info) with `error_code`, `request_id` and in `context` `job_id`, `attempt`, `pipeline_id`, `project_id` and `timeout_s`; the job's log ends with the same code."
+fix = "Make the job faster or raise its `timeout` (at most 4 hours) in `.forge-ci.yml`, then push."
+runbook = "ci-runner"
+test = "a_job_past_its_timeout_kills_and_removes_its_container"
+
+[[error]]
+code = "FG-CI-0011"
+name = "JobImageNotAllowed"
+http_status = 409
+severity = "warn"
+user_message_ja = "CI のジョブのイメージは、この Runner で許可されたレジストリのものではありません。ジョブは実行されませんでした。"
+user_message_en = "The CI job's image is not from a registry this runner allows. The job was not run."
+user_message_id = "Image tugas CI bukan dari registri yang diizinkan runner ini. Tugas tidak dijalankan."
+cause = "M4 C4 review: `forge-runner` runs only images whose name starts with one of the prefixes in its configuration's `image_registries` (the internal registry mirror, plan 14 §9.3). The claimed job's image is outside every prefix, so the job fails before any git call, pull or container."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (warn) with `error_code`, `request_id` and in `context` `job_id`, `attempt`, `pipeline_id`, `project_id` and `image`; the job's log ends with the same code. Compare the image with `image_registries` in /etc/forge-runner/config.toml."
+fix = "Follow runbook ci-runner: mirror the image into the internal registry and change the job's `image` in `.forge-ci.yml` to the mirror (pinned by digest), or — after review — add the registry prefix to `image_registries` and restart the runner."
+runbook = "ci-runner"
+test = "an_image_outside_the_allowed_registries_is_refused_before_any_call"
+
+[[error]]
+code = "FG-CI-0012"
+name = "JobWorkspaceTooLarge"
+http_status = 507
+severity = "warn"
+user_message_ja = "CI のジョブの作業ディレクトリが上限を超えました。ジョブは失敗として報告され、作業ディレクトリは消されました。"
+user_message_en = "The CI job's work directory grew past its limit. The job was reported as failed and the work directory was removed."
+user_message_id = "Direktori kerja tugas CI melampaui batasnya. Tugas dilaporkan gagal dan direktori kerja dihapus."
+cause = "M4 C4 review: the runner configuration sets `work_dir_max_bytes`, and after the job's container ended its work directory (the checkout plus everything the job wrote to /workspace) held more bytes than that. The job is failed whatever its script's exit status, and the directory is removed like after every job. The hard bound while the job runs is the filesystem quota of `work_dir` (runbook ci-runner); this check catches a runner whose quota is missing or larger."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (warn) with `error_code`, `request_id` and in `context` `job_id`, `attempt`, `pipeline_id`, `project_id`, `bytes` and `limit_bytes`; the job's log ends with the same code. A work directory that could not be measured is logged as `forge.runner.workspace_unmeasured` (warn) and does not fail the job."
+fix = "Make the job write less into /workspace (build outputs to /tmp, which is a bounded tmpfs, or clean up before the end), or raise `work_dir_max_bytes` and the filesystem quota of `work_dir` together (runbook ci-runner), then retry the pipeline."
+runbook = "ci-runner"
+test = "a_work_directory_past_its_bound_fails_the_job_and_is_wiped"

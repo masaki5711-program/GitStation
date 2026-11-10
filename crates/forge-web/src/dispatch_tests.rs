@@ -1237,6 +1237,9 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         "routes/git.rs",
         "routes/git_push.rs",
         "routes/history.rs",
+        // M4 C4: a CI job's fetch (Smart HTTP API only: upload_pack_pinned,
+        // check_wants_pinned, ensure_pipeline_ref).
+        "routes/job_fetch.rs",
         // M3 X1: the browse API only (small_file, resolve_ref).
         "routes/spec_refs.rs",
         // M3 X4: the browse API only (refs, resolve_ref, the index scans).

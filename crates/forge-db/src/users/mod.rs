@@ -461,5 +461,27 @@ pub async fn id_by_username(db: &Db, username: &str) -> Result<UserId, ForgeErro
     id.map(UserId::new).ok_or_else(not_found)
 }
 
+/// Whether `user` is an active human administrator (the operator CLI's
+/// `forge admin runner register --admin <name>` records the runner as
+/// registered by such a person, M4 C4). Reads on the read pool; a missing
+/// user is `false`.
+pub async fn is_active_human_admin(db: &Db, user: UserId) -> Result<bool, ForgeError> {
+    const QUERY: &str = "users.is_active_human_admin";
+    let found: Option<bool> = db
+        .within(QUERY, async {
+            let mut conn = db.acquire().await?;
+            sqlx::query_scalar(
+                "SELECT kind = 'human' AND state = 'active' AND is_admin \
+                 FROM forge.users WHERE id = $1",
+            )
+            .bind(user.get())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| crate::read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(found.unwrap_or(false))
+}
+
 #[cfg(test)]
 mod tests;

@@ -1021,6 +1021,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-runner"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "forge-client",
+ "forge-core",
+ "forge-errors",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "forge-web"
 version = "0.1.0"
 dependencies = [

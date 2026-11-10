@@ -18473,6 +18473,68 @@
         "x-forge-max-body-bytes": 65536
       }
     },
+    "/api/v1/runner/jobs/{job_id}/repo.git/git-upload-pack": {
+      "post": {
+        "operationId": "post_api_v1_runner_jobs_job_id_repo_git_git_upload_pack",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Smart HTTP for a CI job: upload-pack; every want checked reachable from the pipeline's pinned commit (a live job's token fgj_... of that project and commit)",
+        "x-forge-action": "RepoRead"
+      }
+    },
+    "/api/v1/runner/jobs/{job_id}/repo.git/info/refs": {
+      "get": {
+        "operationId": "get_api_v1_runner_jobs_job_id_repo_git_info_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Smart HTTP for a CI job (?service=git-upload-pack): the advertisement of refs/pipelines/<pipeline_id>/head only (a live job's token fgj_... of that project and commit; 404 FG-REPO-0005 otherwise, 401 FG-AUTH-0001 once the job ended)",
+        "x-forge-action": "RepoRead"
+      }
+    },
     "/api/v1/session": {
       "get": {
         "operationId": "get_api_v1_session",

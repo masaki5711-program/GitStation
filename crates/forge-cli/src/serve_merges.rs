@@ -155,6 +155,13 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobLeaseLost
         | ErrorCode::NoRunnerAvailable
         | ErrorCode::JobLogTooLarge
+        // M4 C4: the runner host's, never a merge's.
+        | ErrorCode::ContainerStartFailed
+        | ErrorCode::JobDefinitionMismatch
+        | ErrorCode::JobFetchFailed
+        | ErrorCode::JobTimedOut
+        | ErrorCode::JobImageNotAllowed
+        | ErrorCode::JobWorkspaceTooLarge
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

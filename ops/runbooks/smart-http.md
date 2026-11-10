@@ -157,3 +157,15 @@ git には `fatal: remote error: <文> (request_id: …)`、アーカイブは J
 **限界**: 見るのは既定のブランチの先端だけ。履歴や他のブランチにだけある機密のファイルは見ない（clone すれば渡る）。
 だから運用の規則が先で、これは規則を破ったリポジトリを止める網にすぎない。漏えいが疑われるときは secret-removal の runbook の
 考え方（履歴から消す・アクセスを絞る）で扱う。
+
+## CI のジョブの fetch（M4 C4、ADR-0029 §3）
+
+Runner のジョブは人の `{path}.git` ではなく、ジョブの経路 `/api/v1/runner/jobs/{job_id}/repo.git`（`info/refs?service=git-upload-pack` と
+`git-upload-pack`、ジョブのトークン `fgj_…` の Bearer だけ）で固定したコミットを取る。
+
+- 広告は `refs/pipelines/<pipeline_id>/head` の 1 本だけ（初めての fetch でパイプラインの SHA に作る。動かさない。`HEAD`・ブランチ・タグ・
+  他のパイプラインは隠す）。人の clone・fetch・push には `refs/pipelines/` は見えず、書けない（`transfer.hideRefs`、want の検査も外す）。
+- want は固定したコミットとその祖先から届くものだけ。それ以外は帯域内の FG-GIT-0014 `want_unreachable`（ログの `route=job_upload_pack`、`job_id`）。
+- 他のプロジェクト・他のコミットのジョブの経路は FG-REPO-0005、終わったジョブのトークンは FG-AUTH-0001、Runner・人のトークンは FG-AUTH-0003。
+- POST は `git.http.timeout_ms` の下（要求の時間切れの例外）。ストリームの上限の鍵は `job:<job_id>`。
+- Runner の側の失敗は runbook `ci-runner`（FG-CI-0009）。

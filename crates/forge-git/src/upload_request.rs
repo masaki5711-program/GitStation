@@ -97,20 +97,24 @@ fn check_filter(payload: &[u8]) -> Result<(), ForgeError> {
     Ok(())
 }
 
-/// `deepen-not <rev>` naming a hidden merge request ref (M3 R1b review):
-/// git resolves the name on the server (DWIM: `merge-requests/1/v1` finds
-/// `refs/merge-requests/1/v1`), which would reveal a hidden ref's history
-/// boundary: `deepen_not_hidden`.
+/// `deepen-not <rev>` naming a hidden ref (M3 R1b review; M4 C4 review:
+/// the pipeline refs too): git resolves the name on the server (DWIM:
+/// `merge-requests/1/v1` finds `refs/merge-requests/1/v1`,
+/// `pipelines/5/head` finds `refs/pipelines/5/head`), which would reveal a
+/// hidden ref's history boundary: `deepen_not_hidden`. Both prefixes come
+/// from `hidden_refs`, the same constants as `transfer.hideRefs`.
 fn check_deepen_not(payload: &[u8]) -> Result<(), ForgeError> {
     let Some(rev) = payload.strip_prefix(b"deepen-not ") else {
         return Ok(());
     };
-    let hidden = crate::hidden_refs::HIDDEN_REF_PREFIX
-        .strip_prefix("refs/")
-        .unwrap_or(crate::hidden_refs::HIDDEN_REF_PREFIX)
-        .as_bytes();
-    if rev.windows(hidden.len()).any(|w| w == hidden) {
-        return Err(refused("deepen_not_hidden"));
+    for prefix in [
+        crate::hidden_refs::HIDDEN_REF_PREFIX,
+        crate::hidden_refs::PIPELINE_REF_PREFIX,
+    ] {
+        let hidden = prefix.strip_prefix("refs/").unwrap_or(prefix).as_bytes();
+        if rev.windows(hidden.len()).any(|w| w == hidden) {
+            return Err(refused("deepen_not_hidden"));
+        }
     }
     Ok(())
 }
