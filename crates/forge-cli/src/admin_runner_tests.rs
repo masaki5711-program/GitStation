@@ -78,7 +78,7 @@ async fn register_prints_the_token_once_and_disable_stops_it() {
     }
     assert_eq!(list_with(&t.db).await.expect("list").lines().count(), 2);
     // Disabled: the token is refused at once.
-    let out = disable_with(&t.db, &rid("req-cli-runner-off"), runner_id)
+    let out = disable_with(&t.db, &rid("req-cli-runner-off"), runner_id, "ada")
         .await
         .expect("disabled");
     assert!(out.contains("disabled"), "{out}");
@@ -86,9 +86,50 @@ async fn register_prints_the_token_once_and_disable_stops_it() {
         .await
         .expect_err("refused");
     assert_eq!(err.code(), ErrorCode::Unauthenticated);
-    let err = disable_with(&t.db, &rid("req-cli-runner-none"), runner_id + 100)
+    let err = disable_with(&t.db, &rid("req-cli-runner-none"), runner_id + 100, "ada")
         .await
         .expect_err("absent");
     assert_eq!(err.code(), ErrorCode::NotFound);
+    t.drop_now().await;
+}
+
+/// M4 C4 review: `disable --admin <user>` records that operator as the
+/// audit actor (not the registrant); a non-administrator changes nothing.
+#[tokio::test]
+async fn disable_records_the_operator_as_the_actor() {
+    let t = FreshDb::migrated().await;
+    human(&t, "ada", true).await;
+    human(&t, "cy", true).await;
+    human(&t, "bob", false).await;
+    register_with(&t.db, &rid("req-cli-runner-1"), &args("linux-1", "ada"))
+        .await
+        .expect("registered");
+    let runner_id = t
+        .json_rows("SELECT id FROM forge.ci_runners WHERE name = 'linux-1'")
+        .await[0]["id"]
+        .as_i64()
+        .expect("id");
+    let err = disable_with(&t.db, &rid("req-cli-runner-bob"), runner_id, "bob")
+        .await
+        .expect_err("not an administrator");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    let err = disable_with(&t.db, &rid("req-cli-runner-nobody"), runner_id, "nobody")
+        .await
+        .expect_err("no such user");
+    assert_ne!(err.code(), ErrorCode::Internal);
+    assert!(list_with(&t.db).await.expect("list").contains("\ttrue\t"));
+    disable_with(&t.db, &rid("req-cli-runner-cy"), runner_id, "cy")
+        .await
+        .expect("disabled");
+    let rows = t
+        .json_rows(
+            "SELECT a.actor_user_id, u.username, a.request_id FROM forge.audit_log a \
+             JOIN forge.users u ON u.id = a.actor_user_id \
+             WHERE a.action = 'ci_runner.updated' ORDER BY a.id",
+        )
+        .await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["username"], "cy");
+    assert_eq!(rows[0]["request_id"], "req-cli-runner-cy");
     t.drop_now().await;
 }

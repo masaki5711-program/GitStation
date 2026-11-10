@@ -82,7 +82,7 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
 3. forge の管理者が forge のホストで登録し、表示されたトークンを 1 回だけ控える（再表示は無い）:
    `forge admin runner register --name linux-1 --tags linux,podman --admin <管理者のユーザー名>`
    （`--admin` は記録される登録者。有効な人の管理者でなければ FG-AUTH-0003）。一覧 `forge admin runner list`、
-   無効にする `forge admin runner disable <runner_id>`（そのトークンとジョブのトークンが次の要求から拒まれる）。
+   無効にする `forge admin runner disable <runner_id> --admin <管理者のユーザー名>`（監査の記録の操作者。そのトークンとジョブのトークンが次の要求から拒まれる）。
    Web の管理画面はまだ無い（API の `POST /api/v1/admin/runners` は管理者の Web のセッションだけ）。
 4. トークンを Runner のホストのファイルに置く（ADR-0013）: `/etc/forge-runner/token`、所有者 `forge-runner`、モード 0600。
    環境変数 `FORGE_RUNNER_TOKEN` でもよい（ファイルより優先）。`fgr_` で始まらないものは拒む（FG-SYS-0002）。
@@ -135,7 +135,7 @@ FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podma
 - ジョブのタグに合う Runner が無い: 管理者がタグを足す（`PATCH … {"tags": [...]}`）か、そのタグの Runner を登録する
   （`forge admin runner register …` または `POST /api/v1/admin/runners` `{"name", "tags"}`、表示された `token` を Runner の
   ホストのトークンのファイルに置く。ADR-0013）。
-- トークンが漏れた・失われた: その Runner を無効にし（`forge admin runner disable <id>`）、新しい名前で登録し直す（Runner は消さない。
+- トークンが漏れた・失われた: その Runner を無効にし（`forge admin runner disable <id> --admin <管理者>`）、新しい名前で登録し直す（Runner は消さない。
   ジョブの記録が `runner_id` を持つ）。
 - FG-CI-0004 で `failed` になったジョブ: Runner が健全になってから、パイプラインを再実行する（`gstn pipeline retry --project <id> <pipeline_id>`）。
 - **行を直接書き換えない**。`lease_until` や `status` を手で変えると、Runner と DB の状態が食い違い、同じジョブが 2 回動く。

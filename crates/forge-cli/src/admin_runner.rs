@@ -7,7 +7,8 @@
 //! `forge admin token issue`); in production running these is an approved
 //! runbook step. `register` names the administrator the runner is recorded
 //! as registered by (`--admin`, an active human administrator: the
-//! table's `created_by`), and the audit row also carries
+//! table's `created_by`), `disable` the administrator who disables it
+//! (`--admin`, the audit row's actor), and the audit row also carries
 //! `forge-cli:<os user>`. The runner's token is printed once on stdout and
 //! never logged: the log event carries the runner id and name.
 
@@ -73,10 +74,27 @@ pub fn disable(
     cfg: &DatabaseConfig,
     request_id: &RequestId,
     runner_id: i64,
+    admin: &str,
 ) -> Result<String, ForgeError> {
     with_db(cfg, async |db| {
-        disable_with(db, request_id, runner_id).await
+        disable_with(db, request_id, runner_id, admin).await
     })
+}
+
+/// `name` as an active human administrator (the user recorded as the
+/// actor); `FG-AUTH-0003 reason=<reason>` otherwise.
+async fn administrator(
+    db: &Db,
+    name: &str,
+    reason: &'static str,
+) -> Result<forge_core::UserId, ForgeError> {
+    let admin = users::id_by_username(db, name).await?;
+    if !users::is_active_human_admin(db, admin).await? {
+        return Err(ForgeError::new(ErrorCode::Forbidden)
+            .with_context("reason", reason)
+            .with_context("user_id", admin.get()));
+    }
+    Ok(admin)
 }
 
 pub(crate) async fn register_with(
@@ -93,12 +111,7 @@ pub(crate) async fn register_with(
         return Err(invalid("description", "invalid"));
     }
     let tags = parse_tags(args.tags.as_deref())?;
-    let admin = users::id_by_username(db, &args.admin).await?;
-    if !users::is_active_human_admin(db, admin).await? {
-        return Err(ForgeError::new(ErrorCode::Forbidden)
-            .with_context("reason", "registrant_not_an_administrator")
-            .with_context("user_id", admin.get()));
-    }
+    let admin = administrator(db, &args.admin, "registrant_not_an_administrator").await?;
     let mut ctx: ChangeContext = context(request_id);
     ctx.actor = Actor::User(admin);
     let new = NewRunner {
@@ -134,16 +147,18 @@ pub(crate) async fn disable_with(
     db: &Db,
     request_id: &RequestId,
     runner_id: i64,
+    admin: &str,
 ) -> Result<String, ForgeError> {
-    let runner = ci_runners::get(db, runner_id).await?.ok_or_else(|| {
-        ForgeError::new(ErrorCode::NotFound)
+    let admin = administrator(db, admin, "operator_not_an_administrator").await?;
+    if ci_runners::get(db, runner_id).await?.is_none() {
+        return Err(ForgeError::new(ErrorCode::NotFound)
             .with_context("resource", "runner")
-            .with_context("runner_id", runner_id)
-    })?;
-    // The audit row names the administrator who registered the runner
-    // (the table's audit needs a user) and the operator's OS account.
+            .with_context("runner_id", runner_id));
+    }
+    // The audit row names the operating administrator (`--admin`) and the
+    // operator's OS account.
     let mut ctx = context(request_id);
-    ctx.actor = Actor::User(forge_core::UserId::new(runner.created_by));
+    ctx.actor = Actor::User(admin);
     let change = RunnerUpdate {
         enabled: Some(false),
         ..RunnerUpdate::default()
@@ -160,6 +175,7 @@ pub(crate) async fn disable_with(
         event = "forge.admin.runner.disabled",
         request_id = %request_id,
         runner_id,
+        user_id = admin.get(),
         "runner disabled"
     );
     Ok(format!(

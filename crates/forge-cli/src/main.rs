@@ -272,6 +272,9 @@ enum RunnerCommand {
     Disable {
         /// The runner id (from `runner list`).
         runner_id: i64,
+        /// The administrator recorded as disabling it (an active human administrator).
+        #[arg(long)]
+        admin: String,
     },
 }
 // ── end M4 C4 ──
@@ -718,8 +721,8 @@ fn main() -> ExitCode {
                 },
             ),
             RunnerCommand::List => admin_runner::list(&cfg.database),
-            RunnerCommand::Disable { runner_id } => {
-                admin_runner::disable(&cfg.database, &request_id, runner_id)
+            RunnerCommand::Disable { runner_id, admin } => {
+                admin_runner::disable(&cfg.database, &request_id, runner_id, &admin)
             }
         }),
         Command::Admin {
