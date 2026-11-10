@@ -4,8 +4,8 @@
 //! (`docs/plan/13-examples/`, synthetic data only).
 
 use super::{
-    display_markdown, join_cjk_lines, view_with_body, Piece, Resolver, Target, TargetDoc,
-    VIEW_VERSION,
+    display_markdown, join_cjk_lines, referrers, view_with_body, Piece, Referrer, Resolver, Target,
+    TargetDoc, VIEW_VERSION,
 };
 use crate::document::{parse_document, Classification, TypeDefault};
 
@@ -253,4 +253,65 @@ fn display_markdown_joins_prose_and_leaves_structure_alone() {
     // Paragraph ends stay.
     assert_eq!(display_markdown("一。\n\n二。\n三。"), "一。\n\n二。三。");
     assert_eq!(display_markdown(""), "");
+}
+
+// ── referrers (plan 13 §8.2: the documents that refer to one) ─────────
+
+fn doc(text: &str) -> crate::document::Document {
+    parse_document(text.as_bytes())
+}
+
+#[test]
+fn referrers_ignore_external_and_code_fence_refs() {
+    let a =
+        doc("---\ndoctype: t\nid: A-1\n---\n\nSee [[T-1]].\nAnd [[T-1#B-1]] and [[T-1#B-2]].\n");
+    let fenced = doc("---\ndoctype: t\nid: F-1\n---\n\n```\n[[T-1]]\n```\nInline `[[T-1]]` too.\n");
+    let external =
+        doc("---\ndoctype: t\nid: X-1\n---\n\n[[other/repo:T-1]] [[other/repo:T-1#B-1]]\n");
+    let own = doc("---\ndoctype: t\nid: T-1\n---\n\n::: req B-1\nText.\n:::\n\n[[T-1#B-1]]\n");
+    let own_translation =
+        doc("---\ndoctype: t\nid: T-1\nlang: en\ntranslation_of: T-1\n---\n\n[[T-1#B-1]]\n");
+    let unrelated = doc("---\ndoctype: t\nid: U-1\n---\n\n[[T-10]] [[T-1x]]\n");
+    let docs = [&a, &fenced, &external, &own, &own_translation, &unrelated];
+
+    let all = referrers(&docs, "T-1", None);
+    assert_eq!(
+        all.found,
+        vec![Referrer {
+            doc: 0,
+            refs: vec![
+                (6, None),
+                (7, Some("B-1".to_owned())),
+                (7, Some("B-2".to_owned()))
+            ],
+        }]
+    );
+    assert!(all.capped.is_empty());
+
+    let one = referrers(&docs, "T-1", Some("B-1"));
+    assert_eq!(
+        one.found,
+        vec![Referrer {
+            doc: 0,
+            refs: vec![(7, Some("B-1".to_owned()))],
+        }]
+    );
+    assert!(referrers(&docs, "T-1", Some("B-9")).found.is_empty());
+    assert!(referrers(&docs, "NOPE", None).found.is_empty());
+}
+
+#[test]
+fn a_document_whose_references_hit_the_cap_is_named() {
+    use crate::document::MAX_REFS_PER_DOCUMENT;
+    let mut text = String::from("---\ndoctype: t\nid: C-1\n---\n\n");
+    for _ in 0..=MAX_REFS_PER_DOCUMENT {
+        text.push_str("[[Z-1]]\n");
+    }
+    text.push_str("[[T-1]]\n");
+    let capped = doc(&text);
+    let plain = doc("---\ndoctype: t\nid: P-1\n---\n\n[[T-1]]\n");
+    let r = referrers(&[&plain, &capped], "T-1", None);
+    assert_eq!(r.capped, vec![1]);
+    assert_eq!(r.found.len(), 1);
+    assert_eq!(r.found[0].doc, 0);
 }

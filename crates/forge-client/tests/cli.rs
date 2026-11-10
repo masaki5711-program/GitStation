@@ -939,6 +939,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "doc fmt",
             "doc lint",
             "doc show",
+            "doc refs",
             "doc list",
             "doc migration show",
             "doc migration set",

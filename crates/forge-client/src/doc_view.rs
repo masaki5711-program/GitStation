@@ -1,4 +1,5 @@
-//! `gstn doc show` / `gstn doc list` (plan 13 stage 3): a project's
+//! `gstn doc show [--block]` / `gstn doc list` / `gstn doc refs` (plan 13
+//! stage 3, §8.2): a project's
 //! documents through the document API, read with your permissions. One
 //! `GET` each with `read_api`. The project id is formatted into the path
 //! as an integer and the document id only after clap checked it is a
@@ -226,5 +227,180 @@ pub fn list(
     let c = client(cli, env, io)?;
     let body = call(&c, Method::Get, &documents_path(project), &q, None)?;
     let human = list_text(&body);
+    emit(io, cli, body, &human)
+}
+
+/// The block route's answer as text: the document's summary, the block
+/// and the references inside it.
+pub(crate) fn block_text(d: &Value) -> String {
+    let empty = Vec::new();
+    let mut out = vec![
+        format!("{}  {}", text(d, "id"), text(d, "title")),
+        format!(
+            "type {}  classification {}  {}",
+            text(d, "doctype"),
+            text(d, "classification"),
+            text(d, "path")
+        ),
+    ];
+    if let Some(h) = d.get("section").and_then(Value::as_str) {
+        out.push(format!("## {}", terminal_text(h)));
+    }
+    if let Some(b) = d.get("block") {
+        let attrs: Vec<String> = b
+            .get("attrs")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty)
+            .iter()
+            .map(|a| format!("{}={}", text(a, "key"), text(a, "value")))
+            .collect();
+        let mut head = format!("[{} {}]", text(b, "kind"), text(b, "id"));
+        if !attrs.is_empty() {
+            head.push(' ');
+            head.push_str(&attrs.join(" "));
+        }
+        if b.get("deprecated").and_then(Value::as_bool) == Some(true) {
+            head.push_str(" (deprecated)");
+        }
+        out.push(head);
+        if let Some(body) = b.get("display").and_then(Value::as_str) {
+            out.push(terminal_text(body));
+        }
+    }
+    let refs = d.get("refs").and_then(Value::as_array).unwrap_or(&empty);
+    if !refs.is_empty() {
+        out.push(String::new());
+        out.push("References:".into());
+        for r in refs {
+            out.push(format!("  line {}  {}", text(r, "line"), reference_text(r)));
+        }
+    }
+    out.join("\n")
+}
+
+/// `gstn doc show --block`.
+pub fn show_block(
+    cli: &Cli,
+    project: i64,
+    (id, block): (&str, &str),
+    rev: Option<&str>,
+    lang: Option<&str>,
+    env: EnvFn<'_>,
+    io: &mut Io<'_>,
+) -> Result<()> {
+    let mut q: Vec<(String, String)> = Vec::new();
+    if let Some(r) = rev {
+        q.push(("ref".into(), r.to_owned()));
+    }
+    if let Some(l) = lang {
+        q.push(("lang".into(), l.to_owned()));
+    }
+    let c = client(cli, env, io)?;
+    let body = call(
+        &c,
+        Method::Get,
+        &format!("{}/{id}/blocks/{block}", documents_path(project)),
+        &q,
+        None,
+    )?;
+    let human = block_text(&body);
+    emit(io, cli, body, &human)
+}
+
+/// The referrers as one line each: `ID (lang)  classification  path  title
+/// (lines 11, 12#B-1)`, or `ID  (more confidential: id only)`.
+pub(crate) fn refs_text(l: &Value) -> String {
+    let empty = Vec::new();
+    let list = l
+        .get("referrers")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+    let mut out: Vec<String> = list
+        .iter()
+        .map(|r| {
+            let mut id = text(r, "id");
+            if let Some(lang) = r.get("lang").and_then(Value::as_str) {
+                id = format!("{id} ({})", crate::error::sanitize(lang));
+            }
+            if r.get("hidden").and_then(Value::as_bool) == Some(true) {
+                return format!("{id}  (more confidential: id only)");
+            }
+            let lines: Vec<String> = r
+                .get("refs")
+                .and_then(Value::as_array)
+                .unwrap_or(&empty)
+                .iter()
+                .map(|x| match x.get("block").and_then(Value::as_str) {
+                    Some(b) => format!("{}#{}", text(x, "line"), crate::error::sanitize(b)),
+                    None => text(x, "line"),
+                })
+                .collect();
+            format!(
+                "{id}  {}  {}  {}  (lines {})",
+                text(r, "classification"),
+                text(r, "path"),
+                text(r, "title"),
+                lines.join(", ")
+            )
+        })
+        .collect();
+    if list.is_empty() {
+        out.push("No referrers.".into());
+    }
+    if let Some(n) = l.get("total").and_then(Value::as_u64) {
+        out.push(format!("({n} referrers)"));
+    }
+    if let Some(next) = l.get("next_after").and_then(Value::as_str) {
+        out.push(format!("(more: --after {})", crate::error::sanitize(next)));
+    }
+    if let Some(inc) = l.get("incomplete").filter(|v| !v.is_null()) {
+        out.push(format!(
+            "(incomplete: {} {} — referrers may be missing)",
+            text(inc, "error_code"),
+            text(inc, "reason")
+        ));
+    }
+    out.join("\n")
+}
+
+/// The filters of `gstn doc refs`.
+pub struct RefsArgs<'a> {
+    pub block: Option<&'a str>,
+    pub rev: Option<&'a str>,
+    pub limit: Option<u32>,
+    pub after: Option<&'a str>,
+}
+
+/// `gstn doc refs`.
+pub fn refs(
+    cli: &Cli,
+    project: i64,
+    id: &str,
+    args: &RefsArgs<'_>,
+    env: EnvFn<'_>,
+    io: &mut Io<'_>,
+) -> Result<()> {
+    let mut q: Vec<(String, String)> = Vec::new();
+    if let Some(r) = args.rev {
+        q.push(("ref".into(), r.to_owned()));
+    }
+    if let Some(b) = args.block {
+        q.push(("block".into(), b.to_owned()));
+    }
+    if let Some(n) = args.limit {
+        q.push(("limit".into(), n.to_string()));
+    }
+    if let Some(a) = args.after {
+        q.push(("after".into(), a.to_owned()));
+    }
+    let c = client(cli, env, io)?;
+    let body = call(
+        &c,
+        Method::Get,
+        &format!("{}/{id}/referenced-by", documents_path(project)),
+        &q,
+        None,
+    )?;
+    let human = refs_text(&body);
     emit(io, cli, body, &human)
 }

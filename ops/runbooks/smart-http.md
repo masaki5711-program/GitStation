@@ -148,6 +148,12 @@ git には `fatal: remote error: <文> (request_id: …)`、アーカイブは J
 **Diagnose（読み取りのみ）**: ログを `request_id` で引き、`route`・`project_id`・`repo_id`・`audience`・`tip`・`paths` を読む。
 先端の印は `gstn browse blob --project <id> --ref <tip> --path <path>` で確かめる。
 
+**文書の API と MCP**: 文書の API（`GET …/documents`・`…/documents/{doc_id}`・`…/referenced-by`・`…/blocks/{block_id}`）は、
+エージェントの相手（`gstn mcp` は常に `Forge-Context-Audience: agent` を送る）に機密の文書を **無いものとして**
+`FG-REPO-0005`（ログの `reason=doc_confidential`）で答え、一覧と参照している側の一覧からは数えずに外す。ログはイベント
+`forge.context.withheld`（`route=documents_list|documents_show|documents_referenced_by|documents_block`、`documents` に外した数）。
+「文書が見つからない」という問い合わせは、まずこのイベントを `request_id` で引く。印が正しければ不具合ではない（人のアカウントで読む）。
+
 **限界**: 見るのは既定のブランチの先端だけ。履歴や他のブランチにだけある機密のファイルは見ない（clone すれば渡る）。
 だから運用の規則が先で、これは規則を破ったリポジトリを止める網にすぎない。漏えいが疑われるときは secret-removal の runbook の
 考え方（履歴から消す・アクセスを絞る）で扱う。

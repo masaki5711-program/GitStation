@@ -205,6 +205,57 @@ fn resolve(r: &Reference, mine: Classification, resolver: &dyn Resolver) -> Targ
     }
 }
 
+/// One document that refers to a target (plan 13 §8.2 "参照している側を逆に
+/// 引く").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Referrer {
+    /// The referring document: an index into the `docs` given to
+    /// [`referrers`].
+    pub doc: usize,
+    /// Its references to the target, in the written order: `(line, the
+    /// block named)`.
+    pub refs: Vec<(usize, Option<String>)>,
+}
+
+/// What [`referrers`] found.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Referrers {
+    /// In the order of `docs`.
+    pub found: Vec<Referrer>,
+    /// The documents whose references hit the parser's cap
+    /// ([`crate::document::MAX_REFS_PER_DOCUMENT`]): they may refer to the
+    /// target in what was not kept, so the answer is incomplete.
+    pub capped: Vec<usize>,
+}
+
+/// The documents of `docs` that refer to `target` (to its block `block`
+/// only, when given). Only this repository's references count (`[[repo:…]]`
+/// is another repository's); references inside code are no references (the
+/// parser keeps none). A document's references to itself — the target and
+/// its translations, which carry its `id` — are not referrers.
+pub fn referrers(docs: &[&Document], target: &str, block: Option<&str>) -> Referrers {
+    let mut out = Referrers::default();
+    for (i, d) in docs.iter().enumerate() {
+        if d.refs.len() >= crate::document::MAX_REFS_PER_DOCUMENT {
+            out.capped.push(i);
+        }
+        if d.id() == Some(target) {
+            continue;
+        }
+        let refs: Vec<(usize, Option<String>)> = d
+            .refs
+            .iter()
+            .filter(|r| r.repo.is_none() && r.doc == target)
+            .filter(|r| block.is_none_or(|b| r.block.as_deref() == Some(b)))
+            .map(|r| (r.line, r.block.clone()))
+            .collect();
+        if !refs.is_empty() {
+            out.found.push(Referrer { doc: i, refs });
+        }
+    }
+    out
+}
+
 /// The body's sections: text between top-level blocks, and the blocks.
 fn sections(text: &str, doc: &Document) -> Vec<SectionView> {
     let lines: Vec<&str> = text

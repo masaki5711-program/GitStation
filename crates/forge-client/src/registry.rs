@@ -1046,17 +1046,34 @@ pub const COMMANDS: &[CommandSpec] = &[
     // Plan 13 stage 3: the document API (the document view as JSON).
     CommandSpec {
         name: "doc show",
-        summary: "One document of a project through the server's document API: its front matter (title, id, type, owner, classification), sections of text and blocks, and every [[...]] reference resolved (found: its title; hidden: a more confidential target, its id only; broken; external). An AI agent's token is refused a confidential document (403 FG-AUTH-0021); no such document is 404 FG-REPO-0005.",
+        summary: "One document of a project through the server's document API: its front matter (title, id, type, owner, classification), sections of text and blocks, and every [[...]] reference resolved (found: its title; hidden: a more confidential target, its id only; broken; external). An AI agent is answered a confidential document as one that is not there; no such document is 404 FG-REPO-0005.",
         args: &[
             arg("--project", "option", true, "The project id."),
             ArgSpec { name: "doc_id", kind: "positional", required: true, repeatable: false, description: "The document id (ASCII letters, digits, '.', '_', '-'; e.g. RA-2026-014)." },
             arg("--ref", "option", false, "A commit id, a branch or a tag (default: the default branch)."),
             arg("--lang", "option", false, "A translation's language (<id>.<lang>.md, e.g. en)."),
+            arg("--block", "option", false, "Only this block (e.g. H-01): the block alone with the references inside it (a missing block is 404 FG-REPO-0005, as a missing document)."),
         ],
-        examples: &["gstn doc show --project 7 RA-2026-014", "gstn doc show --project 7 RA-2026-014 --ref v1.0 --json", "gstn doc show --project 7 QP-07-001 --lang en"],
+        examples: &["gstn doc show --project 7 RA-2026-014", "gstn doc show --project 7 RA-2026-014 --ref v1.0 --json", "gstn doc show --project 7 QP-07-001 --lang en", "gstn doc show --project 7 RA-2026-014 --block H-01"],
         scopes: &["read_api"],
-        routes: &["GET /api/v1/projects/{id}/documents/{doc_id}"],
+        routes: &["GET /api/v1/projects/{id}/documents/{doc_id}", "GET /api/v1/projects/{id}/documents/{doc_id}/blocks/{block_id}"],
         output: r#"{"type":"object","required":["version","ref","path","lang","translations","id","doctype","title","owner","classification","fields","sections","refs","problems","problem_count","incomplete"],"properties":{"version":{"type":"integer"},"classification":{"enum":["public","internal","confidential"]},"sections":{"type":"array","items":{"type":"object","required":["heading","line","pieces"],"properties":{"pieces":{"type":"array","items":{"type":"object","required":["type","line","markdown","display","block"],"properties":{"type":{"enum":["text","block"]}}}}}}},"refs":{"type":"array","items":{"type":"object","required":["repo","doc","block","line","target","title","block_kind"],"properties":{"target":{"enum":["found","hidden","broken","external"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc refs",
+        summary: "The documents that refer to one document (or, with --block, to one of its blocks) through the server's document API, by id (translations with their language): classification, path, title and the lines of the references; a referrer more confidential than the document is its id only. Paged with --limit / --after; a person's answer says how many in all. An AI agent is answered 404 FG-REPO-0005 for a confidential document, and its answer leaves confidential referrers out without saying how many. `incomplete` FG-DOC-0002 reason doc_refs: a document hit the 5000 references cap, so a referrer may be missing.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            ArgSpec { name: "doc_id", kind: "positional", required: true, repeatable: false, description: "The document id (ASCII letters, digits, '.', '_', '-'; e.g. RA-2026-014)." },
+            arg("--block", "option", false, "Only the references to this block (e.g. H-01)."),
+            arg("--ref", "option", false, "A commit id, a branch or a tag (default: the default branch)."),
+            arg("--limit", "option", false, "At most this many referrers, 1..=500 (server default 100)."),
+            arg("--after", "option", false, "The previous page's next_after (<id> or <id>.<lang>)."),
+        ],
+        examples: &["gstn doc refs --project 7 RA-2026-014", "gstn doc refs --project 7 RA-2026-014 --block H-01 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/documents/{doc_id}/referenced-by"],
+        output: r#"{"type":"object","required":["ref","id","block","referrers","total","next_after","incomplete"],"properties":{"referrers":{"type":"array","items":{"type":"object","required":["id","lang","hidden","title","doctype","path","classification","refs"],"properties":{"hidden":{"type":"boolean"},"refs":{"type":"array","items":{"type":"object","required":["line","block"]}}}}},"total":{"type":["integer","null"]},"next_after":{"type":["string","null"]},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
     },
     CommandSpec {
         name: "doc list",

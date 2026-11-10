@@ -1841,6 +1841,32 @@ pub enum DocCommand {
         /// A translation's language (e.g. en).
         #[arg(long, value_parser = parse_text)]
         lang: Option<String>,
+        /// Only this block of the document (e.g. H-01), with the
+        /// references inside it.
+        #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "BLOCK_ID")]
+        block: Option<String>,
+    },
+    /// The documents that refer to one document (or one of its blocks),
+    /// through the server's document API: id, classification, path,
+    /// title and the lines of the references.
+    Refs {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The document id (e.g. RA-2026-014).
+        #[arg(value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        id: String,
+        /// Only the references to this block (e.g. H-01).
+        #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "BLOCK_ID")]
+        block: Option<String>,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+        /// At most this many referrers, 1..=500 (server default 100).
+        #[arg(long, value_parser = parse_spec_limit)]
+        limit: Option<u32>,
+        /// The previous page's next_after.
+        #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "KEY")]
+        after: Option<String>,
     },
     /// A project's documents (id, classification, type, path, title),
     /// through the server's document API.
