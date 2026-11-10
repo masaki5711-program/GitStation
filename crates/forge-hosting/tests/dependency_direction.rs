@@ -88,6 +88,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-auth",
             "forge-git",
             "forge-core",
+            // Plan 13 stage 3: the document API maps forge-doc's view.
+            "forge-doc",
             "forge-errors",
         ],
     ),

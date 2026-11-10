@@ -328,7 +328,7 @@ pub(crate) fn withheld_logged(
     })
 }
 
-fn refused(audience: Audience, reason: &'static str) -> ForgeError {
+pub(crate) fn refused(audience: Audience, reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::ContextWithheld)
         .with_context("reason", reason)
         .with_context("audience", reason_of(audience))

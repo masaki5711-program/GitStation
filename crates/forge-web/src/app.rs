@@ -415,7 +415,8 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
 /// 系統"). `raw` and `archive` are `RepoRead` content routes
 /// (`routes::content`, M2 MR7). `pulls` / `pull` are the merge request
 /// screens (MR B0; their data is the `MergeRequestList` / `MergeRequestRead`
-/// API).
+/// API). `documents` is the document screens (plan 13 stage 3; their data
+/// is the document API, `RepoBrowse`).
 pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Tree,
     RouteWord::Blob,
@@ -429,6 +430,7 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Members,
     RouteWord::Pulls,
     RouteWord::Pull,
+    RouteWord::Documents,
 ];
 
 /// The words whose page is the SPA shell on a group (no merge request
@@ -1332,6 +1334,36 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<b::BlobBody>(Verb::Get, b::BLOB)
         .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+        // Plan 13 stage 3: the document view as JSON (the blob API's rule);
+        // a confidential document is withheld from an AI agent (plan 06 D-5).
+        .route_with(
+            Verb::Get,
+            routes::documents::LIST,
+            Action::RepoBrowse,
+            "A revision's documents in the plan 13 format: id, title, type, path, classification (paged; an agent's list leaves confidential ones out)",
+            routes::documents::LIST_OF,
+            routes::documents::list,
+        )
+        .responds::<routes::documents::DocumentListBody>(Verb::Get, routes::documents::LIST)
+        .queries(
+            Verb::Get,
+            routes::documents::LIST,
+            routes::documents::LIST_QUERY,
+        )
+        .route_with(
+            Verb::Get,
+            routes::documents::ONE,
+            Action::RepoBrowse,
+            "One document's view: front matter, sections of text and blocks, references resolved (a more confidential target: its id only)",
+            routes::documents::DocumentOf,
+            routes::documents::one,
+        )
+        .responds::<routes::documents::DocumentBody>(Verb::Get, routes::documents::ONE)
+        .queries(
+            Verb::Get,
+            routes::documents::ONE,
+            routes::documents::ONE_QUERY,
+        )
         // M3 X1: `.forge/repo.yml` and its spec references; every referenced
         // project decided again with the reader's own principal.
         .route_with(

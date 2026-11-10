@@ -194,6 +194,24 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 - `gstn doc migration show|set|clear --project <id>`。画面はプロジェクトの設定の「移行中の文書の検査」。
 - 上限: 木の一覧 50,000 件、`.md` 2,000 個、解析の上限（1 MiB）を超える `.md` 100 個（それぞれ上限＋1 バイトだけ読む。`gstn` と同じ。`doctype` の無い大きな Markdown は上限に当たらない。超えると `doc_large_files`）、合計 32 MiB、型の定義 64 個。最初に当たった上限を要約に書く。
 
+#### 文書の API（計画 13 段 3、§7.3「文書の JSON」）
+
+| 方法とパス | Action | 内容 |
+|---|---|---|
+| `GET /api/v1/projects/{id}/documents[?ref=&doctype=&limit=&after=]` | `RepoBrowse`（`read_api`、blob と同じ） | 文書の一覧（id の順、`id`・`title`・`doctype`・`path`・`classification`・`translations`）。`limit` 1〜500（既定 100）、続きは `next_after` を `after` に |
+| `GET …/documents/{doc_id}[?ref=&lang=]` | `RepoBrowse` | 文書の見え方（`version` = `forge_doc::render::VIEW_VERSION`）: frontmatter、節（見出し 2）ごとの本文（`markdown` = 書いたまま、`display` = 散文の行を和文の詰めでつないだもの）とブロック（種類・ID・属性・廃止）、`[[…]]` の参照の解決（`found` 題名つき / `hidden` ID だけ / `broken` / `external`） |
+
+- 読み方と上限は `forge/doc-lint` と同じ（上の上限。当たると `incomplete {error_code: FG-DOC-0002, reason}`）。`ref` の既定は既定のブランチ。
+  文書は `doctype` を書いた `.md` で、ファイル名が `<id>.md`（同じ id はパスの順で最初）。訳は `<id>.<lang>.md`（`lang` と `translation_of`）。
+- 区分は型の既定（`.forge/doctypes/<型>.yml` の `defaults.classification`）。型が読めないとき、自分で書いていない文書は `confidential`。
+- **参照先の方が機密（Q14）**: `hidden`。題名・ブロックの種類・本文は送らない（ID だけ）。
+- **AI エージェント（計画 06 D-5）**: 読んだ版か既定のブランチの先で `confidential` の文書は `403 FG-AUTH-0021`（`reason=doc_confidential`）。
+  一覧からは外し、`withheld.documents` に数える。
+- 無い文書・無い訳は、見えないプロジェクトと同じ `404 FG-REPO-0005`（ログに `reason=document_not_found` / `translation_not_found`）。
+- 1 回の要求で読む版は 2 つまで。仕様の API と同じ時間の上限（30 秒）・呼び出しの制限・同時の数（`FG-WEB-0010`）。
+- `gstn doc show --project <id> <doc_id> [--ref] [--lang] [--json]`、`gstn doc list --project <id>`。画面は `/{プロジェクト}/-/documents` と
+  `/-/documents/{id}`（ファイルの画面の「文書として開く」から）。
+
 ## 仕様の API（X4）
 
 `GET /api/v1/projects/{id}/specs/{requirements,versions,diff,trace}`（Action `SpecRead`、`read_api`、`RepoBrowse` と同じ判定）。

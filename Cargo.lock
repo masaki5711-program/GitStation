@@ -998,6 +998,7 @@ dependencies = [
  "forge-checks",
  "forge-core",
  "forge-db",
+ "forge-doc",
  "forge-errors",
  "forge-git",
  "forge-hosting",

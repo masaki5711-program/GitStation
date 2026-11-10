@@ -32,11 +32,12 @@
 
 use forge_core::checks::{CheckAnnotationLevel, CheckConclusion, DOC_LINT_CHECK};
 use forge_core::doc_lint_migration::LOWERED_RULE;
+use forge_core::RepoId;
 use forge_doc::doctype::MAX_DOCTYPE_BYTES;
 use forge_doc::document::MAX_DOCUMENT_BYTES;
 use forge_doc::lint::{lint, FileReport, Source, DOCTYPES_DIR};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::browse::{BlobListing, ListedBlob};
+use forge_git::browse::{BlobListing, Browser, ListedBlob};
 
 use crate::spec_checks::{annotation, completed};
 
@@ -190,6 +191,44 @@ pub fn select(listing: &BlobListing, limits: &DocLimits) -> (Selection, DocTree)
         }
     }
     (chosen, tree)
+}
+
+/// One revision's documents and type definitions, read within `limits`
+/// (the document API, plan 13 stage 3): the listing, selection and reads of
+/// [`crate::spec_index::index_head`] without the specification index — one
+/// listing of the whole tree, one `cat-file --batch` for the files read
+/// whole, and a capped read of each file over the parser's limit. A bound
+/// hit is named in [`DocTree::incomplete`]. Errors: forge-git's
+/// (`FG-GIT-…`, the repository's timeout and output caps), each with the
+/// commit.
+pub async fn read_tree(
+    browse: &Browser,
+    repo: RepoId,
+    commit: &str,
+    limits: &DocLimits,
+) -> Result<DocTree, ForgeError> {
+    let with_commit = |e: ForgeError| e.with_context("commit", commit.to_owned());
+    let listing = browse
+        .blobs_in_tree(repo, commit, limits.max_tree_entries)
+        .await
+        .map_err(with_commit)?;
+    let (chosen, mut tree) = select(&listing, limits);
+    let contents = browse
+        .read_blobs(repo, &chosen.whole)
+        .await
+        .map_err(with_commit)?;
+    for (b, bytes) in chosen.whole.iter().zip(contents) {
+        tree.add(&b.path, bytes);
+    }
+    for b in &chosen.prefix {
+        let bytes = browse
+            .read_blob_prefix(repo, b, read_cap(&b.path))
+            .await
+            .map_err(with_commit)?;
+        tree.add(&b.path, bytes);
+    }
+    tree.sort();
+    Ok(tree)
 }
 
 /// The code a problem of `path` with `rule` is reported under.

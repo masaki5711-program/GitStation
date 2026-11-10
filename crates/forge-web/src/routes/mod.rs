@@ -13,6 +13,8 @@ pub mod content;
 pub mod directory;
 // Plan 13 Q13: the document lint migration setting.
 pub mod doc_lint_migration;
+// Plan 13 stage 3: the document API (the document view as JSON).
+pub mod documents;
 pub mod git;
 pub mod git_push;
 pub mod groups;

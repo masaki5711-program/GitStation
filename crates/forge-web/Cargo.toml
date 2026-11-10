@@ -28,6 +28,8 @@ forge-oidc.workspace = true
 forge-review.workspace = true
 # M3 C1: the Checks API (web → checks → auth / git / db, ADR-0024 §11).
 forge-checks.workspace = true
+# Plan 13 stage 3: the document view (forge-doc is pure; ADR-0026 §8).
+forge-doc.workspace = true
 # M3 I1c: the integrations' event feed (web -> integ -> auth / db, plan 11 3.7).
 forge-integ.workspace = true
 # M3 N1: the notification settings (web -> notify -> auth / db, plan 11 3.7).
