@@ -468,3 +468,23 @@ Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 �
   なので、プロジェクトの読み手は連携の ID の有無を確かめられる（MR の確認の画面と同じ振る舞い。連携の ID は秘密ではなく、読めるのは有無だけ）→
   押せない人にはすべて 404 にするかを後で決める。(LOW) 画面は 403 をすべて「この人では行えない」と言う（連携の無効なども含む）→ 中立の文と
   `request_id` の表示を MR の画面と一緒に直す。
+
+## レビューの残りの指摘を直した（2026-11-10、クラウド）
+
+上の 2 つの確認で残した指摘のうち、利用者の判断が要らないものを直した（どれも先に失敗するテストを書いた）。
+
+- （MEDIUM authz）公開の経路（`WebShell`・`Health`・`WebLogin`・`OidcBackchannelLogout`。固定の経路と振り分けの公開の語の両方）は、
+  `Forge-Act-As` / `Forge-Assertion` を持つ要求を経路の前で **断る**（`FG-AUTH-0003 reason=act_as_not_allowed`、許可リストの外の経路と同じ。
+  何も解析・検索しない。`forge-web/src/act_as.rs` の `refuse_on_public`）。テスト `public_routes_refuse_act_as_headers_instead_of_ignoring_them`。
+- （LOW a）資格情報の無い要求の代理のヘッダーは `FG-AUTH-0001 reason=act_as_without_credential` で断る（外して匿名で続けない）。
+  テスト `act_as_headers_without_a_credential_are_refused_never_stripped`。
+- （LOW b）検証の後、経路が答える前に要求が切れたら、drop の守り（`act_as::Pending`）が `outcome=cancelled` の 1 行を出し、別のタスクで
+  `reject_unused`（`reject_reason=request_cancelled`）を行う（1 つの短いトランザクション。プールの取得と文の時間の上限の内）。実行時が無いときは
+  ログに出して 5 分で切れるのを待つ（従来どおり）。経路が答えた後の `finish` の途中で切れる狭い窓は残る。テスト
+  `a_request_cut_off_after_the_verification_rejects_its_assertion`。
+- （LOW c）鍵のバイトは drop で `zeroize` する（読み込みの途中の復号のバイトも）。全部同じバイトの鍵は読み込みで
+  `FG-SYS-0002 config_key=auth.act_as_hmac_keys_file reason=key_degenerate` で断る（runbook `act-as` に追記）。テストの鍵も作り直した。
+- （LOW d）MR の確認の画面のタイトルは 80 文字で切り、目立たない 1 行にした。番号と head の SHA を太字にした。
+- （LOW、両方の確認の画面）403 は「この人では行えない」と言わず、中立の文（権限やアプリの連携の設定などが理由のことがある）と
+  問い合わせ番号を出す（i18n `actAs.refusedTitle` / `refusedBody`、ja / en / id）。
+- 残した: (MEDIUM) 押せない人に 403 か 404 か（利用者の判断を待つ）。

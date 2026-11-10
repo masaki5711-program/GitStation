@@ -1036,9 +1036,16 @@ impl<S: DispatchState> Registry<S> {
     }
 
     /// Mount a fixed route's method router, behind authentication and the
-    /// guard unless the action is public.
+    /// guard unless the action is public (then behind the refusal of the
+    /// act-as headers, [`crate::act_as::refuse_on_public`]).
     fn mount(&mut self, path: &'static str, action: Action, mut one: MethodRouter<S>) {
-        if !action.is_public() {
+        if action.is_public() {
+            // ADR-0025 §2: the act-as headers are refused, never ignored.
+            one = one.route_layer(axum::middleware::from_fn_with_state(
+                action,
+                crate::act_as::public_route,
+            ));
+        } else {
             // The later route_layer runs first: token authentication builds
             // the principal, then the guard requires it.
             one = one

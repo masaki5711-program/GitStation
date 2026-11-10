@@ -7,7 +7,7 @@ import axe from 'axe-core';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PAGE_TTL_MS } from '../src/pages/confirm/ActAsConfirm';
+import { graphemes, PAGE_TTL_MS, shortTitle, TITLE_MAX_CHARS } from '../src/pages/confirm/ActAsConfirm';
 import { ARM_DELAY_MS, ARM_GAP_MS, eventTrust } from '../src/pages/confirm/useArmed';
 import { apiError, mockServer, PROJECT, SESSION, type Handler } from './mock';
 import { json, renderApp } from './render';
@@ -139,6 +139,31 @@ describe('the summary', () => {
     // No navigation header, no default focus.
     expect(screen.queryByRole('navigation')).toBeNull();
     expect(document.activeElement === button).toBe(false);
+  });
+
+  // Review of ADR-0025 (2026-11-09, security LOW d): the title is the
+  // author's text — shown cut short and quiet; the number and the commit are
+  // the facts the person checks.
+  it('cuts a long merge request title short and makes the number and the head prominent', async () => {
+    const long = `Please approve ${'x'.repeat(300)} END-OF-TITLE`;
+    await open(routes({ [`GET ${CONFIRM}`]: () => json(200, view({ title: long })) }));
+    await approve();
+    expect(screen.queryByText(long)).toBeNull();
+    expect(screen.queryByText(/END-OF-TITLE/)).toBeNull();
+    const shown = screen.getByTestId('mr-title');
+    expect(shown.textContent.endsWith('…')).toBe(true);
+    expect(graphemes(shown.textContent).length).toBe(TITLE_MAX_CHARS + 1);
+    expect(shown.getAttribute('title')).toBeNull();
+    expect(screen.getByTestId('mr-iid').textContent).toBe('!3');
+    expect(screen.getByTestId('mr-iid').tagName).toBe('STRONG');
+    expect(screen.getByText(HEAD).closest('strong')).toBeTruthy();
+  });
+
+  it('never cuts a character in half and keeps a title on one line', () => {
+    const family = '👨‍👩‍👧';
+    expect(shortTitle(family.repeat(100))).toBe(`${family.repeat(TITLE_MAX_CHARS)}…`);
+    expect(shortTitle('a\n\nb\tc')).toBe('a b c');
+    expect(shortTitle('x'.repeat(TITLE_MAX_CHARS))).toBe('x'.repeat(TITLE_MAX_CHARS));
   });
 
   it('says it in simple Japanese too, and for unapprove', async () => {
@@ -426,11 +451,15 @@ describe('the states', () => {
     await approve();
   });
 
-  it('refuses another person without any detail (403)', async () => {
+  // Review of ADR-0025 (2026-11-10, LOW): a 403 is not always "another
+  // person" (a disabled integration is a 403 too): a neutral sentence and the
+  // request id, never the server's detail.
+  it('refuses on 403 with a neutral sentence and the request id, without any detail', async () => {
     await open(routes({ [`GET ${CONFIRM}`]: () => apiError(403, 'Secret detail about roles.', 'req-403') }));
-    expect(await screen.findByRole('heading', { name: 'You cannot do this' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'This cannot be confirmed' })).toBeTruthy();
+    expect(screen.queryByText(/someone else's account/)).toBeNull();
     expect(screen.queryByText(/Secret detail/)).toBeNull();
-    expect(screen.queryByTestId('request-id')).toBeNull();
+    expect(screen.getByTestId('request-id').textContent).toBe('req-403');
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
 

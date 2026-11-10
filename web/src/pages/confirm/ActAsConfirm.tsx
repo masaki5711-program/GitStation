@@ -37,7 +37,25 @@ import { useArmed } from './useArmed';
 export const PAGE_TTL_MS = 10 * 60 * 1000;
 export const PAGE_TTL_MINUTES = PAGE_TTL_MS / 60000;
 
-export type NoticeKind = 'invalidLink' | 'wrongPerson' | 'notFound' | 'bindingNotFound' | 'expired' | 'alreadyDecided' | 'stale';
+/** The longest merge request title shown (characters). The title is the
+ * author's text, not a fact forge checked: it is shown cut short and quiet,
+ * and the number and the commit are what the person compares. */
+export const TITLE_MAX_CHARS = 80;
+
+/** The user-perceived characters of `text` (grapheme clusters: an emoji
+ * or a combined character is never cut in half). */
+export function graphemes(text: string): string[] {
+  return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), (s) => s.segment);
+}
+
+/** `text` on one line, cut to at most `max` characters, ending in "…" when
+ * it was cut. */
+export function shortTitle(text: string, max = TITLE_MAX_CHARS): string {
+  const chars = graphemes(text.replace(/\s+/g, ' ').trim());
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max).join('')}…`;
+}
+
+export type NoticeKind = 'invalidLink' | 'refused' | 'notFound' | 'bindingNotFound' | 'expired' | 'alreadyDecided' | 'stale';
 
 export type End = { kind: 'done' } | { kind: 'canceled' } | { kind: NoticeKind; requestId: string | null };
 
@@ -84,8 +102,10 @@ export function ActAsConfirm() {
     const e = confirmation.error;
     const f = e instanceof ApiFailure && e.failure.kind === 'api' ? e.failure : null;
     if (f?.status === 403) {
-      // The refusal says nothing more: not who may, not why.
-      body = <Notice kind="wrongPerson" requestId={null} />;
+      // The refusal says nothing more: not who may, not why (a 403 is also a
+      // disabled integration, so it never blames the person). The request
+      // id lets an administrator find the logged reason.
+      body = <Notice kind="refused" requestId={f.requestId} />;
     } else if (f?.status === 404) {
       body = <Notice kind="notFound" requestId={f.requestId} />;
     } else {
@@ -134,7 +154,7 @@ export function Notice({ kind, requestId }: { kind: NoticeKind; requestId: strin
   const { t } = useTranslation();
   const text = {
     invalidLink: [t('actAs.invalidTitle'), t('actAs.invalidBody')],
-    wrongPerson: [t('actAs.wrongPersonTitle'), t('actAs.wrongPersonBody')],
+    refused: [t('actAs.refusedTitle'), t('actAs.refusedBody')],
     notFound: [t('actAs.notFoundTitle'), t('actAs.notFoundBody')],
     bindingNotFound: [t('actAs.notFoundTitle'), t('actAs.binding.notFoundBody')],
     expired: [t('actAs.expiredTitle'), t('actAs.expiredBody')],
@@ -264,13 +284,20 @@ function Confirmation({
           {projectInfo.isSuccess ? projectInfo.data.path : t('actAs.projectN', { id: project })}
         </Row>
         <Row label={t('actAs.rowMr')}>
-          {t('actAs.mrN', { iid })} <span className={styles.mrTitle}>{data.title}</span>
+          <strong className={styles.fact} data-testid="mr-iid">
+            {t('actAs.mrN', { iid })}
+          </strong>{' '}
+          <span className={styles.mrTitle} data-testid="mr-title">
+            {shortTitle(data.title)}
+          </span>
         </Row>
         <Row label={t('actAs.rowBranches')}>
           <code>{data.source_branch}</code> {t('actAs.into')} <code>{data.target_branch}</code>
         </Row>
         <Row label={t('actAs.rowHead')}>
-          <code className={styles.sha}>{data.head_sha}</code>
+          <strong className={styles.fact}>
+            <code className={styles.sha}>{data.head_sha}</code>
+          </strong>
         </Row>
         <Row label={t('actAs.rowTargetTip')}>
           <code className={styles.sha}>{data.target_sha}</code>

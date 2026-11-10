@@ -223,6 +223,61 @@ async fn the_act_as_confirmation_page_cannot_be_framed() {
     }
 }
 
+/// ADR-0025 §2 (review 2026-11-09, authz MEDIUM): a public route (the
+/// shell, the assets, liveness / readiness, the sign-in, the back-channel
+/// logout) never acts for a person, and the act-as headers are refused
+/// there — never silently ignored. `FG-AUTH-0003 reason=act_as_not_allowed`
+/// (the refusal of every route outside the allowlist), before the route
+/// runs: never the shell's bytes.
+#[tokio::test]
+async fn public_routes_refuse_act_as_headers_instead_of_ignoring_them() {
+    let assertion = format!("fga_{}_{}", "0".repeat(16), "1".repeat(64));
+    let shell = sha256(crate::ui::shell_html());
+    let mut uris: Vec<(&str, String)> = SHELL_PATHS
+        .iter()
+        .flat_map(|p| [("GET", (*p).to_owned()), ("HEAD", (*p).to_owned())])
+        .collect();
+    for uri in [
+        "/-/assets/index-0000.js",
+        "/healthz",
+        "/readyz",
+        "/-/auth/login",
+        "/-/auth/callback?code=x&state=y",
+    ] {
+        uris.push(("GET", uri.to_owned()));
+    }
+    uris.push(("POST", "/-/auth/backchannel-logout".to_owned()));
+    for headers in [
+        vec![("forge-act-as", "user:1")],
+        vec![("forge-assertion", assertion.as_str())],
+        vec![
+            ("forge-act-as", "employee:E-1"),
+            ("forge-assertion", &assertion),
+        ],
+        // Malformed or doubled: refused the same way, nothing parsed.
+        vec![("forge-act-as", "user:a@b"), ("forge-act-as", "user:2")],
+    ] {
+        for (method, uri) in &uris {
+            let a = send_with(AppConfig::default(), method, uri, &headers).await;
+            assert_eq!(
+                a.status,
+                StatusCode::FORBIDDEN,
+                "{method} {uri} {headers:?}"
+            );
+            if *method != "HEAD" {
+                assert_eq!(a.code(), "FG-AUTH-0003", "{method} {uri}");
+                assert_ne!(sha256(&a.bytes), shell, "{method} {uri}: never the shell");
+            }
+            // The refusal still carries its class's security headers.
+            assert_common(&a, uri);
+        }
+    }
+    // Without the headers the same public routes answer as before (the
+    // shell tests above stay meaningful: they send none).
+    assert_eq!(get("/healthz").await.status, StatusCode::OK);
+    assert_eq!(sha256(&get("/acme").await.bytes), shell);
+}
+
 #[cfg(not(feature = "embed-ui"))]
 #[tokio::test]
 async fn without_embed_ui_the_shell_is_the_placeholder() {

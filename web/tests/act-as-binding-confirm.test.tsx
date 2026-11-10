@@ -160,10 +160,11 @@ describe('the binding confirmation', () => {
     expect(server.calls.some((c) => c.path === CONFIRM)).toBe(false);
   });
 
-  it('refuses another person without detail (403) and says not found on 404', async () => {
+  it('refuses on 403 with a neutral sentence and the request id (no detail), and says not found on 404', async () => {
     const first = await open(routes({ [`GET ${CONFIRM}`]: () => apiError(403, 'Secret detail about roles.', 'req-403') }));
-    expect(await screen.findByRole('heading', { name: 'You cannot do this' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'This cannot be confirmed' })).toBeTruthy();
     expect(screen.queryByText(/Secret detail/)).toBeNull();
+    expect(screen.getByTestId('request-id').textContent).toBe('req-403');
     first.unmount();
     window.sessionStorage.clear();
     await open(routes({ [`GET ${CONFIRM}`]: () => apiError(404, 'Not found.', 'req-404') }));

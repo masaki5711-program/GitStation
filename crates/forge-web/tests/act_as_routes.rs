@@ -35,7 +35,7 @@ fn ctx(request: &str) -> ChangeContext {
     ChangeContext::new(Actor::System, RequestId::parse(request).expect("id"))
 }
 
-const KEYS: &str = "1:BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc= active";
+const KEYS: &str = "1:BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY= active";
 const STATE: &str = "kanflow-state-0123456789abcdefABCDEF";
 
 /// Who calls: an injected principal (people), or a bearer token (the
@@ -592,6 +592,66 @@ async fn assertion_is_consumed_when_the_action_fails() {
         w.t.json_rows("SELECT count(*) AS n FROM forge.merge_request_approvals")
             .await;
     assert_eq!(approvals[0]["n"], 0);
+    w.t.drop_now().await;
+}
+
+/// Review of ADR-0025 (2026-11-09, security LOW b): a request cut off after
+/// its assertion was verified (the client went away while the body was
+/// still being read) does not leave the assertion `claimed` for 5 minutes:
+/// the drop guard rejects it (`request_cancelled`), and it cannot be used.
+#[tokio::test]
+async fn a_request_cut_off_after_the_verification_rejects_its_assertion() {
+    let w = world().await;
+    let assertion = w
+        .confirmed("approve", "kanflow-state-cut-0123456789abcdef")
+        .await;
+    let act_as = w.act_as(w.olga);
+    // A body that never ends: the route waits for it after the
+    // authentication (and the act-as verification) admitted the request.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(1);
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    tx.send(Ok(axum::body::Bytes::from_static(b"{\"sha\":")))
+        .await
+        .expect("first chunk");
+    let req = Request::builder()
+        .method("POST")
+        .uri(w.mr("/approve"))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", w.kanflow))
+        .header("forge-act-as", &act_as)
+        .header("forge-assertion", &assertion)
+        .body(Body::from_stream(stream))
+        .expect("request");
+    let cut = tokio::time::timeout(Duration::from_millis(500), w.router.clone().oneshot(req)).await;
+    assert!(
+        cut.is_err(),
+        "the request must still be waiting for its body"
+    );
+    drop(tx);
+    let id = public_id(&assertion);
+    let mut state = String::new();
+    for _ in 0..100 {
+        state = w.assertion_state(&id).await;
+        if state != "claimed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(state, "rejected");
+    let rows =
+        w.t.json_rows(&format!(
+            "SELECT reject_reason FROM forge.act_as_assertions WHERE public_id = '{id}'"
+        ))
+        .await;
+    assert_eq!(rows[0]["reject_reason"], "request_cancelled");
+    let (status, later) = w.approve_as(w.olga, &assertion, &w.head).await;
+    assert_eq!(
+        (status, code(&later)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0020"),
+        "{later}"
+    );
     w.t.drop_now().await;
 }
 

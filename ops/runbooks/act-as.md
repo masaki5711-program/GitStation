@@ -12,7 +12,7 @@ PM ツール（kanflow）が、**本人として** forge を操作する「代�
 
 - kanflow の承認・読み取りが `403 FG-INT-0006`（本人を解決できない）または `403 FG-AUTH-0020`（主張が無効）で失敗する。
 - kanflow の要求が `403 FG-AUTH-0003` の `reason=act_as_not_configured` / `act_as_no_integration` / `integration_disabled` / `act_as_requires_service_account` / `agent_token`、または `403 FG-AUTH-0002 required_scope=act_as` で失敗する。
-- `forge doctor` の `act_as.keys` が `FAIL ... FG-SYS-0002`（鍵のファイルが読めない・形が不正・`active` が 0 か 2 つ以上、または `reason=act_as_keys_missing`: `act_as` スコープの有効なトークンがあるのに鍵が無い）。
+- `forge doctor` の `act_as.keys` が `FAIL ... FG-SYS-0002`（鍵のファイルが読めない・形が不正・全部同じバイトの鍵（`reason=key_degenerate`: すべて 0 などの仮の値。`openssl rand -base64 32` で作り直す）・`active` が 0 か 2 つ以上、または `reason=act_as_keys_missing`: `act_as` スコープの有効なトークンがあるのに鍵が無い）。
 - `forge serve` が `FG-SYS-0002 config_key=auth.act_as_hmac_keys_file` で起動しない。
 - ログ `forge.auth.act_as` に `reason=ambiguous`（**データの破損**として扱う）、または `reason=mac_mismatch`（**改ざんの兆候**として扱う）。
 - `FG-INT-0006` が短い時間に急増する（kanflow の誤設定か、利用者の存在の探索の兆候）。

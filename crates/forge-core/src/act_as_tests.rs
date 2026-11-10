@@ -5,8 +5,18 @@ use forge_errors::ErrorCode;
 
 use super::*;
 
+/// 32 key bytes derived from `byte` (never all the same byte: such a key
+/// is refused, `key_degenerate`).
+fn key_bytes(byte: u8) -> [u8; 32] {
+    let mut k = [byte; 32];
+    for (i, b) in k.iter_mut().enumerate() {
+        *b = b.wrapping_add(i as u8);
+    }
+    k
+}
+
 fn key_line(kid: i16, byte: u8, marker: &str) -> String {
-    let b64 = base64::engine::general_purpose::STANDARD.encode([byte; 32]);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(key_bytes(byte));
     format!("{kid}:{b64} {marker}")
 }
 
@@ -349,12 +359,23 @@ fn the_key_file_needs_exactly_one_active_key() {
     assert_eq!(reason(&key_line(0, 1, "active")), "kid_invalid");
     assert_eq!(reason(&key_line(1, 1, "primary")), "unknown_marker");
     assert_eq!(reason("1:AQEB active"), "key_length");
+    // Review of ADR-0025 (2026-11-09, security LOW c): a key of one
+    // repeated byte (all zeros, a placeholder) is refused at load.
+    for byte in [0u8, 7, 0xff] {
+        let b64 = base64::engine::general_purpose::STANDARD.encode([byte; 32]);
+        assert_eq!(
+            reason(&format!("1:{b64} active")),
+            "key_degenerate",
+            "{byte}"
+        );
+    }
     assert_eq!(reason("1:!!! active"), "key_not_base64");
     assert_eq!(reason("nonsense"), "malformed_line");
     let ok = ActAsKeys::parse(&format!("# comment\n\n{}\n", key_line(3, 1, "active")))
         .expect("comments and blank lines are ignored");
     assert_eq!(ok.active_kid().expect("active"), 3);
-    assert!(!format!("{ok:?}").contains("AQEB"));
+    let b64 = base64::engine::general_purpose::STANDARD.encode(key_bytes(1));
+    assert!(!format!("{ok:?}").contains(&b64[..8]));
 }
 
 #[test]
@@ -373,4 +394,19 @@ fn the_claimed_mac_is_keyed_and_stable() {
     // The claimed purpose differs from the assertion's: the same key never
     // yields the same value for both.
     assert!(!a.contains("S1"));
+}
+
+/// Review of ADR-0025 (2026-11-09, security LOW c): the key bytes are wiped
+/// from memory when the ring is dropped.
+#[test]
+fn the_key_bytes_are_wiped_on_drop() {
+    fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    wiped_on_drop::<Key>();
+    let mut key = Key {
+        kid: 1,
+        bytes: key_bytes(3),
+        state: KeyState::Active,
+    };
+    zeroize::Zeroize::zeroize(&mut key);
+    assert_eq!(key.bytes, [0u8; 32]);
 }

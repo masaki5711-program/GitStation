@@ -68,7 +68,8 @@ export function ActAsBindingConfirm() {
     const e = confirmation.error;
     const f = e instanceof ApiFailure && e.failure.kind === 'api' ? e.failure : null;
     if (f?.status === 403) {
-      body = <Notice kind="wrongPerson" requestId={null} />;
+      // Neutral (a disabled integration is a 403 too), with the request id.
+      body = <Notice kind="refused" requestId={f.requestId} />;
     } else if (f?.status === 404) {
       body = <Notice kind="bindingNotFound" requestId={f.requestId} />;
     } else if (f?.status === 400) {
