@@ -10,5 +10,6 @@ pub mod document;
 pub mod fmt;
 pub mod legacy;
 pub mod lint;
+pub mod render;
 pub mod spec_doc;
 pub mod yaml;
