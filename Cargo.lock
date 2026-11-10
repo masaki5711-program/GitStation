@@ -855,6 +855,7 @@ dependencies = [
 name = "forge-doc"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "toml",
  "yaml-rust2",
 ]

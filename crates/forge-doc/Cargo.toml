@@ -11,6 +11,7 @@ publish.workspace = true
 # allowed are forge-errors and pure parsing parts (tests/purity.rs).
 [dependencies]
 yaml-rust2.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 toml.workspace = true

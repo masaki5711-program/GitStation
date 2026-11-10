@@ -5,7 +5,7 @@
 //! a database or the network.
 
 /// Every dependency forge-doc may have (normal and build).
-const ALLOWED: &[&str] = &["forge-errors", "yaml-rust2"];
+const ALLOWED: &[&str] = &["forge-errors", "yaml-rust2", "regex"];
 
 fn names(table: Option<&toml::Value>) -> Vec<String> {
     table

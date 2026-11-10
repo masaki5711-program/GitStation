@@ -466,12 +466,12 @@ enum Open {
     Other,
 }
 
-/// A code fence: its character and length.
-struct Fence(u8, usize);
+/// A code fence: its character and length (shared with [`crate::document`]).
+pub(crate) struct Fence(pub(crate) u8, pub(crate) usize);
 
 /// The fence a line opens (or closes), when it is one: up to three spaces,
 /// then three or more backticks or tildes.
-fn fence_of(line: &str) -> Option<Fence> {
+pub(crate) fn fence_of(line: &str) -> Option<Fence> {
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > 3 {
         return None;
