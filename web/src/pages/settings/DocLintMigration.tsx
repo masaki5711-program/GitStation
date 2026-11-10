@@ -35,6 +35,25 @@ export function nextDay(day: string): string {
   return next.toISOString().slice(0, 10);
 }
 
+/** When a migration date stops applying: the end of `day` in UTC (the next
+ * day's 00:00 UTC), in the viewer's own time (`timeZone` for tests). The
+ * moment comes from the server's date string, not the browser's clock. */
+export function cutoff(day: string, language: string, timeZone?: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  if (y === undefined || m === undefined || d === undefined) return day;
+  const end = new Date(Date.UTC(y, m - 1, d + 1));
+  if (Number.isNaN(end.getTime())) return day;
+  return new Intl.DateTimeFormat(language, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+    ...(timeZone === undefined ? {} : { timeZone }),
+  }).format(end);
+}
+
 /** Why `raw` cannot be sent (the server has the last word), or null. */
 function dateProblem(raw: string, min: string, max: string, t: TFunction): string | null {
   const s = raw.trim();
@@ -74,13 +93,15 @@ function MigrationBody({ projectId, m }: { projectId: number; m: DocLintMigratio
   const problem = dateProblem(date, min, m.max_until, t);
   const busy = set.isPending || clear.isPending;
   const until = m.warn_until;
+  /** The day the help's cut-off is shown for: the date typed, else the first allowed. */
+  const shownDay = DATE.test(date.trim()) ? date.trim() : min;
   return (
     <>
       <p className={until !== null && m.in_force ? styles.warning : undefined}>
         {until === null
           ? t('settings.docLint.none')
           : m.in_force
-            ? t('settings.docLint.inForce', { until })
+            ? t('settings.docLint.inForce', { until, local: cutoff(until, i18n.language) })
             : t('settings.docLint.ended', { until })}
       </p>
       {until !== null && m.set_at !== null && (
@@ -110,7 +131,13 @@ function MigrationBody({ projectId, m }: { projectId: number; m: DocLintMigratio
             max={m.max_until}
             value={date}
             onChange={setDate}
-            help={t('settings.docLint.help', { min, max: m.max_until, today: m.today })}
+            help={t('settings.docLint.help', {
+              min,
+              max: m.max_until,
+              today: m.today,
+              local: cutoff(shownDay, i18n.language),
+              day: shownDay,
+            })}
             error={attempt > 0 ? problem : null}
             required
           />

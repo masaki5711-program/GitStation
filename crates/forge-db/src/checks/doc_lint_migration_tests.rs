@@ -262,3 +262,89 @@ async fn the_table_refuses_a_date_outside_the_bounds_of_the_day_it_was_set() {
         assert!(refused.is_err(), "{days}");
     }
 }
+
+/// Review (LOW): two writes of one project's date serialize on a per-project
+/// lock taken before the stored date is read, so the second sees the first
+/// (`Updated`, `previous` = the first's date) instead of both "creating".
+#[tokio::test]
+async fn a_write_waits_for_another_and_names_its_date_as_previous() {
+    let w = world().await;
+    let first = w.date(20).await;
+    let id = w.project().get();
+    // Another change of the setting holds the project's lock and writes a
+    // date; the command must wait for it before reading the stored date.
+    let mut held = w
+        .t
+        .hold_audited(
+            ("project", id),
+            &[format!(
+                "SELECT pg_advisory_xact_lock(hashtextextended('doc_lint_migration:' || {id}::text, 0))"
+            )],
+        )
+        .await;
+    let db = w.t.db.clone(); // clone: pool handles for the task
+    let (user, project) = (w.maintainer, w.project());
+    let second = w.date(40).await;
+    let until = second.clone(); // clone: moved into the task
+    let waiting = tokio::spawn(async move {
+        set_doc_lint_migration_decided(
+            &db,
+            &as_user(user, "req-second"),
+            project,
+            user,
+            &until,
+            |_| Ok(()),
+        )
+        .await
+        .map(|(o, ())| o)
+    });
+    w.t.until_waiting("pg_advisory_xact_lock").await;
+    held.fetch_text(&format!(
+        "INSERT INTO forge.doc_lint_migrations (project_id, warn_until, set_by) \
+         VALUES ({id}, '{first}'::date, {}) RETURNING to_char(warn_until, 'YYYY-MM-DD')",
+        user.get()
+    ))
+    .await;
+    held.commit().await;
+    let outcome = waiting.await.expect("join").expect("second set");
+    assert_eq!(outcome, SetOutcome::Updated);
+    let rows = w.audit("doc_lint_migration.set").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["previous"], serde_json::json!(first));
+    assert_eq!(rows[0]["warn_until"], serde_json::json!(second));
+
+    // Two at once: one creates, the other updates and names it.
+    let w = world().await;
+    let (a, b) = (w.date(10).await, w.date(11).await);
+    let (ra, rb) = tokio::join!(w.set("req-a", &a), w.set("req-b", &b));
+    let mut outcomes = vec![ra.expect("a"), rb.expect("b")];
+    outcomes.sort_by_key(|o| *o != SetOutcome::Created);
+    assert_eq!(outcomes, [SetOutcome::Created, SetOutcome::Updated]);
+    let rows = w.audit("doc_lint_migration.set").await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["previous"], serde_json::Value::Null);
+    assert_eq!(rows[1]["previous"], rows[0]["warn_until"]);
+}
+
+/// Review (LOW): moving `set_at` so the date is more than 180 days after it
+/// (or not after it) is refused by the table, whatever writes it.
+#[tokio::test]
+async fn an_update_that_breaks_the_bounds_of_set_at_is_refused() {
+    let w = world().await;
+    w.set("req-set", &w.date(30).await).await.expect("set");
+    for set_at in ["now() - interval '151 days'", "now() + interval '31 days'"] {
+        let mut tx = w.t.db.write_pool().begin().await.expect("begin");
+        let refused = sqlx::query(&format!(
+            "UPDATE forge.doc_lint_migrations SET set_at = {set_at} WHERE project_id = $1"
+        ))
+        .bind(w.project().get())
+        .execute(&mut *tx)
+        .await;
+        let e = refused.expect_err(set_at);
+        assert_eq!(
+            e.as_database_error().and_then(|d| d.constraint()),
+            Some("doc_lint_migrations_until"),
+            "{set_at}"
+        );
+    }
+}

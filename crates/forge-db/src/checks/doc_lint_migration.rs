@@ -153,6 +153,24 @@ fn record(change: DocLintMigrationChange, project: ProjectId) -> ChangeRecord {
     }
 }
 
+/// One change of `project`'s setting at a time (review: the row may be
+/// absent, so `FOR UPDATE` alone lets two writes both "create" it and name
+/// a wrong `previous`). Taken after the decision, before the stored date is
+/// read; released at the end of the transaction.
+async fn lock_setting(tx: &mut ChangeTx, project: ProjectId) -> Result<(), ForgeError> {
+    tx.step(|c| async move {
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtextextended('doc_lint_migration:' || $1::text, 0))",
+        )
+        .bind(project.get())
+        .execute(c)
+        .await
+        .map_err(|e| query_error("doc_lint_migration.project_lock", e))
+    })
+    .await?;
+    Ok(())
+}
+
 async fn decided_facts(
     tx: &mut ChangeTx,
     project: ProjectId,
@@ -181,6 +199,7 @@ pub async fn set_doc_lint_migration_decided<P>(
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let decided = decide(&decided_facts(&mut tx, project, caller).await?)?;
+        lock_setting(&mut tx, project).await?;
         let until = warn_until.to_owned();
         let bounds: Bounds = tx
             .step(|c| async move {
@@ -263,6 +282,7 @@ pub async fn clear_doc_lint_migration_decided<P>(
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let decided = decide(&decided_facts(&mut tx, project, caller).await?)?;
+        lock_setting(&mut tx, project).await?;
         let removed: Option<String> = tx
             .step(|c| async move {
                 sqlx::query_scalar(

@@ -9,7 +9,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { Language } from '../src/i18n';
-import { nextDay } from '../src/pages/settings/DocLintMigration';
+import { cutoff, nextDay } from '../src/pages/settings/DocLintMigration';
 import { docLintMigration, settingsRoutes } from './merge-settings-fixtures';
 import { apiError, mockServer, SESSION, type Handler } from './mock';
 import { json, renderApp } from './render';
@@ -32,6 +32,17 @@ describe('document lint migration', () => {
     expect(nextDay('2026-11-10')).toBe('2026-11-11');
     expect(nextDay('2026-12-31')).toBe('2027-01-01');
     expect(nextDay('2028-02-28')).toBe('2028-02-29');
+  });
+
+  it('shows when a date ends in the viewer\'s own time zone (the end of the day in UTC)', () => {
+    // 2026-12-01 ends at 2026-12-02 00:00 UTC = 09:00 in Tokyo, 19:00 on Dec 1 in New York.
+    const tokyo = cutoff('2026-12-01', 'en', 'Asia/Tokyo');
+    expect(tokyo).toContain('Dec 2, 2026');
+    expect(tokyo).toContain('9:00');
+    const york = cutoff('2026-12-01', 'en', 'America/New_York');
+    expect(york).toContain('Dec 1, 2026');
+    expect(york).toContain('7:00');
+    expect(cutoff('2026-12-01', 'ja', 'Asia/Tokyo')).toContain('2026年12月2日 9:00');
   });
 
   it('a Maintainer sets the date with the CSRF header; the field is bounded by the server dates', async () => {
@@ -77,9 +88,11 @@ describe('document lint migration', () => {
     expect(await within(s).findByText('Broken references are warnings until 2027-03-31.')).toBeTruthy();
     expect(
       within(s).getByText(
-        'Migrating: broken references are warnings until 2027-03-31 (UTC). From the next day they are errors again.',
+        `Migrating: broken references are warnings through the end of 2027-03-31 in UTC (until ${cutoff('2027-03-31', 'en')} your time). After that they are errors again.`,
       ),
     ).toBeTruthy();
+    // The help names the cut-off of the date typed, in the viewer's time.
+    expect(within(s).getByText(new RegExp(`2027-03-31 ends at ${cutoff('2027-03-31', 'en').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} your time`))).toBeTruthy();
   });
 
   it('ends the migration now', async () => {
