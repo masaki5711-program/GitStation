@@ -122,7 +122,12 @@ fn ci_pipeline_is_reported_by_the_system_alone() {
         assert!(system_reports(&name(raw)), "{raw}");
         assert!(SYSTEM_REPORTED_CHECKS.contains(raw), "{raw}");
     }
-    for raw in ["ci/gates", "ci/pipeline-x", "ci/pipelines", "kanflow/pipeline"] {
+    for raw in [
+        "ci/gates",
+        "ci/pipeline-x",
+        "ci/pipelines",
+        "kanflow/pipeline",
+    ] {
         assert!(!system_reports(&name(raw)), "{raw}");
         assert!(!reserved_from_http(&name(raw)), "{raw}");
     }

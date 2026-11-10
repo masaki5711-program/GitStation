@@ -345,7 +345,9 @@ impl Checks {
         let reported = checks::reported_namespaces(&self.db, project).await?;
         Ok(names
             .iter()
-            .filter(|n| !forge_core::checks::system_reports(n) && !reported.contains(&n.namespace()))
+            .filter(|n| {
+                !forge_core::checks::system_reports(n) && !reported.contains(&n.namespace())
+            })
             .cloned() // clone: the answer owns its names
             .collect())
     }
