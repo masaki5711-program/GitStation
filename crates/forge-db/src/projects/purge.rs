@@ -553,6 +553,14 @@ async fn finish_steps(
         "projects.purge.finish.merge_settings",
     )
     .await?;
+    // Plan 13 Q13: the document lint's migration setting.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.doc_lint_migrations WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.doc_lint_migrations",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.merge_request_merges WHERE project_id = $1",

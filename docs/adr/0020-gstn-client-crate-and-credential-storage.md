@@ -39,3 +39,9 @@
 - 新しい領域 `CLI` は、エージェントモデルの `validate-error-registry.js` の `AREAS` と `forge-error-contract.md` にも加える必要がある
   （この MR の引き継ぎ事項）。
 - `self-update`（チェックサム + 署名）、配布、Windows 実機での保管庫の検証は後続。設定は `[update]` 表と `state.toml` を予約している。
+
+## Amendment（proposed、2026-11-09、ADR-0026）— `forge-doc` への依存
+
+ADR-0026 §8（proposed）: `gstn` が依存してよいサーバー側のクレートを **`forge-errors` と `forge-doc`** にする。`forge-doc` は文書の解析・整形・lint の
+純粋なクレート（I/O・秘密なし、依存は `forge-errors` と I/O の無い部品だけ）で、手元の `gstn doc fmt` / `lint` と CI の `forge/doc-lint` に同じ答えを
+出すため。サーバー側のどのクレートも `forge-client` に依存しない、は変えない。ADR-0026 が accepted になったときに有効になる。

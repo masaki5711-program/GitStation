@@ -176,6 +176,7 @@ fn decide_rule(
             Resource::Unresolved(reason) => Err(not_found(reason.as_str())),
             Resource::Group { .. }
             | Resource::Namespace { .. }
+            | Resource::RepoCopy { .. }
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
             | Resource::GroupTransfer { .. }
@@ -213,6 +214,7 @@ fn decide_rule(
         | Resource::Namespace { .. }
         | Resource::Project(_)
         | Resource::Ref { .. }
+        | Resource::RepoCopy { .. }
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -353,6 +355,7 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::Group { .. }
         | Resource::Namespace { .. }
         | Resource::Ref { .. }
+        | Resource::RepoCopy { .. }
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -437,6 +440,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::Group { .. }
         | Resource::Namespace { .. }
         | Resource::Ref { .. }
+        | Resource::RepoCopy { .. }
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

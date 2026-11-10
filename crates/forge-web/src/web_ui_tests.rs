@@ -137,6 +137,8 @@ const SHELL_PATHS: &[&str] = &[
     "/-/projects/42/-/commits/main",
     // The act-as confirmation popup (U3): the same shell for everyone.
     "/-/confirm/projects/42/merge-requests/7",
+    // The binding confirmation popup (X3).
+    "/-/confirm/projects/42/integration-bindings",
     // The in-app notifications page (U4).
     "/-/notifications",
 ];
@@ -180,10 +182,18 @@ async fn the_shell_is_byte_identical_for_every_path_by_hash() {
 #[tokio::test]
 async fn the_act_as_confirmation_page_cannot_be_framed() {
     let page = "/-/confirm/projects/42/merge-requests/7";
-    for (method, query) in [
-        ("GET", ""),
-        ("HEAD", ""),
-        ("GET", "?intent=approve&sha=abc&integration=3&state=s"),
+    let binding = "/-/confirm/projects/42/integration-bindings";
+    for (page, method, query) in [
+        (page, "GET", ""),
+        (page, "HEAD", ""),
+        (page, "GET", "?intent=approve&sha=abc&integration=3&state=s"),
+        (binding, "GET", ""),
+        (binding, "HEAD", ""),
+        (
+            binding,
+            "GET",
+            "?intent=binding_set&integration=3&kanflow_project_id=KF-1&resolves_work_items=false&state=s",
+        ),
     ] {
         let a = send_with(AppConfig::default(), method, &format!("{page}{query}"), &[]).await;
         assert_eq!(a.status, StatusCode::OK, "{method} {query}");
@@ -211,6 +221,61 @@ async fn the_act_as_confirmation_page_cannot_be_framed() {
         let a = get(uri).await;
         assert_eq!(a.header("x-frame-options"), Some("DENY"), "{uri}");
     }
+}
+
+/// ADR-0025 §2 (review 2026-11-09, authz MEDIUM): a public route (the
+/// shell, the assets, liveness / readiness, the sign-in, the back-channel
+/// logout) never acts for a person, and the act-as headers are refused
+/// there — never silently ignored. `FG-AUTH-0003 reason=act_as_not_allowed`
+/// (the refusal of every route outside the allowlist), before the route
+/// runs: never the shell's bytes.
+#[tokio::test]
+async fn public_routes_refuse_act_as_headers_instead_of_ignoring_them() {
+    let assertion = format!("fga_{}_{}", "0".repeat(16), "1".repeat(64));
+    let shell = sha256(crate::ui::shell_html());
+    let mut uris: Vec<(&str, String)> = SHELL_PATHS
+        .iter()
+        .flat_map(|p| [("GET", (*p).to_owned()), ("HEAD", (*p).to_owned())])
+        .collect();
+    for uri in [
+        "/-/assets/index-0000.js",
+        "/healthz",
+        "/readyz",
+        "/-/auth/login",
+        "/-/auth/callback?code=x&state=y",
+    ] {
+        uris.push(("GET", uri.to_owned()));
+    }
+    uris.push(("POST", "/-/auth/backchannel-logout".to_owned()));
+    for headers in [
+        vec![("forge-act-as", "user:1")],
+        vec![("forge-assertion", assertion.as_str())],
+        vec![
+            ("forge-act-as", "employee:E-1"),
+            ("forge-assertion", &assertion),
+        ],
+        // Malformed or doubled: refused the same way, nothing parsed.
+        vec![("forge-act-as", "user:a@b"), ("forge-act-as", "user:2")],
+    ] {
+        for (method, uri) in &uris {
+            let a = send_with(AppConfig::default(), method, uri, &headers).await;
+            assert_eq!(
+                a.status,
+                StatusCode::FORBIDDEN,
+                "{method} {uri} {headers:?}"
+            );
+            if *method != "HEAD" {
+                assert_eq!(a.code(), "FG-AUTH-0003", "{method} {uri}");
+                assert_ne!(sha256(&a.bytes), shell, "{method} {uri}: never the shell");
+            }
+            // The refusal still carries its class's security headers.
+            assert_common(&a, uri);
+        }
+    }
+    // Without the headers the same public routes answer as before (the
+    // shell tests above stay meaningful: they send none).
+    assert_eq!(get("/healthz").await.status, StatusCode::OK);
+    assert_eq!(sha256(&get("/acme").await.bytes), shell);
 }
 
 #[cfg(not(feature = "embed-ui"))]

@@ -454,21 +454,21 @@ pub(crate) const CONFIRM_ROWS: &[Row] = &[
     row(A::ActAsAssertionIssue, W::Developer, confirm(true, true, true, false), Allow),
     row(A::ActAsConfirmView, W::Developer, confirm(true, true, true, false), Allow),
     // A token, an act-as request, an agent: never.
-    row(A::ActAsConfirmView, W::DevTokenMergeApprove, APPROVE_OK, deny(E::InsufficientScope)),
-    row(A::ActAsAssertionIssue, W::DevTokenMergeApprove, APPROVE_OK, deny(E::InsufficientScope)),
-    row(A::ActAsAssertionIssue, APPROVER, APPROVE_OK, deny(E::Forbidden)),
-    row(A::ActAsConfirmView, APPROVER, APPROVE_OK, deny(E::Forbidden)),
-    row(A::ActAsAssertionIssue, W::ServiceAccountAdminSession, APPROVE_OK, deny(E::Forbidden)),
-    row(A::ActAsAssertionIssue, W::BotAdminSession, APPROVE_OK, deny(E::Forbidden)),
-    row(A::ActAsConfirmView, W::ServiceAccountAdminSession, APPROVE_OK, deny(E::Forbidden)),
-    row(A::ActAsConfirmView, W::BotAdminSession, APPROVE_OK, deny(E::Forbidden)),
+    row(A::ActAsConfirmView, W::DevTokenMergeApprove, APPROVE_OK, deny(E::NotFound)),
+    row(A::ActAsAssertionIssue, W::DevTokenMergeApprove, APPROVE_OK, deny(E::NotFound)),
+    row(A::ActAsAssertionIssue, APPROVER, APPROVE_OK, deny(E::NotFound)),
+    row(A::ActAsConfirmView, APPROVER, APPROVE_OK, deny(E::NotFound)),
+    row(A::ActAsAssertionIssue, W::ServiceAccountAdminSession, APPROVE_OK, deny(E::NotFound)),
+    row(A::ActAsAssertionIssue, W::BotAdminSession, APPROVE_OK, deny(E::NotFound)),
+    row(A::ActAsConfirmView, W::ServiceAccountAdminSession, APPROVE_OK, deny(E::NotFound)),
+    row(A::ActAsConfirmView, W::BotAdminSession, APPROVE_OK, deny(E::NotFound)),
     // Not bound, disabled, the intent's action refused, invisible.
-    row(A::ActAsAssertionIssue, W::Developer, confirm(false, true, false, false), deny(E::Forbidden)),
-    row(A::ActAsConfirmView, W::Developer, confirm(false, true, false, false), deny(E::Forbidden)),
-    row(A::ActAsAssertionIssue, W::Developer, confirm(false, false, true, false), deny(E::Forbidden)),
-    row(A::ActAsAssertionIssue, W::Developer, confirm(false, true, true, true), deny(E::SelfApprovalRefused)),
-    row(A::ActAsConfirmView, W::Developer, confirm(false, true, true, true), deny(E::SelfApprovalRefused)),
-    row(A::ActAsAssertionIssue, W::Reporter, APPROVE_OK, deny(E::Forbidden)),
+    row(A::ActAsAssertionIssue, W::Developer, confirm(false, true, false, false), deny(E::NotFound)),
+    row(A::ActAsConfirmView, W::Developer, confirm(false, true, false, false), deny(E::NotFound)),
+    row(A::ActAsAssertionIssue, W::Developer, confirm(false, false, true, false), deny(E::NotFound)),
+    row(A::ActAsAssertionIssue, W::Developer, confirm(false, true, true, true), deny(E::NotFound)),
+    row(A::ActAsConfirmView, W::Developer, confirm(false, true, true, true), deny(E::NotFound)),
+    row(A::ActAsAssertionIssue, W::Reporter, APPROVE_OK, deny(E::NotFound)),
     row(A::ActAsAssertionIssue, W::NonMember, APPROVE_OK, deny(E::NotFound)),
     row(A::ActAsConfirmView, W::NonMember, APPROVE_OK, deny(E::NotFound)),
     // An administrator's session sees every merge request and may approve
@@ -479,11 +479,20 @@ pub(crate) const CONFIRM_ROWS: &[Row] = &[
 
 /// Rows 1: every action an act-as request never performs, for a Developer
 /// person with a valid approve assertion on a bound project
-/// (`act_as_denied_for_<action>`, ADR-0024 #38).
+/// (`act_as_denied_for_<action>`, ADR-0024 #38). The act-as
+/// confirmation answers every refusal with the invisible project's 404
+/// (ADR-0025, decision of 2026-11-10).
 pub(crate) fn generated_denies() -> Vec<Row> {
     A::ALL
         .iter()
         .filter(|a| a.act_as_rule() == ActAsRule::Denied)
-        .map(|&a| row(a, APPROVER, BOUND_MR, deny(E::Forbidden)))
+        .map(|&a| {
+            let code = if matches!(a, A::ActAsConfirmView | A::ActAsAssertionIssue) {
+                E::NotFound
+            } else {
+                E::Forbidden
+            };
+            row(a, APPROVER, BOUND_MR, deny(code))
+        })
         .collect()
 }

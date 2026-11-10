@@ -16,6 +16,11 @@
 //!   it; the assertion's secret is created now and answered once
 //!   (`Cache-Control: no-store`). 120 per integration a minute.
 //!
+//! Whoever may not press the confirmation (no right for the intent, a
+//! token, an integration that is absent, unbound or disabled) gets the
+//! invisible project's `FG-REPO-0005` on both confirmation routes, the cause
+//! only in the log (`refused_code`; ADR-0025, decision of 2026-11-10).
+//!
 //! The answer of a claim and the request's `state` are never logged.
 
 use std::time::{Duration, Instant};
@@ -208,6 +213,14 @@ async fn confirm_lookup(
     integration: IntegrationId,
     viewer: Option<UserId>,
 ) -> Result<Lookup<ActAsConfirmCtx>, ForgeError> {
+    // Review ff17e86 (HIGH): without act-as configured, every confirmation
+    // is the same 404 — before anything is loaded, so nobody learns whether
+    // the project or the merge request exists.
+    let Some(act_as) = state.act_as.as_deref() else {
+        return Ok(crate::routes::write::absent_because(
+            "act_as_not_configured",
+        ));
+    };
     let Some(record) = crate::routes::projects::load_bounded(state, project, viewer).await? else {
         return Ok(absent());
     };
@@ -228,7 +241,7 @@ async fn confirm_lookup(
     let found: Option<LoadedConfirmIntegration> = bounded(
         state,
         "act_as_confirm_integration",
-        act_as(state)?.confirm_integration(integration, project),
+        act_as.confirm_integration(integration, project),
     )
     .await?;
     let Some(found) = found else {

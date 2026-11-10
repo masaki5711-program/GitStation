@@ -24,7 +24,9 @@
 //! After the route answered, [`finish`] logs the one `forge.auth.act_as`
 //! line of an accepted act-as request (with the route's error code when it
 //! refused) and rejects its verified assertion unless the action consumed
-//! it — so a verified assertion is never usable twice.
+//! it — so a verified assertion is never usable twice. A request cut off
+//! before the route answered does the same through the drop of its
+//! [`Pending`] guard (`outcome=cancelled`, `request_cancelled`).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -170,6 +172,51 @@ fn refused(
     )
 }
 
+/// Whether the request carries `Forge-Act-As` or `Forge-Assertion`.
+pub(crate) fn carries_act_as(h: &HeaderMap) -> bool {
+    h.contains_key(ACT_AS_HEADER) || h.contains_key(ASSERTION_HEADER)
+}
+
+/// A public route (`Action::is_public`: the shell, the assets, liveness /
+/// readiness, the sign-in, the back-channel logout) never acts for a
+/// person and never authenticates: a request carrying the act-as headers
+/// is refused before the route runs — `FG-AUTH-0003
+/// reason=act_as_not_allowed`, as on every route outside the allowlist —
+/// never served with the headers ignored (ADR-0025 §2; review 2026-11-09,
+/// authz MEDIUM). Nothing is parsed or looked up.
+pub(crate) fn refuse_on_public(req: &Request, action: Action) -> Result<(), Box<Response>> {
+    if !carries_act_as(req.headers()) {
+        return Ok(());
+    }
+    let err = match forge_auth::act_as_route(action) {
+        Err(e) => e,
+        // A public action is never in the allowlist; should one be, the
+        // public route still has no principal to act with.
+        Ok(()) => ForgeError::new(ErrorCode::Forbidden)
+            .with_context("reason", "act_as_not_allowed")
+            .with_context("action", action.name()),
+    };
+    let request_id = req
+        .extensions()
+        .get::<RequestId>()
+        .cloned()
+        .unwrap_or_else(RequestId::generate);
+    let lang = crate::context::language(req.headers().get(axum::http::header::ACCEPT_LANGUAGE));
+    Err(refused(err, Some(action), None, request_id, lang))
+}
+
+/// Per-route middleware of the fixed public routes ([`refuse_on_public`]).
+pub(crate) async fn public_route(
+    axum::extract::State(action): axum::extract::State<Action>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    match refuse_on_public(&req, action) {
+        Ok(()) => next.run(req).await,
+        Err(res) => *res,
+    }
+}
+
 /// The act-as step of the authentication (see the module documentation).
 /// `action` is the fixed route's (`None`: a dispatcher word — raw /
 /// archive, decided like `RepoRead`, which never acts for a person).
@@ -188,15 +235,21 @@ pub(crate) async fn admit(
     let fail = |err: ForgeError, via: Option<i64>| {
         Err(refused(err, Some(action), via, request_id.clone(), lang))
     };
-    let present =
-        req.headers().contains_key(ACT_AS_HEADER) || req.headers().contains_key(ASSERTION_HEADER);
-    if !present {
+    if !carries_act_as(req.headers()) {
         return Ok(None);
     }
     let Some(token) = req.extensions().get::<Principal>().cloned() else {
-        // No credential: the guard answers FG-AUTH-0001.
+        // Review (security LOW a): no credential to act with — refused
+        // here, never stripped to continue anonymously.
         strip(req.headers_mut());
-        return Ok(None);
+        return Err(refused(
+            ForgeError::new(ErrorCode::Unauthenticated)
+                .with_context("reason", "act_as_without_credential"),
+            Some(action),
+            None,
+            request_id.clone(),
+            lang,
+        ));
     };
     let via = token.user().map(|u| u.get());
     // A route never acted for is refused whatever the headers say (the
@@ -282,7 +335,7 @@ pub(crate) fn answered(res: &Response) -> (axum::http::StatusCode, Option<Failur
 
 /// After the route answered (see the module documentation).
 pub(crate) async fn finish(
-    accepted: Accepted,
+    accepted: &Accepted,
     (status, failure): (axum::http::StatusCode, Option<Failure>),
 ) {
     let failure = failure.as_ref();
@@ -316,6 +369,13 @@ pub(crate) async fn finish(
     } else {
         "action_failed"
     };
+    reject_unused(accepted, reason).await;
+}
+
+/// Reject the request's verified assertion unless the action consumed it,
+/// logged once here (success or failure, with its code).
+async fn reject_unused(accepted: &Accepted, reason: &'static str) {
+    let public_id = accepted.log.assertion_public_id.as_deref();
     match accepted
         .act_as
         .reject_unused(&accepted.principal, &accepted.request_id, reason)
@@ -325,7 +385,7 @@ pub(crate) async fn finish(
             target: "forge_web::auth",
             event = "forge.auth.act_as_assertion_rejected",
             request_id = %accepted.request_id,
-            assertion_public_id = l.assertion_public_id.as_deref(),
+            assertion_public_id = public_id,
             reject_reason = reason,
             "a verified assertion the action did not consume was rejected"
         ),
@@ -337,9 +397,105 @@ pub(crate) async fn finish(
             event = "forge.auth.act_as_assertion_reject_failed",
             error_code = e.code().id(),
             request_id = %accepted.request_id,
-            assertion_public_id = l.assertion_public_id.as_deref(),
+            assertion_public_id = public_id,
+            reject_reason = reason,
             error = %e,
             "the unused assertion could not be rejected; it expires by itself (runbook act-as)"
         ),
     }
 }
+
+/// An accepted act-as request between [`admit`] and [`finish`] (review of
+/// ADR-0025, 2026-11-09, security LOW b). When the request is cut off
+/// before [`finish`] completed (the client went away, so the server drops
+/// the request's future — while the route runs or while `finish` waits on
+/// the database), dropping the guard
+/// logs the request as `cancelled` and rejects its verified assertion
+/// (`request_cancelled`) in a task of its own — so it never stays
+/// `claimed` until it expires. The task is one `reject_unused` (one
+/// short transaction, bounded by the pool's acquire and statement
+/// timeouts); without a runtime (never in `forge serve`) the failure is
+/// logged and the assertion expires by itself (5 minutes, as before).
+pub(crate) struct Pending(Option<Accepted>);
+
+impl Pending {
+    pub(crate) fn new(accepted: Accepted) -> Self {
+        Self(Some(accepted))
+    }
+
+    /// The accepted request, for [`finish`]: the guard stays armed while
+    /// `finish` runs (a cut-off inside it still rejects the assertion;
+    /// `reject_unused` is idempotent — it touches a `claimed` row only).
+    pub(crate) fn accepted(&self) -> Option<&Accepted> {
+        self.0.as_ref()
+    }
+
+    /// `finish` completed: the guard has nothing left to do.
+    pub(crate) fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let Some(accepted) = self.0.take() else {
+            return;
+        };
+        let l = &accepted.log;
+        // The route may have run to its end (and committed) before the cut:
+        // `cancelled` says the answer never reached the client, not that
+        // nothing happened.
+        tracing::info!(
+            target: "forge_web::auth",
+            event = "forge.auth.act_as",
+            outcome = "cancelled",
+            note = "the request was cut off before it answered; the action may already have been committed",
+            request_id = %accepted.request_id,
+            action = l.action.name(),
+            act_as_rule = l.action.act_as_rule().as_str(),
+            target_form = l.form,
+            actor.user = l.person,
+            actor.via = l.via,
+            integration_id = l.integration,
+            credential_id = l.credential_id,
+            assertion_public_id = l.assertion_public_id.as_deref(),
+            claimed_mac = l.claimed_prefix.as_str(),
+            "forge.auth.act_as"
+        );
+        if l.assertion_public_id.is_none() {
+            return;
+        }
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                // Logged before the task runs: a task lost at the runtime's
+                // shutdown leaves this line without its `rejected` /
+                // `reject_failed` follow-up (the assertion then expires).
+                tracing::info!(
+                    target: "forge_web::auth",
+                    event = "forge.auth.act_as_assertion_reject_scheduled",
+                    request_id = %accepted.request_id,
+                    assertion_public_id = l.assertion_public_id.as_deref(),
+                    reject_reason = "request_cancelled",
+                    "the unused assertion of a cut-off request will be rejected"
+                );
+                runtime.spawn(async move {
+                    reject_unused(&accepted, "request_cancelled").await;
+                });
+            }
+            Err(_) => tracing::error!(
+                target: "forge_web::auth",
+                event = "forge.auth.act_as_assertion_reject_failed",
+                error_code = ErrorCode::Internal.id(),
+                request_id = %accepted.request_id,
+                assertion_public_id = l.assertion_public_id.as_deref(),
+                reject_reason = "request_cancelled",
+                reason = "no_runtime",
+                "the unused assertion of a cut-off request could not be rejected; it expires by itself (runbook act-as)"
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "act_as_tests.rs"]
+mod tests;

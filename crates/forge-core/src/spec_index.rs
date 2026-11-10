@@ -112,6 +112,17 @@ impl SpecIndex {
         }
     }
 
+    /// Apply the repository's `spec.system` type (`.forge/doctypes/
+    /// spec.system.yml`, read by whoever builds the index) to every
+    /// document: a stricter default withholds them all from an AI
+    /// ([`crate::spec_doc::SpecDocument::apply_type_default`]). Call it once
+    /// the documents are added.
+    pub fn apply_spec_system_type(&mut self, ty: forge_doc::document::TypeDefault) {
+        for d in &mut self.documents {
+            d.doc.apply_type_default(ty);
+        }
+    }
+
     /// Mark the index incomplete (the first reason is kept).
     pub fn left_out(&mut self, reason: &'static str) {
         self.incomplete.get_or_insert(reason);

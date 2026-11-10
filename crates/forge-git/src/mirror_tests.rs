@@ -17,6 +17,8 @@ use crate::GitConfig;
 const T: Duration = Duration::from_secs(60);
 
 struct Fixture {
+    // Read only by the Unix-only tests; on Windows it just keeps git's home alive.
+    #[cfg_attr(not(unix), allow(dead_code))]
     home: tempfile::TempDir,
     _root_dir: tempfile::TempDir,
     dest_dir: tempfile::TempDir,
@@ -159,16 +161,10 @@ async fn a_refused_push_is_int_0013_with_the_ref() {
     let f = fixture().await;
     // The destination refuses every update (like a GitLab pre-receive hook).
     let hook = f.dest().join("hooks").join("pre-receive");
-    std::fs::write(
+    crate::test_git::write_script(
         &hook,
         "#!/bin/sh\necho 'GL-HOOK-ERR: protected' >&2\nexit 1\n",
-    )
-    .expect("hook");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    );
     let e = f.push().await.expect_err("refused");
     assert_eq!(e.code(), ErrorCode::PushMirrorFailed);
     let ctx = |k: &str| {
@@ -183,27 +179,20 @@ async fn a_refused_push_is_int_0013_with_the_ref() {
 }
 
 /// A fake git: records its arguments and the header variable's presence,
-/// then answers like an HTTPS remote that refused the credentials.
+/// then answers like an HTTPS remote that refused the credentials
+/// (its only caller is Unix-only).
+#[cfg(unix)]
 fn recording_git(dir: &Path) -> (PathBuf, PathBuf) {
     let log = dir.join("argv.log");
     let script = dir.join("fake-git");
-    std::fs::write(
-        &script,
-        format!(
+    crate::test_git::write_script(&script, &format!(
             "#!/bin/sh\nif [ \"$1\" = push ] || [ \"$4\" = push ] || echo \"$*\" | grep -q ' push '; then\n\
              printf '%s\\n' \"$@\" > '{log}'\n\
              printf 'key=%s\\nvalue=%s\\ncount=%s\\n' \"$GIT_CONFIG_KEY_0\" \"$GIT_CONFIG_VALUE_0\" \"$GIT_CONFIG_COUNT\" >> '{log}.env'\n\
              echo 'fatal: Authentication failed for https://gitlab.example.invalid/ymma/app.git/' >&2\n\
              exit 128\nfi\nexec git \"$@\"\n",
             log = log.display()
-        ),
-    )
-    .expect("script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+        ));
     (script, log)
 }
 

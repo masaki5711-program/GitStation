@@ -1,0 +1,37 @@
+# synthetic — 計画 13 §5 の型の定義の例。W12 の「決めるべき項目」は ::: decision（ADR-0026 §10 の 2）。
+name: equipment.urs
+version: 1
+label: { ja: 設備要求仕様書, en: User requirement specification, id: Spesifikasi kebutuhan pengguna }
+id_pattern: '^URS-[A-Z0-9]+-\d{3}$'
+defaults: { classification: internal }
+fields:
+  equipment: { type: text, required: true, label: { ja: 設備の名前 } }
+  line:      { type: text, required: false, label: { ja: ライン } }
+sections:
+  - { title: 目的と範囲 }
+  - { title: 要求事項, blocks: [req] }
+  - { title: 決めるべき項目, blocks: [decision] }
+  - { title: 検収の条件, blocks: [check] }
+blocks:
+  req:                                  # 03 の要件と同じ ID の形（RequirementId）
+    attrs:
+      priority: { enum: [must, should, could, wont], required: true }
+      verify:   { enum: [test, inspection, analysis, demonstration], required: true }
+  decision:
+    id_pattern: '^D-\d{2}$'
+    attrs:
+      state:    { enum: [open, decided, na], required: true }
+      required: { type: bool, required: false }       # 必須の項目（W12）
+      owner:    { type: text, required: false }       # 決める役割
+  check:
+    id_pattern: '^K-\d{2}$'
+    attrs:
+      covers: { type: blockref, kind: req, required: true }
+rules:
+  - decisions_resolved           # required=true の decision が open ならエラー（W12 のゲート）
+  - decision_na_needs_reason     # state=na は本文に理由が要る
+  - every_must_req_has_check     # priority=must の要件は検収の条件で覆う
+approval_hint:
+  review: [equipment-team, safety-team]
+  approve: [plant-manager]
+concurrency_hint: single_revision

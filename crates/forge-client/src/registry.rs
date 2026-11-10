@@ -1015,6 +1015,98 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["GET /api/v1/projects/{id}/specs/trace"],
         output: r#"{"type":"object","required":["ref","requirements","references","incomplete","withheld"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"requirements":{"type":"array","items":{"type":"object","required":["id","source","path","line","deprecated","status","test_count","tests"],"properties":{"status":{"enum":["tested","untested"]}}}},"references":{"type":"array","items":{"type":"object","required":["line","repo","status","error_code","requirements"],"properties":{"status":{"enum":["resolved","version_not_found","unavailable"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
     },
+    // Plan 13 stage 2 (ADR-0026): local only — no route, no token
+    // (coverage.rs LOCAL_COMMANDS).
+    CommandSpec {
+        name: "doc fmt",
+        summary: "Format the documents of the working tree's repository (one sentence per line; the type's field and attribute order). Local only: nothing is sent to the server.",
+        args: &[
+            arg("--check", "flag", false, "Write nothing; exit 1 (FG-DOC-0004) when a file would change."),
+            arg("--migrate", "flag", false, "Also rewrite older-format specifications (spec: front matter) into the plan 13 format (ADR-0026 §7): no owner is invented (a TODO comment; the lint reports field_missing owner), status: deprecated becomes retired: {} without a date. Never without this flag."),
+            arg("--accept-status-loss", "flag", false, "With --migrate: also migrate a status: draft / review specification (refused otherwise: status_would_be_lost); the older value stays in a TODO comment."),
+            ArgSpec { name: "path", kind: "positional", required: false, repeatable: true, description: "Files or directories (default: the whole repository found upward from the current directory)." },
+        ],
+        examples: &["gstn doc fmt", "gstn doc fmt --check --json", "gstn doc fmt qms/procedures/QP-07-001.md", "gstn doc fmt --migrate --check spec"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["check","changed","unchanged","skipped","migrated","incomplete"],"properties":{"check":{"type":"boolean"},"changed":{"type":"array","items":{"type":"string"}},"unchanged":{"type":"integer"},"skipped":{"type":"array","items":{"type":"object","required":["path","reason"],"properties":{"reason":{"enum":["not_utf8","too_large","not_a_document","doctype_invalid","older_format_invalid","status_would_be_lost"]}}}},"migrated":{"type":"array","items":{"type":"object","required":["path","notes"],"properties":{"path":{"type":"string"},"notes":{"type":"array","items":{"enum":["owner_missing","retired_date_unknown","status_dropped"]}}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc lint",
+        summary: "Check the working tree's documents against their types (.forge/doctypes) and each other: the same lint as the forge/doc-lint check. Local only: nothing is sent to the server.",
+        args: &[
+            ArgSpec { name: "path", kind: "positional", required: false, repeatable: true, description: "Report only these files or directories (every document is read; default: the whole repository)." },
+            arg("--migration-warnings", "flag", false, "Report broken references (ref_broken) as warnings while migrating; the server's forge/doc-lint decides."),
+        ],
+        examples: &["gstn doc lint", "gstn doc lint safety --json", "gstn doc lint --migration-warnings"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["files","errors","warnings","markdown_files","doctype_files","migration_warnings","incomplete"],"properties":{"files":{"type":"array","items":{"type":"object","required":["path","problems","problems_dropped"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","rule","subject","level","error_code"],"properties":{"line":{"type":"integer"},"rule":{"type":"string"},"subject":{"type":["string","null"]},"level":{"enum":["error","warning"]},"error_code":{"enum":["FG-DOC-0001","FG-DOC-0003"]}}}},"problems_dropped":{"type":"integer"}}}},"errors":{"type":"integer"},"warnings":{"type":"integer"},"markdown_files":{"type":"integer"},"doctype_files":{"type":"integer"},"migration_warnings":{"type":"boolean"},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    // Plan 13 stage 3: the document API (the document view as JSON).
+    CommandSpec {
+        name: "doc show",
+        summary: "One document of a project through the server's document API: its front matter (title, id, type, owner, classification), sections of text and blocks, and every [[...]] reference resolved (found: its title; hidden: a more confidential target, its id only; broken; external). An AI agent's token is refused a confidential document (403 FG-AUTH-0021); no such document is 404 FG-REPO-0005.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            ArgSpec { name: "doc_id", kind: "positional", required: true, repeatable: false, description: "The document id (ASCII letters, digits, '.', '_', '-'; e.g. RA-2026-014)." },
+            arg("--ref", "option", false, "A commit id, a branch or a tag (default: the default branch)."),
+            arg("--lang", "option", false, "A translation's language (<id>.<lang>.md, e.g. en)."),
+        ],
+        examples: &["gstn doc show --project 7 RA-2026-014", "gstn doc show --project 7 RA-2026-014 --ref v1.0 --json", "gstn doc show --project 7 QP-07-001 --lang en"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/documents/{doc_id}"],
+        output: r#"{"type":"object","required":["version","ref","path","lang","translations","id","doctype","title","owner","classification","fields","sections","refs","problems","problem_count","incomplete"],"properties":{"version":{"type":"integer"},"classification":{"enum":["public","internal","confidential"]},"sections":{"type":"array","items":{"type":"object","required":["heading","line","pieces"],"properties":{"pieces":{"type":"array","items":{"type":"object","required":["type","line","markdown","display","block"],"properties":{"type":{"enum":["text","block"]}}}}}}},"refs":{"type":"array","items":{"type":"object","required":["repo","doc","block","line","target","title","block_kind"],"properties":{"target":{"enum":["found","hidden","broken","external"]}}}},"incomplete":{"type":["object","null"],"required":["error_code","reason"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc list",
+        summary: "A project's documents through the server's document API, by id: id, classification, type, path, title and translations (paged with --limit / --after). An AI agent's list leaves confidential documents out (without saying how many).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", false, "A commit id, a branch or a tag (default: the default branch)."),
+            arg("--doctype", "option", false, "Only documents of this type."),
+            arg("--limit", "option", false, "At most this many documents, 1..=500 (server default 100)."),
+            arg("--after", "option", false, "The previous page's next_after."),
+        ],
+        examples: &["gstn doc list --project 7", "gstn doc list --project 7 --doctype safety.risk-assessment --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/documents"],
+        output: r#"{"type":"object","required":["ref","documents","next_after","incomplete","withheld"],"properties":{"documents":{"type":"array","items":{"type":"object","required":["id","title","doctype","path","classification","translations"]}},"next_after":{"type":["string","null"]},"incomplete":{"type":["object","null"],"required":["error_code","reason"]},"withheld":{"type":["object","null"]}}}"#,
+    },
+    // Plan 13 Q13: the repository setting (the server's forge/doc-lint).
+    CommandSpec {
+        name: "doc migration show",
+        summary: "A project's document lint migration: the date until which broken document references (ref_broken) are warnings in the server's forge/doc-lint, whether it is in force, and the server's date (UTC) and the latest date allowed.",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn doc migration show --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/doc-lint/migration"],
+        output: r#"{"type":"object","required":["project_id","warn_until","in_force","set_by","set_at","today","max_until","viewer"],"properties":{"warn_until":{"type":["string","null"]},"in_force":{"type":"boolean"},"today":{"type":"string"},"max_until":{"type":"string"},"viewer":{"type":"object","required":["can_manage"]}}}"#,
+    },
+    CommandSpec {
+        name: "doc migration set",
+        summary: "Lower a project's broken document references to warnings in forge/doc-lint until a date (a Maintainer, a person). The date is required, after the server's today and at most 180 days ahead (400 FG-DOC-0005); from the next day they are errors again by themselves.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--until", "option", true, "The last day (UTC), YYYY-MM-DD."),
+        ],
+        examples: &["gstn doc migration set --project 7 --until 2027-03-31"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/doc-lint/migration"],
+        output: r#"{"type":"object","required":["project_id","warn_until","in_force","set_by","set_at","today","max_until","viewer"]}"#,
+    },
+    CommandSpec {
+        name: "doc migration clear",
+        summary: "End a project's document lint migration now: broken references are errors again (a Maintainer, a person; 404 FG-REPO-0005 without a setting). Needs --yes.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--yes", "flag", true, "Confirm."),
+        ],
+        examples: &["gstn doc migration clear --project 7 --yes"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/projects/{id}/doc-lint/migration"],
+        output: r#"{"type":"null"}"#,
+    },
     CommandSpec {
         name: "context work-item",
         summary: "Show a kanflow work item's context in a project: its linked merge requests and the @req tests of its acceptance criteria, each with its source (M3 X5).",

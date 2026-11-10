@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-Writing to standard output or standard error failed (a closed pipe, a full disk, a redirected file that cannot be written) after the command ran.
+Writing to standard output or standard error failed (a closed pipe, a full disk, a redirected file that cannot be written) after the command ran. Also `gstn doc fmt` (plan 13 stage 2) failing to write a formatted document (`stream=file reason=write_failed`): it writes a new temporary file beside the document and renames it over the document, so a document is never half written; the temporary file is removed on failure. `reason=file_changed_while_formatting`: the document's length or time of change differs from when it was read (someone edited it meanwhile); it is left as it is — run gstn doc fmt again.
 
 ## 調べ方 (diagnosis)
 
-The detail line carries `stream` (stdout or stderr) and the OS error kind. A command that changes state (`auth login`, `auth logout`, `api` with a body) has already done its work when this code appears: check with `gstn auth status`.
+The detail line carries `stream` (stdout, stderr, or file for `gstn doc fmt`) and the OS error kind. A command that changes state (`auth login`, `auth logout`, `api` with a body) has already done its work when this code appears: check with `gstn auth status`.
 
 ## 対処 (fix)
 

@@ -48,6 +48,7 @@ pub const FORGE_REPORTED_CHECKS: &[&str] = &[
     RISK_CHECK,
     SPEC_LINT_CHECK,
     SPEC_TRACE_CHECK,
+    DOC_LINT_CHECK,
 ];
 
 /// `forge/spec-lint` (M3 X4, plan 03 §5.4): whether the commit's own
@@ -61,6 +62,13 @@ pub const SPEC_LINT_CHECK: &str = "forge/spec-lint";
 /// touches has a `@req` test at its head (`success`) or not (`neutral`,
 /// never `failure` while advisory). Reported by forge's worker only.
 pub const SPEC_TRACE_CHECK: &str = "forge/spec-trace";
+
+/// `forge/doc-lint` (plan 13 stage 2, ADR-0026): whether the commit's
+/// documents (`.md` naming a `doctype`, in any folder) keep their types'
+/// rules (`success`) or not (`failure`; `neutral` when reading them hit a
+/// bound). Written by the `check.spec_index` job beside `forge/spec-lint`.
+/// Reported by forge's worker only.
+pub const DOC_LINT_CHECK: &str = "forge/doc-lint";
 
 /// The most runs one commit holds in all: the reporters' cap
 /// ([`MAX_CHECK_RUNS_PER_COMMIT`], which counts no `forge/` name) plus one

@@ -75,6 +75,10 @@ pub struct AppState {
     /// serve` always sets them; without them those routes answer
     /// `FG-SYS-0001 reason=checks_unconfigured`).
     pub checks: Option<Arc<forge_checks::Checks>>,
+    /// The document lint's migration setting (plan 13 Q13; set with the
+    /// checks by [`AppState::with_checks`]; without it those routes answer
+    /// `FG-SYS-0001 reason=checks_unconfigured`).
+    pub doc_lint_migrations: Option<Arc<forge_checks::DocLintMigrations>>,
     /// The integrations' event feed (M3 I1c, ADR-0016 §7; `forge serve`
     /// always sets it; without it the feed routes answer `FG-SYS-0001
     /// reason=feed_unconfigured`).
@@ -176,6 +180,7 @@ impl AppState {
             hosting: None,
             review: None,
             checks: None,
+            doc_lint_migrations: None,
             feed: None,
             webhooks: None,
             push_mirrors: None,
@@ -266,6 +271,7 @@ impl AppState {
     /// The check run commands (M3 C1).
     #[must_use]
     pub fn with_checks(mut self, checks: forge_checks::Checks) -> Self {
+        self.doc_lint_migrations = Some(Arc::new(checks.doc_lint_migrations()));
         self.checks = Some(Arc::new(checks));
         self
     }
@@ -409,7 +415,8 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
 /// 系統"). `raw` and `archive` are `RepoRead` content routes
 /// (`routes::content`, M2 MR7). `pulls` / `pull` are the merge request
 /// screens (MR B0; their data is the `MergeRequestList` / `MergeRequestRead`
-/// API).
+/// API). `documents` is the document screens (plan 13 stage 3; their data
+/// is the document API, `RepoBrowse`).
 pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Tree,
     RouteWord::Blob,
@@ -423,6 +430,7 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Members,
     RouteWord::Pulls,
     RouteWord::Pull,
+    RouteWord::Documents,
 ];
 
 /// The words whose page is the SPA shell on a group (no merge request
@@ -545,15 +553,50 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    binding_routes(act_as_routes(mirror_routes(webhook_routes(
-        notification_routes(check_routes(dev_status_routes(feed_routes(
-            integration_routes(service_account_routes(account_routes(history_routes(
-                browse_routes(git_routes(shell_routes(merge_request_routes(
-                    member_routes(move_routes(hosting_routes(fixed))),
+    doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
+        webhook_routes(notification_routes(check_routes(dev_status_routes(
+            feed_routes(integration_routes(service_account_routes(account_routes(
+                history_routes(browse_routes(git_routes(shell_routes(
+                    merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
                 )))),
             )))),
         )))),
     ))))
+}
+
+/// A project's document lint migration setting (plan 13 Q13, ADR-0026):
+/// broken document references lowered to warnings until a date.
+fn doc_lint_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::doc_lint_migration as d;
+    registry
+        .route_with(
+            Verb::Get,
+            d::ONE,
+            Action::ProjectRead,
+            "A project's document lint migration: the date until which broken document references (ref_broken) are warnings in forge/doc-lint, whether it is in force, and the database's date and the latest date allowed (project read)",
+            d::MigrationOf,
+            d::read,
+        )
+        .responds::<d::DocLintMigrationBody>(Verb::Get, d::ONE)
+        .route_with_body(
+            Verb::Put,
+            d::ONE,
+            Action::DocLintMigrationManage,
+            "Lower broken document references to warnings until warn_until (YYYY-MM-DD, after today and at most 180 days ahead by the database's date: 400 FG-DOC-0005); errors again from the next day by themselves (people only; Maintainer)",
+            d::MAX_BODY,
+            d::MigrationOf,
+            d::set,
+        )
+        .responds::<d::DocLintMigrationBody>(Verb::Put, d::ONE)
+        .route_with(
+            Verb::Delete,
+            d::ONE,
+            Action::DocLintMigrationManage,
+            "End the document lint migration now: broken document references are errors again (people only; Maintainer; 404 without a setting)",
+            d::MigrationOf,
+            d::clear,
+        )
+        .responds_no_content(Verb::Delete, d::ONE)
 }
 
 /// A kanflow project's repositories (M3 X3, plan 03 §7.1, ADR-0016
@@ -622,6 +665,16 @@ fn binding_routes(registry: Registry<AppState>) -> Registry<AppState> {
             b::confirm,
         )
         .responds_created::<b::BindingAssertionIssued>(Verb::Post, b::CONFIRM)
+        .route_with(
+            Verb::Get,
+            b::CONFIRMATION,
+            Action::ActAsConfirmView,
+            "What the binding confirmation screen shows: the repository, the kanflow project id the integration named, the setting, whether it is bound now, the receiving integration (a person's web session; Maintainer, the intent's action allowed for them)",
+            b::BindingConfirmationOf,
+            b::confirmation,
+        )
+        .responds::<b::BindingConfirmationBody>(Verb::Get, b::CONFIRMATION)
+        .queries(Verb::Get, b::CONFIRMATION, b::CONFIRMATION_QUERY)
 }
 
 /// Every route of the product. The `gen-authz` binary and the tests read the
@@ -1281,6 +1334,36 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<b::BlobBody>(Verb::Get, b::BLOB)
         .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+        // Plan 13 stage 3: the document view as JSON (the blob API's rule);
+        // a confidential document is withheld from an AI agent (plan 06 D-5).
+        .route_with(
+            Verb::Get,
+            routes::documents::LIST,
+            Action::RepoBrowse,
+            "A revision's documents in the plan 13 format: id, title, type, path, classification (paged; an agent's list leaves confidential ones out)",
+            routes::documents::LIST_OF,
+            routes::documents::list,
+        )
+        .responds::<routes::documents::DocumentListBody>(Verb::Get, routes::documents::LIST)
+        .queries(
+            Verb::Get,
+            routes::documents::LIST,
+            routes::documents::LIST_QUERY,
+        )
+        .route_with(
+            Verb::Get,
+            routes::documents::ONE,
+            Action::RepoBrowse,
+            "One document's view: front matter, sections of text and blocks, references resolved (a more confidential target: its id only)",
+            routes::documents::DocumentOf,
+            routes::documents::one,
+        )
+        .responds::<routes::documents::DocumentBody>(Verb::Get, routes::documents::ONE)
+        .queries(
+            Verb::Get,
+            routes::documents::ONE,
+            routes::documents::ONE_QUERY,
+        )
         // M3 X1: `.forge/repo.yml` and its spec references; every referenced
         // project decided again with the reader's own principal.
         .route_with(
@@ -2171,6 +2254,14 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 routes::act_as::PAGE,
                 Action::WebShell,
                 "SPA shell: act-as confirmation popup",
+                shell,
+            )
+            // The binding confirmation popup (ADR-0025 Amendment X3 §4).
+            .route(
+                verb,
+                routes::integration_bindings::PAGE,
+                Action::WebShell,
+                "SPA shell: act-as binding confirmation popup",
                 shell,
             )
             // The in-app notifications page (M3 U4).

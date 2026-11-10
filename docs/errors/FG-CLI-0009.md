@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-`gstn mcp` (M3 X5) reads JSON-RPC messages from stdin and the read failed with an I/O error other than the end of input (a closed pipe or an unexpected end of file end the server cleanly with exit 0). The MCP client's transport broke: the process that started gstn went away abnormally, or stdin is something unreadable. Nothing on the server is affected.
+`gstn mcp` (M3 X5) reads JSON-RPC messages from stdin and the read failed with an I/O error other than the end of input (a closed pipe or an unexpected end of file end the server cleanly with exit 0). The MCP client's transport broke: the process that started gstn went away abnormally, or stdin is something unreadable. Nothing on the server is affected. Also `gstn doc fmt` / `gstn doc lint` (plan 13 stage 2, local only) when the working tree cannot be read: `reason=cwd_unreadable` (the current directory), `reason=git_ls_files_failed` (`git ls-files` in the repository's root is not runnable, fails, or passes its 30 s limit: git_not_runnable, exit <n>, git_timeout), or `reason=file_unreadable` (a listed document or type definition cannot be opened or read; a file deleted from the working tree is passed over, not an error).
 
 ## 調べ方 (diagnosis)
 
-The detail line carries `reason=stdin_unreadable` and `kind` (the I/O error kind). Look at the MCP client's own log for why its pipe failed; run `gstn mcp < /dev/null` to see that gstn itself starts and ends cleanly.
+The detail line carries `reason=stdin_unreadable` and `kind` (the I/O error kind); for gstn doc, the reason above and `kind`: run `git ls-files` in the repository yourself and check the file's permissions. Look at the MCP client's own log for why its pipe failed; run `gstn mcp < /dev/null` to see that gstn itself starts and ends cleanly.
 
 ## 対処 (fix)
 

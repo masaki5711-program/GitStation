@@ -57,6 +57,15 @@
 //!    whose merge rule forbids direct pushes, M3 R6) for everyone too, and
 //!    `FG-GIT-0008` below the minimum push role (administrators pass the
 //!    minimum role).
+//!    A whole copy of a repository (`RepoRead` on `RepoCopy`: clone /
+//!    fetch, an archive; plan 06 D-5 safety net) is read like the project,
+//!    then refused to an AI agent audience unless the default tip was
+//!    measured open → `FG-AUTH-0022` (`tip_confidential`,
+//!    `default_branch_unborn`, `tip_undecided`, `tip_not_measured`);
+//! 10. an act-as confirmation (`ActAsConfirmView`, `ActAsAssertionIssue`,
+//!     ADR-0025 decision of 2026-11-10): every refusal but `FG-AUTH-0001` /
+//!     `FG-AUTH-0004` becomes `FG-REPO-0005` (the invisible project's 404),
+//!     the cause kept in the log as `refused_code` and its context.
 
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -64,10 +73,10 @@ use crate::action::Action;
 use forge_core::merge_conditions::MAX_CODEOWNERS_SUSPENSION_MINUTES;
 
 use crate::model::{
-    AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,
-    MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefUpdate, ResolvedVia,
-    Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
-    Visibility,
+    AccountKind, AdmissionAccount, CodeownersToggle, CopyMark, Credential, MembershipChange,
+    MembershipScope, MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefUpdate,
+    ResolvedVia, Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget,
+    UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -77,6 +86,46 @@ pub fn authorize(
     action: Action,
     resource: &Resource,
 ) -> Result<(), ForgeError> {
+    let decided = decide(principal, action, resource);
+    if matches!(
+        action,
+        Action::ActAsConfirmView | Action::ActAsAssertionIssue
+    ) {
+        return decided.map_err(confirmation_refused);
+    }
+    decided
+}
+
+/// ADR-0025 (decision of 2026-11-10): an act-as confirmation answers
+/// whoever may not press it — no right for the intent, a token, an act-as
+/// request, a service account or a bot, a pending deletion, a disabled
+/// integration, a binding state that does not fit the intent — with the
+/// invisible project's `FG-REPO-0005`, so nobody learns whether an
+/// integration exists or what the binding state is. The log keeps the
+/// cause: the refusal's own code as `refused_code` and its context.
+/// No credential (`FG-AUTH-0001`) and a disabled account (`FG-AUTH-0004`)
+/// say nothing about the confirmation and stay as they are; so does a
+/// defect (`FG-SYS-0001`, a resource of the wrong shape).
+fn confirmation_refused(refusal: ForgeError) -> ForgeError {
+    let code = refusal.code();
+    // `Internal` (a resource of the wrong shape) is a defect, not a refusal.
+    if matches!(
+        code,
+        ErrorCode::NotFound
+            | ErrorCode::Unauthenticated
+            | ErrorCode::AccountDisabled
+            | ErrorCode::Internal
+    ) {
+        return refusal;
+    }
+    refusal.context().iter().fold(
+        ForgeError::new(ErrorCode::NotFound).with_context("refused_code", code.id()),
+        |hidden, (key, value)| hidden.with_context(key, value),
+    )
+}
+
+/// The decision itself (see [`authorize`]).
+fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<(), ForgeError> {
     let deny = |code: ErrorCode| ForgeError::new(code).with_context("action", action.name());
 
     // Acting for a person (M3 S2, ADR-0025): its own arm, before anything
@@ -281,6 +330,21 @@ pub fn authorize(
             | Action::ProjectRead,
             Resource::Project(p),
         ) => need(Role::Reporter, read_role(p)),
+
+        // A whole copy of the repository (clone / fetch, an archive; plan
+        // 06 D-5, ADR-0026 decision of 2026-11-10): read like the project,
+        // then an AI agent audience (an `is_agent` credential, a service
+        // account, a bot) only when the default tip was measured open. Push
+        // is not a copy and stays `RepoPush`'s.
+        (Action::RepoRead, Resource::RepoCopy { project, mark }) => {
+            need(Role::Reporter, read_role(project))?;
+            if !principal.is_agent_audience() || *mark == CopyMark::Open {
+                return Ok(());
+            }
+            Err(deny(ErrorCode::RepositoryCopyWithheld)
+                .with_context("reason", mark.as_str())
+                .with_context("audience", audience_of(principal)))
+        }
 
         // Before receive-pack starts (no ref is known yet): may this caller
         // push to the project at all? Stops non-developers from uploading
@@ -1135,6 +1199,14 @@ pub fn authorize(
             admin_only()
         }
 
+        // --- documents (plan 13 Q13, ADR-0026) ---
+        // The migration downgrade of broken references: a governance
+        // setting like the merge settings — people only, Maintainer.
+        (Action::DocLintMigrationManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1236,11 +1308,13 @@ pub fn authorize(
             | Action::WebhookDeliver
             | Action::PushMirrorRead
             | Action::PushMirrorManage
+            | Action::DocLintMigrationManage
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
             | Resource::Namespace { .. }
             | Resource::Project(_)
+            | Resource::RepoCopy { .. }
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
             | Resource::GroupTransfer { .. }
@@ -1266,6 +1340,19 @@ pub fn authorize(
             | Resource::ProjectEvents { .. }
             | Resource::ActAsConfirm(_),
         ) => wrong_resource(),
+    }
+}
+
+/// Why `principal` counts as an AI agent audience (the log `audience`,
+/// as the context API names it).
+fn audience_of(principal: &Principal) -> &'static str {
+    if principal.is_agent() {
+        return "agent_token";
+    }
+    match principal.account_kind() {
+        AccountKind::ServiceAccount => "service_account",
+        AccountKind::Bot => "bot",
+        AccountKind::Human => "person",
     }
 }
 
@@ -1299,6 +1386,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
     let live = |p| Some((p, ResolvedVia::Live));
     match resource {
         Resource::Project(p) => live(p),
+        Resource::RepoCopy { project, .. } => live(project),
         Resource::Ref { project, .. } => live(project),
         Resource::Transfer { source, .. } => live(source),
         Resource::RefProtectionChange { project, .. }
@@ -1377,6 +1465,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::Namespace { .. }
         | Resource::Project(_)
         | Resource::Ref { .. }
+        | Resource::RepoCopy { .. }
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

@@ -2,7 +2,8 @@
 //! The dependency direction gate (CLAUDE.md §3-9, ADR-0001 and its M1 phase
 //! 8b amendment): `forge-web / forge-cli → feature crates (forge-hosting,
 //! forge-review, forge-checks, forge-integ, forge-notify, forge-oidc) →
-//! forge-auth / forge-git / forge-db → forge-core → forge-errors`. Every
+//! forge-auth / forge-git / forge-db → forge-core → forge-doc → forge-errors`
+//! (forge-doc: plan 13 stage 2, ADR-0026 §8). Every
 //! workspace crate's normal and build dependencies on other forge crates
 //! are checked against the layer table; a crate missing from the table
 //! fails too, so a new crate must be placed before it builds green.
@@ -13,7 +14,9 @@ use std::path::Path;
 /// Each forge crate and the forge crates it may depend on.
 const ALLOWED: &[(&str, &[&str])] = &[
     ("forge-errors", &[]),
-    ("forge-core", &["forge-errors"]),
+    // Plan 13 stage 2 (ADR-0026 §8): pure document parsing, shared with gstn.
+    ("forge-doc", &["forge-errors"]),
+    ("forge-core", &["forge-doc", "forge-errors"]),
     ("forge-auth", &["forge-core", "forge-errors"]),
     ("forge-git", &["forge-core", "forge-errors"]),
     ("forge-db", &["forge-core", "forge-errors"]),
@@ -42,7 +45,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ),
     // M3 C1 (ADR-0024 §11): check runs, beside forge-review (and never
     // depending on it: the merge conditions read the runs through
-    // forge-core's `CheckResultsSource`).
+    // forge-core's `CheckResultsSource`). Plan 13 stage 2: forge-doc for
+    // `forge/doc-lint` (the same lint as `gstn doc lint`).
     (
         "forge-checks",
         &[
@@ -50,6 +54,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-git",
             "forge-db",
             "forge-core",
+            "forge-doc",
             "forge-errors",
         ],
     ),
@@ -83,6 +88,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-auth",
             "forge-git",
             "forge-core",
+            // Plan 13 stage 3: the document API maps forge-doc's view.
+            "forge-doc",
             "forge-errors",
         ],
     ),
@@ -103,8 +110,9 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-errors",
         ],
     ),
-    // The `gstn` client sits outside the server graph (ADR-0020).
-    ("forge-client", &["forge-errors"]),
+    // The `gstn` client sits outside the server graph (ADR-0020); it may
+    // share the pure document parsing (ADR-0020 Amendment, ADR-0026 §8).
+    ("forge-client", &["forge-errors", "forge-doc"]),
 ];
 
 /// The forge crates `table` names (a `[dependencies]`-like table).

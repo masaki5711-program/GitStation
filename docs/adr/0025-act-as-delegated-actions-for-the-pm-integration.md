@@ -1,7 +1,7 @@
 # ADR-0025: 代理実行（act-as）— PM ツール（kanflow）が本人として行う操作
 
 **Date**: 2026-11-05
-**Status**: proposed（方式は計画 11 §3.5 の案 B で、利用者が承認済み（2026-11-02、§10 Q9 を含む）。**`security-reviewer`（必須）と `authz-matrix-auditor` のレビューを経て accepted にする**。受理の条件は末尾「accepted の条件」。ADR-0017 §4.0・§4.2 の代理の部分、ADR-0016 §9 の `FG-INT-0006` の範囲、ADR-0024 §12 の「代理」の列を、この ADR が具体化し、食い違う点はこの ADR が優先する（末尾「他の ADR との関係」））
+**Status**: accepted（2026-11-09。accepted の条件 1〜3 を満たした — 末尾「accepted の条件の確認」。方式は計画 11 §3.5 の案 B で、利用者が承認済み（2026-11-02、§10 Q9 を含む）。ADR-0017 §4.0・§4.2 の代理の部分、ADR-0016 §9 の `FG-INT-0006` の範囲、ADR-0024 §12 の「代理」の列を、この ADR が具体化し、食い違う点はこの ADR が優先する（末尾「他の ADR との関係」））
 **Deciders**: Masaki Fujikawa（ユーザー）、Claude
 
 ## Context
@@ -84,9 +84,14 @@ Forge-Act-As = "user:" 1*19DIGIT                                   ; forge の�
 - **結びつけていないプロジェクト**は、本人が見えても見えなくても `FG-REPO-0005`（`reason=act_as_unbound`。存在を漏らさない）。
 - 本人の判定は通常の arm をそのまま通る（自己承認の FG-REVIEW-0013、ロールの不足の FG-AUTH-0003、削除待ちの FG-REPO-0006）。経路ごとの分岐は作らない。kanflow の出どころの能力（ADR-0017 §4.4）は、入ったときに `role_for` の規則どおりに本人の側で数える（読み取りの min の規則は変わらない）。
 
+> **例外**（Amendment X3 の 5）: `RepositorySearch`（`ListAsPerson`）は min ではなく本人として判定する（結ぶ前のリポジトリを見せるため。名前だけ）。
+
 ### 4. 代理で使える Action の許可リスト（既定で閉じる）
 
 `Action::act_as_rule(self) -> ActAsRule`（`_` のない全列挙の `match`。新しい Action はコンパイルが `ActAsRule` を選ばせ、選ぶまで入らない）。M3（S2）の時点:
+
+> **X3 で広げた**（Amendment X3、下）: `IntegrationBindingManage`（主張 `binding_set`）・`IntegrationBindingRemove`（主張 `binding_remove`）・
+> `RepositorySearch`（主張なし、**本人として** 判定する `ListAsPerson` — §3 の min の規則の例外。名前だけ、流量の制限と監査つき）。この表は S2 の時点のもの。
 
 | Action | 規則 | 許す理由 |
 |---|---|---|
@@ -428,3 +433,68 @@ kanflow の画面で本人が「承認」/「取り消し」を押す
   連携の状態を言わない）。存在しない連携は見えないプロジェクトと同じ 404 のまま。
 - （LOW b）`RepositorySearch` の経路（`Resource::Instance`）は人だけ（代理は本人として判定）。サービスアカウント・ボット・エージェントの単独は
   `FG-AUTH-0003`。
+
+## accepted の条件の確認（2026-11-09、クラウド）
+
+1. **条件 1 は満たした**: `main`（S2 `04262d7`・U3b `f440c77`・X3 `a7036aa` 以降）のコードを、`security-reviewer`（T1〜T5・§1〜§9）と
+   `authz-matrix-auditor`（許可リストと権限の表・全経路の `authorize()`・人だけの Action・min の規則・契約 4 の例外）が読んで、どちらも
+   **CRITICAL / HIGH なし**（コードと生成物を読んだ。cargo は流していない）。
+   - MEDIUM（authz）: 公開の経路（`WebShell`・`Health`・ログイン）は認証の層を通らず、`Forge-Act-As` / `Forge-Assertion` を **断らずに無視** する
+     （副作用は無い）。§2 の「無視せず断る」と食い違う → 後で直す（安い事前の検査で断る）か、§2 に例外として書く。
+   - LOW（security）: (a) `Authorization` の無い要求の代理のヘッダーは外して匿名で続ける（匿名を許す経路だけ、昇格は無い）→ `FG-AUTH-0001` で断る、
+     (b) 要求が途中で切れると検証済みの主張が `claimed` のまま 5 分残る（同じ MR・head・target に縛られ昇格は無い）→ drop の守りで `reject_unused`、
+     (c) 鍵のバイトを drop で消していない・全部同じバイトの鍵を受け付ける → `zeroize` と拒否、(d) 確認の画面の MR のタイトルは作者が書いた文字
+     （React が逃がす）→ 切り詰めと番号・SHA を目立たせる。
+   - LOW（authz）: §4 の表が S2 の時点のまま（上に X3 の注記を足した）、`ListAsPerson` が §3 の例外（上に注記を足した）。
+2. **条件 2 は満たした**: 利用者が §1 の社員番号の守りを S2 の範囲に含めることを受け入れた（2026-11-09。S2 は実装済み）→ **accepted**。
+3. 条件 3 は未決のままでよい（変わらず）。
+
+## 結びつけの確認の画面（2026-11-10、クラウド）
+
+Amendment X3 の 4 の「確認の画面（GET の表示のデータ）は U3 で足す」を足した（kanflow の X3 の前提）。
+
+- `GET /api/v1/projects/{id}/integration-bindings/act-as-confirmation?intent&integration&kanflow_project_id[&resolves_work_items]`
+  （`ActAsConfirmView`、本人の Web セッションだけ、`Coverage::BrowserOnly`）。答えは forge が持つ事実だけ: リポジトリのパスと表示名、
+  kanflow のプロジェクトは **連携が名指した ID**（kanflow が送った文字は出さない）、設定、**いま結びついているか**、連携の種類と名前、本人。
+  問い合わせは厳しく読む（知らない・重なった引数、`binding_remove` の設定、`binding_set` の設定の欠けは 400）。判定は
+  `ActAsAssertionIssue` と同じ関数（`binding_confirm_lookup`）を通り、権限の無い人に連携の状態を言わない順（上の LOW a）も同じ。
+  `state` は GET に載せない（POST の本文だけ）。
+- 画面 `/-/confirm/projects/{id}/integration-bindings`（`ActAsBindingConfirm`）: MR の確認の画面と同じ守り（フレームに入れない・`useArmed`・
+  既定のフォーカスなし・`state` を読んだらアドレスから消す・不正な形のリンクは API に聞かずに断る）。結びついていない先の解除は押すものを出さない。
+- 権限の表に `ActAsConfirmView` の 10 行（binding の `ActAsAssertionIssue` の行と同じ組）、`binding_routes` と web の `act-as-binding-confirm` のテスト。
+- 独立レビュー（2026-11-10、`security-reviewer`）: HIGH 1 件を直した — 問い合わせの値を百分率の復号をせずに比べていたため、ブラウザーが `:` を
+  `%3A` にした kanflow のプロジェクト ID が 400 になった → 値ごとに厳しく復号してから検査（壊れた `%` は 400。テストで `KF%3A7` と `KF%2F7`）。
+  LOW: フレーム・COOP・殻の同一性のテストに結びつけの画面の経路を足した。残した指摘: (MEDIUM) 結べない Developer には 403、存在しない連携には 404
+  なので、プロジェクトの読み手は連携の ID の有無を確かめられる（MR の確認の画面と同じ振る舞い。連携の ID は秘密ではなく、読めるのは有無だけ）→
+  押せない人にはすべて 404 にするかを後で決める。(LOW) 画面は 403 をすべて「この人では行えない」と言う（連携の無効なども含む）→ 中立の文と
+  `request_id` の表示を MR の画面と一緒に直す。
+
+## レビューの残りの指摘を直した（2026-11-10、クラウド）
+
+上の 2 つの確認で残した指摘のうち、利用者の判断が要らないものを直した（どれも先に失敗するテストを書いた）。
+
+- （MEDIUM authz）公開の経路（`WebShell`・`Health`・`WebLogin`・`OidcBackchannelLogout`。固定の経路と振り分けの公開の語の両方）は、
+  `Forge-Act-As` / `Forge-Assertion` を持つ要求を経路の前で **断る**（`FG-AUTH-0003 reason=act_as_not_allowed`、許可リストの外の経路と同じ。
+  何も解析・検索しない。`forge-web/src/act_as.rs` の `refuse_on_public`）。テスト `public_routes_refuse_act_as_headers_instead_of_ignoring_them`。
+- （LOW a）資格情報の無い要求の代理のヘッダーは `FG-AUTH-0001 reason=act_as_without_credential` で断る（外して匿名で続けない）。
+  テスト `act_as_headers_without_a_credential_are_refused_never_stripped`。
+- （LOW b）検証の後、経路が答える前に要求が切れたら、drop の守り（`act_as::Pending`）が `outcome=cancelled` の 1 行を出し、別のタスクで
+  `reject_unused`（`reject_reason=request_cancelled`）を行う（1 つの短いトランザクション。プールの取得と文の時間の上限の内）。実行時が無いときは
+  ログに出して 5 分で切れるのを待つ（従来どおり）。経路が答えた後の `finish` の途中で切れる狭い窓は残る。テスト
+  `a_request_cut_off_after_the_verification_rejects_its_assertion`。
+- （LOW c）鍵のバイトは drop で `zeroize` する（読み込みの途中の復号のバイトも）。全部同じバイトの鍵は読み込みで
+  `FG-SYS-0002 config_key=auth.act_as_hmac_keys_file reason=key_degenerate` で断る（runbook `act-as` に追記）。テストの鍵も作り直した。
+- （LOW d）MR の確認の画面のタイトルは 80 文字で切り、目立たない 1 行にした。番号と head の SHA を太字にした。
+- （LOW、両方の確認の画面）403 は「この人では行えない」と言わず、中立の文（権限やアプリの連携の設定などが理由のことがある）と
+  問い合わせ番号を出す（i18n `actAs.refusedTitle` / `refusedBody`、ja / en / id）。
+- 直した後の独立レビュー（2026-11-10）の指摘も直した: (MEDIUM) drop の守りは `finish` が終わるまで外さない（`finish` の
+  `reject_unused` の待ちで切れても拒否する。テスト `a_request_cut_off_while_its_assertion_is_being_rejected_still_rejects_it`）。
+  (LOW) 守りはタスクを起こす前に `forge.auth.act_as_assertion_reject_scheduled` を出し（停止で失われたタスクが見える）、`cancelled` の
+  行は「操作はもう確定したかもしれない」と書く。(LOW) 鍵のファイルの文字は `Zeroizing<String>` で読み、鍵の束は 1 回で確保する
+  （伸ばすときに鍵の写しを解放しない。テスト `the_ring_never_reallocates_over_key_bytes`）。HMAC の内部の状態の残りは受け入れる。
+  (LOW) 画面のタイトルは `Intl.Segmenter` が無いブラウザーでは code point で切り、双方向の制御文字（U+202A–202E・U+2066–2069）を
+  取り除き、`unicode-bidi: isolate` で囲む。
+- 残した: (MEDIUM) 押せない人に 403 か 404 か（利用者の判断を待つ）。
+- **決定（2026-11-10、利用者「推奨で」）**: 押せない人（権限の無い人・連携の状態を知るべきでない人）には、MR と結びつけの両方の確認の画面で
+  **すべて同じ 404** を返す（連携の ID の有無も、結びつけの状態も言わない）。実装は別の変更で行う。
+- **実装した（2026-11-10、クラウド）**: `authorize()` が `ActAsConfirmView` / `ActAsAssertionIssue` の断り（`FG-AUTH-0001` / `FG-AUTH-0004` を除く）を見えないプロジェクトと同じ `FG-REPO-0005` に変える（ログには元の理由を `refused_code` と文脈で残す）。権限の表の断りの行は 404、`binding_routes` / `act_as_routes` で Developer・Reporter・作成者・トークン・無い／無効の／結びついていない連携・結びついていない先の解除の GET と POST が問い合わせ番号の他はバイトまで同じ 404 になることを確かめ、両方の画面の 404 は同じ中立の文（ja / en / id）にした。

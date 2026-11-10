@@ -10,6 +10,7 @@ pub mod config;
 pub mod cursor;
 pub mod dedup_key;
 pub mod discussion;
+pub mod doc_lint_migration;
 pub mod event_type;
 // ── M3 I1c: the event feed's visible set and cursor position ──
 pub mod feed;
@@ -47,7 +48,8 @@ pub mod session_token;
 pub mod spec_version;
 // ── M3 X4: requirement blocks, `@req` tags, the index, spec-lint and spec-trace ──
 pub mod req_tags;
-pub mod spec_doc;
+// Moved to forge-doc (plan 13 stage 2 MR1); the path stays for every caller.
+pub use forge_doc::spec_doc;
 pub mod spec_index;
 // ── end M3 X4 ──
 pub mod telemetry;

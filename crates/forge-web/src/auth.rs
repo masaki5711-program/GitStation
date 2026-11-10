@@ -324,8 +324,14 @@ pub(crate) async fn authenticate(
     match authenticate_request_acting(&mut req, Surface::Api, Some(action)).await {
         Ok(None) => next.run(req).await,
         Ok(Some(accepted)) => {
+            // Dropped with the request if it is cut off before `finish`
+            // completed: the guard then rejects the unused assertion.
+            let pending = crate::act_as::Pending::new(accepted);
             let res = next.run(req).await;
-            crate::act_as::finish(accepted, crate::act_as::answered(&res)).await;
+            if let Some(accepted) = pending.accepted() {
+                crate::act_as::finish(accepted, crate::act_as::answered(&res)).await;
+            }
+            pending.disarm();
             res
         }
         Err(res) => *res,

@@ -311,6 +311,19 @@
       }
     },
     {
+      "name": "route word documents",
+      "path": "/g/p/-/documents/RA-2026-014",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "documents",
+        "rest": [
+          "RA-2026-014"
+        ]
+      }
+    },
+    {
       "name": "ref and file keep their case",
       "path": "/acme/x/-/blob/Main/ReadMe.MD",
       "form": "both",

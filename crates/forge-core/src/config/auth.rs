@@ -119,7 +119,9 @@ impl AuthConfig {
             return Ok(None);
         };
         let key = crate::act_as::KEYS_CONFIG_KEY;
-        let text = secret::read_secret_text(key, path, MAX_ACT_AS_KEYS_BYTES)?;
+        // The key file's text is wiped when it goes (ADR-0025 review, LOW c).
+        let text =
+            zeroize::Zeroizing::new(secret::read_secret_text(key, path, MAX_ACT_AS_KEYS_BYTES)?);
         crate::act_as::ActAsKeys::parse(&text)
             .map(Some)
             .map_err(|e| e.with_context("path", path.display()))

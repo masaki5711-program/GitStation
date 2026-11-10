@@ -51,6 +51,7 @@ pub(crate) async fn fixture(state_copy: bool) -> Fixture {
     create_private_dir(&backup_dir).expect("backup dir");
     let key = tmp.path().join("backup.key");
     fs::write(&key, format!("{KEY_HEX}\n")).expect("key");
+    #[cfg(unix)] // Windows has no mode bits; the key's owner-only check is Unix's
     chmod(&key, 0o600);
     let state_dir = tmp.path().join("state");
     create_private_dir(&state_dir).expect("state dir");

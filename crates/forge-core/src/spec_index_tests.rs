@@ -347,3 +347,73 @@ fn confidential_paths_lists_the_withheld_documents() {
     let paths: Vec<&str> = i.confidential_paths().into_iter().collect();
     assert_eq!(paths, ["spec/secret.md"]);
 }
+
+/// ADR-0026 §7: a document migrated to the plan 13 format (`gstn doc fmt
+/// --migrate`) is indexed as before — the same requirements, the same
+/// spec-lint answer (a name used twice is still `duplicate_spec` across the
+/// two formats), and a document of another type is not indexed.
+#[test]
+fn a_migrated_document_is_indexed_and_linted_as_before() {
+    let older = spec("a", "::: req A-1 priority=must\nx\n:::\n");
+    let migrated = forge_doc::fmt::migrate_legacy(older.as_bytes(), None)
+        .expect("migrates")
+        .text;
+    let before = index(
+        &[("spec/a.md", older.clone())],
+        &[("src/t.rs", 1, "// @req A-1")],
+    );
+    let after = index(
+        &[("spec/a.md", migrated.clone())],
+        &[("src/t.rs", 1, "// @req A-1")],
+    );
+    assert!(lint(&before, &none()).is_empty());
+    assert!(
+        lint(&after, &none()).is_empty(),
+        "{:?}",
+        lint(&after, &none())
+    );
+    let ids = |i: &SpecIndex| -> Vec<String> {
+        i.requirements()
+            .iter()
+            .map(|l| format!("{} {:?}", l.requirement.id, l.requirement.priority))
+            .collect()
+    };
+    assert_eq!(ids(&after), ids(&before));
+    let both = index(
+        &[
+            ("spec/a.md", older),
+            ("spec/b.md", migrated.replace("A-1", "A-2")),
+        ],
+        &[],
+    );
+    let found = lint(&both, &none());
+    assert!(
+        found.iter().any(|f| f.rule == "duplicate_spec"),
+        "{found:?}"
+    );
+    let other = index(
+        &[(
+            "spec/QM-001.md",
+            "---\ndoctype: qms.manual\nid: QM-001\ntitle: t\nowner: qa\n---\n".to_owned(),
+        )],
+        &[],
+    );
+    assert!(other.documents.is_empty());
+}
+
+/// Review (0d59521, MEDIUM): the repository's `spec.system` type default is
+/// applied to every indexed document (the context API reads
+/// `confidential_paths`).
+#[test]
+fn a_stricter_spec_system_default_withholds_every_document() {
+    use forge_doc::document::{Classification, TypeDefault};
+    let mut i = index(&[("spec/a.md", spec("a", "::: req A-1\nx\n:::\n"))], &[]);
+    assert!(i.confidential_paths().is_empty());
+    i.apply_spec_system_type(TypeDefault::Known(None));
+    assert!(i.confidential_paths().is_empty());
+    i.apply_spec_system_type(TypeDefault::Known(Some(Classification::Confidential)));
+    assert_eq!(
+        i.confidential_paths().into_iter().collect::<Vec<_>>(),
+        ["spec/a.md"]
+    );
+}

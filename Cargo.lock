@@ -736,6 +736,7 @@ dependencies = [
  "forge-auth",
  "forge-core",
  "forge-db",
+ "forge-doc",
  "forge-errors",
  "forge-git",
  "serde_json",
@@ -789,6 +790,7 @@ dependencies = [
  "clap",
  "dbus-secret-service-keyring-store",
  "forge-client",
+ "forge-doc",
  "forge-errors",
  "keyring-core",
  "percent-encoding",
@@ -809,6 +811,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
+ "forge-doc",
  "forge-errors",
  "getrandom 0.2.17",
  "hkdf",
@@ -825,7 +828,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "yaml-rust2",
  "zeroize",
 ]
 
@@ -849,6 +851,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "forge-doc"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "regex",
+ "toml",
+ "yaml-rust2",
 ]
 
 [[package]]
@@ -986,6 +998,7 @@ dependencies = [
  "forge-checks",
  "forge-core",
  "forge-db",
+ "forge-doc",
  "forge-errors",
  "forge-git",
  "forge-hosting",

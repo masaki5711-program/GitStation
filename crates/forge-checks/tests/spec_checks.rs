@@ -10,8 +10,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use forge_checks::doc_lint::{assess_doc_lint, DocLimits};
 use forge_checks::spec_checks::{record_errors, Ran, SpecChecks};
-use forge_checks::spec_index::{index_commit, IndexLimits, Tags};
+use forge_checks::spec_index::{index_commit, index_head, IndexLimits, Tags};
 use forge_checks::spec_refs::RepoConfigRead;
 use forge_core::checks::CheckConclusion;
 use forge_core::{ObjectId, RequestId, Visibility};
@@ -296,7 +297,7 @@ async fn a_merge_request_that_is_gone_records_nothing() {
 }
 
 #[tokio::test]
-async fn a_failed_job_answers_error_for_both_checks() {
+async fn a_failed_job_answers_error_for_every_check() {
     let (t, _r, project) = project_world().await;
     let request = SpecIndexRequest {
         project,
@@ -322,6 +323,7 @@ async fn a_failed_job_answers_error_for_both_checks() {
     assert_eq!(
         names,
         vec![
+            ("forge/doc-lint", Some(CheckConclusion::Error)),
             ("forge/spec-lint", Some(CheckConclusion::Error)),
             ("forge/spec-trace", Some(CheckConclusion::Error)),
         ]
@@ -384,4 +386,204 @@ Test it with `@req ZEVA-CFG-1`.
         forge_core::spec_index::lint(&i.index, &i.external).is_empty(),
         "the fenced example names no broken reference"
     );
+}
+
+const MANUAL_T: &[u8] = b"name: qms.manual\nid_pattern: '^QM-\\d{3}$'\n";
+
+fn manual(id: &str, body: &str) -> Vec<u8> {
+    format!("---\ndoctype: qms.manual\nid: {id}\ntitle: t\nowner: qa\n---\n\n{body}\n").into_bytes()
+}
+
+/// Plan 13 stage 2: the job's head is listed and read once; the index is
+/// the one [`index_commit`] builds, and the documents (`.md` naming a
+/// `doctype`, in any folder) and their types come from the same read.
+#[tokio::test]
+async fn the_head_is_read_once_for_the_index_and_the_documents() {
+    let r = repo().await;
+    let qm1 = manual("QM-001", "本文。[[QM-002]]");
+    let qm2 = manual("QM-002", "本文。[[QM-404]]");
+    let c = commit(
+        &r.path,
+        &[
+            (".forge/doctypes/qms.manual.yml", MANUAL_T),
+            ("spec/a.md", SPEC_A),
+            ("spec/QM-001.md", &qm1),
+            ("qms/deep/QM-002.md", &qm2),
+            ("specs-not/x.md", b"# x\n"),
+            ("tests/t.rs", b"// @req ZEVA-CFG-1\n"),
+        ],
+    );
+    let limits = IndexLimits::default();
+    let (head, docs) = index_head(&r.browser, r.id, &c, &limits, &DocLimits::default())
+        .await
+        .expect("head");
+    let alone = index_commit(&r.browser, r.id, &c, &limits, Tags::Read)
+        .await
+        .expect("index");
+    assert_eq!(head, alone, "the same index as index_commit");
+    let paths: Vec<&str> = docs.markdown.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "qms/deep/QM-002.md",
+            "spec/QM-001.md",
+            "spec/a.md",
+            "specs-not/x.md"
+        ]
+    );
+    assert_eq!(docs.doctypes.len(), 1);
+    assert_eq!(docs.incomplete, None);
+    let run = assess_doc_lint(&docs).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains("qms/deep/QM-002.md:8 ref_broken — QM-404"),
+        "{}",
+        run.summary
+    );
+    // A listing cut at its bound leaves the documents incomplete; the
+    // specification directories are listed on their own (review MR3):
+    // forge/spec-lint's answer does not depend on the tree's size.
+    let cut = DocLimits {
+        max_tree_entries: 2,
+        ..DocLimits::default()
+    };
+    let (head, docs) = index_head(&r.browser, r.id, &c, &limits, &cut)
+        .await
+        .expect("head");
+    assert_eq!(head, alone, "the same index as index_commit");
+    assert_eq!(head.index.incomplete, None);
+    assert_eq!(docs.incomplete, Some("doc_tree"));
+    let run = assess_doc_lint(&docs).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Neutral),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("[FG-DOC-0002]"), "{}", run.summary);
+}
+
+/// A Markdown file over the parser's limit is read only as far as the
+/// parser needs: one without a `doctype` is no document and no bound
+/// (review MR3); one naming a type is `too_large`, as gstn says.
+#[tokio::test]
+async fn a_large_markdown_file_is_read_in_part_and_is_no_bound() {
+    let r = repo().await;
+    let big = "x".repeat(forge_doc::document::MAX_DOCUMENT_BYTES + 10);
+    let readme = format!("# notes\n{big}");
+    let large_doc = String::from_utf8(manual("QM-001", &big)).expect("utf8");
+    let c = commit(
+        &r.path,
+        &[
+            (".forge/doctypes/qms.manual.yml", MANUAL_T),
+            ("README.md", readme.as_bytes()),
+        ],
+    );
+    let limits = IndexLimits::default();
+    let (_, docs) = index_head(&r.browser, r.id, &c, &limits, &DocLimits::default())
+        .await
+        .expect("head");
+    assert_eq!(docs.incomplete, None);
+    assert_eq!(
+        docs.markdown[0].1.len(),
+        forge_doc::document::MAX_DOCUMENT_BYTES + 1
+    );
+    let run = assess_doc_lint(&docs).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    let c = commit(
+        &r.path,
+        &[
+            (".forge/doctypes/qms.manual.yml", MANUAL_T),
+            ("QM-001.md", large_doc.as_bytes()),
+        ],
+    );
+    let (_, docs) = index_head(&r.browser, r.id, &c, &limits, &DocLimits::default())
+        .await
+        .expect("head");
+    let run = assess_doc_lint(&docs).expect("run");
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary.contains("QM-001.md:0 too_large"),
+        "{}",
+        run.summary
+    );
+    // More large files than the bound: named, never a silent pass.
+    let none = DocLimits {
+        max_large_files: 0,
+        ..DocLimits::default()
+    };
+    let (_, docs) = index_head(&r.browser, r.id, &c, &limits, &none)
+        .await
+        .expect("head");
+    assert_eq!(docs.incomplete, Some("doc_large_files"));
+}
+
+/// Review (0d59521, MEDIUM): the repository's `spec.system` type default
+/// is applied where the index is built (both reads): a stricter default, or
+/// a definition that cannot be used, withholds every document from an AI.
+#[tokio::test]
+async fn the_spec_system_type_default_withholds_the_documents() {
+    let r = repo().await;
+    let cases: [(&[u8], bool); 4] = [
+        (b"name: spec.system\n", false),
+        (
+            b"name: spec.system\ndefaults:\n  classification: internal\n",
+            false,
+        ),
+        (
+            b"name: spec.system\ndefaults:\n  classification: confidential\n",
+            true,
+        ),
+        (b"name: [broken\n", true),
+    ];
+    for (definition, withheld) in cases {
+        let c = commit(
+            &r.path,
+            &[
+                ("spec/a.md", SPEC_A),
+                (".forge/doctypes/spec.system.yml", definition),
+            ],
+        );
+        let i = index_commit(&r.browser, r.id, &c, &IndexLimits::default(), Tags::Read)
+            .await
+            .expect("index");
+        assert_eq!(
+            i.index.confidential_paths().contains("spec/a.md"),
+            withheld,
+            "{}",
+            String::from_utf8_lossy(definition)
+        );
+        let (head, _) = index_head(
+            &r.browser,
+            r.id,
+            &c,
+            &IndexLimits::default(),
+            &Default::default(),
+        )
+        .await
+        .expect("head");
+        assert_eq!(head.index, i.index, "the same in both reads");
+    }
+    // No definition: the document's own mark decides.
+    let c = commit(&r.path, &[("spec/a.md", SPEC_A)]);
+    let i = index_commit(&r.browser, r.id, &c, &IndexLimits::default(), Tags::Read)
+        .await
+        .expect("index");
+    assert!(i.index.confidential_paths().is_empty());
 }

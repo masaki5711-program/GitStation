@@ -342,7 +342,6 @@ async fn a_job_for_an_unknown_repository_is_dead_lettered_with_repo_0005() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_hanging_git_is_retried_with_its_own_code() {
-    use std::os::unix::fs::PermissionsExt as _;
     use std::time::{Duration, Instant};
 
     use forge_git::{Git, GitConfig};
@@ -352,8 +351,7 @@ async fn a_hanging_git_is_retried_with_its_own_code() {
     let bin = tempfile::tempdir().expect("bin dir");
     let fake = bin.path().join("git");
     // `exec`: the killed child is the sleep itself (no orphan holding the pipes).
-    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").expect("fake git");
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    forge_git::test_git::write_script(&fake, "#!/bin/sh\nexec sleep 30\n");
     storage.git = Git::new(GitConfig::new(&fake, storage.root.path()));
     let p = project(&t, "max").await;
     // A 2 s job: the storage work gets 1 s.

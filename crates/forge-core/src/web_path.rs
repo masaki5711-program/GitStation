@@ -61,6 +61,9 @@ pub enum RouteWord {
     Pulls,
     /// One merge request (`/-/pull/{iid}`).
     Pull,
+    /// A project's documents in the plan 13 format (`/-/documents`,
+    /// `/-/documents/{id}`; plan 13 stage 3).
+    Documents,
 }
 
 impl RouteWord {
@@ -80,6 +83,7 @@ impl RouteWord {
         Self::Members,
         Self::Pulls,
         Self::Pull,
+        Self::Documents,
     ];
 
     /// The URL word (also the log / manifest form).
@@ -99,6 +103,7 @@ impl RouteWord {
             Self::Members => "members",
             Self::Pulls => "pulls",
             Self::Pull => "pull",
+            Self::Documents => "documents",
         }
     }
 

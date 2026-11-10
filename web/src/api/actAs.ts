@@ -47,6 +47,11 @@ const STATE_KEY = 'gs-act-as-state';
  * the sign-in round trip still has it. Storage may be missing: then the
  * state lives only in the returned value. */
 export function takeConfirmLink(search: URLSearchParams): ConfirmLink | null {
+  return takeLink(search, parseConfirmLink);
+}
+
+/** `takeConfirmLink`'s state handling, for any confirmation's link parser. */
+function takeLink<L>(search: URLSearchParams, parse: (p: URLSearchParams) => L | null): L | null {
   const params = new URLSearchParams(search);
   const fromUrl = params.get('state');
   let state = fromUrl;
@@ -65,8 +70,121 @@ export function takeConfirmLink(search: URLSearchParams): ConfirmLink | null {
   }
   if (state === null) return null;
   params.set('state', state);
-  return parseConfirmLink(params);
+  return parse(params);
 }
+
+// ── binding confirmations (M3 X3, ADR-0025 Amendment X3 §4) ─────────────
+
+export type BindingConfirmation = S['BindingConfirmationBody'];
+export type BindingIntent = 'binding_set' | 'binding_remove';
+
+/** What the integration put into the binding popup's address, checked. */
+export interface BindingLink {
+  intent: BindingIntent;
+  integration: number;
+  kanflowProjectId: string;
+  /** `binding_set` only. */
+  resolvesWorkItems: boolean | null;
+  state: string;
+}
+
+/** The binding popup's query, strictly (the server checks again): `null`
+ * when anything is missing, malformed, or the setting does not fit the intent. */
+export function parseBindingLink(search: URLSearchParams): BindingLink | null {
+  const intent = search.get('intent');
+  const integration = search.get('integration');
+  const kanflow = search.get('kanflow_project_id');
+  const resolves = search.get('resolves_work_items');
+  const state = search.get('state');
+  if (intent !== 'binding_set' && intent !== 'binding_remove') return null;
+  if (integration === null || !/^[1-9][0-9]{0,15}$/.test(integration)) return null;
+  const id = Number(integration);
+  if (!Number.isSafeInteger(id)) return null;
+  if (kanflow === null || !/^[A-Za-z0-9._:-]{1,100}$/.test(kanflow)) return null;
+  let resolvesWorkItems: boolean | null = null;
+  if (intent === 'binding_set') {
+    if (resolves !== 'true' && resolves !== 'false') return null;
+    resolvesWorkItems = resolves === 'true';
+  } else if (resolves !== null) {
+    return null;
+  }
+  if (state === null || !/^[A-Za-z0-9_-]{22,128}$/.test(state)) return null;
+  return { intent, integration: id, kanflowProjectId: kanflow, resolvesWorkItems, state };
+}
+
+/** The binding popup's link, once (the state leaves the address bar, as for `takeConfirmLink`). */
+export function takeBindingLink(search: URLSearchParams): BindingLink | null {
+  return takeLink(search, parseBindingLink);
+}
+
+export function useBindingConfirmation(project: number, link: BindingLink | null, enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: [
+      'act-as-binding-confirmation',
+      project,
+      link?.intent ?? '',
+      link?.integration ?? 0,
+      link?.kanflowProjectId ?? '',
+      link?.resolvesWorkItems ?? null,
+    ] as const,
+    enabled: enabled && link !== null,
+    // What the person sees must be what is checked now: never reuse.
+    gcTime: 0,
+    staleTime: 0,
+    queryFn: ({ signal }) => {
+      if (link === null) throw new Error('binding confirmation without a link');
+      return call(() =>
+        api.GET('/api/v1/projects/{id}/integration-bindings/act-as-confirmation', {
+          signal,
+          params: {
+            path: { id: project },
+            query: {
+              intent: link.intent,
+              integration: String(link.integration),
+              kanflow_project_id: link.kanflowProjectId,
+              ...(link.resolvesWorkItems === null ? {} : { resolves_work_items: String(link.resolvesWorkItems) }),
+            },
+          },
+        }),
+      );
+    },
+  });
+}
+
+/** The press on the binding popup. A 403 is most often a stale CSRF token: read the session again. */
+export function useIssueBindingAssertion(project: number) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: (link: BindingLink) =>
+      call(() =>
+        api.POST('/-/confirm/projects/{id}/integration-bindings/assertions', {
+          params: { path: { id: project } },
+          body: {
+            intent: link.intent,
+            integration: link.integration,
+            kanflow_project_id: link.kanflowProjectId,
+            resolves_work_items: link.resolvesWorkItems,
+            state: link.state,
+          },
+        }),
+      ),
+    onError: (error: unknown) => {
+      if (
+        error instanceof ApiFailure &&
+        (error.failure.kind === 'unauthenticated' ||
+          (error.failure.kind === 'api' && error.failure.status === 403))
+      ) {
+        void queryClient.invalidateQueries({ queryKey: SESSION_KEY });
+      }
+    },
+  });
+}
+
+/** The binding press, as the screen holds it. */
+export type IssueBindingMutation = ReturnType<typeof useIssueBindingAssertion>;
 
 export const actAsKeys = {
   confirmation: (project: number, iid: number, link: Omit<ConfirmLink, 'state'>) =>

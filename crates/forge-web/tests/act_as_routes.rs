@@ -35,7 +35,7 @@ fn ctx(request: &str) -> ChangeContext {
     ChangeContext::new(Actor::System, RequestId::parse(request).expect("id"))
 }
 
-const KEYS: &str = "1:BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc= active";
+const KEYS: &str = "1:BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY= active";
 const STATE: &str = "kanflow-state-0123456789abcdefABCDEF";
 
 /// Who calls: an injected principal (people), or a bearer token (the
@@ -143,6 +143,19 @@ async fn send(
     body: Option<Value>,
     headers: &[(&str, &str)],
 ) -> (StatusCode, Value) {
+    let (status, raw) = send_raw(router, method, uri, who, body, headers).await;
+    (status, serde_json::from_slice(&raw).unwrap_or(Value::Null))
+}
+
+/// [`send`], the body as the bytes on the wire.
+async fn send_raw(
+    router: axum::Router,
+    method: &str,
+    uri: &str,
+    who: Who,
+    body: Option<Value>,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Vec<u8>) {
     let mut req = Request::builder().method(method).uri(uri);
     if body.is_some() {
         req = req.header("content-type", "application/json");
@@ -177,7 +190,7 @@ async fn send(
         .expect("body")
         .to_bytes()
         .to_vec();
-    (status, serde_json::from_slice(&raw).unwrap_or(Value::Null))
+    (status, raw)
 }
 
 fn code(body: &Value) -> &str {
@@ -592,6 +605,113 @@ async fn assertion_is_consumed_when_the_action_fails() {
         w.t.json_rows("SELECT count(*) AS n FROM forge.merge_request_approvals")
             .await;
     assert_eq!(approvals[0]["n"], 0);
+    w.t.drop_now().await;
+}
+
+/// Review of ADR-0025 (2026-11-09, security LOW b): a request cut off after
+/// its assertion was verified (the client went away while the body was
+/// still being read) does not leave the assertion `claimed` for 5 minutes:
+/// the drop guard rejects it (`request_cancelled`), and it cannot be used.
+#[tokio::test]
+async fn a_request_cut_off_while_its_assertion_is_being_rejected_still_rejects_it() {
+    // Review of the follow-ups (2026-11-10, MEDIUM): the route answered
+    // (a malformed body, 400: the assertion is not used), `finish` is
+    // rejecting it and is cut off while waiting on the database — the
+    // guard must still be armed and reject it.
+    let w = world().await;
+    let assertion = w
+        .confirmed("approve", "kanflow-state-fin-0123456789abcdef")
+        .await;
+    let id = public_id(&assertion);
+    // Hold the assertion's row: finish's UPDATE waits on it.
+    let held =
+        w.t.hold_audited(
+            ("project", w.project),
+            &[format!(
+                "SELECT 1 FROM forge.act_as_assertions WHERE public_id = '{id}' FOR UPDATE"
+            )],
+        )
+        .await;
+    let act_as = w.act_as(w.olga);
+    let req = Request::builder()
+        .method("POST")
+        .uri(w.mr("/approve"))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", w.kanflow))
+        .header("forge-act-as", &act_as)
+        .header("forge-assertion", &assertion)
+        .body(Body::from("{\"sha\": 5}"))
+        .expect("request");
+    let request = tokio::spawn(w.router.clone().oneshot(req));
+    w.t.until_waiting("SET state = 'rejected'").await;
+    request.abort();
+    assert!(request.await.is_err(), "cut off inside finish");
+    drop(held); // rollback: the waiting statements go on
+    let mut state = String::new();
+    for _ in 0..200 {
+        state = w.assertion_state(&id).await;
+        if state != "claimed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(state, "rejected");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_request_cut_off_after_the_verification_rejects_its_assertion() {
+    let w = world().await;
+    let assertion = w
+        .confirmed("approve", "kanflow-state-cut-0123456789abcdef")
+        .await;
+    let act_as = w.act_as(w.olga);
+    // A body that never ends: the route waits for it after the
+    // authentication (and the act-as verification) admitted the request.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(1);
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    tx.send(Ok(axum::body::Bytes::from_static(b"{\"sha\":")))
+        .await
+        .expect("first chunk");
+    let req = Request::builder()
+        .method("POST")
+        .uri(w.mr("/approve"))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", w.kanflow))
+        .header("forge-act-as", &act_as)
+        .header("forge-assertion", &assertion)
+        .body(Body::from_stream(stream))
+        .expect("request");
+    let cut = tokio::time::timeout(Duration::from_millis(500), w.router.clone().oneshot(req)).await;
+    assert!(
+        cut.is_err(),
+        "the request must still be waiting for its body"
+    );
+    drop(tx);
+    let id = public_id(&assertion);
+    let mut state = String::new();
+    for _ in 0..100 {
+        state = w.assertion_state(&id).await;
+        if state != "claimed" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(state, "rejected");
+    let rows =
+        w.t.json_rows(&format!(
+            "SELECT reject_reason FROM forge.act_as_assertions WHERE public_id = '{id}'"
+        ))
+        .await;
+    assert_eq!(rows[0]["reject_reason"], "request_cancelled");
+    let (status, later) = w.approve_as(w.olga, &assertion, &w.head).await;
+    assert_eq!(
+        (status, code(&later)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0020"),
+        "{later}"
+    );
     w.t.drop_now().await;
 }
 
@@ -1034,4 +1154,237 @@ async fn a_press_with_another_target_tip_is_refused_as_stale() {
     // Nothing was written: the same state is still free for the right press.
     let assertion = w.confirmed("approve", STATE).await;
     assert!(assertion.starts_with("fga_"));
+}
+
+/// The body of a refusal with its request id blanked (the only part that
+/// may differ between two refusals).
+fn without_request_id(status: StatusCode, raw: &[u8]) -> (StatusCode, String) {
+    let body: Value = serde_json::from_slice(raw).expect("a JSON body");
+    let id = body["request_id"].as_str().expect("request_id").to_owned();
+    assert!(!id.is_empty());
+    let text = String::from_utf8(raw.to_vec()).expect("utf-8");
+    assert_eq!(text.matches(id.as_str()).count(), 1, "{text}");
+    (status, text.replace(id.as_str(), "<request_id>"))
+}
+
+/// A person with a session-shaped principal.
+async fn person(w: &World, name: &str, role: Option<Role>) -> UserId {
+    let user = users::create(
+        &w.t.db,
+        &ctx(&format!("req-user-{name}")),
+        &NewUser::human(name, name, &format!("{name}@example.test")),
+    )
+    .await
+    .expect("user")
+    .user_id;
+    if let Some(role) = role {
+        projects::add_member(
+            &w.t.db,
+            &ctx(&format!("req-member-{name}")),
+            forge_core::ProjectId::new(w.project),
+            user,
+            role,
+        )
+        .await
+        .expect("member");
+    }
+    user
+}
+
+/// ADR-0025 (decision of 2026-11-10): whoever may not press the merge
+/// request's act-as confirmation — no right for the intent (a Reporter),
+/// the author (self-approval), a token, an integration that does not
+/// exist, is not bound to the project or is disabled — gets the invisible
+/// project's 404, byte for byte but the request id, on the screen's facts
+/// (`GET`) and on the press (`POST`).
+#[tokio::test]
+async fn every_refusal_of_the_merge_request_confirmation_is_the_invisible_projects_404() {
+    let w = world().await;
+    let eve = person(&w, "eve", None).await;
+    let rita = person(&w, "rita", Some(Role::Reporter)).await;
+    // A second integration, enabled, not bound to the project.
+    let sa2 = forge_db::service_accounts::create(
+        &w.t.db,
+        &ctx("req-sa-two"),
+        &forge_db::service_accounts::NewServiceAccount {
+            username: "kanflow-two".to_owned(),
+            display_name: "kanflow two".to_owned(),
+            owner: w.olga,
+            purpose: "a second kanflow, bound nowhere".to_owned(),
+        },
+        w.olga,
+    )
+    .await
+    .expect("sa")
+    .user_id;
+    let unbound = forge_db::integrations::create(
+        &w.t.db,
+        &ctx("req-int-two"),
+        &forge_db::integrations::NewIntegration {
+            kind: forge_core::IntegrationKind::Kanflow,
+            service_account: sa2,
+            event_types: None,
+        },
+        w.olga,
+    )
+    .await
+    .expect("integration")
+    .get();
+    let as_session = |user: UserId| Who::Person(session_of(user), Some(w.olga_session));
+    let answer = |project: i64, integration: i64, who: Who| {
+        let w = &w;
+        async move {
+            let (status, raw) = send_raw(
+                w.router.clone(),
+                "GET",
+                &format!(
+                    "/api/v1/projects/{project}/merge-requests/1/act-as-confirmation?intent=approve&sha={}&integration={integration}",
+                    w.head
+                ),
+                who.clone(),
+                None,
+                &[],
+            )
+            .await;
+            let shown = without_request_id(status, &raw);
+            let (status, raw) = send_raw(
+                w.router.clone(),
+                "POST",
+                &format!("/-/confirm/projects/{project}/merge-requests/1/assertions"),
+                who,
+                Some(json!({
+                    "intent": "approve", "sha": w.head, "target_sha": w.base,
+                    "integration": integration,
+                    "state": "kanflow-state-refused-0123456789abcdef",
+                })),
+                &[],
+            )
+            .await;
+            (shown, without_request_id(status, &raw))
+        }
+    };
+    let mut answers = vec![
+        (
+            "invisible project",
+            answer(w.project, w.integration, as_session(eve)).await,
+        ),
+        (
+            "absent project",
+            answer(999_999, w.integration, w.olga_by_session()).await,
+        ),
+        (
+            "a Reporter",
+            answer(w.project, w.integration, as_session(rita)).await,
+        ),
+        (
+            "the author",
+            answer(w.project, w.integration, as_session(w.dave)).await,
+        ),
+        (
+            "missing integration",
+            answer(w.project, 999_999, w.olga_by_session()).await,
+        ),
+        (
+            "integration not bound",
+            answer(w.project, unbound, w.olga_by_session()).await,
+        ),
+        (
+            "a token",
+            answer(w.project, w.integration, w.kanflow()).await,
+        ),
+    ];
+    // Last: the bound integration disabled.
+    let disabled = forge_db::integrations::update(
+        &w.t.db,
+        &ctx("req-int-disable"),
+        forge_core::IntegrationId::new(w.integration),
+        &forge_db::integrations::Changes {
+            enabled: Some(false),
+            event_types: None,
+        },
+    )
+    .await
+    .expect("disable");
+    assert_ne!(disabled, forge_db::integrations::UpdateOutcome::Unchanged);
+    answers.push((
+        "disabled integration",
+        answer(w.project, w.integration, w.olga_by_session()).await,
+    ));
+    let (first, (expected, _)) = &answers[0];
+    assert_eq!(expected.0, StatusCode::NOT_FOUND, "{first}: {}", expected.1);
+    assert!(expected.1.contains("FG-REPO-0005"), "{}", expected.1);
+    for (what, (shown, pressed)) in &answers {
+        assert_eq!(shown, expected, "GET {what} differs from {first}");
+        assert_eq!(pressed, expected, "POST {what} differs from {first}");
+    }
+    // Nothing was written by any refused press.
+    let rows =
+        w.t.json_rows("SELECT count(*) AS n FROM forge.act_as_assertions")
+            .await;
+    assert_eq!(rows[0]["n"], json!(0));
+    w.t.drop_now().await;
+}
+
+/// Review ff17e86 (HIGH): when act-as is not configured on the server, the
+/// confirmation and its press answer the invisible project's 404 for
+/// everyone, before anything is loaded — an existing project or merge
+/// request answers exactly like an absent one (no probe of existence).
+#[tokio::test]
+async fn without_act_as_configured_the_confirmation_is_the_same_404_for_all() {
+    let w = world().await;
+    let state = AppState::new(
+        "test",
+        Vec::new(),
+        Arc::new(w.t.db.clone()),
+        Lookups {
+            namespaces: Arc::new(w.t.db.clone()),
+            projects: Arc::new(w.t.db.clone()),
+        },
+    )
+    .with_hosting(forge_hosting::Hosting::new(w.t.db.clone()));
+    let router = forge_web::app(state, AppConfig::default()).expect("router");
+    let answer = |project: i64, who: Who| {
+        let router = router.clone();
+        let w = &w;
+        async move {
+            let (status, raw) = send_raw(
+                router.clone(),
+                "GET",
+                &format!(
+                    "/api/v1/projects/{project}/merge-requests/1/act-as-confirmation?intent=approve&sha={}&integration={}",
+                    w.head, w.integration
+                ),
+                who.clone(),
+                None,
+                &[],
+            )
+            .await;
+            let shown = without_request_id(status, &raw);
+            let (status, raw) = send_raw(
+                router,
+                "POST",
+                &format!("/-/confirm/projects/{project}/merge-requests/1/assertions"),
+                who,
+                Some(json!({
+                    "intent": "approve", "sha": w.head, "target_sha": w.base,
+                    "integration": w.integration,
+                    "state": "kanflow-state-unconfigured-0123456789ab",
+                })),
+                &[],
+            )
+            .await;
+            (shown, without_request_id(status, &raw))
+        }
+    };
+    let existing = answer(w.project, w.olga_by_session()).await;
+    let absent = answer(999_999, w.olga_by_session()).await;
+    let developer = answer(
+        w.project,
+        Who::Person(session_of(w.dave), Some(w.olga_session)),
+    )
+    .await;
+    assert_eq!(existing.0 .0, StatusCode::NOT_FOUND, "{existing:?}");
+    assert_eq!(existing, absent);
+    assert_eq!(developer, absent);
+    w.t.drop_now().await;
 }

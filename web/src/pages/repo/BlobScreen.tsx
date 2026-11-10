@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate } from 'react-router';
 
+import { documentId } from '../../api/documents';
 import { refParam, useBlob } from '../../api/repo';
 import type { Rev } from '../../api/types';
 import { Loading } from '../../components/Loading';
@@ -17,6 +18,7 @@ import {
   baseName,
   blameUrl,
   commitsUrl,
+  documentUrl,
   isDownloadOnly,
   isImagePath,
   isMarkdownPath,
@@ -108,6 +110,14 @@ function Blob({
         <Link className={controls.button} to={commitsUrl(project, rev.name, path)}>
           {t('file.history')}
         </Link>
+        {markdown && documentId(text) !== null && (
+          <Link
+            className={controls.button}
+            to={documentUrl(project, documentId(text) ?? '', { ref: rev.name })}
+          >
+            {t('file.openDocument')}
+          </Link>
+        )}
         {markdown && (
           <span className={styles.toggle} role="group" aria-label={t('file.viewLabel')}>
             <button

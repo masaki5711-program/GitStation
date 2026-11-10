@@ -8,7 +8,6 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
 
 use forge_auth::{
     prove, AccountKind, Action, CheckNamespaceGrantCtx, CheckRunCtx, Credential, LoadedProject,
@@ -214,11 +213,21 @@ async fn the_browser_adapter_answers_unreachable_and_undecided_like_missing() {
         .await
         .expect_err("unreachable");
     assert_reason(&err, ErrorCode::RepositoryPathNotResolved, "ref_not_found");
-    // The reachability check runs out of time: the same answer.
-    let slow = checks_with(BrowseLimits {
-        reach_timeout: Duration::from_nanos(1),
-        ..BrowseLimits::default()
-    });
+    // The reachability check runs out of time: the same answer. Its
+    // `rev-list` never answers (`forge_git::test_git`): a 1 ns limit is no
+    // timeout — under load a fast git that already answered wins.
+    let stall_dir = tempfile::tempdir().expect("stall");
+    let slow = Checks::new(
+        t.db.clone(),
+        Arc::new(Browser::new(
+            forge_git::test_git::stalled_git(home.path(), stall_dir.path(), Some("rev-list")),
+            storage.clone(),
+            BrowseLimits {
+                reach_timeout: forge_git::test_git::STALL,
+                ..BrowseLimits::default()
+            },
+        )),
+    );
     let err = slow
         .report(&request("req-slow"), &proof_for(&lost), repo, &input)
         .await

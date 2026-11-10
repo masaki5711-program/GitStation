@@ -1,0 +1,35 @@
+# synthetic — 計画 13 §5 の型の定義の例。
+name: safety.risk-assessment
+version: 1
+label: { ja: リスクアセスメント, en: Risk assessment, id: Penilaian risiko }
+id_pattern: '^RA-\d{4}-\d{3}$'
+defaults: { classification: internal, review_cycle: 12M }
+fields:
+  regulations: { type: list, required: true, label: { ja: 関係する法令・規格 } }
+  equipment:   { type: ref, doctype: equipment.urs, required: false, label: { ja: 対象の設備 } }
+sections:
+  - { title: 対象と範囲 }
+  - { title: 危険源の特定とリスクの見積り, blocks: [hazard] }
+  - { title: リスク低減措置, blocks: [control] }
+  - { title: 残留リスク }
+blocks:
+  hazard:
+    id_pattern: '^H-\d{2}$'
+    attrs:
+      severity:     { type: int, min: 1, max: 4, required: true }
+      likelihood:   { type: int, min: 1, max: 4, required: true }
+      res_severity:   { type: int, min: 1, max: 4, required: false }   # 措置の後（残留リスク）
+      res_likelihood: { type: int, min: 1, max: 4, required: false }
+  control:
+    id_pattern: '^C-\d{2}[a-z]?$'
+    attrs:
+      for:  { type: blockref, kind: hazard, required: true }
+      type: { enum: [elimination, engineering, administrative, ppe], required: true }
+rules:
+  - every_hazard_has_control          # 措置のない危険源はエラー
+  - residual_not_above_initial        # res_* は元の値を超えない
+  - residual_set_when_controlled      # 措置のある危険源は res_* が要る
+approval_hint:
+  review: [safety-team]
+  approve: [plant-manager]
+concurrency_hint: single_revision

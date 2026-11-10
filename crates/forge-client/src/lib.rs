@@ -1,13 +1,15 @@
 //! `forge-client`: the typed client for REST API v1 and the `gstn` CLI built
 //! on it (plan 01 §3.11, M1 phase 8b plan "gstn series").
 //!
-//! Dependency decision (CLAUDE.md §3.9): this crate is a *client*, outside the
-//! server's layering. It depends on `forge-errors` only — the generated
-//! registry of `FG-…` codes and their messages, which both sides must agree on
-//! — and on no server crate (no `forge-core`, `forge-db`, `forge-auth`,
-//! `forge-web`): it talks to the server over HTTP and nothing else. No server
-//! crate may depend on it. `Cargo.toml` of the server crates is checked by
-//! `client_depends_only_on_forge_errors` below.
+//! Dependency decision (CLAUDE.md §3.9, ADR-0020 and its Amendment, ADR-0026
+//! §8): this crate is a *client*, outside the server's layering. It depends on
+//! `forge-errors` — the generated registry of `FG-…` codes and their messages,
+//! which both sides must agree on — and on `forge-doc`, the pure document
+//! parsing, formatting and lint `gstn doc` shares with the server's
+//! `forge/doc-lint`; on no server crate (no `forge-core`, `forge-db`,
+//! `forge-auth`, `forge-web`): it talks to the server over HTTP and nothing
+//! else. No server crate may depend on it. `Cargo.toml` of the server crates
+//! is checked by `client_depends_only_on_forge_errors_and_forge_doc` below.
 
 pub mod admin;
 pub mod app;
@@ -18,6 +20,8 @@ pub mod config;
 pub mod conflicts;
 pub mod coverage;
 pub mod credential;
+// Plan 13 stage 2: `gstn doc fmt` / `gstn doc lint` (local only).
+pub mod doc;
 pub mod error;
 pub mod gitcfg;
 pub mod hosting;
@@ -40,6 +44,9 @@ pub mod store;
 pub mod webhooks;
 // M3 O2: the push mirror to GitLab.
 pub mod mirror;
+// Plan 13 Q13: the document lint migration setting.
+pub mod doc_migration;
+pub mod doc_view;
 
 #[cfg(test)]
 mod tests;

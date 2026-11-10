@@ -555,3 +555,8 @@ ID トークンとの取り違えは防げる）。バックチャネルのエ�
 | 40 | LOW | 古い行の掃除（MR3 の引き継ぎ §4b の宿題） | `forge worker` のタスク `session_purge`（`web.session_purge_interval_secs`、既定 3600、60〜86 400）。失効か絶対の期限から **30 日** を過ぎた行を 1 回の変更で最大 500 行、id の順、`FOR UPDATE SKIP LOCKED`。持ち主ごとに監査 `session.purged`（`{"user_id","purged_sessions"}`、actor `system`、最初の行が変更の行、残りは `ChangeRecord.affected`）。満杯のバッチの後はすぐもう 1 回。マイグレーション `20261105100000`（追記）で `forge_app` に DELETE、ガード `forge.web_sessions_purge_guard()` / トリガー `web_sessions_purge_only`（ALWAYS、XF001 → FG-DB-0009）が 30 日より新しい行の DELETE をどのロールでも拒む。doctor の期待値と `tables.toml` に登録 |
 | 41 | HIGH（MR6 のレビュー） | 利用者のルートの `DELETE /api/v1/user/tokens/{id}` で、管理者（`admin` スコープのエージェントのトークンを含む）が他人のトークンを失効できた | `TokenRevoke` は持ち主だけ。他人のトークンは管理者も FG-REPO-0005（ないトークンと同じ本文）。管理者が他人のトークンを失効するルート（`/api/v1/admin/users/{id}/tokens/…`、`people_only`）は**見送り**（それまでは無効化か CLI `forge admin token revoke`） |
 | 42 | LOW（MR6 のレビュー） | 管理者が HTTP で自分を無効にできた。利用者の検索に回数の制限がない | 自分の無効化は FG-AUTH-0009 `self_disable`（CLI が経路）。検索は利用者ごとに 120 回 / 60 秒（FG-WEB-0010 `route=user_search`）。`prefix=true` は path の検査と scope の判定の後に数える。掃除の条件に部分インデックス（マイグレーション `20261105100100`） |
+
+## Amendment（proposed、2026-11-09、ADR-0028）— 文書の承認の直前の再確認
+
+ADR-0028 §3（proposed）: 承認のフェーズのあるリポジトリの文書の承認の直前に、直近 5 分以内の Keycloak の認証でなければ再ログインさせる
+（OIDC の `max_age`、ID トークンの `auth_time`）。トークンによる文書の承認は拒否する。ADR-0028 が accepted になったときに有効になる。

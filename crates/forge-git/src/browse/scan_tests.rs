@@ -84,6 +84,52 @@ async fn blobs_under_lists_regular_files_below_each_directory_only() {
     assert!(cut.truncated);
 }
 
+/// Plan 13 stage 2: the document lint's one listing of a head is the
+/// whole tree — regular files only, in git's order, cut at the cap.
+#[tokio::test]
+async fn blobs_in_tree_lists_every_regular_file_of_the_commit() {
+    let f = fixture().await;
+    let c = commit(&f.path, &tree(&f.path), None);
+    let b = f.browser(BrowseLimits::default());
+    let listed = b.blobs_in_tree(f.id, &c, 100).await.expect("list");
+    let names: Vec<&str> = listed.blobs.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "docs/c.md",
+            "spec/a.md",
+            "spec/deep/b.md",
+            "tests/t.rs",
+            "tests/x.bin"
+        ],
+        "no symlink, no submodule"
+    );
+    assert!(!listed.truncated);
+    let cut = b.blobs_in_tree(f.id, &c, 3).await.expect("list");
+    assert_eq!(cut.blobs.len(), 3);
+    assert!(cut.truncated);
+}
+
+#[tokio::test]
+async fn read_blob_prefix_reads_at_most_the_cap() {
+    let f = fixture().await;
+    let c = commit(&f.path, &tree(&f.path), None);
+    let b = f.browser(BrowseLimits::default());
+    let listed = b
+        .blobs_under(f.id, &c, &[path("spec")], 100)
+        .await
+        .expect("list");
+    let first = &listed.blobs[0];
+    assert_eq!(
+        b.read_blob_prefix(f.id, first, 5).await.expect("read"),
+        b"---\ns".to_vec()
+    );
+    assert_eq!(
+        b.read_blob_prefix(f.id, first, 1000).await.expect("read"),
+        b"---\nspec: a\n---\n".to_vec()
+    );
+}
+
 #[tokio::test]
 async fn read_blobs_returns_each_content_in_order() {
     let f = fixture().await;

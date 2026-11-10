@@ -82,6 +82,12 @@ impl ActAsBindingConfirmCtx {
     pub fn intent(&self) -> Intent {
         self.intent
     }
+
+    /// The integration is bound to the project for the kanflow project
+    /// (the confirmation screen says so; the decision reads it too).
+    pub fn bound(&self) -> bool {
+        self.integration.bound
+    }
 }
 
 impl sealed::Sealed for ActAsBindingConfirmCtx {}

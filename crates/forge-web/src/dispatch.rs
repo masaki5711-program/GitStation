@@ -91,6 +91,11 @@ pub(crate) async fn dispatch<S: DispatchState>(
 
     // 4. Authentication by word.
     if table.is_public_word(verb, route) {
+        // ADR-0025 §2: a public word never acts for a person; the act-as
+        // headers are refused, never ignored.
+        if let Err(res) = crate::act_as::refuse_on_public(&req, first.def.action) {
+            return *res;
+        }
         return serve_public(first, state, ctx, req, tail, verb).await;
     }
     let guard_action = candidates

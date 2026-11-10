@@ -26,10 +26,16 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn only_forge_checks_calls_the_check_commands() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     // Assembled so this file does not match itself.
-    let mut needles: Vec<String> = ["report_check_run", "change_check_namespace_grant"]
-        .iter()
-        .map(|c| format!("{c}{}{}", "_decided", "("))
-        .collect();
+    let mut needles: Vec<String> = [
+        "report_check_run",
+        "change_check_namespace_grant",
+        // Plan 13 Q13: the document lint's migration setting.
+        "set_doc_lint_migration",
+        "clear_doc_lint_migration",
+    ]
+    .iter()
+    .map(|c| format!("{c}{}{}", "_decided", "("))
+    .collect();
     // M3 X2: forge's own runs (no decision at all: forge's worker) are
     // written through forge-checks' `SpecDrift` only.
     needles.push(format!("{}{}", "record_forge_check_run", "("));
@@ -79,7 +85,12 @@ fn the_check_command_names_avoid_the_hosting_needles() {
         "put_merge_rule",
         "remove_merge_rule",
     ];
-    for name in ["report_check_run", "change_check_namespace_grant"] {
+    for name in [
+        "report_check_run",
+        "change_check_namespace_grant",
+        "set_doc_lint_migration",
+        "clear_doc_lint_migration",
+    ] {
         let call = format!("{name}_decided(");
         for needle in hosting {
             assert!(

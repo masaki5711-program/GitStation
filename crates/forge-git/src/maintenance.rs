@@ -617,7 +617,18 @@ impl Git {
     /// could not remove its own lock), still under the merge lock: remove
     /// `packed-refs.lock` only when its time lies between `step_started`
     /// (less [`LOCK_MTIME_SLACK`] for coarse file times) and `killed_at` —
-    /// it can then only be the one our pack-refs made.
+    /// it can then only be the one our pack-refs made. `killed_at` is when
+    /// the kill was sent, carried in whole milliseconds rounded up: file
+    /// times may be finer than a millisecond (Linux multigrain timestamps
+    /// once anyone, e.g. the doctor's probe, stat()s the lock), and our git's
+    /// last write in the kill's millisecond must still count as ours. The
+    /// rounding lets a lock made up to 1 ms after the kill count as ours —
+    /// only possible when our git had not taken the lock (O_EXCL), the
+    /// residual below. Not covered, by design (2026-11-09): a git blocked in
+    /// the kernel (slow storage) that finishes a write to its lock after the
+    /// kill was sent — its lock looks newer than the kill and is left and
+    /// named (a false FG-GIT-0020, the safe side); moving the bound later
+    /// would let a live writer's lock be removed instead.
     /// Anything else is left ([`LockCleanup::Foreign`]: the caller alerts,
     /// FG-GIT-0020): the merge lock does **not** keep writers out —
     /// receive-pack and `update-ref` of the version job take

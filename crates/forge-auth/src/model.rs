@@ -400,6 +400,45 @@ pub enum MembershipChange {
     Missing { to: Option<Role> },
 }
 
+/// What the measurement of a repository's default branch found, for a
+/// whole copy of it — a clone or fetch over Smart HTTP, an archive
+/// (`RepoRead` on [`Resource::RepoCopy`], plan 06 D-5, ADR-0026 decision
+/// of 2026-11-10). Measured by the route for an agent audience
+/// ([`Principal::is_agent_audience`]) only; `authorize()` refuses that
+/// audience everything but [`CopyMark::Open`] (fail closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyMark {
+    /// Not measured (the caller is a person: a measurement would only
+    /// cost). An agent audience with this is refused (`tip_not_measured`).
+    NotMeasured,
+    /// The default branch's tip has no confidential file, or the
+    /// repository has no ref at all (nothing to copy).
+    Open,
+    /// The default branch's tip has a confidential file
+    /// (`forge_checks::confidential`: either mark, the type's default as a
+    /// floor, an unreadable front matter or type definition).
+    Confidential,
+    /// The default branch is not born while other refs exist: nothing to
+    /// measure against (the read routes withhold every document then).
+    Unborn,
+    /// The measurement did not complete (its timeout, a bound of the
+    /// document read, a git error).
+    Undecided,
+}
+
+impl CopyMark {
+    /// The log `reason` of a refusal.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CopyMark::NotMeasured => "tip_not_measured",
+            CopyMark::Open => "tip_open",
+            CopyMark::Confidential => "tip_confidential",
+            CopyMark::Unborn => "default_branch_unborn",
+            CopyMark::Undecided => "tip_undecided",
+        }
+    }
+}
+
 /// What the action acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resource {
@@ -417,6 +456,17 @@ pub enum Resource {
         owner_kind: AccountKind,
     },
     Project(ProjectView),
+    /// A whole copy of the project's repository — a clone or fetch
+    /// (upload-pack, its advertisement) or an archive — with what the
+    /// default branch's tip was measured to hold ([`CopyMark`]). Decided
+    /// like `RepoRead` on the project, then an agent audience is refused
+    /// every mark but `Open` (`FG-AUTH-0022`). Built only by
+    /// [`crate::authorize_repo_copy`] from the dispatcher's `RepoRead`
+    /// proof.
+    RepoCopy {
+        project: ProjectView,
+        mark: CopyMark,
+    },
     /// One ref update in a push. The kind is derived from `name` inside
     /// `authorize()` (callers cannot mislabel a reserved ref); `update` must
     /// come from the ancestry check of old and new object ids; `protection`

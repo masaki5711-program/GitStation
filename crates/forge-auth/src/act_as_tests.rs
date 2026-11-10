@@ -110,6 +110,7 @@ fn act_as_merge_is_not_allowed() {
     for a in [
         Action::MergeRequestMerge,
         Action::MergeSettingsManage,
+        Action::DocLintMigrationManage,
         Action::ApprovalRuleManage,
         Action::CodeownersEnforcementToggle,
         Action::ProtectedRefManage,
@@ -417,10 +418,17 @@ fn every_denied_action_has_a_generated_act_as_row() {
         if a.act_as_rule() != ActAsRule::Denied {
             continue;
         }
+        // The act-as confirmation answers every refusal with the invisible
+        // project's 404 (ADR-0025, decision of 2026-11-10).
+        let code = if matches!(a, Action::ActAsConfirmView | Action::ActAsAssertionIssue) {
+            ErrorCode::NotFound
+        } else {
+            ErrorCode::Forbidden
+        };
         assert!(
             ROWS.iter().any(|r| r.action == a
                 && matches!(r.actor, Actor::ActAs(_))
-                && r.expect == Expect::Deny(ErrorCode::Forbidden)),
+                && r.expect == Expect::Deny(code)),
             "act_as_denied_for_{}",
             a.name()
         );

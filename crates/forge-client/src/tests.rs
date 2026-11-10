@@ -3,7 +3,7 @@
 
 use crate::cli::command_paths;
 use crate::config::{parse_host, Config, Overrides};
-use crate::coverage::{non_api_coverage, Coverage, API_ROUTES};
+use crate::coverage::{non_api_coverage, Coverage, API_ROUTES, LOCAL_COMMANDS};
 use crate::credential::{answer_get, matches_host, parse_request};
 use crate::error::{ClientError, Exit};
 use crate::registry::{find, COMMANDS};
@@ -128,6 +128,31 @@ fn every_api_route_is_covered_or_planned() {
     for r in routes.iter().filter(|r| !r.contains(" /api/v1")) {
         let p = r.split(' ').nth(1).unwrap_or_default();
         assert!(!non_api_coverage(p).is_empty());
+    }
+}
+
+/// C-1, local commands: a command that calls no route is listed as local
+/// (with why), and a listed command calls none (plan 13 stage 2: `doc fmt`,
+/// `doc lint`).
+#[test]
+fn commands_without_a_route_are_local() {
+    let mut without: Vec<&str> = COMMANDS
+        .iter()
+        // `api` calls whichever route it is given (C-6).
+        .filter(|c| c.routes.is_empty() && c.name != "api")
+        .map(|c| c.name)
+        .collect();
+    without.sort_unstable();
+    let mut local: Vec<&str> = LOCAL_COMMANDS.iter().map(|(n, _)| *n).collect();
+    local.sort_unstable();
+    assert_eq!(without, local, "coverage.rs LOCAL_COMMANDS");
+    for (name, why) in LOCAL_COMMANDS {
+        assert!(!why.is_empty(), "{name}");
+        assert!(find(name).is_some(), "{name}");
+    }
+    for name in ["doc fmt", "doc lint"] {
+        let c = find(name).expect("doc command");
+        assert!(c.scopes.is_empty(), "{name} needs no token");
     }
 }
 
@@ -349,10 +374,10 @@ fn both_stores_failing_is_credential_store_failed() {
     assert!(!e.human().contains("\nt"), "no token");
 }
 
-/// The dependency decision (lib.rs): forge-client sees only forge-errors, and
-/// no server crate depends on forge-client.
+/// The dependency decision (lib.rs): forge-client sees only forge-errors and
+/// the pure forge-doc, and no server crate depends on forge-client.
 #[test]
-fn client_depends_only_on_forge_errors() {
+fn client_depends_only_on_forge_errors_and_forge_doc() {
     const SELF_DEV_DEP: &str = r#"forge-client = { path = ".", features = ["test-support"] }"#;
     let own = include_str!("../Cargo.toml");
     let deps: Vec<&str> = own
@@ -362,8 +387,9 @@ fn client_depends_only_on_forge_errors() {
         // crate's own tests; it is not an edge to another forge crate.
         .filter(|l| l.trim() != SELF_DEV_DEP)
         .collect();
-    assert_eq!(deps.len(), 1, "{deps:?}");
-    assert!(deps[0].starts_with("forge-errors"));
+    assert_eq!(deps.len(), 2, "{deps:?}");
+    assert!(deps[0].starts_with("forge-errors"), "{deps:?}");
+    assert!(deps[1].starts_with("forge-doc"), "{deps:?}");
     // ...and it may only appear under [dev-dependencies].
     let dev = own
         .split("[dev-dependencies]")

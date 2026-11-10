@@ -142,6 +142,13 @@ pub enum Command {
         #[command(subcommand)]
         command: SpecCommand,
     },
+    /// Documents in the plan 13 format: fmt and lint on your working tree
+    /// (never the server); show, list and migration through the server.
+    #[command(disable_help_subcommand = true)]
+    Doc {
+        #[command(subcommand)]
+        command: DocCommand,
+    },
     /// The context API (M3 X5): a work item's, a requirement's or a merge
     /// request's context, every item with its source.
     #[command(disable_help_subcommand = true)]
@@ -1782,6 +1789,111 @@ pub enum SpecCommand {
         /// A commit id, a branch or a tag (default: the default branch).
         #[arg(long = "ref", value_parser = parse_text)]
         rev: Option<String>,
+    },
+}
+
+/// `gstn doc` (plan 13 stage 2, ADR-0026): the document format's tools on
+/// the working tree. Local only: the files and `.forge/doctypes/` of the
+/// repository found upward from the current directory; nothing is sent.
+#[derive(Subcommand, Debug)]
+pub enum DocCommand {
+    /// Format documents: one sentence per line, the front matter's keys
+    /// and the blocks' attributes in their type's order.
+    Fmt {
+        /// Write nothing; exit 1 (FG-DOC-0004) when a file would change.
+        #[arg(long)]
+        check: bool,
+        /// Also rewrite older-format specifications (`spec:` front matter)
+        /// into the plan 13 format (ADR-0026 §7); never without it.
+        #[arg(long)]
+        migrate: bool,
+        /// With --migrate: also migrate a `status: draft` / `review`
+        /// specification (the plan 13 format keeps no state in the file;
+        /// the older value stays in a TODO comment).
+        #[arg(long, requires = "migrate")]
+        accept_status_loss: bool,
+        /// Files or directories (default: the whole repository).
+        paths: Vec<PathBuf>,
+    },
+    /// Check documents against their types and each other (the same lint
+    /// as the forge/doc-lint check).
+    Lint {
+        /// Report only these files or directories (every document is
+        /// read: references are checked against the whole repository).
+        paths: Vec<PathBuf>,
+        /// Report broken references as warnings while migrating (plan 13
+        /// Q13; the server's forge/doc-lint decides).
+        #[arg(long)]
+        migration_warnings: bool,
+    },
+    /// One document of a project, read through the server's document API
+    /// (plan 13 stage 3): its front matter, sections, blocks and resolved
+    /// references.
+    Show {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The document id (e.g. RA-2026-014).
+        #[arg(value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        id: String,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+        /// A translation's language (e.g. en).
+        #[arg(long, value_parser = parse_text)]
+        lang: Option<String>,
+    },
+    /// A project's documents (id, classification, type, path, title),
+    /// through the server's document API.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag (default: the default branch).
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: Option<String>,
+        /// Only documents of this type.
+        #[arg(long, value_parser = parse_text)]
+        doctype: Option<String>,
+        /// At most this many documents, 1..=500 (server default 100).
+        #[arg(long, value_parser = parse_spec_limit)]
+        limit: Option<u32>,
+        /// The previous page's next_after.
+        #[arg(long, value_parser = crate::doc_view::parse_doc_id, value_name = "DOC_ID")]
+        after: Option<String>,
+    },
+    /// The repository setting that lowers broken references to warnings
+    /// in forge/doc-lint until a date (plan 13 Q13): show, set, clear.
+    #[command(disable_help_subcommand = true)]
+    Migration {
+        #[command(subcommand)]
+        command: DocMigrationCommand,
+    },
+}
+
+/// `gstn doc migration` (plan 13 Q13): the server's setting.
+#[derive(Subcommand, Debug)]
+pub enum DocMigrationCommand {
+    /// The project's migration date, whether it is in force, and the
+    /// server's date.
+    Show {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Lower broken references to warnings until a date (Maintainer).
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The last day (UTC), YYYY-MM-DD: after today and at most 180
+        /// days ahead.
+        #[arg(long, value_parser = parse_text, value_name = "YYYY-MM-DD")]
+        until: String,
+    },
+    /// End the migration now: broken references are errors again.
+    Clear {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
     },
 }
 

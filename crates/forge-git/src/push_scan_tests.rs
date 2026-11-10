@@ -397,7 +397,9 @@ async fn skipped_blobs_and_waivers_are_reported() {
 }
 
 /// The size check cannot be cut short into an accept: past its bound the
-/// scan is an error (FG-GIT-0023, the push refused).
+/// scan is an error (FG-GIT-0023, the push refused). Its git never answers
+/// (`test_git`): a zero bound is no timeout — under load a fast `cat-file`
+/// answered first and the scan, complete, passed (2026-11-09, 3 of 5 runs).
 #[tokio::test]
 async fn a_size_check_that_cannot_finish_fails_closed() {
     let f = fixture().await;
@@ -405,9 +407,11 @@ async fn a_size_check_that_cannot_finish_fails_closed() {
     let tip = commit_in(&f.path, Some(&dir), &[("a.txt", b"a")], None);
     let q = quarantine_of(&f.path, &dir);
     let mut l = limits(1 << 20);
-    l.size_timeout = Duration::ZERO;
-    let err = f
-        .git
+    l.size_timeout = crate::test_git::STALL;
+    let bin = tempfile::tempdir().expect("bin");
+    // Only the size check (`cat-file --batch-all-objects`) stalls.
+    let git = crate::test_git::stalled_git(f._home.path(), bin.path(), Some("--batch-all-objects"));
+    let err = git
         .scan_push(&f.path, Some(&q), &[tip], &l)
         .await
         .expect_err("refused");

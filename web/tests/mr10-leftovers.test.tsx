@@ -13,6 +13,9 @@ function big(n: number) {
   return Array.from({ length: n }, (_, i) => `line ${i}`).join('\n');
 }
 
+/** The wait for the large file's rows (see the first test). */
+const HEAVY = 15_000;
+
 describe('MR10 review leftovers', () => {
   it('"Show more" keeps one status region and moves focus to the first new row on the last click', async () => {
     const server = mockServer(
@@ -21,21 +24,29 @@ describe('MR10 review leftovers', () => {
       }),
     );
     await renderApp({ fetch: server.fetch, path: `${BASE}/blob/main/big.txt`, lang: 'en' });
-    const code = await screen.findByTestId('code');
+    // Rendering 3000–3500 rows in jsdom is slow under load (a full parallel
+    // suite): the waits are bounded by HEAVY, not by the 1 s default.
+    const code = await screen.findByTestId('code', undefined, { timeout: HEAVY });
     const status = screen.getAllByRole('status').find((s) => s.textContent.includes('Showing'));
     expect(status?.textContent).toBe('Showing 3000 of 3500 lines.');
     fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
-    await waitFor(() => {
-      expect(code.querySelectorAll('tr')).toHaveLength(3500);
-    });
+    await waitFor(
+      () => {
+        expect(code.querySelectorAll('tr')).toHaveLength(3500);
+      },
+      { timeout: HEAVY },
+    );
     // The same status element survives, now empty; the button is gone.
     expect(status?.isConnected).toBe(true);
     expect(status?.textContent).toBe('');
     expect(screen.queryByRole('button', { name: /Show more/ })).toBeNull();
-    await waitFor(() => {
-      expect(document.activeElement?.id).toBe('L3001');
-    });
-  });
+    await waitFor(
+      () => {
+        expect(document.activeElement?.id).toBe('L3001');
+      },
+      { timeout: HEAVY },
+    );
+  }, 30_000);
 
   it('line-number links are not tab stops; the "go to line" control is the entry', async () => {
     const server = mockServer(

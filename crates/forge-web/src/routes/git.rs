@@ -22,6 +22,14 @@
 //!   `remote error:`. Exempt from the request timeout (`app.rs`): the
 //!   route's own bounds are `git.http.*`.
 //!
+//! The upload-pack advertisement and RPC: an AI agent audience copies only
+//! while its default branch's tip has no confidential file (plan 06 D-5
+//! safety net, `routes::repo_copy`; decided by `authorize()` on
+//! `Resource::RepoCopy`): otherwise HTTP 200 with one `ERR` packet
+//! (`FG-AUTH-0022`, logged once), so git prints `fatal: remote error:
+//! <message> (request_id: …)`. `HEAD` on the advertisement starts no git
+//! and is not measured. receive-pack (push) is unchanged.
+//!
 //! Both: a repository still `provisioning` is `FG-REPO-0016` (after
 //! `authorize()`); responses carry `Cache-Control: private, no-store` and
 //! `Vary: Authorization`; git's output is streamed (`GitResponse`), and a
@@ -53,6 +61,8 @@ use tokio::io::AsyncWriteExt as _;
 use crate::app::AppState;
 use crate::git_stream::{read_request_body, BodySlots, GitResponse, StreamLog};
 use crate::registry::Dispatched;
+use crate::routes::repo_copy::{decide_copy, CopyMarks};
+use forge_checks::confidential::ConfidentialLimits;
 
 const ADVERTISEMENT: &str = "application/x-git-upload-pack-advertisement";
 const REQUEST: &str = "application/x-git-upload-pack-request";
@@ -134,6 +144,10 @@ pub struct SmartHttp {
     /// and storage, the browse limits, the per-repository cap and the ref
     /// cache every push drops.
     pub browse: Browser,
+    /// What a whole copy's measurement found per repository tip (plan 06
+    /// D-5 safety net, `routes::repo_copy`), and its bounds.
+    pub(crate) copy_marks: Arc<CopyMarks>,
+    pub(crate) copy_limits: ConfidentialLimits,
 }
 
 /// Counts running push tasks (a receive-pack the request no longer owns,
@@ -234,7 +248,18 @@ impl SmartHttp {
             push_tasks: PushTasks::default(),
             push_checks: None,
             browse,
+            copy_marks: Arc::default(),
+            copy_limits: ConfidentialLimits::default(),
         }
+    }
+
+    /// Other bounds for the copy measurement (tests: a zero timeout, tiny
+    /// document limits).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_copy_check_limits(mut self, limits: ConfidentialLimits) -> Self {
+        self.copy_limits = limits;
+        self
     }
 
     /// Other browse limits (tests; `forge serve` keeps the defaults).
@@ -336,6 +361,14 @@ async fn advertise_inner(
     let protocol = git_protocol(request.headers());
     let version = ProtocolVersion::from_git_protocol(protocol.as_deref());
     let principal = principal_key(&request)?;
+    if service == Service::UploadPack {
+        if let Err(refused) = decide_copy(smart, request.proof(), repository.id, &principal).await {
+            let refused = refused
+                .with_context("route", "info_refs")
+                .with_context("service", service.name());
+            return Ok(refused_in_band(&request, refused, ADVERTISEMENT));
+        }
+    }
     let log = StreamLog::new(&request, repository, "info_refs");
     drop(request);
     let cmd = match service {
@@ -387,6 +420,10 @@ async fn upload_pack_inner(
     let protocol = git_protocol(request.headers());
     let version = ProtocolVersion::from_git_protocol(protocol.as_deref());
     let principal = principal_key(&request)?;
+    if let Err(refused) = decide_copy(&smart, request.proof(), repository.id, &principal).await {
+        let refused = refused.with_context("route", "upload_pack");
+        return Ok(refused_in_band(&request, refused, RESULT));
+    }
     let log = StreamLog::new(&request, repository, "upload_pack");
     let ctx = request.ctx().clone(); // clone: the request body is consumed below
     let slot = smart.body_slots.acquire(&principal).await?;
@@ -456,6 +493,29 @@ async fn upload_pack_inner(
         RESULT,
         GitResponse::new(Vec::new(), stream, log)?.into_body(),
     ))
+}
+
+/// A refusal of a whole copy (`routes::repo_copy`) as git shows it: HTTP
+/// 200 with one `ERR` packet (`fatal: remote error: <message> (request_id:
+/// …)`), the way an unreachable want is refused; logged once here. A
+/// defect (`FG-SYS-0001`) is no refusal: it is answered like any other
+/// failure (500, the JSON error).
+fn refused_in_band(
+    request: &Dispatched<ProjectCtx>,
+    refused: ForgeError,
+    content_type: &'static str,
+) -> Response {
+    let ctx = request.ctx();
+    if refused.code() != ErrorCode::RepositoryCopyWithheld {
+        return ctx.fail(refused).into_response();
+    }
+    telemetry::log_failure(&refused, &ctx.request_id);
+    let message = format!(
+        "{} (request_id: {})",
+        refused.user_message(ctx.lang),
+        ctx.request_id
+    );
+    git_response(content_type, Body::from(err_packet(&message)))
 }
 
 /// The Smart HTTP state and the repository, once it is ready

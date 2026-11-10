@@ -97,3 +97,32 @@ export function isDownloadOnly(path: string): boolean {
 export function isMarkdownPath(path: string): boolean {
   return ['md', 'markdown', 'mdown'].includes(extensionOf(path));
 }
+
+/** The document list (plan 13 stage 3); `ref` (a branch, tag or commit) and
+ * `after` (the previous page's `next_after`) are the query. */
+export const documentsUrl = (project: string, query?: { ref?: string; after?: string }) => {
+  const q = new URLSearchParams();
+  if (query?.ref !== undefined) q.set('ref', query.ref);
+  if (query?.after !== undefined) q.set('after', query.after);
+  const s = q.toString();
+  return `${base(project)}/-/documents${s === '' ? '' : `?${s}`}`;
+};
+
+/** One document by its id; `ref` and `lang` (a translation) are the query,
+ * `block` the fragment of a block's card. */
+export const documentUrl = (
+  project: string,
+  id: string,
+  query?: { ref?: string; lang?: string; block?: string },
+) => {
+  const q = new URLSearchParams();
+  if (query?.ref !== undefined) q.set('ref', query.ref);
+  if (query?.lang !== undefined) q.set('lang', query.lang);
+  const s = q.toString();
+  const hash = query?.block === undefined ? '' : `#${blockAnchor(query.block)}`;
+  return `${base(project)}/-/documents/${encodeURIComponent(id)}${s === '' ? '' : `?${s}`}${hash}`;
+};
+
+/** The element id of a block's card (the `user-content-` prefix keeps
+ * document ids from clobbering the page's globals, as Markdown headings). */
+export const blockAnchor = (block: string) => `user-content-block-${block}`;

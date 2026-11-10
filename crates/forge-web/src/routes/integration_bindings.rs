@@ -26,6 +26,11 @@
 //!   (`ActAsAssertionIssue`, a person's web session, CSRF): the person
 //!   confirms `binding_set` (with the setting) or `binding_remove` for one
 //!   kanflow project; a pending assertion for the integration to claim.
+//!   Whoever may not press it — and the screen's facts (`GET
+//!   …/act-as-confirmation`) alike — a Developer, a token, an integration
+//!   that is absent or disabled, a binding state that does not fit the
+//!   intent — gets the invisible project's `FG-REPO-0005`, the cause only in
+//!   the log (`refused_code`; ADR-0025, decision of 2026-11-10).
 //!
 //! The loaders of the three binding writes add, for an act-as request, the
 //! binding the request writes (the assertion is compared with it); the
@@ -65,6 +70,36 @@ pub const BINDINGS: &str = "/api/v1/integrations/{id}/bindings";
 pub const BINDING: &str = "/api/v1/integrations/{id}/bindings/{binding_id}";
 /// `POST` the person's confirmation of a binding intent.
 pub const CONFIRM: &str = "/-/confirm/projects/{id}/integration-bindings/assertions";
+/// `GET` what the binding confirmation screen shows (ADR-0025 Amendment X3 §4).
+pub const CONFIRMATION: &str = "/api/v1/projects/{id}/integration-bindings/act-as-confirmation";
+const CONFIRMATION_PREFIX: &str = "/api/v1/projects/";
+const CONFIRMATION_SUFFIX: &str = "/integration-bindings/act-as-confirmation";
+/// The binding confirmation popup (the SPA shell; popup headers by its `/-/confirm/` prefix).
+pub const PAGE: &str = "/-/confirm/projects/{id}/integration-bindings";
+
+/// The query of [`CONFIRMATION`].
+pub const CONFIRMATION_QUERY: &[QueryParam] = &[
+    QueryParam {
+        name: "intent",
+        description: "binding_set or binding_remove",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "integration",
+        description: "the receiving integration's id",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "kanflow_project_id",
+        description: "the kanflow project the integration named",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "resolves_work_items",
+        description: "binding_set only: true (the code repository) or false (a shared specification repository)",
+        integer_range: None,
+    },
+];
 const PREFIX: &str = "/api/v1/integrations/";
 const BINDINGS_WORD: &str = "/bindings";
 const CONFIRM_PREFIX: &str = "/-/confirm/projects/";
@@ -304,7 +339,11 @@ fn search_query(query: Option<&str>) -> Result<(String, usize), ForgeError> {
         if pair.is_empty() {
             continue;
         }
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let (key, raw) = pair.split_once('=').unwrap_or((pair, ""));
+        // Browsers escape `:` (allowed in a kanflow project id) as `%3A`:
+        // decode strictly (a malformed escape is refused, never passed on).
+        let value = crate::routes::namespaces::percent_decode(raw)
+            .ok_or_else(|| param_invalid("query", "malformed"))?;
         let (slot, param) = match key {
             "q" => (&mut q, "q"),
             "limit" => (&mut limit, "limit"),
@@ -701,38 +740,240 @@ impl BodyLoader<AppState, IssueBindingAssertion> for ConfirmOf {
                 crate::routes::write::id_in(parts.uri.path(), CONFIRM_PREFIX, CONFIRM_SUFFIX)
                     .map(ProjectId::new)
                     .ok_or_else(|| param_invalid("id", "not_positive_decimal"))?;
-            let intent = binding_intent(&body.intent)?;
-            external_param("kanflow_project_id", &body.kanflow_project_id)?;
-            if (intent == Intent::BindingSet) != body.resolves_work_items.is_some() {
-                return Err(request_invalid("field_invalid")
-                    .with_context("field", "resolves_work_items")
-                    .with_context("rule", "required_for_binding_set_only"));
-            }
-            if body.integration <= 0 {
-                return Err(param_invalid("integration", "not_positive_decimal"));
-            }
-            let Some(loaded) = project_of(state, project, viewer).await? else {
-                return Ok(absent());
+            let asked = BindingAsk {
+                intent: binding_intent(&body.intent)?,
+                integration: body.integration,
+                kanflow_project_id: &body.kanflow_project_id,
+                resolves_work_items: body.resolves_work_items,
             };
-            let act_as = state.act_as.as_deref().ok_or_else(|| {
-                ForgeError::new(ErrorCode::Forbidden)
-                    .with_context("reason", "act_as_not_configured")
-            })?;
-            let integration = bounded(
-                state,
-                "act_as_confirm_integration",
-                act_as.confirm_binding_integration(
-                    IntegrationId::new(body.integration),
-                    project,
-                    &body.kanflow_project_id,
-                ),
-            )
-            .await?;
-            Ok(match integration {
-                Some(i) => found(ActAsBindingConfirmCtx::new(loaded, intent, i)),
-                None => absent(),
-            })
+            binding_confirm_lookup(state, project, &asked, viewer, false).await
         })
+    }
+}
+
+/// What a binding confirmation names (the issue's body or the screen's query).
+struct BindingAsk<'a> {
+    intent: Intent,
+    integration: i64,
+    kanflow_project_id: &'a str,
+    resolves_work_items: Option<bool>,
+}
+
+/// The binding confirmation's context — one lookup for the screen (`GET`)
+/// and the press (`POST`), so the two decide on the same facts: the
+/// project as loaded for the person (`with_record`: kept for the screen's
+/// path), the intent and the integration with whether it is bound for that
+/// kanflow project (absent, or invisible: the same 404).
+async fn binding_confirm_lookup(
+    state: &AppState,
+    project: ProjectId,
+    asked: &BindingAsk<'_>,
+    viewer: Option<UserId>,
+    with_record: bool,
+) -> Result<Lookup<ActAsBindingConfirmCtx>, ForgeError> {
+    external_param("kanflow_project_id", asked.kanflow_project_id)?;
+    if (asked.intent == Intent::BindingSet) != asked.resolves_work_items.is_some() {
+        return Err(request_invalid("field_invalid")
+            .with_context("field", "resolves_work_items")
+            .with_context("rule", "required_for_binding_set_only"));
+    }
+    if asked.integration <= 0 {
+        return Err(param_invalid("integration", "not_positive_decimal"));
+    }
+    // Review ff17e86 (HIGH): without act-as configured, the same 404 before
+    // anything is loaded (no probe of the project's existence).
+    let Some(act_as) = state.act_as.as_deref() else {
+        return Ok(crate::routes::write::absent_because(
+            "act_as_not_configured",
+        ));
+    };
+    let Some(record) = crate::routes::projects::load_bounded(state, project, viewer).await? else {
+        return Ok(absent());
+    };
+    if record.id != project {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "loaded_another_project")
+            .with_context("project_id", project.get())
+            .with_context("loaded_project_id", record.id.get()));
+    }
+    let loaded = crate::routes::projects::loaded(&record);
+    let integration = bounded(
+        state,
+        "act_as_confirm_integration",
+        act_as.confirm_binding_integration(
+            IntegrationId::new(asked.integration),
+            project,
+            asked.kanflow_project_id,
+        ),
+    )
+    .await?;
+    let Some(integration) = integration else {
+        return Ok(absent());
+    };
+    let ctx = ActAsBindingConfirmCtx::new(loaded, asked.intent, integration);
+    Ok(Lookup::Found {
+        ctx,
+        canonical: None,
+        tombstone: None,
+        project: with_record.then_some(record),
+        group: None,
+    })
+}
+
+/// The query of [`CONFIRMATION`], strictly (an unknown or repeated
+/// parameter is refused; values are taken as they are — the kanflow
+/// project id's own format check refuses anything that would need escaping).
+fn binding_confirm_query(
+    query: Option<&str>,
+) -> Result<(Intent, i64, String, Option<bool>), ForgeError> {
+    let (mut intent, mut integration, mut kanflow, mut resolves) = (None, None, None, None);
+    for pair in query.unwrap_or_default().split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, raw) = pair.split_once('=').unwrap_or((pair, ""));
+        // Browsers escape `:` (allowed in a kanflow project id) as `%3A`:
+        // decode strictly (a malformed escape is refused, never passed on).
+        let value = crate::routes::namespaces::percent_decode(raw)
+            .ok_or_else(|| param_invalid("query", "malformed"))?;
+        let (slot, param) = match key {
+            "intent" => (&mut intent, "intent"),
+            "integration" => (&mut integration, "integration"),
+            "kanflow_project_id" => (&mut kanflow, "kanflow_project_id"),
+            "resolves_work_items" => (&mut resolves, "resolves_work_items"),
+            _ => return Err(param_invalid("query", "unknown_parameter")),
+        };
+        if slot.replace(value).is_some() {
+            return Err(param_invalid(param, "repeated"));
+        }
+    }
+    let intent = match intent.as_deref() {
+        Some(raw) => Intent::parse(raw)
+            .filter(|i| matches!(i, Intent::BindingSet | Intent::BindingRemove))
+            .ok_or_else(|| param_invalid("intent", "unknown_intent"))?,
+        None => return Err(param_invalid("intent", "missing")),
+    };
+    let integration = integration
+        .as_deref()
+        .and_then(parse_positive_id)
+        .ok_or_else(|| param_invalid("integration", "not_positive_decimal"))?;
+    let kanflow = kanflow.ok_or_else(|| param_invalid("kanflow_project_id", "missing"))?;
+    let resolves = match resolves.as_deref() {
+        None => None,
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        Some(_) => return Err(param_invalid("resolves_work_items", "not_a_bool")),
+    };
+    Ok((intent, integration, kanflow, resolves))
+}
+
+/// `GET …/integration-bindings/act-as-confirmation`'s loader.
+pub struct BindingConfirmationOf;
+
+impl Loader<AppState> for BindingConfirmationOf {
+    type Ctx = ActAsBindingConfirmCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, ActAsBindingConfirmCtx> {
+        Box::pin(async move {
+            let project = crate::routes::write::id_in(
+                parts.uri.path(),
+                CONFIRMATION_PREFIX,
+                CONFIRMATION_SUFFIX,
+            )
+            .map(ProjectId::new)
+            .ok_or_else(|| param_invalid("id", "not_positive_decimal"))?;
+            let (intent, integration, kanflow, resolves) =
+                binding_confirm_query(parts.uri.query())?;
+            let asked = BindingAsk {
+                intent,
+                integration,
+                kanflow_project_id: &kanflow,
+                resolves_work_items: resolves,
+            };
+            binding_confirm_lookup(state, project, &asked, viewer, true).await
+        })
+    }
+}
+
+/// `GET …/integration-bindings/act-as-confirmation` (forge's data only: the
+/// kanflow project id is shown as the identifier the integration named,
+/// never with text the integration sent).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BindingConfirmationBody {
+    #[schema(minimum = 1)]
+    pub project_id: i64,
+    /// The repository's path now (`group/name`).
+    pub project_path: String,
+    pub project_display_name: String,
+    /// `binding_set` or `binding_remove`.
+    pub intent: String,
+    pub kanflow_project_id: String,
+    /// The setting confirmed (`binding_set`; `null` for `binding_remove`).
+    #[schema(required = true)]
+    pub resolves_work_items: Option<bool>,
+    /// The integration is bound to this repository for that kanflow project now.
+    pub bound: bool,
+    #[schema(minimum = 1)]
+    pub integration_id: i64,
+    pub integration_kind: String,
+    pub integration_name: String,
+    pub person_display_name: String,
+    pub person_username: String,
+}
+
+/// `GET …/integration-bindings/act-as-confirmation` → `200` the facts.
+pub async fn confirmation(
+    state: AppState,
+    request: Dispatched<ActAsBindingConfirmCtx>,
+) -> Response {
+    let query = request.raw_query().map(str::to_owned);
+    let record = request.project().cloned();
+    let caller = request.caller().cloned();
+    let bound = request.proof().ctx().bound();
+    let w = request.into_write();
+    let built = async {
+        let (intent, _, kanflow, resolves) = binding_confirm_query(query.as_deref())?;
+        let (project, integration) = *w.proof.id();
+        let record = record.ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "confirm_without_project")
+        })?;
+        let act_as = state.act_as.as_deref().ok_or_else(|| {
+            ForgeError::new(ErrorCode::Forbidden).with_context("reason", "act_as_not_configured")
+        })?;
+        let (kind, name) = bounded(
+            &state,
+            "act_as_integration_label",
+            act_as.integration_label(integration),
+        )
+        .await?
+        .ok_or_else(|| ForgeError::new(ErrorCode::NotFound).with_context("reason", "absent"))?;
+        json(BindingConfirmationBody {
+            project_id: project.get(),
+            project_path: record.path.full_path(),
+            project_display_name: record.display_name.clone(), // clone: the body owns it
+            intent: intent.as_str().to_owned(),
+            kanflow_project_id: kanflow,
+            resolves_work_items: resolves,
+            bound,
+            integration_id: integration.get(),
+            integration_kind: kind,
+            integration_name: name,
+            person_display_name: caller
+                .as_ref()
+                .map(|c| c.display_name.clone())
+                .unwrap_or_default(),
+            person_username: caller.map(|c| c.username).unwrap_or_default(),
+        })
+    }
+    .await;
+    match built {
+        Ok(body) => no_store(StatusCode::OK, body),
+        Err(e) => w.ctx.fail(e).into_response(),
     }
 }
 

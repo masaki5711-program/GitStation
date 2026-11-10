@@ -61,6 +61,15 @@ pub(crate) fn absent<R>() -> Lookup<R> {
     }
 }
 
+/// Absent with a reason the log records as `lookup` (the caller still sees
+/// only the invisible project's `FG-REPO-0005`).
+pub(crate) fn absent_because<R>(why: &'static str) -> Lookup<R> {
+    Lookup::Unresolved {
+        ctx: UnresolvedCtx::new(UnresolvedReason::Absent),
+        why: Some(why),
+    }
+}
+
 /// The request a write belongs to: its id and the token it came with.
 pub(crate) fn write_request<R: ResourceCtx, B>(write: &WriteParts<R, B>) -> WriteRequest {
     WriteRequest {

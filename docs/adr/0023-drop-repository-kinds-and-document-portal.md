@@ -431,7 +431,8 @@
    - **読み取りのルートも同じ境界（security HIGH）**: エージェントの相手には、印の付いた仕様の文書の中身を HTTP の読み取りの API でも渡さない。
      `GET …/repository/blob`・`{path}/-/raw/…`・`…/repository/blame` は **`FG-AUTH-0021`**（`reason=spec_confidential`、`path`）。`…/repository/compare`・
      `…/repository/commits/{oid}`・`…/merge-requests/{iid}/versions/{n}/diff`・`…/merge-requests/{iid}/compare` は、その文書のファイルを差分から除き、
-     `diff.withheld {files}` に数える（人には出さない）。**git の clone / fetch と archive は印を見ない**（対象外）。**機密の高い仕様の本当の境界はリポジトリの権限**で、
+     `diff.withheld {files}` に数える（人には出さない）。**git の clone / fetch と archive は印を見ない**（対象外。
+     2026-11-10 に改めた: 既定のブランチの先端に機密のファイルがあれば、エージェントの相手には全体を断る — ADR-0026 の末尾、`FG-AUTH-0022`）。**機密の高い仕様の本当の境界はリポジトリの権限**で、
      エージェントのアカウント（`is_agent` のトークンの持ち主・サービスアカウント・bot）に、そのリポジトリの読み取りを与えないこと。印は HTTP の読み取りの API の **二重の守り** にすぎない。
    - **版を選んで印を避けること（MEDIUM a）**: エージェントの相手には、読む版で印が付いているか、**既定のブランチの先端で印が付いている** パスを機密とする
      （`marked_paths`、先端の索引は 1 回分として上限に数える）。残る穴: どの版にも印の無い古い履歴（印を付ける前の版で、先端でもパスが変わっている・消えている文書）は読める。

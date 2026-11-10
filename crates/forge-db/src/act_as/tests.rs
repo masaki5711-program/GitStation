@@ -45,11 +45,11 @@ fn oid(c: char) -> ObjectId {
     ObjectId::parse(&c.to_string().repeat(40)).expect("oid")
 }
 
-/// A ring of one active key (kid 1) of 32 equal bytes: 7 or 8.
+/// A ring of one active key (kid 1): the 32 bytes 7, 8, 9, … or 8, 9, 10, ….
 fn keys(byte: u8) -> ActAsKeys {
     let b64 = match byte {
-        7 => "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
-        _ => "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=",
+        7 => "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY=",
+        _ => "CAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJic=",
     };
     ActAsKeys::parse(&format!("1:{b64} active")).expect("keys")
 }

@@ -593,6 +593,74 @@
         ],
         "type": "object"
       },
+      "BindingConfirmationBody": {
+        "additionalProperties": false,
+        "description": "`GET …/integration-bindings/act-as-confirmation` (forge's data only: the\nkanflow project id is shown as the identifier the integration named,\nnever with text the integration sent).",
+        "properties": {
+          "bound": {
+            "description": "The integration is bound to this repository for that kanflow project now.",
+            "type": "boolean"
+          },
+          "integration_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "integration_kind": {
+            "type": "string"
+          },
+          "integration_name": {
+            "type": "string"
+          },
+          "intent": {
+            "description": "`binding_set` or `binding_remove`.",
+            "type": "string"
+          },
+          "kanflow_project_id": {
+            "type": "string"
+          },
+          "person_display_name": {
+            "type": "string"
+          },
+          "person_username": {
+            "type": "string"
+          },
+          "project_display_name": {
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "The repository's path now (`group/name`).",
+            "type": "string"
+          },
+          "resolves_work_items": {
+            "description": "The setting confirmed (`binding_set`; `null` for `binding_remove`).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "project_path",
+          "project_display_name",
+          "intent",
+          "kanflow_project_id",
+          "resolves_work_items",
+          "bound",
+          "integration_id",
+          "integration_kind",
+          "integration_name",
+          "person_display_name",
+          "person_username"
+        ],
+        "type": "object"
+      },
       "BindingSettings": {
         "additionalProperties": false,
         "description": "A binding's settings.",
@@ -3290,6 +3358,541 @@
         ],
         "type": "object"
       },
+      "DocIncompleteBody": {
+        "additionalProperties": false,
+        "description": "A bound the read of the documents hit.",
+        "properties": {
+          "error_code": {
+            "description": "`FG-DOC-0002`.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "`doc_tree`, `doc_files`, `doc_large_files`, `doc_bytes` or\n`doctype_files`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "DocLintMigrationBody": {
+        "additionalProperties": false,
+        "description": "A project's migration setting.",
+        "properties": {
+          "in_force": {
+            "description": "The date is today or later: broken references are warnings now.",
+            "type": "boolean"
+          },
+          "max_until": {
+            "description": "The latest date a new setting may name (today + 180 days).",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "set_at": {
+            "description": "When (UTC, RFC 3339; `null` without a setting).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "set_by": {
+            "description": "Who set the date last (`null` without a setting).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "today": {
+            "description": "The database's date (UTC), `YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/DocLintMigrationViewer"
+          },
+          "warn_until": {
+            "description": "`YYYY-MM-DD`, or `null` when there is no setting.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "warn_until",
+          "in_force",
+          "set_by",
+          "set_at",
+          "today",
+          "max_until",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "DocLintMigrationViewer": {
+        "additionalProperties": false,
+        "description": "What the caller could do now: a trial `authorize()` of the write (a\nhint for the screen; the route decides again).",
+        "properties": {
+          "can_manage": {
+            "description": "`PUT` / `DELETE …/doc-lint/migration`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_manage"
+        ],
+        "type": "object"
+      },
+      "DocumentAttrBody": {
+        "additionalProperties": false,
+        "description": "A block's attribute, as written.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "DocumentBlockBody": {
+        "additionalProperties": false,
+        "description": "A block (`::: <kind> <id> <attrs>`).",
+        "properties": {
+          "attrs": {
+            "description": "In the written order.",
+            "items": {
+              "$ref": "#/components/schemas/DocumentAttrBody"
+            },
+            "type": "array"
+          },
+          "body": {
+            "description": "The body as written (one sentence per line).",
+            "type": "string"
+          },
+          "deprecated": {
+            "description": "`status=deprecated`.",
+            "type": "boolean"
+          },
+          "display": {
+            "description": "The body for display: Markdown with the prose lines joined\n(`forge_doc::render::display_markdown`, plan 13 §4.1).",
+            "type": "string"
+          },
+          "id": {
+            "description": "`null` for a plain container (`::: note`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "attrs",
+          "deprecated",
+          "body",
+          "display"
+        ],
+        "type": "object"
+      },
+      "DocumentBody": {
+        "additionalProperties": false,
+        "description": "One document's view (plan 13 §7.3).",
+        "properties": {
+          "classification": {
+            "description": "`public`, `internal` or `confidential` (the type's default when\nthe document has none; `confidential` when the type cannot be read).",
+            "type": "string"
+          },
+          "doctype": {
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentFieldBody"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocIncompleteBody"
+              }
+            ]
+          },
+          "lang": {
+            "description": "The translation shown; `null`: the original.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The file shown (the translation's when `lang` is set).",
+            "type": "string"
+          },
+          "problem_count": {
+            "description": "Problems in all (with those not listed).",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "problems": {
+            "description": "The first parse problems ([`MAX_PROBLEMS`]).",
+            "items": {
+              "$ref": "#/components/schemas/DocumentProblemBody"
+            },
+            "type": "array"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "refs": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentRefBody"
+            },
+            "type": "array"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentSectionBody"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "translations": {
+            "description": "The languages of the document's translations, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The view's schema version (`forge_doc::render::VIEW_VERSION`): a\nchange that removes or renames a field raises it.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "ref",
+          "path",
+          "lang",
+          "translations",
+          "id",
+          "doctype",
+          "title",
+          "owner",
+          "classification",
+          "fields",
+          "sections",
+          "refs",
+          "problems",
+          "problem_count",
+          "incomplete"
+        ],
+        "type": "object"
+      },
+      "DocumentFieldBody": {
+        "additionalProperties": false,
+        "description": "A front matter field the base keys do not cover.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "description": "As written: a string, a list, a map or `null`."
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "DocumentListBody": {
+        "additionalProperties": false,
+        "description": "A revision's documents.",
+        "properties": {
+          "documents": {
+            "description": "By id.",
+            "items": {
+              "$ref": "#/components/schemas/DocumentSummaryBody"
+            },
+            "type": "array"
+          },
+          "incomplete": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocIncompleteBody"
+              }
+            ]
+          },
+          "next_after": {
+            "description": "More documents follow: ask again with `after=<next_after>`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "Always `null` (plan 06 D-5, review stage 3: an agent's list does not\nsay what it left out; the log does). Kept for the clients."
+              }
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "documents",
+          "next_after",
+          "incomplete",
+          "withheld"
+        ],
+        "type": "object"
+      },
+      "DocumentPieceBody": {
+        "additionalProperties": false,
+        "description": "A piece of a section, in order: Markdown text, or a block.",
+        "properties": {
+          "block": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentBlockBody",
+                "description": "`type: block`."
+              }
+            ]
+          },
+          "display": {
+            "description": "The text for display (`type: text`): prose lines joined.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "description": "1-based.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "markdown": {
+            "description": "The text as written (`type: text`; `null` for a block).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "`text` or `block`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "line",
+          "markdown",
+          "display",
+          "block"
+        ],
+        "type": "object"
+      },
+      "DocumentProblemBody": {
+        "additionalProperties": false,
+        "description": "A rule the document's text breaks (the parser's; `gstn doc lint` lists\nthem all with the type's).",
+        "properties": {
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "line",
+          "rule",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "DocumentRefBody": {
+        "additionalProperties": false,
+        "description": "A `[[…]]` reference and how it resolved.",
+        "properties": {
+          "block": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "block_kind": {
+            "description": "`found` with a block only: the block's kind.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doc": {
+            "type": "string"
+          },
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "Another repository's (`[[repo:ID]]`); `null` for this one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "description": "`found` (a document of this repository the reader may be shown),\n`hidden` (more confidential than this document: its id only — plan\n13 Q14), `broken` (no such document or block) or `external` (another\nrepository's; not resolved here).",
+            "type": "string"
+          },
+          "title": {
+            "description": "`found` only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "repo",
+          "doc",
+          "block",
+          "line",
+          "target",
+          "title",
+          "block_kind"
+        ],
+        "type": "object"
+      },
+      "DocumentSectionBody": {
+        "additionalProperties": false,
+        "description": "A level-2 section.",
+        "properties": {
+          "heading": {
+            "description": "`null`: the text before the first heading.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pieces": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentPieceBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "heading",
+          "line",
+          "pieces"
+        ],
+        "type": "object"
+      },
+      "DocumentSummaryBody": {
+        "additionalProperties": false,
+        "description": "One document of the list.",
+        "properties": {
+          "classification": {
+            "description": "`public`, `internal` or `confidential` (plan 06 D-5: how an AI may\nbe given it; not access control).",
+            "type": "string"
+          },
+          "doctype": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "title": {
+            "description": "`null` when the front matter has none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "translations": {
+            "description": "The languages of its translations, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "doctype",
+          "path",
+          "classification",
+          "translations"
+        ],
+        "type": "object"
+      },
       "EntryBody": {
         "additionalProperties": false,
         "description": "One tree entry.",
@@ -3881,6 +4484,10 @@
             "format": "int64",
             "minimum": 1,
             "type": "integer"
+          },
+          "resolves_work_items": {
+            "description": "`true`: this is the kanflow project's code repository (its merge\nrequests resolve work items; one kanflow project only). `false`: a\nshared specification repository (03 §7.1, ADR-0016 Amendment X3).",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3889,6 +4496,7 @@
           "project_id",
           "external_project_id",
           "granted_membership",
+          "resolves_work_items",
           "created_by",
           "created_at"
         ],
@@ -5541,6 +6149,20 @@
         },
         "required": [
           "enforced"
+        ],
+        "type": "object"
+      },
+      "PutDocLintMigration": {
+        "additionalProperties": false,
+        "description": "`PUT …/doc-lint/migration`.",
+        "properties": {
+          "warn_until": {
+            "description": "`YYYY-MM-DD`: the last day (UTC) broken references are warnings.\nRequired; after today and at most 180 days ahead (the database's\ndate).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "warn_until"
         ],
         "type": "object"
       },
@@ -8666,6 +9288,68 @@
         "x-forge-action": "SessionLogout"
       }
     },
+    "/-/confirm/projects/{id}/integration-bindings": {
+      "get": {
+        "operationId": "get_confirm_projects_id_integration_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: act-as binding confirmation popup",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_confirm_projects_id_integration_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: act-as binding confirmation popup",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/confirm/projects/{id}/integration-bindings/assertions": {
       "post": {
         "operationId": "post_confirm_projects_id_integration_bindings_assertions",
@@ -11412,6 +12096,276 @@
         "x-forge-action": "ContextRead"
       }
     },
+    "/api/v1/projects/{id}/doc-lint/migration": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_doc_lint_migration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "End the document lint migration now: broken document references are errors again (people only; Maintainer; 404 without a setting)",
+        "x-forge-action": "DocLintMigrationManage"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id_doc_lint_migration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocLintMigrationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's document lint migration: the date until which broken document references (ref_broken) are warnings in forge/doc-lint, whether it is in force, and the database's date and the latest date allowed (project read)",
+        "x-forge-action": "ProjectRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_doc_lint_migration",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutDocLintMigration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocLintMigrationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Lower broken document references to warnings until warn_until (YYYY-MM-DD, after today and at most 180 days ahead by the database's date: 400 FG-DOC-0005); errors again from the next day by themselves (people only; Maintainer)",
+        "x-forge-action": "DocLintMigrationManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/documents": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_documents",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only documents of this type (e.g. safety.risk-assessment)",
+            "in": "query",
+            "name": "doctype",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many documents (default 100)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_after: only documents whose id sorts after it",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A revision's documents in the plan 13 format: id, title, type, path, classification (paged; an agent's list leaves confidential ones out)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/documents/{doc_id}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_documents_doc_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag); default: the default branch",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A translation (<id>.<lang>.md, e.g. en); default: the original",
+            "in": "query",
+            "name": "lang",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One document's view: front matter, sections of text and blocks, references resolved (a more confidential target: its id only)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
     "/api/v1/projects/{id}/integration-bindings": {
       "get": {
         "operationId": "get_api_v1_projects_id_integration_bindings",
@@ -11451,6 +12405,83 @@
         },
         "summary": "A project's integration binding, none or one (as reading the project)",
         "x-forge-action": "ProjectRead"
+      }
+    },
+    "/api/v1/projects/{id}/integration-bindings/act-as-confirmation": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_integration_bindings_act_as_confirmation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "binding_set or binding_remove",
+            "in": "query",
+            "name": "intent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the receiving integration's id",
+            "in": "query",
+            "name": "integration",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "the kanflow project the integration named",
+            "in": "query",
+            "name": "kanflow_project_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "binding_set only: true (the code repository) or false (a shared specification repository)",
+            "in": "query",
+            "name": "resolves_work_items",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindingConfirmationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "What the binding confirmation screen shows: the repository, the kanflow project id the integration named, the setting, whether it is bound now, the receiving integration (a person's web session; Maintainer, the intent's action allowed for them)",
+        "x-forge-action": "ActAsConfirmView"
       }
     },
     "/api/v1/projects/{id}/integration-bindings/{integration_id}": {

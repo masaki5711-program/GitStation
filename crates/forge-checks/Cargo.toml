@@ -16,6 +16,8 @@ publish.workspace = true
 forge-auth.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
+# Plan 13 stage 2: the document lint (`forge/doc-lint`), pure.
+forge-doc.workspace = true
 forge-errors.workspace = true
 forge-git.workspace = true
 serde_json.workspace = true
@@ -25,6 +27,8 @@ url.workspace = true
 
 [dev-dependencies]
 forge-db = { workspace = true, features = ["test-support"] }
+# Tests that need a git timeout use a git that never answers, not a 1 ns timeout.
+forge-git = { workspace = true, features = ["test-support"] }
 tokio.workspace = true
 sqlx.workspace = true
 # tests/real_browser.rs: a real bare repository under a temporary storage root.

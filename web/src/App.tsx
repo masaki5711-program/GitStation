@@ -6,6 +6,7 @@ import { Route, Routes } from 'react-router';
 import { ApiFailure, type ApiClient } from './api/client';
 import { ApiProvider } from './api/context';
 import { Layout } from './components/Layout';
+import { ActAsBindingConfirm } from './pages/confirm/ActAsBindingConfirm';
 import { ActAsConfirm } from './pages/confirm/ActAsConfirm';
 import { Home } from './pages/Home';
 import { Inbox } from './pages/Inbox';
@@ -40,6 +41,7 @@ export function AppRoutes() {
       {/* The act-as popup: the session gate without the navigation. */}
       <Route element={<Layout bare />}>
         <Route path="-/confirm/projects/:id/merge-requests/:iid" element={<ActAsConfirm />} />
+        <Route path="-/confirm/projects/:id/integration-bindings" element={<ActAsBindingConfirm />} />
       </Route>
       <Route element={<Layout />}>
         <Route index element={<Home />} />

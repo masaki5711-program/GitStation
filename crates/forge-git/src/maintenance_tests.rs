@@ -437,14 +437,12 @@ async fn hidden_refs_stay_hidden_after_pack_refs() {
 /// `pack-objects`) which keeps writing to `marker`, then stalls. Synthetic.
 #[cfg(unix)]
 fn tree_fake(dir: &Path, marker: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join("fake-git.sh");
     let body = format!(
         "#!/bin/sh\n(while true; do echo x >> '{m}'; sleep 0.1; done) &\nsleep 300\n",
         m = marker.display()
     );
-    std::fs::write(&path, body).expect("script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    crate::test_git::write_script(&path, &body);
     path
 }
 
@@ -464,14 +462,11 @@ fn tree_fake(dir: &Path, marker: &Path) -> PathBuf {
 /// A fake git that exits `code` after printing `stderr`. Synthetic.
 #[cfg(unix)]
 fn exit_fake(dir: &Path, code: i32, stderr: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join("fake-exit.sh");
-    std::fs::write(
+    crate::test_git::write_script(
         &path,
-        format!("#!/bin/sh\necho '{stderr}' >&2\nexit {code}\n"),
-    )
-    .expect("script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        &format!("#!/bin/sh\necho '{stderr}' >&2\nexit {code}\n"),
+    );
     path
 }
 
@@ -713,14 +708,12 @@ fn count_objects_needs_every_key() {
 /// with `code` (a failing leader that leaves a helper). Synthetic.
 #[cfg(unix)]
 fn leaving_fake(dir: &Path, marker: &Path, code: i32) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join("fake-leave.sh");
     let body = format!(
         "#!/bin/sh\n(while true; do echo x >> '{m}'; sleep 0.1; done) &\nsleep 1\nexit {code}\n",
         m = marker.display()
     );
-    std::fs::write(&path, body).expect("script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    crate::test_git::write_script(&path, &body);
     path
 }
 
@@ -780,7 +773,6 @@ async fn helpers_die_when_a_maintenance_step_fails() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_timed_out_step_gets_sigterm_before_sigkill() {
-    use std::os::unix::fs::PermissionsExt;
     let f = fixture().await;
     let tmp = tempfile::tempdir().expect("tmp");
     let marker = tmp.path().join("got-term");
@@ -789,8 +781,7 @@ async fn a_timed_out_step_gets_sigterm_before_sigkill() {
         "#!/bin/sh\ntrap \"echo term > {m}; exit 143\" TERM\nsleep 300 &\nwait\n",
         m = marker.display()
     );
-    std::fs::write(&path, script).expect("script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    crate::test_git::write_script(&path, &script);
     let fake = f.with_bin(path);
     let err = fake
         .gc_objects(&f.root, f.id, GRACE, Duration::from_secs(2))
@@ -850,6 +841,47 @@ async fn a_lock_stamped_by_a_coarse_clock_just_before_the_step_is_ours() {
         .expect("cleanup");
     assert!(matches!(kept, LockCleanup::Foreign { .. }), "{kept:?}");
     assert!(lock.exists(), "someone else's is left");
+}
+
+/// A pack-refs killed while still writing its lock (it ignored SIGTERM, e.g.
+/// blocked on slow storage): the lock's time is fine-grained here and lies
+/// in the same millisecond as the kill. The kill's time as the step's error
+/// carries it (`killed_at_unix_ms`, read back by `StepEnd::of`) must still
+/// cover it — our own lock is ours, never "someone else's" (2026-11-09).
+#[tokio::test]
+async fn a_lock_written_in_the_millisecond_of_the_kill_is_ours() {
+    let f = fixture().await;
+    let lock = f.path.join("packed-refs.lock");
+    let started = SystemTime::now() - Duration::from_secs(30);
+    let mut misjudged = 0;
+    for _ in 0..50 {
+        std::fs::write(&lock, b"refs").expect("our lock, still being written");
+        // The kill right after the last write, as the supervisor records it.
+        let killed_ms = crate::command::ceil_millis(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("after the epoch"),
+        );
+        let err = ForgeError::new(ErrorCode::GitTimeout)
+            .with_context("stop", "kill")
+            .with_context("killed_at_unix_ms", killed_ms);
+        let StepEnd::Killed { at } = StepEnd::of(&err) else {
+            panic!("a kill");
+        };
+        let found = f
+            .git
+            .clear_own_packed_refs_lock(&f.root, f.id, started, at)
+            .await
+            .expect("cleanup");
+        if found != LockCleanup::Removed {
+            misjudged += 1;
+            std::fs::remove_file(&lock).expect("reset");
+        }
+    }
+    assert_eq!(
+        misjudged, 0,
+        "our own lock judged foreign {misjudged} of 50 times"
+    );
 }
 
 /// After a **killed** pack-refs (still under the merge lock) the lock is

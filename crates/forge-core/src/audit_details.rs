@@ -3,6 +3,7 @@
 
 use crate::approval::ApprovalRuleChange;
 use crate::checks::CheckRunChange;
+use crate::doc_lint_migration::DocLintMigrationChange;
 use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::integration::IntegrationChange;
@@ -390,6 +391,10 @@ pub enum AuditDetails {
     /// M3 O2: a push mirror set or removed (resource the project, no
     /// event). Shapes: [`PushMirrorChange::to_value`].
     PushMirror(PushMirrorChange),
+    /// Plan 13 Q13: the document lint's migration date set or cleared
+    /// (resource the project, no event). Shapes:
+    /// [`DocLintMigrationChange::to_value`].
+    DocLintMigration(DocLintMigrationChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -558,6 +563,7 @@ impl AuditDetails {
             Self::WorkItem(change) => change.action(),
             Self::Webhook(change) => change.action(),
             Self::PushMirror(change) => change.action(),
+            Self::DocLintMigration(change) => change.action(),
         }
     }
 
@@ -614,7 +620,8 @@ impl AuditDetails {
             | Self::CheckNamespaceGrant { .. }
             | Self::CheckRunsExpired { .. }
             | Self::Integration(_)
-            | Self::PushMirror(_) => None,
+            | Self::PushMirror(_)
+            | Self::DocLintMigration(_) => None,
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,
@@ -1034,6 +1041,7 @@ impl AuditDetails {
             Self::WorkItem(change) => change.to_value(),
             Self::Webhook(change) => change.to_value(),
             Self::PushMirror(change) => change.to_value(),
+            Self::DocLintMigration(change) => change.to_value(),
         }
     }
 
@@ -1114,7 +1122,8 @@ impl AuditDetails {
             | Self::Integration(_)
             | Self::WorkItem(_)
             | Self::Webhook(_)
-            | Self::PushMirror(_) => self.to_value(),
+            | Self::PushMirror(_)
+            | Self::DocLintMigration(_) => self.to_value(),
         }
     }
 }

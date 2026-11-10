@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 28] = [
+const GROUPS: [[Row; 2]; 29] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -73,6 +73,8 @@ const GROUPS: [[Row; 2]; 28] = [
     both!(A::MergeRequestApprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
     both!(A::MergeRequestUnapprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
     both!(A::ApprovalRuleManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    // Plan 13 Q13: the document lint's migration setting.
+    both!(A::DocLintMigrationManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // M3 R6.
     both!(A::MergeSettingsManage, MAINTAINER.0, MAINTAINER.1, F::SettingsChange {
         highest: None,

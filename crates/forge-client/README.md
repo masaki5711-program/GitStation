@@ -4,10 +4,12 @@
 `gstn` binary (plan `01` §3.11). It runs on developers' PCs (Windows / Linux),
 never on the server, and never touches the DB or server internals.
 
-**Dependency decision** (ADR-0020): depends on `forge-errors` only (the
-generated `FG-…` registry both sides must agree on). No server crate
-(`forge-core` / `-db` / `-auth` / `-web` / `-hosting` / `-git`) and none of them
-depends on this crate; `client_depends_only_on_forge_errors` checks it.
+**Dependency decision** (ADR-0020 and its Amendment, ADR-0026 §8): depends on
+`forge-errors` (the generated `FG-…` registry both sides must agree on) and the
+pure `forge-doc` (the document lint and format `gstn doc` shares with
+`forge/doc-lint`). No server crate (`forge-core` / `-db` / `-auth` / `-web` /
+`-hosting` / `-git`) and none of them depends on this crate;
+`client_depends_only_on_forge_errors_and_forge_doc` checks it.
 
 ## 利用者向けの手引き（日本語）
 
@@ -139,6 +141,38 @@ gstn mr resolve --project 7 --iid 3 --discussion 12 [--unresolve] # スレッド
 `--iid` はプロジェクトの中の番号（`!3`）。ブランチ名・タイトル・説明は JSON の本文で送り、パスには入れない。
 同じ source / target の開いている MR が既にあると FG-REVIEW-0001（終了コード 5）。
 
+### 文書のコマンド（計画 13 段 2。手元だけ）
+
+```
+gstn doc lint [<パス>…] [--json] [--migration-warnings]   # 文書を型と他の文書に照らして検査（forge/doc-lint と同じ検査）
+gstn doc fmt [--check] [<パス>…] [--json]                  # 文書を整形（1 文 1 行、項目と属性の順）。--check は書かずに確かめる
+```
+
+- **サーバーには何も送りません**。ログインも設定も要りません。今いるフォルダから上へたどって見つけた git のリポジトリの、
+  作業ツリーのファイル（`git ls-files` の一覧。`.gitignore` で除いたものは読まない）と `.forge/doctypes/*.yml` を読みます。
+- 文書は、前付けに `doctype` を書いた `.md`（どのフォルダでも）。それ以外の Markdown は読み飛ばします（`fmt` も書き換えない）。
+- `lint` は参照を確かめるためにリポジトリの文書をすべて読み、パスを渡したときはその下のファイルの問題だけを出します。
+  誤りがあると終了コード 1（`FG-DOC-0001`。型の定義 `.forge/doctypes/<型>.yml` が使えないときは `FG-DOC-0003`）。
+- 壊れた参照（`ref_broken`、まだ GitStation に無い文書への参照）は **誤り** です。移行の間は `--migration-warnings` で警告に下げられます
+  （手元だけ。MR の `forge/doc-lint` の答えが正）。サーバーの `forge/doc-lint` で下げるのは、次のリポジトリの設定です。
+
+### 移行中の警告の設定（計画 13 Q13。サーバーに送る）
+
+```
+gstn doc migration show  --project <id> [--json]                 # 期限・今それが効いているか・サーバーの日付（UTC）と決められる最後の日
+gstn doc migration set   --project <id> --until YYYY-MM-DD       # 期限まで壊れた参照を警告に下げる（Maintainer 以上、人だけ）
+gstn doc migration clear --project <id> --yes                    # 今すぐ終える（壊れた参照は誤りに戻る）
+```
+
+- 期限は **必須** で、サーバーの「今日」（DB の日付、UTC）より後、180 日以内。外れると `FG-DOC-0005`、日付の形でないと `FG-WEB-0006`。
+  手元の PC の時計は使いません。
+- 期限の日の終わり（UTC）まで警告で、翌日からは何もしなくても誤りに戻ります。下げている間、MR の `forge/doc-lint` の要約の 1 行目に
+  `migrating: until YYYY-MM-DD` と出ます。
+- `doc migration` は `doc fmt` / `doc lint` と違い、ログインと設定（トークン）が要ります。
+- `fmt --check` は何も書かず、変わるファイルがあるか、確かめられないファイル（名前を挙げた文書でないファイル、大きすぎる・UTF-8 でない文書）があると終了コード 1（`FG-DOC-0004`）。読んだ後に誰かが書き換えた文書は上書きしません（`FG-CLI-0007`）。`--check` が無いと書き換えます（一時ファイルに書いてから置き換えるので、
+  途中で止まっても文書が半分になることはありません）。型の定義が使えない文書はそのまま残し、終了コード 1（`FG-DOC-0003`）。
+- 上限（`.md` 5,000 個、合計 64 MiB など）に当たると、問題が無くても終了コード 1（`FG-DOC-0002`）。黙って合格にはしません。
+
 ## 開発者向けメモ
 
 - コマンドを足すときは `src/cli.rs`（clap）と `src/registry.rs`（`help --json` の元）の両方に書く。
@@ -146,6 +180,8 @@ gstn mr resolve --project 7 --iid 3 --discussion 12 [--unresolve] # スレッド
   `help --json` を変えたら `GSTN_UPDATE_SNAPSHOT=1 cargo nextest run -p forge-client` でスナップショットを更新し、差分を確認する。
 - **C-1 のゲート**: サーバーに REST のルートが増えると `every_api_route_is_covered_or_planned` が落ちる。
   `src/coverage.rs` に、対応するコマンド（`Command`）か、予定（`Planned`）の行を足す。
+  ルートを呼ばないコマンド（`doc fmt` / `doc lint` など手元だけのもの）は `LOCAL_COMMANDS` に理由と一緒に書く
+  （`commands_without_a_route_are_local` が確かめる）。
 - 構成: `config.rs`（設定の層）/ `store.rs`（トークンの保管、0600 のフォールバック）/ `http.rs`
   （タイムアウト、リダイレクトなし、ページ送り）/ `credential.rs`（git の資格情報ヘルパー）/
   `app.rs`（実行と出力）/ `coverage.rs`（C-1）。入出力は注入できるので、テストはプロセス内で stdout / stderr を検査する。
@@ -156,5 +192,6 @@ gstn mr resolve --project 7 --iid 3 --discussion 12 [--unresolve] # スレッド
 
 ## Error codes
 
-`FG-CLI-0001`…`0007` (usage, not logged in, server unreachable, response invalid, config invalid,
-credential store failed, output failed). Server errors keep their own code and request id.
+`FG-CLI-0001`…`0009` (usage, not logged in, server unreachable, response invalid, config invalid,
+credential store failed, output failed, wait timed out, input failed). `gstn doc`: `FG-DOC-0001`…`0004`
+(lint problem, bounded, type definition invalid, format would change). Server errors keep their own code and request id.

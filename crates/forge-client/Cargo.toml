@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 forge-errors.workspace = true
+# Plan 13 stage 2 (ADR-0026 §8): the pure document parsing for `gstn doc`.
+forge-doc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true

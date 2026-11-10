@@ -31,10 +31,8 @@ async fn bare_repo(git: &Git) -> tempfile::TempDir {
 /// demand: forking helpers, stderr floods. Synthetic.
 #[cfg(unix)]
 fn fake_git(dir: &Path, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join("fake-git.sh");
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    crate::test_git::write_script(&path, &format!("#!/bin/sh\n{body}\n"));
     path
 }
 

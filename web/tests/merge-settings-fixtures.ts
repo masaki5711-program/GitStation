@@ -36,6 +36,21 @@ export const RULE = {
   updated_at: RULE_STAMP,
 };
 
+/** The document lint migration (plan 13 Q13) as the API answers it: none. */
+export function docLintMigration(over: Record<string, unknown> = {}) {
+  return {
+    project_id: 7,
+    warn_until: null,
+    in_force: false,
+    set_by: null,
+    set_at: null,
+    today: '2026-11-10',
+    max_until: '2027-05-09',
+    viewer: { can_manage: false },
+    ...over,
+  };
+}
+
 export function settingsRoutes(over: Record<string, Handler> = {}): Record<string, Handler> {
   return {
     ...signedIn(),
@@ -44,6 +59,10 @@ export function settingsRoutes(over: Record<string, Handler> = {}): Record<strin
     [`GET ${API}/protected-refs`]: () => json(200, { rules: [] }),
     [`GET ${API}/merge-settings`]: () => json(200, mergeSettings({ viewer: MANAGER })),
     [`GET ${API}/approval-rules`]: () => json(200, { rules: [] }),
+    // The kanflow bindings (IntegrationBindings.tsx): none.
+    [`GET ${API}/integration-bindings`]: () => json(200, { items: [] }),
+    // Plan 13 Q13: the document lint migration (none).
+    [`GET ${API}/doc-lint/migration`]: () => json(200, docLintMigration({ viewer: { can_manage: true } })),
     // The rules name their approvers: no member list is read for them.
     'GET /api/v1/groups': () =>
       page([

@@ -237,12 +237,18 @@ pub(crate) mod tests {
         };
         let err = tool.backup().await.expect_err("missing");
         forge_db::test_support::assert_reason(&err, ErrorCode::BackupFailed, "db_tool_missing");
+        // The failing, hanging and answering tools are shell scripts (pgBackRest
+        // itself is Linux-only).
+        #[cfg(unix)]
+        scripted_tools(tool).await;
+    }
+
+    #[cfg(unix)]
+    async fn scripted_tools(tool: PgBackRest) {
         let tmp = tempfile::tempdir().expect("tmp");
         let script = |name: &str, body: &str| {
-            use std::os::unix::fs::PermissionsExt as _;
             let p = tmp.path().join(name);
-            std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).expect("script");
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).expect("mode");
+            forge_git::test_git::write_script(&p, &format!("#!/bin/sh\n{body}\n"));
             p
         };
         let failing = PgBackRest {

@@ -587,7 +587,8 @@ pub async fn blame(state: AppState, request: Dispatched<ProjectCtx>) -> Response
 }
 
 /// A diff for `audience` (M3 X5, plan 06 D-5): an agent's leaves out the
-/// confidential specification documents of `commits` and the default tip.
+/// confidential files of `commits` and the default tip
+/// ([`crate::routes::context::marked_files`]).
 pub(crate) async fn guarded(
     ctx: &crate::Ctx,
     route: &'static str,
@@ -599,11 +600,10 @@ pub(crate) async fn guarded(
     if !audience.is_agent() {
         return Ok(diff_body(diff));
     }
-    let marked = crate::routes::context::marked_paths(
+    let marked = crate::routes::context::marked_files(
         &t.smart.browse,
         t.repository.id,
         &t.principal,
-        &[],
         commits,
     )
     .await?;

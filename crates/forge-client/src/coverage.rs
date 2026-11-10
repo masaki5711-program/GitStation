@@ -6,6 +6,11 @@
 //! gains a route that is not in this table (the C-1 gate), or when the table
 //! names a route the server no longer has.
 //!
+//! Commands that call no route at all are listed in [`LOCAL_COMMANDS`] with
+//! why (e.g. `doc fmt` / `doc lint`, plan 13 stage 2: they work on the
+//! working tree and never contact the server); the test
+//! `commands_without_a_route_are_local` keeps that list exact.
+//!
 //! Every route is already callable through `gstn api` (C-6); `Command` means a
 //! dedicated command exists, `Planned` names the series that adds it, and
 //! `BrowserOnly` marks a route only a web session can use (gstn holds a
@@ -656,6 +661,33 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/webhooks/{webhook_id}/deliveries/{delivery_id}/redeliver",
         Coverage::Command("webhook redeliver"),
     ),
+    // Plan 13 stage 3: the document API.
+    (
+        "GET",
+        "/api/v1/projects/{id}/documents",
+        Coverage::Command("doc list"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/documents/{doc_id}",
+        Coverage::Command("doc show"),
+    ),
+    // Plan 13 Q13 (ADR-0026): the document lint migration setting.
+    (
+        "GET",
+        "/api/v1/projects/{id}/doc-lint/migration",
+        Coverage::Command("doc migration show"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/doc-lint/migration",
+        Coverage::Command("doc migration set"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/doc-lint/migration",
+        Coverage::Command("doc migration clear"),
+    ),
     // M3 O2 (ADR-0024 Amendment O2): the push mirror to GitLab.
     (
         "GET",
@@ -696,6 +728,11 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         Coverage::BrowserOnly("the act-as confirmation screen: a person's web session only; tokens are refused (FG-AUTH-0002 session_required)"),
     ),
     (
+        "GET",
+        "/api/v1/projects/{id}/integration-bindings/act-as-confirmation",
+        Coverage::BrowserOnly("the binding confirmation screen (M3 X3): a person's web session only; tokens are refused (FG-AUTH-0002 session_required)"),
+    ),
+    (
         "POST",
         "/api/v1/integrations/{id}/act-as/claim",
         Coverage::NotForCli("kanflow's server claims the assertion a person confirmed (an integration's act_as token); gstn never acts for a person"),
@@ -731,6 +768,29 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/users/{id}/rename",
         Coverage::Command("user rename"),
     ),
+];
+
+/// Commands that call no API route, and why: local work only (C-1 counts
+/// them as "local", not as uncovered).
+pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
+    (
+        "auth logout",
+        "removes the token stored on this computer (never revokes it on the server)",
+    ),
+    (
+        "auth git-credential",
+        "the git credential helper: answers git from the stored token, or edits the global git config",
+    ),
+    (
+        "doc fmt",
+        "plan 13 stage 2: formats the working tree's documents with forge-doc; nothing is sent",
+    ),
+    (
+        "doc lint",
+        "plan 13 stage 2: the forge/doc-lint lint on the working tree with forge-doc; nothing is sent",
+    ),
+    ("help", "describes the commands from the registry"),
+    ("schema", "describes one command from the registry"),
 ];
 
 /// Routes outside `/api/v1` and how they are covered.

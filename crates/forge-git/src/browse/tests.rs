@@ -594,10 +594,8 @@ async fn archives_stream_zip_and_tar_gz_below_the_prefix() {
 /// A fake `git` (synthetic): records its pid, then becomes `body`.
 #[cfg(unix)]
 pub(super) fn fake_git(dir: &Path, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join("fake-git.sh");
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    crate::test_git::write_script(&path, &format!("#!/bin/sh\n{body}\n"));
     path
 }
 

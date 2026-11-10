@@ -155,10 +155,8 @@ fn lease_outlives_step_timeouts() {
 /// A git that never ends (Unix `sleep`, Windows `ping`). Synthetic.
 #[cfg(unix)]
 fn hanging_git(dir: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join("hang.sh");
-    std::fs::write(&path, "#!/bin/sh\nsleep 120\n").expect("script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    forge_git::test_git::write_script(&path, "#!/bin/sh\nsleep 120\n");
     path
 }
 
@@ -519,6 +517,10 @@ enum PackRefs {
     /// Takes `packed-refs.lock` (unless one exists) and hangs, ignoring
     /// SIGTERM: it ends only by a kill and leaves its lock.
     HangUntilKilled,
+    /// Unix: takes `packed-refs.lock` and keeps WRITING it, ignoring
+    /// SIGTERM (a git blocked on slow storage): it ends only by a kill.
+    #[cfg(unix)]
+    WriteUntilKilled,
     /// Fails at once (exit 1) while a lock appears — a writer that took it
     /// right after our pack-refs exited on its own.
     ExitWhileAWriterLocks,
@@ -534,7 +536,6 @@ enum PackRefs {
 /// repository.
 #[cfg(unix)]
 fn scripted_git(dir: &Path, fsck_quarantine: bool, pack_refs: PackRefs) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join("scripted-git.sh");
     let fsck = if fsck_quarantine {
         "mkdir -p objects/tmp_objdir-incoming-during-fsck; exit 0"
@@ -546,6 +547,9 @@ fn scripted_git(dir: &Path, fsck_quarantine: bool, pack_refs: PackRefs) -> PathB
             "trap '' TERM; [ -e packed-refs.lock ] || : > packed-refs.lock; while :; do sleep 1; done"
         }
         PackRefs::ExitWhileAWriterLocks => ": > packed-refs.lock; exit 1",
+        PackRefs::WriteUntilKilled => {
+            "trap '' TERM; : > packed-refs.lock; while :; do echo ref >> packed-refs.lock; done"
+        }
         PackRefs::ExitOnTermWhileAWriterLocks => {
             "trap ': > packed-refs.lock; exit 143' TERM; while :; do sleep 1 & wait; done"
         }
@@ -553,8 +557,7 @@ fn scripted_git(dir: &Path, fsck_quarantine: bool, pack_refs: PackRefs) -> PathB
     let body = format!(
         "#!/bin/sh\ncase \"$*\" in\n*fsck*) {fsck};;\n*pack-refs*) {pack};;\n*) exit 0;;\nesac\n"
     );
-    std::fs::write(&path, body).expect("script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    forge_git::test_git::write_script(&path, &body);
     path
 }
 
@@ -737,6 +740,50 @@ async fn a_killed_pack_refs_removes_its_own_lock_and_keeps_a_foreign_one() {
         alerts[0]["fields"]["event"],
         "forge.git.maintenance_lock_left"
     );
+    t.drop_now().await;
+}
+
+/// A pack-refs killed while it was still writing its lock (2026-11-09):
+/// its last write lands right before (or as) the kill is recorded. Someone
+/// stat()s the lock meanwhile (the doctor's `repositories.stale_locks`), so
+/// on a kernel with multigrain timestamps its times are finer than a
+/// millisecond. The lock is still ours: removed, and no FG-GIT-0020 alert.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_pack_refs_killed_while_writing_its_lock_removes_it() {
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = storage();
+    let repo = ready_repo(&t, &storage, "wes").await;
+    let lock = storage.root.path_for(repo).join("packed-refs.lock");
+    let tmp = tempfile::tempdir().expect("tmp");
+    let inner = scripted_handler(&t, &storage, tmp.path(), false, PackRefs::WriteUntilKilled);
+    // The doctor's probe, every millisecond while the step runs.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let prober = {
+        let (stop, lock) = (Arc::clone(&stop), lock.clone());
+        std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = std::fs::metadata(&lock); // ignore: absent between runs
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+    let logs = Captured::default();
+    let guard = logs.install();
+    inner
+        .maintain_repo(repo, &rid("req-maint-lock-writing"), 1, BUDGET)
+        .await
+        .expect("recorded");
+    drop(guard);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    prober.join().expect("prober");
+    let alerts: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|e| e["fields"]["error_code"] == "FG-GIT-0020")
+        .collect();
+    assert!(alerts.is_empty(), "no false alert: {alerts:?}");
+    assert!(!lock.exists(), "our own lock is removed");
     t.drop_now().await;
 }
 

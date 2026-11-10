@@ -250,7 +250,9 @@ const INTERNAL_READS: &[Action] = &[
 fn internal_project(resource: &crate::Resource) -> bool {
     use crate::{NamespaceView, Resource, Visibility};
     let project = match resource {
-        Resource::Project(p) | Resource::MergeRequest { project: p, .. } => Some(p),
+        Resource::Project(p)
+        | Resource::MergeRequest { project: p, .. }
+        | Resource::RepoCopy { project: p, .. } => Some(p),
         Resource::Resolved {
             view: NamespaceView::Project(p),
             ..
@@ -351,6 +353,20 @@ fn only_people_only_actions_refuse_by_account_kind() {
                         ) => {
                             e.code() == ErrorCode::Forbidden
                                 && matches!(r.actor, crate::matrix::Actor::ActAs(_))
+                        }
+                        // Plan 06 D-5 safety net: a whole copy of a
+                        // repository whose default tip is not measured open
+                        // is refused to every AI agent audience — a service
+                        // account and a bot are one by their kind.
+                        (
+                            AccountKind::ServiceAccount | AccountKind::Bot,
+                            "tip_confidential"
+                            | "default_branch_unborn"
+                            | "tip_undecided"
+                            | "tip_not_measured",
+                        ) => {
+                            e.code() == ErrorCode::RepositoryCopyWithheld
+                                && matches!(resource, crate::model::Resource::RepoCopy { .. })
                         }
                         // A Guest member of an internal project reads by
                         // its own role (a person reads it as a Reporter):

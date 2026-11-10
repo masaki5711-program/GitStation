@@ -41,7 +41,8 @@ this crate calls the check commands (`tests/decided_callers.rs`).
   assess}` (X2), `risk::{Risk, assess, record_error, Limits}` (X7).
 - `spec_index::{index_commit, own_dirs, IndexLimits, Indexed, Tags}` (X4): one commit's
   requirement index (the own specification directories, the `@req` tags), bounded;
-  `spec_checks::{SpecChecks, assess_lint, assess_trace, record_errors}` (X4).
+  `spec_checks::{SpecChecks, assess_lint, assess_trace, record_errors}` (X4);
+  `spec_index::index_head` and `doc_lint::{assess_doc_lint, DocLimits, DocTree}` (plan 13 stage 2).
 
 **forge's own check (M3 X2, ADR-0023 Amendment X2)**: `spec_drift::SpecDrift` evaluates
 `forge/spec-drift` for one `check.spec_drift` job (a merge request version's head; the job is
@@ -68,9 +69,28 @@ and traces the merge request (`trace_merge_request`: changed requirements, added
 work items' `PBI-<n>/AC-<m>` tests). spec-lint is `success` / `failure` (FG-REPO-0028) /
 `neutral` (FG-REPO-0031); spec-trace is advisory: `success` / `neutral` (FG-REPO-0029, 0030,
 0031), never `failure`. A run shows only the repository's own text. The evaluation's deadline is
-70 s and each write's 10 s (two runs and two `error` writes: 110 s < the job's 120 s); `SpecChecks::fail` answers `error` for both on the
+60 s and each write's 8 s (three runs and three `error` writes: 108 s, 12 s inside the job's 120 s); `SpecChecks::fail` answers `error` for all three on the
 last attempt and `record_errors` for `forge worker`'s `spec_index_sweep`. forge-web's spec API
 (`GET …/specs/…`) reads the same index with the reader's permissions.
+
+**forge/doc-lint (plan 13 stage 2, ADR-0026)**: the same job writes a third run, `doc_lint::assess_doc_lint`,
+from the **same read** of the head (`spec_index::index_head`: one `ls-tree` of the whole tree —
+`forge_git::Browser::blobs_in_tree` — and one `cat-file --batch`; the specification directories' files are
+taken from that listing, so the index equals `index_commit`'s). Documents are the `.md` files naming a
+`doctype` in any folder, their types `.forge/doctypes/*.yml`; the lint is `forge_doc::lint::lint`, the same
+as `gstn doc lint`. `success` / `failure` (FG-DOC-0001; FG-DOC-0003 for a type definition that cannot be
+used) / `neutral` (FG-DOC-0002: `DocLimits` — 50 000 tree entries, 2000 `.md`, 100 over the parser's limit (each read only up to the limit + 1 byte, like gstn), 32 MiB in all,
+64 definitions — never a silent pass). Broken references are errors (plan 13 Q13) unless the project's
+**migration setting** is in force: `doc_lint::assess_doc_lint_with(tree, Some(until))` lowers only `ref_broken`
+to warnings (annotations of level `warning`; only lowered problems → `success`, or `neutral` with a bound hit),
+and the summary's first line is `migrating: until YYYY-MM-DD`. The job reads the date in force with
+`forge_db::checks::doc_lint_migration::in_force`, compared in SQL with the database's date (UTC) — never this
+host's clock; past the date it is errors again with nothing written. `doc_migration::DocLintMigrations`
+(`Checks::doc_lint_migrations`) is the setting's read and its two commands for `GET|PUT|DELETE
+/api/v1/projects/{id}/doc-lint/migration` (`ProjectRead` / `DocLintMigrationManage`: people only,
+Maintainer): the date's shape here (`FG-WEB-0006 param=warn_until`), its bounds — after today, at most 180 days
+ahead — by forge-db (`FG-DOC-0005`), and the decision again inside the transaction (`Authorized::reconfirm`;
+`tests/decided_callers.rs` keeps `set_doc_lint_migration_decided` / `clear_doc_lint_migration_decided` here).
 
 **forge's risk check (M3 X7, ADR-0023 Amendment X7)**: `risk::Risk` evaluates `forge/risk` for one
 `check.risk` job (the same head; enqueued by forge-db's `risk` subscriber): the target branches of the

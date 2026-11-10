@@ -240,6 +240,7 @@ impl ScopedRoute {
                 RouteWord::Members => "/{namespace}/-/members/{*rest}",
                 RouteWord::Pulls => "/{namespace}/-/pulls/{*rest}",
                 RouteWord::Pull => "/{namespace}/-/pull/{*rest}",
+                RouteWord::Documents => "/{namespace}/-/documents/{*rest}",
             },
             ScopedRoute::Git(g) => match g {
                 GitRoute::InfoRefsUploadPack | GitRoute::InfoRefsReceivePack => {
@@ -1036,9 +1037,16 @@ impl<S: DispatchState> Registry<S> {
     }
 
     /// Mount a fixed route's method router, behind authentication and the
-    /// guard unless the action is public.
+    /// guard unless the action is public (then behind the refusal of the
+    /// act-as headers, [`crate::act_as::refuse_on_public`]).
     fn mount(&mut self, path: &'static str, action: Action, mut one: MethodRouter<S>) {
-        if !action.is_public() {
+        if action.is_public() {
+            // ADR-0025 §2: the act-as headers are refused, never ignored.
+            one = one.route_layer(axum::middleware::from_fn_with_state(
+                action,
+                crate::act_as::public_route,
+            ));
+        } else {
             // The later route_layer runs first: token authentication builds
             // the principal, then the guard requires it.
             one = one
@@ -1574,12 +1582,16 @@ fn error_schema() -> Value {
 }
 
 /// A path parameter's schema: an `{id}` is a plain positive decimal
-/// (anything else is `FG-WEB-0006`); every other parameter a string.
+/// (anything else is `FG-WEB-0006`), a `{doc_id}` a document id; every
+/// other parameter a string.
 fn param_schema(name: &str) -> Value {
     // A web session's public id is 16 lowercase hex characters
     // (`forge_db::sessions::is_public_id`), not a numeric id.
     if name == "public_id" {
         json!({ "type": "string", "pattern": "^[0-9a-f]{16}$" })
+    } else if name == "doc_id" {
+        // A document id (plan 13 §2.2; forge_doc::document::reference_of).
+        json!({ "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" })
     } else if name == "id" || name.ends_with("_id") {
         json!({ "type": "integer", "format": "int64", "minimum": 1 })
     } else {

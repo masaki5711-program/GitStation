@@ -35,11 +35,37 @@ import { useArmed } from './useArmed';
  * assertion lives 5 minutes from the press; a page left open longer than this
  * shows a head the person saw long ago, so it asks to be opened again. */
 export const PAGE_TTL_MS = 10 * 60 * 1000;
-const PAGE_TTL_MINUTES = PAGE_TTL_MS / 60000;
+export const PAGE_TTL_MINUTES = PAGE_TTL_MS / 60000;
 
-type NoticeKind = 'invalidLink' | 'wrongPerson' | 'notFound' | 'expired' | 'alreadyDecided' | 'stale';
+/** The longest merge request title shown (characters). The title is the
+ * author's text, not a fact forge checked: it is shown cut short and quiet,
+ * and the number and the commit are what the person compares. */
+export const TITLE_MAX_CHARS = 80;
 
-type End = { kind: 'done' } | { kind: 'canceled' } | { kind: NoticeKind; requestId: string | null };
+/** The user-perceived characters of `text` (grapheme clusters: an emoji
+ * or a combined character is never cut in half). Without `Intl.Segmenter`
+ * (an older browser) code points: never half a surrogate pair. */
+export function graphemes(text: string): string[] {
+  // The lib types say it always exists; an older browser has none.
+  const Segmenter = (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+  if (Segmenter === undefined) return Array.from(text);
+  return Array.from(new Segmenter(undefined, { granularity: 'grapheme' }).segment(text), (s) => s.segment);
+}
+
+/** The bidirectional embedding, override and isolate controls (U+202A-202E,
+ * U+2066-2069): an author's title must not reorder what is shown. */
+const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/g;
+
+/** `text` on one line without bidi controls, cut to at most `max`
+ * characters, ending in "…" when it was cut. */
+export function shortTitle(text: string, max = TITLE_MAX_CHARS): string {
+  const chars = graphemes(text.replace(BIDI_CONTROLS, '').replace(/\s+/g, ' ').trim());
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max).join('')}…`;
+}
+
+export type NoticeKind = 'invalidLink' | 'refused' | 'notFound' | 'expired' | 'alreadyDecided' | 'stale';
+
+export type End = { kind: 'done' } | { kind: 'canceled' } | { kind: NoticeKind; requestId: string | null };
 
 export function ActAsConfirm() {
   const { t } = useTranslation();
@@ -84,9 +110,14 @@ export function ActAsConfirm() {
     const e = confirmation.error;
     const f = e instanceof ApiFailure && e.failure.kind === 'api' ? e.failure : null;
     if (f?.status === 403) {
-      // The refusal says nothing more: not who may, not why.
-      body = <Notice kind="wrongPerson" requestId={null} />;
+      // The refusal says nothing more: not who may, not why (what is left as
+      // a 403 is the server's set-up, so it never blames the person). The
+      // request id lets an administrator find the logged reason.
+      body = <Notice kind="refused" requestId={f.requestId} />;
     } else if (f?.status === 404) {
+      // ADR-0025 (decision of 2026-11-10): whoever may not press gets the
+      // invisible project's 404 - one neutral notice on both confirmation
+      // screens, whatever the logged cause.
       body = <Notice kind="notFound" requestId={f.requestId} />;
     } else {
       body = (
@@ -109,7 +140,7 @@ export function ActAsConfirm() {
   );
 }
 
-function CloseButton() {
+export function CloseButton() {
   const { t } = useTranslation();
   const [failed, setFailed] = useState(false);
   return (
@@ -130,11 +161,11 @@ function CloseButton() {
   );
 }
 
-function Notice({ kind, requestId }: { kind: NoticeKind; requestId: string | null }) {
+export function Notice({ kind, requestId }: { kind: NoticeKind; requestId: string | null }) {
   const { t } = useTranslation();
   const text = {
     invalidLink: [t('actAs.invalidTitle'), t('actAs.invalidBody')],
-    wrongPerson: [t('actAs.wrongPersonTitle'), t('actAs.wrongPersonBody')],
+    refused: [t('actAs.refusedTitle'), t('actAs.refusedBody')],
     notFound: [t('actAs.notFoundTitle'), t('actAs.notFoundBody')],
     expired: [t('actAs.expiredTitle'), t('actAs.expiredBody')],
     alreadyDecided: [t('actAs.alreadyTitle'), t('actAs.alreadyBody')],
@@ -158,7 +189,7 @@ function Notice({ kind, requestId }: { kind: NoticeKind; requestId: string | nul
   );
 }
 
-function Ended({ end }: { end: End }) {
+export function Ended({ end }: { end: End }) {
   const { t } = useTranslation();
   if (end.kind === 'done' || end.kind === 'canceled') {
     const done = end.kind === 'done';
@@ -173,7 +204,7 @@ function Ended({ end }: { end: End }) {
   return <Notice kind={end.kind} requestId={end.requestId} />;
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+export function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
       <dt>{label}</dt>
@@ -263,13 +294,20 @@ function Confirmation({
           {projectInfo.isSuccess ? projectInfo.data.path : t('actAs.projectN', { id: project })}
         </Row>
         <Row label={t('actAs.rowMr')}>
-          {t('actAs.mrN', { iid })} <span className={styles.mrTitle}>{data.title}</span>
+          <strong className={styles.fact} data-testid="mr-iid">
+            {t('actAs.mrN', { iid })}
+          </strong>{' '}
+          <span className={styles.mrTitle} data-testid="mr-title">
+            {shortTitle(data.title)}
+          </span>
         </Row>
         <Row label={t('actAs.rowBranches')}>
           <code>{data.source_branch}</code> {t('actAs.into')} <code>{data.target_branch}</code>
         </Row>
         <Row label={t('actAs.rowHead')}>
-          <code className={styles.sha}>{data.head_sha}</code>
+          <strong className={styles.fact}>
+            <code className={styles.sha}>{data.head_sha}</code>
+          </strong>
         </Row>
         <Row label={t('actAs.rowTargetTip')}>
           <code className={styles.sha}>{data.target_sha}</code>

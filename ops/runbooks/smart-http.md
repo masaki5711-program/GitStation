@@ -3,7 +3,7 @@
 対象のコード: FG-GIT-0002（`kind=idle` / `kind=total` のストリーム、`operation=want_check`）、FG-GIT-0004（`reason=streams` /
 `reason=principal_streams`）、FG-GIT-0013、FG-GIT-0014（`reason=want_unreachable` ほか）、FG-GIT-0015、FG-GIT-0001（`reason=hooks_dir`）、
 FG-WEB-0007、FG-REPO-0016、FG-WEB-0002（`operation=git_request_body` / `protection_load`）、push の拒否（FG-GIT-0005 / 0007 / 0008 /
-0009 / 0010 / 0011、M1 phase 9 MR4）。
+0009 / 0010 / 0011、M1 phase 9 MR4）、AI エージェントの clone / fetch / アーカイブの拒否 FG-AUTH-0022（末尾の節）。
 仕組みは ADR-0007（M1 phase 9 の追記）と ADR-0015（MR3 の追記）、実装は `crates/forge-git`（`stream.rs`、`smart_http.rs`、
 `upload_request.rs`、`want_check.rs`、push は `receive_request.rs`、`receive_report.rs`、`push_check.rs`）と
 `crates/forge-web`（`routes/git.rs`、`routes/git_push.rs`、`git_stream.rs`）。push の判定の流れは ADR-0008（MR4 の追記、案 B）。
@@ -124,3 +124,30 @@ upload-pack と receive-pack には `keepAlive=5` を付けているので、git
 - 強制終了のあと git の helper（`pack-objects`、`index-pack`）が残っていた場合（`pgrep -af pack-objects`）は、プロセスグループの
   強制終了が効いていない。`forge-git` の不具合として起票する（`grandchildren_die_with_the_process_group` の想定外）。
 - `empty-hooks` にファイルが置かれていた場合は、保存先と git の HOME に forge 以外が書けるかを調べ、セキュリティの問題として扱う。
+
+## AI エージェントと機密の文書（FG-AUTH-0022、計画 06 D-5、ADR-0026 の決まったこと 2026-11-10）
+
+**運用の規則（本当の境界）**: 機密の文書（`classification: confidential`、旧い `confidential: true`、型の既定が機密のもの）は、
+AI エージェントのアカウント（`is_agent` のトークンの持ち主・サービスアカウント・bot）が **読めないリポジトリ** に置く。
+エージェントのアカウントをそのリポジトリのメンバーにしない（内部公開のリポジトリなら非公開にする）。
+
+**安全網（この節のコード）**: エージェントの相手が、既定のブランチの先端に機密のファイルがあるリポジトリを clone / fetch
+（`info/refs?service=git-upload-pack`・`git-upload-pack`、v0 / v2）またはアーカイブ（`-/archive/…`）しようとすると、全体を断る。
+判定は `authorize()`（`RepoRead` の `Resource::RepoCopy`、`forge_auth::authorize_repo_copy`）、測るのは `routes/repo_copy.rs`
+（`forge_checks::confidential`、20 秒・文書の読みの上限）。人は測らず、断らない。push は変わらない。
+git には `fatal: remote error: <文> (request_id: …)`、アーカイブは JSON の 403。結果は（リポジトリ、先端のコミット）ごとに
+メモリに持つ（最大 4096、リポジトリごとに 1 つ、失敗は持たない）ので、push で先端が変わればすぐに答えが変わる。
+
+| `reason` | 意味 | 対処 |
+|---|---|---|
+| `tip_confidential` | 先端に機密のファイルがある（ログの `paths` に最初の 5 件） | 機密の文書を別の（エージェントが読めない）リポジトリへ移す。印の誤りなら文書の front matter（または型の既定）を直す。急ぐなら人のアカウントで clone する |
+| `default_branch_unborn` | `HEAD` の指すブランチが無く、他の ref はある（測れない） | 既定のブランチを作る・指し直す（`[MUTATING — needs approval]`、ロールバック: 元のブランチ名に戻す） |
+| `tip_undecided` | 測れなかった（`check_error`: FG-GIT-0002 = 20 秒の時間切れ、FG-DOC-0002 = 文書の読みの上限、ほかは git の失敗） | 時間切れは再試行。繰り返すなら文書が上限を超えている — 文書を分ける、または人のアカウントを使う |
+| `tip_not_measured` | 経路が測らずに判定した（不具合） | `forge-web` の不具合として起票する |
+
+**Diagnose（読み取りのみ）**: ログを `request_id` で引き、`route`・`project_id`・`repo_id`・`audience`・`tip`・`paths` を読む。
+先端の印は `gstn browse blob --project <id> --ref <tip> --path <path>` で確かめる。
+
+**限界**: 見るのは既定のブランチの先端だけ。履歴や他のブランチにだけある機密のファイルは見ない（clone すれば渡る）。
+だから運用の規則が先で、これは規則を破ったリポジトリを止める網にすぎない。漏えいが疑われるときは secret-removal の runbook の
+考え方（履歴から消す・アクセスを絞る）で扱う。

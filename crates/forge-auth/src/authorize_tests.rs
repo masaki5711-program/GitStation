@@ -1125,3 +1125,61 @@ fn admission_denials_are_login_not_permitted() {
     let names: Vec<&str> = A::ALL.iter().map(|a| a.as_str()).collect();
     assert_eq!(names, ["new", "active", "disabled", "not_human"]);
 }
+
+/// ADR-0025 (decision of 2026-11-10): whoever may not press an act-as
+/// confirmation — no right for the intent, a token, an act-as request, a
+/// service account, a disabled integration, a binding state that does not
+/// fit the intent — gets the invisible project's `FG-REPO-0005`, so nobody
+/// learns whether an integration exists or what the binding state is. The
+/// log still says why: the refusal's own code (`refused_code`) and its
+/// context (`reason`, `required_role`, …) ride along.
+#[test]
+fn every_act_as_confirmation_refusal_is_the_invisible_projects_not_found() {
+    let mut why = BTreeSet::new();
+    for r in ROWS.iter().filter(|r| {
+        matches!(
+            r.action,
+            Action::ActAsConfirmView | Action::ActAsAssertionIssue
+        ) && r.expect != Expect::Allow
+    }) {
+        let err = authorize(&r.actor.principal(), r.action, &r.fixture.resource(r.actor))
+            .expect_err("a deny row");
+        assert_eq!(err.code(), ErrorCode::NotFound, "{r:?}");
+        let ctx = |key: &str| {
+            err.context()
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.clone())
+        };
+        match ctx("refused_code") {
+            // Already the invisible project's own 404 (`not_visible`).
+            None => assert_eq!(ctx("reason").as_deref(), Some("not_visible"), "{r:?} {err}"),
+            Some(code) => {
+                assert_ne!(code, ErrorCode::NotFound.id(), "{r:?} {err}");
+                assert!(
+                    err.context()
+                        .iter()
+                        .any(|(k, v)| *k == "action" && v == r.action.name()),
+                    "{r:?} {err}"
+                );
+                why.insert(format!("{code} {}", ctx("reason").unwrap_or_default()));
+            }
+        }
+    }
+    // Distinct causes stay distinct in the log (role, token, kind,
+    // disabled integration, unbound, self-approval).
+    for expected in [
+        "FG-AUTH-0002 session_required",
+        "FG-AUTH-0003 integration_disabled",
+        "FG-AUTH-0003 act_as_unbound",
+        "FG-AUTH-0003 service_account",
+        "FG-AUTH-0003 bot",
+    ] {
+        assert!(why.contains(expected), "{expected} missing from {why:?}");
+    }
+    assert!(
+        why.iter()
+            .any(|w| w.starts_with(ErrorCode::SelfApprovalRefused.id())),
+        "self-approval missing from {why:?}"
+    );
+}

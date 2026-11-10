@@ -40,8 +40,23 @@
   overflow-wrap: anywhere;
 }
 
+/* The author's title: quiet and on one line, cut short (`shortTitle`). */
 .mrTitle {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--gs-color-text-muted);
+  /* Its direction never leaks into the number or the commit around it. */
+  unicode-bidi: isolate;
+}
+
+/* The facts forge checked: the number and the commit. */
+.fact {
   font-weight: bold;
+  color: var(--gs-color-text);
 }
 
 .sha {

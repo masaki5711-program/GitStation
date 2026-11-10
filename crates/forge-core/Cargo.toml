@@ -9,6 +9,9 @@ publish.workspace = true
 
 [dependencies]
 forge-errors.workspace = true
+# Plan 13 stage 2 MR1 (ADR-0026 §8): the strict YAML tree and the spec
+# documents' parser, shared with the `gstn` client.
+forge-doc.workspace = true
 toml.workspace = true
 url.workspace = true
 percent-encoding.workspace = true
@@ -32,8 +35,6 @@ hmac.workspace = true
 hkdf.workspace = true
 # M1 phase 9 MR2: the forge.git.push_applied log line (one serde type, logged and replayed).
 serde.workspace = true
-# M3 X1: `.forge/repo.yml` (the event parser only).
-yaml-rust2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

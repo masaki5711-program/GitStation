@@ -416,6 +416,8 @@ async fn binding_requires_maintainer() {
     assert_eq!(bound.json["outcome"], "bound");
     assert_eq!(bound.json["binding"]["external_project_id"], "P1");
     assert_eq!(bound.json["binding"]["granted_membership"], true);
+    // The setting is shown (a project bound by the admin route is its code repository).
+    assert_eq!(bound.json["binding"]["resolves_work_items"], true);
     assert_eq!(bound.json["binding"]["created_by"], carol.get());
     let again = call(
         db,

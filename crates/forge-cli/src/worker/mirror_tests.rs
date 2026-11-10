@@ -169,12 +169,7 @@ async fn a_refused_push_is_int_0013_on_the_last_attempt() {
     let w = world().await;
     w.set_mirror().await;
     let hook = w.dest().join("hooks").join("pre-receive");
-    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").expect("hook");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    forge_git::test_git::write_script(&hook, "#!/bin/sh\nexit 1\n");
     let h = w.handler();
     let logs = Captured::default();
     let guard = logs.install();

@@ -22,7 +22,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | 名前空間 | 書ける主体 |
 |---|---|
 | `ci/`・`kanflow/` | その名前空間を **そのプロジェクトについて** 管理者から割り当てられたサービスアカウントで、そのプロジェクトの **Developer 以上のメンバー**（割り当てはプロジェクトごと。別のプロジェクトの割り当て・`kanflow` だけの割り当ては `ci/` を書けない）。人（管理者を含む）・ボット・エージェントのトークンは拒否（`FG-AUTH-0003`、`reason=not_service_account` / `agent_token`）。割り当てが無い: `reason=namespace_not_granted` |
-| `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。X2 から `forge/spec-drift`、X7 から `forge/risk`、X4 から `forge/spec-lint` と `forge/spec-trace` を書く（下の「forge 自身のチェック」） |
+| `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。X2 から `forge/spec-drift`、X7 から `forge/risk`、X4 から `forge/spec-lint` と `forge/spec-trace`、計画 13 段 2 から `forge/doc-lint` を書く（下の「forge 自身のチェック」） |
 | `ext/` | C1 では誰も書けない（`reason=ext_namespace_unavailable`）。`ext/` は必須のチェックにもできない（FG-REVIEW-0016） |
 
 - 見えないプロジェクト（サービスアカウントはメンバーのプロジェクトだけが見える）は、存在しないプロジェクトと同じ `FG-REPO-0005`（404）。
@@ -114,7 +114,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 その割り当ても消える。割り当てとは別に、サービスアカウントはそのプロジェクトの Developer 以上のメンバーでなければ報告できない。
 
 保護ブランチのマージの条件の答え（`PUT …/merge-rule`）は、必須のチェックのうち **そのプロジェクトについて報告できる有効なサービスアカウントが 1 つも無い** 名前を
-`unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は、forge 自身が書く名前（`forge/spec-drift`・`forge/risk`・`forge/spec-lint`・`forge/spec-trace`）を除いて常にここに入る）。
+`unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は、forge 自身が書く名前（`forge/spec-drift`・`forge/risk`・`forge/spec-lint`・`forge/spec-trace`・`forge/doc-lint`）を除いて常にここに入る）。
 対処は runbook `checks-reporting`。
 
 ## 保持
@@ -147,13 +147,13 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 - 要約と注釈には **規則の id・パス・行・固定の理由・コード** だけを出す。一致した文字列（秘密、表名）は書かない。注釈は最悪のものから 50 件まで。`reported_by` は `null`。
 - 本文を読むのは 60 ファイル、1 ファイル 256 KiB まで。残りの数は `content_not_scanned`（`neutral`）に出す。評価の締め切りは 45 秒。
 - 必須のチェックにすると `neutral` も `failure` も満たさない（ADR-0024 §10）。必須にしなければ手動のマージは止めない。ローカル AI の層（層 2）と `.forge/risk.yml` は含まない（ADR-0023 Amendment X7）。
-- 1 コミットの一覧は最大 104 件（報告者 100 + forge の名前 4。X4 で 2 つ増えた）。
+- 1 コミットの一覧は最大 105 件（報告者 100 + forge の名前 5。X4 で 2 つ、計画 13 段 2 で 1 つ増えた）。
 
 ### `forge/spec-lint` と `forge/spec-trace`（X4）
 
 | 名前 | いつ | 結論 |
 |---|---|---|
-| `forge/spec-lint` | MR の版ごと（`merge_request.pushed`）と、作業項目の結びつきが変わったとき（`work_item.linked` / `unlinked`）・対象ブランチを変えたとき（`merge_request.updated` の `target_branch`）。後の 2 つはその MR の今の head。同じ head のジョブが待っている間は積まない。1 つのジョブ `check.spec_index` が 2 つの run を書く | `success`: 自分の仕様（`.forge/repo.yml` の `path:`、無ければ `spec/`）の文書と、自分の系列の `@req` が規則を守る。`failure`: 規則違反（`FG-REPO-0028`、要約と注釈に `パス:行 規則`）。`neutral`: 違反は見つからないが索引が上限に達した（`FG-REPO-0031`）。`error`: 評価がやり直しても失敗した |
+| `forge/spec-lint` | MR の版ごと（`merge_request.pushed`）と、作業項目の結びつきが変わったとき（`work_item.linked` / `unlinked`）・対象ブランチを変えたとき（`merge_request.updated` の `target_branch`）。後の 2 つはその MR の今の head。同じ head のジョブが待っている間は積まない。1 つのジョブ `check.spec_index` が `forge/doc-lint` を含めて 3 つの run を書く | `success`: 自分の仕様（`.forge/repo.yml` の `path:`、無ければ `spec/`）の文書と、自分の系列の `@req` が規則を守る。`failure`: 規則違反（`FG-REPO-0028`、要約と注釈に `パス:行 規則`）。`neutral`: 違反は見つからないが索引が上限に達した（`FG-REPO-0031`）。`error`: 評価がやり直しても失敗した |
 | `forge/spec-trace` | 同上 | **助言**（計画 03 §9-4）。`success`: MR が触れる要件（マージベースからの追加・変更、追加した `@req`、結びついた作業項目）にすべて `@req` のテストがある。`neutral`: テストの無い要件・作業項目（`FG-REPO-0029`）、知らない ID・形の崩れたタグ（`FG-REPO-0030`）、索引が上限（`FG-REPO-0031`）。**`failure` にはしない** |
 
 - 比べる相手は head と対象ブランチの先端の **マージベース**（無ければ、head のすべてを新しいものとして数える）。
@@ -161,8 +161,59 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 - `@req <要件 ID>` と `@req PBI-<番号>/AC-<番号>`（kanflow の受入基準）を受け付ける。結びついた作業項目 `PBI-<番号>` は、その受入基準のどれかのテストがあればよい。
 - 要約と注釈に出すのは、このリポジトリ自身の文字（自分の仕様の ID とパス、自分のタグ、MR 自身の作業項目）だけ。参照先の仕様は読まない（`repo:` の `scope:` に当たる ID は「知っている」と数える）。参照先を含めた表は、自分の権限で `gstn spec trace`。
 - M3 ではテストの **有無** だけを見る（パイプラインの結果は M4 の CI から。ADR-0017 §4.1.1）。
-- 上限: 仕様の Markdown 1000 ファイル、合計 8 MiB、1 ファイル 256 KiB（超えると `file_too_large`）、`@req` の `git grep` の出力 8 MiB。評価の締め切り 70 秒、書き込み 10 秒ずつ（2 つの run と 2 つの `error` で 110 秒 < ジョブの 120 秒）。落ちたジョブは 1 分ごとの掃除（`spec_index_sweep`）が両方の run を `error` にする。
-- forge が書く名前（`forge/spec-drift`・`forge/risk`・`forge/spec-lint`・`forge/spec-trace`）は 100 名の上限に数えない（一覧は最大 104 件）。
+- 上限: 仕様の Markdown 1000 ファイル、合計 8 MiB、1 ファイル 256 KiB（超えると `file_too_large`）、`@req` の `git grep` の出力 8 MiB。評価の締め切り 60 秒、書き込み 8 秒ずつ（3 つの run と 3 つの `error` で 108 秒。ジョブの 120 秒に 12 秒の余裕）。落ちたジョブは 1 分ごとの掃除（`spec_index_sweep`）が 3 つの run を `error` にする。
+- forge が書く名前（`forge/spec-drift`・`forge/risk`・`forge/spec-lint`・`forge/spec-trace`・`forge/doc-lint`）は 100 名の上限に数えない（一覧は最大 105 件）。
+
+### `forge/doc-lint`（計画 13 段 2、ADR-0026）
+
+| 名前 | いつ | 結論 |
+|---|---|---|
+| `forge/doc-lint` | `forge/spec-lint` と同じ（同じジョブ `check.spec_index` が、同じ head の **1 回の木の一覧と読み取り**から書く。新しいジョブの種類は無い） | `success`: 文書（前付けに `doctype` を書いた `.md`、どのフォルダでも）が型（`.forge/doctypes/<型>.yml`）と他の文書に照らして規則を守る（文書が無ければ `success`）。`failure`: 規則違反（`FG-DOC-0001`、要約と注釈に `パス:行 規則 — 対象 [コード]`）、型の定義が使えない（`FG-DOC-0003`）。`neutral`: 違反は見つからないが上限に達した（`FG-DOC-0002`。上限のときは壊れた参照だけなら `neutral`）。`error`: 評価がやり直しても失敗した |
+
+- 検査は `gstn doc lint`（手元）と同じ `forge-doc` の lint を、同じバイトに対して行う（答えが一致する）。
+- 壊れた参照（`ref_broken`）は誤り（計画 13 Q13）。移行の間は、リポジトリの設定（下の「移行中の警告」）で期限まで **警告** に下げられる。
+  手元では `gstn doc lint --migration-warnings`（手元は DB を読めない。CI の答えが正）。
+
+#### 移行中の警告（計画 13 Q13、ADR-0026 の「決まったこと」）
+
+| 方法とパス | Action | 内容 |
+|---|---|---|
+| `GET /api/v1/projects/{id}/doc-lint/migration` | `ProjectRead`（`read_api`） | 設定（無ければ `warn_until: null`）、`in_force`（期限が今日以降）、`set_by` / `set_at`、サーバーの DB の日付 `today`（UTC）と、新しく決められる最後の日 `max_until`（today + 180 日）、`viewer.can_manage`（書き込みの試しの `authorize()`、目安だけ） |
+| `PUT …/doc-lint/migration` | `DocLintMigrationManage`（人だけ、Maintainer 以上、`api`、代理実行は不可） | 本文 `{"warn_until": "YYYY-MM-DD"}`（必須）。`200` で設定を返す。暦の日付でない: `400 FG-WEB-0006 param=warn_until`。今日以前か 180 日より先: `400 FG-DOC-0005`（`reason=not_in_future` / `too_far`、ログに `today`・`max_until`） |
+| `DELETE …/doc-lint/migration` | `DocLintMigrationManage` | `204`。設定が無ければ `404 FG-REPO-0005` |
+
+- **日付は DB の時計で比べる**: 「今日」は `(now() AT TIME ZONE 'UTC')::date`。Web サーバーや利用者の PC の時計は使わない。
+  期限の日（UTC）の終わりまで警告、翌日からは何も書かずに誤りへ戻る（期限の過ぎた行は残り、`in_force: false` と見える）。
+- 期限の上限は **180 日**（`forge_core::doc_lint_migration::MAX_DAYS`。表の CHECK `doc_lint_migrations_until` が裏付け）。延ばすときは
+  新しい日付を設定し直す（そのたびに監査の行が残る）。
+- 下げている間、`forge/doc-lint` の要約の 1 行目は `migrating: until YYYY-MM-DD — …`。`ref_broken` の注釈は `warning`、要約の行に
+  `(warning: migrating)`。壊れた参照**だけ**なら `success`（上限に達していれば `neutral`）。他の規則の違反と、ファイルごとの上限を超えて
+  並べなかった問題は誤りのまま（`failure`）。
+- 変更は監査の行 1 つ（プロジェクトに対して `doc_lint_migration.set`（`warn_until`・`previous`）/ `doc_lint_migration.cleared`、イベントなし）。
+  表は `forge.doc_lint_migrations`（マイグレーション 20261203100000、`audited`）。プロジェクトの削除（purge）で消える。
+- `gstn doc migration show|set|clear --project <id>`。画面はプロジェクトの設定の「移行中の文書の検査」。
+- 上限: 木の一覧 50,000 件、`.md` 2,000 個、解析の上限（1 MiB）を超える `.md` 100 個（それぞれ上限＋1 バイトだけ読む。`gstn` と同じ。`doctype` の無い大きな Markdown は上限に当たらない。超えると `doc_large_files`）、合計 32 MiB、型の定義 64 個。最初に当たった上限を要約に書く。
+
+#### 文書の API（計画 13 段 3、§7.3「文書の JSON」）
+
+| 方法とパス | Action | 内容 |
+|---|---|---|
+| `GET /api/v1/projects/{id}/documents[?ref=&doctype=&limit=&after=]` | `RepoBrowse`（`read_api`、blob と同じ） | 文書の一覧（id の順、`id`・`title`・`doctype`・`path`・`classification`・`translations`）。`limit` 1〜500（既定 100）、続きは `next_after` を `after` に |
+| `GET …/documents/{doc_id}[?ref=&lang=]` | `RepoBrowse` | 文書の見え方（`version` = `forge_doc::render::VIEW_VERSION`）: frontmatter、節（見出し 2）ごとの本文（`markdown` = 書いたまま、`display` = 散文の行を和文の詰めでつないだもの）とブロック（種類・ID・属性・廃止）、`[[…]]` の参照の解決（`found` 題名つき / `hidden` ID だけ / `broken` / `external`） |
+
+- 読み方と上限は `forge/doc-lint` と同じ（上の上限。当たると `incomplete {error_code: FG-DOC-0002, reason}`）。`ref` の既定は既定のブランチ。
+  文書は `doctype` を書いた `.md` で、ファイル名が `<id>.md`（同じ id はパスの順で最初）。訳は `<id>.<lang>.md`（`lang` と `translation_of`）。
+- 区分は型の既定（`.forge/doctypes/<型>.yml` の `defaults.classification`）。型が読めないとき、自分で書いていない文書は `confidential`。
+- **参照先の方が機密（Q14）**: `hidden`。題名・ブロックの種類・本文は送らない（ID だけ）。
+- **AI エージェント（計画 06 D-5）**: 読んだ版か既定のブランチの先で `confidential` の文書（id でもファイルのパスでも見る。既定のブランチが無いときはすべて）は、
+  無い文書と同じ `404 FG-REPO-0005`（ログに `reason=doc_confidential`。有無を推し量らせない）。一覧からは外し、数は返さない（`withheld` は常に `null`。
+  数や有無の印があると `after`・`doctype` との組み合わせで機密の id の範囲が分かるため）。参照先も既定のブランチの先で機密なら `hidden`。
+- **リポジトリの読み取り（blob・raw・blame・compare・コミット・MR の差分と文脈）**: 同じ規則（`forge_checks::confidential`）で、機密のファイルは
+  `403 FG-AUTH-0021` または差分から外して `withheld.files` に数える。
+- 無い文書・無い訳は、見えないプロジェクトと同じ `404 FG-REPO-0005`（ログに `reason=document_not_found` / `translation_not_found`）。
+- 1 回の要求で読む版は 2 つまで。仕様の API と同じ時間の上限（30 秒）・呼び出しの制限・同時の数（`FG-WEB-0010`）。
+- `gstn doc show --project <id> <doc_id> [--ref] [--lang] [--json]`、`gstn doc list --project <id>`。画面は `/{プロジェクト}/-/documents` と
+  `/-/documents/{id}`（ファイルの画面の「文書として開く」から）。
 
 ## 仕様の API（X4）
 

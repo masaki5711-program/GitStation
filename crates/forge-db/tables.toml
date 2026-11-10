@@ -651,3 +651,15 @@ ro_columns = ["*"]
 guarded = true
 kind = "derived"
 ro_columns = ["*"]
+
+# ── Plan 13 Q13: the document lint's migration setting (20261203100000,
+# ADR-0026) ── broken document references lowered to warnings until a date,
+# set by a Maintainer; audited on the project.
+[tables.doc_lint_migrations]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []

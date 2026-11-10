@@ -353,6 +353,22 @@ struct Key {
     state: KeyState,
 }
 
+// Review of ADR-0025 (2026-11-09, security LOW c): the key bytes leave
+// memory with the ring.
+impl zeroize::Zeroize for Key {
+    fn zeroize(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.bytes);
+    }
+}
+
+impl Drop for Key {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(self);
+    }
+}
+
+impl zeroize::ZeroizeOnDrop for Key {}
+
 /// The keys of `auth.act_as_hmac_keys_file` (ADR-0025 §5.2). One line per
 /// key: `<kid>:<base64 of 32 bytes>` followed by `active` or `retired`
 /// (or nothing: a key that still verifies); blank lines and `#` comments
@@ -402,11 +418,22 @@ fn keys_invalid(reason: &'static str) -> ForgeError {
 
 impl ActAsKeys {
     /// Parse the file's text: an unreadable line, a duplicate kid, a key
-    /// that is not 32 bytes, or not exactly one `active` key is
+    /// that is not 32 bytes, a key of one repeated byte (`key_degenerate`:
+    /// all zeros or a placeholder, never a random key), or not exactly one
+    /// `active` key is
     /// `FG-SYS-0002 config_key=auth.act_as_hmac_keys_file` with `reason`
     /// (and `line`); the key bytes are never quoted.
+    ///
+    /// Memory (review of ADR-0025, 2026-11-09 / 11-10, security LOW c): the
+    /// caller holds `text` in a `Zeroizing<String>` (the base64 slices
+    /// below borrow it); the decoded bytes are wiped; the ring's vector is
+    /// sized once, so growing it never leaves a freed copy of a key behind;
+    /// every `Key` wipes itself on drop. Accepted residue: the HMAC's
+    /// internal state (the keyed pads of each short-lived `Hmac` value are
+    /// not wiped when it is dropped) and the register / stack copies of a
+    /// move.
     pub fn parse(text: &str) -> Result<Self, ForgeError> {
-        let mut keys: Vec<Key> = Vec::new();
+        let mut keys: Vec<Key> = Vec::with_capacity(text.lines().count());
         for (n, line) in text.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -433,11 +460,25 @@ impl ActAsKeys {
             if keys.iter().any(|k| k.kid == kid) {
                 return Err(at("kid_duplicate"));
             }
-            let raw = base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .map_err(|_| at("key_not_base64"))?;
-            let bytes: [u8; 32] = raw.try_into().map_err(|_| at("key_length"))?;
-            keys.push(Key { kid, bytes, state });
+            let raw = zeroize::Zeroizing::new(
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .map_err(|_| at("key_not_base64"))?,
+            );
+            let mut key = Key {
+                kid,
+                bytes: [0u8; 32],
+                state,
+            };
+            if raw.len() != key.bytes.len() {
+                return Err(at("key_length"));
+            }
+            key.bytes.copy_from_slice(&raw);
+            let first = key.bytes.first().copied();
+            if key.bytes.iter().all(|b| Some(*b) == first) {
+                return Err(at("key_degenerate"));
+            }
+            keys.push(key);
         }
         match keys.iter().filter(|k| k.state == KeyState::Active).count() {
             1 => Ok(Self { keys }),
