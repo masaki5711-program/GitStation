@@ -86,7 +86,8 @@ push・MR の版から作られたパイプラインは人の操作ではない�
 ## 後の MR
 
 - C3（済み）: Runner がジョブを取り、状態とパイプラインの状態を進める（上の「Runner の API」）。
-- C4: ジョブの fetch の Smart HTTP（`refs/pipelines/<id>/head`）と `forge-runner`。スクリプトは `definition_hash` の `.forge-ci.yml` から読む。
+- C4（済み）: ジョブの fetch の Smart HTTP（`refs/pipelines/<id>/head`、`Pipelines::job_copy` が判定の材料を 1 文で読む。ルートは forge-web の
+  `routes::job_fetch`）と `forge-runner`（別のクレート）。スクリプトは Runner が `definition_hash` の `.forge-ci.yml` から読む。
 - C5: CI の出力の読み取りを `copy_mark` で判定する（`undecided` はエージェントに閉じる）。今のルートはメタデータだけ。
 - C12: 手動・定期の実行の保護（今は保護されない扱い）。
 - C3 / C6: シークレットは `secrets_allowed()` だけで判定する（上）。C11: 再実行されたデプロイのジョブも人の `DeployApprove` を待つ。

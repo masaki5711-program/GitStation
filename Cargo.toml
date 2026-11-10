@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-doc", "crates/forge-ci", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-pipelines", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
+members = ["crates/forge-errors", "crates/forge-doc", "crates/forge-ci", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-pipelines", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client", "crates/forge-runner"]
 
 [workspace.package]
 version = "0.1.0"

@@ -115,6 +115,58 @@ pub async fn lease_of(db: &Db, job: i64) -> Result<Option<(Option<i64>, bool)>, 
     .await
 }
 
+/// What a job's fetch of its pinned commit is decided on (M4 C4): the job's
+/// pipeline, the pipeline's project and SHA, and that project's repository
+/// (`None` without such a job). Read in one statement on the read pool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobCopy {
+    pub job_id: i64,
+    pub pipeline_id: i64,
+    pub project: forge_core::ProjectId,
+    pub sha: forge_core::ObjectId,
+    pub repository: forge_core::ProjectRepository,
+}
+
+/// The facts of [`JobCopy`] for `job`; a stored SHA or repository state that
+/// does not parse is `FG-SYS-0001` (never a pass).
+pub async fn job_copy(db: &Db, job: i64) -> Result<Option<JobCopy>, ForgeError> {
+    const QUERY: &str = "ci_runners.job_copy";
+    let row: Option<(i64, i64, String, i64, String)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT p.id, p.project_id, p.sha, r.id, r.state \
+                 FROM forge.ci_jobs j \
+                 JOIN forge.ci_pipelines p ON p.id = j.pipeline_id \
+                 JOIN forge.repositories r ON r.project_id = p.project_id \
+                 WHERE j.id = $1",
+            )
+            .bind(job)
+            .fetch_optional(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    let Some((pipeline_id, project, sha, repo, state)) = row else {
+        return Ok(None);
+    };
+    let corrupt = |reason: &'static str| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", reason)
+            .with_context("job_id", job)
+    };
+    Ok(Some(JobCopy {
+        job_id: job,
+        pipeline_id,
+        project: forge_core::ProjectId::new(project),
+        sha: forge_core::ObjectId::parse(&sha).map_err(|_| corrupt("pipeline_sha_invalid"))?,
+        repository: forge_core::ProjectRepository {
+            id: forge_core::RepoId::new(repo),
+            state: forge_core::RepositoryState::parse(&state)
+                .ok_or_else(|| corrupt("unknown_repository_state"))?,
+        },
+    }))
+}
+
 type ClaimRow = (
     i64,
     i32,

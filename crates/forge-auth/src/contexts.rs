@@ -905,6 +905,72 @@ impl RunnerJobCtx {
     }
 }
 
+/// A CI job's fetch of its pipeline's pinned commit as loaded for the job
+/// fetch route (M4 C4, ADR-0029 §3): the job, its pipeline, the pipeline's
+/// project and pinned SHA, and the project's repository, from one row.
+/// `authorize()` decides `RepoRead` on `Resource::PinnedCopy { project,
+/// sha }` — the same decision as [`crate::authorize_pinned_copy`] — so a job
+/// token reaches only its own project at its own commit while it is live.
+/// The id is the job's (the route's path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedCopyCtx {
+    job: i64,
+    pipeline: i64,
+    copy: crate::model::PinnedCopy,
+    repository: forge_core::ProjectRepository,
+}
+
+impl PinnedCopyCtx {
+    /// One loaded row: the job, its pipeline, the pipeline's project and
+    /// SHA, and that project's repository.
+    pub fn new(
+        job: i64,
+        pipeline: i64,
+        project: ProjectId,
+        sha: forge_core::push::ObjectId,
+        repository: forge_core::ProjectRepository,
+    ) -> Self {
+        Self {
+            job,
+            pipeline,
+            copy: crate::model::PinnedCopy::new(project, sha),
+            repository,
+        }
+    }
+
+    /// The pipeline whose ref the fetch advertises.
+    pub fn pipeline(&self) -> i64 {
+        self.pipeline
+    }
+
+    /// The project the job copies.
+    pub fn project(&self) -> ProjectId {
+        self.copy.project()
+    }
+
+    /// The pinned commit.
+    pub fn sha(&self) -> &forge_core::push::ObjectId {
+        self.copy.sha()
+    }
+
+    /// The project's repository (storage id and state).
+    pub fn repository(&self) -> forge_core::ProjectRepository {
+        self.repository
+    }
+}
+
+impl sealed::Sealed for PinnedCopyCtx {}
+
+impl ResourceCtx for PinnedCopyCtx {
+    type Id = i64;
+    fn resource(&self) -> Resource {
+        Resource::PinnedCopy(self.copy.clone()) // clone: every decision gets its own resource
+    }
+    fn id(&self) -> i64 {
+        self.job
+    }
+}
+
 impl sealed::Sealed for RunnerJobCtx {}
 
 impl ResourceCtx for RunnerJobCtx {

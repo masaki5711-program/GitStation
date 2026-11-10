@@ -352,3 +352,91 @@ async fn version_ref_write_during_pack_refs_is_retried() {
     );
     assert!(f.refs("refs/merge-requests/2").await.is_empty());
 }
+
+/// M4 C4: the pipeline ref is created once and kept; a pipeline ref at
+/// another commit is a defect, never moved.
+#[tokio::test]
+async fn the_pipeline_ref_is_created_once_and_never_moved() {
+    let f = fixture().await;
+    let c1 = commit(&f.path, "one\n", None);
+    let c2 = commit(&f.path, "two\n", Some(c1.as_str()));
+    let made = f
+        .git
+        .ensure_pipeline_ref(&f.root, f.id, 3, &c1, T)
+        .await
+        .expect("created");
+    assert_eq!(made.as_str(), "refs/pipelines/3/head");
+    // Again: kept as is.
+    f.git
+        .ensure_pipeline_ref(&f.root, f.id, 3, &c1, T)
+        .await
+        .expect("kept");
+    assert_eq!(f.refs("refs/pipelines").await.get(&made), Some(&c1));
+    let err = f
+        .git
+        .ensure_pipeline_ref(&f.root, f.id, 3, &c2, T)
+        .await
+        .expect_err("moved");
+    assert_eq!(err.code(), ErrorCode::Internal);
+    assert_eq!(f.refs("refs/pipelines").await.get(&made), Some(&c1));
+}
+
+/// M4 C4 review: a finished pipeline's ref is deleted (a second delete is
+/// a no-op); the others are kept.
+#[tokio::test]
+async fn a_pipeline_ref_is_deleted_once_its_pipeline_ends() {
+    let f = fixture().await;
+    let c1 = commit(&f.path, "one\n", None);
+    let three = f
+        .git
+        .ensure_pipeline_ref(&f.root, f.id, 3, &c1, T)
+        .await
+        .expect("created");
+    let four = f
+        .git
+        .ensure_pipeline_ref(&f.root, f.id, 4, &c1, T)
+        .await
+        .expect("created");
+    assert!(f
+        .git
+        .delete_pipeline_ref(&f.root, f.id, 3, T)
+        .await
+        .expect("deleted"));
+    assert!(!f
+        .git
+        .delete_pipeline_ref(&f.root, f.id, 3, T)
+        .await
+        .expect("already gone"));
+    let left = f.refs("refs/pipelines").await;
+    assert_eq!(left.get(&three), None);
+    assert_eq!(left.get(&four), Some(&c1));
+}
+
+/// M4 C4 review, the sweep's backstop: every pipeline ref with its id;
+/// `delete_pipeline_refs` removes exactly the given ones in one
+/// transaction (CAS on the listed value).
+#[tokio::test]
+async fn pipeline_refs_are_listed_by_id_and_deleted_in_one_transaction() {
+    let f = fixture().await;
+    let c1 = commit(&f.path, "one\n", None);
+    for id in [3, 4, 12] {
+        f.git
+            .ensure_pipeline_ref(&f.root, f.id, id, &c1, T)
+            .await
+            .expect("created");
+    }
+    let listed = f.git.pipeline_refs(&f.root, f.id, T).await.expect("list");
+    let ids: Vec<i64> = listed.iter().map(|r| r.pipeline_id).collect();
+    assert_eq!(ids, [3, 4, 12]);
+    assert!(listed.iter().all(|r| r.at == c1));
+    let gone: Vec<PipelineRef> = listed.into_iter().filter(|r| r.pipeline_id != 4).collect();
+    assert_eq!(
+        f.git
+            .delete_pipeline_refs(&f.root, f.id, &gone, T)
+            .await
+            .expect("deleted"),
+        RefUpdateResult::Applied { changes: 2 }
+    );
+    let left = f.git.pipeline_refs(&f.root, f.id, T).await.expect("list");
+    assert_eq!(left.iter().map(|r| r.pipeline_id).collect::<Vec<_>>(), [4]);
+}

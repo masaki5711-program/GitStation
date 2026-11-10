@@ -1067,6 +1067,26 @@ pub async fn health(
     })
 }
 
+/// The ids among `ids` whose pipeline is live (`pending` / `running`), in
+/// id order (M4 C4 review: the maintenance sweep deletes the pipeline refs
+/// of every other id — finished, or gone with its project). Read pool.
+pub async fn live_among(db: &Db, ids: &[i64]) -> Result<Vec<i64>, ForgeError> {
+    const QUERY: &str = "pipelines.live_among";
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    db.within(QUERY, async {
+        sqlx::query_scalar(
+            "SELECT id FROM forge.ci_pipelines              WHERE id = ANY($1) AND status IN ('pending', 'running') ORDER BY id",
+        )
+        .bind(ids)
+        .fetch_all(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))
+    })
+    .await
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

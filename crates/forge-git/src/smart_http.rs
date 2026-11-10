@@ -20,7 +20,7 @@ use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::command::{Git, GitCommand};
-use crate::hidden_refs::HIDDEN_REF_PREFIX;
+use crate::hidden_refs::{HIDDEN_REF_PREFIX, PIPELINE_REF_PREFIX};
 use crate::pkt_line;
 use crate::storage::StorageRoot;
 
@@ -121,6 +121,8 @@ pub const UPLOAD_PACK_CONFIG: &[(&str, &str)] = &[
     // M3 R1b (ADR-0024 §2): merge request versions are not advertised; the
     // want check leaves the same refs out (`hidden_refs`).
     ("transfer.hideRefs", HIDDEN_REF_PREFIX),
+    // M4 C4 (ADR-0029 §3): the CI pipeline refs, likewise.
+    ("transfer.hideRefs", PIPELINE_REF_PREFIX),
 ];
 
 /// Fixed `-c` settings of receive-pack (push); `receive.maxInputSize` is
@@ -132,6 +134,8 @@ pub const RECEIVE_PACK_CONFIG: &[(&str, &str)] = &[
     // M3 R1b (ADR-0024 §2): not advertised to a pusher either, and git
     // refuses updates of them (forge refuses first: FG-GIT-0010).
     ("transfer.hideRefs", HIDDEN_REF_PREFIX),
+    // M4 C4: nor are the CI pipeline refs.
+    ("transfer.hideRefs", PIPELINE_REF_PREFIX),
     // M3 O3: a push deleting a packed ref waits out the maintenance's
     // pack-refs instead of failing after git's 1 s (`refs::PACKED_REFS_TIMEOUT_MS`).
     (
@@ -156,6 +160,38 @@ impl Git {
         for (key, value) in UPLOAD_PACK_CONFIG {
             cmd = cmd.config_override(key, value);
         }
+        cmd = self.with_empty_hooks(cmd)?.arg("--strict");
+        Ok(finish_command(cmd, &repo, phase, git_protocol))
+    }
+
+    /// `git upload-pack` for a CI job's fetch (M4 C4, ADR-0029 §3): the
+    /// fixed set, then every ref and `HEAD` hidden, then exactly
+    /// `pipeline_ref` un-hidden (git applies the last matching
+    /// `transfer.hideRefs`), so the advertisement holds that one ref. The
+    /// caller checks the wants against the pinned commit
+    /// (`Git::check_wants_pinned`): protocol v2 serves any known object.
+    pub fn upload_pack_pinned(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        phase: Phase,
+        git_protocol: Option<&str>,
+        pipeline_ref: &forge_core::RefName,
+    ) -> Result<GitCommand, ForgeError> {
+        if !pipeline_ref.as_str().starts_with(PIPELINE_REF_PREFIX) {
+            return Err(
+                ForgeError::new(ErrorCode::Internal).with_context("reason", "not_a_pipeline_ref")
+            );
+        }
+        let repo = storage.existing(id)?;
+        let mut cmd = self.command(Service::UploadPack.subcommand());
+        for (key, value) in UPLOAD_PACK_CONFIG {
+            cmd = cmd.config_override(key, value);
+        }
+        cmd = cmd
+            .config_override("transfer.hideRefs", "refs/")
+            .config_override("transfer.hideRefs", "HEAD")
+            .config_override("transfer.hideRefs", format!("!{}", pipeline_ref.as_str()));
         cmd = self.with_empty_hooks(cmd)?.arg("--strict");
         Ok(finish_command(cmd, &repo, phase, git_protocol))
     }

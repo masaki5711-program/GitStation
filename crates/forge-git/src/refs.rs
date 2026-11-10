@@ -186,6 +186,150 @@ impl Git {
     }
 }
 
+impl Git {
+    /// `refs/pipelines/<pipeline_id>/head` at `sha` (M4 C4, ADR-0029 §3):
+    /// created when missing, kept when it already points there. A pipeline
+    /// ref at another commit is a defect (`FG-SYS-0001
+    /// reason=pipeline_ref_moved`; pipeline ids are never reused and
+    /// receive-pack cannot write the hidden prefix). Two jobs creating it at
+    /// once: the loser reads it back.
+    pub async fn ensure_pipeline_ref(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        pipeline_id: i64,
+        sha: &ObjectId,
+        timeout: Duration,
+    ) -> Result<RefName, ForgeError> {
+        let name = crate::hidden_refs::pipeline_head_ref(pipeline_id)?;
+        let moved = |at: &ObjectId| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "pipeline_ref_moved")
+                .with_context("pipeline_id", pipeline_id)
+                .with_context("repo_id", id.get())
+                .with_context("at", at.as_str().to_owned())
+        };
+        match self.read_ref(storage, id, &name, timeout).await? {
+            Some(at) if at == *sha => return Ok(name),
+            Some(at) => return Err(moved(&at)),
+            None => {}
+        }
+        let create = [RefChange::Create {
+            name: name.clone(), // clone: the caller gets the name back
+            new: sha.clone(),   // clone: the change owns its id
+        }];
+        match self.update_refs(storage, id, &create, timeout).await {
+            Ok(_) => Ok(name),
+            Err(e) => match self.read_ref(storage, id, &name, timeout).await? {
+                Some(at) if at == *sha => Ok(name),
+                Some(at) => Err(moved(&at)),
+                None => Err(e.with_context("pipeline_id", pipeline_id)),
+            },
+        }
+    }
+}
+
+/// One `refs/pipelines/<pipeline_id>/head` of a repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PipelineRef {
+    pub pipeline_id: i64,
+    pub name: RefName,
+    pub at: ObjectId,
+}
+
+/// The pipeline id of `refs/pipelines/<id>/head`, `None` for any other
+/// name.
+fn pipeline_id_of(name: &RefName) -> Option<i64> {
+    let id = name
+        .as_str()
+        .strip_prefix(crate::hidden_refs::PIPELINE_REF_PREFIX)?
+        .strip_suffix("/head")?;
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) || id.starts_with('0') {
+        return None;
+    }
+    id.parse().ok()
+}
+
+impl Git {
+    /// Delete `refs/pipelines/<pipeline_id>/head` (M4 C4 review: the ref
+    /// pins its commit only while the pipeline runs; deleted when it
+    /// reaches a terminal state, the maintenance sweep is the backstop).
+    /// `false`: there was no such ref (already deleted). A retried
+    /// pipeline's next job fetch creates it again
+    /// ([`Git::ensure_pipeline_ref`]).
+    pub async fn delete_pipeline_ref(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        pipeline_id: i64,
+        timeout: Duration,
+    ) -> Result<bool, ForgeError> {
+        let name = crate::hidden_refs::pipeline_head_ref(pipeline_id)?;
+        let Some(at) = self.read_ref(storage, id, &name, timeout).await? else {
+            return Ok(false);
+        };
+        let delete = [RefChange::Delete {
+            name: name.clone(), // clone: read again below on a lost CAS
+            old: at,
+        }];
+        match self.update_refs(storage, id, &delete, timeout).await {
+            Ok(_) => Ok(true),
+            // Deleted meanwhile (the sweep, another completion): done.
+            Err(e) => match self.read_ref(storage, id, &name, timeout).await? {
+                None => Ok(false),
+                Some(_) => Err(e.with_context("pipeline_id", pipeline_id)),
+            },
+        }
+    }
+
+    /// Every pipeline ref of the repository, by pipeline id. A name under
+    /// `refs/pipelines/` that forge did not build is `FG-GIT-0003
+    /// reason=unexpected_output` (only forge writes the prefix).
+    pub async fn pipeline_refs(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        timeout: Duration,
+    ) -> Result<Vec<PipelineRef>, ForgeError> {
+        let pattern =
+            RefName::parse(crate::hidden_refs::PIPELINE_REF_PREFIX.trim_end_matches('/'))?;
+        let mut refs = Vec::new();
+        for (name, at) in self.read_refs(storage, id, &pattern, timeout).await? {
+            let Some(pipeline_id) = pipeline_id_of(&name) else {
+                return Err(unexpected("for-each-ref")
+                    .with_context("repo_id", id.get())
+                    .with_context("ref", name.as_str().to_owned()));
+            };
+            refs.push(PipelineRef {
+                pipeline_id,
+                name,
+                at,
+            });
+        }
+        refs.sort_by_key(|r| r.pipeline_id);
+        Ok(refs)
+    }
+
+    /// Delete `refs` in one transaction, each only if it is still at the
+    /// listed commit (the maintenance sweep of finished pipelines' refs).
+    pub async fn delete_pipeline_refs(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        refs: &[PipelineRef],
+        timeout: Duration,
+    ) -> Result<RefUpdateResult, ForgeError> {
+        let changes: Vec<RefChange> = refs
+            .iter()
+            .map(|r| RefChange::Delete {
+                name: r.name.clone(), // clone: the change owns its name
+                old: r.at.clone(),    // clone: as above
+            })
+            .collect();
+        self.update_refs(storage, id, &changes, timeout).await
+    }
+}
+
 #[cfg(test)]
 #[path = "refs_tests.rs"]
 mod tests;
