@@ -759,7 +759,7 @@ async fn the_migration_removes_ci_pipeline_runs_a_service_account_reported() {
             )
             .await;
         } else {
-            assert_eq!(applied, vec![C5]);
+            assert_eq!(applied, vec![C5, C5 + 100]);
         }
     }
     let rows = t

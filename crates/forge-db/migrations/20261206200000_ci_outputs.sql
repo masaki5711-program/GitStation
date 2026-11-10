@@ -124,16 +124,9 @@ FROM (SELECT project_id, count(*) AS runs FROM forge.check_runs
 DELETE FROM forge.check_annotations a USING forge.check_runs r
     WHERE a.check_run_id = r.id AND r.name = 'ci/pipeline' AND r.reported_by IS NOT NULL;
 DELETE FROM forge.check_runs WHERE name = 'ci/pipeline' AND reported_by IS NOT NULL;
--- The deferred audit checks of those deletes run now: ALTER TABLE refuses
--- a table with pending trigger events.
-SET CONSTRAINTS ALL IMMEDIATE;
-
-ALTER TABLE forge.check_runs DROP CONSTRAINT check_runs_reporter;
-ALTER TABLE forge.check_runs ADD CONSTRAINT check_runs_reporter
-    CHECK ((reported_by IS NULL) = (name LIKE 'forge/%' OR name = 'ci/pipeline')
-        AND (reported_by IS NOT NULL OR credential_id IS NULL))
-    NOT VALID;
-ALTER TABLE forge.check_runs VALIDATE CONSTRAINT check_runs_reporter;
+-- check_runs_reporter changes in 20261206200100: ALTER TABLE refuses a
+-- table with the pending (deferred) audit checks of these deletes, which
+-- run at this file's COMMIT.
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON forge.failure_fingerprints TO forge_app;
 GRANT SELECT ON forge.failure_fingerprints TO forge_ro;
