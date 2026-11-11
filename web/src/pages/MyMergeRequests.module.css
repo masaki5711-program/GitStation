@@ -1,0 +1,152 @@
+/* /-/merge-requests (plan 15 MR 7). Tokens only. */
+.pageTitle {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-xl);
+  color: var(--gs-brand-navy);
+}
+
+.explain {
+  margin: 0 0 var(--gs-space-6);
+  color: var(--gs-color-text-muted);
+}
+
+.section {
+  margin-bottom: var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.summary {
+  composes: interactive from '../components/controls.module.css';
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  min-height: var(--gs-tap-target);
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border-radius: var(--gs-radius-md);
+  list-style: none;
+}
+
+.summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The disclosure marker: a chevron drawn with borders (no glyph to
+   translate), right when closed, down when open. */
+.summary::before {
+  content: '';
+  flex: none;
+  width: var(--gs-space-2);
+  height: var(--gs-space-2);
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+details[open] > .summary::before {
+  transform: rotate(45deg);
+}
+
+.summaryTitle {
+  font-size: var(--gs-font-size-lg);
+  font-weight: var(--gs-font-weight-bold);
+  color: var(--gs-brand-navy);
+}
+
+.count {
+  padding: 0 var(--gs-space-2);
+  border-radius: var(--gs-radius-pill);
+  background: var(--gs-color-active-surface);
+  color: var(--gs-color-text);
+  font-size: var(--gs-font-size-sm);
+  font-variant-numeric: var(--gs-numeric);
+}
+
+.hint {
+  margin: 0;
+  padding: 0 var(--gs-space-4) var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--gs-color-border);
+}
+
+.item {
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.titleLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gs-space-2);
+  margin: 0 0 var(--gs-space-1);
+}
+
+.title {
+  font-weight: var(--gs-font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.draft {
+  padding: 0 var(--gs-space-1);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.ref {
+  font-family: var(--gs-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.time {
+  font-variant-numeric: var(--gs-numeric);
+}
+
+/* Not colour alone: the reason is written out. */
+.reason {
+  padding: 0 var(--gs-space-1);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.empty {
+  margin: 0;
+  padding: var(--gs-space-3) var(--gs-space-4);
+  color: var(--gs-color-text-muted);
+}
+
+.status {
+  min-height: var(--gs-status-min-height);
+  margin: 0;
+  padding: 0 var(--gs-space-4);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.more {
+  margin: var(--gs-space-3) 0 0;
+  padding: 0 var(--gs-space-4);
+}

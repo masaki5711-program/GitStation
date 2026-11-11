@@ -39,12 +39,21 @@
   },
   "home": {
     "title": "ホーム",
-    "mine": "自分のプロジェクト",
-    "groups": "自分のグループ",
     "recent": "最近見たもの",
     "recentHint": "このブラウザの中だけに覚えています。",
     "allProjects": "プロジェクトをすべて見る",
-    "allGroups": "グループをすべて見る"
+    "work": "自分の作業",
+    "cardAttention": "対応が必要な自分の MR",
+    "cardApprovable": "承認を待っている MR",
+    "cardAuthored": "自分の MR",
+    "cardUnread": "未読の通知",
+    "nextAttention": "衝突や失敗したチェックはありません。",
+    "nextApprovable": "承認を頼まれた MR はここに出ます。",
+    "nextAuthored": "ブランチを push して MR を作るとここに出ます。",
+    "nextUnread": "新しい通知はありません。",
+    "countUnknown": "数を読めませんでした。",
+    "cardCount_one": "{{shown}} 件",
+    "cardCount_other": "{{shown}} 件"
   },
   "nav": {
     "myWork": "マイワーク",
@@ -56,7 +65,30 @@
     "menu": "メニュー",
     "projectMenu": "プロジェクトのメニュー",
     "groupMenu": "グループのメニュー",
-    "showAll": "中身をすべて見る"
+    "showAll": "中身をすべて見る",
+    "mergeRequests": "マージリクエスト",
+    "mrBadge": "、対応 {{shown}} 件"
+  },
+  "myMrs": {
+    "title": "マージリクエスト",
+    "explain": "あなたが見てよいプロジェクトの、開いている MR だけを出しています。",
+    "attention": "対応が必要な自分の MR",
+    "approvable": "承認を待っている MR",
+    "authored": "自分の MR",
+    "hintAttention": "衝突や失敗した必須チェックがあり、あなたの対応を待っています。",
+    "hintApprovable": "あなたが承認できて、まだ承認していないものです（自分の MR は入りません）。",
+    "hintAuthored": "あなたが作って、まだ開いているものです。",
+    "more": "さらに読む",
+    "moreShown": "{{n}} 件を足しました。",
+    "draft": "下書き",
+    "updated": "更新 {{time}}",
+    "reasonConflict": "衝突があります",
+    "reasonConflictPredicted": "衝突しそうです",
+    "reasonCheckFailed": "必須のチェックが失敗しました",
+    "reasonOther": "対応が必要です",
+    "summaryCount_one": "{{shown}} 件",
+    "summaryCount_other": "{{shown}} 件",
+    "countUnknown": "件数不明"
   },
   "projects": {
     "title": "プロジェクト",

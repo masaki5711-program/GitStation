@@ -178,6 +178,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the caller's merge requests */
+        get: operations["get_merge_requests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the caller's merge requests */
+        head: operations["head_merge_requests"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/notifications": {
         parameters: {
             query?: never;
@@ -6669,6 +6687,46 @@ export interface operations {
         };
     };
     head_groups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_merge_requests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_merge_requests: {
         parameters: {
             query?: never;
             header?: never;

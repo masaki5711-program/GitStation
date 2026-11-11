@@ -67,28 +67,28 @@ describe('axe', () => {
   });
 
   for (const lang of ['ja', 'en', 'id'] as const) {
-    it(`home (${lang}), menu open`, async () => {
+    it(`projects (${lang}), menu open`, async () => {
       const server = mockServer(home());
-      const { container } = await renderApp({ fetch: server.fetch, lang });
+      const { container } = await renderApp({ fetch: server.fetch, lang, path: '/-/projects' });
       await screen.findByText('Forge Web');
       fireEvent.click(container.querySelector('header button') as HTMLElement);
       expect(await violations(container)).toEqual([]);
     });
   }
 
-  it('home: loading, empty and error', async () => {
+  it('projects: loading, empty and error', async () => {
     const server = mockServer(
       home({ 'GET /api/v1/projects': () => apiError(500, 'エラー', 'req-e1') }),
     );
-    const { container } = await renderApp({ fetch: server.fetch });
+    const { container } = await renderApp({ fetch: server.fetch, path: '/-/projects' });
     expect(await violations(container)).toEqual([]);
     await screen.findAllByRole('alert');
     expect(await violations(container)).toEqual([]);
   });
 
-  it('home: the create dialog with its validation errors', async () => {
+  it('projects: the create dialog with its validation errors', async () => {
     const server = mockServer(home());
-    const { container } = await renderApp({ fetch: server.fetch });
+    const { container } = await renderApp({ fetch: server.fetch, path: '/-/projects' });
     fireEvent.click(await screen.findByRole('button', { name: 'プロジェクトを作る' }));
     const dialog = screen.getByRole('dialog');
     fireEvent.click(

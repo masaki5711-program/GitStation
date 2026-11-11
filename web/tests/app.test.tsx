@@ -21,7 +21,7 @@ describe('error display (CLAUDE.md contract 3)', () => {
         apiError(503, 'いまは処理できません。', 'req-abc123', 'FG-DB-0001'),
       'GET /api/v1/groups': () => page([]),
     });
-    const { container } = await renderApp({ fetch: server.fetch });
+    const { container } = await renderApp({ fetch: server.fetch, path: '/-/projects' });
     const alert = (await screen.findAllByRole('alert'))[0];
     expect(alert?.textContent).toContain('いまは処理できません。');
     expect(screen.getAllByTestId('request-id')[0]?.textContent).toBe('req-abc123');
@@ -39,7 +39,7 @@ describe('error display (CLAUDE.md contract 3)', () => {
         }),
       'GET /api/v1/groups': () => page([]),
     });
-    const { container } = await renderApp({ fetch: server.fetch });
+    const { container } = await renderApp({ fetch: server.fetch, path: '/-/projects' });
     await screen.findAllByRole('alert');
     expect(container.textContent).toContain('思いがけない応答がありました');
     expect(container.textContent).not.toContain('proxy error');
@@ -52,7 +52,7 @@ describe('error display (CLAUDE.md contract 3)', () => {
       'GET /api/v1/projects': () => Promise.reject(new TypeError('Failed to fetch')),
       'GET /api/v1/groups': () => page([]),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/projects' });
     await screen.findAllByRole('alert');
     expect(screen.getAllByText(/サーバーにつながりませんでした/).length).toBeGreaterThan(0);
     expect(screen.queryByTestId('request-id')).toBeNull();
@@ -95,7 +95,7 @@ describe('CSP: no injected <style> (ADR-0022 §3a)', () => {
       'GET /api/v1/projects': () => page([PROJECT]),
       'GET /api/v1/groups': () => page([]),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/projects' });
     await screen.findByText('Forge Web');
     await waitFor(() => {
       expect(document.querySelectorAll('style').length).toBe(before);
@@ -125,7 +125,7 @@ describe('CSP: no injected <style> (ADR-0022 §3a)', () => {
       'GET /api/v1/namespaces/resolve': () => apiError(404, 'x', 'r'),
     });
     const before = document.querySelectorAll('style').length;
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/groups' });
     fireEvent.click(await screen.findByRole('button', { name: 'グループを作る' }));
     expect(screen.getByRole('dialog')).toBeTruthy();
     expect(document.querySelectorAll('style').length).toBe(before);

@@ -23,21 +23,8 @@
   margin-bottom: var(--gs-space-8);
 }
 
-.blockTop {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--gs-space-3);
-  margin-bottom: var(--gs-space-3);
-}
-
-.all {
-  font-size: var(--gs-font-size-sm);
-}
-
 .heading {
-  margin: 0;
+  margin: 0 0 var(--gs-space-3);
   font-size: var(--gs-font-size-lg);
   color: var(--gs-brand-navy);
 }
@@ -56,4 +43,91 @@
 .path {
   color: var(--gs-color-text-muted);
   font-size: var(--gs-font-size-sm);
+}
+
+/* The count cards (plan 15 §3.3): the card is the box; its link (label and
+   number) stretches over it, so the whole card is the target, and the focus
+   ring is drawn around the card. The next step is the card's description,
+   outside the link. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--gs-card-min-width), 1fr));
+  gap: var(--gs-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  min-height: var(--gs-card-min-height);
+  padding: var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.card:hover {
+  background: var(--gs-color-hover-surface);
+}
+
+/* Waits on me and not 0: a stronger border and a tinted surface (the number
+   says it too: not colour alone). */
+.cardWaiting {
+  border: 2px solid var(--gs-color-warning-text);
+  background: var(--gs-color-warning-surface);
+}
+
+.cardLink {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  color: var(--gs-color-text);
+  text-decoration: none;
+}
+
+.cardLink::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--gs-radius-md);
+}
+
+.cardLink:focus-visible {
+  outline: none;
+}
+
+.cardLink:focus-visible::after {
+  outline: var(--gs-focus-ring);
+  outline-offset: 2px;
+}
+
+.cardLabel {
+  font-weight: var(--gs-font-weight-bold);
+  color: var(--gs-brand-navy);
+}
+
+.cardCount {
+  font-size: var(--gs-font-size-xl);
+  font-weight: var(--gs-font-weight-bold);
+  font-variant-numeric: var(--gs-numeric);
+  color: var(--gs-color-link);
+}
+
+.cardNext {
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.projectsLink {
+  margin: 0 0 var(--gs-space-8);
+  font-size: var(--gs-font-size-sm);
+}
+
+.srOnly {
+  composes: srOnly from '../components/controls.module.css';
 }

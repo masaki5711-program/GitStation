@@ -29,7 +29,7 @@ const lists = () => ({
 describe('forms: focus and cancel', () => {
   it('opening the dialog focuses its first field, not the Close button', async () => {
     const server = mockServer(lists());
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/groups' });
     fireEvent.click(await screen.findByRole('button', { name: 'グループを作る' }));
     const dialog = screen.getByRole('dialog');
     expect(document.activeElement).toBe(within(dialog).getByLabelText('名前'));
@@ -37,7 +37,7 @@ describe('forms: focus and cancel', () => {
 
   it('an invalid submit moves focus to the error summary (an alert) that lists the problems', async () => {
     const server = mockServer(lists());
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/groups' });
     fireEvent.click(await screen.findByRole('button', { name: 'グループを作る' }));
     const dialog = screen.getByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'グループを作る' }));
@@ -62,7 +62,7 @@ describe('forms: focus and cancel', () => {
         json(200, { canonical_path: 'press', kind: 'group', moved: false, namespace_id: 400, group_id: 40 }),
       'GET /api/v1/groups/40': () => json(200, created),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/groups' });
     fireEvent.click(await screen.findByRole('button', { name: 'グループを作る' }));
     const dialog = screen.getByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('名前'), { target: { value: 'Press' } });
@@ -82,7 +82,7 @@ describe('forms: focus and cancel', () => {
       ...lists(),
       'POST /api/v1/groups': () => apiError(403, '要求を受け付けられませんでした。', 'req-403', 'FG-AUTH-0016'),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/groups' });
     fireEvent.click(await screen.findByRole('button', { name: 'グループを作る' }));
     const dialog = screen.getByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('名前'), { target: { value: 'Press' } });
@@ -124,7 +124,7 @@ describe('menu and page focus', () => {
       'GET /api/v1/projects/7': () => json(200, PROJECT),
       'GET /api/v1/projects/7/repository/refs': () => json(200, REFS_FILLED),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/projects' });
     fireEvent.click(await screen.findByRole('link', { name: 'Forge Web' }));
     const h1 = await screen.findByRole('heading', { level: 1, name: 'Forge Web' });
     await waitFor(() => {
@@ -149,11 +149,10 @@ describe('states', () => {
     expect(screen.queryByRole('button', { name: 'もう一度試す' })).toBeNull();
   });
 
-  it('when every list fails the home page shows one alert, not three', async () => {
+  it('when the counts fail the home page shows one alert, not one per card', async () => {
     const server = mockServer({
       ...signedIn(),
-      'GET /api/v1/projects': () => apiError(500, '失敗', 'req-x'),
-      'GET /api/v1/groups': () => apiError(500, '失敗', 'req-y'),
+      'GET /api/v1/user/merge-requests/counts': () => apiError(500, '失敗', 'req-x'),
     });
     await renderApp({ fetch: server.fetch });
     await screen.findByRole('alert');
@@ -170,9 +169,9 @@ describe('states', () => {
     expect(status.className).toContain('block');
   });
 
-  it('the empty home offers the primary action', async () => {
+  it('the empty projects page offers the primary action', async () => {
     const server = mockServer(lists());
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/projects' });
     const empty = (await screen.findByText('あなたがメンバーのプロジェクトはまだありません。')).parentElement as HTMLElement;
     fireEvent.click(within(empty).getByRole('button', { name: 'プロジェクトを作る' }));
     expect(screen.getByRole('dialog')).toBeTruthy();
@@ -210,7 +209,7 @@ describe('session', () => {
       'GET /api/v1/session': () => json(200, { ...ADMIN_SESSION, csrf_token: token }),
       'POST /api/v1/groups': () => apiError(403, 'x', 'r', 'FG-AUTH-0016'),
     });
-    const { api } = await renderApp({ fetch: server.fetch });
+    const { api } = await renderApp({ fetch: server.fetch, path: '/-/groups' });
     await screen.findByRole('button', { name: 'グループを作る' });
     expect(api.csrf.token).toBe('a'.repeat(64));
     token = 'b'.repeat(64);

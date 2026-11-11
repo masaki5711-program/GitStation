@@ -39,12 +39,21 @@
   },
   "home": {
     "title": "Home",
-    "mine": "Your projects",
-    "groups": "Your groups",
     "recent": "Recently viewed",
     "recentHint": "Remembered in this browser only.",
     "allProjects": "See all projects",
-    "allGroups": "See all groups"
+    "work": "Your work",
+    "cardAttention": "Your merge requests that need action",
+    "cardApprovable": "Merge requests waiting for your approval",
+    "cardAuthored": "Your merge requests",
+    "cardUnread": "Unread notifications",
+    "nextAttention": "No conflicts or failed checks.",
+    "nextApprovable": "Merge requests you can approve appear here.",
+    "nextAuthored": "Push a branch and open a merge request to see it here.",
+    "nextUnread": "No new notifications.",
+    "countUnknown": "The number could not be read.",
+    "cardCount_one": "{{shown}} item",
+    "cardCount_other": "{{shown}} items"
   },
   "nav": {
     "myWork": "My work",
@@ -56,7 +65,30 @@
     "menu": "Menu",
     "projectMenu": "Project menu",
     "groupMenu": "Group menu",
-    "showAll": "See everything inside"
+    "showAll": "See everything inside",
+    "mergeRequests": "Merge requests",
+    "mrBadge": ", {{shown}} to act on"
+  },
+  "myMrs": {
+    "title": "Merge requests",
+    "explain": "Open merge requests only, from projects you may see.",
+    "attention": "Your merge requests that need action",
+    "approvable": "Merge requests waiting for your approval",
+    "authored": "Your merge requests",
+    "hintAttention": "A conflict or a failed required check waits for you.",
+    "hintApprovable": "You can approve these and have not yet (your own are not included).",
+    "hintAuthored": "You opened these and they are still open.",
+    "more": "Load more",
+    "moreShown": "{{n}} more shown.",
+    "draft": "Draft",
+    "updated": "Updated {{time}}",
+    "reasonConflict": "Has a conflict",
+    "reasonConflictPredicted": "May conflict",
+    "reasonCheckFailed": "A required check failed",
+    "reasonOther": "Needs action",
+    "summaryCount_one": "{{shown}} item",
+    "summaryCount_other": "{{shown}} items",
+    "countUnknown": "count unknown"
   },
   "projects": {
     "title": "Projects",
