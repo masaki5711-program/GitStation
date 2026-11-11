@@ -1,4 +1,5 @@
-// Home (plan 10 §4.2): my projects (the ones I hold a role in) with a filter,
+// Home (plan 10 §4.2): my projects (the ones I hold a role in) with a filter
+// (MyProjects, shared with /-/projects; plan 15 MR 7 reshapes Home),
 // my groups and what I looked at recently (this browser only).
 // No "coming soon" frames: a section appears when it has something to show,
 // the main list always shows its loading / empty / error state.
@@ -8,23 +9,42 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { useApi } from '../api/context';
-import { Loading } from '../components/Loading';
 import { groupsQuery, projectsQuery } from '../api/lists';
 import type { All } from '../api/pages';
 import controls from '../components/controls.module.css';
 import { QueryError } from '../components/QueryError';
 import { CreateGroupDialog, CreateProjectDialog } from '../features/CreateDialogs';
-import { GroupList, ProjectList } from '../features/Lists';
+import { GroupList } from '../features/Lists';
+import { MyProjects } from '../features/MyProjects';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
+import { useSession } from '../session/session';
 import styles from './Home.module.css';
 
-function Block({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+/** `all`: the "see all" link to the full screen (plan 15 sidebar pages). */
+function Block({
+  id,
+  title,
+  all,
+  children,
+}: {
+  id: string;
+  title: string;
+  all?: { to: string; label: string };
+  children: ReactNode;
+}) {
   return (
     <section aria-labelledby={id} className={styles.block}>
-      <h2 id={id} className={styles.heading}>
-        {title}
-      </h2>
+      <div className={styles.blockTop}>
+        <h2 id={id} className={styles.heading}>
+          {title}
+        </h2>
+        {all && (
+          <Link to={all.to} className={styles.all}>
+            {all.label}
+          </Link>
+        )}
+      </div>
       {children}
     </section>
   );
@@ -38,22 +58,15 @@ function Truncated({ all }: { all: All<unknown> }) {
 export function Home() {
   const { t } = useTranslation();
   const api = useApi();
+  const { user } = useSession();
   useDocumentTitle(t('home.title'));
   const [dialog, setDialog] = useState<'project' | 'group' | null>(null);
-  const [filter, setFilter] = useState('');
   const recent = useMemo(() => readRecent(), []);
 
+  // The same query as MyProjects (one request, shared cache): when it fails,
+  // its error is the one the page shows.
   const mine = useQuery(projectsQuery(api, { membership: true }));
   const groups = useQuery(groupsQuery(api, { membership: true }));
-
-  const needle = filter.trim().toLowerCase();
-  const shown =
-    mine.data?.items.filter(
-      (p) =>
-        needle === '' ||
-        p.display_name.toLowerCase().includes(needle) ||
-        p.path.toLowerCase().includes(needle),
-    ) ?? [];
 
   return (
     <>
@@ -67,69 +80,29 @@ export function Home() {
               setDialog('project');
             }}
           >
-            {t('home.newProject')}
+            {t('projects.new')}
           </button>
-          <button
-            type="button"
-            className={controls.button}
-            onClick={() => {
-              setDialog('group');
-            }}
-          >
-            {t('home.newGroup')}
-          </button>
+          {/* Only an administrator may create a top-level group (as /-/groups). */}
+          {user.is_admin && (
+            <button
+              type="button"
+              className={controls.button}
+              onClick={() => {
+                setDialog('group');
+              }}
+            >
+              {t('groups.new')}
+            </button>
+          )}
         </div>
       </div>
 
-      <Block id="home-mine" title={t('home.mine')}>
-        {mine.isPending && <Loading />}
-        {mine.isError && (
-          <QueryError
-            error={mine.error}
-            onRetry={() => {
-              void mine.refetch();
-            }}
-          />
-        )}
-        {mine.isSuccess &&
-          (mine.data.items.length === 0 ? (
-            <div className={styles.empty}>
-              <p>{t('home.mineEmpty')}</p>
-              <p className={styles.hint}>{t('home.mineEmptyHint')}</p>
-              <button
-                type="button"
-                className={controls.primary}
-                onClick={() => {
-                  setDialog('project');
-                }}
-              >
-                {t('home.newProject')}
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className={controls.field}>
-                <label htmlFor="home-filter" className={controls.label}>
-                  {t('home.filter')}
-                </label>
-                <input
-                  id="home-filter"
-                  type="search"
-                  className={controls.input}
-                  value={filter}
-                  onChange={(e) => {
-                    setFilter(e.target.value);
-                  }}
-                />
-              </div>
-              {shown.length === 0 ? (
-                <p role="status">{t('home.filterEmpty')}</p>
-              ) : (
-                <ProjectList items={shown} />
-              )}
-              <Truncated all={mine.data} />
-            </>
-          ))}
+      <Block id="home-mine" title={t('home.mine')} all={{ to: '/-/projects', label: t('home.allProjects') }}>
+        <MyProjects
+          onCreate={() => {
+            setDialog('project');
+          }}
+        />
       </Block>
 
       {!mine.isError && groups.isError && (
@@ -143,7 +116,7 @@ export function Home() {
         </Block>
       )}
       {groups.isSuccess && groups.data.items.length > 0 && (
-        <Block id="home-groups" title={t('home.groups')}>
+        <Block id="home-groups" title={t('home.groups')} all={{ to: '/-/groups', label: t('home.allGroups') }}>
           <GroupList items={groups.data.items} />
           <Truncated all={groups.data} />
         </Block>
@@ -168,12 +141,14 @@ export function Home() {
           setDialog(null);
         }}
       />
-      <CreateGroupDialog
-        open={dialog === 'group'}
-        onClose={() => {
-          setDialog(null);
-        }}
-      />
+      {user.is_admin && (
+        <CreateGroupDialog
+          open={dialog === 'group'}
+          onClose={() => {
+            setDialog(null);
+          }}
+        />
+      )}
     </>
   );
 }

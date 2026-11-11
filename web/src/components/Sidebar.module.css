@@ -1,0 +1,95 @@
+/* The "My work" sidebar (tokens only). Breakpoint: useNarrowScreen.ts. */
+.sidebar {
+  flex: none;
+  align-self: flex-start;
+  /* The header scrolls away (it is not sticky), so the column sticks to
+     the top of the viewport once the page scrolls past it. */
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+  width: var(--gs-sidebar-width);
+  min-height: calc(100vh - var(--gs-header-height));
+  padding: var(--gs-space-4) var(--gs-space-2);
+  border-right: 1px solid var(--gs-color-border);
+  background: var(--gs-color-surface);
+}
+
+.collapsed {
+  width: auto;
+}
+
+/* Narrow screens: a panel under the header, full width, pushing the page down. */
+.narrow {
+  position: static;
+  width: auto;
+  min-height: 0;
+  border-right: none;
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.heading {
+  margin: var(--gs-space-2) var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+  font-weight: bold;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.link,
+.toggle {
+  composes: interactive from './controls.module.css';
+  display: flex;
+  align-items: center;
+  gap: var(--gs-space-3);
+  width: 100%;
+  min-height: var(--gs-tap-target);
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: none;
+  border-radius: var(--gs-radius-sm);
+  background: none;
+  color: var(--gs-color-text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+/* Where I am: not colour alone — a bar and bold text as well. */
+.link[aria-current='page'],
+.link[aria-current='page']:hover:not(:disabled) {
+  background: var(--gs-color-active-surface);
+  box-shadow: inset 3px 0 0 var(--gs-color-action);
+  color: var(--gs-color-link);
+  font-weight: bold;
+}
+
+.toggle {
+  margin-bottom: var(--gs-space-2);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.collapsed .link,
+.collapsed .toggle {
+  justify-content: center;
+  width: var(--gs-tap-target);
+  padding: var(--gs-space-2);
+}
+
+.icon {
+  display: block;
+  flex: none;
+}
+
+.label {
+  overflow-wrap: anywhere;
+}
+
+.srOnly {
+  composes: srOnly from './controls.module.css';
+}

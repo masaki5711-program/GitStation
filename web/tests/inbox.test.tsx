@@ -299,8 +299,9 @@ describe.each(['ja', 'en', 'id'] as Language[])('U4 axe (%s)', (lang) => {
 
   it('the empty page', async () => {
     const { container } = await openPage({ [`GET ${LIST}`]: () => json(200, { items: [], next_before: null }) }, '/-/notifications?unread=1', lang);
+    // Inside main: the sidebar's own items are not the inbox's (plan 15).
     await waitFor(() => {
-      expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+      expect(within(screen.getByRole('main')).queryAllByRole('listitem')).toHaveLength(0);
     });
     expect(await violations(container)).toEqual([]);
   });

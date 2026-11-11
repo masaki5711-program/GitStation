@@ -6,11 +6,11 @@ import { describe, expect, it } from 'vitest';
 
 import { ErrorNotice } from '../src/components/ErrorNotice';
 import { createI18n } from '../src/i18n';
-import { apiError, mockServer, page, signedIn } from './mock';
+import { apiError, mockServer, page, signedInAdmin } from './mock';
 import { json, renderApp } from './render';
 
 const lists = () => ({
-  ...signedIn(),
+  ...signedInAdmin(),
   'GET /api/v1/projects': () => page([]),
   'GET /api/v1/groups': () => page([]),
   'GET /api/v1/namespaces/resolve': () =>

@@ -1,4 +1,14 @@
 /* Shared controls: buttons, form fields, badges. Tokens only. */
+/* Text for screen readers only (compose it: `composes: srOnly from …`). */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* One interactive class: every button-like control composes it, so hover,
  * pressed and keyboard focus look the same everywhere (tokens only). */
 .interactive {
