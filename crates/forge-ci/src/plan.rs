@@ -86,6 +86,8 @@ pub struct PlannedJob {
     pub tags: Vec<String>,
     pub secrets: Vec<String>,
     pub script_lines: usize,
+    /// The names of its services, in file order.
+    pub services: Vec<String>,
 }
 
 fn selected(job: &Job, trigger: &Trigger) -> bool {
@@ -192,6 +194,7 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
             tags: job.tags.clone(),
             secrets: job.secrets.clone(),
             script_lines: job.script.len(),
+            services: job.services.iter().map(|s| s.name.clone()).collect(),
         })
         .collect();
     let stage_of: BTreeMap<&str, usize> = chosen

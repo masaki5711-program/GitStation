@@ -1160,7 +1160,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn ci plan --branch main --protected main", "gstn ci plan --branch feature-x --event mr --json"],
         scopes: &[],
         routes: &[],
-        output: r#"{"type":"object","required":["path","event","branch","protected","jobs"],"properties":{"path":{"type":"string"},"event":{"enum":["push","merge_request"]},"branch":{"type":"string"},"protected":{"type":"boolean"},"jobs":{"type":"array","items":{"type":"object","required":["name","stage","wave","after","image","timeout_secs","tags","secrets","script_lines"],"properties":{"wave":{"type":"integer"},"after":{"type":"array","items":{"type":"string"}}}}}}}"#,
+        output: r#"{"type":"object","required":["path","event","branch","protected","jobs"],"properties":{"path":{"type":"string"},"event":{"enum":["push","merge_request"]},"branch":{"type":"string"},"protected":{"type":"boolean"},"jobs":{"type":"array","items":{"type":"object","required":["name","stage","wave","after","image","timeout_secs","tags","secrets","script_lines","services"],"properties":{"wave":{"type":"integer"},"after":{"type":"array","items":{"type":"string"}}}}}}}"#,
     },
     CommandSpec {
         name: "context work-item",

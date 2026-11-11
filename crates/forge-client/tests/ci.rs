@@ -249,3 +249,58 @@ fn ci_plan_refuses_secrets_on_a_branch_not_protected() {
         "secret_on_unprotected_ref"
     );
 }
+
+/// Plan 14 C5s: a job's services are linted (each rule a reason) and named
+/// in the plan.
+#[test]
+fn ci_lint_and_plan_show_a_jobs_services() {
+    let with_db = valid().replace(
+        "    script: [cargo test]\n",
+        &format!(
+            "    script: [cargo test]\n    services:\n      - name: db\n        image: registry.internal/postgres@sha256:{D}\n        user: \"999:999\"\n        tmpfs: [/var/run/postgresql]\n"
+        ),
+    );
+    let r = repo(&with_db);
+    let o = gstn(
+        r.path(),
+        &[
+            "ci",
+            "plan",
+            "--branch",
+            "main",
+            "--protected",
+            "main",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{} {}", o.stdout, o.stderr);
+    let v = o.json();
+    assert_eq!(v["jobs"][1]["name"], "unit");
+    assert_eq!(v["jobs"][1]["services"], serde_json::json!(["db"]));
+    assert_eq!(v["jobs"][0]["services"], serde_json::json!([]));
+    let o = gstn(
+        r.path(),
+        &["ci", "plan", "--branch", "main", "--protected", "main"],
+    );
+    assert!(
+        o.stdout
+            .contains("unit [test] timeout 3600s after build services db"),
+        "{}",
+        o.stdout
+    );
+    // An unpinned service image and a bad tmpfs path: one line each.
+    let bad = with_db
+        .replace("postgres@sha256:", "postgres:16-")
+        .replace("/var/run/postgresql", "/proc/x");
+    std::fs::write(r.path().join(".forge-ci.yml"), bad).unwrap();
+    let o = gstn(r.path(), &["ci", "lint", "--protected", "main", "--json"]);
+    assert_eq!(o.code, 1);
+    let reasons: Vec<String> = o.json()["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["reason"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(reasons, ["image_not_pinned", "service_tmpfs_invalid"]);
+    assert!(o.stderr.contains("FG-CI-0001"), "{}", o.stderr);
+}

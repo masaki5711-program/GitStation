@@ -177,6 +177,7 @@ fn report_plan(cli: &Cli, io: &mut Io<'_>, file: &str, plan: &Plan) -> Result<()
                 "tags": j.tags,
                 "secrets": j.secrets,
                 "script_lines": j.script_lines,
+                "services": j.services,
             })
         })
         .collect();
@@ -202,8 +203,13 @@ fn report_plan(cli: &Cli, io: &mut Io<'_>, file: &str, plan: &Plan) -> Result<()
         } else {
             format!(" secrets {}", j.secrets.join(", "))
         };
+        let services = if j.services.is_empty() {
+            String::new()
+        } else {
+            format!(" services {}", j.services.join(", "))
+        };
         human.push(format!(
-            "  wave {} {} [{}] timeout {}s{after}{secrets}",
+            "  wave {} {} [{}] timeout {}s{after}{secrets}{services}",
             j.wave, j.name, j.stage, j.timeout_secs
         ));
     }

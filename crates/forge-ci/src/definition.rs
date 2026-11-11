@@ -32,6 +32,16 @@ pub const MAX_BRANCHES: usize = 16;
 pub const MAX_TIMEOUT_SECS: u32 = 4 * 60 * 60;
 /// The longest script line in bytes (`script_line_too_long`).
 pub const MAX_SCRIPT_LINE_BYTES: usize = 4096;
+/// At most this many services in one job (`too_many_services`).
+pub const MAX_SERVICES: usize = 2;
+/// At most this many environment variables in one service
+/// (`too_many_service_env`).
+pub const MAX_SERVICE_ENV: usize = 16;
+/// At most this many writable tmpfs paths in one service
+/// (`too_many_service_tmpfs`).
+pub const MAX_SERVICE_TMPFS: usize = 4;
+/// The longest environment value of a service, in bytes.
+const MAX_ENV_VALUE: usize = 1024;
 /// The longest name (job, stage, tag, secret) and pattern / path.
 const MAX_NAME: usize = 63;
 const MAX_PATH: usize = 255;
@@ -77,6 +87,45 @@ pub struct Job {
     pub(crate) secrets: Vec<String>,
     pub(crate) rules: Rules,
     pub(crate) artifacts: Vec<String>,
+    /// Sidecar containers sharing the job's loopback (ADR-0029 amendment).
+    pub(crate) services: Vec<Service>,
+}
+
+/// A sidecar container of a job (plan 14 C5s): it runs in the job's pod,
+/// shares only the job's loopback (no network), and is reached on
+/// `127.0.0.1`. Its environment values are plain text from the file - never
+/// a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Service {
+    /// `[a-z][a-z0-9-]{0,30}`, unique within the job.
+    pub(crate) name: String,
+    /// An OCI reference pinned by digest, like the job's image.
+    pub(crate) image: String,
+    /// In file order; keys `[A-Za-z_][A-Za-z0-9_]*`, values without control
+    /// characters.
+    pub(crate) env: Vec<(String, String)>,
+    /// `name`, `uid` or `uid:gid` (the container's `--user`).
+    pub(crate) user: Option<String>,
+    /// Absolute paths mounted as writable tmpfs over the read-only root.
+    pub(crate) tmpfs: Vec<String>,
+}
+
+impl Service {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn image(&self) -> &str {
+        &self.image
+    }
+    pub fn env(&self) -> &[(String, String)] {
+        &self.env
+    }
+    pub fn user(&self) -> Option<&str> {
+        self.user.as_deref()
+    }
+    pub fn tmpfs(&self) -> &[String] {
+        &self.tmpfs
+    }
 }
 
 impl Job {
@@ -114,6 +163,10 @@ impl Job {
     }
     pub fn artifacts(&self) -> &[String] {
         &self.artifacts
+    }
+    /// In file order.
+    pub fn services(&self) -> &[Service] {
+        &self.services
     }
 }
 
@@ -322,6 +375,7 @@ fn read_job(
     let mut secrets = Vec::new();
     let mut rules = Rules::default();
     let mut artifacts = Vec::new();
+    let mut services = Vec::new();
     for f in &fields {
         let (line, value) = (f.line, f.value);
         match f.key {
@@ -387,6 +441,7 @@ fn read_job(
                 }
             }
             "artifacts" => artifacts = read_artifacts(value, line, problems),
+            "services" => services = read_services(value, line, name, problems),
             other => problems.push(Problem::about(line, "key_unknown", other)),
         }
     }
@@ -433,7 +488,171 @@ fn read_job(
         secrets,
         rules,
         artifacts,
+        services,
     })
+}
+
+/// `services:` - a list of at most [`MAX_SERVICES`] mappings `{ name,
+/// image, env?, user?, tmpfs? }` with unique names.
+fn read_services(node: &Node, at: usize, job: &str, problems: &mut Vec<Problem>) -> Vec<Service> {
+    let items = match &node.kind {
+        Kind::Null => return Vec::new(),
+        Kind::List(items) => items,
+        Kind::Text(_) | Kind::Map(_) => {
+            problems.push(Problem::about(
+                node.line.max(at),
+                "field_invalid",
+                "services",
+            ));
+            return Vec::new();
+        }
+    };
+    if items.len() > MAX_SERVICES {
+        problems.push(Problem::about(at, "too_many_services", job));
+        return Vec::new();
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(service) = read_service(item, problems) else {
+            continue;
+        };
+        // clone: the set owns its keys; the service itself goes to `out`
+        if seen.insert(service.name.clone()) {
+            out.push(service);
+        } else {
+            problems.push(Problem::about(item.line, "service_duplicate", service.name));
+        }
+    }
+    out
+}
+
+fn read_service(node: &Node, problems: &mut Vec<Problem>) -> Option<Service> {
+    let fields = match yaml::mapping(node, "field_invalid") {
+        Ok(f) => f,
+        Err(p) => {
+            problems.push(Problem::about(p.line, p.reason, "services"));
+            return None;
+        }
+    };
+    let before = problems.len();
+    let mut name = None;
+    let mut image = None;
+    let mut env = Vec::new();
+    let mut user = None;
+    let mut tmpfs = Vec::new();
+    // The subject of the service's other problems: its name when valid.
+    let label = fields
+        .iter()
+        .find(|f| f.key == "name")
+        .and_then(|f| match &f.value.kind {
+            Kind::Text(t) if is_service_name(t) => Some(t.as_str()),
+            Kind::Text(_) | Kind::Null | Kind::List(_) | Kind::Map(_) => None,
+        })
+        .unwrap_or("services");
+    for f in &fields {
+        let (line, value) = (f.line, f.value);
+        match f.key {
+            "name" => {
+                if let Some(s) = one_text(value, line, "name", problems) {
+                    if is_service_name(&s) {
+                        name = Some(s);
+                    } else {
+                        problems.push(Problem::about(line, "service_name_invalid", s));
+                    }
+                }
+            }
+            "image" => {
+                if let Some(s) = one_text(value, line, "image", problems) {
+                    if is_pinned_image(&s) {
+                        image = Some(s);
+                    } else {
+                        problems.push(Problem::about(line, "image_not_pinned", label));
+                    }
+                }
+            }
+            "env" => env = read_service_env(value, line, label, problems),
+            "user" => {
+                if let Some(s) = one_text(value, line, "user", problems) {
+                    if is_service_user(&s) {
+                        user = Some(s);
+                    } else {
+                        problems.push(Problem::about(line, "service_user_invalid", label));
+                    }
+                }
+            }
+            "tmpfs" => {
+                tmpfs = bounded_names(
+                    value,
+                    line,
+                    "tmpfs",
+                    MAX_SERVICE_TMPFS,
+                    "too_many_service_tmpfs",
+                    problems,
+                    |p| (!is_tmpfs_path(p)).then_some("service_tmpfs_invalid"),
+                );
+            }
+            other => problems.push(Problem::about(line, "key_unknown", other)),
+        }
+    }
+    if !fields.iter().any(|f| f.key == "name") {
+        problems.push(Problem::about(node.line, "field_missing", "name"));
+    }
+    if !fields.iter().any(|f| f.key == "image") {
+        problems.push(Problem::about(node.line, "field_missing", "image"));
+    }
+    if problems.len() != before {
+        return None;
+    }
+    Some(Service {
+        name: name?,
+        image: image?,
+        env,
+        user,
+        tmpfs,
+    })
+}
+
+/// A service's `env:` mapping. A bad key or value is reported with the
+/// service's name only: a value may be a pasted credential, never echoed.
+fn read_service_env(
+    node: &Node,
+    at: usize,
+    service: &str,
+    problems: &mut Vec<Problem>,
+) -> Vec<(String, String)> {
+    if matches!(node.kind, Kind::Null) {
+        return Vec::new();
+    }
+    let fields = match yaml::mapping(node, "field_invalid") {
+        Ok(f) => f,
+        Err(p) => {
+            problems.push(Problem::about(p.line.max(at), p.reason, "env"));
+            return Vec::new();
+        }
+    };
+    if fields.len() > MAX_SERVICE_ENV {
+        problems.push(Problem::about(at, "too_many_service_env", service));
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(fields.len());
+    for f in &fields {
+        let value = match &f.value.kind {
+            Kind::Text(t) => Some(t.as_str()),
+            Kind::Null => Some(""),
+            Kind::List(_) | Kind::Map(_) => None,
+        };
+        match value {
+            Some(v) if is_env_key(f.key) && is_env_value(v) => {
+                // clone: the tree is borrowed; the definition owns its text
+                out.push((f.key.to_owned(), v.to_owned()));
+            }
+            Some(_) | None => {
+                problems.push(Problem::about(f.line, "service_env_invalid", service));
+            }
+        }
+    }
+    out
 }
 
 fn read_script(
@@ -637,6 +856,66 @@ fn is_name(s: &str) -> bool {
             .next()
             .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "._-".contains(c))
+}
+
+/// Service names: `[a-z][a-z0-9-]{0,30}` (part of a container name).
+fn is_service_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    s.len() <= 31
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// A service's `user`: a user name `[a-z_][a-z0-9_-]{0,31}`, a numeric uid,
+/// or `uid:gid`.
+fn is_service_user(s: &str) -> bool {
+    let number = |n: &str| !n.is_empty() && n.len() <= 10 && n.chars().all(|c| c.is_ascii_digit());
+    let mut chars = s.chars();
+    let named = s.len() <= 32
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_-".contains(c));
+    named
+        || number(s)
+        || s.split_once(':')
+            .is_some_and(|(u, g)| number(u) && number(g))
+}
+
+/// An environment key: `[A-Za-z_][A-Za-z0-9_]*`, at most 63 bytes.
+fn is_env_key(s: &str) -> bool {
+    let mut chars = s.chars();
+    s.len() <= MAX_NAME
+        && chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// An environment value: at most 1024 bytes, no control character.
+fn is_env_value(s: &str) -> bool {
+    s.len() <= MAX_ENV_VALUE && !s.chars().any(char::is_control)
+}
+
+/// A writable tmpfs path of a service: absolute, `[A-Za-z0-9._-]`
+/// components, no `.` / `..`, not `/`, not `/tmp` (always mounted) and
+/// nothing under `/proc`, `/sys` or `/dev`.
+fn is_tmpfs_path(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix('/') else {
+        return false;
+    };
+    let first = rest.split('/').next().unwrap_or_default();
+    s.len() <= MAX_PATH
+        && !rest.is_empty()
+        && s != "/tmp"
+        && !["proc", "sys", "dev"].contains(&first)
+        && rest.split('/').all(|c| {
+            !c.is_empty()
+                && c != "."
+                && c != ".."
+                && c.chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || "._-".contains(ch))
+        })
 }
 
 /// Secret names: `[A-Z][A-Z0-9_]*`, at most 63 bytes.

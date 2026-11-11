@@ -6302,7 +6302,8 @@
                 "timeout_secs",
                 "tags",
                 "secrets",
-                "script_lines"
+                "script_lines",
+                "services"
               ],
               "type": "object"
             },
