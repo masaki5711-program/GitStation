@@ -10,8 +10,8 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { pipelineIdOfCheck } from '../src/api/pipelines';
-import { logText } from '../src/pages/repo/pipelines/JobLog';
-import { groupByStage } from '../src/pages/repo/pipelines/PipelineScreen';
+import { cleanPages, logText } from '../src/pages/repo/pipelines/JobLog';
+import { groupByStage } from '../src/pages/repo/pipelines/Stages';
 import { PROJECT, SESSION, apiError, mockServer, type Handler } from './mock';
 import { repoRoutes } from './repo-fixtures';
 import { json, renderApp } from './render';
@@ -236,26 +236,84 @@ describe('one pipeline', () => {
     expect(screen.queryByTestId('pipeline-actions')).toBeNull();
   });
 
-  it('running: Cancel only; pressing it shows the answer', async () => {
+  it('running: Cancel only, asked once more; busy while the request is out; then the answer', async () => {
     let status = 'running';
+    let answer: (r: Response) => void = () => undefined;
     const server = routes({
       [`GET ${API}/12`]: () => json(200, pipeline({ status, finished_at: null, jobs: [job({ status: 'running', finished_at: null })] })),
-      [`POST ${API}/12/cancel`]: () => {
-        status = 'canceled';
-        return json(200, pipeline({ status: 'canceled', jobs: [job({ status: 'canceled' })] }));
-      },
+      [`POST ${API}/12/cancel`]: () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
     });
     await renderApp({ fetch: server.fetch, path: `${BASE}/12` });
     const cancel = await screen.findByRole('button', { name: '取り消す' });
     expect(screen.queryByRole('button', { name: '再実行' })).toBeNull();
-    expect(screen.getByTestId('pipeline-status-line').textContent).toContain('実行中です');
+    const line = screen.getByTestId('pipeline-status-line').textContent;
+    expect(line).toContain('実行中です');
+    expect(line).toContain('止める場合は「取り消す」を押してください');
+    // The first press only asks; "keep running" goes back without a request.
     fireEvent.click(cancel);
+    const confirm = await screen.findByTestId('cancel-confirm');
+    expect(confirm.textContent).toContain('実行中のジョブを途中で止めます');
+    await waitFor(() => {
+      expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: '取り消しを確定' }));
+    });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'やめる' }));
+    expect(screen.queryByTestId('cancel-confirm')).toBeNull();
+    expect(server.to('POST', `${API}/12/cancel`)).toHaveLength(0);
+    // Confirmed: the button says it is working and the group is busy.
+    fireEvent.click(screen.getByRole('button', { name: '取り消す' }));
+    fireEvent.click(await screen.findByRole('button', { name: '取り消しを確定' }));
+    const busy = await screen.findByRole('button', { name: '取り消し中…' });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('pipeline-actions').getAttribute('aria-busy')).toBe('true');
+    status = 'canceled';
+    answer(json(200, pipeline({ status: 'canceled', jobs: [job({ status: 'canceled' })] })));
     await waitFor(() => {
       expect(screen.getByTestId('pipeline-status-line').textContent).toContain('取り消されました');
     });
     expect(server.to('POST', `${API}/12/cancel`)).toHaveLength(1);
     // A canceled one can be retried.
     expect(screen.getByRole('button', { name: '再実行' })).toBeTruthy();
+  });
+
+  it('pending: Cancel without asking', async () => {
+    const pending = () => json(200, pipeline({ status: 'pending', finished_at: null, jobs: [job({ status: 'created', started_at: null, finished_at: null })] }));
+    const server = routes({
+      [`GET ${API}/12`]: pending,
+      [`POST ${API}/12/cancel`]: () => json(200, pipeline({ status: 'canceled', jobs: [] })),
+    });
+    await renderApp({ fetch: server.fetch, path: `${BASE}/12` });
+    expect((await screen.findByTestId('pipeline-status-line')).textContent).toContain('「取り消す」を押してください');
+    fireEvent.click(await screen.findByRole('button', { name: '取り消す' }));
+    await waitFor(() => {
+      expect(server.to('POST', `${API}/12/cancel`)).toHaveLength(1);
+    });
+    expect(screen.queryByTestId('cancel-confirm')).toBeNull();
+  });
+
+  it('pending / running for a Reporter: no Cancel, and whom to ask', async () => {
+    const server = routes({
+      'GET /api/v1/projects/7': () => json(200, { ...PROJECT, role: 'reporter' }),
+      [`GET ${API}/12`]: () => json(200, pipeline({ status: 'running', finished_at: null, jobs: [] })),
+    });
+    await renderApp({ fetch: server.fetch, path: `${BASE}/12` });
+    const line = await screen.findByTestId('pipeline-status-line');
+    await waitFor(() => {
+      expect(line.textContent).toContain('Developer 以上のメンバーに依頼してください');
+    });
+    expect(screen.queryByRole('button', { name: '取り消す' })).toBeNull();
+  });
+
+  it('error: tells to give an administrator the pipeline number', async () => {
+    const server = routes({
+      [`GET ${API}/12`]: () => json(200, pipeline({ status: 'error', error_code: 'FG-CI-0002', jobs: [] })),
+    });
+    const { container } = await renderApp({ fetch: server.fetch, path: `${BASE}/12` });
+    const line = await screen.findByTestId('pipeline-status-line');
+    expect(line.textContent).toContain('管理者にパイプライン #12 を伝えて');
+    expect(container.textContent).not.toContain('FG-CI-0002');
   });
 
   it('a refused retry shows the user_message and request_id, never the code', async () => {
@@ -302,6 +360,7 @@ describe('one pipeline', () => {
     await renderApp({ fetch: server.fetch, path: `${BASE}/12` });
     const line = await screen.findByTestId('pipeline-status-line');
     expect(line.textContent).toContain('.forge-ci.yml に誤りがある');
+    expect(line.textContent).toContain('下に示す箇所の .forge-ci.yml を直して push してください');
     expect(screen.getByRole('link', { name: '4 行目' }).getAttribute('href')).toBe(
       `/acme/forge-web/-/blob/${SHA}/.forge-ci.yml#L4`,
     );
@@ -365,7 +424,64 @@ describe('job log', () => {
     expect(logText('abcdef', 3)).toEqual({ text: 'abc', cut: true });
     const esc = String.fromCharCode(27);
     expect(logText(`${esc}[31mred${esc}[0m ok`)).toEqual({ text: 'red ok', cut: false });
+    // A code cut at a page's end is carried to the next page, never shown.
+    expect(cleanPages([`a${esc}[3`, `1mb${esc}`, '[0mc']).texts).toEqual(['a', 'b', 'c']);
+    expect(cleanPages(['plain', ' text']).texts).toEqual(['plain', ' text']);
   });
+
+  it('opening a log (the link in the one line) moves the focus to its heading', async () => {
+    const server = routes({
+      [`GET ${API}/12`]: () => json(200, FAILED),
+      [`GET ${API}/12/diagnosis`]: () => json(200, DIAGNOSIS),
+      [`GET ${API}/12/jobs/101/log`]: () => json(200, logPage()),
+      [`GET ${API}/12/jobs/100/log`]: () => json(200, logPage({ job_id: 100, job: 'build', job_status: 'succeeded' })),
+    });
+    await renderApp({ fetch: server.fetch, path: `${BASE}/12` });
+    const line = await screen.findByTestId('pipeline-status-line');
+    fireEvent.click(within(line).getByRole('link', { name: '失敗したジョブ「unit」のログを見る' }));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'ジョブ「unit」のログ' }));
+    });
+    // Another job's log: the focus follows.
+    fireEvent.click(screen.getByRole('link', { name: 'ジョブ「build」のログ' }));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'ジョブ「build」のログ' }));
+    });
+  });
+
+  it(
+    'a running job: only the last page is read again, the earlier one is kept',
+    async () => {
+      let polls = 0;
+      const server = routes({
+        [`GET ${API}/12`]: () =>
+          json(200, pipeline({ status: 'running', finished_at: null, jobs: [job({ status: 'running', finished_at: null })] })),
+        [`GET ${API}/12/jobs/100/log`]: (c) => {
+          if (c.query.get('from') === null) {
+            return json(200, logPage({ job_id: 100, job: 'build', job_status: 'running', text: 'one\n', to: 255, next_from: 256, complete: false }));
+          }
+          polls += 1;
+          const text = polls === 1 ? 'two\n' : 'two\nthree\n';
+          return json(200, logPage({ job_id: 100, job: 'build', job_status: 'running', from: 256, to: 256, text, next_from: null, complete: false }));
+        },
+      });
+      await renderApp({ fetch: server.fetch, path: `${BASE}/12?job=100` });
+      // A running job follows on to the next page by itself.
+      await waitFor(() => {
+        expect(screen.getByTestId('job-log-text').textContent).toBe('one\ntwo\n');
+      });
+      await waitFor(
+        () => {
+          expect(screen.getByTestId('job-log-text').textContent).toBe('one\ntwo\nthree\n');
+        },
+        { timeout: 6000 },
+      );
+      const asked = server.to('GET', `${API}/12/jobs/100/log`);
+      expect(asked.filter((c) => c.query.get('from') === null)).toHaveLength(1);
+      expect(asked.filter((c) => c.query.get('from') === '256').length).toBeGreaterThanOrEqual(2);
+    },
+    15000,
+  );
 
   it('a long log on screen carries the truncation note', async () => {
     const server = routes({

@@ -68,7 +68,7 @@
   margin: 0 0 var(--gs-space-4);
   padding: var(--gs-space-3);
   border: 1px solid var(--gs-color-border);
-  border-left: 4px solid var(--gs-color-border);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-border);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-surface);
 }
@@ -81,6 +81,12 @@
   border-left-color: var(--gs-color-danger-border);
   background: var(--gs-color-danger-surface);
   color: var(--gs-color-danger-text);
+}
+
+.statusRunning {
+  border-left-color: var(--gs-color-info-text);
+  background: var(--gs-color-info-surface);
+  color: var(--gs-color-info-text);
 }
 
 .statusDone {
@@ -123,7 +129,7 @@
 
 /* Log text: monospace, whitespace kept, long lines wrap; never HTML. */
 .log {
-  max-height: 32rem;
+  max-height: var(--gs-log-max-height);
   margin: 0 0 var(--gs-space-3);
   padding: var(--gs-space-3);
   overflow: auto;
@@ -155,4 +161,84 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* The status badge (PipelineBadge): a word, a glyph and a colour. */
+.badge {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-bold);
+  white-space: nowrap;
+}
+
+.badge::before {
+  margin-right: var(--gs-space-1);
+}
+
+.badgeSuccess {
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.badgeSuccess::before {
+  content: "\2713";
+}
+
+.badgeFailed {
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.badgeFailed::before {
+  content: "\2715";
+}
+
+.badgeRunning {
+  background: var(--gs-color-info-surface);
+  color: var(--gs-color-info-text);
+}
+
+.badgeRunning::before {
+  content: "\25B6";
+}
+
+.badgePending {
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text-muted);
+}
+
+.badgePending::before {
+  content: "\25F7";
+}
+
+.badgeNeutral {
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text-muted);
+}
+
+.badgeNeutral::before {
+  content: "\2298";
+}
+
+/* The separator before a problem subject (no literal in the markup). */
+.subject::before {
+  content: "\00B7\00A0";
+  margin-left: var(--gs-space-1);
+}
+
+.confirm {
+  margin: var(--gs-space-3) 0 0;
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: var(--gs-accent-border-width) solid var(--gs-brand-orange);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.confirm p {
+  margin: 0;
 }

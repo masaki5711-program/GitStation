@@ -2113,6 +2113,24 @@
     "word": "tree"
   },
   {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/webhooks/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "webhooks"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/webhooks/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "webhooks"
+  },
+  {
     "action": "UserCreate",
     "planned": true
   },

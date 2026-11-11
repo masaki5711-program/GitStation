@@ -2,7 +2,8 @@
 // diagnosis, a job's log, cancel and retry. Keys start with
 // ['pipelines', projectId] so one invalidation reaches everything of a
 // project. Reads poll only while something is still moving.
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 
 import { call } from './client';
 import { useApi } from './context';
@@ -29,7 +30,8 @@ export const pipelineKeys = {
     ['pipelines', project, 'list', before ?? null] as const,
   one: (project: number, id: number) => ['pipelines', project, id, 'one'] as const,
   diagnosis: (project: number, id: number) => ['pipelines', project, id, 'diagnosis'] as const,
-  log: (project: number, id: number, job: number) => ['pipelines', project, id, 'log', job] as const,
+  log: (project: number, id: number, job: number, from: number) =>
+    ['pipelines', project, id, 'log', job, from] as const,
 };
 
 /** A pipeline or job id from the address: a positive decimal without a
@@ -121,33 +123,47 @@ export function useDiagnosis(project: number, id: number, enabled: boolean) {
   });
 }
 
-/** A job's log (its current attempt), page by page (`next_from`). While the
- * job runs and nothing is stored after the last page, the pages are read
- * again; at most [`LOG_MAX_PAGES`] are held. */
+/** A job's log (its current attempt), page by page (`next_from`). Only the
+ * last page is asked for: the pages before it are over and kept as they
+ * are (appended). While the job runs and nothing is stored after the last
+ * page, that page alone is read again; when it fills up (`next_from`) the
+ * view moves on by itself. At most [`LOG_MAX_PAGES`] are held. */
 export function useJobLog(project: number, id: number, job: number) {
   const api = useApi();
-  return useInfiniteQuery({
-    queryKey: pipelineKeys.log(project, id, job),
-    initialPageParam: 0,
-    queryFn: ({ signal, pageParam }) =>
+  /** The pages before the last one (each has a `next_from`). */
+  const [done, setDone] = useState<JobLogPage[]>([]);
+  const from = done[done.length - 1]?.next_from ?? 0;
+  const tail = useQuery({
+    queryKey: pipelineKeys.log(project, id, job, from),
+    queryFn: ({ signal }) =>
       call(() =>
         api.GET('/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log', {
           signal,
           params: {
             path: { id: project, pipeline_id: id, job_id: job },
-            query: pageParam === 0 ? {} : { from: pageParam },
+            query: from === 0 ? {} : { from },
           },
         }),
       ),
-    getNextPageParam: (last, pages) =>
-      last.next_from === null || pages.length >= LOG_MAX_PAGES ? undefined : last.next_from,
     refetchInterval: (q) => {
-      const pages = q.state.data?.pages;
-      const last = pages?.[pages.length - 1];
+      const last = q.state.data;
       if (last === undefined || last.complete || last.next_from !== null) return false;
       return isJobMoving(last.job_status) ? PIPELINE_POLL_MS : false;
     },
   });
+  const last = tail.data;
+  const room = done.length + 1 < LOG_MAX_PAGES;
+  const hasMore = last !== undefined && last.next_from !== null && room;
+  const capped = last !== undefined && last.next_from !== null && !room;
+  const more = () => {
+    if (last !== undefined && hasMore) setDone((d) => [...d, last]);
+  };
+  // A running job's full page: follow on to the next one by itself.
+  const follow = hasMore && isJobMoving(last.job_status);
+  useEffect(() => {
+    if (follow) setDone((d) => (d.includes(last) ? d : [...d, last]));
+  }, [follow, last]);
+  return { done, tail, hasMore, capped, more };
 }
 
 function usePipelineAction(project: number, id: number, action: 'cancel' | 'retry') {

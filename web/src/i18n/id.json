@@ -1273,8 +1273,6 @@
       "seconds": "{{s}} dtk"
     },
     "line": {
-      "pending": "Menunggu dimulai. Akan berjalan saat runner tersedia.",
-      "running": "Sedang berjalan. Hasilnya akan muncul di halaman ini.",
       "succeeded": "Semua job berhasil.",
       "skipped": "Tidak ada job yang perlu dijalankan untuk commit ini.",
       "failed": "Berhenti karena ada job yang gagal. Periksa penyebab dan log, lalu push perbaikan.",
@@ -1283,8 +1281,12 @@
       "failedJobRetry": "Berhenti karena job \"{{job}}\" gagal. Periksa penyebabnya, lalu push perbaikan atau tekan \"Jalankan ulang\".",
       "canceled": "Dibatalkan.",
       "canceledRetry": "Dibatalkan. Tekan \"Jalankan ulang\" untuk menjalankan lagi job yang gagal dan dibatalkan.",
-      "invalid": "Tidak dijalankan: .forge-ci.yml berisi kesalahan. Perbaiki bagian di bawah lalu push.",
-      "error": "Tidak dijalankan: .forge-ci.yml tidak dapat dibaca. Push lagi; jika terus terjadi, hubungi administrator."
+      "invalid": "Tidak dijalankan: .forge-ci.yml berisi kesalahan. Perbaiki .forge-ci.yml di bagian yang ditunjukkan di bawah lalu push.",
+      "error": "Tidak dijalankan: .forge-ci.yml tidak dapat dibaca. Beri tahu administrator pipeline #{{id}} agar diperiksa.",
+      "pendingOperate": "Menunggu dimulai. Akan berjalan saat runner tersedia. Untuk menghentikannya, tekan \"Batalkan\".",
+      "pendingAsk": "Menunggu dimulai. Akan berjalan saat runner tersedia. Jika perlu dihentikan, minta Developer atau lebih tinggi di proyek ini.",
+      "runningOperate": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Untuk menghentikannya, tekan \"Batalkan\".",
+      "runningAsk": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Jika perlu dihentikan, minta Developer atau lebih tinggi di proyek ini."
     },
     "problems": {
       "title": "Kesalahan di .forge-ci.yml",
@@ -1300,7 +1302,8 @@
       "seenSince": "Kegagalan yang sama terjadi {{count}} kali di proyek ini (pertama {{date}}).",
       "knownFixes": "Kegagalan yang sama diperbaiki oleh:",
       "fix": "!{{iid}} {{title}}",
-      "openLog": "Lihat log job \"{{job}}\""
+      "openLog": "Lihat log job \"{{job}}\"",
+      "excerpt": "Baris gagal job \"{{job}}\""
     },
     "jobs": {
       "title": "Job",
@@ -1320,6 +1323,12 @@
       "live": "Sedang berjalan: diperbarui setiap beberapa detik.",
       "more": "Muat lagi",
       "noSuchJob": "Pipeline ini tidak memiliki job tersebut."
-    }
+    },
+    "canceling": "Membatalkan…",
+    "retrying": "Menjalankan ulang…",
+    "cancelConfirm": "Ini menghentikan job yang sedang berjalan. Batalkan pipeline?",
+    "cancelYes": "Ya, batalkan",
+    "cancelNo": "Biarkan berjalan",
+    "span": "{{from}} – {{to}}"
   }
 }

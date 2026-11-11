@@ -7,18 +7,17 @@ import { Link, useSearchParams } from 'react-router';
 import { branchOf, parseId, usePipelines, type Pipeline } from '../../../api/pipelines';
 import { Loading } from '../../../components/Loading';
 import { formatDateTime, formatRelative } from '../../../features/labels';
-import { StateBadge } from '../../../features/mr/StateBadge';
 import {
   formatDuration,
+  formatSpan,
   pipelineSourceLabel,
-  pipelineStatusLabel,
-  pipelineTone,
   triggeredByLabel,
 } from '../../../features/pipelineLabels';
 import { commitUrl, encodePath, pipelineUrl, pipelinesUrl } from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { useSession } from '../../../session/session';
 import { RepoError } from '../common';
+import { PipelineBadge } from './PipelineBadge';
 import repo from '../Repo.module.css';
 import styles from './Pipelines.module.css';
 
@@ -88,7 +87,7 @@ function PipelineList({ project, items }: { project: string; items: Pipeline[] }
         return (
           <li key={p.id} className={styles.item}>
             <span className={styles.itemMain}>
-              <StateBadge tone={pipelineTone(p.status)}>{pipelineStatusLabel(t, p.status)}</StateBadge>
+              <PipelineBadge status={p.status} />
               <Link to={pipelineUrl(project, p.id)} className={styles.number}>
                 {t('pipelines.number', { id: p.id })}
               </Link>
@@ -104,7 +103,12 @@ function PipelineList({ project, items }: { project: string; items: Pipeline[] }
               <span>{pipelineSourceLabel(t, p.source)}</span>
               <span>{triggeredByLabel(t, p.triggered_by, me)}</span>
               {duration !== null && (
-                <span className={styles.numeric}>{t('pipelines.took', { duration })}</span>
+                <span
+                  className={styles.numeric}
+                  title={formatSpan(t, p.created_at, p.finished_at, i18n.language) ?? undefined}
+                >
+                  {t('pipelines.took', { duration })}
+                </span>
               )}
               <time dateTime={p.created_at} title={formatDateTime(p.created_at, i18n.language)}>
                 {formatRelative(p.created_at, i18n.language)}

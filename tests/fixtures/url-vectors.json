@@ -337,6 +337,20 @@
       }
     },
     {
+      "name": "route word webhooks",
+      "path": "/g/p/-/webhooks/3/deliveries",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "webhooks",
+        "rest": [
+          "3",
+          "deliveries"
+        ]
+      }
+    },
+    {
       "name": "ref and file keep their case",
       "path": "/acme/x/-/blob/Main/ReadMe.MD",
       "form": "both",

@@ -1273,8 +1273,6 @@
       "seconds": "{{s}} s"
     },
     "line": {
-      "pending": "Waiting to start. It starts when a runner is free.",
-      "running": "Running. The result will appear on this page.",
       "succeeded": "All jobs succeeded.",
       "skipped": "No job had to run for this commit.",
       "failed": "Stopped because a job failed. Check the cause and the log, then push a fix.",
@@ -1283,8 +1281,12 @@
       "failedJobRetry": "Stopped because the job \"{{job}}\" failed. Check the cause, then push a fix or press \"Retry\".",
       "canceled": "Canceled.",
       "canceledRetry": "Canceled. Press \"Retry\" to run the failed and canceled jobs again.",
-      "invalid": "Not run: .forge-ci.yml has mistakes. Fix the places below and push.",
-      "error": "Not run: .forge-ci.yml could not be read. Push again; if it keeps happening, contact an administrator."
+      "invalid": "Not run: .forge-ci.yml has mistakes. Fix .forge-ci.yml where shown below and push.",
+      "error": "Not run: .forge-ci.yml could not be read. Tell an administrator pipeline #{{id}} so they can look into it.",
+      "pendingOperate": "Waiting to start. It starts when a runner is free. To stop it, press \"Cancel\".",
+      "pendingAsk": "Waiting to start. It starts when a runner is free. If it must be stopped, ask a Developer or above of this project.",
+      "runningOperate": "Running. The result will appear on this page. To stop it, press \"Cancel\".",
+      "runningAsk": "Running. The result will appear on this page. If it must be stopped, ask a Developer or above of this project."
     },
     "problems": {
       "title": "Mistakes in .forge-ci.yml",
@@ -1300,7 +1302,8 @@
       "seenSince": "The same failure happened {{count}} times in this project (first {{date}}).",
       "knownFixes": "The same failure was fixed by:",
       "fix": "!{{iid}} {{title}}",
-      "openLog": "See the log of the job \"{{job}}\""
+      "openLog": "See the log of the job \"{{job}}\"",
+      "excerpt": "Failing lines of the job \"{{job}}\""
     },
     "jobs": {
       "title": "Jobs",
@@ -1320,6 +1323,12 @@
       "live": "Running: refreshed every few seconds.",
       "more": "Load more",
       "noSuchJob": "This pipeline has no such job."
-    }
+    },
+    "canceling": "Canceling…",
+    "retrying": "Retrying…",
+    "cancelConfirm": "This stops the running jobs midway. Cancel the pipeline?",
+    "cancelYes": "Cancel it",
+    "cancelNo": "Keep running",
+    "span": "{{from}} – {{to}}"
   }
 }

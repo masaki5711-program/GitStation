@@ -2,7 +2,7 @@
 // gate reads them). An unknown value is shown as it is.
 import type { TFunction } from 'i18next';
 
-import type { BadgeTone } from './mr/StateBadge';
+import { formatDateTime } from './labels';
 
 export function pipelineStatusLabel(t: TFunction, status: string): string {
   switch (status) {
@@ -26,24 +26,6 @@ export function pipelineStatusLabel(t: TFunction, status: string): string {
       return t('pipelines.status.created');
     default:
       return status;
-  }
-}
-
-/** A pipeline's or job's status as the shared badge: the word is always
- * there, the colour only repeats it. */
-export function pipelineTone(status: string): BadgeTone {
-  switch (status) {
-    case 'succeeded':
-      return 'open';
-    case 'failed':
-    case 'invalid':
-    case 'error':
-      return 'unresolved';
-    case 'canceled':
-    case 'skipped':
-      return 'closed';
-    default:
-      return 'draft';
   }
 }
 
@@ -81,4 +63,10 @@ export function formatDuration(t: TFunction, from: string | null, to: string | n
   if (h > 0) return t('pipelines.duration.hours', { h, m });
   if (m > 0) return t('pipelines.duration.minutes', { m, s });
   return t('pipelines.duration.seconds', { s });
+}
+
+/** `from` – `to` as moments (a duration's title); null when either is missing. */
+export function formatSpan(t: TFunction, from: string | null, to: string | null, language: string): string | null {
+  if (from === null || to === null) return null;
+  return t('pipelines.span', { from: formatDateTime(from, language), to: formatDateTime(to, language) });
 }

@@ -53,6 +53,8 @@
   --gs-color-warning-surface: #fff4e0;
   --gs-color-success-text: #1f6b3a;
   --gs-color-success-surface: #e8f6ee;
+  --gs-color-info-text: #0a4f9e;
+  --gs-color-info-surface: #e8f0fb;
 
   /* Header */
   --gs-header-background: #1b2a44;
@@ -92,4 +94,6 @@
   --gs-sidebar-width: 14rem;
   --gs-aside-width: 16rem; /* a page's side panel (project info) */
   --gs-content-max-width: 72rem;
+  --gs-log-max-height: 32rem; /* a log or excerpt box before it scrolls */
+  --gs-accent-border-width: 4px; /* the coloured edge of a status line */
 }

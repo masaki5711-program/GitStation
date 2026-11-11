@@ -67,6 +67,9 @@ pub enum RouteWord {
     /// A project's CI pipelines (`/-/pipelines`, `/-/pipelines/{id}`;
     /// plan 14 M4, ADR-0029).
     Pipelines,
+    /// A project's webhooks (`/-/webhooks`, `/-/webhooks/{id}/deliveries`;
+    /// M3 I2, ADR-0016 §8).
+    Webhooks,
 }
 
 impl RouteWord {
@@ -88,6 +91,7 @@ impl RouteWord {
         Self::Pull,
         Self::Documents,
         Self::Pipelines,
+        Self::Webhooks,
     ];
 
     /// The URL word (also the log / manifest form).
@@ -109,6 +113,7 @@ impl RouteWord {
             Self::Pull => "pull",
             Self::Documents => "documents",
             Self::Pipelines => "pipelines",
+            Self::Webhooks => "webhooks",
         }
     }
 
