@@ -1,0 +1,9 @@
+# TEST ONLY (ops/runner/README.md): plain HTTP to the forge. Never copy to production.
+# Copy to ops/runner/.local/config.toml (test environment on this machine).
+server = "http://host.docker.internal:28080"
+allow_insecure_http = true            # test only: the test GitStation has no TLS
+token_file = "/etc/forge-runner/token"
+work_dir = "/var/lib/forge-runner"    # a size-capped tmpfs in compose.yml
+image_registries = ["registry:5000/"]
+memory = "2g"
+work_dir_max_bytes = 3221225472       # 3 GiB, below the 4 GiB tmpfs

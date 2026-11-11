@@ -5,7 +5,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)] // tests may fail loudly
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -241,10 +241,18 @@ struct Forge {
     logs: Mutex<Vec<String>>,
     completed: Mutex<Vec<(i64, JobResult, Option<i32>)>>,
     claims: Mutex<Vec<ClaimedJob>>,
+    /// The forge cannot be reached: every claim fails as the client reports it.
+    unreachable: AtomicBool,
 }
 
 impl RunnerApi for Forge {
     fn request_job(&self, _: u64) -> Result<Option<ClaimedJob>, ClientError> {
+        if self.unreachable.load(Ordering::SeqCst) {
+            return Err(ClientError::local(
+                ErrorCode::CliServerUnreachable,
+                "reason=connect",
+            ));
+        }
         Ok(self.claims.lock().unwrap().pop())
     }
     fn heartbeat(&self, _: i64, _: i32) -> Result<Beat, ClientError> {
@@ -547,6 +555,32 @@ fn a_failed_fetch_is_job_fetch_failed() {
         .all(|(_, v)| !v.contains("fgj_7_secret")));
     assert!(fake.by("podman", "create").is_empty());
     assert!(s.exec.workspace.is_clean());
+}
+
+/// A claim that cannot reach the forge keeps the client's diagnosis class in
+/// the error the loop logs (`forge.runner.claim_failed`).
+#[test]
+fn an_unreachable_forge_keeps_the_reason_in_the_claim_error() {
+    let def = definition("make");
+    let fake = Fake::new(&def, Podman::Exit(0));
+    let s = setup(&fake);
+    let forge = Arc::new(Forge::default());
+    forge.unreachable.store(true, Ordering::SeqCst);
+    let runner = Runner {
+        api: Arc::clone(&forge) as Arc<dyn RunnerApi>,
+        exec: s.exec,
+        heartbeat_every: Duration::from_millis(50),
+        shutdown: Arc::new(AtomicBool::new(false)),
+    };
+    let Err(e) = runner.run_once(0) else {
+        panic!("an unreachable forge is an error");
+    };
+    assert_eq!(e.code(), ErrorCode::CliServerUnreachable);
+    assert!(e
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "detail" && v == "reason=connect"));
+    assert!(forge.completed.lock().unwrap().is_empty());
 }
 
 /// The loop: a claimed job is run and its result reported.

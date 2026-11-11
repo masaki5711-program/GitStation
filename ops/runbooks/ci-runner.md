@@ -126,6 +126,8 @@ FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podma
 `FORGE_RUNNER_TEST_IMAGE=<image@sha256:…> cargo nextest run -p forge-runner --run-ignored only`
 （`a_real_container_runs_without_network_and_is_removed`）。
 
+**試験環境**では、Runner を Docker の上のコンテナとして動かせる（`ops/runner/README.md`。本番では使わない: seccomp を外し、ジョブごとのメモリとプロセス数の上限が効かず、外側のコンテナの上限だけになる）。
+
 ## Mitigate（変更は人の承認のあと）
 
 - Runner のプロセスを起こす・ホストを直す（`systemctl restart forge-runner`）。回収されたジョブは自動でやり直される（新しい `attempt`）。
