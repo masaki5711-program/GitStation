@@ -2455,6 +2455,16 @@ impl forge_core::CheckResultsSource for SpySource {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async { Ok(forge_core::CheckRunsOnHead::default()) })
     }
+
+    fn merge_runs_on<'a>(
+        &'a self,
+        _project: ProjectId,
+        _mr: forge_core::MergeRequestId,
+        _head: &'a forge_core::ObjectId,
+    ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::MergeCheckRuns> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(forge_core::MergeCheckRuns::default()) })
+    }
 }
 
 /// Review fix 2 (HIGH): the merge request and the merge job read the runs
@@ -2505,6 +2515,17 @@ impl forge_core::CheckResultsSource for FailingSource {
         _project: ProjectId,
         _head: &'a forge_core::ObjectId,
     ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::CheckRunsOnHead> {
+        Box::pin(async {
+            Err(ForgeError::new(ErrorCode::DbQueryFailed).with_context("query", "checks.runs_read"))
+        })
+    }
+
+    fn merge_runs_on<'a>(
+        &'a self,
+        _project: ProjectId,
+        _mr: forge_core::MergeRequestId,
+        _head: &'a forge_core::ObjectId,
+    ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::MergeCheckRuns> {
         Box::pin(async {
             Err(ForgeError::new(ErrorCode::DbQueryFailed).with_context("query", "checks.runs_read"))
         })
@@ -2779,5 +2800,514 @@ async fn the_merge_job_decides_the_work_item_link_again() {
     assert_eq!(report.outcome, "superseded");
     assert_eq!(report.error_code, Some(ErrorCode::MergeBlocked));
     assert_eq!(w.tip("main"), w.base);
+    w.t.drop_now().await;
+}
+
+// ── M4 C7: merge results and the freshness of required checks ──────────
+
+impl World {
+    /// A run of a name forge's worker reports (`ci/pipeline`): no reporter.
+    async fn system_run(&self, sha: &str, name: &str, conclusion: &str) {
+        self.t
+            .commit_audited(
+                ("project", self.project.get()),
+                &[format!(
+                    "INSERT INTO forge.check_runs (project_id, head_sha, name, status, \
+                     conclusion, completed_at, request_id) VALUES ({p}, '{sha}', '{name}', \
+                     'completed', '{conclusion}', now(), 'req-ci') \
+                     ON CONFLICT (project_id, head_sha, name) DO UPDATE SET \
+                     conclusion = EXCLUDED.conclusion, revision = forge.check_runs.revision + 1",
+                    p = self.project.get(),
+                )],
+            )
+            .await;
+    }
+
+    /// `refs/merge-requests/<iid>/merge` in the bare repository (`None`:
+    /// absent).
+    fn merge_ref(&self) -> Option<String> {
+        let name = format!("refs/merge-requests/{}/merge", self.mr.iid);
+        let out = plumb(
+            &self.path,
+            &["for-each-ref", "--format=%(objectname)", &name],
+            None,
+        );
+        (!out.is_empty()).then_some(out)
+    }
+
+    /// `main` advances by one commit holding `files` (an update-ref, as a
+    /// push would), and the mergeability job runs for the new pair.
+    async fn advance_main(&self, files: &[(&str, &str)]) -> String {
+        let next = commit(&self.path, files, Some(&self.tip("main")));
+        plumb(&self.path, &["update-ref", "refs/heads/main", &next], None);
+        self.browser.invalidate(self.repo);
+        let report = self.check_again().await;
+        assert_eq!(report.outcome, "checked");
+        next
+    }
+
+    /// One more mergeability request and run, as the worker does; its
+    /// report.
+    async fn check_again(&self) -> forge_review::CheckReport {
+        let seq = request_check(
+            &self.t.db,
+            self.mr.id,
+            RequestId::parse("req-q").expect("id"),
+        )
+        .await
+        .expect("request")
+        .expect("open");
+        let report = check(
+            &self.t.db,
+            &Mergeability::new(self.git.clone(), self.storage.clone()),
+            MergeabilityRequest {
+                merge_request: self.mr.id,
+                check_seq: seq,
+            },
+            &RequestId::parse("req-check-again").expect("id"),
+        )
+        .await
+        .expect("check");
+        self.browser.invalidate(self.repo);
+        report
+    }
+
+    /// The `ci.pipeline_create` jobs of the merge request: their commits.
+    async fn mr_pipeline_shas(&self) -> Vec<String> {
+        let rows = self
+            .t
+            .json_rows(
+                "SELECT payload FROM forge.jobs WHERE kind = 'ci.pipeline_create' ORDER BY id",
+            )
+            .await;
+        rows.iter()
+            .map(|r| &r["payload"])
+            .filter(|p| p["merge_request_id"].as_i64() == Some(self.mr.id.get()))
+            .map(|p| p["sha"].as_str().expect("sha").to_owned())
+            .collect()
+    }
+}
+
+/// M4 C7 (plan 04 M-1 / M-2, FG-CI-0013): the mergeability job writes the
+/// merge result (parents: the target tip, then the head) and its hidden
+/// ref, and the merge request pipeline runs on it; `ci/pipeline` reported
+/// there clears the merge. The target advances: a new merge result, the
+/// old run is stale and the merge on the protected branch is refused with
+/// FG-CI-0013; a run on the new merge result makes it mergeable again and
+/// the merge lands.
+#[tokio::test]
+async fn a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &["ci/pipeline"], false, false)
+        .await;
+    let first = w.status().await;
+    let r1 = first
+        .merge_result_sha
+        .clone()
+        .expect("merge result")
+        .as_str()
+        .to_owned();
+    assert_eq!(w.merge_ref().as_deref(), Some(r1.as_str()));
+    assert_eq!(
+        plumb(
+            &w.path,
+            &["rev-parse", &format!("{r1}^1"), &format!("{r1}^2")],
+            None
+        ),
+        format!("{}\n{}", w.base, w.head),
+        "the merge result's parents are the target tip, then the head"
+    );
+    assert_eq!(
+        w.mr_pipeline_shas().await,
+        std::slice::from_ref(&r1),
+        "the MR pipeline runs on the merge result"
+    );
+    assert_eq!(World::reason_names(&first), ["required_check_missing"]);
+    w.system_run(&r1, "ci/pipeline", "success").await;
+    assert!(w.status().await.mergeable);
+
+    // The target advances (no conflict): a new merge result, a new pipeline.
+    let tip = w
+        .advance_main(&[("README.md", "base\n"), ("other.txt", "o\n")])
+        .await;
+    let status = w.status().await;
+    let r2 = status
+        .merge_result_sha
+        .clone()
+        .expect("new merge result")
+        .as_str()
+        .to_owned();
+    assert_ne!(r2, r1);
+    assert_eq!(w.merge_ref().as_deref(), Some(r2.as_str()));
+    assert_eq!(
+        plumb(&w.path, &["rev-parse", &format!("{r2}^1")], None),
+        tip
+    );
+    assert_eq!(w.mr_pipeline_shas().await, [r1.clone(), r2.clone()]);
+    assert_eq!(World::reason_names(&status), ["required_check_stale"]);
+    assert!(status.checks[0].stale);
+    assert_eq!(
+        status.reasons[0].detail().as_deref(),
+        Some("name=ci/pipeline")
+    );
+    let refused = w.ask().await.expect_err("stale");
+    assert_eq!(refused.code(), ErrorCode::RequiredCheckStale);
+    assert_eq!(reasons(&refused), "required_check_stale");
+
+    // The pipeline on the new merge result reports: mergeable, and it lands.
+    w.system_run(&r2, "ci/pipeline", "success").await;
+    let status = w.status().await;
+    assert!(status.mergeable, "{:?}", status.reasons);
+    assert!(!status.checks[0].stale);
+    let attempt = w.ask().await.expect("queued");
+    assert_eq!(
+        w.merger.execute(attempt.id).await.expect("merge").outcome,
+        "applied"
+    );
+    w.t.drop_now().await;
+}
+
+/// M4 C7: the merge job decides freshness again under its lock — the
+/// target advancing after the request supersedes the attempt with
+/// FG-CI-0013 and no ref moves.
+#[tokio::test]
+async fn the_merge_job_refuses_a_check_that_went_stale_after_the_request() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &["ci/pipeline"], false, false)
+        .await;
+    let r1 = w.status().await.merge_result_sha.expect("merge result");
+    w.system_run(r1.as_str(), "ci/pipeline", "success").await;
+    let attempt = w.ask().await.expect("queued");
+    let tip = w
+        .advance_main(&[("README.md", "base\n"), ("other.txt", "o\n")])
+        .await;
+    let report = w.merger.execute(attempt.id).await.expect("job");
+    assert_eq!(report.outcome, "superseded");
+    assert_eq!(report.error_code, Some(ErrorCode::RequiredCheckStale));
+    assert_eq!(w.tip("main"), tip);
+    w.t.drop_now().await;
+}
+
+/// M4 C7: a push pipeline's `ci/pipeline` on the head never satisfies the
+/// required `ci/pipeline` (it is the merge result's); a head-reported name
+/// (`ci/gates`) still counts on the head.
+#[tokio::test]
+async fn a_head_run_of_ci_pipeline_does_not_count() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &["ci/pipeline", "ci/gates"], false, false)
+        .await;
+    w.system_run(&w.head, "ci/pipeline", "success").await;
+    w.run(&w.head, "ci/gates", "completed", Some("success"))
+        .await;
+    let status = w.status().await;
+    assert_eq!(World::reason_names(&status), ["required_check_missing"]);
+    assert_eq!(
+        status.reasons[0].detail().as_deref(),
+        Some("name=ci/pipeline")
+    );
+    w.t.drop_now().await;
+}
+
+/// M4 C7: a conflict leaves no merge result — the ref is deleted, the
+/// status has no `merge_result_sha`, no pipeline is asked for — and the
+/// reason is the existing `conflict`.
+#[tokio::test]
+async fn a_conflict_leaves_no_merge_ref() {
+    let w = world(&[("README.md", "base\n")], &[("README.md", "head\n")]).await;
+    assert!(w.merge_ref().is_some(), "clean at first");
+    assert_eq!(w.mr_pipeline_shas().await.len(), 1);
+    let next = commit(&w.path, &[("README.md", "main\n")], Some(&w.base));
+    plumb(&w.path, &["update-ref", "refs/heads/main", &next], None);
+    w.browser.invalidate(w.repo);
+    let report = w.check_again().await;
+    assert_eq!(report.reason, Some(forge_core::CheckReason::Conflict));
+    assert!(matches!(
+        report.merge_ref,
+        Some(forge_git::merge_result::MergeRefChange::Deleted { .. })
+    ));
+    assert_eq!(report.merge_result, None);
+    assert_eq!(w.merge_ref(), None);
+    let status = w.status().await;
+    assert_eq!(status.merge_result_sha, None);
+    assert!(World::reason_names(&status).contains(&"conflict"));
+    assert_eq!(
+        w.mr_pipeline_shas().await.len(),
+        1,
+        "no pipeline for a conflict"
+    );
+    // Still a conflict on the next check: nothing to delete.
+    let again = w.check_again().await;
+    assert_eq!(
+        again.merge_ref,
+        Some(forge_git::merge_result::MergeRefChange::Unchanged)
+    );
+    w.t.drop_now().await;
+}
+
+/// M4 C7: a second check of the same (head, target) pair reuses the stored
+/// merge result — no second commit, no second row, no second pipeline.
+#[tokio::test]
+async fn a_merge_result_is_written_once_per_pair() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let first = w.merge_ref().expect("merge ref");
+    let again = w.check_again().await;
+    assert_eq!(
+        again.merge_result.as_ref().map(ObjectId::as_str),
+        Some(first.as_str())
+    );
+    assert_eq!(
+        again.merge_ref,
+        Some(forge_git::merge_result::MergeRefChange::Unchanged)
+    );
+    let rows = forge_db::review::merge_results(&w.t.db, w.mr.id)
+        .await
+        .expect("rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].result.as_str(), first);
+    assert_eq!(w.mr_pipeline_shas().await, [first]);
+    w.t.drop_now().await;
+}
+
+/// Review MEDIUM (M4 C7): "still the latest" and the merge ref's write are
+/// one step under the merge request's refs lock. A run that waits for the
+/// lock while a newer request is made never moves the ref back to its
+/// older pair; the newer run moves it.
+#[tokio::test]
+async fn a_run_superseded_while_it_waits_for_the_refs_lock_leaves_the_merge_ref() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let r1 = w.merge_ref().expect("merge ref");
+    let next = commit(
+        &w.path,
+        &[("README.md", "base\n"), ("other.txt", "o\n")],
+        Some(&w.base),
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/main", &next], None);
+    w.browser.invalidate(w.repo);
+    let seq_a = request_check(&w.t.db, w.mr.id, RequestId::parse("req-a").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
+    let held = forge_db::review::lock_version_refs(&w.t.db, w.mr.id)
+        .await
+        .expect("lock");
+    let run_a = {
+        let db = w.t.db.clone();
+        let checker = Mergeability::new(w.git.clone(), w.storage.clone());
+        let mr = w.mr.id;
+        tokio::spawn(async move {
+            check(
+                &db,
+                &checker,
+                MergeabilityRequest {
+                    merge_request: mr,
+                    check_seq: seq_a,
+                },
+                &RequestId::parse("req-run-a").expect("id"),
+            )
+            .await
+        })
+    };
+    w.t.until_waiting("merge_request_refs:").await;
+    // A newer request while run A waits (its status is already stored).
+    let _seq_b = request_check(&w.t.db, w.mr.id, RequestId::parse("req-b").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
+    held.release().await;
+    let a = run_a.await.expect("join").expect("check");
+    assert_eq!(a.outcome, "checked");
+    assert_eq!(a.merge_ref, None, "a superseded run never moves the ref");
+    assert_eq!(w.merge_ref().as_deref(), Some(r1.as_str()));
+    // The newer run owns the ref.
+    let b = w.check_again().await;
+    let r2 = b.merge_result.expect("merge result");
+    assert_ne!(r2.as_str(), r1);
+    assert_eq!(w.merge_ref().as_deref(), Some(r2.as_str()));
+    w.t.drop_now().await;
+}
+
+/// Review MEDIUM (M4 C7): a stored merge result is reused only while its
+/// commit exists. The target goes A → B → A after `gc` pruned the A-result
+/// (no ref keeps it once the merge ref moved on): a fresh commit is
+/// written, the row points at it, the ref moves to it and a pipeline is
+/// asked for on it.
+#[tokio::test]
+async fn a_pruned_merge_result_is_written_again_when_its_pair_returns() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let r1 = w.merge_ref().expect("merge ref");
+    w.advance_main(&[("README.md", "base\n"), ("other.txt", "o\n")])
+        .await;
+    let r2 = w.merge_ref().expect("moved");
+    assert_ne!(r2, r1);
+    // Pruned: the loose object of r1 is gone.
+    let loose = w.path.join("objects").join(&r1[..2]).join(&r1[2..]);
+    std::fs::remove_file(&loose).expect("remove the loose object");
+    // The target goes back: the pair (head, base) returns.
+    plumb(&w.path, &["update-ref", "refs/heads/main", &w.base], None);
+    w.browser.invalidate(w.repo);
+    let report = w.check_again().await;
+    let fresh = report.merge_result.expect("merge result");
+    assert_ne!(fresh.as_str(), r1, "a fresh commit, not the pruned one");
+    assert_eq!(w.merge_ref().as_deref(), Some(fresh.as_str()));
+    assert_eq!(
+        plumb(
+            &w.path,
+            &["rev-parse", &format!("{}^1", fresh.as_str())],
+            None
+        ),
+        w.base
+    );
+    let rows = forge_db::review::merge_results(&w.t.db, w.mr.id)
+        .await
+        .expect("rows");
+    assert_eq!(rows.len(), 2, "the pair's row is updated, not doubled");
+    let row = rows
+        .iter()
+        .find(|r| r.target.as_str() == w.base)
+        .expect("the base pair");
+    assert_eq!(row.result, fresh);
+    assert_eq!(
+        w.mr_pipeline_shas().await,
+        [r1, r2, fresh.as_str().to_owned()],
+        "a pipeline on the fresh merge result"
+    );
+    // A present result is still reused.
+    let again = w.check_again().await;
+    assert_eq!(again.merge_result.as_ref(), Some(&fresh));
+    assert_eq!(w.mr_pipeline_shas().await.len(), 3);
+    w.t.drop_now().await;
+}
+
+/// Review LOW (M4 C7): closing (or merging) a merge request lets the
+/// worker's sweep delete `refs/merge-requests/<iid>/merge` and its merge
+/// result rows — except a row a live pipeline still needs (its own
+/// pipeline ref pins the commit), which goes once the pipeline ends. An
+/// open merge request is never pruned.
+#[tokio::test]
+async fn a_closed_merge_request_loses_its_merge_ref_and_unpinned_rows() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let r1 = w.merge_ref().expect("merge ref");
+    w.advance_main(&[("README.md", "base\n"), ("other.txt", "o\n")])
+        .await;
+    let checker = Mergeability::new(w.git.clone(), w.storage.clone());
+    let rid = RequestId::parse("req-prune").expect("id");
+    let prune = || forge_review::prune_merge_results(&w.t.db, &checker, 10, &rid);
+    assert_eq!(prune().await.expect("prune").visited, 0, "open: kept");
+    // The create jobs ran; r1's pipeline is still running.
+    w.t.exec_superuser(
+        "UPDATE forge.jobs SET state = 'succeeded', finished_at = now() \
+         WHERE kind = 'ci.pipeline_create'",
+    )
+    .await;
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[format!(
+            "INSERT INTO forge.ci_pipelines (project_id, ref, sha, source, merge_request_id, \
+             copy_mark, status, request_id) VALUES ({p}, 'refs/heads/feature', '{r1}', \
+             'merge_request', {mr}, 'open', 'running', 'req-pipe')",
+            p = w.project.get(),
+            mr = w.mr.id.get(),
+        )],
+    )
+    .await;
+    let _closed = forge_db::review::close_mr_decided(
+        &w.t.db,
+        &ChangeContext::new(
+            Actor::User(w.dave),
+            RequestId::parse("req-close").expect("id"),
+        ),
+        w.project,
+        w.mr.iid,
+        w.dave,
+        |_| Ok(()),
+    )
+    .await
+    .expect("close");
+    let report = prune().await.expect("prune");
+    assert_eq!(
+        (report.visited, report.refs_deleted, report.rows_removed),
+        (1, 1, 1)
+    );
+    assert_eq!(w.merge_ref(), None, "the merge ref is deleted");
+    let rows = forge_db::review::merge_results(&w.t.db, w.mr.id)
+        .await
+        .expect("rows");
+    assert_eq!(rows.len(), 1, "the running pipeline's row stays");
+    assert_eq!(rows[0].result.as_str(), r1);
+    assert_eq!(
+        prune().await.expect("prune").visited,
+        0,
+        "only pinned rows left"
+    );
+    // The pipeline ends: its row goes too.
+    w.t.exec_superuser("UPDATE forge.ci_pipelines SET status = 'succeeded', finished_at = now()")
+        .await;
+    let report = prune().await.expect("prune");
+    assert_eq!(
+        (report.visited, report.refs_deleted, report.rows_removed),
+        (1, 0, 1)
+    );
+    assert!(forge_db::review::merge_results(&w.t.db, w.mr.id)
+        .await
+        .expect("rows")
+        .is_empty());
+    w.t.drop_now().await;
+}
+
+/// Review LOW (M4 C7): with no clean merge result (here a conflict) the
+/// status says the required `ci/pipeline` waits for one — its pipeline runs
+/// only on a merge result; an external name never waits; once the merge is
+/// clean nothing waits.
+#[tokio::test]
+async fn the_status_says_ci_pipeline_waits_for_a_clean_merge_result() {
+    let w = world(&[("README.md", "base\n")], &[("README.md", "head\n")]).await;
+    w.protect("developer", 0, &["ci/pipeline", "ci/gates"], false, false)
+        .await;
+    let clean = w.status().await;
+    assert!(clean.merge_result_sha.is_some());
+    assert!(clean
+        .checks
+        .iter()
+        .all(|c| !clean.waits_for_merge_result(c)));
+    let next = commit(&w.path, &[("README.md", "main\n")], Some(&w.base));
+    plumb(&w.path, &["update-ref", "refs/heads/main", &next], None);
+    w.browser.invalidate(w.repo);
+    w.check_again().await;
+    let status = w.status().await;
+    assert_eq!(status.merge_result_sha, None);
+    let waits: Vec<(&str, bool)> = status
+        .checks
+        .iter()
+        .map(|c| (c.name.as_str(), status.waits_for_merge_result(c)))
+        .collect();
+    assert_eq!(waits, [("ci/gates", false), ("ci/pipeline", true)]);
     w.t.drop_now().await;
 }

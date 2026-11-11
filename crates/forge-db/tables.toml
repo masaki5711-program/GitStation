@@ -737,3 +737,11 @@ ro_columns = [
     "job_id", "attempt", "project_id", "pipeline_id", "fingerprint_id", "error_codes", "first_line",
     "last_line", "created_at",
 ]
+
+# ── M4 C7 (20261207100000, plan 04 M-1 / M-2): the merge results of merge
+# requests (refs/merge-requests/<iid>/merge), one row per (merge request,
+# head, target tip); recomputable from git ──
+[tables.merge_result_refs]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]

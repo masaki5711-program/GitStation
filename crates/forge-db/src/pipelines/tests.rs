@@ -223,10 +223,13 @@ async fn one_push_enqueues_one_job_per_branch_and_a_redelivery_none() {
     t.drop_now().await;
 }
 
-/// A merge request version asks for a merge request pipeline of its head
-/// on its source branch.
+/// M4 C7: a merge request version asks for no pipeline of its head (the
+/// push pipeline covers the branch); the merge request pipeline runs on the
+/// merge result, enqueued with its `merge_result_refs` row — once per
+/// (head, target tip): the same pair again writes nothing and enqueues
+/// nothing, a new target tip is a new row and a new pipeline.
 #[tokio::test]
-async fn a_merge_request_version_enqueues_a_merge_request_pipeline() {
+async fn a_merge_request_pipeline_runs_on_each_merge_result_once() {
     let t = FreshDb::migrated().await;
     let (alice, web) = web(&t).await;
     let p = web.project_id;
@@ -257,18 +260,68 @@ async fn a_merge_request_version_enqueues_a_merge_request_pipeline() {
         .await
         .expect("version");
     drain(&t, &subscriber).await;
-    let jobs = create_jobs(&t).await;
+    assert_eq!(create_jobs(&t).await, [], "no pipeline of the head");
+    let origin = RequestId::parse("req-mr").expect("id");
+    let first = crate::review::record_merge_result(
+        &t.db,
+        &origin,
+        mr.id,
+        (&sha('e'), &sha('1')),
+        &sha('a'),
+    )
+    .await
+    .expect("record")
+    .expect("open");
+    assert!(first.created && first.pipeline_enqueued);
+    // The same pair again (a retried or repeated check with another commit):
+    // the first result stays, nothing is enqueued.
+    let again = crate::review::record_merge_result(
+        &t.db,
+        &origin,
+        mr.id,
+        (&sha('e'), &sha('1')),
+        &sha('b'),
+    )
+    .await
+    .expect("record")
+    .expect("open");
     assert_eq!(
-        jobs,
-        [PipelineRequest {
-            project: p,
-            git_ref: branch("feature"),
-            sha: sha('e'),
-            source: Source::MergeRequest,
-            merge_request: Some(mr.id),
-            triggered_by: Some(alice),
-        }]
+        (again.result.clone(), again.created, again.pipeline_enqueued),
+        (sha('a'), false, false)
     );
+    assert_eq!(
+        crate::review::merge_result_of(&t.db, mr.id, &sha('e'), &sha('1'))
+            .await
+            .expect("read"),
+        Some(sha('a'))
+    );
+    // The target advanced: a new merge result and its own pipeline.
+    let moved = crate::review::record_merge_result(
+        &t.db,
+        &origin,
+        mr.id,
+        (&sha('e'), &sha('2')),
+        &sha('c'),
+    )
+    .await
+    .expect("record")
+    .expect("open");
+    assert!(moved.created && moved.pipeline_enqueued);
+    let pipeline = |result: char| PipelineRequest {
+        project: p,
+        git_ref: branch("feature"),
+        sha: sha(result),
+        source: Source::MergeRequest,
+        merge_request: Some(mr.id),
+        triggered_by: Some(alice),
+    };
+    let mut jobs = create_jobs(&t).await;
+    jobs.sort_by(|a, b| a.sha.as_str().cmp(b.sha.as_str()));
+    assert_eq!(jobs, [pipeline('a'), pipeline('c')]);
+    let rows = crate::review::merge_results(&t.db, mr.id)
+        .await
+        .expect("rows");
+    assert_eq!(rows.len(), 2, "one row per (head, target) pair");
     t.drop_now().await;
 }
 

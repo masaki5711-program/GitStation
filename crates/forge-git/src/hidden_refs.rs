@@ -1,6 +1,8 @@
 //! The hidden ref namespace of merge requests (ADR-0024 §2, M3 R1b):
-//! `refs/merge-requests/<iid>/v<n>` (one per version, never overwritten)
-//! and `refs/merge-requests/<iid>/head` (the latest version).
+//! `refs/merge-requests/<iid>/v<n>` (one per version, never overwritten),
+//! `refs/merge-requests/<iid>/head` (the latest version) and (M4 C7)
+//! `refs/merge-requests/<iid>/merge` (the merge result of the head into the
+//! target tip).
 //!
 //! One prefix ([`HIDDEN_REF_PREFIX`]) drives every place that must leave
 //! these refs out, so they can never disagree (unit test
@@ -93,6 +95,13 @@ pub fn merge_request_head_ref(iid: i64) -> Result<RefName, ForgeError> {
     RefName::parse(&format!("{}head", merge_request_ref_prefix(iid)?))
 }
 
+/// `refs/merge-requests/<iid>/merge` (M4 C7): the merge result of the head
+/// into the target tip (`crate::merge_result`). Under
+/// [`HIDDEN_REF_PREFIX`], so hidden like the version refs.
+pub fn merge_request_merge_ref(iid: i64) -> Result<RefName, ForgeError> {
+    RefName::parse(&format!("{}merge", merge_request_ref_prefix(iid)?))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)] // tests may fail loudly
@@ -152,6 +161,15 @@ mod tests {
             assert_eq!(err.code(), ErrorCode::Internal);
         }
         assert!(merge_request_head_ref(0).is_err());
+        assert_eq!(
+            merge_request_merge_ref(3).expect("ref").as_str(),
+            "refs/merge-requests/3/merge"
+        );
+        assert!(merge_request_merge_ref(0).is_err());
+        assert!(merge_request_merge_ref(3)
+            .expect("ref")
+            .as_str()
+            .starts_with(HIDDEN_REF_PREFIX));
         let name = merge_request_version_ref(1, 1).expect("ref");
         assert!(name.as_str().starts_with(HIDDEN_REF_PREFIX));
     }

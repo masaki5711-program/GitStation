@@ -231,6 +231,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/runners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every CI runner: name, tags, enabled, last contact (never a token; an administrator's web session) */
+        get: operations["get_api_v1_admin_runners"];
+        put?: never;
+        /** Register a CI runner ({"name", "tags"?, "description"?}): 201 the runner and its token fgr_..., shown once (an administrator's web session) */
+        post: operations["post_api_v1_admin_runners"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/runners/{runner_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Enable or disable a CI runner, change its tags or description; a disabled runner's token is refused at once; 404 FG-REPO-0005 without such a runner (an administrator's web session) */
+        patch: operations["patch_api_v1_admin_runners_runner_id"];
+        trace?: never;
+    };
     "/api/v1/admin/service-accounts": {
         parameters: {
             query?: never;
@@ -1380,6 +1415,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/pipelines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's CI pipelines, newest first (ref, before, limit 1..=100, default 20): source, ref, sha, status, error code and problems of an invalid definition, the confidential mark at the commit (project readers; metadata only) */
+        get: operations["get_api_v1_projects_id_pipelines"];
+        put?: never;
+        /** Run a pipeline by hand on a branch's tip ({"ref": "main"}): 201 the pipeline (pending, skipped or invalid; a manual run is never protected, so a job with secrets is invalid); 404 FG-REPO-0023 without the branch or .forge-ci.yml; 503 FG-CI-0002 when the definition could not be read (Developer) */
+        post: operations["post_api_v1_projects_id_pipelines"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One CI pipeline with its jobs (name, stage, wave, needs, image, timeout, tags, secret names, status, attempt); 404 FG-REPO-0005 when the project has no such pipeline (project readers; metadata only) */
+        get: operations["get_api_v1_projects_id_pipelines_pipeline_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a pending or running pipeline and its unfinished jobs; 409 FG-CI-0003 when it is finished (Developer) */
+        post: operations["post_api_v1_projects_id_pipelines_pipeline_id_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A pipeline's deterministic diagnosis (plan 04 P-9): each failed job's fingerprint, error codes, masked excerpt with its log lines, occurrences and known fixes (a merge request whose pipeline later passed); pending while the worker has not fingerprinted it; 404 FG-REPO-0005 without such a pipeline; 403 FG-AUTH-0022 to an AI agent audience unless both marks are open (project readers) */
+        get: operations["get_api_v1_projects_id_pipelines_pipeline_id_diagnosis"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One page of a CI job attempt's log (attempt: default the current one; from: the first chunk, 0-based): whole chunks, at most 256 / 1 MiB, secrets masked as [MASKED]; next_from names the next page, complete says the attempt is over; 404 FG-REPO-0005 without such a pipeline, job or attempt; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers) */
+        get: operations["get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_log"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry a failed or cancelled pipeline: its failed and cancelled jobs get a new attempt; 409 FG-CI-0003 in any other state (Developer) */
+        post: operations["post_api_v1_projects_id_pipelines_pipeline_id_retry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/protected-refs": {
         parameters: {
             query?: never;
@@ -1856,6 +1994,108 @@ export interface paths {
         };
         /** The repositories the caller (or the person acted for, no assertion) may bind, whose path or name contains q: each decided with authorize(), nothing said about the rest (read_api) */
         get: operations["get_api_v1_repositories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A runner's long-poll for a job ({"wait_s"?} 0..=20): 200 {"job": ...} with the job's token fgj_... (shown once), or {"job": null} when none came (a runner's token only) */
+        post: operations["post_api_v1_runner_jobs_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/{job_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report a job's result ({"attempt", "result": succeeded|failed, "exit_code"?}) or acknowledge its cancel: the token is revoked, waiting jobs start; 409 FG-CI-0004 when the lease was lost (the holding runner only) */
+        post: operations["post_api_v1_runner_jobs_job_id_complete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/{job_id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Extend the lease of a job the runner holds ({"attempt"}): running with the new lease end, or canceled (stop and complete); 409 FG-CI-0004 when the lease was lost (the holding runner only) */
+        post: operations["post_api_v1_runner_jobs_job_id_heartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/{job_id}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append a log chunk to a job the runner holds ({"attempt", "seq", "text"}; append only, a resent seq is a no-op); 413 FG-CI-0006 past the job's limit; 409 FG-CI-0004 when the lease was lost (the holding runner only) */
+        post: operations["post_api_v1_runner_jobs_job_id_log"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/{job_id}/repo.git/git-upload-pack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Smart HTTP for a CI job: upload-pack; every want checked reachable from the pipeline's pinned commit (a live job's token fgj_... of that project and commit) */
+        post: operations["post_api_v1_runner_jobs_job_id_repo_git_git_upload_pack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/{job_id}/repo.git/info/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Smart HTTP for a CI job (?service=git-upload-pack): the advertisement of refs/pipelines/<pipeline_id>/head only (a live job's token fgj_... of that project and commit; 404 FG-REPO-0005 otherwise, 401 FG-AUTH-0001 once the job ended) */
+        get: operations["get_api_v1_runner_jobs_job_id_repo_git_info_refs"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2559,6 +2799,55 @@ export interface components {
             /** Format: int64 */
             user_id: number;
         };
+        /** @description A claimed job: what the runner needs to run it. */
+        ClaimedJobBody: {
+            /**
+             * Format: int32
+             * @description Send it back with every call on this job.
+             */
+            attempt: number;
+            /**
+             * @description sha256 of the `.forge-ci.yml` bytes the pipeline was planned from:
+             *     the runner reads the job's script from that file at `sha` and
+             *     refuses other bytes.
+             */
+            definition_hash: string | null;
+            /** @description Pinned by digest. */
+            image: string;
+            /** Format: int64 */
+            job_id: number;
+            /**
+             * @description The job's token `fgj_…`: one project, this commit, this attempt;
+             *     revoked when the job ends. Shown once.
+             */
+            job_token: string;
+            job_token_expires_at: string;
+            /** @description The lease ends then unless a heartbeat extends it. */
+            lease_until: string;
+            name: string;
+            /** Format: int64 */
+            pipeline_id: number;
+            /** Format: int64 */
+            project_id: number;
+            /** @description `refs/heads/…`. */
+            ref: string;
+            /**
+             * @description The secret names the job asks for (empty unless `secrets_allowed`;
+             *     no value before C6).
+             */
+            secret_names: string[];
+            /**
+             * @description Only a push to a branch protected when the pipeline was created
+             *     (ADR-0029): the only jobs that may ever be given secrets.
+             */
+            secrets_allowed: boolean;
+            /** @description The pinned commit (the job reads only this). */
+            sha: string;
+            stage: string;
+            tags: string[];
+            /** Format: int32 */
+            timeout_s: number;
+        };
         /** @description One CODEOWNERS rule the changed paths need. */
         CodeownerStatusBody: {
             /** Format: int32 */
@@ -2623,6 +2912,21 @@ export interface components {
             diff: components["schemas"]["DiffBody"];
             from: components["schemas"]["RevBody"];
             to: components["schemas"]["RevBody"];
+        };
+        /** @description The answer of a completion. */
+        CompleteAnswer: {
+            pipeline_status: string;
+            /** @description The job's final status (`canceled` for an acknowledged cancel). */
+            status: string;
+        };
+        /** @description `POST …/complete`. */
+        CompleteBody: {
+            /** Format: int32 */
+            attempt: number;
+            /** Format: int32 */
+            exit_code?: number | null;
+            /** @description `succeeded` or `failed`. */
+            result: string;
         };
         /**
          * @description `GET …/act-as-confirmation` (forge's data only: the screen shows no
@@ -3262,6 +3566,14 @@ export interface components {
             /** @description `PBI-<n>`. */
             ref: string;
         };
+        /** @description `GET …/pipelines/{pipeline_id}/diagnosis`. */
+        DiagnosisBody: {
+            error_code: string | null;
+            failures: components["schemas"]["FailureBody"][];
+            /** Format: int64 */
+            pipeline_id: number;
+            status: string;
+        };
         /** @description The changed files of a diff. */
         DiffBody: {
             files: components["schemas"]["DiffFileBody"][];
@@ -3607,6 +3919,46 @@ export interface components {
             /** @description Sorted by name. */
             items: components["schemas"]["EventTypeBody"][];
         };
+        /** @description One failed job of a pipeline (plan 04 P-9, deterministic). */
+        FailureBody: {
+            /** Format: int32 */
+            attempt: number;
+            /** @description The `FG-…` codes: the job's own first, then those its log names. */
+            error_codes: string[];
+            /** @description The failure lines, secrets masked. */
+            excerpt: string;
+            /**
+             * @description `fp_` + 16 hex digits: the same failure on any commit has the same
+             *     one.
+             */
+            fingerprint: string | null;
+            first_seen_at: string | null;
+            /** @description The job's name. */
+            job: string;
+            /** Format: int64 */
+            job_id: number;
+            /** @description Deterministic fixes (P-7), never a guess. */
+            known_fixes: components["schemas"]["KnownFixBody"][];
+            /**
+             * Format: int32
+             * @description How often this fingerprint failed in the project.
+             */
+            occurrences: number;
+            /**
+             * @description `true` while the worker has not fingerprinted it yet (seconds after
+             *     the job failed): the fields below are empty then.
+             */
+            pending: boolean;
+            source: components["schemas"]["FailureSourceBody"];
+            stage: string;
+        };
+        /** @description Where a failure's excerpt is in the job's log. */
+        FailureSourceBody: {
+            /** @description The excerpt's first and last line in the attempt's log. */
+            lines: number[] | null;
+            /** @description The log route of the attempt (`GET`, CiLogRead). */
+            log_path: string;
+        };
         /** @description The actor of an event. */
         FeedActorBody: {
             /** @description `user`, `service_account`, `user_via_service_account` or `system`. */
@@ -3722,6 +4074,17 @@ export interface components {
             items: components["schemas"]["ListedGroup"][];
             /** @description Pass as `cursor` for the next page; `null` on the last one. */
             next_cursor: string | null;
+        };
+        /** @description The answer of a heartbeat. */
+        HeartbeatAnswer: {
+            lease_until: string | null;
+            /** @description `running` or `canceled` (stop the job and complete it). */
+            state: string;
+        };
+        /** @description `POST …/heartbeat` and the attempt of every job call. */
+        HeartbeatBody: {
+            /** Format: int32 */
+            attempt: number;
         };
         /** @description One in-app notification. */
         InAppNotificationBody: {
@@ -3890,6 +4253,72 @@ export interface components {
             /** @description The whole token. It is never shown again: hand it to the owner now. */
             token: string;
         };
+        /** @description `GET …/jobs/{job_id}/log`: one page of a job attempt's log. */
+        JobLogPage: {
+            /**
+             * Format: int32
+             * @description The attempt this page is of.
+             */
+            attempt: number;
+            /** @description The attempt is over and nothing is left after this page. */
+            complete: boolean;
+            /**
+             * Format: int32
+             * @description The job's current attempt.
+             */
+            current_attempt: number;
+            /**
+             * Format: int32
+             * @description The first chunk in this page (`null`: none stored from `from` on
+             *     yet).
+             */
+            from: number | null;
+            /** @description The job's name. */
+            job: string;
+            /** Format: int64 */
+            job_id: number;
+            /** @description `created`, `pending`, `running`, `succeeded`, `failed`, `canceled`. */
+            job_status: string;
+            /**
+             * Format: int32
+             * @description Pass as `from` for the next page; `null`: nothing stored after this
+             *     page yet.
+             */
+            next_from: number | null;
+            /** Format: int64 */
+            pipeline_id: number;
+            /** @description The page's text, secrets masked as `[MASKED]`. */
+            text: string;
+            /**
+             * Format: int32
+             * @description The last chunk in this page.
+             */
+            to: number | null;
+        };
+        /** @description The answer of a claim. */
+        JobRequestAnswer: {
+            job: null | components["schemas"]["ClaimedJobBody"];
+        };
+        /** @description `POST /api/v1/runner/jobs/request`. */
+        JobRequestBody: {
+            /**
+             * Format: int64
+             * @description How long to wait for a job, in seconds (0..=20, default 20).
+             */
+            wait_s?: number | null;
+        };
+        /**
+         * @description A known fix of a failure (plan 04 P-7): the merge request whose
+         *     pipeline failed with the same fingerprint and later succeeded.
+         */
+        KnownFixBody: {
+            fixed_at: string;
+            /** Format: int64 */
+            iid: number;
+            /** Format: int64 */
+            merge_request_id: number;
+            title: string;
+        };
         /** @description A group as a list shows it. */
         ListedGroup: {
             /** @description UTC, RFC 3339. */
@@ -3906,6 +4335,23 @@ export interface components {
             path: string;
             /** @description The caller's effective role (`guest` … `owner`); `null` without one. */
             role: string | null;
+        };
+        /** @description The answer of a log append. */
+        LogAnswer: {
+            /** @description `false`: the chunk was stored already (a resend). */
+            stored: boolean;
+        };
+        /** @description `POST …/log`. */
+        LogChunkBody: {
+            /** Format: int32 */
+            attempt: number;
+            /**
+             * Format: int64
+             * @description 0-based, in order; a resent chunk keeps its number.
+             */
+            seq: number;
+            /** @description UTF-8 text, not empty. */
+            text: string;
         };
         /** @description One item marked read. */
         MarkedRead: {
@@ -4050,6 +4496,13 @@ export interface components {
             head_sha: string | null;
             /** Format: int64 */
             iid: number;
+            /**
+             * @description M4 C7 (added within `schema_version` 1): the merge result of the
+             *     head into the target's tip (`refs/merge-requests/<iid>/merge`), where
+             *     the merge request pipeline reports `ci/pipeline`; `null` while it is
+             *     computed, on a conflict, or without a version or target.
+             */
+            merge_result_sha: string | null;
             /** @description Nothing blocks now (a merge decides again under its locks). */
             mergeable: boolean;
             /** @description The method evaluated: the project's default. */
@@ -4216,6 +4669,11 @@ export interface components {
              */
             tombstones: number;
         };
+        /** @description `POST …/pipelines`. */
+        NewPipelineRun: {
+            /** @description The branch: `main` or `refs/heads/main`. */
+            ref: string;
+        };
         /** @description `POST /api/v1/integrations/{id}/bindings`. */
         NewRepositoryBinding: {
             /** @description The kanflow project (1..=100 of `A-Z a-z 0-9 . _ : -`). */
@@ -4226,6 +4684,18 @@ export interface components {
              */
             repository_id: number;
             settings?: null | components["schemas"]["BindingSettings"];
+        };
+        /** @description `POST /api/v1/admin/runners`. */
+        NewRunnerBody: {
+            /** @description At most 1024 bytes. */
+            description?: string | null;
+            /** @description `[a-z0-9][a-z0-9._-]{0,62}`, unique. */
+            name: string;
+            /**
+             * @description At most 16, each like a name. A job runs on a runner whose tags
+             *     cover all of the job's.
+             */
+            tags?: string[] | null;
         };
         /** @description One note of a discussion. */
         NoteBody: {
@@ -4246,6 +4716,95 @@ export interface components {
             /** Format: int64 */
             id: number;
             username: string;
+        };
+        /** @description A pipeline (with its jobs on the one-pipeline routes). */
+        PipelineBody: {
+            /**
+             * @description The confidential marks at `sha` when it was created: `open`,
+             *     `confidential`, `undecided` (ADR-0029 decision 5).
+             */
+            copy_mark: string;
+            created_at: string;
+            definition_hash: string | null;
+            error_code: string | null;
+            finished_at: string | null;
+            /** Format: int64 */
+            id: number;
+            /** @description The jobs (only on `GET …/{pipeline_id}` and the changes). */
+            jobs?: components["schemas"]["PipelineJobBody"][] | null;
+            /** Format: int64 */
+            merge_request_id: number | null;
+            /** @description Why `invalid` (at most 20). */
+            problems: components["schemas"]["PipelineProblemBody"][];
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * @description `true` only for a push to a branch that was protected when the
+             *     pipeline was created: the only pipelines whose jobs may be given
+             *     secrets (ADR-0029).
+             */
+            protected: boolean;
+            /** @description `refs/heads/…`. */
+            ref: string;
+            sha: string;
+            /** @description `push`, `merge_request`, `schedule`, `manual`. */
+            source: string;
+            /**
+             * @description `pending`, `running`, `succeeded`, `failed`, `canceled`, `skipped`,
+             *     `invalid` (FG-CI-0001), `error` (FG-CI-0002).
+             */
+            status: string;
+            /** Format: int64 */
+            triggered_by: number | null;
+            updated_at: string;
+        };
+        /** @description One job of a pipeline. */
+        PipelineJobBody: {
+            /** Format: int32 */
+            attempt: number;
+            created_at: string;
+            error_code: string | null;
+            finished_at: string | null;
+            /** Format: int64 */
+            id: number;
+            image: string;
+            name: string;
+            /** @description The jobs it waits for. */
+            needs: string[];
+            /** @description The secret names (never a value). */
+            secrets: string[];
+            stage: string;
+            started_at: string | null;
+            /** @description `created`, `pending`, `running`, `succeeded`, `failed`, `canceled`. */
+            status: string;
+            tags: string[];
+            /** Format: int32 */
+            timeout_s: number;
+            /**
+             * Format: int32
+             * @description Jobs of one wave may run at once.
+             */
+            wave: number;
+        };
+        /** @description `GET …/pipelines`. */
+        PipelinePage: {
+            /**
+             * Format: int64
+             * @description Pass as `before` for the next page; `null` on the last.
+             */
+            next_before: number | null;
+            pipelines: components["schemas"]["PipelineBody"][];
+        };
+        /** @description One problem of an invalid definition (FG-CI-0001). */
+        PipelineProblemBody: {
+            /**
+             * Format: int64
+             * @description 1-based; 0 for the whole file.
+             */
+            line: number;
+            /** @description The stable reason (crates/forge-ci/README.md). */
+            reason: string;
+            subject: string | null;
         };
         /**
          * @description Where an inline discussion sits: a line of one side of one version's
@@ -4615,6 +5174,15 @@ export interface components {
             /** @description More refs than the server lists (5 000): the list stops there. */
             truncated: boolean;
         };
+        /** @description `201` of a registration: the runner and its token (shown once). */
+        RegisteredRunnerBody: {
+            runner: components["schemas"]["RunnerBody"];
+            /**
+             * @description `fgr_<16 hex>_<64 hex>`: put it in the runner host's token file
+             *     (ADR-0013); it is never shown again.
+             */
+            token: string;
+        };
         /** @description `POST /api/v1/namespaces/tombstones/release`. */
         ReleaseTombstone: {
             /** @description The tombstoned path, exactly (`group/sub/project`). */
@@ -4772,6 +5340,30 @@ export interface components {
             name: string;
             /** Format: int32 */
             required: number;
+        };
+        /** @description A runner (never its token). */
+        RunnerBody: {
+            created_at: string;
+            /** Format: int64 */
+            created_by: number;
+            description: string;
+            enabled: boolean;
+            /** Format: int64 */
+            id: number;
+            last_contact_at: string | null;
+            name: string;
+            tags: string[];
+            updated_at: string;
+        };
+        /** @description `GET /api/v1/admin/runners`. */
+        RunnerList: {
+            runners: components["schemas"]["RunnerBody"][];
+        };
+        /** @description `PATCH /api/v1/admin/runners/{runner_id}`. */
+        RunnerPatchBody: {
+            description?: string | null;
+            enabled?: boolean | null;
+            tags?: string[] | null;
         };
         /** @description One service account (no personal data: it has none). */
         ServiceAccountBody: {
@@ -5155,8 +5747,22 @@ export interface components {
         StatusCheckBody: {
             conclusion: string | null;
             name: string;
+            /**
+             * @description M4 C7 (added within `schema_version` 1): the run is on an earlier
+             *     merge result of the head (the target advanced since); it does not
+             *     count (`required_check_stale`).
+             */
+            stale: boolean;
             /** @description `null`: no run reported (never success). */
             status: string | null;
+            /**
+             * @description M4 C7 review (added within `schema_version` 1): the check is the
+             *     merge request pipeline's (`ci/pipeline`) and there is no clean merge
+             *     result (`merge_result_sha` null: a conflict, no target, unrelated
+             *     histories, or the mergeability check failed or is pending) — its
+             *     pipeline waits for one and runs only once the merge is clean.
+             */
+            waits_for_merge_result: boolean;
         };
         /** @description One CODEOWNERS rule the changes need. */
         StatusCodeownerBody: {
@@ -5192,7 +5798,7 @@ export interface components {
          *     new name here — added, never renamed, within `schema_version` 1.
          * @enum {string}
          */
-        StatusReasonName: "not_open" | "draft" | "merge_in_progress" | "source_branch_missing" | "mergeability_unknown" | "conflict" | "ff_not_possible" | "nothing_to_merge" | "approvals_missing" | "codeowner_approval_missing" | "codeowners_invalid" | "required_check_missing" | "required_check_not_successful" | "unresolved_discussions" | "work_item_link_missing" | "config_change_needs_maintainer_approval" | "changed_paths_unknown";
+        StatusReasonName: "not_open" | "draft" | "merge_in_progress" | "source_branch_missing" | "mergeability_unknown" | "conflict" | "ff_not_possible" | "nothing_to_merge" | "approvals_missing" | "codeowner_approval_missing" | "codeowners_invalid" | "required_check_missing" | "required_check_stale" | "required_check_not_successful" | "unresolved_discussions" | "work_item_link_missing" | "config_change_needs_maintainer_approval" | "changed_paths_unknown";
         /** @description One approval requirement (an approval rule, or `@protected_branch`). */
         StatusRuleBody: {
             applies: boolean;
@@ -6087,6 +6693,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IntegrationBindingList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_runners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_runners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRunnerBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisteredRunnerBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    patch_api_v1_admin_runners_runner_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runner_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnerPatchBody"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -9245,6 +9948,245 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_pipelines: {
+        parameters: {
+            query?: {
+                /** @description Only the pipelines of this branch (`main` or `refs/heads/main`) */
+                ref?: string;
+                /** @description Only pipelines with an id below this one (the previous page's `next_before`) */
+                before?: number;
+                /** @description At most this many pipelines (default 20) */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelinePage"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_pipelines: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewPipelineRun"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_pipelines_pipeline_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_pipelines_pipeline_id_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_pipelines_pipeline_id_diagnosis: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosisBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_log: {
+        parameters: {
+            query?: {
+                /** @description The job's attempt (default its current one) */
+                attempt?: number;
+                /** @description The first chunk (0-based; the previous page's `next_from`; default 0) */
+                from?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+                job_id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobLogPage"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_pipelines_pipeline_id_retry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_protected_refs: {
         parameters: {
             query?: never;
@@ -10447,6 +11389,188 @@ export interface operations {
                     "application/json": components["schemas"]["BindableRepositoryList"];
                 };
             };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_runner_jobs_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobRequestBody"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRequestAnswer"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_runner_jobs_job_id_complete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteBody"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompleteAnswer"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_runner_jobs_job_id_heartbeat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HeartbeatBody"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HeartbeatAnswer"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_runner_jobs_job_id_log: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogChunkBody"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogAnswer"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_runner_jobs_job_id_repo_git_git_upload_pack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_runner_jobs_job_id_repo_git_info_refs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {

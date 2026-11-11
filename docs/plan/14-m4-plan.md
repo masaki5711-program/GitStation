@@ -174,6 +174,16 @@ Runner の登録は管理者の Web のセッションだけ（`gstn` はトー�
 読み取り用の接続は読めない）、マイグレーション `20261206200000`、`check_runs_reporter` を `ci/pipeline` に広げた。FG-AUTH-0022 の文面に
 CI の出力を足した。**分けたもの**: 90 日の保持の削除（C5b）、CI 変数の値のマスク（C6）、成果物（C6）。
 
+**C7 の注記（2026-11-11）**: ブランチは `feat/git-merge-result-staleness`（`review` は許された area に無いので `git`）。判定のジョブ
+（`merge_request.mergeability`）が衝突なしのとき、その木を `commit-tree`（親は target の先端、head）でマージ結果にし、
+`refs/merge-requests/<iid>/merge` を向ける（衝突では消す）。表 `merge_result_refs`（マイグレーション `20261207100000`、派生、(MR, head,
+target の先端) ごとに 1 行）。MR のパイプラインは行を新しく書いたときに **マージ結果の SHA** で積む（`ci-pipelines` 購読者は `merge_request.pushed`
+で head のパイプラインを作らなくなった）。必須チェックは今のマージ結果への実行だけを数え、前のマージ結果だけにあるものは
+`required_check_stale`（最初の理由なら **FG-CI-0013** RequiredCheckStale、info、runbook なし）。外部の報告者の名前は従来どおり head への実行を
+数え、`ci/pipeline` は head への実行を数えない。状態の契約に `merge_result_sha`・`checks[].stale` を足した（schema_version 1 のまま）。
+隠すこと・push の拒否は既存の `refs/merge-requests/` の設定で足り、テストで固定した。新しいルート・Action は無い。詳細は ADR-0024 Amendment
+（2026-11-11）。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。

@@ -197,6 +197,9 @@ function Checks({ status }: { status: MergeStatus }) {
           return (
             <li key={c.name} className={styles.checkItem}>
               <code>{c.name}</code> <StateBadge tone={badge.tone}>{badge.label}</StateBadge>
+              {c.waits_for_merge_result && (
+                <p className={styles.nextHint}>{t('mr.conditions.waitsForMergeResult')}</p>
+              )}
             </li>
           );
         })}

@@ -221,6 +221,9 @@ fn deepen_not_naming_a_hidden_ref_is_refused() {
         "refs/merge-requests/1/v1",
         "merge-requests/1/head",
         "refs/merge-requests/12/v3",
+        // M4 C7: the merge result ref is under the same prefix.
+        "refs/merge-requests/4/merge",
+        "merge-requests/4/merge",
         // M4 C4 review: the pipeline refs are hidden the same way.
         "refs/pipelines/5/head",
         "pipelines/5/head",

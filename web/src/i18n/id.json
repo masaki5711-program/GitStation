@@ -600,11 +600,14 @@
       "approvalsMissingProtected": "Persetujuan kurang (perlu {{required}}, sudah {{counted}})",
       "codeownerMissing": "Pemilik {{pattern}} ({{owners}}) harus menyetujui",
       "checkMissing": "Pemeriksaan wajib \"{{name}}\" belum melapor",
+      "checkStale": "Pemeriksaan wajib \"{{name}}\" berjalan pada hasil penggabungan yang lama",
       "checkFailed": "Pemeriksaan wajib \"{{name}}\" belum berhasil ({{status}} / {{conclusion}})",
       "hint": {
         "approvals": "Menunggu peninjau menyetujui.",
         "owners": "Menunggu pemilik berkas itu menyetujui.",
         "checks": "Menunggu hasil pemeriksaan.",
+        "checksStale": "Cabang tujuan telah bergerak. Menunggu pemeriksaan pada hasil penggabungan yang baru.",
+        "checksWaitMergeResult": "Menunggu hasil penggabungan tanpa konflik; pipeline berjalan di atasnya.",
         "merging": "Menunggu penggabungan selesai.",
         "maintainer": "Menunggu persetujuan maintainer.",
         "retry": "Buka halaman ini lagi nanti. Jika tetap begini, beri tahu administrator.",
@@ -706,6 +709,7 @@
       "notCounted": "{{name}}: tidak dihitung ({{why}})",
       "codeownersSuspended": "Persetujuan CODEOWNERS ditangguhkan sampai {{until}}.",
       "checks": "Pemeriksaan wajib",
+      "waitsForMergeResult": "Pemeriksaan ini hanya berjalan setelah ada hasil penggabungan tanpa konflik.",
       "unread": "Syarat tidak dapat dibaca. Pesan di atas berisi ID permintaan."
     },
     "uncounted": {

@@ -1,6 +1,6 @@
 //! The `ci-pipelines` subscriber (M4 C2, plan 14): every push to a branch
-//! (`repository.pushed`) and every merge request version
-//! (`merge_request.pushed`) enqueues one `ci.pipeline_create` job. The job
+//! (`repository.pushed`) enqueues one `ci.pipeline_create` job per moved
+//! branch. The job
 //! reads `.forge-ci.yml` with git and plans it (forge-pipelines, run by
 //! `forge worker`): a subscriber never calls git (ADR-0016 §7).
 //!
@@ -11,8 +11,11 @@
 //!   (`forge.ci.push_refs_not_planned`, with the counts): never dropped
 //!   silently. The pusher (a person's or a service account's event) is
 //!   `triggered_by`.
-//! - A merge request version: a job for its head on its source branch,
-//!   `triggered_by` the pusher (`pushed_by`; none for the first version).
+//! - A merge request version: nothing here (M4 C7, ADR-0024 Amendment
+//!   2026-11-11). The merge request pipeline runs on the merge RESULT — the
+//!   mergeability job writes `refs/merge-requests/<iid>/merge` and enqueues
+//!   it with the `merge_result_refs` row
+//!   (`crate::review::record_merge_result`), once per (head, target tip).
 //!
 //! Exactly once: the job's dedup key is the pipeline's identity (project,
 //! source, merge request, sha, ref), so a retried step or a redelivered
@@ -20,12 +23,11 @@
 //! from writing a second pipeline. `independent`: an event this build
 //! cannot read is quarantined (doctor's `subscribers.dead_letters`).
 
-use forge_core::{EventType, MergeRequestId, ObjectId, RefName, RequestId, UserId};
+use forge_core::{EventType, ObjectId, RefName, RequestId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 
 use super::{create_job, PipelineRequest, Source};
 use crate::jobs::enqueue_on;
-use crate::query_error;
 use crate::subscribers::{DerivedTx, HandleFuture, Ordering, SourceEvent, Subscriber};
 
 /// The subscriber's name (`forge.event_subscribers`).
@@ -129,62 +131,6 @@ impl PipelineRequests {
         }
         Ok(())
     }
-
-    async fn on_version(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
-        let project = event
-            .project_id
-            .ok_or_else(|| bad_payload(event, "project_id"))?;
-        let head = event
-            .payload
-            .get("head_sha")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|raw| ObjectId::parse(raw).ok())
-            .ok_or_else(|| bad_payload(event, "head_sha"))?;
-        let mr = event
-            .payload
-            .get("merge_request_id")
-            .and_then(serde_json::Value::as_i64)
-            .filter(|id| *id > 0)
-            .ok_or_else(|| bad_payload(event, "merge_request_id"))?;
-        let pushed_by = match event.payload.get("pushed_by") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(v) => Some(
-                v.as_i64()
-                    .filter(|id| *id > 0)
-                    .map(UserId::new)
-                    .ok_or_else(|| bad_payload(event, "pushed_by"))?,
-            ),
-        };
-        let source: Option<String> = sqlx::query_scalar(
-            "SELECT source_branch FROM forge.merge_requests WHERE id = $1 AND project_id = $2",
-        )
-        .bind(mr)
-        .bind(project.get())
-        .fetch_optional(tx.conn())
-        .await
-        .map_err(|e| query_error("pipelines.version_source", e))?;
-        // A merge request purged with its project: nothing to plan.
-        let Some(source) = source else {
-            return Ok(());
-        };
-        let git_ref = RefName::parse(&source).map_err(|_| {
-            ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "stored_branch_invalid")
-                .with_context("merge_request_id", mr)
-        })?;
-        let request = PipelineRequest {
-            project,
-            git_ref,
-            sha: head,
-            source: Source::MergeRequest,
-            merge_request: Some(MergeRequestId::new(mr)),
-            triggered_by: pushed_by,
-        };
-        let origin = event.request_id().unwrap_or_else(RequestId::generate);
-        let _enqueued =
-            enqueue_on(tx.conn(), &create_job(&request, origin, Some(event.seq))?).await?;
-        Ok(())
-    }
 }
 
 impl Subscriber for PipelineRequests {
@@ -212,8 +158,10 @@ impl Subscriber for PipelineRequests {
             };
             match kind {
                 EventType::RepositoryPushed => Self::on_push(event, tx).await,
-                EventType::MergeRequestPushed => Self::on_version(event, tx).await,
-                EventType::ProjectCreated
+                // M4 C7: the merge request pipeline is the merge result's
+                // (enqueued by the mergeability job), not the head's.
+                EventType::MergeRequestPushed
+                | EventType::ProjectCreated
                 | EventType::RepositoryCreated
                 | EventType::TokenCreated
                 | EventType::TokenRevoked

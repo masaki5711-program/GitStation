@@ -1770,11 +1770,16 @@ impl LogSink {
 /// are in no advertisement (`ls-remote` over v0 and v2, a clone, the
 /// receive-pack advertisement), an object only they reach is refused by id
 /// (commit and blob, both wire versions), and a push to them is refused
-/// (FG-GIT-0010) with nothing changed.
+/// (FG-GIT-0010) with nothing changed. M4 C7: the merge result ref
+/// `refs/merge-requests/<iid>/merge` alike.
 #[test]
 fn hidden_merge_request_refs_are_not_advertised_or_fetchable() {
     let s = server(Options::default());
-    for name in ["refs/merge-requests/1/v1", "refs/merge-requests/1/head"] {
+    for name in [
+        "refs/merge-requests/1/v1",
+        "refs/merge-requests/1/head",
+        "refs/merge-requests/1/merge",
+    ] {
         let out = local_git(s.home.path())
             .arg("--git-dir")
             .arg(&s.bare)
@@ -1847,6 +1852,9 @@ fn hidden_merge_request_refs_are_not_advertised_or_fetchable() {
     let out = s.push(&s.alice_write, &work, &["HEAD:refs/merge-requests/1/v2"]);
     refused(&out, ErrorCode::ReservedRefNamespace);
     let out = s.push(&s.dave_admin, &work, &["HEAD:refs/merge-requests/1/head"]);
+    refused(&out, ErrorCode::ReservedRefNamespace);
+    // M4 C7: nobody writes the merge result ref over a push.
+    let out = s.push(&s.dave_admin, &work, &["HEAD:refs/merge-requests/1/merge"]);
     refused(&out, ErrorCode::ReservedRefNamespace);
     assert_eq!(s.refs(), before);
 }

@@ -139,6 +139,13 @@ export function reasonLine(first: StatusReason): BlockedReason {
       if (name === null) return generic();
       return { key: t('mr.status.checkMissing'), values: { name }, next: 'wait' };
     }
+    // M4 C7: the run is on an older merge result; the pipeline on the new
+    // one decides (FG-CI-0013).
+    case 'required_check_stale': {
+      const name = text(d.name);
+      if (name === null) return generic();
+      return { key: t('mr.status.checkStale'), values: { name }, next: 'wait' };
+    }
     case 'required_check_not_successful': {
       const name = text(d.name);
       const checkStatus = text(d.status);
@@ -169,8 +176,15 @@ export function statusHint(status: MergeStatus): string | null {
       return t('mr.status.hint.approvals');
     case 'codeowner_approval_missing':
       return t('mr.status.hint.owners');
-    case 'required_check_missing':
-      return t('mr.status.hint.checks');
+    case 'required_check_missing': {
+      // M4 C7 review: the merge request pipeline runs only on a clean merge
+      // result; without one (conflict, no target, failed check) say so.
+      const name = parseDetail(status.reasons[0]?.detail ?? null).name;
+      const waits = status.checks.some((c) => c.name === name && c.waits_for_merge_result);
+      return waits ? t('mr.status.hint.checksWaitMergeResult') : t('mr.status.hint.checks');
+    }
+    case 'required_check_stale':
+      return t('mr.status.hint.checksStale');
     case 'merge_in_progress':
       return t('mr.status.hint.merging');
     case 'config_change_needs_maintainer_approval':

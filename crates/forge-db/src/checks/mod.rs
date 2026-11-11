@@ -241,6 +241,15 @@ impl forge_core::CheckResultsSource for Db {
     ) -> forge_core::namespace_resolver::LookupFuture<'a, CheckRunsOnHead> {
         Box::pin(runs_for(self, project, head))
     }
+
+    fn merge_runs_on<'a>(
+        &'a self,
+        project: ProjectId,
+        mr: forge_core::ids::MergeRequestId,
+        head: &'a ObjectId,
+    ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::MergeCheckRuns> {
+        Box::pin(crate::review::merge_runs_for(self, project, mr, head))
+    }
 }
 
 type FullRow = (

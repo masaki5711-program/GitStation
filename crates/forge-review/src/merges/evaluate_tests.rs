@@ -16,6 +16,7 @@ fn check(name: &str, run: Option<CheckRun>) -> RequiredCheck {
     RequiredCheck {
         name: CheckName::parse(name).expect("name"),
         run,
+        stale: false,
     }
 }
 
@@ -242,11 +243,15 @@ fn arb_run() -> impl Strategy<Value = Option<CheckRun>> {
     ]
 }
 
+/// M4 C7: a run may be on an earlier merge result (`stale`).
 fn arb_checks() -> impl Strategy<Value = Vec<RequiredCheck>> {
-    proptest::collection::vec(arb_run(), 0..4).prop_map(|runs| {
+    proptest::collection::vec((arb_run(), any::<bool>()), 0..4).prop_map(|runs| {
         runs.into_iter()
             .enumerate()
-            .map(|(i, run)| check(&format!("ci/check-{i}"), run))
+            .map(|(i, (run, stale))| RequiredCheck {
+                stale: stale && run.is_some(),
+                ..check(&format!("ci/check-{i}"), run)
+            })
             .collect()
     })
 }
@@ -281,15 +286,16 @@ fn expected(facts: &MergeFacts, minimum: u32) -> Vec<&'static str> {
     for c in &facts.checks {
         match c.run {
             None => push(11, "required_check_missing"),
-            Some(run) if !run.succeeded() => push(12, "required_check_not_successful"),
+            Some(_) if c.stale => push(12, "required_check_stale"),
+            Some(run) if !run.succeeded() => push(13, "required_check_not_successful"),
             Some(_) => {}
         }
     }
     if facts.discussions.is_some_and(|n| n > 0) {
-        push(13, "unresolved_discussions");
+        push(14, "unresolved_discussions");
     }
     if facts.work_item_link == Some(false) {
-        push(14, "work_item_link_missing");
+        push(15, "work_item_link_missing");
     }
     out.into_values().flatten().collect()
 }
@@ -349,6 +355,46 @@ proptest! {
     }
 }
 
+/// M4 C7: a stale run blocks whatever its conclusion, and a first reason
+/// `required_check_stale` is FG-CI-0013 (otherwise FG-REVIEW-0007 lists it).
+#[test]
+fn a_stale_run_blocks_and_names_its_code_when_first() {
+    let stale = RequiredCheck {
+        stale: true,
+        ..check("ci/pipeline", completed(CheckConclusion::Success))
+    };
+    let reasons = evaluate_merge(&MergeFacts {
+        checks: vec![stale.clone()],
+        ..ready()
+    })
+    .expect_err("blocked");
+    assert_eq!(
+        reasons,
+        [BlockReason::RequiredCheckStale {
+            name: CheckName::parse("ci/pipeline").expect("name")
+        }]
+    );
+    let e = blocked(&reasons);
+    assert_eq!(e.code(), forge_errors::ErrorCode::RequiredCheckStale);
+    assert!(e
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "details" && v == "required_check_stale:name=ci/pipeline"));
+    // Behind an earlier reason it is listed, and the code is MergeBlocked.
+    let reasons = evaluate_merge(&MergeFacts {
+        draft: true,
+        checks: vec![stale],
+        ..ready()
+    })
+    .expect_err("blocked");
+    let e = blocked(&reasons);
+    assert_eq!(e.code(), forge_errors::ErrorCode::MergeBlocked);
+    assert!(e
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "reasons" && v == "draft,required_check_stale"));
+}
+
 /// R6 review (LOW): the fixed order as literal names — the screen's first
 /// line and the `gstn mr status` contract depend on it.
 #[test]
@@ -363,6 +409,9 @@ fn the_reason_order_is_fixed() {
             name: name("ci/b"),
             status: CheckStatus::Completed,
             conclusion: Some(CheckConclusion::Failure),
+        },
+        BlockReason::RequiredCheckStale {
+            name: name("ci/pipeline"),
         },
         BlockReason::RequiredCheckMissing { name: name("ci/a") },
         BlockReason::CodeownersInvalid {
@@ -405,6 +454,7 @@ fn the_reason_order_is_fixed() {
             "codeowner_approval_missing",
             "codeowners_invalid",
             "required_check_missing",
+            "required_check_stale",
             "required_check_not_successful",
             "unresolved_discussions",
             "work_item_link_missing",
@@ -413,7 +463,7 @@ fn the_reason_order_is_fixed() {
         ]
     );
     let ranks: Vec<u8> = sorted.iter().map(BlockReason::rank).collect();
-    assert_eq!(ranks, (0..17).collect::<Vec<u8>>(), "one rank each");
+    assert_eq!(ranks, (0..18).collect::<Vec<u8>>(), "one rank each");
 }
 
 /// The order agrees with ADR-0024 §7's list (the names it lists appear in
@@ -437,6 +487,7 @@ fn the_reason_order_agrees_with_the_adr() {
         "codeowner_approval_missing",
         "codeowners_invalid",
         "required_check_missing",
+        "required_check_stale",
         "required_check_not_successful",
         "unresolved_discussions",
         "work_item_link_missing",

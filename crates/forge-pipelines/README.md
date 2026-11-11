@@ -1,6 +1,8 @@
 # forge-pipelines
 
-CI のパイプライン（計画 14 C2）。push・MR の版・手動の実行を、そのコミットの `.forge-ci.yml` から計画した **1 つのパイプラインとジョブ** にする。
+CI のパイプライン（計画 14 C2）。push・MR のマージ結果・手動の実行を、そのコミットの `.forge-ci.yml` から計画した **1 つのパイプラインとジョブ** にする。
+M4 C7: MR のパイプラインは head ではなく **マージ結果**（`refs/merge-requests/<iid>/merge`、head を target の先端へマージしたコミット）で動く。
+判定のジョブ（forge-review の mergeability）が `merge_result_refs` の行を新しく書くトランザクションで `ci.pipeline_create` を積む（ADR-0024 Amendment 2026-11-11）。
 計画は純粋な `forge-ci`、書き込みは `forge_db::pipelines`（1 つのトランザクション）。機能クレートで、他の機能クレートには依存しない（契約 9）。
 
 | 公開の API | 中身 |
@@ -48,7 +50,7 @@ CI のパイプライン（計画 14 C2）。push・MR の版・手動の実行�
 | `pipeline.run_manual` | `run_manual`（行を書いたとき。503 のときは書かない） | `project_id`、`pipeline_id`、`ref`、`sha`、`status` |
 
 `resource_type = 'project'`、行為者はユーザーまたはサービスアカウント（エージェントのトークンはその人 + `credential_id` と実効スコープ）。
-push・MR の版から作られたパイプラインは人の操作ではないので行を書かない（元の push / MR の監査が既にある）。
+push・MR のマージ結果から作られたパイプラインは人の操作ではないので行を書かない（元の push / MR の監査が既にある）。
 
 ## シークレット（後の MR への約束）
 

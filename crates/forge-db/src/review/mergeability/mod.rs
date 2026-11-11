@@ -15,7 +15,9 @@
 //!   [`request::defer_checks_on`]), the version job after a version
 //!   ([`request_check`]), and the worker's sweep ([`sweep_unchecked`]: rows
 //!   `unchecked` with no live job, oldest first — nothing past the cap is
-//!   starved). Nothing enqueues on a read.
+//!   starved; M4 C7: [`sweep_missing_merge_results`], clean decisions with
+//!   no merge result for their pair — the rollout's backfill). Nothing
+//!   enqueues on a read.
 //! - **Run** (`run.rs`): [`begin_check`] locks the row; a job whose seq is
 //!   no longer the latest is `Superseded`; otherwise it sets `checking` and
 //!   hands over what to check. [`record_check`] writes the result under the
@@ -54,7 +56,9 @@ mod stale;
 pub use confirm::{confirm_live, decided_candidates, DecidedRow};
 pub use request::DEFER_MAX;
 pub(crate) use request::{defer_checks_on, downgrade_on, request_check_on};
-pub use request::{request_check, sweep_unchecked, SWEEP_BATCH};
+pub use request::{
+    request_check, sweep_missing_merge_results, sweep_unchecked, MISSING_RESULT_AFTER, SWEEP_BATCH,
+};
 pub use run::{begin_check, record_check, CheckResult, CheckStart, CheckSubject, Recorded};
 pub use stale::{
     fail_check, health, reap_stale_checks, MergeabilityHealth, STALE_AFTER, UNVERIFIED_AFTER,

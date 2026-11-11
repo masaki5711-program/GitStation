@@ -5862,6 +5862,13 @@
             "minimum": 1,
             "type": "integer"
           },
+          "merge_result_sha": {
+            "description": "M4 C7 (added within `schema_version` 1): the merge result of the\nhead into the target's tip (`refs/merge-requests/<iid>/merge`), where\nthe merge request pipeline reports `ci/pipeline`; `null` while it is\ncomputed, on a conflict, or without a version or target.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mergeable": {
             "description": "Nothing blocks now (a merge decides again under its locks).",
             "type": "boolean"
@@ -5906,6 +5913,7 @@
           "schema_version",
           "iid",
           "head_sha",
+          "merge_result_sha",
           "target_branch",
           "method",
           "mergeable",
@@ -9155,18 +9163,28 @@
           "name": {
             "type": "string"
           },
+          "stale": {
+            "description": "M4 C7 (added within `schema_version` 1): the run is on an earlier\nmerge result of the head (the target advanced since); it does not\ncount (`required_check_stale`).",
+            "type": "boolean"
+          },
           "status": {
             "description": "`null`: no run reported (never success).",
             "type": [
               "string",
               "null"
             ]
+          },
+          "waits_for_merge_result": {
+            "description": "M4 C7 review (added within `schema_version` 1): the check is the\nmerge request pipeline's (`ci/pipeline`) and there is no clean merge\nresult (`merge_result_sha` null: a conflict, no target, unrelated\nhistories, or the mergeability check failed or is pending) — its\npipeline waits for one and runs only once the merge is clean.",
+            "type": "boolean"
           }
         },
         "required": [
           "name",
           "status",
-          "conclusion"
+          "conclusion",
+          "stale",
+          "waits_for_merge_result"
         ],
         "type": "object"
       },
@@ -9267,6 +9285,7 @@
           "codeowner_approval_missing",
           "codeowners_invalid",
           "required_check_missing",
+          "required_check_stale",
           "required_check_not_successful",
           "unresolved_discussions",
           "work_item_link_missing",

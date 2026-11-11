@@ -209,7 +209,7 @@ impl Review {
                 super::conditions::method_allowed(&gate.approvals.settings, method)?;
                 let conditions = super::conditions::conditions(
                     &gate.protection,
-                    &stored.target_branch,
+                    (&stored.target_branch, target_tip.as_ref()),
                     sha,
                     gate.unresolved_discussions,
                     gate.work_item_linked,

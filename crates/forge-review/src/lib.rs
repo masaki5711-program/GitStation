@@ -72,7 +72,7 @@ pub use forge_db::review::{
 };
 pub use forge_db::review::{StoredPrediction, StoredScan};
 pub use merge_conditions::MergeStatus;
-pub use mergeability::{check, CheckReport, Mergeability};
+pub use mergeability::{check, prune_merge_results, CheckReport, Mergeability, PruneReport};
 pub use merges::{
     evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeReport,
     MergeSettings, MergeTimeouts, Merger, ReconcileReport, StoredMerge,

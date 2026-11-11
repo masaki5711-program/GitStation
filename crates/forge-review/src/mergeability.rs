@@ -20,6 +20,22 @@
 //! 3. [`forge_db::review::record_check`] stores it while the seq is still
 //!    the latest, the merge request open and its head the one checked; a
 //!    can ⇄ cannot flip writes `merge_request.conflict_*`.
+//! 4. M4 C7 (plan 04 M-1, ADR-0024 Amendment 2026-11-11), when stored:
+//!    a clean merge becomes the merge result — the commit of the trial
+//!    merge's tree with the parents (target tip, head), written once per
+//!    (head, target tip) pair (an earlier run's row is reused, no second
+//!    commit, while its commit exists — a pruned one is written again and
+//!    replaces it in the row, with a pipeline on it), stored in `merge_result_refs` with the merge request
+//!    pipeline on it ([`forge_db::review::record_merge_result`]), and
+//!    `refs/merge-requests/<iid>/merge` pointed at it. A conflict (or no
+//!    target, unrelated histories, no version) deletes the ref: no merge
+//!    result. A git failure leaves the ref as it is (the stored status
+//!    already blocks the merge). The ref moves only while this run's seq is
+//!    still the latest (a newer run owns it otherwise), decided and written
+//!    under the merge request's refs lock (`lock_version_refs`), so two
+//!    runs never interleave between the two. A failure here is
+//!    the job's (retried; the status is already stored, and a missing merge
+//!    result never makes a check count).
 //!
 //! A git failure (`FG-GIT-0002` timeout, `0004` busy, `0003` process) is
 //! stored as `check_failed` with `reason=git_timeout|git_busy|git_failed`
@@ -36,9 +52,10 @@ use std::time::{Duration, Instant};
 
 use forge_core::{CheckReason, MergeabilityStatus, ObjectId, RefName, RepoId, RequestId};
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::review::{self, CheckResult, CheckStart, MergeabilityRequest, Recorded};
+use forge_db::review::{self, CheckResult, CheckStart, MergeabilityRequest, Recorded, RefsLock};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
+use forge_git::merge_result::MergeRefChange;
 use forge_git::mergeability::{MergeTree, MergeTreeLimits};
 use forge_git::{Git, StorageRoot};
 
@@ -53,6 +70,16 @@ pub const MAX_STORED_FILES: usize = 100;
 pub const MAX_STORED_BYTES: usize = 16 * 1024;
 /// The ref read and `merge-base` of a check.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// The merge result's `commit-tree` and its ref update (M4 C7).
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The time a git step under the refs lock may take: [`WRITE_TIMEOUT`],
+/// cut to what is left of the lock's hold.
+fn left(lock: &RefsLock) -> Duration {
+    lock.deadline()
+        .saturating_duration_since(tokio::time::Instant::now())
+        .min(WRITE_TIMEOUT)
+}
 
 /// Where the check runs: git, the storage, the trial merge's limits.
 #[derive(Clone)]
@@ -78,6 +105,12 @@ pub struct CheckReport {
     pub status: Option<MergeabilityStatus>,
     pub reason: Option<CheckReason>,
     pub flip: Option<forge_core::EventType>,
+    /// M4 C7: the merge result of the checked pair (`None`: not clean, or
+    /// not stored).
+    pub merge_result: Option<ObjectId>,
+    /// M4 C7: what happened to `refs/merge-requests/<iid>/merge`
+    /// (`None`: not touched).
+    pub merge_ref: Option<MergeRefChange>,
 }
 
 impl CheckReport {
@@ -87,6 +120,8 @@ impl CheckReport {
             status: None,
             reason: None,
             flip: None,
+            merge_result: None,
+            merge_ref: None,
         }
     }
 }
@@ -121,7 +156,12 @@ pub fn git_reason(e: &ForgeError) -> CheckReason {
 /// What the git part decided (with how many paths git listed in all), or
 /// the git failure.
 enum Computed {
-    Done { result: CheckResult, files: usize },
+    /// `tree`: the clean trial merge's tree (M4 C7: the merge result's).
+    Done {
+        result: CheckResult,
+        files: usize,
+        tree: Option<ObjectId>,
+    },
     Failed(CheckResult, ForgeError),
 }
 
@@ -137,7 +177,11 @@ fn failed(reason: CheckReason, head: Option<&ObjectId>, target: Option<&ObjectId
 }
 
 fn done(result: CheckResult) -> Computed {
-    Computed::Done { result, files: 0 }
+    Computed::Done {
+        result,
+        files: 0,
+        tree: None,
+    }
 }
 
 impl Mergeability {
@@ -194,20 +238,25 @@ impl Mergeability {
             .merge_tree(&self.storage, repo, &tip, head, self.limits)
             .await
         {
-            Ok(MergeTree::Clean { .. }) => done(CheckResult {
-                status: MergeabilityStatus::CanBeMerged,
-                reason: None,
-                head: Some(head.clone()), // clone: the result owns its ids
-                target: Some(tip),
-                conflicts: Vec::new(),
-                conflicts_truncated: false,
-            }),
+            Ok(MergeTree::Clean { tree }) => Computed::Done {
+                files: 0,
+                tree: Some(tree),
+                result: CheckResult {
+                    status: MergeabilityStatus::CanBeMerged,
+                    reason: None,
+                    head: Some(head.clone()), // clone: the result owns its ids
+                    target: Some(tip),
+                    conflicts: Vec::new(),
+                    conflicts_truncated: false,
+                },
+            },
             Ok(MergeTree::Conflicted {
                 files,
                 files_truncated,
             }) => {
                 let (conflicts, cut) = stored_files(&files);
                 Computed::Done {
+                    tree: None,
                     files: files.len(),
                     result: CheckResult {
                         status: MergeabilityStatus::CannotBeMerged,
@@ -264,9 +313,13 @@ pub async fn check(
             &subject.target_branch,
         )
         .await;
-    let (result, files, git_error) = match computed {
-        Computed::Done { result, files } => (result, files, None),
-        Computed::Failed(result, e) => (result, 0, Some(e)),
+    let (result, files, tree, git_error) = match computed {
+        Computed::Done {
+            result,
+            files,
+            tree,
+        } => (result, files, tree, None),
+        Computed::Failed(result, e) => (result, 0, None, Some(e)),
     };
     let recorded = review::record_check(db, &system(request_id), mr, seq, &result).await;
     let recorded = match (recorded, git_error) {
@@ -285,6 +338,24 @@ pub async fn check(
     let (outcome, flip) = match recorded {
         Recorded::Superseded => ("superseded", None),
         Recorded::Stored { flip } => ("checked", flip),
+    };
+    let (merge_result, merge_ref) = if outcome == "checked" {
+        checker
+            .merge_result(
+                db,
+                (target.repository, mr, subject.iid, seq),
+                &result,
+                tree.as_ref(),
+                request_id,
+            )
+            .await
+            .map_err(|e| {
+                e.with_context("merge_request_id", mr.get())
+                    .with_context("check_seq", seq)
+                    .with_context("stage", "merge_result")
+            })?
+    } else {
+        (None, None)
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let reason = result.reason.map(CheckReason::as_str);
@@ -336,7 +407,273 @@ pub async fn check(
         status: Some(result.status),
         reason: result.reason,
         flip,
+        merge_result,
+        merge_ref,
     })
+}
+
+/// Whether a stored result says "no merge result" (the ref is deleted): a
+/// decision that is not clean, or no target / no history / no version. A
+/// git failure is not (the ref is left as it is).
+fn no_merge_result(result: &CheckResult) -> bool {
+    match result.status {
+        MergeabilityStatus::CannotBeMerged => true,
+        MergeabilityStatus::CheckFailed => matches!(
+            result.reason,
+            Some(
+                CheckReason::TargetMissing
+                    | CheckReason::UnrelatedHistories
+                    | CheckReason::NoVersion
+            )
+        ),
+        MergeabilityStatus::CanBeMerged
+        | MergeabilityStatus::Unchecked
+        | MergeabilityStatus::Checking => false,
+    }
+}
+
+impl Mergeability {
+    /// Step 4 of the module docs for a stored `result` of request `seq`;
+    /// the merge result and what happened to the ref. Runs under the merge
+    /// request's refs lock (`forge_db::review::lock_version_refs`, the lock
+    /// of every hidden ref of a merge request): "still the latest" and the
+    /// ref write are one step, so a run that loses the race never moves the
+    /// ref back to an older pair (review MEDIUM). A busy lock is
+    /// `FG-DB-0002` (the job retries).
+    async fn merge_result(
+        &self,
+        db: &Db,
+        subject: (RepoId, forge_core::MergeRequestId, i64, i64),
+        result: &CheckResult,
+        tree: Option<&ObjectId>,
+        request_id: &RequestId,
+    ) -> Result<(Option<ObjectId>, Option<MergeRefChange>), ForgeError> {
+        let mut lock = review::lock_version_refs(db, subject.1).await?;
+        let out = self
+            .merge_result_locked(db, &mut lock, subject, (result, tree), request_id)
+            .await;
+        lock.release().await;
+        out
+    }
+
+    /// [`Self::merge_result`] under `lock`.
+    async fn merge_result_locked(
+        &self,
+        db: &Db,
+        lock: &mut RefsLock,
+        (repo, mr, iid, seq): (RepoId, forge_core::MergeRequestId, i64, i64),
+        (result, tree): (&CheckResult, Option<&ObjectId>),
+        request_id: &RequestId,
+    ) -> Result<(Option<ObjectId>, Option<MergeRefChange>), ForgeError> {
+        let clean = match (result.status, tree, &result.head, &result.target) {
+            (MergeabilityStatus::CanBeMerged, Some(tree), Some(head), Some(tip)) => {
+                Some((tree, head, tip))
+            }
+            _ => None,
+        };
+        let Some((tree, head, tip)) = clean else {
+            if !no_merge_result(result) || !self.still_latest(db, mr, seq).await? {
+                return Ok((None, None));
+            }
+            lock.alive().await?;
+            let change = self
+                .git
+                .set_merge_result_ref(&self.storage, repo, iid, None, left(lock))
+                .await?;
+            if let MergeRefChange::Deleted { from } = &change {
+                tracing::info!(
+                    target: "forge_review",
+                    event = "forge.review.merge_result_removed",
+                    request_id = %request_id,
+                    merge_request_id = mr.get(),
+                    iid,
+                    check_seq = seq,
+                    status = result.status.as_str(),
+                    reason = result.reason.map(CheckReason::as_str),
+                    previous_sha = from.as_str(),
+                    "no merge result: the merge ref was deleted"
+                );
+            }
+            return Ok((None, Some(change)));
+        };
+        // Once per pair: an earlier run's result is reused (no commit) —
+        // while its commit exists (`gc` may have pruned it once the ref moved
+        // on; then a fresh one replaces it in the row, review MEDIUM).
+        let reused = review::merge_result_of(db, mr, head, tip).await?;
+        let recorded = match reused {
+            Some(sha)
+                if self
+                    .git
+                    .merge_result_exists(&self.storage, repo, &sha, left(lock))
+                    .await? =>
+            {
+                review::record_merge_result(db, request_id, mr, (head, tip), &sha).await?
+            }
+            Some(pruned) => {
+                let fresh = self
+                    .git
+                    .write_merge_result(&self.storage, repo, iid, (tree, tip, head), left(lock))
+                    .await?;
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.review.merge_result_rewritten",
+                    request_id = %request_id,
+                    merge_request_id = mr.get(),
+                    iid,
+                    check_seq = seq,
+                    head_sha = head.as_str(),
+                    target_sha = tip.as_str(),
+                    pruned_sha = pruned.as_str(),
+                    result_sha = fresh.as_str(),
+                    "a stored merge result was pruned; wrote it again"
+                );
+                review::replace_merge_result(db, request_id, mr, (head, tip), (&pruned, &fresh))
+                    .await?
+            }
+            None => {
+                let written = self
+                    .git
+                    .write_merge_result(&self.storage, repo, iid, (tree, tip, head), left(lock))
+                    .await?;
+                review::record_merge_result(db, request_id, mr, (head, tip), &written).await?
+            }
+        };
+        let Some(recorded) = recorded else {
+            return Ok((None, None));
+        };
+        if !self.still_latest(db, mr, seq).await? {
+            // A newer run owns the ref; the row (and pipeline) stay valid
+            // for their pair.
+            return Ok((Some(recorded.result), None));
+        }
+        lock.alive().await?;
+        let change = self
+            .git
+            .set_merge_result_ref(&self.storage, repo, iid, Some(&recorded.result), left(lock))
+            .await?;
+        if recorded.created || change != MergeRefChange::Unchanged {
+            tracing::info!(
+                target: "forge_review",
+                event = "forge.review.merge_result_updated",
+                request_id = %request_id,
+                merge_request_id = mr.get(),
+                iid,
+                check_seq = seq,
+                head_sha = head.as_str(),
+                target_sha = tip.as_str(),
+                result_sha = recorded.result.as_str(),
+                created = recorded.created,
+                pipeline_enqueued = recorded.pipeline_enqueued,
+                merge_ref = change.as_str(),
+                "merge result written (refs/merge-requests/<iid>/merge)"
+            );
+        }
+        Ok((Some(recorded.result), Some(change)))
+    }
+
+    /// Whether `seq` is still `mr`'s latest request (the ref belongs to it).
+    async fn still_latest(
+        &self,
+        db: &Db,
+        mr: forge_core::MergeRequestId,
+        seq: i64,
+    ) -> Result<bool, ForgeError> {
+        Ok(review::mergeability_written(db, mr)
+            .await?
+            .is_some_and(|s| s.check_seq == seq))
+    }
+}
+
+/// What one [`prune_merge_results`] run did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PruneReport {
+    /// Merge requests visited.
+    pub visited: usize,
+    /// Merge refs deleted.
+    pub refs_deleted: usize,
+    /// Rows removed.
+    pub rows_removed: u64,
+}
+
+/// Prune the merge results of at most `limit` merge requests that are
+/// closed or merged (review LOW, M4 C7; the worker's mergeability sweep):
+/// under each one's refs lock, while it is still not open,
+/// `refs/merge-requests/<iid>/merge` is deleted, then every row of
+/// `merge_result_refs` no live pipeline needs
+/// (`forge_db::review::prune_merge_results`; a pending or running pipeline
+/// keeps its row, and its own `refs/pipelines/<id>/head` keeps the commit).
+/// A reopened merge request is skipped (its next check reuses the rows).
+/// A failure on one merge request is logged at warn with its code and the
+/// rest go on (the next run tries again); a failure to list is returned.
+pub async fn prune_merge_results(
+    db: &Db,
+    checker: &Mergeability,
+    limit: i64,
+    request_id: &RequestId,
+) -> Result<PruneReport, ForgeError> {
+    let candidates = review::merge_results_to_prune(db, limit).await?;
+    let mut report = PruneReport {
+        visited: candidates.len(),
+        ..PruneReport::default()
+    };
+    for c in &candidates {
+        match checker.prune_one(db, c).await {
+            Ok((deleted, removed)) => {
+                report.refs_deleted += usize::from(deleted);
+                report.rows_removed += removed;
+                if deleted || removed > 0 {
+                    tracing::info!(
+                        target: "forge_review",
+                        event = "forge.review.merge_results_pruned",
+                        request_id = %request_id,
+                        merge_request_id = c.merge_request.get(),
+                        iid = c.iid,
+                        ref_deleted = deleted,
+                        rows_removed = removed,
+                        "merge results of a closed or merged merge request pruned"
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                target: "forge_review",
+                event = "forge.review.merge_results_prune_failed",
+                request_id = %request_id,
+                error_code = e.code().id(),
+                merge_request_id = c.merge_request.get(),
+                iid = c.iid,
+                error = %e,
+                "could not prune merge results; tried again next run"
+            ),
+        }
+    }
+    Ok(report)
+}
+
+impl Mergeability {
+    /// One merge request of [`prune_merge_results`]: (ref deleted, rows
+    /// removed).
+    async fn prune_one(
+        &self,
+        db: &Db,
+        c: &review::PruneCandidate,
+    ) -> Result<(bool, u64), ForgeError> {
+        let mut lock = review::lock_version_refs(db, c.merge_request).await?;
+        let out = async {
+            if review::merge_request_open(db, c.merge_request).await? != Some(false) {
+                return Ok((false, 0));
+            }
+            lock.alive().await?;
+            let change = self
+                .git
+                .set_merge_result_ref(&self.storage, c.repository, c.iid, None, left(&lock))
+                .await?;
+            let removed = review::prune_merge_results(db, c.merge_request).await?;
+            Ok((matches!(change, MergeRefChange::Deleted { .. }), removed))
+        }
+        .await;
+        lock.release().await;
+        out
+    }
 }
 
 /// The job failed for good (`cause`: its last error): end its request as

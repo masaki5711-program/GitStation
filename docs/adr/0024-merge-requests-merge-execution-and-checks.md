@@ -304,7 +304,8 @@ MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `updat
 - 止める理由（`BlockReason`、`_` のない全列挙。名前は `reasons` のログと `gstn mr status --json` にそのまま出る）:
   `not_open`、`draft`、`merge_in_progress`、`source_branch_missing`、`mergeability_unknown`、`conflict`、`ff_not_possible`、
   `approvals_missing{rule, required, counted}`、`codeowner_approval_missing{pattern, owners}`、`codeowners_invalid{line, reason}`、
-  `required_check_missing{name}`、`required_check_not_successful{name, status, conclusion}`、`unresolved_discussions{count}`、
+  `required_check_missing{name}`、`required_check_stale{name}`（M4 C7。末尾の Amendment 2026-11-11）、
+  `required_check_not_successful{name, status, conclusion}`、`unresolved_discussions{count}`、
   `work_item_link_missing`（I1 から）、`config_change_needs_maintainer_approval`（§8 の 7）、`changed_paths_unknown{reason}`（§9。変更されたパスを
   上限の中で読み切れない・UTF-8 でないパスがある。CODEOWNERS と設定のファイルの判定ができないので止める）。
 - `merge_in_progress` は `MergeFacts` の「実行中のマージの行がある」（§4.2）から出す。`merge_status` からは出さない。
@@ -2046,3 +2047,56 @@ O3 の再レビューの決定「kill の時刻（`killed_at_unix_ms`、forge-gi
 ADR-0028 §4（proposed）: 承認のフェーズのあるリポジトリでは、MR が変えた各文書について、マージの結果の blob が承認した head の blob と同じであることを
 マージの条件に足す（`evaluate_merge()` の新しい止める理由。ロックの下でもう一度確かめる）。§8 の 1 の「承認は `(head_sha, target_branch)` に結ぶ」は
 変えない（文書の blob の一致を足すだけ）。ADR-0028 が accepted になったときに有効になる。
+
+## Amendment（2026-11-11、M4 C7 `feat/git-merge-result-staleness`）— マージ結果の ref と必須チェックの鮮度（計画 04 M-1・M-2）
+
+計画 14 §5 の C7（計画 04 M-1・M-2、§9 の決定 4「保護ブランチでは古い必須チェックはマージを止める」）。§2（予約した `merge`）、§3（判定のジョブ）、
+§7（止める理由）、§10（Checks API）を次のとおり補う。
+
+- **マージ結果を作る場所**: §3 の判定のジョブ（`merge_request.mergeability`）。`merge-tree --write-tree` が衝突なしなら、その木を
+  `commit-tree`（親は **target の先端、head** の順。作者・コミッターは固定の `GitStation <merge-result@gitstation.invalid>`、メッセージは
+  標準入力）でコミットにし、`refs/merge-requests/<iid>/merge` を CAS の `update-ref` で向ける（`forge_git::merge_result`。git が
+  マージし、forge は木を作らない。契約 5: argv、`--end-of-options`、時間切れ 10 s）。ジョブは MR の head か target の先端が動くたびに既に積まれる
+  （版の追加、target への push の購読者、掃除の確かめ直し）ので、新しい契機は足さない。
+- **表 `merge_result_refs`**（マイグレーション 20261207100000、派生、監査なし）: (MR, head, target の先端) ごとに 1 行、`result_sha`。
+  一意 `merge_result_refs_once`。同じ組の 2 回目の判定は行の `result_sha` を使い、コミットを作り直さない（**組ごとに 1 回**）。2 つのジョブが
+  同じ組で競っても、先の行が勝ち、負けた側は勝った側の SHA で ref を向ける。古い組の行は残す（古いマージ結果への報告を「古い」と判定するため）。
+- **衝突**: 衝突（と target が無い・共通の履歴が無い・版が無い）のときは ref を消し（CAS）、行も作らない。止める理由は既存の `conflict`
+  （など）のまま。git の失敗（時間切れ・busy）では ref を触らない（保存した状態が既にマージを止める）。
+- **ref を動かすのは最新の判定だけ**: 結果を保存したあと、その判定の `check_seq` がまだ最新のときだけ ref を動かす（新しい判定があればそれが ref を
+  持つ。行とパイプラインはその組について正しいので残す）。
+- **MR のパイプラインはマージ結果で動く**: C2 の `ci-pipelines` 購読者は `merge_request.pushed` で head のパイプラインを **作らなくなった**
+  （ブランチへの push のパイプラインが head を見る）。MR のパイプライン（`source = merge_request`）は、`merge_result_refs` の行を **新しく**
+  書いたトランザクションで `ci.pipeline_create` を積む（`ref` はソースブランチ、`sha` はマージ結果、`triggered_by` はその head の版を push した人）。
+  パイプラインの一意キー（C2）に SHA が入るので、マージ結果ごとに 1 本。ジョブはマージ結果のコミットを C4 のジョブの fetch の経路
+  （`refs/pipelines/<id>/head` をその SHA に作る）で取る。シークレットは C2 の規則のまま（`source = merge_request` には出さない）。
+- **必須チェックの鮮度**（`forge_core::merge_results`）: マージの判定（状態の読み取り、マージの要求、ジョブのロックの下の再判定）は、head の
+  実行と、その head の **マージ結果ごと** の実行（新しい順に 20 件まで）を読み、必須の名前ごとに **生きている target の先端** で決める:
+  1. 今のマージ結果（target が今の先端の行）への実行は数える。
+  2. それが無く、名前が forge 自身がマージ結果へ報告するもの（`ci/pipeline`、MR のパイプライン）で、前のマージ結果への実行がある →
+     **古い**（`required_check_stale{name}`。結論に関係なく数えない）。`ci/pipeline` は head への実行も **数えない**（push のパイプラインの
+     結果で、マージ結果のものではない）。
+  3. それ以外の名前（外部の報告者。Checks API はブランチかタグから届くコミットにしか報告できないので、隠したマージ結果には報告できない）
+     は head への実行を数え、前のマージ結果にしか無い実行は無視する（レビュー MEDIUM: MR のパイプラインをやり直しても二度と報告されない
+     名前 — 消えた・名前の変わったジョブ — で止まり続けない）。
+  4. どれも無ければ `required_check_missing`。
+  必須チェックは保護ブランチのマージの規則にしかないので、古いものは保護ブランチで常に止める（§9 の決定 4。設定で緩める道は M4 では作らない）。
+- **止める理由とコード**: `required_check_stale{name}` を §7 の並びの `required_check_missing` の次に足した（`BlockReason::rank` 12、以降を 1 つずらした。
+  `status_reason_schema_lists_every_block_reason`・`the_reason_order_is_fixed` が固定）。最初の理由が `required_check_stale` のとき、拒否は
+  **FG-CI-0013 RequiredCheckStale**（409、info、runbook なし。次の手は「新しいマージ結果のパイプラインを待つ」）、それ以外は従来どおり
+  FG-REVIEW-0007 が `reasons` に並べる。マージのジョブでは `superseded` の `error_code` になる（再試行しない決定のコード）。
+- **状態の契約**（`docs/api/merge-status.md`、schema_version 1 のまま欄を足す）: `merge_result_sha`（今のマージ結果。判定中・衝突・版や target が
+  無いときは null）と `checks[].stale`。
+- **隠す**: `refs/merge-requests/<iid>/merge` は §2 の `HIDDEN_REF_PREFIX` の下なので、upload-pack / receive-pack の広告、`want` の確認、
+  `deepen-not`（`deepen_not_hidden`）から既に外れ、push は FG-GIT-0010 で断られる。新しい設定は足さず、テストで固定した
+  （forge-cli `hidden_merge_request_refs_are_not_advertised_or_fetchable` に `merge` を足した、forge-git
+  `deepen_not_naming_a_hidden_ref_is_refused`、forge-web `a_merge_request_job_fetches_its_merge_result_commit`）。
+- **ログ**: 新しいマージ結果・ref の移動は info `forge.review.merge_result_updated`（`request_id`、`merge_request_id`、`head_sha`、`target_sha`、
+  `result_sha`、`created`、`pipeline_enqueued`、`merge_ref`）、衝突などでの削除は info `forge.review.merge_result_removed`。この段の失敗は判定の
+  ジョブの失敗（`stage=merge_result` の文脈つきで再試行。状態は既に保存済みで、マージ結果が無いことは必須チェックを数える方向には働かない）。
+- **分けたもの**: マージ結果のコミットは到達できる ref が `refs/merge-requests/<iid>/merge` だけなので、閉じた・マージした MR の古い結果は
+  O3 の保守の prune（猶予つき）に任せる（ref は §2 のとおり MR と一緒に残す）。マージキュー（C8）は前に並ぶ MR を含めたマージ結果を別に作る。
+- テスト（実際の git と開発の DB）: forge-review `a_required_check_of_an_older_merge_result_is_stale_and_blocks_the_merge`（target が進む →
+  古い → FG-CI-0013 → 新しい結果で成功 → マージ）、`the_merge_job_refuses_a_check_that_went_stale_after_the_request`、
+  `a_head_run_of_ci_pipeline_does_not_count`、`a_conflict_leaves_no_merge_ref`、`a_merge_result_is_written_once_per_pair`、forge-db
+  `a_merge_request_pipeline_runs_on_each_merge_result_once`、forge-core の解決の単体テスト。

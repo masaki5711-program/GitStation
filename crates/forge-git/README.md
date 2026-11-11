@@ -140,6 +140,14 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   empty name falls back to the username). `Git::ref_locked` tells a `<ref>.lock`. Tests
   `commit_tests.rs` (`merge_plumbing_argv_on_git_2_38`, the three methods, identities, dashes,
   timeout).
+- **Merge result** (`merge_result`, M4 C7, ADR-0024 Amendment 2026-11-11):
+  `Git::write_merge_result(&StorageRoot, RepoId, iid, (tree, target_tip, head), timeout)` —
+  `commit_tree` with the clean trial merge's tree, parents target tip then head, the fixed
+  identity `GitStation <merge-result@gitstation.invalid>`; `Git::set_merge_result_ref(…, iid,
+  Some(&sha) | None, timeout) -> MergeRefChange::{Unchanged, Created, Moved, Deleted}` points
+  `refs/merge-requests/<iid>/merge` (`hidden_refs::merge_request_merge_ref`) at the result or
+  deletes it, one CAS `update-ref` on the value just read (a lost swap already at the wanted
+  value is success). Hidden by the existing `refs/merge-requests/` settings.
 - **Mergeability** (`mergeability`, M3 R2, ADR-0024 §3): `Git::merge_tree(&StorageRoot, RepoId,
   target, head, MergeTreeLimits { timeout 30 s, max_output_bytes 256 KiB, max_files 100 }) ->
   MergeTree::{Clean { tree }, Conflicted { files, files_truncated }}` (`merge-tree --write-tree
