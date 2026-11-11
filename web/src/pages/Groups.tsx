@@ -85,7 +85,7 @@ export function GroupsPage() {
         ) : (
           <>
             {groups.data.truncated && (
-              <p role="status" className={lists.hint}>
+              <p className={lists.hint}>
                 {t('groups.truncated')}
               </p>
             )}

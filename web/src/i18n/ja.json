@@ -76,8 +76,8 @@
     "collapseAll": "すべて閉じる",
     "subgroupCount_one": "サブグループ {{count}} 件",
     "subgroupCount_other": "サブグループ {{count}} 件",
-    "newSubgroupIn": "{{name}} にサブグループを作る",
-    "newProjectIn": "{{name}} にプロジェクトを作る"
+    "newSubgroupIn": "サブグループを作る（{{name}}）",
+    "newProjectIn": "プロジェクトを作る（{{name}}）"
   },
   "create": {
     "parent": "作る場所",

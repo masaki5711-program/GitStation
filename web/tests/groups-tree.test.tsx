@@ -95,10 +95,10 @@ describe('/-/groups tree', () => {
     await renderApp({ fetch: server.fetch, path: '/-/groups' });
     await screen.findByRole('link', { name: 'Acme Plant' });
     expect(screen.queryByRole('button', { name: 'グループを作る' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Acme Plant にサブグループを作る' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Acme Plant にプロジェクトを作る' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Ops にサブグループを作る' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Ops にプロジェクトを作る' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'サブグループを作る（Acme Plant）' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'プロジェクトを作る（Acme Plant）' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'サブグループを作る（Ops）' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'プロジェクトを作る（Ops）' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Dev Team に/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Public に/ })).toBeNull();
   });
@@ -107,8 +107,8 @@ describe('/-/groups tree', () => {
     const server = mockServer(routes({}, signedInAdmin()));
     await renderApp({ fetch: server.fetch, path: '/-/groups' });
     await screen.findByRole('link', { name: 'Public' });
-    expect(screen.getByRole('button', { name: 'Public にサブグループを作る' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Dev Team にプロジェクトを作る' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'サブグループを作る（Public）' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'プロジェクトを作る（Dev Team）' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'グループを作る' }));
     expect(await screen.findByRole('dialog', { name: 'グループを作る' })).toBeTruthy();
   });
@@ -117,7 +117,7 @@ describe('/-/groups tree', () => {
     const created = { ...ACME, id: 12, namespace_id: 120, parent_id: 3, path: 'acme/new-sub', name: 'new-sub', display_name: 'New Sub' };
     const server = mockServer(routes({ 'POST /api/v1/groups/3/subgroups': () => json(201, created) }));
     await renderApp({ fetch: server.fetch, path: '/-/groups' });
-    fireEvent.click(await screen.findByRole('button', { name: 'Acme Plant にサブグループを作る' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'サブグループを作る（Acme Plant）' }));
     const d = within(await screen.findByRole('dialog', { name: 'サブグループを作る' }));
     expect(d.getByText('acme')).toBeTruthy();
     fireEvent.change(d.getByLabelText('名前'), { target: { value: 'New Sub' } });
@@ -146,7 +146,7 @@ describe('/-/groups tree', () => {
     };
     const server = mockServer(routes({ 'POST /api/v1/projects': () => json(201, created) }));
     await renderApp({ fetch: server.fetch, path: '/-/groups' });
-    fireEvent.click(await screen.findByRole('button', { name: 'Ops にプロジェクトを作る' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'プロジェクトを作る（Ops）' }));
     const d = within(await screen.findByRole('dialog', { name: 'プロジェクトを作る' }));
     fireEvent.change(d.getByLabelText('名前'), { target: { value: 'New Proj' } });
     fireEvent.click(d.getByRole('button', { name: 'プロジェクトを作る' }));
@@ -170,7 +170,7 @@ describe('/-/groups tree', () => {
       }),
     );
     const { container } = await renderApp({ fetch: server.fetch, path: '/-/groups' });
-    fireEvent.click(await screen.findByRole('button', { name: 'Acme Plant にサブグループを作る' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'サブグループを作る（Acme Plant）' }));
     const dialog = await screen.findByRole('dialog', { name: 'サブグループを作る' });
     const d = within(dialog);
     fireEvent.change(d.getByLabelText('名前'), { target: { value: 'New Sub' } });
