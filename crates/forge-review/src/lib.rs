@@ -56,6 +56,7 @@ pub mod merges;
 pub mod outdated;
 pub mod position;
 mod purge;
+pub mod user_lists;
 mod version_refs;
 pub mod versions;
 mod versions_carry;
@@ -76,6 +77,10 @@ pub use mergeability::{check, prune_merge_results, CheckReport, Mergeability, Pr
 pub use merges::{
     evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeReport,
     MergeSettings, MergeTimeouts, Merger, ReconcileReport, StoredMerge,
+};
+pub use user_lists::{
+    AttentionReason, UserListCount, UserListCounts, UserListItem, UserListPage, UserListQuery,
+    UserListScope,
 };
 pub use versions::{refresh, RefreshReport, SyncReport, VersionRefs};
 

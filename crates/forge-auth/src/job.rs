@@ -190,6 +190,7 @@ fn job(credential: &JobCredential, rule: CiRule, resource: &Resource) -> Result<
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
         | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

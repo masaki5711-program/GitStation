@@ -160,6 +160,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the groups the caller can see */
+        get: operations["get_groups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the groups the caller can see */
+        head: operations["head_groups"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/notifications": {
         parameters: {
             query?: never;
@@ -175,6 +193,24 @@ export interface paths {
         options?: never;
         /** SPA shell: the caller's in-app notifications */
         head: operations["head_notifications"];
+        patch?: never;
+        trace?: never;
+    };
+    "/-/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the caller's projects */
+        get: operations["get_projects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the caller's projects */
+        head: operations["head_projects"];
         patch?: never;
         trace?: never;
     };
@@ -2130,6 +2166,40 @@ export interface paths {
         };
         /** The caller's own account (M1 phase 8b MR6) */
         get: operations["get_api_v1_user"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own open merge requests of one scope (authored, approvable, attention), newest first; only rows whose merge request the caller may read now (an unknown or missing scope is FG-WEB-0006) */
+        get: operations["get_api_v1_user_merge_requests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/merge-requests/counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found) */
+        get: operations["get_api_v1_user_merge_requests_counts"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5996,6 +6066,71 @@ export interface components {
             outcome: string;
             webhook: components["schemas"]["WebhookBody"];
         };
+        /** @description One merge request of the caller's lists. */
+        UserMergeRequestBody: {
+            /**
+             * @description Why it waits on its author: `conflict`, `conflict_predicted`,
+             *     `required_check_failed` (empty: nothing known; never empty on
+             *     `attention`).
+             */
+            attention: string[];
+            author: components["schemas"]["UserNameBody"];
+            /** Format: int64 */
+            author_id: number;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            draft: boolean;
+            /** @description The head commit of the latest version (`null` until one is recorded). */
+            head_sha: string | null;
+            /**
+             * Format: int64
+             * @description The merge request's global id (the keyset of `before`).
+             */
+            id: number;
+            /**
+             * Format: int64
+             * @description The project's own number of it.
+             */
+            iid: number;
+            /** Format: int64 */
+            project_id: number;
+            /** @description The project's path now (`group/project`). */
+            project_path: string;
+            /** @description The branch name without `refs/heads/`. */
+            source_branch: string;
+            /** @description `open` (every scope lists open merge requests only). */
+            state: string;
+            target_branch: string;
+            title: string;
+            updated_at: string;
+        };
+        /** @description The visible rows of one scope. */
+        UserMergeRequestCount: {
+            /** @description 100 visible rows were found (show "99+"); hidden rows never set it. */
+            capped: boolean;
+            /**
+             * Format: int64
+             * @description At most 100 (counted over at most 1000 candidates, newest first).
+             */
+            count: number;
+        };
+        /** @description The counts of the caller's lists. */
+        UserMergeRequestCounts: {
+            approvable: components["schemas"]["UserMergeRequestCount"];
+            attention: components["schemas"]["UserMergeRequestCount"];
+            authored: components["schemas"]["UserMergeRequestCount"];
+        };
+        /** @description A page of one scope. */
+        UserMergeRequestList: {
+            merge_requests: components["schemas"]["UserMergeRequestBody"][];
+            /**
+             * Format: int64
+             * @description Pass as `before` for the next (older) page; `null`: no more.
+             */
+            next_before: number | null;
+            /** @description `authored`, `approvable` or `attention`. */
+            scope: string;
+        };
         /** @description One search match: names only. */
         UserName: {
             display_name: string;
@@ -6507,6 +6642,46 @@ export interface operations {
             };
         };
     };
+    get_groups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_groups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_notifications: {
         parameters: {
             query?: never;
@@ -6528,6 +6703,46 @@ export interface operations {
         };
     };
     head_notifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_projects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_projects: {
         parameters: {
             query?: never;
             header?: never;
@@ -11627,6 +11842,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserSelf"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_merge_requests: {
+        parameters: {
+            query?: {
+                /** @description Required: authored (open, the caller's own), approvable (open, not draft, the caller may approve its current head and has not yet; never the caller's own) or attention (the caller's open ones with a conflict, a predicted conflict or a failed required check) */
+                scope?: string;
+                /** @description Only merge requests with a smaller id (next_before of the previous page) */
+                before?: number;
+                /** @description Rows read per page, 1..=100 (default 20), newest first; hidden rows are skipped, so a page may hold fewer */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserMergeRequestList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_merge_requests_counts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserMergeRequestCounts"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

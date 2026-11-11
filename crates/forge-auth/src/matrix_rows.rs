@@ -757,6 +757,22 @@ pub(crate) const BASE_ROWS: &[Row] = &[
     row(A::NotificationInboxRead, W::Reporter, F::ForeignNotificationPreferences, deny(E::NotFound)),
     row(A::NotificationInboxRead, W::Admin, F::ForeignNotificationPreferences, deny(E::NotFound)),
     row(A::NotificationInboxRead, W::AdminTokenApi, F::ForeignNotificationPreferences, deny(E::NotFound)),
+    // Plan 15 MR 6: a person's own merge request lists
+    // (`/api/v1/user/merge-requests…`). Only the person; another user's are
+    // not found, administrators included. Reading needs `read_api`; an
+    // act-as credential is refused (generated rows: `ActAsRule::Denied`).
+    row(A::UserMergeRequestList, W::Reporter, F::OwnUserMergeRequests, Allow),
+    row(A::UserMergeRequestList, W::NonMember, F::OwnUserMergeRequests, Allow),
+    row(A::UserMergeRequestList, W::Admin, F::OwnUserMergeRequests, Allow),
+    row(A::UserMergeRequestList, W::OwnerTokenReadApi, F::OwnUserMergeRequests, Allow),
+    row(A::UserMergeRequestList, W::AgentTokenReadApi, F::OwnUserMergeRequests, Allow),
+    row(A::UserMergeRequestList, W::DevTokenReadRepository, F::OwnUserMergeRequests, deny(E::InsufficientScope)),
+    row(A::UserMergeRequestList, W::Anonymous, F::OwnUserMergeRequests, deny(E::Unauthenticated)),
+    row(A::UserMergeRequestList, W::Disabled, F::OwnUserMergeRequests, deny(E::AccountDisabled)),
+    row(A::UserMergeRequestList, W::Reporter, F::ForeignUserMergeRequests, deny(E::NotFound)),
+    row(A::UserMergeRequestList, W::Admin, F::ForeignUserMergeRequests, deny(E::NotFound)),
+    row(A::UserMergeRequestList, W::AdminTokenApi, F::ForeignUserMergeRequests, deny(E::NotFound)),
+    row(A::UserMergeRequestList, W::AdminTokenAdmin, F::ForeignUserMergeRequests, deny(E::NotFound)),
     row(A::NotificationInboxUpdate, W::Reporter, F::OwnNotificationPreferences, Allow),
     row(A::NotificationInboxUpdate, W::NonMember, F::OwnNotificationPreferences, Allow),
     row(A::NotificationInboxUpdate, W::DevTokenApi, F::OwnNotificationPreferences, Allow),

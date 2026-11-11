@@ -9805,6 +9805,168 @@
         ],
         "type": "object"
       },
+      "UserMergeRequestBody": {
+        "additionalProperties": false,
+        "description": "One merge request of the caller's lists.",
+        "properties": {
+          "attention": {
+            "description": "Why it waits on its author: `conflict`, `conflict_predicted`,\n`required_check_failed` (empty: nothing known; never empty on\n`attention`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "author": {
+            "$ref": "#/components/schemas/UserNameBody"
+          },
+          "author_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "description": "The head commit of the latest version (`null` until one is recorded).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The merge request's global id (the keyset of `before`).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "iid": {
+            "description": "The project's own number of it.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "The project's path now (`group/project`).",
+            "type": "string"
+          },
+          "source_branch": {
+            "description": "The branch name without `refs/heads/`.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`open` (every scope lists open merge requests only).",
+            "type": "string"
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "project_path",
+          "iid",
+          "title",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "author_id",
+          "author",
+          "head_sha",
+          "attention",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "UserMergeRequestCount": {
+        "additionalProperties": false,
+        "description": "The visible rows of one scope.",
+        "properties": {
+          "capped": {
+            "description": "100 visible rows were found (show \"99+\"); hidden rows never set it.",
+            "type": "boolean"
+          },
+          "count": {
+            "description": "At most 100 (counted over at most 1000 candidates, newest first).",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "capped"
+        ],
+        "type": "object"
+      },
+      "UserMergeRequestCounts": {
+        "additionalProperties": false,
+        "description": "The counts of the caller's lists.",
+        "properties": {
+          "approvable": {
+            "$ref": "#/components/schemas/UserMergeRequestCount"
+          },
+          "attention": {
+            "$ref": "#/components/schemas/UserMergeRequestCount"
+          },
+          "authored": {
+            "$ref": "#/components/schemas/UserMergeRequestCount"
+          }
+        },
+        "required": [
+          "authored",
+          "approvable",
+          "attention"
+        ],
+        "type": "object"
+      },
+      "UserMergeRequestList": {
+        "additionalProperties": false,
+        "description": "A page of one scope.",
+        "properties": {
+          "merge_requests": {
+            "items": {
+              "$ref": "#/components/schemas/UserMergeRequestBody"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "description": "Pass as `before` for the next (older) page; `null`: no more.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scope": {
+            "description": "`authored`, `approvable` or `attention`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "merge_requests",
+          "next_before"
+        ],
+        "type": "object"
+      },
       "UserName": {
         "additionalProperties": false,
         "description": "One search match: names only.",
@@ -18686,6 +18848,97 @@
         },
         "summary": "The caller's own account (M1 phase 8b MR6)",
         "x-forge-action": "UserSelfRead"
+      }
+    },
+    "/api/v1/user/merge-requests": {
+      "get": {
+        "operationId": "get_api_v1_user_merge_requests",
+        "parameters": [
+          {
+            "description": "Required: authored (open, the caller's own), approvable (open, not draft, the caller may approve its current head and has not yet; never the caller's own) or attention (the caller's open ones with a conflict, a predicted conflict or a failed required check)",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only merge requests with a smaller id (next_before of the previous page)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Rows read per page, 1..=100 (default 20), newest first; hidden rows are skipped, so a page may hold fewer",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserMergeRequestList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own open merge requests of one scope (authored, approvable, attention), newest first; only rows whose merge request the caller may read now (an unknown or missing scope is FG-WEB-0006)",
+        "x-forge-action": "UserMergeRequestList"
+      }
+    },
+    "/api/v1/user/merge-requests/counts": {
+      "get": {
+        "operationId": "get_api_v1_user_merge_requests_counts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserMergeRequestCounts"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found)",
+        "x-forge-action": "UserMergeRequestList"
       }
     },
     "/api/v1/user/notification-preferences": {

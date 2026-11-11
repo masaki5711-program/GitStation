@@ -94,8 +94,8 @@ pub use prove::{
     LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx, PinnedCopyCtx, ProjectCtx,
     ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, RunnerJobCtx, ServiceAccountCtx,
     ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx,
-    TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx,
-    UserTargetCtx, VisibilityChangeCtx,
+    TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserMergeRequestsCtx,
+    UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 pub use repo_copy::authorize_repo_copy;
