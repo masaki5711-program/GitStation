@@ -39,16 +39,12 @@
   },
   "home": {
     "title": "Beranda",
-    "newProject": "Proyek baru",
-    "newGroup": "Grup baru",
     "mine": "Proyek Anda",
-    "mineEmpty": "Anda belum menjadi anggota proyek mana pun.",
-    "mineEmptyHint": "Buat dengan \"Proyek baru\", atau minta administrator proyek menambahkan Anda.",
-    "filter": "Saring menurut nama atau jalur",
-    "filterEmpty": "Tidak ada proyek yang cocok.",
     "groups": "Grup Anda",
     "recent": "Baru dilihat",
-    "recentHint": "Hanya diingat di peramban ini."
+    "recentHint": "Hanya diingat di peramban ini.",
+    "allProjects": "Lihat semua proyek",
+    "allGroups": "Lihat semua grup"
   },
   "nav": {
     "myWork": "Pekerjaan saya",
@@ -59,14 +55,20 @@
     "expand": "Bentangkan bilah samping",
     "menu": "Menu"
   },
-  "projectsPage": {
+  "projects": {
     "title": "Proyek",
-    "member": "Anggota"
+    "new": "Proyek baru",
+    "empty": "Anda belum menjadi anggota proyek mana pun.",
+    "emptyHint": "Buat dengan \"Proyek baru\", atau minta administrator proyek menambahkan Anda.",
+    "filter": "Saring menurut nama atau jalur",
+    "filterEmpty": "Tidak ada proyek yang cocok."
   },
-  "groupsPage": {
+  "groups": {
     "title": "Grup",
+    "new": "Grup baru",
     "empty": "Belum ada grup yang dapat Anda lihat.",
-    "emptyHint": "Grup dibuat oleh administrator. Minta kepada administrator jika Anda membutuhkan grup.",
+    "emptyMember": "Grup tempat Anda bergabung muncul di sini.",
+    "emptyHint": "Minta administrator untuk membuatnya.",
     "emptyHintAdmin": "Buat grup pertama dengan \"Grup baru\"."
   },
   "create": {

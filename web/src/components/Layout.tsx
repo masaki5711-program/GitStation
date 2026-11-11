@@ -24,25 +24,43 @@ export function Layout({ bare = false }: { bare?: boolean }) {
   const navId = useId();
   const menuButton = useRef<HTMLButtonElement>(null);
   const [navOpen, setNavOpen] = useState(false);
-  const closeNav = useCallback(() => {
-    setNavOpen(false);
-  }, []);
+  const pathname = location.pathname;
+  // A followed link closes the narrow-screen panel. The link of the page I am
+  // on changes no route, so the focus (on the now hidden link) would fall to
+  // the body: give it back to the menu button.
+  const closeNav = useCallback(
+    (to: string) => {
+      setNavOpen(false);
+      if (to === pathname) menuButton.current?.focus();
+    },
+    [pathname],
+  );
+
+  // Narrow screens: opening moves the focus to the first item.
+  useEffect(() => {
+    if (!narrow || !navOpen) return;
+    document.getElementById(navId)?.querySelector<HTMLElement>('a[href]')?.focus();
+  }, [narrow, navOpen, navId]);
 
   // Narrow screens: Esc closes the open sidebar and gives the focus back to
-  // the menu button (WCAG 2.1.2 / 2.4.3).
+  // the menu button (WCAG 2.1.2 / 2.4.3) — only when the focus is in the
+  // sidebar or on the button, and not when something else (a dialog) has
+  // already handled the key.
   useEffect(() => {
     if (!narrow || !navOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setNavOpen(false);
-        menuButton.current?.focus();
-      }
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const active = document.activeElement;
+      const inNav = active !== null && document.getElementById(navId)?.contains(active) === true;
+      if (!inNav && active !== menuButton.current) return;
+      setNavOpen(false);
+      menuButton.current?.focus();
     };
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
     };
-  }, [narrow, navOpen]);
+  }, [narrow, navOpen, navId]);
 
   // After a navigation the focus moves to the new page's heading (WCAG 2.4.3;
   // not on first load).
@@ -119,7 +137,7 @@ export function Layout({ bare = false }: { bare?: boolean }) {
       {!bare && <Header {...(nav ? { nav } : {})} />}
       <div className={styles.frame}>
         {withNav && <Sidebar id={navId} narrow={narrow} open={navOpen} onNavigate={closeNav} />}
-        <main id="main" tabIndex={-1} ref={main} className={styles.main}>
+        <main id="main" tabIndex={-1} ref={main} className={withNav ? `${styles.main ?? ''} ${styles.besideNav ?? ''}` : styles.main}>
           <ErrorBoundary key={location.pathname}>{content}</ErrorBoundary>
         </main>
       </div>

@@ -18,14 +18,33 @@ import { GroupList } from '../features/Lists';
 import { MyProjects } from '../features/MyProjects';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
+import { useSession } from '../session/session';
 import styles from './Home.module.css';
 
-function Block({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+/** `all`: the "see all" link to the full screen (plan 15 sidebar pages). */
+function Block({
+  id,
+  title,
+  all,
+  children,
+}: {
+  id: string;
+  title: string;
+  all?: { to: string; label: string };
+  children: ReactNode;
+}) {
   return (
     <section aria-labelledby={id} className={styles.block}>
-      <h2 id={id} className={styles.heading}>
-        {title}
-      </h2>
+      <div className={styles.blockTop}>
+        <h2 id={id} className={styles.heading}>
+          {title}
+        </h2>
+        {all && (
+          <Link to={all.to} className={styles.all}>
+            {all.label}
+          </Link>
+        )}
+      </div>
       {children}
     </section>
   );
@@ -39,6 +58,7 @@ function Truncated({ all }: { all: All<unknown> }) {
 export function Home() {
   const { t } = useTranslation();
   const api = useApi();
+  const { user } = useSession();
   useDocumentTitle(t('home.title'));
   const [dialog, setDialog] = useState<'project' | 'group' | null>(null);
   const recent = useMemo(() => readRecent(), []);
@@ -60,21 +80,24 @@ export function Home() {
               setDialog('project');
             }}
           >
-            {t('home.newProject')}
+            {t('projects.new')}
           </button>
-          <button
-            type="button"
-            className={controls.button}
-            onClick={() => {
-              setDialog('group');
-            }}
-          >
-            {t('home.newGroup')}
-          </button>
+          {/* Only an administrator may create a top-level group (as /-/groups). */}
+          {user.is_admin && (
+            <button
+              type="button"
+              className={controls.button}
+              onClick={() => {
+                setDialog('group');
+              }}
+            >
+              {t('groups.new')}
+            </button>
+          )}
         </div>
       </div>
 
-      <Block id="home-mine" title={t('home.mine')}>
+      <Block id="home-mine" title={t('home.mine')} all={{ to: '/-/projects', label: t('home.allProjects') }}>
         <MyProjects
           onCreate={() => {
             setDialog('project');
@@ -93,7 +116,7 @@ export function Home() {
         </Block>
       )}
       {groups.isSuccess && groups.data.items.length > 0 && (
-        <Block id="home-groups" title={t('home.groups')}>
+        <Block id="home-groups" title={t('home.groups')} all={{ to: '/-/groups', label: t('home.allGroups') }}>
           <GroupList items={groups.data.items} />
           <Truncated all={groups.data} />
         </Block>
@@ -118,12 +141,14 @@ export function Home() {
           setDialog(null);
         }}
       />
-      <CreateGroupDialog
-        open={dialog === 'group'}
-        onClose={() => {
-          setDialog(null);
-        }}
-      />
+      {user.is_admin && (
+        <CreateGroupDialog
+          open={dialog === 'group'}
+          onClose={() => {
+            setDialog(null);
+          }}
+        />
+      )}
     </>
   );
 }

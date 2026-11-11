@@ -9,6 +9,7 @@ import {
   mockServer,
   page,
   signedIn,
+  signedInAdmin,
 } from './mock';
 import { json, renderApp } from './render';
 
@@ -118,7 +119,7 @@ describe('CSP: no injected <style> (ADR-0022 §3a)', () => {
 
   it('opening and closing the create dialog adds none (native <dialog>)', async () => {
     const server = mockServer({
-      ...signedIn(),
+      ...signedInAdmin(),
       'GET /api/v1/projects': () => page([]),
       'GET /api/v1/groups': () => page([]),
       'GET /api/v1/namespaces/resolve': () => apiError(404, 'x', 'r'),

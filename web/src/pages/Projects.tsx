@@ -12,7 +12,7 @@ import styles from './Home.module.css';
 
 export function ProjectsPage() {
   const { t } = useTranslation();
-  useDocumentTitle(t('projectsPage.title'));
+  useDocumentTitle(t('projects.title'));
   const [creating, setCreating] = useState(false);
   const create = () => {
     setCreating(true);
@@ -20,19 +20,14 @@ export function ProjectsPage() {
   return (
     <>
       <div className={styles.top}>
-        <h1 className={styles.title}>{t('projectsPage.title')}</h1>
+        <h1 className={styles.title}>{t('projects.title')}</h1>
         <div className={styles.actions}>
           <button type="button" className={controls.primary} onClick={create}>
-            {t('home.newProject')}
+            {t('projects.new')}
           </button>
         </div>
       </div>
-      <section aria-labelledby="projects-member" className={styles.block}>
-        <h2 id="projects-member" className={styles.heading}>
-          {t('projectsPage.member')}
-        </h2>
-        <MyProjects onCreate={create} />
-      </section>
+      <MyProjects onCreate={create} />
       <CreateProjectDialog
         open={creating}
         onClose={() => {

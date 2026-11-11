@@ -84,8 +84,8 @@ export function Sidebar({
   narrow: boolean;
   /** Narrow screens only: the header's menu button opened it. */
   open: boolean;
-  /** A link was followed (closes the narrow-screen panel). */
-  onNavigate: () => void;
+  /** A link to `to` was followed (closes the narrow-screen panel). */
+  onNavigate: (to: string) => void;
 }) {
   const { t } = useTranslation();
   const [stored, setStored] = useState(readCollapsed);
@@ -122,7 +122,11 @@ export function Sidebar({
       <ul className={styles.list}>
         {items.map((item) => (
           <li key={item.key}>
-            <NavLink to={item.to} end className={styles.link ?? ''} onClick={onNavigate}>
+            <NavLink to={item.to} end               className={styles.link ?? ''}
+              onClick={() => {
+                onNavigate(item.to);
+              }}
+            >
               {ICONS[item.key]}
               {label(item.text)}
             </NavLink>

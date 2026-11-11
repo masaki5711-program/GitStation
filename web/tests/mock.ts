@@ -144,3 +144,10 @@ export const signedIn = (): Record<string, Handler> => ({
   'GET /api/v1/session': () => json(200, SESSION),
   'GET /api/v1/user/notifications/unread-count': () => json(200, { count: 0, capped: false }),
 });
+
+/** An administrator: the only one shown "create group" (plan 15 §6-1). */
+export const ADMIN_SESSION = { ...SESSION, user: { ...SESSION.user, is_admin: true } };
+export const signedInAdmin = (): Record<string, Handler> => ({
+  ...signedIn(),
+  'GET /api/v1/session': () => json(200, ADMIN_SESSION),
+});

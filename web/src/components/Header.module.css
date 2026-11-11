@@ -28,7 +28,7 @@
 
 .select {
   composes: interactive from './controls.module.css';
-  min-height: 2.5rem;
+  min-height: var(--gs-tap-target);
   padding: 0 var(--gs-space-2);
   border: 1px solid var(--gs-header-text);
   border-radius: var(--gs-radius-sm);
@@ -50,12 +50,7 @@
 }
 
 .srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+  composes: srOnly from './controls.module.css';
 }
 
 .skip {
@@ -89,8 +84,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 2.5rem;
-  min-height: 2.5rem;
+  min-width: var(--gs-tap-target);
+  min-height: var(--gs-tap-target);
   padding: 0;
   border: 1px solid var(--gs-header-text);
   border-radius: var(--gs-radius-sm);

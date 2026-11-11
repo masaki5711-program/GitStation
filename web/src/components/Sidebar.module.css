@@ -2,9 +2,13 @@
 .sidebar {
   flex: none;
   align-self: flex-start;
+  /* The header scrolls away (it is not sticky), so the column sticks to
+     the top of the viewport once the page scrolls past it. */
   position: sticky;
   top: 0;
-  width: 14rem;
+  max-height: 100vh;
+  overflow-y: auto;
+  width: var(--gs-sidebar-width);
   min-height: calc(100vh - var(--gs-header-height));
   padding: var(--gs-space-4) var(--gs-space-2);
   border-right: 1px solid var(--gs-color-border);
@@ -44,7 +48,7 @@
   align-items: center;
   gap: var(--gs-space-3);
   width: 100%;
-  min-height: 2.5rem;
+  min-height: var(--gs-tap-target);
   padding: var(--gs-space-2) var(--gs-space-3);
   border: none;
   border-radius: var(--gs-radius-sm);
@@ -56,7 +60,8 @@
 }
 
 /* Where I am: not colour alone — a bar and bold text as well. */
-.link[aria-current='page'] {
+.link[aria-current='page'],
+.link[aria-current='page']:hover:not(:disabled) {
   background: var(--gs-color-active-surface);
   box-shadow: inset 3px 0 0 var(--gs-color-action);
   color: var(--gs-color-link);
@@ -72,7 +77,7 @@
 .collapsed .link,
 .collapsed .toggle {
   justify-content: center;
-  width: 2.75rem;
+  width: var(--gs-tap-target);
   padding: var(--gs-space-2);
 }
 
@@ -86,10 +91,5 @@
 }
 
 .srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+  composes: srOnly from './controls.module.css';
 }

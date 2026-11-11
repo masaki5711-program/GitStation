@@ -22,7 +22,7 @@ export function GroupsPage() {
   const { t } = useTranslation();
   const api = useApi();
   const { user } = useSession();
-  useDocumentTitle(t('groupsPage.title'));
+  useDocumentTitle(t('groups.title'));
   const [creating, setCreating] = useState(false);
   const groups = useQuery(groupsQuery(api));
 
@@ -34,14 +34,14 @@ export function GroupsPage() {
         setCreating(true);
       }}
     >
-      {t('home.newGroup')}
+      {t('groups.new')}
     </button>
   ) : null;
 
   return (
     <>
       <div className={styles.top}>
-        <h1 className={styles.title}>{t('groupsPage.title')}</h1>
+        <h1 className={styles.title}>{t('groups.title')}</h1>
         {createButton !== null && <div className={styles.actions}>{createButton}</div>}
       </div>
       {groups.isPending && <Loading />}
@@ -56,10 +56,15 @@ export function GroupsPage() {
       {groups.isSuccess &&
         (groups.data.items.length === 0 ? (
           <div className={lists.empty}>
-            <p>{t('groupsPage.empty')}</p>
-            <p className={lists.hint}>
-              {user.is_admin ? t('groupsPage.emptyHintAdmin') : t('groupsPage.emptyHint')}
-            </p>
+            <p>{t('groups.empty')}</p>
+            {user.is_admin ? (
+              <p className={lists.hint}>{t('groups.emptyHintAdmin')}</p>
+            ) : (
+              <>
+                <p className={lists.hint}>{t('groups.emptyMember')}</p>
+                <p className={lists.hint}>{t('groups.emptyHint')}</p>
+              </>
+            )}
           </div>
         ) : (
           <>

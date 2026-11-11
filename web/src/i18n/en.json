@@ -39,16 +39,12 @@
   },
   "home": {
     "title": "Home",
-    "newProject": "New project",
-    "newGroup": "New group",
     "mine": "Your projects",
-    "mineEmpty": "You are not a member of any project yet.",
-    "mineEmptyHint": "Create one with \"New project\", or ask a project administrator to add you.",
-    "filter": "Filter by name or path",
-    "filterEmpty": "No project matches.",
     "groups": "Your groups",
     "recent": "Recently viewed",
-    "recentHint": "Remembered in this browser only."
+    "recentHint": "Remembered in this browser only.",
+    "allProjects": "See all projects",
+    "allGroups": "See all groups"
   },
   "nav": {
     "myWork": "My work",
@@ -59,14 +55,20 @@
     "expand": "Expand the sidebar",
     "menu": "Menu"
   },
-  "projectsPage": {
+  "projects": {
     "title": "Projects",
-    "member": "Member of"
+    "new": "New project",
+    "empty": "You are not a member of any project yet.",
+    "emptyHint": "Create one with \"New project\", or ask a project administrator to add you.",
+    "filter": "Filter by name or path",
+    "filterEmpty": "No project matches."
   },
-  "groupsPage": {
+  "groups": {
     "title": "Groups",
+    "new": "New group",
     "empty": "There are no groups you can see yet.",
-    "emptyHint": "Groups are created by an administrator. Ask one if you need a group.",
+    "emptyMember": "The groups you belong to appear here.",
+    "emptyHint": "Ask an administrator to create one.",
     "emptyHintAdmin": "Create the first group with \"New group\"."
   },
   "create": {

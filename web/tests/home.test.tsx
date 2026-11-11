@@ -11,6 +11,7 @@ import {
   mockServer,
   page,
   signedIn,
+  signedInAdmin,
 } from './mock';
 import { json, renderApp } from './render';
 
@@ -203,6 +204,7 @@ describe('create a group', () => {
     const created = { ...GROUP, id: 40, namespace_id: 400, path: 'press', name: 'press', display_name: 'Press' };
     const server = mockServer({
       ...lists([]),
+      ...signedInAdmin(),
       'POST /api/v1/groups': () => json(201, created),
       'GET /api/v1/namespaces/resolve': () =>
         json(200, { canonical_path: 'press', kind: 'group', moved: false, namespace_id: 400, group_id: 40 }),

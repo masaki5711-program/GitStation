@@ -8,17 +8,18 @@ import {
   PROJECT,
   REFS_FILLED,
   RESOLVE_GROUP,
-  SESSION,
+  ADMIN_SESSION,
   apiError,
   askedPaths,
   mockServer,
   page,
   signedIn,
+  signedInAdmin,
 } from './mock';
 import { json, renderApp } from './render';
 
 const lists = () => ({
-  ...signedIn(),
+  ...signedInAdmin(),
   'GET /api/v1/projects': () => page([]),
   'GET /api/v1/groups': () => page([]),
   'GET /api/v1/namespaces/resolve': () =>
@@ -206,7 +207,7 @@ describe('session', () => {
     let token = 'a'.repeat(64);
     const server = mockServer({
       ...lists(),
-      'GET /api/v1/session': () => json(200, { ...SESSION, csrf_token: token }),
+      'GET /api/v1/session': () => json(200, { ...ADMIN_SESSION, csrf_token: token }),
       'POST /api/v1/groups': () => apiError(403, 'x', 'r', 'FG-AUTH-0016'),
     });
     const { api } = await renderApp({ fetch: server.fetch });

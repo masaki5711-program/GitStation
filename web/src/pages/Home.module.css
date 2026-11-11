@@ -23,8 +23,21 @@
   margin-bottom: var(--gs-space-8);
 }
 
+.blockTop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gs-space-3);
+  margin-bottom: var(--gs-space-3);
+}
+
+.all {
+  font-size: var(--gs-font-size-sm);
+}
+
 .heading {
-  margin: 0 0 var(--gs-space-3);
+  margin: 0;
   font-size: var(--gs-font-size-lg);
   color: var(--gs-brand-navy);
 }

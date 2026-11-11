@@ -169,6 +169,8 @@ describe('sidebar on a narrow screen', () => {
     fireEvent.click(button);
     expect(button.getAttribute('aria-expanded')).toBe('true');
     expect(nav().id).toBe(controls);
+    // Opening moves the focus to the first item.
+    expect(document.activeElement).toBe(within(nav()).getByRole('link', { name: 'ホーム' }));
     // No collapse button on a narrow screen: the names always show.
     expect(within(nav()).queryByRole('button')).toBeNull();
 
@@ -176,6 +178,43 @@ describe('sidebar on a narrow screen', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByRole('navigation', { name: 'マイワーク' })).toBeNull();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('Esc is left alone when already handled or when the focus is elsewhere', async () => {
+    stubNarrow(true);
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch });
+    await screen.findByRole('heading', { name: 'ホーム', level: 1 });
+    const button = screen.getByRole('button', { name: 'メニュー' });
+    fireEvent.click(button);
+    // Something else (a dialog) handled the key first.
+    const handled = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    handled.preventDefault();
+    act(() => {
+      document.dispatchEvent(handled);
+    });
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    // The focus is outside the sidebar and its button (e.g. in the page).
+    const filter = await screen.findByLabelText('名前やパスで絞り込む');
+    filter.focus();
+    fireEvent.keyDown(filter, { key: 'Escape' });
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    // On the button itself, Esc closes.
+    button.focus();
+    fireEvent.keyDown(button, { key: 'Escape' });
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('the link of the page I am on closes the panel and gives the focus to the menu button', async () => {
+    stubNarrow(true);
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch });
+    await screen.findByRole('heading', { name: 'ホーム', level: 1 });
+    const button = screen.getByRole('button', { name: 'メニュー' });
+    fireEvent.click(button);
+    fireEvent.click(within(nav()).getByRole('link', { name: 'ホーム' }));
+    expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(button);
   });
 
@@ -206,13 +245,36 @@ describe('sidebar on a narrow screen', () => {
   });
 });
 
+describe('Home with the sidebar pages', () => {
+  it('links its blocks to /-/projects and /-/groups', async () => {
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch });
+    await screen.findByText('Acme Plant');
+    expect(screen.getByRole('link', { name: 'プロジェクトをすべて見る' }).getAttribute('href')).toBe('/-/projects');
+    expect(screen.getByRole('link', { name: 'グループをすべて見る' }).getAttribute('href')).toBe('/-/groups');
+  });
+
+  it('shows "create group" to an administrator only', async () => {
+    const server = mockServer(routes());
+    const first = await renderApp({ fetch: server.fetch });
+    await screen.findByText('Forge Web');
+    expect(screen.queryByRole('button', { name: 'グループを作る' })).toBeNull();
+    first.unmount();
+    const admin = { ...SESSION, user: { ...SESSION.user, is_admin: true } };
+    const server2 = mockServer(routes({ 'GET /api/v1/session': () => json(200, admin) }));
+    await renderApp({ fetch: server2.fetch });
+    expect(await screen.findByRole('button', { name: 'グループを作る' })).toBeTruthy();
+  });
+});
+
 describe('/-/projects', () => {
   it('lists the projects I am a member of (membership=true) with the filter', async () => {
     const other = { ...PROJECT, id: 9, path: 'acme/press-line', display_name: 'Press Line' };
     const server = mockServer(routes({ 'GET /api/v1/projects': () => page([PROJECT, other]) }));
     await renderApp({ fetch: server.fetch, path: '/-/projects' });
     expect(await screen.findByRole('heading', { name: 'プロジェクト', level: 1 })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '参加中', level: 2 })).toBeTruthy();
+    // No sub-heading or tab until the "created by me" view (plan 15 MR 5).
+    expect(screen.queryByRole('heading', { level: 2, name: /参加中/ })).toBeNull();
     await screen.findByText('Press Line');
     expect(server.to('GET', '/api/v1/projects')[0]?.query.get('membership')).toBe('true');
     fireEvent.change(screen.getByLabelText('名前やパスで絞り込む'), { target: { value: 'press' } });
@@ -281,7 +343,8 @@ describe('/-/groups', () => {
     const server = mockServer(routes({ 'GET /api/v1/groups': () => page([]) }));
     const first = await renderApp({ fetch: server.fetch, path: '/-/groups' });
     expect(await screen.findByText('見られるグループはまだありません。')).toBeTruthy();
-    expect(screen.getByText(/管理者に頼んでください/)).toBeTruthy();
+    expect(screen.getByText('参加しているグループがここに出ます。')).toBeTruthy();
+    expect(screen.getByText('管理者に作成を依頼してください。')).toBeTruthy();
     first.unmount();
 
     const admin = { ...SESSION, user: { ...SESSION.user, is_admin: true } };

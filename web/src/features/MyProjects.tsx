@@ -35,10 +35,10 @@ export function MyProjects({ onCreate }: { onCreate: () => void }) {
   if (mine.data.items.length === 0) {
     return (
       <div className={styles.empty}>
-        <p>{t('home.mineEmpty')}</p>
-        <p className={styles.hint}>{t('home.mineEmptyHint')}</p>
+        <p>{t('projects.empty')}</p>
+        <p className={styles.hint}>{t('projects.emptyHint')}</p>
         <button type="button" className={controls.primary} onClick={onCreate}>
-          {t('home.newProject')}
+          {t('projects.new')}
         </button>
       </div>
     );
@@ -55,7 +55,7 @@ export function MyProjects({ onCreate }: { onCreate: () => void }) {
     <>
       <div className={controls.field}>
         <label htmlFor={filterId} className={controls.label}>
-          {t('home.filter')}
+          {t('projects.filter')}
         </label>
         <input
           id={filterId}
@@ -67,7 +67,7 @@ export function MyProjects({ onCreate }: { onCreate: () => void }) {
           }}
         />
       </div>
-      {shown.length === 0 ? <p role="status">{t('home.filterEmpty')}</p> : <ProjectList items={shown} />}
+      {shown.length === 0 ? <p role="status">{t('projects.filterEmpty')}</p> : <ProjectList items={shown} />}
       {mine.data.truncated && <p className={styles.hint}>{t('common.truncated')}</p>}
     </>
   );
