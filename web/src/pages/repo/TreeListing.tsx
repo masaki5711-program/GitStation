@@ -9,7 +9,7 @@ import type { TreeEntry } from '../../api/types';
 import { CodeView } from '../../features/CodeView';
 import { MarkdownView } from '../../features/MarkdownView';
 import { formatBytes } from '../../features/labels';
-import { blobUrl, isMarkdownPath, parentPath, treeUrl } from '../../features/repoUrls';
+import { blobUrl, isMarkdownPath, isReadmeName, parentPath, treeUrl } from '../../features/repoUrls';
 import { Loading } from '../../components/Loading';
 import { RepoError } from './common';
 import styles from './Repo.module.css';
@@ -18,8 +18,6 @@ function order(entries: TreeEntry[]): TreeEntry[] {
   const rank = (e: TreeEntry) => (e.type === 'tree' ? 0 : e.type === 'submodule' ? 1 : 2);
   return [...entries].sort((a, b) => rank(a) - rank(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
-
-const README = /^readme(\.(md|markdown|txt))?$/i;
 
 export function TreeListing({
   projectId,
@@ -45,7 +43,7 @@ export function TreeListing({
     );
   }
   const entries = order(tree.data.entries);
-  const readme = entries.find((e) => e.type === 'blob' && README.test(e.name));
+  const readme = entries.find((e) => e.type === 'blob' && isReadmeName(e.name));
   return (
     <>
       {tree.data.truncated && (

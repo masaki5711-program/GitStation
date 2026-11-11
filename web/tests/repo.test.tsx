@@ -165,7 +165,8 @@ describe('tree', () => {
     const server = mockServer(repoRoutes());
     await renderApp({ fetch: server.fetch, path: '/acme/forge-web', lang: 'en' });
     expect(await screen.findByRole('link', { name: 'src/' })).toBeTruthy();
-    const nav = screen.getByRole('navigation', { name: 'Repository screens' });
+    // The project's screens are in the sidebar.
+    const nav = await screen.findByRole('navigation', { name: 'Project menu' });
     expect(within(nav).getByRole('link', { name: 'Commits' }).getAttribute('href')).toBe(`${BASE}/commits`);
   });
 });

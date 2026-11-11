@@ -1,4 +1,4 @@
-// The page frame: header, the "My work" sidebar (signed in only), main and
+// The page frame: header, the sidebar (My work / project / group) (signed in only), main and
 // the session gate. Without a session the sign-in screen replaces the page
 // (same address, `next` = this page).
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
@@ -12,6 +12,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { ErrorNotice } from './ErrorNotice';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
+import { SidebarScopeProvider } from './sidebarScope';
 import { useNarrowScreen } from '../hooks/useNarrowScreen';
 
 /** `bare`: no header (the act-as confirmation popup has nowhere to go). */
@@ -133,14 +134,16 @@ export function Layout({ bare = false }: { bare?: boolean }) {
       }
     : undefined;
   return (
-    <div className={styles.app}>
-      {!bare && <Header {...(nav ? { nav } : {})} />}
-      <div className={styles.frame}>
-        {withNav && <Sidebar id={navId} narrow={narrow} open={navOpen} onNavigate={closeNav} />}
-        <main id="main" tabIndex={-1} ref={main} className={withNav ? `${styles.main ?? ''} ${styles.besideNav ?? ''}` : styles.main}>
-          <ErrorBoundary key={location.pathname}>{content}</ErrorBoundary>
-        </main>
+    <SidebarScopeProvider>
+      <div className={styles.app}>
+        {!bare && <Header {...(nav ? { nav } : {})} />}
+        <div className={styles.frame}>
+          {withNav && <Sidebar id={navId} narrow={narrow} open={navOpen} onNavigate={closeNav} />}
+          <main id="main" tabIndex={-1} ref={main} className={withNav ? `${styles.main ?? ''} ${styles.besideNav ?? ''}` : styles.main}>
+            <ErrorBoundary key={location.pathname}>{content}</ErrorBoundary>
+          </main>
+        </div>
       </div>
-    </div>
+    </SidebarScopeProvider>
   );
 }

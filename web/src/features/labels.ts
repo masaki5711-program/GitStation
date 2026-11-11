@@ -114,3 +114,24 @@ export function checkBadge(
   if (conclusion === 'success') return { tone: 'open', label: t('mr.check.success') };
   return { tone: 'unresolved', label: t('mr.check.failed', { conclusion: conclusion ?? '-' }) };
 }
+
+/** `2026-11-08T…` → "3 days ago" in the page's language (Intl, no
+ * dictionary). The moment itself goes in a `<time>` title. */
+export function formatRelative(iso: string, language: string, now: number = Date.now()): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const seconds = Math.round((then - now) / 1000);
+  const steps: [Intl.RelativeTimeFormatUnit, number][] = [
+    ['year', 365 * 24 * 3600],
+    ['month', 30 * 24 * 3600],
+    ['week', 7 * 24 * 3600],
+    ['day', 24 * 3600],
+    ['hour', 3600],
+    ['minute', 60],
+  ];
+  const format = new Intl.RelativeTimeFormat(language, { numeric: 'auto' });
+  for (const [unit, size] of steps) {
+    if (Math.abs(seconds) >= size) return format.format(Math.round(seconds / size), unit);
+  }
+  return format.format(seconds, 'second');
+}

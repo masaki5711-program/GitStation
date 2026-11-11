@@ -1,0 +1,41 @@
+/* The compact error (tokens only). */
+.inline {
+  margin: var(--gs-space-2) 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-color-danger-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+  font-size: var(--gs-font-size-sm);
+}
+
+.collapsed {
+  margin: var(--gs-space-2) 0;
+}
+
+.message {
+  margin: 0 0 var(--gs-space-1);
+  overflow-wrap: anywhere;
+}
+
+.requestId {
+  margin: 0 0 var(--gs-space-2);
+  color: var(--gs-color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.retry,
+.iconButton {
+  composes: button from './controls.module.css';
+  gap: var(--gs-space-2);
+  font-size: var(--gs-font-size-sm);
+}
+
+.iconButton {
+  width: var(--gs-tap-target);
+  padding: var(--gs-space-2);
+}
+
+.srOnly {
+  composes: srOnly from './controls.module.css';
+}
