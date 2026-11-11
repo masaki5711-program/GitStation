@@ -529,6 +529,11 @@ fn repositories_on_disk(root: &StorageRoot) -> Result<BTreeSet<i64>, ForgeError>
     Ok(out)
 }
 
+/// The refs under `refs/merge-requests/<iid>/` that `verify` does not
+/// compare for a known merge request (forge-git `hidden_refs`): derived
+/// from the versions or recomputed, so the database holds no expectation.
+const DERIVED_MR_REFS: [&str; 2] = ["head", "merge"];
+
 /// Step 4: compare the database's expectations with the repositories.
 ///
 /// - every ready repository row has its directory (`repository_missing`)
@@ -538,7 +543,8 @@ fn repositories_on_disk(root: &StorageRoot) -> Result<BTreeSet<i64>, ForgeError>
 ///   (`version_ref_missing` / `version_ref_mismatch`), or is gone when its
 ///   refs were purged (`purged_ref_present`);
 /// - the database-behind findings: a version ref without its row
-///   (`version_ref_unknown`), a repository directory without its row
+///   (`version_ref_unknown`; `head` and `merge` of a known merge request
+///   are derived, never a finding), a repository directory without its row
 ///   (`repository_unknown`).
 ///
 /// Read-only. A git or database failure other than a finding is returned.
@@ -631,14 +637,16 @@ pub async fn verify(db: &Db, storage: &StorageRoot, git: &Git) -> Result<Verifie
             if expected.contains(n) {
                 continue;
             }
-            // refs/merge-requests/<iid>/head of a known merge request is the
-            // newest version's (not a version of its own).
+            // The derived refs of a known merge request have no expectation
+            // in the database: `head` is the newest version's, `merge` the
+            // mergeability check's merge result (M4 C7, recomputed on every
+            // check and pruned once the merge request is closed or merged).
             let iid = n
                 .strip_prefix("refs/merge-requests/")
                 .and_then(|rest| rest.split_once('/'))
                 .and_then(|(iid, tail)| iid.parse::<i64>().ok().map(|i| (i, tail)));
-            if let Some((iid, "head")) = iid {
-                if iids.contains(&(id, iid)) {
+            if let Some((iid, tail)) = iid {
+                if DERIVED_MR_REFS.contains(&tail) && iids.contains(&(id, iid)) {
                     continue;
                 }
             }

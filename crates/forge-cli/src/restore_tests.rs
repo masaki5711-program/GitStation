@@ -165,6 +165,65 @@ async fn a_database_behind_the_repositories_is_detected() {
 }
 
 #[tokio::test]
+async fn the_merge_result_ref_of_a_known_merge_request_is_no_finding() {
+    let f = fixture(false).await;
+    let (_, _, _, path, shas) = world(&f, "hal").await;
+    // The mergeability check's merge result (ADR-0024 Amendment
+    // 2026-11-11): parents <target tip> then <head>, kept by
+    // refs/merge-requests/<iid>/merge.
+    let main = git(&path, &["rev-parse", "refs/heads/main"]);
+    let tree = git(&path, &["hash-object", "-t", "tree", "-w", "/dev/null"]);
+    let merge = git(
+        &path,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &main,
+            "-p",
+            &shas[1],
+            "-m",
+            "synthetic: merge result",
+        ],
+    );
+    git(
+        &path,
+        &["update-ref", "refs/merge-requests/1/merge", &merge],
+    );
+    let v = verify(&f.t.db, &f.storage.root, &f.storage.git)
+        .await
+        .expect("verify");
+    assert!(v.findings.is_empty(), "{}", v.report());
+    assert!(v.error(false).is_none(), "{}", v.report());
+    // The same ref of a merge request the database does not know, and an
+    // unknown ref of a known one, are still reported.
+    git(
+        &path,
+        &["update-ref", "refs/merge-requests/9/merge", &merge],
+    );
+    git(
+        &path,
+        &["update-ref", "refs/merge-requests/1/other", &merge],
+    );
+    let v = verify(&f.t.db, &f.storage.root, &f.storage.git)
+        .await
+        .expect("verify");
+    assert_eq!(counts_of(&v, Kind::VersionRefUnknown), 2, "{}", v.report());
+    assert_eq!(v.findings.len(), 2, "{}", v.report());
+    let details: Vec<&str> = v.findings.iter().map(|f| f.detail.as_str()).collect();
+    assert!(
+        details.contains(&"refs/merge-requests/9/merge")
+            && details.contains(&"refs/merge-requests/1/other"),
+        "{details:?}"
+    );
+    f.t.drop_now().await;
+}
+
+fn counts_of(v: &Verified, kind: Kind) -> usize {
+    v.counts().get(&kind).copied().unwrap_or(0)
+}
+
+#[tokio::test]
 async fn repositories_behind_the_database_are_detected() {
     let f = fixture(false).await;
     let (_, project, owner, path, shas) = world(&f, "gil").await;

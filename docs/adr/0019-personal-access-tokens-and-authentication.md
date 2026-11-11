@@ -646,6 +646,8 @@ Amendment「計画 11 P1」の実装。計画 11 §10 Q11 の答え（2026-11-09
 - **verify の比較**: ready のリポジトリのディレクトリと fsck、`merge_request_versions` の各行の ref
   `refs/merge-requests/<iid>/v<n>`（`refs_purged_at` のある行は ref が無いこと）。DB が古いときの検出: 行の無い版の ref、行の無い
   リポジトリのディレクトリ（`--accept-db-behind` のときだけ進める）。`refs/merge-requests/<iid>/head` は知っている MR なら数えない。
+  （2026-11-11、復元の訓練の指摘）`refs/merge-requests/<iid>/merge`（M4 C7 のマージの結果）も知っている MR なら数えない: 検査のたびに
+  作り直す派生の ref で、DB に期待値が無い。知らない MR の ref と、`v<n>`・`head`・`merge` 以外の名前は `version_ref_unknown`。
   ブランチの先端は DB に期待値が無いので比べない（push の記録は保持で消える）。
 - **エラー**: FG-SYS-0008 BackupFailed / FG-SYS-0009 RestoreVerificationFailed（どちらも alert、runbook `backup-restore`）。
 - **確かめていないこと**: 本物の pgBackRest（この環境に無い）。DB の手順は trait `DbBackupTool` の後ろにあり、テストは偽物と、
