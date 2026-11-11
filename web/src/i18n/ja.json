@@ -657,6 +657,7 @@
     "number": "!{{iid}}",
     "draft": "下書き",
     "opened": "{{author}} が {{date}} に作成",
+    "openedBy": "作成: {{author}}",
     "branches": "{{source}} から {{target}} へ",
     "state": {
       "open": "開いている",
@@ -694,7 +695,8 @@
       "overview": "概要",
       "changes": "変更",
       "description": "説明",
-      "noDescription": "説明はありません。"
+      "noDescription": "説明はありません。",
+      "threadCount": "スレッド {{n}} 件"
     },
     "threads": {
       "title": "スレッド",
@@ -815,6 +817,27 @@
       "running": "実行中",
       "success": "成功",
       "failed": "成功していません（{{conclusion}}）"
+    },
+    "side": {
+      "title": "このマージリクエストについて",
+      "approvals": "承認",
+      "approvalsCount": "{{required}} 件中 {{counted}} 件",
+      "approvalsNone": "不要",
+      "approvedBy": "承認した人",
+      "notCounted": "{{name}}（数に入りません）",
+      "checks": "必須のチェック",
+      "checksCount": "{{total}} 件中 {{passed}} 件が成功",
+      "checksNone": "必須のチェックはありません",
+      "threads": "スレッド",
+      "threadsCount": "{{total}} 件中 {{open}} 件が未解決",
+      "threadsNone": "なし",
+      "versions": "バージョン",
+      "latestHead": "最新のコミット {{sha}}",
+      "workItem": "作業項目",
+      "linked": "リンクあり",
+      "notLinked": "リンクなし",
+      "updated": "更新",
+      "unread": "読み込めませんでした。理由は上の行に表示しています。"
     }
   },
   "webhooks": {

@@ -407,3 +407,54 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* The side panel of the Overview (MrSidePanel.tsx): a summary, not actions. */
+.side {
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.sideTitle {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+}
+
+.sideList {
+  margin: 0;
+}
+
+.sideRow {
+  padding: var(--gs-space-2) 0;
+  border-top: 1px solid var(--gs-color-border);
+}
+
+.sideRow dt {
+  margin: 0 0 var(--gs-space-1);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.sideRow dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sideNote {
+  display: block;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.sidePeople {
+  margin: var(--gs-space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Digits of one width (counts, dates). */
+.number {
+  font-variant-numeric: tabular-nums;
+}

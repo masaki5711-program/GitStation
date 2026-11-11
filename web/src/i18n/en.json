@@ -657,6 +657,7 @@
     "number": "!{{iid}}",
     "draft": "Draft",
     "opened": "Opened by {{author}} on {{date}}",
+    "openedBy": "Opened by {{author}}",
     "branches": "{{source}} into {{target}}",
     "state": {
       "open": "Open",
@@ -694,7 +695,8 @@
       "overview": "Overview",
       "changes": "Changes",
       "description": "Description",
-      "noDescription": "No description."
+      "noDescription": "No description.",
+      "threadCount": "Threads: {{n}}"
     },
     "threads": {
       "title": "Threads",
@@ -815,6 +817,27 @@
       "running": "Running",
       "success": "Succeeded",
       "failed": "Did not succeed ({{conclusion}})"
+    },
+    "side": {
+      "title": "About this merge request",
+      "approvals": "Approvals",
+      "approvalsCount": "{{counted}} of {{required}}",
+      "approvalsNone": "Not required",
+      "approvedBy": "Approved by",
+      "notCounted": "{{name}} (does not count)",
+      "checks": "Required checks",
+      "checksCount": "{{passed}} of {{total}} passed",
+      "checksNone": "None required",
+      "threads": "Threads",
+      "threadsCount": "{{open}} unresolved of {{total}}",
+      "threadsNone": "None",
+      "versions": "Versions",
+      "latestHead": "Latest commit {{sha}}",
+      "workItem": "Work item",
+      "linked": "Linked",
+      "notLinked": "Not linked",
+      "updated": "Updated",
+      "unread": "Could not be read. The line at the top shows why."
     }
   },
   "webhooks": {

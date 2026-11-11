@@ -77,3 +77,77 @@
 .number {
   font-variant-numeric: tabular-nums;
 }
+
+/* The merge request header: title, state and author, then "source → target". */
+.header {
+  margin: 0 0 var(--gs-space-3);
+}
+
+.headerMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  margin: 0 0 var(--gs-space-2);
+  color: var(--gs-color-text-muted);
+}
+
+.branchFlow {
+  margin: 0;
+}
+
+.branchFlowVisual {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2);
+}
+
+.branchChip {
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-code-surface);
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The arrow is decoration (the words are in the screen-reader text). */
+.branchArrow::before {
+  content: '\2192';
+  color: var(--gs-color-text-muted);
+}
+
+/* A count next to a tab's name ("Overview 3"). */
+.tabCount {
+  display: inline-block;
+  min-width: 1.5em;
+  margin-left: var(--gs-space-2);
+  padding: 0 var(--gs-space-1);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-code-surface);
+  color: var(--gs-color-text);
+  font-size: var(--gs-font-size-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Overview: the main column and the side panel; one column when narrow
+   (the side panel follows the main column, as in the reading order). */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gs-space-6);
+}
+
+.mainColumn {
+  min-width: 0;
+}
+
+@media (min-width: 64rem) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr) 16rem;
+    align-items: start;
+  }
+}

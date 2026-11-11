@@ -2,6 +2,9 @@
 // status (why it is stopped, what next), and the tabs Overview (description
 // and threads) and Changes. The status line and the threads read on their
 // own: a failure of one shows in its place only, with its request_id.
+// The Overview has a side panel (MrSidePanel.tsx: approvals, checks,
+// threads, versions at a glance) that stacks below the main column on a
+// narrow screen; the Changes tab keeps the whole width for the diff.
 // The Overview starts with the merge conditions panel (U2: every reason,
 // approve / withdraw, merge), then the detail of the head's check runs and
 // the conflicts predicted with other merge requests (CheckRuns.tsx).
@@ -13,13 +16,14 @@ import { useAddComment, useDiscussions, useMergeRequest } from '../../../api/mer
 import type { Discussion, MergeRequest } from '../../../api/types';
 import { Loading } from '../../../components/Loading';
 import { QueryError } from '../../../components/QueryError';
-import { formatDate, formatDateTime, mrStateLabel } from '../../../features/labels';
+import { formatDateTime, formatRelative, mrStateLabel } from '../../../features/labels';
 import { MarkdownView } from '../../../features/MarkdownView';
 import { CheckRunsSection, ConflictsSection } from '../../../features/mr/CheckRuns';
 import { CommentForm } from '../../../features/mr/CommentForm';
 import { ConditionsPanel } from '../../../features/mr/ConditionsPanel';
 import { DiscussionThread, threadElementId } from '../../../features/mr/DiscussionThread';
 import { MrChanges } from '../../../features/mr/MrChanges';
+import { MrSidePanel } from '../../../features/mr/MrSidePanel';
 import { Announcer } from '../../../features/mr/announce';
 import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
 import { FOCUS_FIRST_UNRESOLVED, StatusLine } from '../../../features/mr/StatusLine';
@@ -62,6 +66,7 @@ export function MergeRequestScreen({
     );
   }
 
+  const threadCount = threads.data?.discussions.length ?? 0;
   const firstUnresolved = threads.data?.discussions.find((d) => !d.resolved);
   const focusFirstUnresolved =
     firstUnresolved === undefined
@@ -74,6 +79,7 @@ export function MergeRequestScreen({
     <ViewedHeadProvider projectId={projectId} project={project} iid={iid} mr={mr.data}>
     <Announcer>
       <Header mr={mr.data} />
+      {/* The primary action area: why it is stopped and what to press next. */}
       <StatusLine
         projectId={projectId}
         project={project}
@@ -89,6 +95,14 @@ export function MergeRequestScreen({
               {...(tab === 'overview' ? { 'aria-current': 'page' as const } : {})}
             >
               {t('mr.view.overview')}
+              {threadCount > 0 && (
+                <>
+                  <span className={styles.tabCount} aria-hidden="true">
+                    {threadCount}
+                  </span>
+                  <span className={repo.srOnly}>{t('mr.view.threadCount', { n: threadCount })}</span>
+                </>
+              )}
             </Link>
           </li>
           <li>
@@ -103,7 +117,12 @@ export function MergeRequestScreen({
         </ul>
       </nav>
       {tab === 'overview' ? (
-        <Overview projectId={projectId} project={project} mr={mr.data} threads={threads} />
+        <div className={styles.layout}>
+          <div className={styles.mainColumn}>
+            <Overview projectId={projectId} project={project} mr={mr.data} threads={threads} />
+          </div>
+          <MrSidePanel projectId={projectId} mr={mr.data} threads={threads} />
+        </div>
       ) : (
         <section aria-labelledby="mr-changes-title">
           <h2 id="mr-changes-title" className={repo.sectionTitle}>
@@ -125,21 +144,35 @@ export function MergeRequestScreen({
 function Header({ mr }: { mr: MergeRequest }) {
   const { t, i18n } = useTranslation();
   return (
-    <header>
+    <header className={styles.header}>
       <h1 className={repo.title}>
         {mr.title}{' '}
         <span className={`${repo.titleNote} ${styles.number}`}>{t('mr.number', { iid: mr.iid })}</span>
       </h1>
-      <p className={repo.meta}>
+      <p className={styles.headerMeta}>
         <StateBadge tone={mrTone(mr.state)}>{mrStateLabel(t, mr.state)}</StateBadge>
         {mr.draft && <StateBadge tone="draft">{t('mr.draft')}</StateBadge>}
-        <span title={formatDateTime(mr.created_at, i18n.language)}>
-          {t('mr.opened', {
-            author: mr.author.display_name,
-            date: formatDate(mr.created_at, i18n.language),
-          })}
+        <span>{t('mr.openedBy', { author: mr.author.display_name })}</span>
+        <time
+          className={styles.number}
+          dateTime={mr.created_at}
+          title={formatDateTime(mr.created_at, i18n.language)}
+          data-testid="mr-opened-at"
+        >
+          {formatRelative(mr.created_at, i18n.language)}
+        </time>
+      </p>
+      {/* "source → target": the words for a screen reader, the chips and
+          the arrow (drawn by CSS) for the eye. */}
+      <p className={styles.branchFlow} data-testid="mr-branches">
+        <span className={repo.srOnly}>
+          {t('mr.branches', { source: mr.source_branch, target: mr.target_branch })}
         </span>
-        <span>{t('mr.branches', { source: mr.source_branch, target: mr.target_branch })}</span>
+        <span className={styles.branchFlowVisual} aria-hidden="true">
+          <code className={styles.branchChip}>{mr.source_branch}</code>
+          <span className={styles.branchArrow} />
+          <code className={styles.branchChip}>{mr.target_branch}</code>
+        </span>
       </p>
     </header>
   );
