@@ -1,6 +1,8 @@
-// "My projects" (the ones I hold a role in, `?membership=true`) with the
-// name/path filter: one component for Home and the projects page (plan 15
-// §3.3), so the list, the filter and the three states live in one place.
+// "My projects" with the name/path filter: one component for Home and the
+// projects page (plan 15 §3.3), so the list, the filter and the three states
+// live in one place. `scope`: `member` — the ones I hold a role in
+// (`?membership=true`); `created` — the ones I created (`?created_by=me`,
+// plan 15 MR 5; projects whose creator was never recorded are not there).
 import { useQuery } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,13 +15,23 @@ import { QueryError } from '../components/QueryError';
 import { ProjectList } from './Lists';
 import styles from './Lists.module.css';
 
+export type ProjectScope = 'member' | 'created';
+
 /** `onCreate`: the empty state's next step (opens the create dialog). */
-export function MyProjects({ onCreate }: { onCreate: () => void }) {
+export function MyProjects({
+  onCreate,
+  scope = 'member',
+}: {
+  onCreate: () => void;
+  scope?: ProjectScope;
+}) {
   const { t } = useTranslation();
   const api = useApi();
   const filterId = useId();
   const [filter, setFilter] = useState('');
-  const mine = useQuery(projectsQuery(api, { membership: true }));
+  const mine = useQuery(
+    projectsQuery(api, scope === 'created' ? { createdByMe: true } : { membership: true }),
+  );
 
   if (mine.isPending) return <Loading />;
   if (mine.isError) {
@@ -35,8 +47,10 @@ export function MyProjects({ onCreate }: { onCreate: () => void }) {
   if (mine.data.items.length === 0) {
     return (
       <div className={styles.empty}>
-        <p>{t('projects.empty')}</p>
-        <p className={styles.hint}>{t('projects.emptyHint')}</p>
+        <p>{scope === 'created' ? t('projects.emptyCreated') : t('projects.empty')}</p>
+        <p className={styles.hint}>
+          {scope === 'created' ? t('projects.emptyCreatedHint') : t('projects.emptyHint')}
+        </p>
         <button type="button" className={controls.primary} onClick={onCreate}>
           {t('projects.new')}
         </button>

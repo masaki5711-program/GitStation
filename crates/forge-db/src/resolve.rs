@@ -110,7 +110,7 @@ pub(crate) const PROJECT_ACCESS_SQL: &str = concat!(
        a.steps, a.truncs, a.roles, \
        n.id AS namespace_id, n.full_path, \
        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
-       p.display_name, p.description, r.id AS repository_id, r.state AS repository_state, \
+       p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state, \
        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
      FROM agg a LEFT JOIN forge.projects p ON p.id = $1 \
      LEFT JOIN forge.namespaces n ON p.id IS NOT NULL AND n.kind = 'project' AND n.owner_id = $1 \
@@ -169,6 +169,8 @@ pub(crate) struct ProjectAccessRow {
     repository_id: Option<i64>,
     repository_state: Option<String>,
     created_at: Option<String>,
+    /// `projects.created_by` (plan 15 MR5); NULL = creator unknown.
+    created_by: Option<i64>,
 }
 
 impl ProjectAccessRow {
@@ -518,6 +520,7 @@ pub(crate) fn interpret_project(
         display_name,
         description,
         created_at,
+        created_by: row.created_by.map(UserId::new),
         repository,
     }))
 }

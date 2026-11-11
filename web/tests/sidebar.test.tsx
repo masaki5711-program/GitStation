@@ -268,30 +268,74 @@ describe('Home with the sidebar pages', () => {
 });
 
 describe('/-/projects', () => {
-  it('lists the projects I am a member of (membership=true) with the filter', async () => {
+  // Plan 15 MR 5: two views as tabs — "created by me" (default,
+  // created_by=me) and "member" (membership=true, `?tab=member`).
+  const tabs = () => screen.getByRole('navigation', { name: 'プロジェクトの表示' });
+  const projectQueries = (server: ReturnType<typeof mockServer>) =>
+    server.to('GET', '/api/v1/projects').map((r) => [r.query.get('created_by'), r.query.get('membership')]);
+
+  it('opens on "created by me" (created_by=me only) with the filter', async () => {
     const other = { ...PROJECT, id: 9, path: 'acme/press-line', display_name: 'Press Line' };
     const server = mockServer(routes({ 'GET /api/v1/projects': () => page([PROJECT, other]) }));
     await renderApp({ fetch: server.fetch, path: '/-/projects' });
     expect(await screen.findByRole('heading', { name: 'プロジェクト', level: 1 })).toBeTruthy();
-    // No sub-heading or tab until the "created by me" view (plan 15 MR 5).
-    expect(screen.queryByRole('heading', { level: 2, name: /参加中/ })).toBeNull();
     await screen.findByText('Press Line');
-    expect(server.to('GET', '/api/v1/projects')[0]?.query.get('membership')).toBe('true');
+    const created = within(tabs()).getByRole('link', { name: '自分が作成' });
+    expect(created.getAttribute('aria-current')).toBe('page');
+    expect(created.getAttribute('href')).toBe('/-/projects');
+    const member = within(tabs()).getByRole('link', { name: '参加中' });
+    expect(member.getAttribute('aria-current')).toBeNull();
+    expect(member.getAttribute('href')).toBe('/-/projects?tab=member');
+    // Only `me`, never a user id, and not mixed with the membership filter.
+    expect(projectQueries(server)).toEqual([['me', null]]);
+    expect(screen.getByText(/作った人の記録がない古いプロジェクト/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('名前やパスで絞り込む'), { target: { value: 'press' } });
     expect(screen.queryByText('Forge Web')).toBeNull();
-    // No tab UI yet (the "created by me" view is plan 15 MR 5).
-    expect(screen.queryByRole('tab')).toBeNull();
     expect(document.title).toBe('プロジェクト · GitStation');
     expect(server.unmatched).toEqual([]);
   });
 
-  it('loading, then the empty state with the next step', async () => {
+  it('the "member" tab lists the projects I am a member of (membership=true)', async () => {
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch, path: '/-/projects' });
+    await screen.findByText('Forge Web');
+    fireEvent.click(within(tabs()).getByRole('link', { name: '参加中' }));
+    await vi.waitFor(() => {
+      expect(projectQueries(server)).toEqual([
+        ['me', null],
+        [null, 'true'],
+      ]);
+    });
+    expect(within(tabs()).getByRole('link', { name: '参加中' }).getAttribute('aria-current')).toBe('page');
+    expect(within(tabs()).getByRole('link', { name: '自分が作成' }).getAttribute('aria-current')).toBeNull();
+    expect(screen.queryByText(/作った人の記録がない古いプロジェクト/)).toBeNull();
+    expect(await screen.findByText('Forge Web')).toBeTruthy();
+    expect(document.title).toBe('参加中 · プロジェクト · GitStation');
+    expect(server.unmatched).toEqual([]);
+  });
+
+  it('a link to ?tab=member opens that tab directly', async () => {
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch, path: '/-/projects?tab=member' });
+    await screen.findByText('Forge Web');
+    expect(projectQueries(server)).toEqual([[null, 'true']]);
+    expect(within(tabs()).getByRole('link', { name: '参加中' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('loading, then the empty state with the next step (each tab its own words)', async () => {
     const server = mockServer(routes({ 'GET /api/v1/projects': () => page([]) }));
     await renderApp({ fetch: server.fetch, path: '/-/projects' });
     expect(screen.getAllByText('読み込んでいます…').length).toBeGreaterThan(0);
-    expect(await screen.findByText('あなたがメンバーのプロジェクトはまだありません。')).toBeTruthy();
+    expect(await screen.findByText('あなたが作ったプロジェクトはまだありません。')).toBeTruthy();
+    expect(screen.getByText(/参加しているプロジェクトは「参加中」のタブにあります/)).toBeTruthy();
     fireEvent.click(screen.getAllByRole('button', { name: 'プロジェクトを作る' })[1] as HTMLElement);
     expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('the member tab keeps its own empty state', async () => {
+    const server = mockServer(routes({ 'GET /api/v1/projects': () => page([]) }));
+    await renderApp({ fetch: server.fetch, path: '/-/projects?tab=member' });
+    expect(await screen.findByText('あなたがメンバーのプロジェクトはまだありません。')).toBeTruthy();
   });
 
   it('an error shows user_message + request_id only, and retries', async () => {

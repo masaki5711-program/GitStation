@@ -189,11 +189,26 @@ async fn projects_are_created_where_the_caller_may_and_never_elsewhere() {
         Some(Role::Owner),
         "the creator is a direct Owner"
     );
+    // Plan 15 MR5: the route's caller is recorded as the creator, even in
+    // a group someone else owns.
+    assert_eq!(record.created_by, Some(bob.user_id));
     let own = parent_proof(&hosting, &as_bob, bob.namespace_id).await;
-    hosting
+    let notes = hosting
         .create_project(&request("req-own"), &own, &project_fields("notes"))
         .await
         .expect("own namespace");
+    assert_eq!(
+        count(
+            &t,
+            &format!(
+                "SELECT count(*) AS n FROM forge.projects WHERE id = {} AND created_by = {}",
+                notes.project_id.get(),
+                bob.user_id.get()
+            )
+        )
+        .await,
+        1
+    );
     // Demoted to Developer after the check: refused, nothing written.
     let _changed = groups::change_member(
         &t.db,

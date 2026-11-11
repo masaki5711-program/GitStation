@@ -105,6 +105,7 @@ impl forge_core::ProjectAccessLoader for OneProject {
             display_name: "App".to_owned(),
             description: "synthetic".to_owned(),
             created_at: "2026-11-01T00:00:00Z".to_owned(),
+            created_by: None,
             repository: self.repository(),
         });
         Box::pin(async move { Ok(answer) })

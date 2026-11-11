@@ -6,9 +6,13 @@ import { call, type ApiClient } from './client';
 import { fetchAllPages } from './pages';
 import type { ListedGroup, Project } from './types';
 
+/**
+ * `membership`: only projects I hold a role in; `createdByMe`: only the ones
+ * I created (`created_by=me`, plan 15 MR 5 — the server accepts only `me`).
+ */
 export function projectsQuery(
   api: ApiClient,
-  filter: { membership?: boolean } = {},
+  filter: { membership?: boolean; createdByMe?: boolean } = {},
 ) {
   return queryOptions({
     queryKey: ['projects', filter],
@@ -22,6 +26,7 @@ export function projectsQuery(
                 limit: 100,
                 ...(cursor === undefined ? {} : { cursor }),
                 ...(filter.membership === true ? { membership: 'true' } : {}),
+                ...(filter.createdByMe === true ? { created_by: 'me' } : {}),
               },
             },
           }),

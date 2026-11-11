@@ -64,7 +64,13 @@
     "empty": "You are not a member of any project yet.",
     "emptyHint": "Create one with \"New project\", or ask a project administrator to add you.",
     "filter": "Filter by name or path",
-    "filterEmpty": "No project matches."
+    "filterEmpty": "No project matches.",
+    "tabs": "Project views",
+    "tabCreated": "Created by me",
+    "tabMember": "Joined",
+    "createdHint": "Projects you created. Older projects with no recorded creator are listed under \"Joined\".",
+    "emptyCreated": "You have not created any project yet.",
+    "emptyCreatedHint": "Create one with \"New project\". Projects you belong to are under the \"Joined\" tab."
   },
   "groups": {
     "title": "Groups",

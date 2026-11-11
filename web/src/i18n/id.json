@@ -64,7 +64,13 @@
     "empty": "Anda belum menjadi anggota proyek mana pun.",
     "emptyHint": "Buat dengan \"Proyek baru\", atau minta administrator proyek menambahkan Anda.",
     "filter": "Saring menurut nama atau jalur",
-    "filterEmpty": "Tidak ada proyek yang cocok."
+    "filterEmpty": "Tidak ada proyek yang cocok.",
+    "tabs": "Tampilan proyek",
+    "tabCreated": "Dibuat oleh saya",
+    "tabMember": "Anggota",
+    "createdHint": "Proyek yang Anda buat. Proyek lama tanpa catatan pembuat ada di \"Anggota\".",
+    "emptyCreated": "Anda belum membuat proyek apa pun.",
+    "emptyCreatedHint": "Buat dengan \"Proyek baru\". Proyek tempat Anda menjadi anggota ada di tab \"Anggota\"."
   },
   "groups": {
     "title": "Grup",
