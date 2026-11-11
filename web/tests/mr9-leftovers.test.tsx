@@ -44,7 +44,7 @@ describe('MR9 review leftovers', () => {
           release = resolve;
         }),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/groups' });
     fireEvent.click(await screen.findByRole('button', { name: 'グループを作る' }));
     const dialog = screen.getByRole<HTMLDialogElement>('dialog');
     let shown = 0;
@@ -74,7 +74,7 @@ describe('MR9 review leftovers', () => {
           release = resolve;
         }),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/groups' });
     fireEvent.click(await screen.findByRole('button', { name: 'グループを作る' }));
     const dialog = screen.getByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('名前'), { target: { value: 'Press' } });

@@ -39,12 +39,20 @@
   },
   "home": {
     "title": "Beranda",
-    "mine": "Proyek Anda",
-    "groups": "Grup Anda",
     "recent": "Baru dilihat",
     "recentHint": "Hanya diingat di peramban ini.",
     "allProjects": "Lihat semua proyek",
-    "allGroups": "Lihat semua grup"
+    "work": "Pekerjaan Anda",
+    "cardAttention": "Merge request Anda yang perlu ditindak",
+    "cardApprovable": "Merge request menunggu persetujuan Anda",
+    "cardAuthored": "Merge request Anda",
+    "cardUnread": "Notifikasi belum dibaca",
+    "cardCount": "{{shown}}",
+    "nextAttention": "Tidak ada konflik atau pemeriksaan yang gagal.",
+    "nextApprovable": "Merge request yang dapat Anda setujui muncul di sini.",
+    "nextAuthored": "Push sebuah branch dan buka merge request agar muncul di sini.",
+    "nextUnread": "Tidak ada notifikasi baru.",
+    "countUnknown": "Jumlahnya tidak dapat dibaca."
   },
   "nav": {
     "myWork": "Pekerjaan saya",
@@ -56,7 +64,31 @@
     "menu": "Menu",
     "projectMenu": "Menu proyek",
     "groupMenu": "Menu grup",
-    "showAll": "Lihat semua isinya"
+    "showAll": "Lihat semua isinya",
+    "mergeRequests": "Merge request",
+    "mrBadge": ", {{shown}} perlu ditindak"
+  },
+  "myMrs": {
+    "title": "Merge request",
+    "explain": "Hanya merge request yang terbuka, dari proyek yang boleh Anda lihat.",
+    "attention": "Merge request Anda yang perlu ditindak",
+    "approvable": "Merge request menunggu persetujuan Anda",
+    "authored": "Merge request Anda",
+    "hintAttention": "Ada konflik atau pemeriksaan wajib yang gagal menunggu Anda.",
+    "hintApprovable": "Anda dapat menyetujui ini dan belum melakukannya (milik Anda sendiri tidak termasuk).",
+    "hintAuthored": "Anda membukanya dan masih terbuka.",
+    "emptyAttention": "Tidak ada merge request yang perlu ditindak.",
+    "emptyApprovable": "Tidak ada merge request yang menunggu persetujuan Anda.",
+    "emptyAuthored": "Anda tidak punya merge request yang terbuka.",
+    "more": "Muat lagi",
+    "moreShown": "{{n}} lagi ditampilkan.",
+    "summaryCount": "{{shown}}",
+    "draft": "Draf",
+    "updated": "Diperbarui {{time}}",
+    "reasonConflict": "Ada konflik",
+    "reasonConflictPredicted": "Mungkin konflik",
+    "reasonCheckFailed": "Pemeriksaan wajib gagal",
+    "reasonOther": "Perlu ditindak"
   },
   "projects": {
     "title": "Proyek",

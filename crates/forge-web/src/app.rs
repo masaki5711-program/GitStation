@@ -2539,6 +2539,13 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: the groups the caller can see",
                 shell,
             )
+            .route(
+                verb,
+                MY_MERGE_REQUESTS_PAGE,
+                Action::WebShell,
+                "SPA shell: the caller's merge requests",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -2753,3 +2760,5 @@ async fn request_timeout(
 pub const MY_PROJECTS_PAGE: &str = "/-/projects";
 /// The "My work" sidebar's groups page (plan 15).
 pub const MY_GROUPS_PAGE: &str = "/-/groups";
+/// The "My work" sidebar's merge requests page (plan 15 MR 7).
+pub const MY_MERGE_REQUESTS_PAGE: &str = "/-/merge-requests";

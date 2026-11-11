@@ -51,7 +51,7 @@ async function violations(root: HTMLElement): Promise<string[]> {
 }
 
 describe('sidebar', () => {
-  it('lists Home, Projects, Groups under "My work" (no placeholder items)', async () => {
+  it('lists Home, Projects, Groups, Merge requests under "My work" (no placeholder items)', async () => {
     const server = mockServer(routes());
     await renderApp({ fetch: server.fetch });
     await screen.findByRole('heading', { name: 'ホーム', level: 1 });
@@ -61,6 +61,7 @@ describe('sidebar', () => {
       ['ホーム', '/'],
       ['プロジェクト', '/-/projects'],
       ['グループ', '/-/groups'],
+      ['マージリクエスト', '/-/merge-requests'],
     ]);
   });
 
@@ -123,7 +124,7 @@ describe('sidebar', () => {
     await renderApp({ fetch: server.fetch });
     await screen.findByRole('heading', { name: 'ホーム', level: 1 });
     const focusable = [...nav().querySelectorAll<HTMLElement>('a[href], button')];
-    expect(focusable.map((e) => e.textContent)).toEqual(['サイドバーを畳む', 'ホーム', 'プロジェクト', 'グループ']);
+    expect(focusable.map((e) => e.textContent)).toEqual(['サイドバーを畳む', 'ホーム', 'プロジェクト', 'グループ', 'マージリクエスト']);
     for (const el of focusable) {
       expect(el.tabIndex).toBe(0);
       el.focus();
@@ -147,7 +148,7 @@ describe('sidebar', () => {
   it('axe: no violations on Home with the sidebar, expanded and collapsed', async () => {
     const server = mockServer(routes());
     const { container } = await renderApp({ fetch: server.fetch });
-    await screen.findByText('Forge Web');
+    await screen.findByText('承認を頼まれた MR はここに出ます。');
     expect(await violations(container)).toEqual([]);
     fireEvent.click(within(nav()).getByRole('button', { name: 'サイドバーを畳む' }));
     expect(await violations(container)).toEqual([]);
@@ -196,9 +197,9 @@ describe('sidebar on a narrow screen', () => {
     });
     expect(button.getAttribute('aria-expanded')).toBe('true');
     // The focus is outside the sidebar and its button (e.g. in the page).
-    const filter = await screen.findByLabelText('名前やパスで絞り込む');
-    filter.focus();
-    fireEvent.keyDown(filter, { key: 'Escape' });
+    const card = await screen.findByRole('link', { name: /承認を待っている MR/ });
+    card.focus();
+    fireEvent.keyDown(card, { key: 'Escape' });
     expect(button.getAttribute('aria-expanded')).toBe('true');
     // On the button itself, Esc closes.
     button.focus();
@@ -246,24 +247,15 @@ describe('sidebar on a narrow screen', () => {
 });
 
 describe('Home with the sidebar pages', () => {
-  it('links its blocks to /-/projects and /-/groups', async () => {
+  it('links to /-/projects, where the projects I take part in moved (plan 15 MR 7)', async () => {
     const server = mockServer(routes());
     await renderApp({ fetch: server.fetch });
-    await screen.findByText('Acme Plant');
-    expect(screen.getByRole('link', { name: 'プロジェクトをすべて見る' }).getAttribute('href')).toBe('/-/projects');
-    expect(screen.getByRole('link', { name: 'グループをすべて見る' }).getAttribute('href')).toBe('/-/groups');
-  });
-
-  it('shows "create group" to an administrator only', async () => {
-    const server = mockServer(routes());
-    const first = await renderApp({ fetch: server.fetch });
-    await screen.findByText('Forge Web');
-    expect(screen.queryByRole('button', { name: 'グループを作る' })).toBeNull();
-    first.unmount();
-    const admin = { ...SESSION, user: { ...SESSION.user, is_admin: true } };
-    const server2 = mockServer(routes({ 'GET /api/v1/session': () => json(200, admin) }));
-    await renderApp({ fetch: server2.fetch });
-    expect(await screen.findByRole('button', { name: 'グループを作る' })).toBeTruthy();
+    expect((await screen.findByRole('link', { name: 'プロジェクトをすべて見る' })).getAttribute('href')).toBe(
+      '/-/projects',
+    );
+    // Home no longer reads the project or group lists.
+    expect(server.to('GET', '/api/v1/projects')).toHaveLength(0);
+    expect(server.to('GET', '/api/v1/groups')).toHaveLength(0);
   });
 });
 

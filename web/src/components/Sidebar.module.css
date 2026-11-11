@@ -90,6 +90,34 @@
   overflow-wrap: anywhere;
 }
 
+/* A count next to an item's name (the merge requests that wait on me). */
+.badge {
+  flex: none;
+  margin-left: auto;
+  min-width: 1.5rem;
+  padding: 0 var(--gs-space-1);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-brand-orange);
+  color: var(--gs-brand-navy);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-bold);
+  line-height: 1.5rem;
+  text-align: center;
+}
+
+/* Collapsed: the count sits on the icon's corner. */
+.collapsed .link {
+  position: relative;
+}
+
+.collapsed .badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 1.25rem;
+  line-height: 1.25rem;
+}
+
 .srOnly {
   composes: srOnly from './controls.module.css';
 }

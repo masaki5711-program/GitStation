@@ -14,6 +14,9 @@ export interface Item {
   icon: IconKey;
   text: string;
   current: boolean;
+  /** A number next to the name: `shown` is drawn (hidden from assistive
+   * tech), `spoken` is appended to the link's name as hidden text. */
+  badge?: { shown: string; spoken: string } | undefined;
 }
 
 export interface SectionProps {
@@ -43,6 +46,14 @@ export function NavItem({
     >
       {ICONS[item.icon]}
       <Label collapsed={collapsed} text={item.text} />
+      {item.badge && (
+        <>
+          <span className={styles.badge} aria-hidden="true">
+            {item.badge.shown}
+          </span>
+          <span className={styles.srOnly}>{item.badge.spoken}</span>
+        </>
+      )}
     </Link>
   );
 }

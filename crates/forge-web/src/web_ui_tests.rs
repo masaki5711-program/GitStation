@@ -144,6 +144,8 @@ const SHELL_PATHS: &[&str] = &[
     // The "My work" sidebar pages (plan 15 MR 1).
     "/-/projects",
     "/-/groups",
+    // The caller's merge requests (plan 15 MR 7).
+    "/-/merge-requests",
 ];
 
 #[tokio::test]
