@@ -2,10 +2,11 @@
 // part in, newest first, grouped by day (in the browser's time zone), 30 at a
 // time ("load more": `before` = the server's next_before). The server decides
 // which events I may see; a page may hold fewer than 30.
-// Focus is never lost on "load more": the button keeps it while more remain;
+// Focus is never lost on "load more" (it follows the render, not the
+// request): the button keeps it while more remain;
 // when the last page arrives the button goes away, so focus moves to the
 // first new event (or to the "nothing older" line when none came).
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useUserActivity, type ActivityEvent } from '../api/activity';
@@ -39,37 +40,68 @@ export function groupByDay(events: ActivityEvent[]): { day: string; events: Acti
 
 const itemId = (seq: number) => `activity-${String(seq)}`;
 const END_ID = 'activity-end';
+const ERROR_ID = 'activity-error';
+
+/** A day's heading: the date, or a plain word when the moment is unreadable. */
+function dayTitle(iso: string, language: string, unknown: string): string {
+  return Number.isNaN(new Date(iso).getTime()) ? unknown : formatDate(iso, language);
+}
+
+/** A "load more" in flight: how many events were shown before it, and
+ * whether its fetch was seen running (the focus waits for it to end). */
+interface PendingLoad {
+  from: number;
+  started: boolean;
+}
 
 export function Activity() {
   const { t, i18n } = useTranslation();
   useDocumentTitle(t('activity.title'));
   const list = useUserActivity();
-  const [message, setMessage] = useState('');
-  const [focusTarget, setFocusTarget] = useState<string | null>(null);
-  const events = list.data?.pages.flatMap((p) => p.events) ?? [];
+  // How many events were shown when the last "load more" was pressed (its
+  // outcome line is derived from it); null before the first.
+  const [lastLoad, setLastLoad] = useState<number | null>(null);
+  const pending = useRef<PendingLoad | null>(null);
+  const events = useMemo(() => list.data?.pages.flatMap((p) => p.events) ?? [], [list.data]);
   const truncated = list.data?.pages.some((p) => p.truncated) ?? false;
+  const fetchingMore = list.isFetchingNextPage;
 
+  // Focus follows what was rendered, once the load has ended: while more
+  // remain the button keeps it; after the last page it moves to the first new
+  // event (or the "nothing older" line); after a failure, to the retry.
   useEffect(() => {
-    if (focusTarget === null) return;
-    document.getElementById(focusTarget)?.focus();
-    setFocusTarget(null);
-  }, [focusTarget]);
+    const load = pending.current;
+    if (load === null) return;
+    if (fetchingMore) {
+      load.started = true;
+      return;
+    }
+    if (!load.started) return;
+    pending.current = null;
+    if (list.isError) {
+      // The notice's last button is its retry (the first copies the request id).
+      const buttons = document.getElementById(ERROR_ID)?.querySelectorAll('button');
+      buttons?.[buttons.length - 1]?.focus();
+      return;
+    }
+    if (list.hasNextPage) return;
+    const first = events[load.from];
+    document.getElementById(first === undefined ? END_ID : itemId(first.seq))?.focus();
+  }, [fetchingMore, list.isError, list.hasNextPage, events]);
 
   const more = () => {
-    if (list.isFetchingNextPage) return;
-    const before = events.length;
-    setMessage('');
-    void list.fetchNextPage().then((r) => {
-      if (r.isError) return;
-      const all = r.data?.pages.flatMap((p) => p.events) ?? [];
-      const added = all.slice(before);
-      setMessage(added.length > 0 ? t('activity.moreShown', { n: added.length }) : t('activity.noMore'));
-      if (!r.hasNextPage) {
-        const first = added[0];
-        setFocusTarget(first === undefined ? END_ID : itemId(first.seq));
-      }
-    });
+    if (fetchingMore) return;
+    pending.current = { from: events.length, started: false };
+    setLastLoad(events.length);
+    void list.fetchNextPage();
   };
+
+  let status = '';
+  if (fetchingMore) status = t('common.loading');
+  else if (lastLoad !== null && !list.isError) {
+    const added = events.length - lastLoad;
+    status = added > 0 ? t('activity.moreShown', { n: added }) : t('activity.noMore');
+  }
 
   return (
     <>
@@ -85,7 +117,7 @@ export function Activity() {
         return (
           <section key={headingId} aria-labelledby={headingId} className={styles.day}>
             <h2 id={headingId} className={styles.dayHeading}>
-              {formatDate(first.occurred_at, i18n.language)}
+              {dayTitle(first.occurred_at, i18n.language, t('activity.dateUnknown'))}
             </h2>
             <ul className={styles.list}>
               {g.events.map((e) => (
@@ -96,13 +128,21 @@ export function Activity() {
         );
       })}
       {list.isError && (
-        <QueryError
-          error={list.error}
-          onRetry={() => {
-            // A later page failed: ask for it again; the first: read anew.
-            void (list.isFetchNextPageError ? list.fetchNextPage() : list.refetch());
-          }}
-        />
+        <div id={ERROR_ID}>
+          <QueryError
+            error={list.error}
+            onRetry={() => {
+              // A later page failed: ask for it again (the rows stay); the
+              // first: read anew.
+              if (list.isFetchNextPageError) {
+                pending.current = { from: events.length, started: false };
+                void list.fetchNextPage();
+              } else {
+                void list.refetch();
+              }
+            }}
+          />
+        </div>
       )}
       {list.isSuccess && events.length === 0 && !list.hasNextPage && (
         <p className={styles.empty}>{t('activity.empty')}</p>
@@ -112,15 +152,17 @@ export function Activity() {
           <button
             type="button"
             className={controls.button}
-            aria-disabled={list.isFetchingNextPage ? 'true' : undefined}
+            aria-disabled={fetchingMore ? 'true' : undefined}
             onClick={more}
           >
-            {list.isFetchingNextPage ? t('common.loading') : t('activity.more')}
+            {fetchingMore ? t('common.loading') : t('activity.more')}
           </button>
         </p>
       )}
+      {/* The live region: "loading" while the next page is read, then what
+          it added. */}
       <p id={END_ID} tabIndex={-1} role="status" className={styles.status}>
-        {message}
+        {status}
       </p>
     </>
   );

@@ -1,4 +1,4 @@
-// Plan 15 MR 9: /-/activity, Home's "recent updates" and the sidebar item.
+// Plan 15 MR 9: /-/activity, Home's activity block and the sidebar item.
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
@@ -36,18 +36,18 @@ describe('activity: one sentence per type', () => {
     [{ type: 'project.created', merge_request: null }, '山田 太郎 がプロジェクトを作りました'],
     [{ type: 'repository.pushed', merge_request: null, ref_count: 3 }, '山田 太郎 が 3 個のブランチやタグに push しました'],
     [{ type: 'repository.pushed', merge_request: null, ref_count: null }, '山田 太郎 が push しました'],
-    [{ type: 'merge_request.opened' }, '山田 太郎 が MR を開きました'],
-    [{ type: 'merge_request.closed' }, '山田 太郎 が MR を閉じました'],
-    [{ type: 'merge_request.reopened' }, '山田 太郎 が MR を開き直しました'],
-    [{ type: 'merge_request.commented' }, '山田 太郎 が MR にコメントしました'],
-    [{ type: 'merge_request.merged' }, '山田 太郎 が MR をマージしました'],
-    [{ type: 'merge_request.approved' }, '山田 太郎 が MR を承認しました'],
+    [{ type: 'merge_request.opened' }, '山田 太郎 がマージリクエストを開きました'],
+    [{ type: 'merge_request.closed' }, '山田 太郎 がマージリクエストを閉じました'],
+    [{ type: 'merge_request.reopened' }, '山田 太郎 がマージリクエストをもう一度開きました'],
+    [{ type: 'merge_request.commented' }, '山田 太郎 がマージリクエストにコメントしました'],
+    [{ type: 'merge_request.merged' }, '山田 太郎 がマージリクエストをマージしました'],
+    [{ type: 'merge_request.approved' }, '山田 太郎 がマージリクエストを承認しました'],
     // A type added later: a general sentence, never the raw name.
     [{ type: 'pipeline.finished', merge_request: null }, '山田 太郎 がプロジェクトで何かを変えました'],
     // No actor (a removed user, a system event).
-    [{ type: 'merge_request.merged', actor: null }, 'だれか が MR をマージしました'],
+    [{ type: 'merge_request.merged', actor: null }, 'だれか がマージリクエストをマージしました'],
     // No display name: the username.
-    [{ actor: { username: 'hanako', display_name: '' } }, 'hanako が MR を開きました'],
+    [{ actor: { username: 'hanako', display_name: '' } }, 'hanako がマージリクエストを開きました'],
   ];
   it.each(cases)('%o', async (over, sentence) => {
     const i18n = await createI18n('ja');
@@ -76,7 +76,7 @@ describe('/-/activity', () => {
     );
     await renderApp({ fetch: server.fetch, path: ACTIVITY });
     expect(await screen.findByRole('heading', { name: 'アクティビティ', level: 1 })).toBeTruthy();
-    await screen.findByText('山田 太郎 が MR を開きました');
+    await screen.findByText('山田 太郎 がマージリクエストを開きました');
     // One section per day, labelled by its date.
     const days = [...document.querySelectorAll<HTMLElement>('section[aria-labelledby^="activity-day-"]')];
     expect(days).toHaveLength(2);
@@ -84,7 +84,7 @@ describe('/-/activity', () => {
     const firstDay = days[0] as HTMLElement;
     const items = within(firstDay).getAllByRole('listitem');
     expect(items.map((li) => li.querySelector('p')?.textContent)).toEqual([
-      '山田 太郎 が MR を開きました',
+      '山田 太郎 がマージリクエストを開きました',
       '山田 太郎 が 2 個のブランチやタグに push しました',
     ]);
     const mr = within(items[0] as HTMLElement).getByRole('link', { name: '!12 ログの文を直す' });
@@ -122,7 +122,7 @@ describe('/-/activity', () => {
     const more = await screen.findByRole('button', { name: 'さらに読む' });
     more.focus();
     fireEvent.click(more);
-    expect(await screen.findByText('山田 太郎 が MR をマージしました')).toBeTruthy();
+    expect(await screen.findByText('山田 太郎 がマージリクエストをマージしました')).toBeTruthy();
     expect(server.to('GET', ACTIVITY_PATH)[1]?.query.get('before')).toBe('50');
     // A merge request without a title is linked by its number.
     expect(screen.getByRole('link', { name: '!3' }).getAttribute('href')).toBe('/acme/forge-web/-/pull/3');
@@ -131,7 +131,7 @@ describe('/-/activity', () => {
       expect(document.activeElement?.id).toBe('activity-49');
     });
     expect(screen.queryByRole('button', { name: 'さらに読む' })).toBeNull();
-    expect(screen.getByText('1 件を足しました。')).toBeTruthy();
+    expect(screen.getByText('さらに 1 件を表示しました。')).toBeTruthy();
   });
 
   it('a last page with nothing in it says so and takes the focus there', async () => {
@@ -146,6 +146,59 @@ describe('/-/activity', () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(end);
     });
+  });
+
+  it('a failed "load more" keeps the rows; the retry asks for the next page again', async () => {
+    let fail = true;
+    let release: () => void = () => undefined;
+    const server = mockServer(
+      routes({
+        [`GET ${ACTIVITY_PATH}`]: async (c) => {
+          if (c.query.get('before') === null) return pageOf([event(20)], 19);
+          if (fail) return apiError(503, '動きを読めません。', 'req-more-1');
+          // Held until the test has seen the loading announcement.
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          return pageOf([event(19, { type: 'merge_request.approved' })]);
+        },
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: ACTIVITY });
+    fireEvent.click(await screen.findByRole('button', { name: 'さらに読む' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('動きを読めません。');
+    expect(screen.getByTestId('request-id').textContent).toBe('req-more-1');
+    // The rows already read stay.
+    expect(screen.getByText('山田 太郎 がマージリクエストを開きました')).toBeTruthy();
+    // Focus goes to the retry, not to the page body.
+    const retry = screen.getByRole('button', { name: 'もう一度試す' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(retry);
+    });
+    fail = false;
+    fireEvent.click(retry);
+    // While the page is read, the live region says so.
+    await waitFor(() => {
+      expect(document.getElementById('activity-end')?.textContent).toBe('読み込んでいます…');
+    });
+    release();
+    expect(await screen.findByText('山田 太郎 がマージリクエストを承認しました')).toBeTruthy();
+    const asked = server.to('GET', ACTIVITY_PATH).map((c) => c.query.get('before'));
+    expect(asked).toEqual([null, '19', '19']);
+    expect(screen.getByText('山田 太郎 がマージリクエストを開きました')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    await waitFor(() => {
+      expect(document.activeElement?.id).toBe('activity-19');
+    });
+  });
+
+  it('an unreadable moment gets a plain day heading, not the raw value', async () => {
+    const server = mockServer(
+      routes({ [`GET ${ACTIVITY_PATH}`]: () => pageOf([event(3, { occurred_at: 'not-a-date' })]) }),
+    );
+    await renderApp({ fetch: server.fetch, path: ACTIVITY });
+    expect(await screen.findByRole('heading', { name: '日付不明', level: 2 })).toBeTruthy();
   });
 
   it('truncated is a quiet note, not an alert', async () => {
@@ -181,7 +234,7 @@ describe('/-/activity', () => {
     expect(screen.getByTestId('request-id').textContent).toBe('req-activity-1');
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: 'もう一度試す' }));
-    expect(await screen.findByText('山田 太郎 が MR を開きました')).toBeTruthy();
+    expect(await screen.findByText('山田 太郎 がマージリクエストを開きました')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -197,18 +250,20 @@ describe('/-/activity', () => {
   });
 });
 
-describe('home: recent updates', () => {
+describe('home: activity', () => {
   it('shows the latest 10 and links to all of the activity', async () => {
     const server = mockServer(
       routes({ [`GET ${ACTIVITY_PATH}`]: () => pageOf([event(2), event(1, { type: 'merge_request.approved' })], 1) }),
     );
     await renderApp({ fetch: server.fetch });
-    const section = (await screen.findByRole('heading', { name: '最近の更新', level: 2 })).closest('section') as HTMLElement;
-    expect(await within(section).findByText('山田 太郎 が MR を承認しました')).toBeTruthy();
+    const section = (await screen.findByRole('heading', { name: 'アクティビティ', level: 2 })).closest('section') as HTMLElement;
+    expect(await within(section).findByText('山田 太郎 がマージリクエストを承認しました')).toBeTruthy();
     expect(within(section).getAllByRole('listitem')).toHaveLength(2);
     expect(within(section).getByRole('link', { name: 'アクティビティをすべて見る' }).getAttribute('href')).toBe(
       ACTIVITY,
     );
+    // The same name as the sidebar and the page, with a short lead.
+    expect(within(section).getByText('関わっているプロジェクトの新しい動きを 10 件まで出しています。')).toBeTruthy();
     // Home pages no further.
     expect(within(section).queryByRole('button', { name: 'さらに読む' })).toBeNull();
     expect(server.to('GET', ACTIVITY_PATH)[0]?.query.get('limit')).toBe('10');
@@ -217,7 +272,7 @@ describe('home: recent updates', () => {
   it('empty: says what will appear', async () => {
     const server = mockServer(routes());
     await renderApp({ fetch: server.fetch });
-    const section = (await screen.findByRole('heading', { name: '最近の更新', level: 2 })).closest('section') as HTMLElement;
+    const section = (await screen.findByRole('heading', { name: 'アクティビティ', level: 2 })).closest('section') as HTMLElement;
     expect(
       await within(section).findByText('まだ動きはありません。プロジェクトのメンバーになると、そこでの動きがここに出ます。'),
     ).toBeTruthy();
@@ -228,7 +283,7 @@ describe('home: recent updates', () => {
       routes({ [`GET ${ACTIVITY_PATH}`]: () => apiError(500, '動きを読めません。', 'req-home-activity') }),
     );
     await renderApp({ fetch: server.fetch });
-    const section = (await screen.findByRole('heading', { name: '最近の更新', level: 2 })).closest('section') as HTMLElement;
+    const section = (await screen.findByRole('heading', { name: 'アクティビティ', level: 2 })).closest('section') as HTMLElement;
     expect((await within(section).findByRole('alert')).textContent).toContain('動きを読めません。');
     expect(within(section).getByTestId('request-id').textContent).toBe('req-home-activity');
     expect(within(section).getByRole('button', { name: 'もう一度試す' })).toBeTruthy();

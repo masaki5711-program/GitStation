@@ -2,7 +2,7 @@
 // projects they take part in, newest first, page by page (`before` = the
 // server's next_before, a keyset on the event's seq). The server decides on
 // every read which events the person may see; the screen shows what it gets.
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { call } from './client';
 import { useApi } from './context';
@@ -46,4 +46,10 @@ export function useRecentActivity() {
     queryFn: ({ signal }) =>
       call(() => api.GET('/api/v1/user/activity', { signal, params: { query: { limit: ACTIVITY_RECENT } } })),
   });
+}
+
+/** Read the activity again after an in-app change that adds an event (a
+ * merge request opened, commented, approved, merged). */
+export function invalidateActivity(queryClient: QueryClient) {
+  return queryClient.invalidateQueries({ queryKey: USER_ACTIVITY_KEY });
 }

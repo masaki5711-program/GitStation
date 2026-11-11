@@ -147,3 +147,9 @@
   margin: var(--gs-space-2) 0 0;
   font-size: var(--gs-font-size-sm);
 }
+
+.lead {
+  margin: 0 0 var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}

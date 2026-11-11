@@ -54,8 +54,9 @@
     "countUnknown": "Jumlahnya tidak dapat dibaca.",
     "cardCount_one": "{{shown}} item",
     "cardCount_other": "{{shown}} item",
-    "activity": "Pembaruan terbaru",
-    "activityAll": "Lihat semua aktivitas"
+    "activity": "Aktivitas",
+    "activityAll": "Lihat semua aktivitas",
+    "activityLead": "Hingga 10 peristiwa terbaru di proyek Anda."
   },
   "nav": {
     "myWork": "Pekerjaan saya",
@@ -112,7 +113,8 @@
     "truncated": "Anda terlibat di banyak proyek: peristiwa dari sebagian proyek lama tidak ditampilkan.",
     "more": "Muat lagi",
     "moreShown": "{{n}} lagi ditampilkan.",
-    "noMore": "Tidak ada yang lebih lama."
+    "noMore": "Tidak ada yang lebih lama.",
+    "dateUnknown": "Tanggal tidak diketahui"
   },
   "projects": {
     "title": "Proyek",

@@ -54,8 +54,9 @@
     "countUnknown": "The number could not be read.",
     "cardCount_one": "{{shown}} item",
     "cardCount_other": "{{shown}} items",
-    "activity": "Recent updates",
-    "activityAll": "See all activity"
+    "activity": "Activity",
+    "activityAll": "See all activity",
+    "activityLead": "Up to 10 of the latest events in your projects."
   },
   "nav": {
     "myWork": "My work",
@@ -112,7 +113,8 @@
     "truncated": "You take part in many projects: the events of some older projects are not shown.",
     "more": "Load more",
     "moreShown": "{{n}} more shown.",
-    "noMore": "There is nothing older."
+    "noMore": "There is nothing older.",
+    "dateUnknown": "Unknown date"
   },
   "projects": {
     "title": "Projects",

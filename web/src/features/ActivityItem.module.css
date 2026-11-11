@@ -27,11 +27,13 @@
 }
 
 .mr {
+  max-width: 100%;
   font-weight: var(--gs-font-weight-bold);
   overflow-wrap: anywhere;
 }
 
 .project {
+  max-width: 100%;
   font-family: var(--gs-font-mono);
   overflow-wrap: anywhere;
 }

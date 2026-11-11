@@ -1,8 +1,8 @@
 // Home (plan 15 §3.3, MR 7): count cards for what waits on me (my merge
 // requests that need action, the ones waiting for my approval, my open ones,
 // unread notifications), each a link to its list; then the latest 10
-// events of my projects (MR 9, all of them on /-/activity); then what I
-// looked at recently (this browser only). The projects I take part in moved to
+// events of my projects (MR 9; headed "Activity", the sidebar's name, all of
+// them on /-/activity); then what I looked at recently (this browser only). The projects I take part in moved to
 // /-/projects (a small link here); groups live on /-/groups.
 // A card's link is named by its label and number only; what the card says
 // besides (the next step when it is 0, loading, unknown) is its description
@@ -115,6 +115,7 @@ function RecentActivity() {
   const events = recent.data?.events ?? [];
   return (
     <Block id="home-activity" title={t('home.activity')}>
+      <p className={styles.lead}>{t('home.activityLead')}</p>
       {recent.isPending && <Loading />}
       {recent.isError && (
         <QueryError

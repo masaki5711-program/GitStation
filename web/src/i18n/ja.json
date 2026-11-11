@@ -54,8 +54,9 @@
     "countUnknown": "数を読めませんでした。",
     "cardCount_one": "{{shown}} 件",
     "cardCount_other": "{{shown}} 件",
-    "activity": "最近の更新",
-    "activityAll": "アクティビティをすべて見る"
+    "activity": "アクティビティ",
+    "activityAll": "アクティビティをすべて見る",
+    "activityLead": "関わっているプロジェクトの新しい動きを 10 件まで出しています。"
   },
   "nav": {
     "myWork": "マイワーク",
@@ -101,18 +102,19 @@
     "pushed_one": "{{actor}} が {{count}} 個のブランチやタグに push しました",
     "pushed_other": "{{actor}} が {{count}} 個のブランチやタグに push しました",
     "pushedNoCount": "{{actor}} が push しました",
-    "mrOpened": "{{actor}} が MR を開きました",
-    "mrClosed": "{{actor}} が MR を閉じました",
-    "mrReopened": "{{actor}} が MR を開き直しました",
-    "mrCommented": "{{actor}} が MR にコメントしました",
-    "mrMerged": "{{actor}} が MR をマージしました",
-    "mrApproved": "{{actor}} が MR を承認しました",
+    "mrOpened": "{{actor}} がマージリクエストを開きました",
+    "mrClosed": "{{actor}} がマージリクエストを閉じました",
+    "mrReopened": "{{actor}} がマージリクエストをもう一度開きました",
+    "mrCommented": "{{actor}} がマージリクエストにコメントしました",
+    "mrMerged": "{{actor}} がマージリクエストをマージしました",
+    "mrApproved": "{{actor}} がマージリクエストを承認しました",
     "other": "{{actor}} がプロジェクトで何かを変えました",
     "empty": "まだ動きはありません。プロジェクトのメンバーになると、そこでの動きがここに出ます。",
     "truncated": "関わっているプロジェクトが多いため、一部の古いプロジェクトの動きは出ていません。",
     "more": "さらに読む",
-    "moreShown": "{{n}} 件を足しました。",
-    "noMore": "これより前の動きはありません。"
+    "moreShown": "さらに {{n}} 件を表示しました。",
+    "noMore": "これより前の動きはありません。",
+    "dateUnknown": "日付不明"
   },
   "projects": {
     "title": "プロジェクト",
