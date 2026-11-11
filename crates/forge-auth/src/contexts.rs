@@ -16,7 +16,9 @@
 //! let mixed = GroupCtx { group: LoadedGroup { id: GroupId::new(1), role: None } };
 //! ```
 
-use forge_core::{GroupId, NamespaceId, ProjectId, ProtectedRefId, TombstoneId, UserId};
+use forge_core::{
+    GroupId, NamespaceId, ProjectId, ProtectedRefId, TombstoneId, UserId, VisibilityClass,
+};
 
 use crate::model::{
     AccountKind, MembershipChange, MembershipScope, ProjectView, Resource, Role, Scope,
@@ -629,6 +631,66 @@ impl ResourceCtx for UserMergeRequestsCtx {
     }
     fn id(&self) -> UserId {
         self.owner
+    }
+}
+
+/// The recent events of the projects `owner` is involved in (`ActivityRead`
+/// on the route, plan 15 MR 8): the id is the owner, so a proof names whose
+/// activity it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserActivityCtx {
+    owner: UserId,
+}
+
+impl UserActivityCtx {
+    pub fn new(owner: UserId) -> Self {
+        Self { owner }
+    }
+}
+
+impl sealed::Sealed for UserActivityCtx {}
+
+impl ResourceCtx for UserActivityCtx {
+    type Id = UserId;
+    fn resource(&self) -> Resource {
+        Resource::UserActivity { owner: self.owner }
+    }
+    fn id(&self) -> UserId {
+        self.owner
+    }
+}
+
+/// The events of one visibility class of one project as loaded for the
+/// caller (`ActivityRead` per listed event, plan 15 MR 8): the id and the
+/// view come from the same [`LoadedProject`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectEventsCtx {
+    project: LoadedProject,
+    class: VisibilityClass,
+}
+
+impl ProjectEventsCtx {
+    pub fn new(project: LoadedProject, class: VisibilityClass) -> Self {
+        Self { project, class }
+    }
+}
+
+impl sealed::Sealed for ProjectEventsCtx {}
+
+impl ResourceCtx for ProjectEventsCtx {
+    type Id = ProjectId;
+    fn resource(&self) -> Resource {
+        Resource::ProjectEvents {
+            project: ProjectView {
+                visibility: self.project.visibility,
+                role: self.project.role,
+                pending_deletion: self.project.pending_deletion,
+            },
+            class: self.class,
+        }
+    }
+    fn id(&self) -> ProjectId {
+        self.project.id
     }
 }
 

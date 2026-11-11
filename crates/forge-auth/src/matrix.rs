@@ -320,6 +320,9 @@ pub(crate) enum Fixture {
     /// The caller's own merge request lists (plan 15 MR 6) or another user's.
     OwnUserMergeRequests,
     ForeignUserMergeRequests,
+    /// The caller's own activity (plan 15 MR 8) or another user's.
+    OwnUserActivity,
+    ForeignUserActivity,
     /// Creating an own token with plain scopes.
     OwnTokenRequest,
     /// Creating an own token that carries the admin scope.
@@ -1014,6 +1017,8 @@ impl Fixture {
             }
             Fixture::OwnUserMergeRequests => Resource::UserMergeRequests { owner: ME },
             Fixture::ForeignUserMergeRequests => Resource::UserMergeRequests { owner: OTHER },
+            Fixture::OwnUserActivity => Resource::UserActivity { owner: ME },
+            Fixture::ForeignUserActivity => Resource::UserActivity { owner: OTHER },
             Fixture::OwnTokenRequest => Resource::TokenRequest {
                 owner: ME,
                 scopes: vec![Scope::ReadRepository],
@@ -1175,6 +1180,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_bindings::LIST_ROWS,
         &crate::matrix_rows_act_as::generated_denies(),
         crate::matrix_rows_webhooks::WEBHOOK_ROWS.as_slice(),
+        crate::matrix_rows_activity::ACTIVITY_ROWS,
         crate::matrix_rows_mirror::MIRROR_ROWS.as_slice(),
         crate::matrix_rows_doc_lint::DOC_LINT_ROWS,
         crate::matrix_rows_pipelines::PIPELINE_ROWS.as_slice(),

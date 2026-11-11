@@ -143,6 +143,19 @@ fn authored_sql() -> String {
     page_sql("", &own_page(""))
 }
 
+/// The projects where `user` holds a membership, as common table
+/// expressions of a `WITH RECURSIVE` (each ending with `, `; the last,
+/// `related`, has the column `project_id`): the project namespaces under a
+/// group `user` is a direct member of (descendants to `cap` steps) or under
+/// `user`'s personal namespace, and the projects `user` is a direct member
+/// of. `user` and `cap` are the statement's placeholders (`$n`). Shared by
+/// `approvable` and the activity list (plan 15 MR 8).
+pub(crate) fn related_ctes(user: &str, cap: &str) -> String {
+    format!(
+        "roots AS (            SELECT n.id FROM forge.group_members gm              JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = gm.group_id              WHERE gm.user_id = {user}            UNION SELECT n.id FROM forge.namespaces n WHERE n.kind = 'user' AND n.owner_id = {user}),          down (id, step) AS (            SELECT id, 1 FROM roots            UNION ALL            SELECT n.id, d.step + 1 FROM forge.namespaces n JOIN down d ON n.parent_id = d.id              WHERE d.step < {cap}),          related AS (            SELECT n.owner_id AS project_id FROM down d              JOIN forge.namespaces n ON n.id = d.id AND n.kind = 'project'            UNION SELECT pm.project_id FROM forge.project_members pm WHERE pm.user_id = {user}), "
+    )
+}
+
 /// The projects where the caller (`$1`) holds a membership: the project
 /// namespaces under a group the caller is a direct member of (descendants
 /// to `$5` steps) or under the caller's personal namespace, and the
@@ -151,7 +164,7 @@ fn authored_sql() -> String {
 /// newest `$3` of them.
 fn approvable_sql() -> String {
     page_sql(
-        "roots AS (            SELECT n.id FROM forge.group_members gm              JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = gm.group_id              WHERE gm.user_id = $1            UNION SELECT n.id FROM forge.namespaces n WHERE n.kind = 'user' AND n.owner_id = $1),          down (id, step) AS (            SELECT id, 1 FROM roots            UNION ALL            SELECT n.id, d.step + 1 FROM forge.namespaces n JOIN down d ON n.parent_id = d.id              WHERE d.step < $5),          related AS (            SELECT n.owner_id AS project_id FROM down d              JOIN forge.namespaces n ON n.id = d.id AND n.kind = 'project'            UNION SELECT pm.project_id FROM forge.project_members pm WHERE pm.user_id = $1), ",
+        &related_ctes("$1", "$5"),
         "SELECT c.id FROM related r CROSS JOIN LATERAL (            SELECT m.id FROM forge.merge_requests m            WHERE m.project_id = r.project_id AND m.state = 'open' AND NOT m.draft              AND m.head_sha IS NOT NULL AND m.author_id <> $1              AND ($2::bigint IS NULL OR m.id < $2)              AND NOT EXISTS (SELECT 1 FROM forge.merge_request_approvals a                WHERE a.merge_request_id = m.id AND a.approver_id = $1                  AND a.revoked_at IS NULL AND a.head_sha = m.head_sha                  AND a.target_branch = m.target_branch)            ORDER BY m.id DESC LIMIT $3) c          ORDER BY c.id DESC LIMIT $3",
     )
 }

@@ -125,6 +125,56 @@ pub(crate) const PROJECT_SEARCH_SQL: &str = concat!(
      ORDER BY n.full_path, p.id"
 );
 
+/// The projects of the ids `$1` (a `bigint[]`; duplicates and missing ids
+/// are dropped), with the viewer's (`$2`) access facts over a chain capped
+/// at `$3` steps: the columns of [`PROJECT_PAGE_SQL`], newest project
+/// first. One statement for many projects (plan 15 MR 8: the activity
+/// list's involved projects, review MEDIUM "N+1").
+pub(crate) const PROJECT_IDS_SQL: &str = concat!(
+    page_scan!(
+        @page ["page AS (SELECT DISTINCT x AS id FROM unnest($1::bigint[]) AS x), "],
+        "project"
+    ),
+    "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion,        a.steps, a.truncs, a.roles,        n.id AS namespace_id, n.full_path,        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed,        p.display_name, p.description, r.id AS repository_id, r.state AS repository_state,        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at      FROM page pg JOIN forge.projects p ON p.id = pg.id      LEFT JOIN agg a ON a.anchor = p.id      LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id      LEFT JOIN forge.repositories r ON r.project_id = p.id      ORDER BY p.id DESC"
+);
+
+/// The most ids [`project_records`] reads in one statement.
+pub const MAX_RECORD_IDS: usize = 2_000;
+
+/// The projects of `ids` that exist, newest first, each with `viewer`'s
+/// access facts — visible or not (the caller decides each with
+/// `authorize()`): one [`PROJECT_IDS_SQL`] round trip on the read pool,
+/// each row read as `resolve::load_project` reads its row. More than
+/// [`MAX_RECORD_IDS`] ids is a programming error (`FG-SYS-0001
+/// reason=too_many_project_ids`).
+pub async fn project_records(
+    db: &Db,
+    ids: &[ProjectId],
+    viewer: UserId,
+) -> Result<Vec<ProjectRecord>, ForgeError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if ids.len() > MAX_RECORD_IDS {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "too_many_project_ids")
+            .with_context("ids", ids.len()));
+    }
+    let raw: Vec<i64> = ids.iter().map(|p| p.get()).collect();
+    let rows: Vec<ProjectAccessRow> = db
+        .within("projects.by_ids", async {
+            sqlx::query_as(PROJECT_IDS_SQL)
+                .bind(raw)
+                .bind(viewer.get())
+                .bind(CAP)
+                .fetch_all(db.pool().executor())
+                .await
+                .map_err(|e| read_query_error("projects.by_ids", e))
+        })
+        .await?;
+    records(rows, viewer)
+}
+
 /// The longest search text (characters).
 pub const MAX_SEARCH_CHARS: usize = 100;
 

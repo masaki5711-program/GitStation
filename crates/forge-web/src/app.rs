@@ -577,12 +577,12 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    user_merge_request_routes(runner_routes(pipeline_routes(doc_lint_routes(
-        binding_routes(act_as_routes(mirror_routes(webhook_routes(
-            notification_routes(check_routes(dev_status_routes(feed_routes(
-                integration_routes(service_account_routes(account_routes(history_routes(
-                    browse_routes(git_routes(shell_routes(merge_request_routes(
-                        member_routes(move_routes(hosting_routes(fixed))),
+    user_activity_routes(user_merge_request_routes(runner_routes(pipeline_routes(
+        doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
+            webhook_routes(notification_routes(check_routes(dev_status_routes(
+                feed_routes(integration_routes(service_account_routes(account_routes(
+                    history_routes(browse_routes(git_routes(shell_routes(
+                        merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
                     )))),
                 )))),
             )))),
@@ -615,6 +615,24 @@ fn user_merge_request_routes(registry: Registry<AppState>) -> Registry<AppState>
             u::counts,
         )
         .responds::<u::UserMergeRequestCounts>(Verb::Get, u::COUNTS)
+}
+
+/// The recent events of the projects the caller is involved in (plan 15
+/// MR 8); each event is decided again on `ActivityRead` per project and
+/// visibility class (forge-review `activity`).
+fn user_activity_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::user_activity as a;
+    registry
+        .route_with(
+            Verb::Get,
+            a::ACTIVITY,
+            Action::ActivityRead,
+            "The recent events of the projects the caller is involved in (a role on the project, directly or through a group), newest first; only the shown types (project.created, repository.pushed and merge request events) with their allowed fields, only events the caller may read now (people only; a bad parameter is FG-WEB-0006)",
+            a::OwnActivity,
+            a::list,
+        )
+        .responds::<a::UserActivityList>(Verb::Get, a::ACTIVITY)
+        .queries(Verb::Get, a::ACTIVITY, a::ACTIVITY_QUERY)
 }
 
 /// CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1): the administration (an
