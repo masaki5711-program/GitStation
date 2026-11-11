@@ -655,6 +655,17 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::NotificationInboxUpdate,
             Resource::NotificationPreferences { owner },
         ) => own_preferences(*owner),
+        // Plan 15 MR 6: the merge requests of a person's own work, for
+        // nobody else — an administrator included. Each listed row is
+        // decided again on `MergeRequestRead` (an approvable one also on
+        // `MergeRequestApprove`) by forge-review.
+        (Action::UserMergeRequestList, Resource::UserMergeRequests { owner }) => {
+            if *owner == user {
+                Ok(())
+            } else {
+                Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_merge_request_list"))
+            }
+        }
 
         (Action::UserCreate | Action::UserAdminList | Action::Metrics, Resource::Instance) => {
             admin_only()
@@ -1336,6 +1347,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::TokenRevoke
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
+            | Action::UserMergeRequestList
             | Action::NotificationPreferencesWrite
             | Action::NotificationInboxUpdate
             | Action::UserCreate
@@ -1427,6 +1439,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::VisibilityChange { .. }
             | Resource::Token { .. }
             | Resource::NotificationPreferences { .. }
+            | Resource::UserMergeRequests { .. }
             | Resource::Session { .. }
             | Resource::TokenRequest { .. }
             | Resource::Admission { .. }
@@ -1525,6 +1538,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Namespace { .. }
         | Resource::Token { .. }
         | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }
@@ -1583,6 +1597,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
         | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

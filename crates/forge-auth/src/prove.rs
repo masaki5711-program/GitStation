@@ -103,7 +103,8 @@ pub use crate::contexts::{
     LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx, PinnedCopyCtx, ProjectMemberCtx,
     RefProtectionCtx, RunnerJobCtx, ServiceAccountCtx, ServiceAccountTokenCtx,
     ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx,
-    TombstoneCtx, TransferCtx, UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
+    TombstoneCtx, TransferCtx, UserMergeRequestsCtx, UserNamespaceCtx, UserRenameCtx,
+    UserTargetCtx, VisibilityChangeCtx,
 };
 
 /// Seals [`ResourceCtx`]: only this crate implements it, so every context's
