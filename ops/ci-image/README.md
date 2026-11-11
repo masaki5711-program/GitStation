@@ -108,7 +108,7 @@ node ops/ci-image/build-and-push.mjs --skip-postgres --jobs 4
 
 1. **`.forge-ci.yml` でデバッグ情報を切る**: `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`（下書きに入れた）。ジョブの
    ピークは約 6.2 GB になる。バックトレースは関数名まで（行番号は出ない）。
-2. **試験用 Runner**（`ops/runner/compose.yml`、`.local/config.toml`）:
+2. **試験用 Runner**（`ops/runner/compose.yml`、`.local/config.toml`）:（**済み**: `chore/ops-runner-workdir-disk`。`mem_limit` も 6g → 8g）
    - `/var/lib/forge-runner` を tmpfs から名前付きのボリューム（ディスク）に替える。tmpfs はメモリで、コンテナの `mem_limit: 6g` に
      数えられるので 6 GB 台の `target/` は置けない。
    - `work_dir_max_bytes = 10737418240`（10 GiB。6.2 GB に余裕を持たせる）。ボリュームには容量の上限が無いので、この確かめが網になる。
