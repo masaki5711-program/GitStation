@@ -1,0 +1,7 @@
+# Build context for ops/runner/Dockerfile (context = repository root).
+.git
+target
+web/node_modules
+web/dist
+ops/test-env/.local
+ops/runner/.local

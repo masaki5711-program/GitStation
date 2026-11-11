@@ -1,0 +1,47 @@
+# Test-environment runner on a Docker host (ops/runner/README.md).
+# No published ports: the runner only makes outbound requests.
+name: gs-runner-test
+
+services:
+  registry:
+    image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    networks: [runner]
+    volumes:
+      - registry-data:/var/lib/registry
+    restart: unless-stopped
+
+  runner:
+    build:
+      context: ../..
+      dockerfile: ops/runner/Dockerfile
+    image: gitstation/forge-runner:test
+    depends_on: [registry]
+    networks: [runner]
+    user: podman
+    # Rootless Podman inside an unprivileged container needs the user-namespace
+    # syscalls Docker's default seccomp profile refuses, and /dev/fuse for
+    # fuse-overlayfs. Not privileged; no Docker socket.
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/fuse
+    volumes:
+      - ./.local/config.toml:/etc/forge-runner/config.toml:ro
+      - ./.local/token:/etc/forge-runner/token:ro
+      - ./registries.conf:/etc/containers/registries.conf.d/50-test-registry.conf:ro
+      - podman-store:/home/podman/.local/share/containers
+    tmpfs:
+      # The job work directory: capped in size (the runbook requires a quota).
+      - /var/lib/forge-runner:size=4g,uid=1000,gid=1000,mode=0700,exec
+    # Bounds the runner and every job container together.
+    mem_limit: 6g
+    pids_limit: 4096
+    stop_grace_period: 120s
+    restart: unless-stopped
+
+networks:
+  runner:
+
+volumes:
+  registry-data:
+  podman-store:
