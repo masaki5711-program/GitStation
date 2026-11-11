@@ -220,6 +220,7 @@ pub async fn list(state: AppState, request: Dispatched<UserActivityCtx>) -> Resp
             target: "forge_web::user_activity",
             request_id = %w.ctx.request_id,
             projects = page.projects,
+            projects_hidden = page.projects_hidden,
             projects_truncated = page.truncated,
             rows_scanned = page.rows_scanned,
             rows_hidden = page.rows_hidden,

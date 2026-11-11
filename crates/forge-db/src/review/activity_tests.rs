@@ -249,3 +249,44 @@ async fn pages_chain_by_seq_within_one_timestamp_and_read_only_shaped_scalars() 
         .expect("empty")
         .is_empty());
 }
+
+/// The batch access read of the involved projects (review MEDIUM "N+1"):
+/// one statement, newest first, each with the viewer's role as
+/// `resolve::load_project` reads it; a missing or repeated id is dropped.
+#[tokio::test]
+async fn project_records_read_every_access_row_in_one_statement() {
+    let t = FreshDb::migrated().await;
+    let olga = person(&t, "olga").await;
+    let dave = person(&t, "dave").await;
+    let (web, acme) = project(&t, "acme", olga).await;
+    let (other, _) = project(&t, "other", olga).await;
+    groups::add_member(&t.db, &system("req-gm"), acme, dave, Role::Guest)
+        .await
+        .expect("group member");
+    let records =
+        crate::lists::project_records(&t.db, &[web, other, web, ProjectId::new(999_999)], dave)
+            .await
+            .expect("records");
+    let seen: Vec<(ProjectId, Option<Role>, String)> = records
+        .iter()
+        .map(|r| (r.id, r.access.role, r.path.full_path()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (other, None, "other/web".to_owned()),
+            (web, Some(Role::Guest), "acme/web".to_owned()),
+        ]
+    );
+    for (record, id) in records.iter().zip([other, web]) {
+        let one = crate::resolve::load_project(&t.db, id, Some(dave))
+            .await
+            .expect("one")
+            .expect("exists");
+        assert_eq!(&one, record);
+    }
+    assert!(crate::lists::project_records(&t.db, &[], dave)
+        .await
+        .expect("empty")
+        .is_empty());
+}

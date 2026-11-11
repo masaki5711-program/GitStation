@@ -230,7 +230,10 @@ actions! {
     /// and a bot are refused; act-as and CI credentials too); another
     /// user's is not found, administrators included. Each event is decided
     /// again per project and visibility class (`Resource::ProjectEvents`):
-    /// the integration class only, Reporter and above by role. `read_api`.
+    /// the integration class only, Reporter and above by role
+    /// (administrator rights pass the role, as everywhere: an administrator
+    /// sees the events of every project they hold a membership in, a Guest
+    /// one included). `read_api`.
     ActivityRead,
     UserCreate,
     /// `POST /api/v1/admin/users/{id}/disable` (M2 MR6): administrators,

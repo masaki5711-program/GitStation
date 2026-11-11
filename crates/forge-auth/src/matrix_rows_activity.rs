@@ -7,7 +7,9 @@
 //!   another user's is not found, administrators included. Act-as and CI
 //!   credentials: the generated rows (`ActAsRule::Denied`, `CiRule`).
 //! - one listed event (`ActivityRead` on `Fixture::ProjectEvents`, decided
-//!   by forge-review per project and class): Reporter and above by role,
+//!   by forge-review per project and class): Reporter and above by role
+//!   (administrator rights pass the role, as in every `need`: an
+//!   administrator sees every project they hold a membership in),
 //!   the integration class only (never the maintainer, deployment or admin
 //!   class, administrators and Owners included); an internal project the
 //!   person only reads is refused (no role), a private one without a role
@@ -47,7 +49,11 @@ const SHOWN: F = events(C::Integration, P::Private);
 #[rustfmt::skip]
 pub(crate) const ACTIVITY_ROWS: &[Row] = &[
     // --- the route: the person's own ---
+    row(W::Guest, OWN, Allow),
     row(W::Reporter, OWN, Allow),
+    row(W::Developer, OWN, Allow),
+    row(W::Maintainer, OWN, Allow),
+    row(W::Owner, OWN, Allow),
     row(W::NonMember, OWN, Allow),
     row(W::Admin, OWN, Allow),
     row(W::AdminTokenApi, OWN, Allow),

@@ -682,7 +682,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // FG-REPO-0005 / FG-REPO-0006): people only, the integration class
         // only (never the maintainer, deployment or admin class, whatever
         // the role), Reporter and above by role — an internal project the
-        // person merely reads is not one they are involved in.
+        // person merely reads is not one they are involved in. As in every
+        // `need`, administrator rights pass the role: an administrator sees
+        // every project they hold a membership in, a Guest one included.
         (Action::ActivityRead, Resource::ProjectEvents { project, class }) => {
             people_only()?;
             match class {

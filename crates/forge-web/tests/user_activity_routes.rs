@@ -440,8 +440,9 @@ async fn the_activity_holds_only_shown_events_of_involved_projects() {
     );
     assert!(!h.raw.contains("acme"), "{}", h.raw);
 
-    // A Guest is involved but reads no events: nothing shown, the hidden
-    // rows counted in the log with the request id — never what they were.
+    // A Guest holds a membership but reads no events: the project is
+    // refused before any event is read (no scan, no page slot), and the
+    // refusal is counted in the log with the request id — never named.
     let (logs, guard) = capture();
     let g = ok(&t.db, ACTIVITY, session(gina)).await;
     drop(guard);
@@ -452,8 +453,10 @@ async fn the_activity_holds_only_shown_events_of_involved_projects() {
         .filter(|l| l["message"] == "forge.user_activity.read")
         .collect();
     assert_eq!(read.len(), 1, "{lines:?}");
-    assert_eq!(read[0]["rows_scanned"], 3, "{}", read[0]);
-    assert_eq!(read[0]["rows_hidden"], 3, "{}", read[0]);
+    assert_eq!(read[0]["projects"], 0, "{}", read[0]);
+    assert_eq!(read[0]["projects_hidden"], 1, "{}", read[0]);
+    assert_eq!(read[0]["rows_scanned"], 0, "{}", read[0]);
+    assert_eq!(read[0]["rows_hidden"], 0, "{}", read[0]);
     assert!(read[0]["request_id"]
         .as_str()
         .is_some_and(|r| !r.is_empty()));

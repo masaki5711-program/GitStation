@@ -5,15 +5,20 @@
 //!
 //! "Involved" (plan 15 §6, default 3) is a membership: directly, through an
 //! ancestor group, or as the owner of the personal namespace. forge-db
-//! reads those projects (at most [`MAX_INVOLVED_PROJECTS`], newest first;
-//! more is said as `truncated`) and the candidate events of the types in
-//! [`SHOWN_TYPES`]; every row is then decided again here, for the caller's
-//! own principal, by the one decision point — this module has no access
-//! rule of its own: `ActivityRead` on the event's project as loaded for
-//! the caller now and the event type's [`VisibilityClass`]
-//! (`forge_auth::prove`). `authorize()` allows the integration class only,
-//! Reporter and above by role; a project the caller lost, cannot see or
-//! that waits for deletion shows nothing, and its name never appears.
+//! reads those projects and their access rows in one statement each; every
+//! project is decided here, for the caller's own principal, by the one
+//! decision point — this module has no access rule of its own:
+//! `ActivityRead` on the project's integration-class events as loaded for
+//! the caller now (`forge_auth::prove`). Only the allowed projects (at
+//! most [`MAX_INVOLVED_PROJECTS`], newest first; more is said as
+//! `truncated`) reach the statement reading the events of the types in
+//! [`SHOWN_TYPES`], and each row is decided again for its type's
+//! [`VisibilityClass`]. `authorize()` allows the integration class only,
+//! Reporter and above by role (administrators with administrator rights
+//! pass the role, so they see every project they hold a membership in); a
+//! project the caller lost, cannot see or that waits for deletion shows
+//! nothing, and its name never appears. A refusal hides; any other
+//! decision error is returned (logged once by the route).
 //!
 //! **Allowlists, never the payload.** The shown types are an explicit,
 //! exhaustive decision per [`EventType`] ([`fields_of`]), every one of the
@@ -29,14 +34,13 @@
 //! the retention period are gone from the feed, so they are not listed.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use forge_auth::{prove, Action, Authorized, LoadedProject, ProjectEventsCtx, UserActivityCtx};
 use forge_core::{EventType, ProjectId, ProjectRecord, VisibilityClass};
-use forge_db::resolve;
+use forge_db::lists;
 pub use forge_db::review::activity::MAX_INVOLVED_PROJECTS;
 use forge_db::review::activity::{self as rows, ActivityRow};
-use forge_errors::ForgeError;
+use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{require, Review};
 
@@ -162,12 +166,15 @@ pub struct ActivityPage {
     pub items: Vec<ActivityItem>,
     /// Pass as `before` for the next (older) page; `None`: no more.
     pub next_before: Option<i64>,
-    /// The caller is involved in more than [`MAX_INVOLVED_PROJECTS`]
-    /// projects: the oldest were not read.
+    /// The caller is involved (Reporter and above) in more than
+    /// [`MAX_INVOLVED_PROJECTS`] projects, or holds more memberships than
+    /// one read decides on: the oldest projects were not read.
     pub truncated: bool,
-    /// For the route's log only: the involved projects read, the candidate
-    /// rows read, and how many of them were not shown.
+    /// For the route's log only (counts, never what they were): the
+    /// projects whose events were read, the membership projects refused,
+    /// the candidate rows read and how many of them were not shown.
     pub projects: usize,
+    pub projects_hidden: usize,
     pub rows_scanned: usize,
     pub rows_hidden: usize,
 }
@@ -182,6 +189,14 @@ pub struct ActivityQuery {
 impl Review {
     /// `GET /api/v1/user/activity` (`ActivityRead`): one page of the events
     /// of the projects the caller is involved in, newest first.
+    ///
+    /// Every membership project is decided once, before any event is read
+    /// (`ActivityRead` on its integration-class events): only the allowed
+    /// ids reach the event statement, so a Guest-only or hidden membership
+    /// costs no scan and takes no page slot, and only allowed projects
+    /// count toward [`MAX_INVOLVED_PROJECTS`]. Each row is then decided
+    /// again for its own type's class (pure, no I/O: the stored type is
+    /// never trusted to be the class decided for the project).
     pub async fn user_activity(
         &self,
         proof: &Authorized<UserActivityCtx>,
@@ -189,34 +204,36 @@ impl Review {
     ) -> Result<ActivityPage, ForgeError> {
         require(proof.action(), Action::ActivityRead)?;
         let user = *proof.id();
-        let involved = rows::involved_projects(&self.db, user).await?;
-        let candidates = rows::activity_page(
-            &self.db,
-            &involved.ids,
-            &SHOWN_TYPES,
-            query.before,
-            query.limit,
-        )
-        .await?;
-        let rows_scanned = candidates.len();
+        let candidates = rows::involved_projects(&self.db, user).await?;
+        // One statement for every candidate's access row (review: no N+1).
+        let records = lists::project_records(&self.db, &candidates.ids, user).await?;
+        let mut allowed: HashMap<ProjectId, ProjectRecord> = HashMap::new();
+        let mut ids: Vec<ProjectId> = Vec::new();
+        let mut projects_hidden = 0;
+        let mut over_cap = false;
+        // Newest project first (the records' order).
+        for record in records {
+            if !allows(proof, &record, VisibilityClass::Integration)? {
+                projects_hidden += 1;
+                continue;
+            }
+            if ids.len() == MAX_INVOLVED_PROJECTS {
+                over_cap = true;
+                continue;
+            }
+            ids.push(record.id);
+            allowed.insert(record.id, record);
+        }
+        let candidates_rows =
+            rows::activity_page(&self.db, &ids, &SHOWN_TYPES, query.before, query.limit).await?;
+        let rows_scanned = candidates_rows.len();
         let next_before = (rows_scanned >= query.limit)
-            .then(|| candidates.last().map(|r| r.seq))
+            .then(|| candidates_rows.last().map(|r| r.seq))
             .flatten();
-        let mut projects: HashMap<ProjectId, Option<Arc<ProjectRecord>>> = HashMap::new();
         let mut items = Vec::with_capacity(rows_scanned);
-        for row in candidates {
-            let id = ProjectId::new(row.project_id);
-            let record = match projects.get(&id) {
-                Some(known) => known.clone(), // clone: an Arc
-                None => {
-                    let loaded = resolve::load_project(&self.db, id, Some(user))
-                        .await?
-                        .map(Arc::new);
-                    projects.insert(id, loaded.clone()); // clone: an Arc
-                    loaded
-                }
-            };
-            if let Some(item) = decide(proof, record.as_deref(), row) {
+        for row in candidates_rows {
+            let record = allowed.get(&ProjectId::new(row.project_id));
+            if let Some(item) = decide(proof, record, row)? {
                 items.push(item);
             }
         }
@@ -224,37 +241,68 @@ impl Review {
             rows_hidden: rows_scanned - items.len(),
             items,
             next_before,
-            truncated: involved.truncated,
-            projects: involved.ids.len(),
+            truncated: candidates.truncated || over_cap,
+            projects: ids.len(),
+            projects_hidden,
             rows_scanned,
         })
     }
 }
 
-/// The row as the caller may see it, or `None` (an unknown or unshown
-/// type, a project gone or not visible, a refusal of `authorize()`).
-fn decide(
+/// `authorize()`'s answer for `ActivityRead` on `record`'s events of
+/// `class`: `false` on a refusal (not found, forbidden, pending deletion:
+/// the row or project is hidden, counted by the caller); any other error
+/// (a defect such as a resource of the wrong shape) is returned, and the
+/// route logs it once with its `error_code` and the request id.
+fn allows(
     proof: &Authorized<UserActivityCtx>,
-    record: Option<&ProjectRecord>,
-    row: ActivityRow,
-) -> Option<ActivityItem> {
-    let event_type = EventType::parse(&row.event_type)?;
-    let fields = fields_of(event_type)?;
-    let record = record?;
+    record: &ProjectRecord,
+    class: VisibilityClass,
+) -> Result<bool, ForgeError> {
     let loaded = LoadedProject {
         id: record.id,
         visibility: record.access.visibility,
         role: record.access.role,
         pending_deletion: record.access.pending_deletion,
     };
-    let class: VisibilityClass = event_type.visibility_class();
-    // The proof is all that is needed: a refusal hides the row.
-    let _allowed = prove(
+    match prove(
         proof.principal(),
         Action::ActivityRead,
         ProjectEventsCtx::new(loaded, class),
-    )
-    .ok()?;
+    ) {
+        Ok(_) => Ok(true),
+        Err(e)
+            if matches!(
+                e.code(),
+                ErrorCode::NotFound | ErrorCode::Forbidden | ErrorCode::PendingDeletion
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(e.with_context("during", "activity_decision")),
+    }
+}
+
+/// The row as the caller may see it, `None` when it is hidden (an unknown
+/// or unshown type, a project not allowed, a refusal for the type's
+/// class); an unexpected decision error is returned.
+fn decide(
+    proof: &Authorized<UserActivityCtx>,
+    record: Option<&ProjectRecord>,
+    row: ActivityRow,
+) -> Result<Option<ActivityItem>, ForgeError> {
+    let Some(event_type) = EventType::parse(&row.event_type) else {
+        return Ok(None);
+    };
+    let Some(fields) = fields_of(event_type) else {
+        return Ok(None);
+    };
+    let Some(record) = record else {
+        return Ok(None);
+    };
+    if !allows(proof, record, event_type.visibility_class())? {
+        return Ok(None);
+    }
     let actor = match (
         row.actor_kind.as_str(),
         row.actor_username,
@@ -278,7 +326,7 @@ fn decide(
         ),
         Fields::Push => (None, row.total_refs),
     };
-    Some(ActivityItem {
+    Ok(Some(ActivityItem {
         seq: row.seq,
         event_type,
         occurred_at: row.occurred_at,
@@ -287,7 +335,7 @@ fn decide(
         actor,
         merge_request,
         ref_count,
-    })
+    }))
 }
 
 #[cfg(test)]

@@ -11,8 +11,12 @@
 //! - [`involved_projects`]: the projects where the caller holds a
 //!   membership (the walk of `user_lists`' `approvable`: directly, through
 //!   an ancestor group, or as the owner of the personal namespace), at most
-//!   [`MAX_INVOLVED_PROJECTS`], newest project first; more is said
-//!   (`truncated`), never silently cut.
+//!   [`MAX_MEMBERSHIP_CANDIDATES`], newest project first; more is said
+//!   (`truncated`), never silently cut. forge-review loads their access
+//!   rows in one statement (`lists::project_records`), decides each with
+//!   `authorize()` and keeps at most [`MAX_INVOLVED_PROJECTS`] allowed ones
+//!   before any event is read (review MEDIUM: a Guest-only membership
+//!   costs no event scan).
 //! - [`activity_page`]: the newest sequenced events of those projects and
 //!   of the types asked for, below `before` (a `seq`). One ordered,
 //!   cut-short range per (project, type) on `events_project_type_seq
@@ -35,16 +39,21 @@ use super::MAX_PAGE;
 use crate::roles::CAP;
 use crate::{read_query_error, Db};
 
-/// The most involved projects one read decides on (plan 15 §3.4).
+/// The most allowed (Reporter and above) projects one read takes events
+/// from (plan 15 §3.4); forge-review applies it after deciding.
 pub const MAX_INVOLVED_PROJECTS: usize = 500;
 
-/// The projects a person is involved in.
+/// The most membership candidates one read decides on (the batch access
+/// read's bound, `lists::MAX_RECORD_IDS`).
+pub const MAX_MEMBERSHIP_CANDIDATES: usize = crate::lists::MAX_RECORD_IDS;
+
+/// The projects a person holds a membership in (candidates: not decided).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvolvedProjects {
-    /// Newest project first, at most [`MAX_INVOLVED_PROJECTS`].
+    /// Newest project first, at most [`MAX_MEMBERSHIP_CANDIDATES`].
     pub ids: Vec<ProjectId>,
-    /// More projects than [`MAX_INVOLVED_PROJECTS`]: the oldest were left
-    /// out.
+    /// More memberships than [`MAX_MEMBERSHIP_CANDIDATES`]: the oldest
+    /// projects were left out.
     pub truncated: bool,
 }
 
@@ -124,11 +133,11 @@ pub(crate) fn page_sql() -> String {
     )
 }
 
-/// The projects `user` is involved in (see the module docs).
+/// The projects `user` holds a membership in (see the module docs).
 pub async fn involved_projects(db: &Db, user: UserId) -> Result<InvolvedProjects, ForgeError> {
     const QUERY: &str = "review.user_activity.projects";
     let sql = involved_sql();
-    let cap = i64::try_from(MAX_INVOLVED_PROJECTS + 1).unwrap_or(i64::MAX);
+    let cap = i64::try_from(MAX_MEMBERSHIP_CANDIDATES + 1).unwrap_or(i64::MAX);
     let mut ids: Vec<i64> = db
         .within(QUERY, async {
             sqlx::query_scalar(&sql)
@@ -140,8 +149,8 @@ pub async fn involved_projects(db: &Db, user: UserId) -> Result<InvolvedProjects
                 .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    let truncated = ids.len() > MAX_INVOLVED_PROJECTS;
-    ids.truncate(MAX_INVOLVED_PROJECTS);
+    let truncated = ids.len() > MAX_MEMBERSHIP_CANDIDATES;
+    ids.truncate(MAX_MEMBERSHIP_CANDIDATES);
     Ok(InvolvedProjects {
         ids: ids.into_iter().map(ProjectId::new).collect(),
         truncated,
