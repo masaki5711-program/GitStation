@@ -606,7 +606,7 @@ fn user_merge_request_routes(registry: Registry<AppState>) -> Registry<AppState>
             Verb::Get,
             u::COUNTS,
             Action::UserMergeRequestList,
-            "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found)",
+            "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found, truncated when the scan bound was reached with candidates left)",
             u::OwnMergeRequests,
             u::counts,
         )

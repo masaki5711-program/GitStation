@@ -9908,11 +9908,16 @@
             "description": "At most 100 (counted over at most 1000 candidates, newest first).",
             "format": "int64",
             "type": "integer"
+          },
+          "truncated": {
+            "description": "The scan stopped after 1000 candidates with more left (hidden rows\namong them): `count` is a lower bound (show \"n+\"). Never true with\n`capped`.",
+            "type": "boolean"
           }
         },
         "required": [
           "count",
-          "capped"
+          "capped",
+          "truncated"
         ],
         "type": "object"
       },
@@ -18937,7 +18942,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found)",
+        "summary": "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found, truncated when the scan bound was reached with candidates left)",
         "x-forge-action": "UserMergeRequestList"
       }
     },

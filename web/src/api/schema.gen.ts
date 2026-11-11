@@ -2198,7 +2198,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found) */
+        /** The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found, truncated when the scan bound was reached with candidates left) */
         get: operations["get_api_v1_user_merge_requests_counts"];
         put?: never;
         post?: never;
@@ -6113,6 +6113,12 @@ export interface components {
              * @description At most 100 (counted over at most 1000 candidates, newest first).
              */
             count: number;
+            /**
+             * @description The scan stopped after 1000 candidates with more left (hidden rows
+             *     among them): `count` is a lower bound (show "n+"). Never true with
+             *     `capped`.
+             */
+            truncated: boolean;
         };
         /** @description The counts of the caller's lists. */
         UserMergeRequestCounts: {

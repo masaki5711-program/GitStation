@@ -764,6 +764,7 @@ pub(crate) const BASE_ROWS: &[Row] = &[
     row(A::UserMergeRequestList, W::Reporter, F::OwnUserMergeRequests, Allow),
     row(A::UserMergeRequestList, W::NonMember, F::OwnUserMergeRequests, Allow),
     row(A::UserMergeRequestList, W::Admin, F::OwnUserMergeRequests, Allow),
+    row(A::UserMergeRequestList, W::AdminTokenApi, F::OwnUserMergeRequests, Allow),
     row(A::UserMergeRequestList, W::OwnerTokenReadApi, F::OwnUserMergeRequests, Allow),
     row(A::UserMergeRequestList, W::AgentTokenReadApi, F::OwnUserMergeRequests, Allow),
     row(A::UserMergeRequestList, W::DevTokenReadRepository, F::OwnUserMergeRequests, deny(E::InsufficientScope)),
