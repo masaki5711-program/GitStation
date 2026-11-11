@@ -8,8 +8,11 @@
 //! instead: the localized `user_message`, the `request_id` (問い合わせ番号)
 //! and the next step (sign in again / home). Everything else stays JSON:
 //! a `fetch` (any `Sec-Fetch-Mode` but `navigate`), a client without fetch
-//! metadata that does not accept `text/html`, and the back-channel logout
-//! (server to server, never a browser).
+//! metadata that does not accept `text/html`, and every other `/-/auth/…`
+//! path (the back-channel logout is server to server, never a browser).
+//! Because the answer depends on the request's `Sec-Fetch-Mode` and
+//! `Accept`, every failure on those three paths — page or JSON — carries
+//! `Vary: Sec-Fetch-Mode, Accept` (appended to any `Vary` already set).
 //!
 //! The page is built from what [`crate::error::ApiError`] rendered (the
 //! [`ErrorView`] extension), so every failure on those paths — the
@@ -22,12 +25,12 @@
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_LENGTH, CONTENT_TYPE};
+use axum::http::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_LENGTH, CONTENT_TYPE, VARY};
 use axum::middleware::Next;
 use axum::response::Response;
 use forge_errors::Lang;
 
-use crate::routes::auth::{BACKCHANNEL_LOGOUT_PATH, LOGIN_PATH};
+use crate::routes::auth::{CALLBACK_PATH, LOGIN_PATH, LOGOUT_PATH};
 
 /// What a failure showed its user, as a response extension set by the
 /// error renderer (never sent).
@@ -38,13 +41,22 @@ pub(crate) struct ErrorView {
     pub(crate) lang: Lang,
 }
 
-/// The paths whose browser navigations get the page.
+/// The paths a browser navigates to in the sign-in flow — the only ones
+/// whose failures get the page (an allowlist: a new `/-/auth/…` route stays
+/// JSON until it is added here).
+const PAGE_PATHS: [&str; 3] = [LOGIN_PATH, CALLBACK_PATH, LOGOUT_PATH];
+
+/// What a failure's answer on [`PAGE_PATHS`] depends on.
+const VARY_ON: &str = "Sec-Fetch-Mode, Accept";
+
 fn page_path(path: &str) -> bool {
-    path.starts_with("/-/auth/") && path != BACKCHANNEL_LOGOUT_PATH
+    PAGE_PATHS.contains(&path)
 }
 
-/// A browser navigation: `Sec-Fetch-Mode: navigate`; without fetch
-/// metadata (an older browser), an `Accept` that names `text/html`.
+/// A browser navigation: `Sec-Fetch-Mode: navigate`. The `Accept`
+/// fallback (`text/html` named) only matters for a browser that sends no
+/// fetch metadata (older ones); any request with `Sec-Fetch-Mode` is
+/// decided by it alone.
 pub(crate) fn browser_navigation(headers: &HeaderMap) -> bool {
     match headers.get(crate::csrf::SEC_FETCH_MODE) {
         Some(mode) => mode.as_bytes() == b"navigate",
@@ -66,9 +78,17 @@ pub(crate) fn browser_navigation(headers: &HeaderMap) -> bool {
 /// Middleware (`app::build`, inside the security headers): a failed
 /// browser navigation on a sign-in path becomes the page.
 pub(crate) async fn auth_error_page(req: Request, next: Next) -> Response {
-    let page = page_path(req.uri().path()) && browser_navigation(req.headers());
-    let res = next.run(req).await;
-    if page {
+    if !page_path(req.uri().path()) {
+        return next.run(req).await;
+    }
+    let navigation = browser_navigation(req.headers());
+    let mut res = next.run(req).await;
+    if res.extensions().get::<ErrorView>().is_none() {
+        return res;
+    }
+    res.headers_mut()
+        .append(VARY, HeaderValue::from_static(VARY_ON));
+    if navigation {
         as_page(res)
     } else {
         res
@@ -210,7 +230,10 @@ mod tests {
         assert!(page_path("/-/auth/login"));
         assert!(page_path("/-/auth/callback"));
         assert!(page_path("/-/auth/logout"));
-        assert!(!page_path(BACKCHANNEL_LOGOUT_PATH));
+        assert!(!page_path(crate::routes::auth::BACKCHANNEL_LOGOUT_PATH));
+        assert!(!page_path("/-/auth/other"));
+        assert!(!page_path("/-/auth/login/x"));
+        assert!(!page_path("/-/auth"));
         assert!(!page_path("/api/v1/user"));
         assert!(!page_path("/acme"));
     }

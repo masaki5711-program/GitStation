@@ -604,6 +604,7 @@ async fn failed_sign_in_navigations_are_a_page_without_the_error_code() {
             assert!(!html.contains("error_code"), "{uri}");
             assert_eq!(a.header("content-security-policy"), Some(NONE_CSP), "{uri}");
             assert_eq!(a.header("cache-control"), Some("no-store"), "{uri}");
+            assert_eq!(a.header("vary"), Some("Sec-Fetch-Mode, Accept"), "{uri}");
             assert_eq!(
                 a.header("content-length").map(str::to_owned),
                 Some(a.bytes.len().to_string()),
@@ -653,6 +654,35 @@ async fn sign_in_failures_stay_json_for_non_navigations() {
             "{method} {uri} {headers:?}"
         );
         assert!(a.code().starts_with("FG-"), "{uri}");
+        // The JSON of a page path names what the answer depends on too.
+        let vary = (uri != "/-/auth/backchannel-logout").then_some("Sec-Fetch-Mode, Accept");
+        assert_eq!(a.header("vary"), vary, "{method} {uri}");
+    }
+}
+
+/// Only the three browser paths get the page: any other `/-/auth/…` path
+/// stays JSON for a navigation too (an allowlist, not a prefix).
+#[tokio::test]
+async fn other_auth_paths_stay_json_for_navigations() {
+    for (method, uri) in [
+        ("GET", "/-/auth/other"),
+        ("GET", "/-/auth/login/extra"),
+        ("POST", "/-/auth/backchannel-logout"),
+    ] {
+        let a = send_with(
+            AppConfig::default(),
+            method,
+            uri,
+            &[("sec-fetch-mode", "navigate"), ("accept", "text/html")],
+        )
+        .await;
+        assert_eq!(
+            a.header("content-type"),
+            Some("application/json"),
+            "{method} {uri}"
+        );
+        assert!(a.code().starts_with("FG-"), "{method} {uri}");
+        assert_eq!(a.header("vary"), None, "{method} {uri}");
     }
 }
 
