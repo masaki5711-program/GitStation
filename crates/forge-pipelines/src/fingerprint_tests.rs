@@ -1,3 +1,5 @@
+// Synthetic tokens and private-key headers for the fingerprint tests (no
+// real secret): forge:allow-secret (the push secret check, FG-GIT-0022).
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)] // tests may fail loudly
 
 use super::*;

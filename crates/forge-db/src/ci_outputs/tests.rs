@@ -4,6 +4,9 @@
 //! fingerprint), the diagnosis, the `ci/pipeline` check through the
 //! pipeline's transitions, and the known fix of a merge request (P-7).
 
+// Synthetic private-key headers for the masking tests (no real key):
+// forge:allow-secret (the push secret check, FG-GIT-0022).
+
 use forge_core::checks::{CheckConclusion, CheckStatus, CI_PIPELINE_CHECK};
 use forge_core::{CheckName, MergeRequestId, ObjectId, RefName, RequestId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
