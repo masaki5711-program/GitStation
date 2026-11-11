@@ -203,7 +203,7 @@ const NAMESPACE_VIEWS: &str = "web/src/pages/Namespace.tsx";
 /// Screen words the SPA routes that the server does not serve its shell for
 /// yet: `("project:<word>" | "namespace:<word>", reason)`. An entry the
 /// server serves fails the gate (remove it then).
-const CLIENT_ONLY: &[(&str, &str)] = &[("project:webhooks", "fixed by feat/ui-pipelines")];
+const CLIENT_ONLY: &[(&str, &str)] = &[];
 
 /// A web source file, read relative to this crate (`Git/web/src/…`).
 fn web_source(rel: &str) -> String {
