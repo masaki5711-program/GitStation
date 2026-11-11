@@ -3148,9 +3148,17 @@ async fn a_run_superseded_while_it_waits_for_the_refs_lock_leaves_the_merge_ref(
 
 /// Review MEDIUM (M4 C7): a stored merge result is reused only while its
 /// commit exists. The target goes A → B → A after `gc` pruned the A-result
-/// (no ref keeps it once the merge ref moved on): a fresh commit is
-/// written, the row points at it, the ref moves to it and a pipeline is
-/// asked for on it.
+/// (no ref keeps it once the merge ref moved on): the commit is written
+/// again (it exists), the row points at it, the ref moves to it and a
+/// pipeline exists on it.
+///
+/// The rewritten commit's id is NOT necessarily new: `commit-tree` dates
+/// have one-second resolution, so a rewrite within the second of the
+/// pruned one rebuilds the very same object (same tree, parents, message,
+/// identity and date). That is the same merge result, and its pipeline is
+/// the one already asked for (the `ci.pipeline_create` dedup key holds the
+/// sha), so nothing new is enqueued. The test holds either way (it used to
+/// assert a different id and failed whenever the run fit in one second).
 #[tokio::test]
 async fn a_pruned_merge_result_is_written_again_when_its_pair_returns() {
     let w = world(
@@ -3171,16 +3179,17 @@ async fn a_pruned_merge_result_is_written_again_when_its_pair_returns() {
     w.browser.invalidate(w.repo);
     let report = w.check_again().await;
     let fresh = report.merge_result.expect("merge result");
-    assert_ne!(fresh.as_str(), r1, "a fresh commit, not the pruned one");
+    // Written again: the object exists (cat-file -e fails on a missing one).
+    plumb(&w.path, &["cat-file", "-e", fresh.as_str()], None);
     assert_eq!(w.merge_ref().as_deref(), Some(fresh.as_str()));
-    assert_eq!(
+    let parent = |n: u8| {
         plumb(
             &w.path,
-            &["rev-parse", &format!("{}^1", fresh.as_str())],
-            None
-        ),
-        w.base
-    );
+            &["rev-parse", &format!("{}^{n}", fresh.as_str())],
+            None,
+        )
+    };
+    assert_eq!((parent(1), parent(2)), (w.base.clone(), w.head.clone()));
     let rows = forge_db::review::merge_results(&w.t.db, w.mr.id)
         .await
         .expect("rows");
@@ -3190,15 +3199,22 @@ async fn a_pruned_merge_result_is_written_again_when_its_pair_returns() {
         .find(|r| r.target.as_str() == w.base)
         .expect("the base pair");
     assert_eq!(row.result, fresh);
+    // A pipeline on the rewritten result: a new one for a new id; for the
+    // same id (rewritten within the pruned one's second), the one r1
+    // already has (doc comment).
+    let mut pipelines = vec![r1.clone(), r2];
+    if fresh.as_str() != r1 {
+        pipelines.push(fresh.as_str().to_owned());
+    }
     assert_eq!(
         w.mr_pipeline_shas().await,
-        [r1, r2, fresh.as_str().to_owned()],
-        "a pipeline on the fresh merge result"
+        pipelines,
+        "a pipeline on the rewritten merge result"
     );
     // A present result is still reused.
     let again = w.check_again().await;
     assert_eq!(again.merge_result.as_ref(), Some(&fresh));
-    assert_eq!(w.mr_pipeline_shas().await.len(), 3);
+    assert_eq!(w.mr_pipeline_shas().await, pipelines);
     w.t.drop_now().await;
 }
 
