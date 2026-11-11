@@ -577,17 +577,44 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    runner_routes(pipeline_routes(doc_lint_routes(binding_routes(
-        act_as_routes(mirror_routes(webhook_routes(notification_routes(
-            check_routes(dev_status_routes(feed_routes(integration_routes(
-                service_account_routes(account_routes(history_routes(browse_routes(git_routes(
-                    shell_routes(merge_request_routes(member_routes(move_routes(
-                        hosting_routes(fixed),
+    user_merge_request_routes(runner_routes(pipeline_routes(doc_lint_routes(
+        binding_routes(act_as_routes(mirror_routes(webhook_routes(
+            notification_routes(check_routes(dev_status_routes(feed_routes(
+                integration_routes(service_account_routes(account_routes(history_routes(
+                    browse_routes(git_routes(shell_routes(merge_request_routes(
+                        member_routes(move_routes(hosting_routes(fixed))),
                     )))),
-                ))))),
+                )))),
             )))),
         )))),
     ))))
+}
+
+/// The merge requests of the caller's own work across projects (plan 15
+/// MR 6): one page of a scope and the counts of every scope; each row is
+/// decided again on `MergeRequestRead` (forge-review `user_lists`).
+fn user_merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::user_merge_requests as u;
+    registry
+        .route_with(
+            Verb::Get,
+            u::LIST,
+            Action::UserMergeRequestList,
+            "The caller's own open merge requests of one scope (authored, approvable, attention), newest first; only rows whose merge request the caller may read now (an unknown or missing scope is FG-WEB-0006)",
+            u::OwnMergeRequests,
+            u::list,
+        )
+        .responds::<u::UserMergeRequestList>(Verb::Get, u::LIST)
+        .queries(Verb::Get, u::LIST, u::LIST_QUERY)
+        .route_with(
+            Verb::Get,
+            u::COUNTS,
+            Action::UserMergeRequestList,
+            "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found, truncated when the scan bound was reached with candidates left)",
+            u::OwnMergeRequests,
+            u::counts,
+        )
+        .responds::<u::UserMergeRequestCounts>(Verb::Get, u::COUNTS)
 }
 
 /// CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1): the administration (an

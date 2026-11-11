@@ -89,6 +89,8 @@
   --gs-space-8: 2rem;
   --gs-radius-sm: 4px;
   --gs-radius-md: 8px;
+  --gs-radius-pill: 999px; /* a count or tag drawn as a pill */
+  --gs-count-min-width: 1.5em; /* a count pill keeps its shape for one digit */
   --gs-header-height: 3.5rem;
   --gs-tap-target: 2.5rem; /* the least height / width of a control (WCAG 2.5.8 with room) */
   --gs-sidebar-width: 14rem;

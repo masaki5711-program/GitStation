@@ -607,6 +607,31 @@ impl ResourceCtx for NotificationPreferencesCtx {
     }
 }
 
+/// The merge requests of `owner`'s own work (`UserMergeRequestList`, plan
+/// 15 MR 6): the id is the owner, so a proof names whose list it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserMergeRequestsCtx {
+    owner: UserId,
+}
+
+impl UserMergeRequestsCtx {
+    pub fn new(owner: UserId) -> Self {
+        Self { owner }
+    }
+}
+
+impl sealed::Sealed for UserMergeRequestsCtx {}
+
+impl ResourceCtx for UserMergeRequestsCtx {
+    type Id = UserId;
+    fn resource(&self) -> Resource {
+        Resource::UserMergeRequests { owner: self.owner }
+    }
+    fn id(&self) -> UserId {
+        self.owner
+    }
+}
+
 /// A token about to be created for `owner` with `scopes` (`TokenCreate`):
 /// the id is the owner, so the proof names whose token it is.
 #[derive(Debug, Clone, PartialEq, Eq)]

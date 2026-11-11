@@ -657,6 +657,7 @@
     "number": "!{{iid}}",
     "draft": "Draf",
     "opened": "Dibuat oleh {{author}} pada {{date}}",
+    "openedAgo": "Dibuat {{when}} oleh {{author}}",
     "branches": "{{source}} ke {{target}}",
     "state": {
       "open": "Terbuka",
@@ -694,7 +695,8 @@
       "overview": "Ringkasan",
       "changes": "Perubahan",
       "description": "Deskripsi",
-      "noDescription": "Tidak ada deskripsi."
+      "noDescription": "Tidak ada deskripsi.",
+      "threadCount": "Utas belum selesai: {{n}}"
     },
     "threads": {
       "title": "Utas",
@@ -815,6 +817,30 @@
       "running": "Berjalan",
       "success": "Berhasil",
       "failed": "Tidak berhasil ({{conclusion}})"
+    },
+    "side": {
+      "title": "Tentang merge request ini",
+      "approvals": "Persetujuan",
+      "approvalsNone": "Tidak diperlukan",
+      "approvedBy": "Disetujui oleh",
+      "notCounted": "{{name}} (tidak dihitung)",
+      "checks": "Pemeriksaan wajib",
+      "checksNone": "Tidak ada yang wajib",
+      "threads": "Utas",
+      "threadsCount": "{{open}} belum selesai dari {{total}}",
+      "threadsNone": "Tidak ada",
+      "versions": "Versi",
+      "latestHead": "Commit terbaru {{sha}}",
+      "workItem": "Item kerja",
+      "linked": "Tertaut",
+      "notLinked": "Tidak tertaut",
+      "updated": "Diperbarui",
+      "conditions": "Persetujuan dan pemeriksaan",
+      "approvalsMet": "Disetujui {{counted}}/{{required}}",
+      "approvalsNeeded": "Persetujuan {{counted}}/{{required}}, perlu {{missing}} lagi",
+      "checksPassed": "Pemeriksaan {{passed}}/{{total}} lolos",
+      "checksFailed": "{{failed}} gagal (pemeriksaan {{passed}}/{{total}} lolos)",
+      "checksPending": "{{pending}} berjalan atau menunggu (pemeriksaan {{passed}}/{{total}} lolos)"
     }
   },
   "webhooks": {

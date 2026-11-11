@@ -227,7 +227,8 @@ describe('Changes tab (typescript MEDIUM, design MEDIUM)', () => {
       [`GET ${MR_API}/3/status`]: () => json(200, UNRESOLVED_1),
       [`GET ${MR_API}/3/discussions`]: () => apiError(500, 'スレッドを読めません', 'req-d-2'),
     });
-    await screen.findByText('スレッドを読めません');
+    // The threads section and the side panel's threads row both show it.
+    await screen.findAllByText('スレッドを読めません');
     fireEvent.click(await screen.findByRole('link', { name: 'Open the first unresolved thread' }));
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByRole('heading', { level: 2, name: 'Threads' }));

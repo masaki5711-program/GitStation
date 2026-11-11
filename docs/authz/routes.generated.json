@@ -1566,6 +1566,24 @@
     "word": "fixed"
   },
   {
+    "action": "UserMergeRequestList",
+    "method": "GET",
+    "path": "/api/v1/user/merge-requests",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserMergeRequestList",
+    "method": "GET",
+    "path": "/api/v1/user/merge-requests/counts",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "NotificationPreferencesRead",
     "method": "GET",
     "path": "/api/v1/user/notification-preferences",

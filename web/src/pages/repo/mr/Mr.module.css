@@ -77,3 +77,92 @@
 .number {
   font-variant-numeric: tabular-nums;
 }
+
+/* The merge request header: title, state and author, then "source → target". */
+.header {
+  margin: 0 0 var(--gs-space-3);
+}
+
+.headerMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  margin: 0 0 var(--gs-space-2);
+  color: var(--gs-color-text-muted);
+}
+
+.branchFlow {
+  margin: 0;
+}
+
+.branchFlowVisual {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2);
+}
+
+.branchChip {
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-code-surface);
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The arrow is decoration (the words are in the screen-reader text). */
+.branchArrow::before {
+  content: '\2192';
+  color: var(--gs-color-text-muted);
+}
+
+/* A count next to a tab's name ("Overview 3"). */
+.tabCount {
+  display: inline-block;
+  min-width: var(--gs-count-min-width);
+  margin-left: var(--gs-space-2);
+  padding: 0 var(--gs-space-1);
+  border-radius: var(--gs-radius-pill);
+  background: var(--gs-color-code-surface);
+  color: var(--gs-color-text);
+  font-size: var(--gs-font-size-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Overview: the side panel comes first in the document, so on a narrow
+   screen it sits right after the status line and the tabs, before the
+   detail sections; on a wide one it is the right-hand column. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gs-space-6);
+}
+
+.mainColumn,
+.sideColumn {
+  min-width: 0;
+}
+
+/* 64rem: the app sidebar (--gs-sidebar-width) + the side panel
+   (--gs-aside-width) + a main column of at least ~30rem with the gaps.
+   A custom property cannot be used in a media query, hence the number. */
+@media (min-width: 64rem) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr) var(--gs-aside-width);
+    align-items: start;
+  }
+
+  .mainColumn {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .sideColumn {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}

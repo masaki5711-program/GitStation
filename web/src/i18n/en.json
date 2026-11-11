@@ -657,6 +657,7 @@
     "number": "!{{iid}}",
     "draft": "Draft",
     "opened": "Opened by {{author}} on {{date}}",
+    "openedAgo": "Opened {{when}} by {{author}}",
     "branches": "{{source}} into {{target}}",
     "state": {
       "open": "Open",
@@ -694,7 +695,8 @@
       "overview": "Overview",
       "changes": "Changes",
       "description": "Description",
-      "noDescription": "No description."
+      "noDescription": "No description.",
+      "threadCount": "Unresolved threads: {{n}}"
     },
     "threads": {
       "title": "Threads",
@@ -815,6 +817,30 @@
       "running": "Running",
       "success": "Succeeded",
       "failed": "Did not succeed ({{conclusion}})"
+    },
+    "side": {
+      "title": "About this merge request",
+      "approvals": "Approvals",
+      "approvalsNone": "Not required",
+      "approvedBy": "Approved by",
+      "notCounted": "{{name}} (does not count)",
+      "checks": "Required checks",
+      "checksNone": "None required",
+      "threads": "Threads",
+      "threadsCount": "{{open}} unresolved of {{total}}",
+      "threadsNone": "None",
+      "versions": "Versions",
+      "latestHead": "Latest commit {{sha}}",
+      "workItem": "Work item",
+      "linked": "Linked",
+      "notLinked": "Not linked",
+      "updated": "Updated",
+      "conditions": "Approvals and checks",
+      "approvalsMet": "Approved {{counted}}/{{required}}",
+      "approvalsNeeded": "Approvals {{counted}}/{{required}}, {{missing}} more needed",
+      "checksPassed": "Checks {{passed}}/{{total}} passed",
+      "checksFailed": "{{failed}} failed (checks {{passed}}/{{total}} passed)",
+      "checksPending": "{{pending}} running or waiting (checks {{passed}}/{{total}} passed)"
     }
   },
   "webhooks": {
