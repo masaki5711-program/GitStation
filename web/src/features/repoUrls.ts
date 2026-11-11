@@ -131,3 +131,14 @@ export const blockAnchor = (block: string) => `user-content-block-${block}`;
 export function isReadmeName(name: string): boolean {
   return /^readme(\.(md|markdown|txt))?$/i.test(name);
 }
+
+/** The CI pipeline list (plan 14 M4); `before` (the previous page's
+ * `next_before`) is the query. */
+export const pipelinesUrl = (project: string, query?: { before?: number }) =>
+  query?.before === undefined
+    ? `${base(project)}/-/pipelines`
+    : `${base(project)}/-/pipelines?before=${String(query.before)}`;
+
+/** One pipeline; `job`: the job whose log is open. */
+export const pipelineUrl = (project: string, id: number, job?: number) =>
+  `${base(project)}/-/pipelines/${String(id)}${job === undefined ? '' : `?job=${String(job)}`}`;

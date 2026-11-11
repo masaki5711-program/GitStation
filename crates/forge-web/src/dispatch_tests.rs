@@ -461,7 +461,7 @@ async fn api_paths_and_unknown_words_never_get_the_shell() {
         "/api/v1/nope",
         "/api",
         "/acme/x/-/merge_requests/1",
-        "/acme/x/-/pipelines",
+        "/acme/x/-/wiki",
         "/acme/x/-/Blob/main",
         "/-/unknown",
         "/-",

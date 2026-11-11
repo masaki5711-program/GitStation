@@ -2007,6 +2007,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/{namespace}/-/pipelines/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "pipelines"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/pipelines/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "pipelines"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/{namespace}/-/pull/{*rest}",
     "people_only": false,
     "public": true,
@@ -2129,6 +2147,24 @@
     "public": true,
     "scope": "project",
     "word": "tree"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/webhooks/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "webhooks"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/webhooks/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "webhooks"
   },
   {
     "action": "UserCreate",

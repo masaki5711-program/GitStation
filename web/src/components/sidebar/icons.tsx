@@ -96,6 +96,14 @@ export const ICONS = {
       <path d="M9 9h6M9 13h6M9 17h3" />
     </Icon>
   ),
+  pipelines: (
+    <Icon>
+      <circle cx="5" cy="12" r="2.5" />
+      <circle cx="19" cy="6" r="2.5" />
+      <circle cx="19" cy="18" r="2.5" />
+      <path d="M7.5 12H12M12 6v12M12 6h4.5M12 18h4.5" />
+    </Icon>
+  ),
   members: (
     <Icon>
       <circle cx="12" cy="8" r="3.5" />
