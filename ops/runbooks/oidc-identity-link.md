@@ -13,6 +13,10 @@
   - `employee_number_linked`: その利用者は、この IdP の別の `sub` に結ばれている。
   - `auto_link_disabled`: `auth.oidc.auto_link = false` で、社員番号が既存の利用者のもの。
   - `username_unavailable`: `preferred_username` がない・規則に合わない・予約語・使用中・墓標と重なる。
+    予約語（`admin` など、`crates/forge-core/src/namespace_path.rs` の `RESERVED_TOP_LEVEL`）は利用者名にできないため、
+    その ID は**その名前の利用者にはなれない**。既存の別の利用者に `forge admin user link-identity` で結ぶ（Mitigate の承認制の手順）か、
+    別のアカウント（予約語でない `preferred_username`）でログインしてもらう。ブラウザには `user_message` と問い合わせ番号の画面が出る
+    （エラーコードは出ない）ので、問い合わせ番号でログを引いて `reason` を確かめる。
   - `email_taken`: そのメールは別の利用者のもの。
   - `employee_number_taken`: 同時のログインが先に利用者を作った（もう一度ログインすれば `existing` になる）。同じ人の初回のログインが
     2 つ同時に走ると（二重のクリック、2 つのタブ）、負けた方は `employee_number_taken`・`username_unavailable`・`email_taken` の

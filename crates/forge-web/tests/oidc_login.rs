@@ -355,3 +355,67 @@ async fn refused_accounts_get_no_session() {
         .is_empty());
     t.drop_now().await;
 }
+
+/// The bug of 2026-11-11: a first sign-in whose `preferred_username` is a
+/// reserved name (`admin`) is refused with FG-AUTH-0014
+/// (`reason=username_unavailable`), and the browser showed the raw JSON
+/// body. A browser navigation gets a page: the localized message and the
+/// request id, never the error code; no session, the state cookie cleared.
+#[tokio::test]
+async fn a_reserved_username_is_refused_with_a_page_in_the_browser() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = Oidc::new(op.settings(ORIGIN), &web_keys(), t.db.clone()).expect("oidc");
+    let app = router(state(&t).with_oidc(Arc::new(oidc)));
+    let peer = "192.0.2.60";
+    let (status, headers, _) = call(&app, get("/-/auth/login", None, peer)).await;
+    assert_eq!(status, StatusCode::FOUND);
+    let location = headers["location"].to_str().expect("location").to_owned();
+    let state_cookie = cookie_pair(&headers, "__Host-gstn_oidc");
+    let (code, state) = op.authorize(
+        &location,
+        json!({"sub": "sub-reserved", "preferred_username": "admin",
+               "employee_number": "SYN0950", "email": "reserved@example.test"}),
+    );
+    let uri = format!("/-/auth/callback?code={code}&state={state}");
+    let mut req = get(&uri, Some(&state_cookie), peer);
+    for (k, v) in [
+        ("sec-fetch-mode", "navigate"),
+        ("sec-fetch-dest", "document"),
+        ("accept-language", "ja,en;q=0.8"),
+    ] {
+        req.headers_mut()
+            .insert(k, v.parse().expect("header value"));
+    }
+    let res = app.clone().oneshot(req).await.expect("infallible");
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let headers = res.headers().clone();
+    let bytes = res.into_body().collect().await.expect("body").to_bytes();
+    let html = String::from_utf8(bytes.to_vec()).expect("utf-8");
+    assert_eq!(
+        headers["content-type"].to_str().expect("ascii"),
+        "text/html; charset=utf-8"
+    );
+    let message =
+        ForgeError::new(ErrorCode::IdentityLinkConflict).user_message(forge_errors::Lang::Ja);
+    assert!(html.contains(message), "{html}");
+    let request_id = headers["x-request-id"].to_str().expect("ascii");
+    assert!(
+        html.contains(&format!("問い合わせ番号: <code>{request_id}</code>")),
+        "{html}"
+    );
+    assert!(!html.contains("FG-AUTH-0014"), "{html}");
+    assert!(!html.contains("username_unavailable"), "{html}");
+    let cookies = set_cookies(&headers);
+    assert!(!cookies
+        .iter()
+        .any(|c| c.starts_with("__Host-gstn_session=")));
+    assert!(cookies
+        .iter()
+        .any(|c| c.starts_with("__Host-gstn_oidc=;") && c.contains("Max-Age=0")));
+    assert!(t
+        .json_rows("SELECT id FROM forge.users WHERE username = 'admin'")
+        .await
+        .is_empty());
+    t.drop_now().await;
+}

@@ -535,3 +535,138 @@ async fn hsts_is_sent_everywhere_but_git_when_configured() {
     .await;
     assert_eq!(git.header("strict-transport-security"), None);
 }
+
+/// The bug of 2026-11-11: a failed browser navigation of the sign-in flow
+/// showed the raw JSON body, error code included. A navigation to
+/// `/-/auth/login`, `/-/auth/callback` or `POST /-/auth/logout` that
+/// fails gets an HTML page with the localized `user_message`, the request
+/// id and the next step — never the code — under the auth class's
+/// headers; the callback's refusal still clears the state cookie.
+#[tokio::test]
+async fn failed_sign_in_navigations_are_a_page_without_the_error_code() {
+    let fetch_metadata: &[(&str, &str)] = &[
+        ("sec-fetch-mode", "navigate"),
+        ("sec-fetch-dest", "document"),
+        ("accept-language", "en"),
+    ];
+    let accept_only: &[(&str, &str)] = &[
+        ("accept", "text/html,application/xhtml+xml,*/*;q=0.8"),
+        ("accept-language", "en"),
+    ];
+    let cases: [(&str, &str, ErrorCode, StatusCode); 3] = [
+        (
+            "GET",
+            "/-/auth/login?next=%2Facme",
+            ErrorCode::LoginNotConfigured,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            "GET",
+            "/-/auth/callback?code=x&state=y",
+            ErrorCode::LoginNotConfigured,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        // The logout form without `Origin` (or a session): refused before
+        // the route by the browser check.
+        (
+            "POST",
+            "/-/auth/logout",
+            ErrorCode::CsrfRejected,
+            StatusCode::FORBIDDEN,
+        ),
+    ];
+    for headers in [fetch_metadata, accept_only] {
+        for (method, uri, code, status) in cases {
+            // Without fetch metadata or `Origin` the browser check does not
+            // apply: the logout without a session is the guard's 401.
+            let (code, status) = if method == "POST" && headers == accept_only {
+                (ErrorCode::Unauthenticated, StatusCode::UNAUTHORIZED)
+            } else {
+                (code, status)
+            };
+            let a = send_with(AppConfig::default(), method, uri, headers).await;
+            assert_eq!(a.status, status, "{method} {uri}");
+            assert_eq!(
+                a.header("content-type"),
+                Some("text/html; charset=utf-8"),
+                "{method} {uri}"
+            );
+            let html = String::from_utf8(a.bytes.clone()).expect("utf-8");
+            let message = forge_errors::ForgeError::new(code).user_message(forge_errors::Lang::En);
+            assert!(html.contains(message), "{uri}: {html}");
+            let request_id = a.header("x-request-id").expect("request id");
+            assert!(
+                html.contains(&format!("Request ID: <code>{request_id}</code>")),
+                "{uri}: {html}"
+            );
+            assert!(html.contains("href=\"/-/auth/login\""), "{uri}");
+            assert!(!html.contains("FG-"), "{uri}: no error code: {html}");
+            assert!(!html.contains("error_code"), "{uri}");
+            assert_eq!(a.header("content-security-policy"), Some(NONE_CSP), "{uri}");
+            assert_eq!(a.header("cache-control"), Some("no-store"), "{uri}");
+            assert_eq!(
+                a.header("content-length").map(str::to_owned),
+                Some(a.bytes.len().to_string()),
+                "{uri}"
+            );
+            assert_common(&a, uri);
+            if uri.starts_with("/-/auth/callback") {
+                assert!(
+                    a.headers.get_all("set-cookie").iter().any(|c| c
+                        .to_str()
+                        .is_ok_and(|c| c.starts_with("__Host-gstn_oidc=;"))),
+                    "the state cookie is still cleared"
+                );
+            }
+        }
+    }
+}
+
+/// The same failures stay JSON for everything that is not a browser
+/// navigation (the SPA's fetch, an API client) and on the back-channel
+/// logout (server to server) even when it accepts HTML.
+#[tokio::test]
+async fn sign_in_failures_stay_json_for_non_navigations() {
+    for (method, uri, headers) in [
+        ("GET", "/-/auth/login", vec![]),
+        ("GET", "/-/auth/login", vec![("sec-fetch-mode", "cors")]),
+        (
+            "GET",
+            "/-/auth/callback?code=x&state=y",
+            vec![("sec-fetch-mode", "cors"), ("accept", "text/html")],
+        ),
+        (
+            "GET",
+            "/-/auth/callback?code=x&state=y",
+            vec![("accept", "application/json")],
+        ),
+        (
+            "POST",
+            "/-/auth/backchannel-logout",
+            vec![("accept", "text/html")],
+        ),
+    ] {
+        let a = send_with(AppConfig::default(), method, uri, &headers).await;
+        assert_eq!(
+            a.header("content-type"),
+            Some("application/json"),
+            "{method} {uri} {headers:?}"
+        );
+        assert!(a.code().starts_with("FG-"), "{uri}");
+    }
+}
+
+/// A failed browser navigation outside the sign-in flow is unchanged (the
+/// API keeps its JSON contract).
+#[tokio::test]
+async fn api_navigation_failures_stay_json() {
+    let a = send_with(
+        AppConfig::default(),
+        "GET",
+        "/api/v1/user",
+        &[("sec-fetch-mode", "navigate")],
+    )
+    .await;
+    assert_eq!(a.header("content-type"), Some("application/json"));
+    assert!(a.code().starts_with("FG-"));
+}
