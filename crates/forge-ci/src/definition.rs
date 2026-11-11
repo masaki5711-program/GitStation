@@ -65,6 +65,22 @@ impl Definition {
     pub fn jobs(&self) -> &[Job] {
         &self.jobs
     }
+
+    /// What a valid file may do but should not, sorted by line (never a
+    /// [`Problem`] of [`crate::check`]): `service_user_root` for a service
+    /// that runs as root (`root`, `0`, `0:<gid>`; security review, plan 14
+    /// C5s).
+    pub fn warnings(&self) -> Vec<Problem> {
+        let mut out: Vec<Problem> = self
+            .jobs
+            .iter()
+            .flat_map(|j| &j.services)
+            .filter(|s| s.user.as_deref().is_some_and(is_root_user))
+            .map(|s| Problem::about(s.user_line, "service_user_root", s.name.as_str()))
+            .collect();
+        out.sort();
+        out
+    }
 }
 
 /// One job of a valid definition.
@@ -106,6 +122,8 @@ pub struct Service {
     pub(crate) env: Vec<(String, String)>,
     /// `name`, `uid` or `uid:gid` (the container's `--user`).
     pub(crate) user: Option<String>,
+    /// The line of the `user` key (0 without one).
+    pub(crate) user_line: usize,
     /// Absolute paths mounted as writable tmpfs over the read-only root.
     pub(crate) tmpfs: Vec<String>,
 }
@@ -540,6 +558,7 @@ fn read_service(node: &Node, problems: &mut Vec<Problem>) -> Option<Service> {
     let mut image = None;
     let mut env = Vec::new();
     let mut user = None;
+    let mut user_line = 0;
     let mut tmpfs = Vec::new();
     // The subject of the service's other problems: its name when valid.
     let label = fields
@@ -576,6 +595,7 @@ fn read_service(node: &Node, problems: &mut Vec<Problem>) -> Option<Service> {
                 if let Some(s) = one_text(value, line, "user", problems) {
                     if is_service_user(&s) {
                         user = Some(s);
+                        user_line = line;
                     } else {
                         problems.push(Problem::about(line, "service_user_invalid", label));
                     }
@@ -609,6 +629,7 @@ fn read_service(node: &Node, problems: &mut Vec<Problem>) -> Option<Service> {
         image: image?,
         env,
         user,
+        user_line,
         tmpfs,
     })
 }
@@ -880,6 +901,12 @@ fn is_service_user(s: &str) -> bool {
         || number(s)
         || s.split_once(':')
             .is_some_and(|(u, g)| number(u) && number(g))
+}
+
+/// A service user that is root in the container: `root`, uid 0 (with any
+/// group).
+fn is_root_user(s: &str) -> bool {
+    s == "root" || s == "0" || s.starts_with("0:")
 }
 
 /// An environment key: `[A-Za-z_][A-Za-z0-9_]*`, at most 63 bytes.

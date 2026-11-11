@@ -304,3 +304,34 @@ fn ci_lint_and_plan_show_a_jobs_services() {
     assert_eq!(reasons, ["image_not_pinned", "service_tmpfs_invalid"]);
     assert!(o.stderr.contains("FG-CI-0001"), "{}", o.stderr);
 }
+
+/// Security review: a root service user passes the lint (exit 0) with a
+/// warning line; `--json` lists it under `warnings`.
+#[test]
+fn ci_lint_warns_about_a_root_service_user() {
+    let text = valid().replace(
+        "    script: [cargo test]\n",
+        &format!(
+            "    script: [cargo test]\n    services:\n      - name: db\n        image: registry.internal/postgres@sha256:{D}\n        user: root\n"
+        ),
+    );
+    let r = repo(&text);
+    let o = gstn(r.path(), &["ci", "lint", "--protected", "main"]);
+    assert_eq!(o.code, 0, "{} {}", o.stdout, o.stderr);
+    assert!(
+        o.stdout
+            .contains(".forge-ci.yml:18: warning service_user_root — db"),
+        "{}",
+        o.stdout
+    );
+    let o = gstn(r.path(), &["ci", "lint", "--protected", "main", "--json"]);
+    assert_eq!(o.code, 0);
+    let v = o.json();
+    assert_eq!(v["problems"], serde_json::json!([]));
+    assert_eq!(v["warnings"][0]["reason"], "service_user_root");
+    assert_eq!(v["warnings"][0]["subject"], "db");
+    // A clean file has an empty list.
+    let r = repo(&valid());
+    let o = gstn(r.path(), &["ci", "lint", "--protected", "main", "--json"]);
+    assert_eq!(o.json()["warnings"], serde_json::json!([]));
+}

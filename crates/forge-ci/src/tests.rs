@@ -961,3 +961,27 @@ fn service_tmpfs_paths_are_absolute_and_stay_off_the_kernel_trees() {
     let text = with_services(&db(&format!("  tmpfs: [{}]\n", many.join(", "))));
     assert_eq!(reasons(&text), ["too_many_service_tmpfs"]);
 }
+
+/// Security review: a service running as root (`0`, `0:<gid>`, `root`) is
+/// allowed but warned about; a non-root user or none is not.
+#[test]
+fn a_root_service_user_is_a_warning_not_a_problem() {
+    for root in ["root", "0", "\"0:0\"", "\"0:999\""] {
+        let text = with_services(&db(&format!("  user: {root}\n")));
+        let def = check(text.as_bytes(), &ctx()).expect("valid");
+        let warnings = def.warnings();
+        let warned: Vec<(&str, Option<&str>)> = warnings
+            .iter()
+            .map(|w| (w.reason, w.subject.as_deref()))
+            .collect();
+        assert_eq!(warned, [("service_user_root", Some("db"))], "{root}");
+        assert_eq!(def.warnings()[0].line, 12, "{root}");
+    }
+    for ok in ["postgres", "999", "\"999:0\"", "rootless"] {
+        let text = with_services(&db(&format!("  user: {ok}\n")));
+        let def = check(text.as_bytes(), &ctx()).expect("valid");
+        assert!(def.warnings().is_empty(), "{ok}");
+    }
+    let def = check(with_services(&db("")).as_bytes(), &ctx()).expect("valid");
+    assert!(def.warnings().is_empty());
+}

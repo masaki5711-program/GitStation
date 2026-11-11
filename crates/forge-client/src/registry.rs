@@ -1146,7 +1146,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn ci lint", "gstn ci lint --protected main,release/* --json", "gstn ci lint ci/other.yml"],
         scopes: &[],
         routes: &[],
-        output: r#"{"type":"object","required":["path","problems"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","reason","subject"],"properties":{"line":{"type":"integer"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}}}}"#,
+        output: r#"{"type":"object","required":["path","problems","warnings"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","reason","subject"],"properties":{"line":{"type":"integer"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}},"warnings":{"type":"array","items":{"type":"object","required":["line","reason","subject"]}}}}"#,
     },
     CommandSpec {
         name: "ci plan",

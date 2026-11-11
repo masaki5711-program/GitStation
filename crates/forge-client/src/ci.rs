@@ -37,8 +37,11 @@ pub fn ci(cli: &Cli, cmd: &CiCommand, io: &mut Io<'_>) -> Result<()> {
         CiCommand::Lint { path, protected } => {
             let (shown, bytes) = read_definition(path.as_deref())?;
             let ctx = context(protected.as_deref());
-            let problems = forge_ci::lint(&bytes, &ctx);
-            report_lint(cli, io, &shown, &problems)
+            let (problems, warnings) = match forge_ci::check(&bytes, &ctx) {
+                Ok(def) => (Vec::new(), def.warnings()),
+                Err(problems) => (problems, Vec::new()),
+            };
+            report_lint(cli, io, &shown, &problems, &warnings)
         }
         CiCommand::Plan {
             path,
@@ -50,7 +53,7 @@ pub fn ci(cli: &Cli, cmd: &CiCommand, io: &mut Io<'_>) -> Result<()> {
             let ctx = context(protected.as_deref());
             let def = match forge_ci::check(&bytes, &ctx) {
                 Ok(def) => def,
-                Err(problems) => return report_lint(cli, io, &shown, &problems),
+                Err(problems) => return report_lint(cli, io, &shown, &problems, &[]),
             };
             let trigger = Trigger {
                 event: match event {
@@ -63,7 +66,7 @@ pub fn ci(cli: &Cli, cmd: &CiCommand, io: &mut Io<'_>) -> Result<()> {
             };
             match forge_ci::plan(&def, &trigger) {
                 Ok(plan) => report_plan(cli, io, &shown, &plan),
-                Err(problems) => report_lint(cli, io, &shown, &problems),
+                Err(problems) => report_lint(cli, io, &shown, &problems, &[]),
             }
         }
     }
@@ -136,8 +139,26 @@ fn problem_text(file: &str, p: &Problem) -> String {
     )
 }
 
-fn report_lint(cli: &Cli, io: &mut Io<'_>, file: &str, problems: &[Problem]) -> Result<()> {
+/// `<file>:<line>: warning <reason> — <subject>`: allowed, not a problem
+/// (exit 0, no error code).
+fn warning_text(file: &str, w: &Problem) -> String {
+    let subject = w
+        .subject
+        .as_deref()
+        .map(|s| format!(" — {}", crate::error::sanitize(s)))
+        .unwrap_or_default();
+    format!("{file}:{}: warning {}{subject}", w.line, w.reason)
+}
+
+fn report_lint(
+    cli: &Cli,
+    io: &mut Io<'_>,
+    file: &str,
+    problems: &[Problem],
+    warnings: &[Problem],
+) -> Result<()> {
     let mut human: Vec<String> = problems.iter().map(|p| problem_text(file, p)).collect();
+    human.extend(warnings.iter().map(|w| warning_text(file, w)));
     human.push(if problems.is_empty() {
         format!("No problem in {file}.")
     } else {
@@ -146,6 +167,7 @@ fn report_lint(cli: &Cli, io: &mut Io<'_>, file: &str, problems: &[Problem]) -> 
     let value = json!({
         "path": file,
         "problems": problems.iter().map(problem_json).collect::<Vec<_>>(),
+        "warnings": warnings.iter().map(problem_json).collect::<Vec<_>>(),
     });
     emit(io, cli, value, &human.join("\n"))?;
     if let Some(first) = problems.first() {
