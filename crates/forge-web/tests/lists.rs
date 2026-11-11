@@ -49,10 +49,11 @@ impl forge_core::ProjectPageLoader for Counting {
         &'a self,
         after: Option<ProjectId>,
         viewer: UserId,
+        created_by: Option<UserId>,
         max_rows: u32,
     ) -> LookupFuture<'a, Vec<ProjectRecord>> {
         self.pages.fetch_add(1, Ordering::SeqCst);
-        forge_core::ProjectPageLoader::project_page(&self.db, after, viewer, max_rows)
+        forge_core::ProjectPageLoader::project_page(&self.db, after, viewer, created_by, max_rows)
     }
 }
 
@@ -553,6 +554,7 @@ impl forge_core::ProjectPageLoader for Gated {
         &'a self,
         _: Option<ProjectId>,
         _: UserId,
+        _: Option<UserId>,
         _: u32,
     ) -> LookupFuture<'a, Vec<ProjectRecord>> {
         Box::pin(async move {
@@ -792,5 +794,148 @@ async fn the_filters_narrow_what_authorize_allowed_and_bind_the_cursor() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{other}: {refused}");
         assert_eq!(refused["error_code"], ErrorCode::RequestInvalid.id());
     }
+    t.drop_now().await;
+}
+
+/// Plan 15 MR5: `created_by=me` lists only the projects the caller created
+/// **and** may read (`ProjectRead` decides first): never another's project
+/// the caller only belongs to, never one pending deletion, never one the
+/// caller created but can no longer see, never one whose creator is
+/// unknown. Only the literal `me` is accepted (`FG-WEB-0006`), and a
+/// cursor is bound to the filter.
+#[tokio::test]
+async fn created_by_me_lists_only_own_visible_projects() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    let first = project(&t, &bob, "first", Visibility::Private).await;
+    let second = project(&t, &bob, "second", Visibility::Internal).await;
+    let open = project(&t, &alice, "open", Visibility::Internal).await;
+    let rep = project(&t, &alice, "rep", Visibility::Private).await;
+    let unknown = project(&t, &alice, "unknown", Visibility::Internal).await;
+    let gone = project(&t, &bob, "gone", Visibility::Private).await;
+    projects::add_member(
+        &t.db,
+        &ctx("req-member"),
+        rep.project_id,
+        bob.user_id,
+        Role::Reporter,
+    )
+    .await
+    .expect("member");
+    // Bob creates a private project in Alice's namespace (operator path,
+    // actor `system`), then loses his membership: his, but not visible.
+    let lost = projects::create(
+        &t.db,
+        &ctx("req-project-lost"),
+        &NewProject::new("lost", alice.namespace_id, "lost", bob.user_id),
+    )
+    .await
+    .expect("lost");
+    t.commit_audited(
+        ("project", lost.project_id.get()),
+        &[format!(
+            "DELETE FROM forge.project_members WHERE project_id = {} AND user_id = {}",
+            lost.project_id.get(),
+            bob.user_id.get()
+        )],
+    )
+    .await;
+    t.commit_audited(
+        ("project", gone.project_id.get()),
+        &[format!(
+            "UPDATE forge.projects SET deleted_at = now(), \
+             purge_after = now() + interval '7 days' WHERE id = {}",
+            gone.project_id.get()
+        )],
+    )
+    .await;
+    // A project from before the column: creator unknown.
+    t.commit_audited(
+        ("project", unknown.project_id.get()),
+        &[format!(
+            "UPDATE forge.projects SET created_by = NULL WHERE id = {}",
+            unknown.project_id.get()
+        )],
+    )
+    .await;
+    let counting = Arc::new(Counting {
+        db: t.db.clone(), // clone: the pool handle is shared
+        pages: AtomicUsize::new(0),
+    });
+    let page = |uri: String, who: UserId| {
+        let counting = Arc::clone(&counting);
+        async move { get(app(&counting, 1000), &uri, Some(session(who))).await }
+    };
+
+    let (status, all) = page("/api/v1/projects".to_owned(), bob.user_id).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert!(
+        ids(&all).contains(&open.project_id.get()) && ids(&all).contains(&rep.project_id.get()),
+        "bob sees alice's internal and shared projects in the full list: {all}"
+    );
+    let (status, mine) = page("/api/v1/projects?created_by=me".to_owned(), bob.user_id).await;
+    assert_eq!(status, StatusCode::OK, "{mine}");
+    assert_eq!(
+        ids(&mine),
+        [first.project_id.get(), second.project_id.get()],
+        "only bob's own visible projects"
+    );
+    let (_, hers) = page("/api/v1/projects?created_by=me".to_owned(), alice.user_id).await;
+    assert_eq!(
+        ids(&hers),
+        [open.project_id.get(), rep.project_id.get()],
+        "not the unknown-creator project, not bob's lost one in her namespace"
+    );
+    let (_, both) = page(
+        "/api/v1/projects?created_by=me&membership=true".to_owned(),
+        bob.user_id,
+    )
+    .await;
+    assert_eq!(
+        ids(&both),
+        [first.project_id.get(), second.project_id.get()]
+    );
+
+    // Only `me`: another user's id (or anything else) is FG-WEB-0006.
+    for bad in [
+        format!("created_by={}", alice.user_id.get()),
+        format!("created_by={}", bob.user_id.get()),
+        "created_by=".to_owned(),
+        "created_by=alice".to_owned(),
+        "created_by=me&created_by=me".to_owned(),
+    ] {
+        let (status, refused) = page(format!("/api/v1/projects?{bad}"), bob.user_id).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {refused}");
+        assert_eq!(
+            refused["error_code"],
+            ErrorCode::RequestInvalid.id(),
+            "{bad}"
+        );
+    }
+    let (status, refused) = page("/api/v1/groups?created_by=me".to_owned(), bob.user_id).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error_code"], ErrorCode::RequestInvalid.id());
+
+    // A cursor handed out under created_by=me opens only under it.
+    let (_, page_one) = get(
+        app(&counting, 1),
+        "/api/v1/projects?created_by=me&limit=1",
+        Some(session(bob.user_id)),
+    )
+    .await;
+    let cursor = page_one["next_cursor"]
+        .as_str()
+        .expect("a cursor")
+        .to_owned();
+    let (status, next) = page(
+        format!("/api/v1/projects?created_by=me&cursor={cursor}"),
+        bob.user_id,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    let (status, refused) = page(format!("/api/v1/projects?cursor={cursor}"), bob.user_id).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error_code"], ErrorCode::RequestInvalid.id());
     t.drop_now().await;
 }

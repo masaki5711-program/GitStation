@@ -209,6 +209,11 @@ pub struct ProjectRecord {
     pub description: String,
     /// `projects.created_at` in UTC, RFC 3339 (`2026-10-31T09:00:00Z`).
     pub created_at: String,
+    /// `projects.created_by` (plan 15 MR5): the user who created it; `None`
+    /// when unknown (created before the column, not resolvable from the
+    /// audit log). Used only after `authorize()` allowed the row
+    /// (`?created_by=me`).
+    pub created_by: Option<UserId>,
     /// The project's repository (storage id and state; M2 MR7: the browse
     /// API reaches it by the project id). Read by the same statement; used
     /// only after `authorize()` allowed.

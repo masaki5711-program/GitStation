@@ -48,6 +48,16 @@
 //!   reason=param_invalid param=membership|state rule=invalid_value`.
 //!   (There is no `kind` filter since ADR-0023: `?kind=` is
 //!   `param=query rule=unknown_parameter`, like any unknown parameter.)
+//! - **`created_by=me`** (projects, plan 15 MR5): only projects the caller
+//!   created (`projects.created_by`; a project whose creator is unknown is
+//!   never "mine"). Only the literal `me` is accepted — never another
+//!   user's id, so the filter cannot ask about anyone else; any other value
+//!   is `FG-WEB-0006 reason=param_invalid param=created_by
+//!   rule=invalid_value`, and on the group list the parameter is
+//!   `param=query rule=unknown_parameter`. Like the other filters it is
+//!   applied after `ProjectRead` allowed the row and is part of the
+//!   cursor's purpose (appended only when set, so existing cursors keep
+//!   their purpose).
 //!
 //! The answer is `{items, next_cursor, has_more}`; a project item is
 //! [`crate::routes::projects::project_view`]'s body, the one builder `GET /api/v1/projects/{id}` uses.
@@ -111,6 +121,11 @@ pub const PROJECTS_QUERY: &[QueryParam] = &[
     QueryParam {
         name: "state",
         description: "pending_deletion: only projects pending deletion that the caller may restore (Owner)",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "created_by",
+        description: "me: only projects the caller created (the only accepted value; never another user's id)",
         integer_range: None,
     },
 ];
@@ -388,7 +403,7 @@ impl List {
         if *filter == Filter::NONE {
             return base;
         }
-        format!(
+        let purpose = format!(
             "{base}:membership={}:state={}",
             filter.membership,
             if filter.pending_deletion {
@@ -396,7 +411,12 @@ impl List {
             } else {
                 "live"
             }
-        )
+        );
+        if filter.created_by_me {
+            format!("{purpose}:created_by=me")
+        } else {
+            purpose
+        }
     }
 }
 
@@ -405,12 +425,15 @@ impl List {
 pub(crate) struct Filter {
     pub(crate) membership: bool,
     pub(crate) pending_deletion: bool,
+    /// `created_by=me` (projects only, plan 15 MR5).
+    pub(crate) created_by_me: bool,
 }
 
 impl Filter {
     pub(crate) const NONE: Filter = Filter {
         membership: false,
         pending_deletion: false,
+        created_by_me: false,
     };
 }
 
@@ -425,8 +448,11 @@ pub(crate) fn parse_filters(query: Option<&str>, list: List) -> Result<Filter, F
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         let param: &'static str = match (key, list) {
             ("state", List::Projects) => "state",
+            ("created_by", List::Projects) => "created_by",
             ("membership", _) => "membership",
-            ("state", List::Groups) => return Err(param_invalid("query", "unknown_parameter")),
+            ("state" | "created_by", List::Groups) => {
+                return Err(param_invalid("query", "unknown_parameter"))
+            }
             _ => continue,
         };
         if seen.contains(&param) {
@@ -438,6 +464,8 @@ pub(crate) fn parse_filters(query: Option<&str>, list: List) -> Result<Filter, F
             ("membership", "false") => filter.membership = false,
             ("state", "pending_deletion") => filter.pending_deletion = true,
             ("state", "live") => filter.pending_deletion = false,
+            // Only `me`: the caller, never another user's id.
+            ("created_by", "me") => filter.created_by_me = true,
             (param, _) => return Err(param_invalid(param, "invalid_value")),
         }
     }
@@ -451,8 +479,8 @@ pub(crate) struct ListQuery {
     pub(crate) cursor: Option<String>,
 }
 
-/// `limit` and `cursor`, strictly (the filters `membership` and
-/// `state` are [`parse_filters`]'): unknown or repeated parameters, a
+/// `limit` and `cursor`, strictly (the filters `membership`, `state` and
+/// `created_by` are [`parse_filters`]'): unknown or repeated parameters, a
 /// `limit` that is not a plain decimal in 1 ..= 100 and an empty cursor are
 /// `FG-WEB-0006 reason=param_invalid` (the value is never logged).
 pub(crate) fn parse_query(query: Option<&str>) -> Result<ListQuery, ForgeError> {
@@ -466,7 +494,7 @@ pub(crate) fn parse_query(query: Option<&str>) -> Result<ListQuery, ForgeError> 
         let slot = match key {
             "limit" => &mut limit,
             "cursor" => &mut cursor,
-            "membership" | "state" => continue,
+            "membership" | "state" | "created_by" => continue,
             _ => return Err(param_invalid("query", "unknown_parameter")),
         };
         if slot.replace(value).is_some() {
@@ -618,9 +646,11 @@ fn next_cursor(
 /// `state=pending_deletion` it is decided with `ProjectRead` (which hides a
 /// project pending deletion), with it only projects pending deletion are
 /// considered, each decided with `ProjectRestore` (Owner, never an agent).
-/// `membership` then narrows what was allowed.
+/// `membership` and `created_by=me` (the record's creator is `viewer`) then
+/// narrow what was allowed.
 fn show_project(
     principal: &Principal,
+    viewer: UserId,
     filter: &Filter,
     record: &ProjectRecord,
 ) -> Result<Option<ProjectBody>, ForgeError> {
@@ -639,6 +669,9 @@ fn show_project(
         Err(e) => return denied_or_failed(e).map(|()| None),
     };
     if filter.membership && record.access.role.is_none() {
+        return Ok(None);
+    }
+    if filter.created_by_me && record.created_by != Some(viewer) {
         return Ok(None);
     }
     project_body(&proof, record).map(Some)
@@ -668,6 +701,8 @@ async fn project_page(
         lists.projects.project_page(
             after.map(ProjectId::new),
             viewer,
+            // A narrower scan only: show_project still decides every row.
+            filter.created_by_me.then_some(viewer),
             lists.scan_budget.saturating_add(1),
         ),
     )
@@ -679,7 +714,7 @@ async fn project_page(
         query.limit,
         budget,
         |r| r.id.get(),
-        |record| show_project(principal, &filter, record),
+        |record| show_project(principal, viewer, &filter, record),
     )?;
     Ok(ProjectPage {
         next_cursor: next_cursor(

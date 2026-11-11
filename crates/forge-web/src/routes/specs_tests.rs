@@ -88,6 +88,7 @@ impl forge_core::ProjectAccessLoader for World {
             display_name: "App".to_owned(),
             description: "synthetic".to_owned(),
             created_at: "2026-11-01T00:00:00Z".to_owned(),
+            created_by: None,
             repository: ProjectRepository {
                 id: RepoId::new(70),
                 state: RepositoryState::Ready,

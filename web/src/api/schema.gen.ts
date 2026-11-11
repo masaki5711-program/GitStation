@@ -22,6 +22,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/-/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: the caller's activity */
+        get: operations["get_activity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: the caller's activity */
+        head: operations["head_activity"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/auth/backchannel-logout": {
         parameters: {
             query?: never;
@@ -6500,6 +6518,46 @@ export interface operations {
             };
         };
     };
+    get_activity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_activity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_auth_backchannel_logout: {
         parameters: {
             query?: never;
@@ -8339,6 +8397,8 @@ export interface operations {
                 membership?: string;
                 /** @description pending_deletion: only projects pending deletion that the caller may restore (Owner) */
                 state?: string;
+                /** @description me: only projects the caller created (the only accepted value; never another user's id) */
+                created_by?: string;
             };
             header?: never;
             path?: never;

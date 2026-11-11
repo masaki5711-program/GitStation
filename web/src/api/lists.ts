@@ -6,12 +6,22 @@ import { call, type ApiClient } from './client';
 import { fetchAllPages } from './pages';
 import type { ListedGroup, Project } from './types';
 
-export function projectsQuery(
-  api: ApiClient,
-  filter: { membership?: boolean } = {},
-) {
+/**
+ * Which projects a list asks for: `all` the ones I may read; `member` the ones
+ * I hold a role in (`membership=true`); `created` the ones I created
+ * (`created_by=me`, plan 15 MR 5 — the server accepts only `me`).
+ */
+export type ProjectScope = 'all' | 'member' | 'created';
+
+const SCOPE_QUERY: Record<ProjectScope, { membership?: 'true'; created_by?: 'me' }> = {
+  all: {},
+  member: { membership: 'true' },
+  created: { created_by: 'me' },
+};
+
+export function projectsQuery(api: ApiClient, scope: ProjectScope = 'all') {
   return queryOptions({
-    queryKey: ['projects', filter],
+    queryKey: ['projects', scope],
     queryFn: ({ signal }) =>
       fetchAllPages<Project>((cursor) =>
         call(() =>
@@ -21,7 +31,7 @@ export function projectsQuery(
               query: {
                 limit: 100,
                 ...(cursor === undefined ? {} : { cursor }),
-                ...(filter.membership === true ? { membership: 'true' } : {}),
+                ...SCOPE_QUERY[scope],
               },
             },
           }),

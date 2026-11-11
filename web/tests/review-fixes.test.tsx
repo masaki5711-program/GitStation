@@ -172,7 +172,7 @@ describe('states', () => {
   it('the empty projects page offers the primary action', async () => {
     const server = mockServer(lists());
     await renderApp({ fetch: server.fetch, path: '/-/projects' });
-    const empty = (await screen.findByText('あなたがメンバーのプロジェクトはまだありません。')).parentElement as HTMLElement;
+    const empty = (await screen.findByText('あなたが作ったプロジェクトはまだありません。')).parentElement as HTMLElement;
     fireEvent.click(within(empty).getByRole('button', { name: 'プロジェクトを作る' }));
     expect(screen.getByRole('dialog')).toBeTruthy();
   });

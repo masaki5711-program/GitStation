@@ -41,14 +41,20 @@ pub trait ProjectPageLoader: Send + Sync {
     /// the viewer may see** (deleted ones included): visibility is decided
     /// per row by `authorize()` in the caller.
     ///
+    /// `created_by` (plan 15 MR5, `?created_by=me`): scan only the
+    /// projects that user created. A narrower scan, never a decision: the
+    /// caller still decides every returned row with `authorize()`.
+    ///
     /// **Contract**: one statement per call, the same statement whatever
-    /// the rows are and whoever the viewer is (forge-db: one statement).
-    /// Errors are store failures (`FG-DB-…`) or rows that cannot be read
-    /// (`FG-DB-0021`). The caller bounds the call with its own timeout.
+    /// the rows are and whoever the viewer is (forge-db: one statement for
+    /// each presence of `created_by`). Errors are store failures (`FG-DB-…`)
+    /// or rows that cannot be read (`FG-DB-0021`). The caller bounds the
+    /// call with its own timeout.
     fn project_page<'a>(
         &'a self,
         after: Option<ProjectId>,
         viewer: UserId,
+        created_by: Option<UserId>,
         max_rows: u32,
     ) -> LookupFuture<'a, Vec<ProjectRecord>>;
 }

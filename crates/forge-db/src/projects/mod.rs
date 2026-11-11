@@ -457,15 +457,19 @@ where
         return Err(path_taken("tombstoned"));
     }
     let visibility = new.visibility;
+    // created_by (plan 15 MR5): the creator, on every creation path (all
+    // of them reach this one statement).
+    let creator = new.creator;
     let project_id: i64 = tx
         .step(|c| async move {
             sqlx::query_scalar(
-                "INSERT INTO forge.projects (display_name, description, visibility) \
-                 VALUES ($1, $2, $3) RETURNING id",
+                "INSERT INTO forge.projects (display_name, description, visibility, created_by) \
+                 VALUES ($1, $2, $3, $4) RETURNING id",
             )
             .bind(new.display_name.as_str())
             .bind(new.description.as_str())
             .bind(visibility.as_str())
+            .bind(creator.get())
             .fetch_one(c)
             .await
             .map_err(|e| query_error("projects.create.project", e))

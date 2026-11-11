@@ -388,6 +388,28 @@ fn the_filters_are_parsed_strictly_per_list() {
             "query",
             "unknown_parameter",
         ),
+        // Plan 15 MR5: only `me` — never another user's id.
+        (
+            List::Projects,
+            "created_by=7",
+            "created_by",
+            "invalid_value",
+        ),
+        (List::Projects, "created_by=", "created_by", "invalid_value"),
+        (
+            List::Projects,
+            "created_by=ME",
+            "created_by",
+            "invalid_value",
+        ),
+        (List::Projects, "created_by", "created_by", "invalid_value"),
+        (
+            List::Projects,
+            "created_by=me&created_by=me",
+            "created_by",
+            "repeated",
+        ),
+        (List::Groups, "created_by=me", "query", "unknown_parameter"),
     ];
     for (list, query, param, expected) in cases {
         let err = parse_filters(Some(query), list).expect_err(query);
@@ -449,6 +471,10 @@ fn a_cursor_opens_only_under_its_own_filters() {
             pending_deletion: true,
             ..spec
         },
+        Filter {
+            created_by_me: true,
+            ..spec
+        },
     ];
     for other in others {
         let err = open_cursor(&keys, List::Projects, alice, &other, Some(&cursor), AGE)
@@ -463,5 +489,38 @@ fn a_cursor_opens_only_under_its_own_filters() {
     assert_eq!(
         List::Projects.purpose(alice, &Filter::NONE),
         "projects.list:user=1"
+    );
+    // Plan 15 MR5: `created_by=me` extends the purpose only when set, so
+    // the purposes of M2 MR6 are unchanged.
+    assert_eq!(
+        List::Projects.purpose(alice, &spec),
+        "projects.list:user=1:membership=true:state=live"
+    );
+    assert_eq!(
+        List::Projects.purpose(
+            alice,
+            &Filter {
+                created_by_me: true,
+                ..Filter::NONE
+            }
+        ),
+        "projects.list:user=1:membership=false:state=live:created_by=me"
+    );
+}
+
+/// Plan 15 MR5: `created_by=me` parses with the paging and other filters.
+#[test]
+fn created_by_me_is_a_project_filter() {
+    let f = parse_filters(
+        Some("created_by=me&membership=true&limit=5"),
+        List::Projects,
+    )
+    .expect("created_by=me");
+    assert!(f.created_by_me && f.membership && !f.pending_deletion);
+    assert_eq!(
+        parse_query(Some("created_by=me&limit=4"))
+            .expect("paging")
+            .limit,
+        4
     );
 }

@@ -134,7 +134,9 @@ async fn a_project_page_is_every_row_after_the_position_with_the_loader_facts() 
     let all = [a.project_id, b.project_id, c.project_id, d.project_id];
 
     for viewer in [alice.user_id, bob.user_id] {
-        let page = project_page(&t.db, None, viewer, 100).await.expect("page");
+        let page = project_page(&t.db, None, viewer, None, 100)
+            .await
+            .expect("page");
         assert_eq!(ids(&page), all, "every row, in id order");
         for record in &page {
             let single = load_project(&t.db, record.id, Some(viewer))
@@ -144,7 +146,7 @@ async fn a_project_page_is_every_row_after_the_position_with_the_loader_facts() 
             assert_eq!(record, &single, "the page row is the single-object row");
         }
     }
-    let page = project_page(&t.db, None, bob.user_id, 100)
+    let page = project_page(&t.db, None, bob.user_id, None, 100)
         .await
         .expect("page");
     assert_eq!(page[0].access.role, None, "alice's private project, raw");
@@ -153,11 +155,11 @@ async fn a_project_page_is_every_row_after_the_position_with_the_loader_facts() 
     assert_eq!(page[0].path.full_path(), "acme/a");
 
     // After a position, and bounded.
-    let after = project_page(&t.db, Some(a.project_id), bob.user_id, 2)
+    let after = project_page(&t.db, Some(a.project_id), bob.user_id, None, 2)
         .await
         .expect("after");
     assert_eq!(ids(&after), [b.project_id, c.project_id]);
-    let end = project_page(&t.db, Some(d.project_id), bob.user_id, 2)
+    let end = project_page(&t.db, Some(d.project_id), bob.user_id, None, 2)
         .await
         .expect("end");
     assert!(end.is_empty());
@@ -232,7 +234,7 @@ async fn every_page_runs_the_same_single_statement() {
         Visibility::Private,
     )
     .await;
-    project_page(&t.db, None, alice.user_id, 1)
+    project_page(&t.db, None, alice.user_id, None, 1)
         .await
         .expect("warm");
     let cases = [
@@ -243,7 +245,7 @@ async fn every_page_runs_the_same_single_statement() {
     for (after, viewer, label) in cases {
         let capture = Captured::default();
         let guard = capture.install();
-        let answer = project_page(&t.db, after, viewer, 10).await;
+        let answer = project_page(&t.db, after, viewer, None, 10).await;
         drop(guard);
         answer.unwrap_or_else(|e| panic!("{label}: {e}"));
         assert_eq!(statements(&capture), [PROJECT_PAGE_SQL], "{label}");
@@ -262,7 +264,7 @@ async fn a_page_size_out_of_range_is_refused_before_any_statement() {
     let t = FreshDb::migrated().await;
     let alice = user(&t, "alice").await;
     for rows in [0, MAX_PAGE_ROWS + 1] {
-        let err = project_page(&t.db, None, alice.user_id, rows)
+        let err = project_page(&t.db, None, alice.user_id, None, rows)
             .await
             .expect_err("out of range");
         assert_eq!(err.code(), ErrorCode::Internal);
@@ -292,10 +294,10 @@ async fn the_db_is_the_page_loader() {
     let groups: &dyn forge_core::GroupPageLoader = &t.db;
     assert_eq!(
         projects
-            .project_page(None, alice.user_id, 5)
+            .project_page(None, alice.user_id, None, 5)
             .await
             .expect("trait"),
-        project_page(&t.db, None, alice.user_id, 5)
+        project_page(&t.db, None, alice.user_id, None, 5)
             .await
             .expect("fn")
     );

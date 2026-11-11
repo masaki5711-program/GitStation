@@ -727,14 +727,18 @@ async fn the_migration_removes_ci_pipeline_runs_a_service_account_reported() {
             )
             .await
             .expect("alice");
-            let web = projects::create(
-                &t.db,
-                &ctx(Actor::System, "req-project-web"),
-                &NewProject::new("web", alice.namespace_id, "Web", alice.user_id),
+            // A bare projects row in the pre-C5 schema: `projects::create`
+            // is today's code and writes columns later migrations add
+            // (plan 15 MR5: created_by), so it cannot run against `before`.
+            let p: i64 = 990_001;
+            t.commit_audited(
+                ("project", p),
+                &[format!(
+                    "INSERT INTO forge.projects (id, display_name) OVERRIDING SYSTEM VALUE                      VALUES ({p}, 'Web')"
+                )],
             )
-            .await
-            .expect("web");
-            let (p, a) = (web.project_id.get(), alice.user_id.get());
+            .await;
+            let a = alice.user_id.get();
             let run = |name: &str, c: char| {
                 format!(
                     "INSERT INTO forge.check_runs (project_id, head_sha, name, status, \

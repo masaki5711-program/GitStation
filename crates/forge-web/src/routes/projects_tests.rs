@@ -95,6 +95,7 @@ fn record(id: i64, visibility: Visibility, role: Option<Role>, deleted: bool) ->
         display_name: format!("Project {id}"),
         description: "synthetic".to_owned(),
         created_at: "2026-10-31T09:00:00Z".to_owned(),
+        created_by: None,
         repository: forge_core::ProjectRepository {
             id: forge_core::RepoId::new(id),
             state: forge_core::RepositoryState::Ready,
