@@ -324,6 +324,33 @@
       }
     },
     {
+      "name": "route word pipelines",
+      "path": "/g/p/-/pipelines/12",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "pipelines",
+        "rest": [
+          "12"
+        ]
+      }
+    },
+    {
+      "name": "route word webhooks",
+      "path": "/g/p/-/webhooks/3/deliveries",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "webhooks",
+        "rest": [
+          "3",
+          "deliveries"
+        ]
+      }
+    },
+    {
       "name": "ref and file keep their case",
       "path": "/acme/x/-/blob/Main/ReadMe.MD",
       "form": "both",
@@ -1312,12 +1339,6 @@
     {
       "name": "no merge_requests alias of pull (ADR-0015 amendment B0)",
       "path": "/acme/x/-/merge_requests/3",
-      "form": "both",
-      "reason": "unknown_route"
-    },
-    {
-      "name": "not yet routed: pipelines (M4)",
-      "path": "/acme/x/-/pipelines",
       "form": "both",
       "reason": "unknown_route"
     },

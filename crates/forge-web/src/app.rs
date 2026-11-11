@@ -436,7 +436,9 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
 /// (`routes::content`, M2 MR7). `pulls` / `pull` are the merge request
 /// screens (MR B0; their data is the `MergeRequestList` / `MergeRequestRead`
 /// API). `documents` is the document screens (plan 13 stage 3; their data
-/// is the document API, `RepoBrowse`).
+/// is the document API, `RepoBrowse`). `pipelines` is the CI screens (plan 14
+/// M4; their data is the pipeline API, project readers). `webhooks` is the
+/// webhook screens (M3 I2; their data is the webhook API, Maintainer).
 pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Tree,
     RouteWord::Blob,
@@ -451,6 +453,8 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Pulls,
     RouteWord::Pull,
     RouteWord::Documents,
+    RouteWord::Pipelines,
+    RouteWord::Webhooks,
 ];
 
 /// The words whose page is the SPA shell on a group (no merge request

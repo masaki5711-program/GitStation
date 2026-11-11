@@ -20,10 +20,11 @@ import {
   type CheckRun,
   type Conflicts,
 } from '../../api/checks';
+import { pipelineIdOfCheck } from '../../api/pipelines';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import { checkBadge } from '../labels';
-import { blobUrl, pullUrl } from '../repoUrls';
+import { blobUrl, pipelineUrl, pullUrl } from '../repoUrls';
 import { StateBadge } from './StateBadge';
 import styles from './Mr.module.css';
 
@@ -102,6 +103,7 @@ function Run({ run, project, head }: { run: CheckRun; project: string; head: str
   const badge = checkBadge(t, run.status, run.conclusion);
   const namespace = namespaceOf(run.name);
   const link = safeDetailsUrl(run.details_url);
+  const pipelineId = pipelineIdOfCheck(run);
   return (
     <li className={styles.run}>
       <p className={styles.runHead}>
@@ -111,6 +113,11 @@ function Run({ run, project, head }: { run: CheckRun; project: string; head: str
         )}
       </p>
       {run.summary.trim() !== '' && <p className={styles.runSummary}>{run.summary}</p>}
+      {pipelineId !== null && (
+        <p className={styles.runSummary}>
+          <Link to={pipelineUrl(project, pipelineId)}>{t('mrChecks.openPipeline', { id: pipelineId })}</Link>
+        </p>
+      )}
       {link !== null && (
         <p className={styles.runSummary}>
           <a href={link} rel="noopener noreferrer">
