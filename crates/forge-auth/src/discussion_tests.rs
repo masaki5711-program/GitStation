@@ -270,6 +270,7 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
         | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

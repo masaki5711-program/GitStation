@@ -317,6 +317,9 @@ pub(crate) enum Fixture {
     /// The caller's own notification settings (M3 N1) or another user's.
     OwnNotificationPreferences,
     ForeignNotificationPreferences,
+    /// The caller's own merge request lists (plan 15 MR 6) or another user's.
+    OwnUserMergeRequests,
+    ForeignUserMergeRequests,
     /// Creating an own token with plain scopes.
     OwnTokenRequest,
     /// Creating an own token that carries the admin scope.
@@ -1009,6 +1012,8 @@ impl Fixture {
             Fixture::ForeignNotificationPreferences => {
                 Resource::NotificationPreferences { owner: OTHER }
             }
+            Fixture::OwnUserMergeRequests => Resource::UserMergeRequests { owner: ME },
+            Fixture::ForeignUserMergeRequests => Resource::UserMergeRequests { owner: OTHER },
             Fixture::OwnTokenRequest => Resource::TokenRequest {
                 owner: ME,
                 scopes: vec![Scope::ReadRepository],
