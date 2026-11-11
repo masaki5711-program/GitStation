@@ -131,3 +131,19 @@
 .srOnly {
   composes: srOnly from '../components/controls.module.css';
 }
+
+/* The latest events (plan 15 MR 9): the same rows as /-/activity. */
+.activity {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--gs-color-border);
+  border-bottom: none;
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.activityAll {
+  margin: var(--gs-space-2) 0 0;
+  font-size: var(--gs-font-size-sm);
+}

@@ -2568,6 +2568,13 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: the caller's merge requests",
                 shell,
             )
+            .route(
+                verb,
+                MY_ACTIVITY_PAGE,
+                Action::WebShell,
+                "SPA shell: the caller's activity",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -2788,3 +2795,5 @@ pub const MY_PROJECTS_PAGE: &str = "/-/projects";
 pub const MY_GROUPS_PAGE: &str = "/-/groups";
 /// The "My work" sidebar's merge requests page (plan 15 MR 7).
 pub const MY_MERGE_REQUESTS_PAGE: &str = "/-/merge-requests";
+/// The "My work" sidebar's activity page (plan 15 MR 9).
+pub const MY_ACTIVITY_PAGE: &str = "/-/activity";

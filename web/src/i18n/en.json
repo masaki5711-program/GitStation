@@ -53,7 +53,9 @@
     "nextUnread": "No new notifications.",
     "countUnknown": "The number could not be read.",
     "cardCount_one": "{{shown}} item",
-    "cardCount_other": "{{shown}} items"
+    "cardCount_other": "{{shown}} items",
+    "activity": "Recent updates",
+    "activityAll": "See all activity"
   },
   "nav": {
     "myWork": "My work",
@@ -67,7 +69,8 @@
     "groupMenu": "Group menu",
     "showAll": "See everything inside",
     "mergeRequests": "Merge requests",
-    "mrBadge": ", {{shown}} to act on"
+    "mrBadge": ", {{shown}} to act on",
+    "activity": "Activity"
   },
   "myMrs": {
     "title": "Merge requests",
@@ -89,6 +92,27 @@
     "summaryCount_one": "{{shown}} item",
     "summaryCount_other": "{{shown}} items",
     "countUnknown": "count unknown"
+  },
+  "activity": {
+    "title": "Activity",
+    "explain": "What happened in the projects you are a member of, newest first. Old events are removed after the keep period.",
+    "someone": "Someone",
+    "projectCreated": "{{actor}} created the project",
+    "pushed_one": "{{actor}} pushed to {{count}} branch or tag",
+    "pushed_other": "{{actor}} pushed to {{count}} branches or tags",
+    "pushedNoCount": "{{actor}} pushed",
+    "mrOpened": "{{actor}} opened a merge request",
+    "mrClosed": "{{actor}} closed a merge request",
+    "mrReopened": "{{actor}} reopened a merge request",
+    "mrCommented": "{{actor}} commented on a merge request",
+    "mrMerged": "{{actor}} merged a merge request",
+    "mrApproved": "{{actor}} approved a merge request",
+    "other": "{{actor}} made a change in the project",
+    "empty": "Nothing has happened yet. When you become a member of a project, what happens there appears here.",
+    "truncated": "You take part in many projects: the events of some older projects are not shown.",
+    "more": "Load more",
+    "moreShown": "{{n}} more shown.",
+    "noMore": "There is nothing older."
   },
   "projects": {
     "title": "Projects",

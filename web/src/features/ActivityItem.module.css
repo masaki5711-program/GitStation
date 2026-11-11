@@ -1,0 +1,41 @@
+/* One activity event (plan 15 MR 9): the sentence, then where and when.
+   Tokens only. */
+.item {
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.item:focus-visible {
+  outline: var(--gs-focus-ring);
+  outline-offset: -2px;
+}
+
+.sentence {
+  margin: 0 0 var(--gs-space-1);
+  color: var(--gs-color-text);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.mr {
+  font-weight: var(--gs-font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.project {
+  font-family: var(--gs-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.time {
+  font-variant-numeric: var(--gs-numeric);
+}

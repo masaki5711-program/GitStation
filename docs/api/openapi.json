@@ -10757,6 +10757,44 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/-/activity": {
+      "get": {
+        "operationId": "get_activity",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's activity",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_activity",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's activity",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/auth/backchannel-logout": {
       "post": {
         "operationId": "post_auth_backchannel_logout",

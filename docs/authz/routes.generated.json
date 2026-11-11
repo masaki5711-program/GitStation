@@ -20,6 +20,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/activity",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/activity",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/assets/{file}",
     "people_only": false,
     "public": true,
