@@ -1,6 +1,7 @@
-// The page frame: header, main and the session gate. Without a session the
-// sign-in screen replaces the page (same address, `next` = this page).
-import { useEffect, useRef } from 'react';
+// The page frame: header, the "My work" sidebar (signed in only), main and
+// the session gate. Without a session the sign-in screen replaces the page
+// (same address, `next` = this page).
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { Login } from '../pages/Login';
@@ -10,6 +11,8 @@ import styles from '../App.module.css';
 import { ErrorBoundary } from './ErrorBoundary';
 import { ErrorNotice } from './ErrorNotice';
 import { Header } from './Header';
+import { Sidebar } from './Sidebar';
+import { useNarrowScreen } from '../hooks/useNarrowScreen';
 
 /** `bare`: no header (the act-as confirmation popup has nowhere to go). */
 export function Layout({ bare = false }: { bare?: boolean }) {
@@ -17,6 +20,29 @@ export function Layout({ bare = false }: { bare?: boolean }) {
   const location = useLocation();
   const main = useRef<HTMLElement>(null);
   const first = useRef(true);
+  const narrow = useNarrowScreen();
+  const navId = useId();
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const [navOpen, setNavOpen] = useState(false);
+  const closeNav = useCallback(() => {
+    setNavOpen(false);
+  }, []);
+
+  // Narrow screens: Esc closes the open sidebar and gives the focus back to
+  // the menu button (WCAG 2.1.2 / 2.4.3).
+  useEffect(() => {
+    if (!narrow || !navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setNavOpen(false);
+        menuButton.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [narrow, navOpen]);
 
   // After a navigation the focus moves to the new page's heading (WCAG 2.4.3;
   // not on first load).
@@ -77,12 +103,26 @@ export function Layout({ bare = false }: { bare?: boolean }) {
       break;
   }
 
+  const withNav = !bare && state.status === 'authed';
+  const nav = withNav && narrow
+    ? {
+        open: navOpen,
+        controls: navId,
+        buttonRef: menuButton,
+        onToggle: () => {
+          setNavOpen((v) => !v);
+        },
+      }
+    : undefined;
   return (
     <div className={styles.app}>
-      {!bare && <Header />}
-      <main id="main" tabIndex={-1} ref={main} className={styles.main}>
-        <ErrorBoundary key={location.pathname}>{content}</ErrorBoundary>
-      </main>
+      {!bare && <Header {...(nav ? { nav } : {})} />}
+      <div className={styles.frame}>
+        {withNav && <Sidebar id={navId} narrow={narrow} open={navOpen} onNavigate={closeNav} />}
+        <main id="main" tabIndex={-1} ref={main} className={styles.main}>
+          <ErrorBoundary key={location.pathname}>{content}</ErrorBoundary>
+        </main>
+      </div>
     </div>
   );
 }

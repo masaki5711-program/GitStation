@@ -1,4 +1,5 @@
-// Home (plan 10 §4.2): my projects (the ones I hold a role in) with a filter,
+// Home (plan 10 §4.2): my projects (the ones I hold a role in) with a filter
+// (MyProjects, shared with /-/projects; plan 15 MR 7 reshapes Home),
 // my groups and what I looked at recently (this browser only).
 // No "coming soon" frames: a section appears when it has something to show,
 // the main list always shows its loading / empty / error state.
@@ -8,13 +9,13 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { useApi } from '../api/context';
-import { Loading } from '../components/Loading';
 import { groupsQuery, projectsQuery } from '../api/lists';
 import type { All } from '../api/pages';
 import controls from '../components/controls.module.css';
 import { QueryError } from '../components/QueryError';
 import { CreateGroupDialog, CreateProjectDialog } from '../features/CreateDialogs';
-import { GroupList, ProjectList } from '../features/Lists';
+import { GroupList } from '../features/Lists';
+import { MyProjects } from '../features/MyProjects';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
 import styles from './Home.module.css';
@@ -40,20 +41,12 @@ export function Home() {
   const api = useApi();
   useDocumentTitle(t('home.title'));
   const [dialog, setDialog] = useState<'project' | 'group' | null>(null);
-  const [filter, setFilter] = useState('');
   const recent = useMemo(() => readRecent(), []);
 
+  // The same query as MyProjects (one request, shared cache): when it fails,
+  // its error is the one the page shows.
   const mine = useQuery(projectsQuery(api, { membership: true }));
   const groups = useQuery(groupsQuery(api, { membership: true }));
-
-  const needle = filter.trim().toLowerCase();
-  const shown =
-    mine.data?.items.filter(
-      (p) =>
-        needle === '' ||
-        p.display_name.toLowerCase().includes(needle) ||
-        p.path.toLowerCase().includes(needle),
-    ) ?? [];
 
   return (
     <>
@@ -82,54 +75,11 @@ export function Home() {
       </div>
 
       <Block id="home-mine" title={t('home.mine')}>
-        {mine.isPending && <Loading />}
-        {mine.isError && (
-          <QueryError
-            error={mine.error}
-            onRetry={() => {
-              void mine.refetch();
-            }}
-          />
-        )}
-        {mine.isSuccess &&
-          (mine.data.items.length === 0 ? (
-            <div className={styles.empty}>
-              <p>{t('home.mineEmpty')}</p>
-              <p className={styles.hint}>{t('home.mineEmptyHint')}</p>
-              <button
-                type="button"
-                className={controls.primary}
-                onClick={() => {
-                  setDialog('project');
-                }}
-              >
-                {t('home.newProject')}
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className={controls.field}>
-                <label htmlFor="home-filter" className={controls.label}>
-                  {t('home.filter')}
-                </label>
-                <input
-                  id="home-filter"
-                  type="search"
-                  className={controls.input}
-                  value={filter}
-                  onChange={(e) => {
-                    setFilter(e.target.value);
-                  }}
-                />
-              </div>
-              {shown.length === 0 ? (
-                <p role="status">{t('home.filterEmpty')}</p>
-              ) : (
-                <ProjectList items={shown} />
-              )}
-              <Truncated all={mine.data} />
-            </>
-          ))}
+        <MyProjects
+          onCreate={() => {
+            setDialog('project');
+          }}
+        />
       </Block>
 
       {!mine.isError && groups.isError && (

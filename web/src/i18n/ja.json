@@ -50,6 +50,25 @@
     "recent": "最近見たもの",
     "recentHint": "このブラウザの中だけに覚えています。"
   },
+  "nav": {
+    "myWork": "マイワーク",
+    "home": "ホーム",
+    "projects": "プロジェクト",
+    "groups": "グループ",
+    "collapse": "サイドバーを畳む",
+    "expand": "サイドバーを広げる",
+    "menu": "メニュー"
+  },
+  "projectsPage": {
+    "title": "プロジェクト",
+    "member": "参加中"
+  },
+  "groupsPage": {
+    "title": "グループ",
+    "empty": "見られるグループはまだありません。",
+    "emptyHint": "グループは管理者が作ります。必要なら管理者に頼んでください。",
+    "emptyHintAdmin": "「グループを作る」から最初のグループを作ってください。"
+  },
   "create": {
     "parent": "作る場所",
     "parentChoose": "選んでください",

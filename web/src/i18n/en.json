@@ -50,6 +50,25 @@
     "recent": "Recently viewed",
     "recentHint": "Remembered in this browser only."
   },
+  "nav": {
+    "myWork": "My work",
+    "home": "Home",
+    "projects": "Projects",
+    "groups": "Groups",
+    "collapse": "Collapse the sidebar",
+    "expand": "Expand the sidebar",
+    "menu": "Menu"
+  },
+  "projectsPage": {
+    "title": "Projects",
+    "member": "Member of"
+  },
+  "groupsPage": {
+    "title": "Groups",
+    "empty": "There are no groups you can see yet.",
+    "emptyHint": "Groups are created by an administrator. Ask one if you need a group.",
+    "emptyHintAdmin": "Create the first group with \"New group\"."
+  },
   "create": {
     "parent": "Create in",
     "parentChoose": "Choose one",

@@ -29,17 +29,6 @@
   color: var(--gs-brand-navy);
 }
 
-.empty {
-  padding: var(--gs-space-4);
-  border: 1px dashed var(--gs-color-border);
-  border-radius: var(--gs-radius-md);
-  background: var(--gs-color-surface);
-}
-
-.empty p {
-  margin: 0;
-}
-
 .hint {
   margin: var(--gs-space-2) 0 0;
   color: var(--gs-color-text-muted);

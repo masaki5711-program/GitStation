@@ -50,6 +50,25 @@
     "recent": "Baru dilihat",
     "recentHint": "Hanya diingat di peramban ini."
   },
+  "nav": {
+    "myWork": "Pekerjaan saya",
+    "home": "Beranda",
+    "projects": "Proyek",
+    "groups": "Grup",
+    "collapse": "Ciutkan bilah samping",
+    "expand": "Bentangkan bilah samping",
+    "menu": "Menu"
+  },
+  "projectsPage": {
+    "title": "Proyek",
+    "member": "Anggota"
+  },
+  "groupsPage": {
+    "title": "Grup",
+    "empty": "Belum ada grup yang dapat Anda lihat.",
+    "emptyHint": "Grup dibuat oleh administrator. Minta kepada administrator jika Anda membutuhkan grup.",
+    "emptyHintAdmin": "Buat grup pertama dengan \"Grup baru\"."
+  },
   "create": {
     "parent": "Buat di",
     "parentChoose": "Pilih salah satu",

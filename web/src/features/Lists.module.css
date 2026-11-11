@@ -36,3 +36,21 @@
   gap: var(--gs-space-2);
   margin-left: auto;
 }
+
+/* The empty state of a list: what is missing and the next step. */
+.empty {
+  padding: var(--gs-space-4);
+  border: 1px dashed var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.empty p {
+  margin: 0 0 var(--gs-space-2);
+}
+
+.hint {
+  margin: var(--gs-space-2) 0 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}

@@ -1,0 +1,95 @@
+/* The "My work" sidebar (tokens only). Breakpoint: useNarrowScreen.ts. */
+.sidebar {
+  flex: none;
+  align-self: flex-start;
+  position: sticky;
+  top: 0;
+  width: 14rem;
+  min-height: calc(100vh - var(--gs-header-height));
+  padding: var(--gs-space-4) var(--gs-space-2);
+  border-right: 1px solid var(--gs-color-border);
+  background: var(--gs-color-surface);
+}
+
+.collapsed {
+  width: auto;
+}
+
+/* Narrow screens: a panel under the header, full width, pushing the page down. */
+.narrow {
+  position: static;
+  width: auto;
+  min-height: 0;
+  border-right: none;
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.heading {
+  margin: var(--gs-space-2) var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+  font-weight: bold;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.link,
+.toggle {
+  composes: interactive from './controls.module.css';
+  display: flex;
+  align-items: center;
+  gap: var(--gs-space-3);
+  width: 100%;
+  min-height: 2.5rem;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: none;
+  border-radius: var(--gs-radius-sm);
+  background: none;
+  color: var(--gs-color-text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+/* Where I am: not colour alone — a bar and bold text as well. */
+.link[aria-current='page'] {
+  background: var(--gs-color-active-surface);
+  box-shadow: inset 3px 0 0 var(--gs-color-action);
+  color: var(--gs-color-link);
+  font-weight: bold;
+}
+
+.toggle {
+  margin-bottom: var(--gs-space-2);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.collapsed .link,
+.collapsed .toggle {
+  justify-content: center;
+  width: 2.75rem;
+  padding: var(--gs-space-2);
+}
+
+.icon {
+  display: block;
+  flex: none;
+}
+
+.label {
+  overflow-wrap: anywhere;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

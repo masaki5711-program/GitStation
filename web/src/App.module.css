@@ -2,7 +2,20 @@
   min-height: 100vh;
 }
 
+.frame {
+  display: flex;
+}
+
+/* Narrow screens (useNarrowScreen.ts): the sidebar panel sits above main. */
+@media (max-width: 767.98px) {
+  .frame {
+    flex-direction: column;
+  }
+}
+
 .main {
+  flex: 1;
+  min-width: 0;
   max-width: var(--gs-content-max-width);
   margin: 0 auto;
   padding: var(--gs-space-6) var(--gs-space-4);
