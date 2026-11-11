@@ -130,7 +130,7 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - ジョブは `services`（2 つまで、`{ name, image, env?, user?, tmpfs? }`）で横にコンテナを動かせる。GitStation の試験は PostgreSQL が要り
   （`FORGE_TEST_DATABASE_URL`）、ジョブのコンテナは `--network=none` なので、これが無いと `ci/pipeline` を必須にできない（X）。
 - **ネットワークは閉じたまま**。ジョブにサービスがあると Runner はポッドを `podman pod create --network=none` で作り、サービスとジョブの
-  コンテナを同じポッドに入れる。共有するのは**ループバックだけの network namespace**（と pod の既定の ipc / uts）: 届くのは `127.0.0.1`
+  コンテナを同じポッドに入れる。共有するのは**ループバックだけの network namespace**（2026-11-12 の追記で `--share=net`。それまでは pod の既定の ipc / uts も共有した）: 届くのは `127.0.0.1`
   の互いだけで、外・Runner のホスト・社内のネットワークには届かない。DNS も無い。ジョブだけのときは従来どおりポッドを作らない。
 - サービスのコンテナはジョブと同じ閉じ方（読み取り専用のルート、`--cap-drop=all`、`no-new-privileges`、同じメモリ・プロセス数・ulimit、
   `--pull=missing`）。書ける場所は `/tmp` と、ファイルが宣言した `tmpfs`（4 つまで、絶対パス、`/proc`・`/sys`・`/dev` の下と `/` を断る、
@@ -153,9 +153,41 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - Runner は準備を待たない（ジョブのスクリプトが待つ）。ポッドやサービスを起動できなければ FG-CI-0014、ポッドはどの終わり方でも
   `pod rm --force` で消し、起動のときも残りを消す。ジョブが失敗したら各サービスのログの最後の 50 行をジョブのログに足す（ジョブの出力と同じマスク）。
 
+## Amendment 2026-11-12 — ジョブのコンテナを containers.conf に任せない（FG-CI-0015）
+
+- **見つけたこと**（GitStation 自身の CI を試験環境の Runner で動かして）: Runner のイメージ quay.io/podman/stable は
+  `~/.config/containers/containers.conf` に `volumes = ["/proc:/proc"]`、`/etc/containers/containers.conf` に `ipcns`・`utsns`・
+  `cgroupns = "host"` を持つ。Runner はこれらを Podman の既定に任せていたので、ジョブとサービスのコンテナが Runner の /proc
+  （Runner・他のジョブ・サービスのすべてのプロセス）を見られ、Runner の IPC・UTS の namespace を共有した。決定 5 の「ジョブの境界」の欠陥。
+  レビュー（ci-runner-security-reviewer）で、containers.conf は他にも `env`・`env_host`・`devices`・`default_sysctls`・`annotations`・
+  `mounts.conf`・OCI hooks でジョブを広げられることが分かった。
+- **決定**:
+  1. Podman は **Runner 自身の containers.conf だけ**を読む。`<work_dir>/runner/podman/containers.conf` を起動のたびに書き直し
+     （閉じた値: `volumes`・`devices`・`default_sysctls`・`annotations` は空、`env_host`・`http_proxy`・`init` は false、namespace は
+     private、`shm_size = "64m"`、ホストの名前を `/etc/hosts` に入れない、空の `mounts.conf` と空の OCI hooks の場所）、すべての
+     Podman の呼び出しに `CONTAINERS_CONF` で渡す。これがあると Podman 5.3 はシステム・利用者の containers.conf も drop-in も読まない
+     （試験環境で確かめた）。Podman の呼び出しの環境は `PATH` と `CONTAINERS_CONF` だけ（従来から環境を消している）。
+  2. 各コンテナにもフラグで同じことを付ける: `--pid/--ipc/--uts/--cgroupns=private`・`--env-host=false`・`--http-proxy=false`・
+     `--init=false`・`--shm-size=64m`。ポッドは `--share=net`（ループバックだけを共有。infra の ipc / uts は共有しない）。
+  3. **ジョブを取る前に毎回**（と起動のとき・`check`）確かめのコンテナを作って `podman inspect` を読み、マウント・バインド・デバイス・
+     能力・特権・SecurityOpt・sysctl・namespace・user namespace・`/dev/shm`・注釈・想定外の環境変数のどれかが違えば FG-CI-0015 で
+     ジョブを取らない。containers.conf の `volumes` は**フラグで外せない**（ジョブ自身の `--volume` があっても足され、`podman inspect`
+     には出ない）ので、確かめのコンテナには `--volume` を付けない。
+- **選ばなかったもの**: `--userns=private`（rootless では uid の対応の指定が要る）・`--userns=auto`（入れ子の試験環境で
+  `gid_map` を書けない）— rootless Podman の user namespace（Runner の利用者の subuid）のまま。`--no-hosts` — `/etc/hosts` の無い
+  イメージ（ci/rust・ci/postgres）で `localhost` が引けなくなる（代わりに `base_hosts_file = "none"`・`host_containers_internal_ip = "none"`）。
+  `CONTAINERS_CONF_OVERRIDE` — 他の containers.conf の上に重ねるだけで、Runner の知らないキーが残る。確かめのコンテナを起動して
+  `/proc` を読む — 起動できるイメージが要る。
+- **既存の Runner への影響**: ホストの containers.conf（`[engine]` を含む）は Runner のジョブに効かなくなる（`cgroup_manager`・`runtime`
+  などを変えていたホストでは Podman の既定に戻る）。`storage.conf`・`registries.conf` は従来どおり。ジョブとサービスは同じポッドでも
+  IPC（共有メモリ）を共有しない。`/etc/hosts` にホストの名前・IP・`host.containers.internal` が入らない。ジョブを取る前に毎回 Podman を
+  4 回呼ぶ（約 1 秒）。
+- runbook `ci-runner`（「ジョブの切り離し」）、FG-CI-0015 JobIsolationUnsafe（新規、alert）。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。
 - C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
+- 2026-11-12: FG-CI-0015 JobIsolationUnsafe（新規、alert。runbook `ci-runner` の「ジョブの切り離し」）。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

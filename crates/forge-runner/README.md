@@ -17,12 +17,13 @@ it (`forge-hosting/tests/dependency_direction.rs`).
 
 | Step | Rule | Failure |
 |---|---|---|
+| start-up and before every claim (`isolation.rs`) | Podman reads only the runner's own `<work_dir>/runner/podman/containers.conf` (`CONTAINERS_CONF` on every call, rewritten at start; empty `mounts.conf` and hooks). `podman create --name=forge-isolation-probe-<pid>` like a service (no `--volume`) from `<work_dir>/runner/empty-rootfs` (`--rootfs`, never started, no pull), `podman inspect`, `podman rm`: mounts, binds, devices, caps, sysctls, annotations, namespaces, shm and env names must be what the flags ask (ADR-0029 amendment 2026-11-12). Also in `check`; stale probes removed at start | FG-CI-0015 (`reason=unexpected_config` with `key`, `deviations` / `probe_failed` with `step` / `conf_unwritable`); the runner takes no job |
 | claim | SHA 40 / 64 lower-case hex, a timeout, a `definition_hash` | FG-CI-0008 `claim_invalid` / `no_hash` |
 | job directory | `<work_dir>/job/{work,script}` wiped, then created empty | FG-CI-0007 `workspace_unusable` |
 | git | `init`; fetch of `refs/pipelines/<id>/head` from `/api/v1/runner/jobs/{job}/repo.git` (token only in git's environment configuration, `http.extraHeader`); the fetched commit must be the SHA | FG-CI-0009 (`step`, `reason`) |
 | definition | `.forge-ci.yml` at the SHA: sha256 = `definition_hash`, parses (`LintContext::pinned_by_server`), holds the job with the claimed image and timeout | FG-CI-0008 — no container starts |
-| container | `podman run --rm --network=none --read-only --cap-drop=all --security-opt=no-new-privileges … --entrypoint=/bin/sh -- <image@sha256> -eu /forge/script.sh`; the script is a read-only file, never argv | 125: FG-CI-0007; timeout: kill + rm, FG-CI-0010; other exit: `failed` with the code |
-| services (C5s) | a job with `services`: `podman pod create --name=forge-job-<job>-<attempt> --network=none --memory=<m> --memory-swap=<m>` (the pod as a whole within one job's memory; pids stay per container — Podman has no pod pids limit; the pause image is built locally, never pulled); each service `podman create --pod=… --name=…-svc-<name>` with the job's confinement and limits (plus its `user`, `tmpfs`, `env`), then `podman start` (detached); the job container joins the pod (`--pod=`, loopback only). The runner does not wait for readiness. A service image outside `image_registries`: FG-CI-0011 with `service` | FG-CI-0014 (`reason=pod_create` / `service_start`, `service`, `step`) |
+| container | `podman run --rm --network=none --pid=private --ipc=private --uts=private --cgroupns=private --env-host=false --http-proxy=false --init=false --shm-size=64m --read-only --cap-drop=all --security-opt=no-new-privileges … --entrypoint=/bin/sh -- <image@sha256> -eu /forge/script.sh`; the script is a read-only file, never argv | 125: FG-CI-0007; timeout: kill + rm, FG-CI-0010; other exit: `failed` with the code |
+| services (C5s) | a job with `services`: `podman pod create --name=forge-job-<job>-<attempt> --network=none --share=net --memory=<m> --memory-swap=<m>` (only the loopback network namespace is shared) (the pod as a whole within one job's memory; pids stay per container — Podman has no pod pids limit; the pause image is built locally, never pulled); each service `podman create --pod=… --name=…-svc-<name>` with the job's confinement and limits (plus its `user`, `tmpfs`, `env`), then `podman start` (detached); the job container joins the pod (`--pod=`, loopback only). The runner does not wait for readiness. A service image outside `image_registries`: FG-CI-0011 with `service` | FG-CI-0014 (`reason=pod_create` / `service_start`, `service`, `step`) |
 | failed job | the last 50 lines of each service's log (`podman logs --tail=50`) appended as `[service <name>] …`, masked like the job's output | unreadable: one line and `forge.runner.service_log_unread` (warn) |
 | always | `podman rm --force --ignore`, then `podman pod rm --force --ignore --time=0` for a job with services (retried once; still there: FG-CI-0007 `reason=pod_remove` and the runner stops like `workspace_dirty`), the job directory removed (through `podman unshare` when needed) | left over: FG-CI-0007 `workspace_dirty`, the runner stops |
 
@@ -36,14 +37,15 @@ deadline, stop flag); the tests use a fake one and assert the argv.
 
 `config::RunnerConfig` (TOML + `FORGE_RUNNER_TOKEN`), `api::RunnerApi` /
 `HttpApi`, `job::Executor`, `runner::Runner` (`run_once`, `run_forever`),
-`git::GitPlan`, `podman::PodmanPlan`, `process::{Cmd, ProcessRunner,
+`git::GitPlan`, `isolation::check`, `podman::PodmanPlan`, `process::{Cmd, ProcessRunner,
 SystemRunner}`, `workspace::Workspace`, `logsink::LogSink`.
 
 ## Error codes owned
 
 FG-CI-0007 ContainerStartFailed, FG-CI-0008 JobDefinitionMismatch, FG-CI-0009
 JobFetchFailed (warn), FG-CI-0010 JobTimedOut (info), FG-CI-0014
-ServiceStartFailed (warn) — runbook `ci-runner`.
+ServiceStartFailed (warn), FG-CI-0015 JobIsolationUnsafe (alert) — runbook
+`ci-runner`.
 Configuration problems are FG-SYS-0002 (`config_key`, `reason`).
 
 ## Tests

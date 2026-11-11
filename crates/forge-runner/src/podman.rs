@@ -2,7 +2,9 @@
 //! rootless container per job attempt, argv only.
 //!
 //! ```text
-//! podman create --name=forge-job-<job>-<attempt> --network=none --read-only
+//! podman create --name=forge-job-<job>-<attempt> --network=none
+//!   --pid=private --ipc=private --uts=private --cgroupns=private
+//!   --env-host=false --http-proxy=false --init=false --shm-size=64m --read-only
 //!   --tmpfs=/tmp:rw,nosuid,nodev,size=<tmpfs> --security-opt=no-new-privileges
 //!   --cap-drop=all --pids-limit=<n> --memory=<m> --memory-swap=<m>
 //!   --ulimit=fsize=<bytes>:<bytes> --ulimit=nofile=<n>:<n> --pull=missing
@@ -35,6 +37,19 @@
 //!   open files and processes; the work directory's total is bounded by
 //!   the filesystem's quota (runbook `ci-runner`) and checked after the job
 //!   (`work_dir_max_bytes`, FG-CI-0012).
+//! - Podman reads only the runner's own containers.conf
+//!   (`CONTAINERS_CONF`, [`crate::isolation::containers_conf`]): no
+//!   system or user containers.conf, no drop-in (ADR-0029 amendment
+//!   2026-11-12: the podman/stable image's `volumes = ["/proc:/proc"]` and
+//!   host IPC/UTS reached every job). Every Podman call has a cleared
+//!   environment (`PATH` and `CONTAINERS_CONF` only, [`crate::process`]).
+//! - Its own PID, IPC, UTS and cgroup namespaces, no host environment, no
+//!   proxy variables, no init, a fixed `/dev/shm`: set on every container
+//!   by flag as well. The user namespace is rootless Podman's own (the
+//!   runner user's subordinate ids); `--userns=private` needs explicit
+//!   mappings and `auto` fails nested, so it is not set. The runner checks
+//!   what a container really gets before every claim
+//!   ([`PodmanPlan::isolation_probe`], FG-CI-0015).
 //! - The job's token is never in the container's environment.
 //! - A timeout or a cancel: `podman kill`; then always `podman rm
 //!   --force` (the container is removed whatever happened).
@@ -42,7 +57,7 @@
 //! A job with `services` (plan 14 C5s, ADR-0029 amendment) runs in a pod:
 //!
 //! ```text
-//! podman pod create --name=forge-job-<job>-<attempt> --network=none
+//! podman pod create --name=forge-job-<job>-<attempt> --network=none --share=net
 //! podman create --pod=<pod> --name=forge-job-<job>-<attempt>-svc-<name> <the same
 //!   confinement and limits> [--user=<user>] [--tmpfs=<path>:…,mode=1777]…
 //!   [--env=K=V]… -- <service image@sha256:…>
@@ -52,7 +67,9 @@
 //! ```
 //!
 //! The pod's network namespace holds only a loopback: services and the job
-//! reach each other on `127.0.0.1`, and nothing else. Pod and container
+//! reach each other on `127.0.0.1`, and nothing else. It is the only
+//! namespace the pod shares (`--share=net`): each container keeps its own
+//! PID, IPC, UTS and cgroup namespaces. Pod and container
 //! names are separate in Podman, so the pod shares the job container's
 //! name.
 
@@ -62,6 +79,14 @@ use crate::process::Cmd;
 
 /// The script's path inside the container.
 pub const SCRIPT_IN_CONTAINER: &str = "/forge/script.sh";
+
+/// The isolation probe's command: never run (the probe is only created).
+pub const PROBE_COMMAND: &str = "/forge-isolation-probe";
+
+/// `--shm-size` of every container (Podman's own default, made explicit).
+pub const SHM_SIZE: &str = "64m";
+/// [`SHM_SIZE`] in bytes (what `podman inspect` reports).
+pub const SHM_SIZE_BYTES: u64 = 64 << 20;
 
 /// Container limits (runner configuration).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,6 +175,10 @@ pub struct PodmanPlan {
     /// The registry prefixes an image must start with (none: every image
     /// is refused).
     registries: Vec<String>,
+    /// The runner's own containers.conf (`CONTAINERS_CONF` of every call).
+    conf: Option<PathBuf>,
+    /// The isolation probe's empty root directory (`None`: no probe).
+    probe_rootfs: Option<PathBuf>,
 }
 
 /// What one container runs.
@@ -186,7 +215,30 @@ impl PodmanPlan {
             podman,
             limits,
             registries: Vec::new(),
+            conf: None,
+            probe_rootfs: None,
         }
+    }
+
+    /// Every Podman call reads only this containers.conf
+    /// (`CONTAINERS_CONF`; [`crate::isolation::write_containers_conf`]).
+    #[must_use]
+    pub fn with_containers_conf(mut self, conf: PathBuf) -> Self {
+        self.conf = Some(conf);
+        self
+    }
+
+    /// The isolation probe's empty root directory: with it,
+    /// [`crate::job::Executor::check_isolation`] probes; without it (unit
+    /// tests of the job) it does nothing.
+    #[must_use]
+    pub fn with_probe_rootfs(mut self, rootfs: PathBuf) -> Self {
+        self.probe_rootfs = Some(rootfs);
+        self
+    }
+
+    pub fn probe_rootfs(&self) -> Option<&Path> {
+        self.probe_rootfs.as_deref()
     }
 
     /// Allow images under these registry prefixes (the runner's
@@ -208,7 +260,11 @@ impl PodmanPlan {
     }
 
     fn cmd(&self) -> Cmd {
-        Cmd::new(self.podman.as_os_str())
+        let cmd = Cmd::new(self.podman.as_os_str());
+        match &self.conf {
+            Some(conf) => cmd.env("CONTAINERS_CONF", conf.as_os_str()),
+            None => cmd,
+        }
     }
 
     /// `podman create …` (module docs; its stdout is the container id).
@@ -244,13 +300,23 @@ impl PodmanPlan {
     }
 
     /// The flags every container of a job gets (the job's and its
-    /// services'): a read-only root with a bounded `/tmp`, no capabilities,
-    /// no new privileges, the same memory, process, file-size and open-file
-    /// limits.
+    /// services'): its own PID, IPC, UTS and cgroup namespaces, no host
+    /// environment or proxy variables, no init, a [`SHM_SIZE`] `/dev/shm`
+    /// (explicit: a containers.conf may say otherwise), a read-only root
+    /// with a bounded `/tmp`, no capabilities, no new privileges, the same
+    /// memory, process, file-size and open-file limits.
     fn confined(&self, cmd: Cmd) -> Cmd {
         // The configuration checked the size; 4 GiB if it did not.
         let fsize = size_bytes(&self.limits.file_size).unwrap_or(4 << 30);
-        cmd.arg("--read-only")
+        cmd.arg("--pid=private")
+            .arg("--ipc=private")
+            .arg("--uts=private")
+            .arg("--cgroupns=private")
+            .arg("--env-host=false")
+            .arg("--http-proxy=false")
+            .arg("--init=false")
+            .arg(format!("--shm-size={SHM_SIZE}"))
+            .arg("--read-only")
             .arg(format!(
                 "--tmpfs=/tmp:rw,nosuid,nodev,size={}",
                 self.limits.tmpfs
@@ -266,9 +332,12 @@ impl PodmanPlan {
             .arg("--pull=missing")
     }
 
-    /// `podman pod create --name=<pod> --network=none`: the job's pod when
-    /// it has services. Its containers share one network namespace that
-    /// holds only a loopback (ADR-0029 amendment).
+    /// `podman pod create --name=<pod> --network=none --share=net`: the
+    /// job's pod when it has services. Its containers share one network
+    /// namespace that holds only a loopback (ADR-0029 amendment), and
+    /// nothing else: Podman's default `--share` adds the infra container's
+    /// IPC and UTS namespaces, which containers.conf may set to the
+    /// runner's own (amendment 2026-11-12).
     ///
     /// The pod's cgroup gets the job's memory limit (without extra swap):
     /// each container keeps its own limits, and the pod as a whole — job
@@ -286,8 +355,55 @@ impl PodmanPlan {
             .arg("create")
             .arg(format!("--name={pod}"))
             .arg("--network=none")
+            .arg("--share=net")
             .arg(format!("--memory={}", self.limits.memory))
             .arg(format!("--memory-swap={}", self.limits.memory))
+            .captured()
+    }
+
+    /// `podman create --name=<probe> --network=none <confined> --rootfs --
+    /// <empty dir> /forge-isolation-probe`: a container made like a
+    /// service (no `--volume` of its own), never started, from an empty
+    /// directory instead of an image (no pull). What `podman inspect`
+    /// shows of it ([`PodmanPlan::probe_inspect`]) beyond the runner's own
+    /// flags came from a containers.conf: e.g. the podman/stable image's
+    /// `/proc:/proc`, which gives a job the runner's processes and is
+    /// added even next to a job's own `--volume` (Podman 5.3: `podman
+    /// inspect` then hides it, so the probe has none). The runner refuses
+    /// to claim a job when there is any (FG-CI-0015).
+    pub fn isolation_probe(&self, name: &str, rootfs: &Path) -> Cmd {
+        self.confined(
+            self.cmd()
+                .arg("create")
+                .arg(format!("--name={name}"))
+                .arg("--network=none"),
+        )
+        .arg("--rootfs")
+        .arg("--")
+        .arg(rootfs.as_os_str())
+        .arg(PROBE_COMMAND)
+        .captured()
+    }
+
+    /// `podman inspect --type=container -- <name>`: the probe as JSON (an
+    /// array of one object; [`crate::isolation::deviations`] reads it).
+    pub fn probe_inspect(&self, name: &str) -> Cmd {
+        self.cmd()
+            .arg("inspect")
+            .arg("--type=container")
+            .arg("--")
+            .arg(name)
+            .captured()
+    }
+
+    /// `podman ps --all --filter=name=^forge-isolation-probe-
+    /// --format={{.Names}}`: probes a crashed runner left (at startup).
+    pub fn stale_probes(&self) -> Cmd {
+        self.cmd()
+            .arg("ps")
+            .arg("--all")
+            .arg("--filter=name=^forge-isolation-probe-")
+            .arg("--format={{.Names}}")
             .captured()
     }
 
@@ -565,6 +681,7 @@ mod tests {
                 "create",
                 "--name=forge-job-7-1",
                 "--network=none",
+                "--share=net",
                 "--memory=4g",
                 "--memory-swap=4g"
             ]
@@ -645,5 +762,164 @@ mod tests {
             ]
         );
         assert_eq!(service_container_name(7, 1, "db"), "forge-job-7-1-svc-db");
+    }
+
+    /// The namespaces a job and its services get, whatever containers.conf
+    /// sets (the podman/stable image sets `ipcns`/`utsns`/`cgroupns` to
+    /// `host`): each container its own PID, IPC, UTS and cgroup namespace,
+    /// in or out of a pod. A configured default `volumes` entry cannot be
+    /// undone by a flag ([`PodmanPlan::isolation_probe`] refuses it).
+    const PRIVATE_NS: [&str; 8] = [
+        "--pid=private",
+        "--ipc=private",
+        "--uts=private",
+        "--cgroupns=private",
+        "--env-host=false",
+        "--http-proxy=false",
+        "--init=false",
+        "--shm-size=64m",
+    ];
+
+    fn job<'a>(image: &'a str, pod: Option<&'a str>) -> Container<'a> {
+        Container {
+            name: "forge-job-7-1",
+            image,
+            work: Path::new("/r/job/work"),
+            script_dir: Path::new("/r/job/script"),
+            job_id: 7,
+            pipeline_id: 3,
+            project_id: 2,
+            sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            pod,
+        }
+    }
+
+    #[test]
+    fn every_container_of_a_job_gets_private_namespaces_before_the_separator() {
+        let image = format!("registry.internal/rust@sha256:{}", digest());
+        let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+        let alone = plan.create(&job(&image, None)).argv();
+        let in_pod = plan.create(&job(&image, Some("forge-job-7-1"))).argv();
+        let service = plan
+            .service_create(&ServiceContainer {
+                pod: "forge-job-7-1",
+                name: "forge-job-7-1-svc-db",
+                image: &image,
+                env: &[],
+                user: None,
+                tmpfs: &[],
+            })
+            .argv();
+        for argv in [&alone, &in_pod, &service] {
+            let dash = argv.iter().position(|a| a == "--").expect("--");
+            for flag in PRIVATE_NS {
+                let at = argv.iter().position(|a| a == flag);
+                assert!(at.is_some_and(|i| i < dash), "{flag}: {argv:?}");
+            }
+            for host in ["--pid=host", "--ipc=host", "--uts=host", "--userns=host"] {
+                assert!(argv.iter().all(|a| a != host), "{host}: {argv:?}");
+            }
+        }
+    }
+
+    /// The pod shares only its loopback network namespace: a pod's default
+    /// `--share` (ipc, uts) would put the job and its services in the
+    /// infra container's namespaces, which containers.conf may set to the
+    /// runner's own (`ipcns = "host"`).
+    #[test]
+    fn a_pod_shares_only_its_network_namespace() {
+        let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+        let argv = plan.pod_create("forge-job-7-1").argv();
+        assert!(argv.iter().any(|a| a == "--share=net"), "{argv:?}");
+        assert_eq!(
+            argv.iter().filter(|a| a.starts_with("--share")).count(),
+            1,
+            "{argv:?}"
+        );
+    }
+
+    /// The isolation probe is made like a service (the same confinement,
+    /// no `--volume` of its own, which would hide the configured ones from
+    /// `podman inspect`), from an empty directory after `--`.
+    #[test]
+    fn the_isolation_probe_is_a_service_like_container_without_volumes() {
+        let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+        let argv = plan
+            .isolation_probe(
+                "forge-isolation-probe-42",
+                Path::new("/r/runner/empty-rootfs"),
+            )
+            .argv();
+        let dash = argv.iter().position(|a| a == "--").expect("--");
+        assert_eq!(argv[0], "create");
+        assert_eq!(&argv[dash + 1..], ["/r/runner/empty-rootfs", PROBE_COMMAND]);
+        for flag in PRIVATE_NS.iter().copied().chain([
+            "--name=forge-isolation-probe-42",
+            "--network=none",
+            "--read-only",
+            "--cap-drop=all",
+            "--rootfs",
+        ]) {
+            let at = argv.iter().position(|a| a == flag);
+            assert!(at.is_some_and(|i| i < dash), "{flag}: {argv:?}");
+        }
+        assert!(
+            argv.iter()
+                .all(|a| !a.starts_with("--volume") && !a.starts_with("--mount")),
+            "{argv:?}"
+        );
+        assert_eq!(
+            plan.probe_inspect("forge-isolation-probe-42").argv(),
+            [
+                "inspect",
+                "--type=container",
+                "--",
+                "forge-isolation-probe-42"
+            ]
+        );
+        assert_eq!(
+            plan.stale_probes().argv(),
+            [
+                "ps",
+                "--all",
+                "--filter=name=^forge-isolation-probe-",
+                "--format={{.Names}}"
+            ]
+        );
+    }
+
+    /// Review (ADR-0029 amendment 2026-11-12): with the runner's own
+    /// containers.conf every Podman call carries it as `CONTAINERS_CONF`
+    /// and nothing else (the process wrapper clears the rest); without one
+    /// (unit tests) no variable at all.
+    #[test]
+    fn every_podman_call_reads_only_the_runners_containers_conf() {
+        let conf = PathBuf::from("/r/runner/podman/containers.conf");
+        let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default())
+            .with_containers_conf(conf.clone());
+        let image = format!("registry.internal/rust@sha256:{}", digest());
+        for cmd in [
+            plan.create(&job(&image, None)),
+            plan.pod_create("forge-job-7-1"),
+            plan.start("forge-job-7-1"),
+            plan.remove("forge-job-7-1"),
+            plan.rootless(),
+            plan.stale(),
+            plan.isolation_probe("forge-isolation-probe-1", Path::new("/e")),
+            plan.probe_inspect("forge-isolation-probe-1"),
+        ] {
+            assert_eq!(
+                cmd.env,
+                [("CONTAINERS_CONF".to_owned(), conf.clone().into_os_string())],
+                "{cmd:?}"
+            );
+        }
+        let bare = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+        assert!(bare.create(&job(&image, None)).env.is_empty());
+        assert!(bare.probe_rootfs().is_none());
+        assert_eq!(
+            bare.with_probe_rootfs(PathBuf::from("/e")).probe_rootfs(),
+            Some(Path::new("/e"))
+        );
     }
 }

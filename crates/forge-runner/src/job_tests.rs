@@ -272,7 +272,10 @@ impl ProcessRunner for Fake {
                 | Podman::Litter
                 | Podman::NeverStarted
                 | Podman::UntilStopped => {
-                    *self.work.lock().unwrap() = Some(work_mount(cmd));
+                    // The isolation probe has no work directory.
+                    if !cmd.argv().iter().any(|a| a == "--rootfs") {
+                        *self.work.lock().unwrap() = Some(work_mount(cmd));
+                    }
                     ok(b"0123abcd\n".to_vec())
                 }
             },
@@ -727,10 +730,16 @@ fn a_real_container_runs_without_network_and_is_removed() {
     std::fs::create_dir_all(&script).expect("script");
     std::fs::write(
         script.join("script.sh"),
-        "touch /workspace/ok\n! wget -q -T 3 http://example.invalid/ 2>/dev/null\n! touch /etc/x 2>/dev/null\n",
+        "touch /workspace/ok\n! wget -q -T 3 http://example.invalid/ 2>/dev/null\n! touch /etc/x 2>/dev/null\n\
+         [ \"$(ls /proc | grep -cE '^[0-9]+$')\" -lt 20 ]\n! grep -q host.containers.internal /etc/hosts\n",
     )
     .expect("script");
-    let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+    // The runner's own containers.conf, as `forge-runner run` uses it; the
+    // script checks its /proc holds only its own processes (ADR-0029
+    // amendment 2026-11-12).
+    let conf = crate::isolation::write_containers_conf(&dir.path().join("podman")).expect("conf");
+    let plan =
+        PodmanPlan::new(PathBuf::from("podman"), Limits::default()).with_containers_conf(conf);
     let create = plan.create(&crate::podman::Container {
         name: "forge-job-test-1",
         image: &image,
@@ -1085,6 +1094,7 @@ fn a_job_with_services_runs_in_a_pod_without_network() {
             "create",
             "--name=forge-job-7-1",
             "--network=none",
+            "--share=net",
             "--memory=4g",
             "--memory-swap=4g"
         ]
@@ -1302,10 +1312,13 @@ fn a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks() {
          PGPASSWORD=test psql -h 127.0.0.1 -U postgres -tAc 'select 40 + 2' > /workspace/answer\n\
          ! getent hosts registry\n\
          ! pg_isready -q -t 3 -h 192.0.2.1\n\
-         [ \"$(awk 'NR > 2 { print $1 }' /proc/net/dev)\" = lo: ]\n",
+         [ \"$(awk 'NR > 2 { print $1 }' /proc/net/dev)\" = lo: ]\n\
+         [ \"$(ls /proc | grep -cE '^[0-9]+$')\" -lt 20 ]\n",
     )
     .expect("script");
-    let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+    let conf = crate::isolation::write_containers_conf(&dir.path().join("podman")).expect("conf");
+    let plan =
+        PodmanPlan::new(PathBuf::from("podman"), Limits::default()).with_containers_conf(conf);
     let run = |cmd: &Cmd| {
         SystemRunner
             .run(cmd, Duration::from_secs(300), &|| false, &mut |_| {})
@@ -1526,4 +1539,37 @@ fn a_service_log_keeps_its_tail_and_a_missing_container_is_quiet() {
     run(&s, &claim(8, "fgj_8_secret", &def), &forge);
     let logs = forge.logs.lock().unwrap().join("");
     assert!(!logs.contains("could not be read"), "{logs}");
+}
+
+/// Review MEDIUM (ADR-0029 amendment 2026-11-12): the isolation probe runs
+/// before every claim; a probe that fails stops the runner before it
+/// claims anything (FG-CI-0015).
+#[test]
+fn an_unverified_isolation_stops_the_runner_before_any_claim() {
+    let def = definition("make");
+    let fake = Fake::new(&def, Podman::Exit(0));
+    let mut s = setup(&fake);
+    s.exec.podman = s
+        .exec
+        .podman
+        .clone()
+        .with_probe_rootfs(s.root.join("empty-rootfs"));
+    let forge = Arc::new(Forge::default());
+    forge
+        .claims
+        .lock()
+        .unwrap()
+        .push(claim(7, "fgj_7_secret", &def));
+    let runner = Runner {
+        api: Arc::clone(&forge) as Arc<dyn RunnerApi>,
+        exec: s.exec,
+        heartbeat_every: Duration::from_secs(30),
+        shutdown: Arc::new(AtomicBool::new(false)),
+    };
+    // The fake's `inspect` prints a container state, not a probe's JSON.
+    let err = runner.run_forever().expect_err("the runner stops");
+    assert_eq!(err.code(), ErrorCode::JobIsolationUnsafe);
+    assert!(has_context(&err, "reason", "probe_failed"), "{err:?}");
+    assert_eq!(forge.claims.lock().unwrap().len(), 1, "nothing was claimed");
+    assert_eq!(podman_order(&fake), ["rm", "create", "inspect", "rm"]);
 }

@@ -627,6 +627,25 @@ impl Executor {
     /// and pods were removed; a Podman failure is `FG-CI-0007
     /// reason=stale_containers` (the runner does not start).
     pub fn remove_stale_containers(&self) -> Result<usize, ForgeError> {
+        self.remove_stale_job_containers()
+    }
+
+    /// The isolation probe ([`crate::isolation::check`], FG-CI-0015) when
+    /// the plan has a probe directory ([`PodmanPlan::with_probe_rootfs`]);
+    /// nothing otherwise (unit tests of the job).
+    pub fn check_isolation(&self) -> Result<(), ForgeError> {
+        match self.podman.probe_rootfs() {
+            Some(rootfs) => crate::isolation::check(
+                self.proc.as_ref(),
+                &self.podman,
+                &crate::isolation::probe_name(std::process::id()),
+                rootfs,
+            ),
+            None => Ok(()),
+        }
+    }
+
+    fn remove_stale_job_containers(&self) -> Result<usize, ForgeError> {
         let failed = |ran: Option<Ran>| {
             let e = start_failed("stale_containers");
             match ran {

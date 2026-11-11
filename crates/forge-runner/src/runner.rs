@@ -201,11 +201,15 @@ impl Runner {
     }
 
     /// Claim and run jobs until [`Runner::shutdown`] (a running job is
-    /// stopped; checked again between claims) or the job directory could
-    /// not be cleaned (then an error: a host problem).
+    /// stopped; checked again between claims), the job directory could
+    /// not be cleaned, or a job's container would not be isolated (then an
+    /// error: a host problem).
     pub fn run_forever(&self) -> Result<(), ForgeError> {
         let shutdown = self.shutdown.as_ref();
         while !shutdown.load(Ordering::SeqCst) {
+            // Before every claim (ADR-0029 amendment 2026-11-12): what
+            // Podman makes of a job's container now, not only at start.
+            self.exec.check_isolation()?;
             match self.run_once(CLAIM_WAIT_S) {
                 Ok(Handled::Idle) => {}
                 Ok(Handled::Ran { outcome, .. }) if outcome.workspace_dirty => {

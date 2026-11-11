@@ -29,6 +29,8 @@ services:
       - ./.local/config.toml:/etc/forge-runner/config.toml:ro
       - ./.local/token:/etc/forge-runner/token:ro
       - ./registries.conf:/etc/containers/registries.conf.d/50-test-registry.conf:ro
+      # Job containers get their own /proc and IPC/UTS namespaces (containers.conf).
+      - ./containers.conf:/home/podman/.config/containers/containers.conf.d/50-forge-job.conf:ro
       - podman-store:/home/podman/.local/share/containers
       # The job work directory, on disk: a Rust test build needs about 6.2 GB
       # (ops/ci-image/README.md), which a RAM tmpfs inside mem_limit cannot hold.
