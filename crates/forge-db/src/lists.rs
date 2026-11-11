@@ -77,22 +77,44 @@ macro_rules! page_scan {
     };
 }
 
+/// The columns of `PROJECT_ACCESS_SQL` for every row of `page` (with
+/// `agg`, from [`page_scan!`]), in id order.
+macro_rules! project_page_select {
+    () => {
+        "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
+           a.steps, a.truncs, a.roles, \
+           n.id AS namespace_id, n.full_path, \
+           (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
+           p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state, \
+           to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
+         FROM page pg JOIN forge.projects p ON p.id = pg.id \
+         LEFT JOIN agg a ON a.anchor = p.id \
+         LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id \
+         LEFT JOIN forge.repositories r ON r.project_id = p.id \
+         ORDER BY p.id"
+    };
+}
+
 /// `$1` the last id of the previous page (0 = from the start), `$2` the
 /// viewer, `$3` the chain cap, `$4` the most rows: the columns of
 /// `PROJECT_ACCESS_SQL`, one row per scanned project, in id order.
 pub(crate) const PROJECT_PAGE_SQL: &str = concat!(
     page_scan!("forge.projects", "project"),
-    "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
-       a.steps, a.truncs, a.roles, \
-       n.id AS namespace_id, n.full_path, \
-       (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
-       p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state, \
-       to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
-     FROM page pg JOIN forge.projects p ON p.id = pg.id \
-     LEFT JOIN agg a ON a.anchor = p.id \
-     LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id \
-     LEFT JOIN forge.repositories r ON r.project_id = p.id \
-     ORDER BY p.id"
+    project_page_select!()
+);
+
+/// As [`PROJECT_PAGE_SQL`], scanning only the projects `$5` created
+/// (`projects.created_by = $5`, plan 15 MR5 `?created_by=me`): the page
+/// walks the partial index `projects_created_by (created_by, id)` in id
+/// order instead of every project. It narrows the scan only: every row is
+/// still decided with `authorize()` in forge-web.
+pub(crate) const PROJECT_CREATED_PAGE_SQL: &str = concat!(
+    page_scan!(
+        @page ["page AS (SELECT id FROM forge.projects \
+                 WHERE created_by = $5 AND id > $1 ORDER BY id LIMIT $4), "],
+        "project"
+    ),
+    project_page_select!()
 );
 
 /// The repository search (M3 X3, `GET /api/v1/repositories?q=`): `$1` the
@@ -300,22 +322,34 @@ fn rows_param(max_rows: u32) -> Result<i64, ForgeError> {
 
 /// The projects after `after`, in id order, at most `max_rows`, with
 /// `viewer`'s access facts — every project, visible or not: one
-/// [`PROJECT_PAGE_SQL`] round trip on the read pool. Each row is read as
-/// `resolve::load_project` reads its row (the same `FG-DB-0021` reasons).
+/// [`PROJECT_PAGE_SQL`] round trip on the read pool, or, with
+/// `created_by`, one [`PROJECT_CREATED_PAGE_SQL`] round trip over only the
+/// projects that user created. Each row is read as `resolve::load_project`
+/// reads its row (the same `FG-DB-0021` reasons).
 pub async fn project_page(
     db: &Db,
     after: Option<ProjectId>,
     viewer: UserId,
+    created_by: Option<UserId>,
     max_rows: u32,
 ) -> Result<Vec<ProjectRecord>, ForgeError> {
     let limit = rows_param(max_rows)?;
     let rows: Vec<ProjectAccessRow> = db
         .within("projects.page", async {
-            sqlx::query_as(PROJECT_PAGE_SQL)
+            let sql = match created_by {
+                None => PROJECT_PAGE_SQL,
+                Some(_) => PROJECT_CREATED_PAGE_SQL,
+            };
+            let query = sqlx::query_as(sql)
                 .bind(after_param(after.map(ProjectId::get)))
                 .bind(viewer.get())
                 .bind(CAP)
-                .bind(limit)
+                .bind(limit);
+            let query = match created_by {
+                None => query,
+                Some(creator) => query.bind(creator.get()),
+            };
+            query
                 .fetch_all(db.pool().executor())
                 .await
                 .map_err(|e| read_query_error("projects.page", e))
@@ -389,9 +423,10 @@ impl forge_core::ProjectPageLoader for Db {
         &'a self,
         after: Option<ProjectId>,
         viewer: UserId,
+        created_by: Option<UserId>,
         max_rows: u32,
     ) -> LookupFuture<'a, Vec<ProjectRecord>> {
-        Box::pin(project_page(self, after, viewer, max_rows))
+        Box::pin(project_page(self, after, viewer, created_by, max_rows))
     }
 }
 

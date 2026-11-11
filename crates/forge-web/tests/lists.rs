@@ -49,10 +49,11 @@ impl forge_core::ProjectPageLoader for Counting {
         &'a self,
         after: Option<ProjectId>,
         viewer: UserId,
+        created_by: Option<UserId>,
         max_rows: u32,
     ) -> LookupFuture<'a, Vec<ProjectRecord>> {
         self.pages.fetch_add(1, Ordering::SeqCst);
-        forge_core::ProjectPageLoader::project_page(&self.db, after, viewer, max_rows)
+        forge_core::ProjectPageLoader::project_page(&self.db, after, viewer, created_by, max_rows)
     }
 }
 
@@ -553,6 +554,7 @@ impl forge_core::ProjectPageLoader for Gated {
         &'a self,
         _: Option<ProjectId>,
         _: UserId,
+        _: Option<UserId>,
         _: u32,
     ) -> LookupFuture<'a, Vec<ProjectRecord>> {
         Box::pin(async move {

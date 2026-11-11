@@ -2,20 +2,21 @@
 // projects page (plan 15 §3.3), so the list, the filter and the three states
 // live in one place. `scope`: `member` — the ones I hold a role in
 // (`?membership=true`); `created` — the ones I created (`?created_by=me`,
-// plan 15 MR 5; projects whose creator was never recorded are not there).
+// plan 15 MR 5; projects whose creator was never recorded are not there,
+// which the list says above itself once it has rows).
 import { useQuery } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useApi } from '../api/context';
-import { projectsQuery } from '../api/lists';
+import { projectsQuery, type ProjectScope } from '../api/lists';
 import controls from '../components/controls.module.css';
 import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
 import { ProjectList } from './Lists';
 import styles from './Lists.module.css';
 
-export type ProjectScope = 'member' | 'created';
+export type MyProjectScope = Exclude<ProjectScope, 'all'>;
 
 /** `onCreate`: the empty state's next step (opens the create dialog). */
 export function MyProjects({
@@ -23,15 +24,13 @@ export function MyProjects({
   scope = 'member',
 }: {
   onCreate: () => void;
-  scope?: ProjectScope;
+  scope?: MyProjectScope;
 }) {
   const { t } = useTranslation();
   const api = useApi();
   const filterId = useId();
   const [filter, setFilter] = useState('');
-  const mine = useQuery(
-    projectsQuery(api, scope === 'created' ? { createdByMe: true } : { membership: true }),
-  );
+  const mine = useQuery(projectsQuery(api, scope));
 
   if (mine.isPending) return <Loading />;
   if (mine.isError) {
@@ -67,6 +66,7 @@ export function MyProjects({
   );
   return (
     <>
+      {scope === 'created' && <p className={styles.hint}>{t('projects.createdHint')}</p>}
       <div className={controls.field}>
         <label htmlFor={filterId} className={controls.label}>
           {t('projects.filter')}

@@ -1,8 +1,12 @@
 // Plan 15 MR 1: the "My work" sidebar and its two new pages.
 import axe from 'axe-core';
-import { act, fireEvent, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { BrowserRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createApiClient } from '../src/api/client';
+import { AppProviders, AppRoutes, createQueryClient } from '../src/App';
+import { createI18n } from '../src/i18n';
 import { LISTED_GROUP, PROJECT, SESSION, apiError, mockServer, page, signedIn } from './mock';
 import { json, renderApp } from './render';
 
@@ -321,8 +325,73 @@ describe('/-/projects', () => {
     expect(screen.getAllByText('読み込んでいます…').length).toBeGreaterThan(0);
     expect(await screen.findByText('あなたが作ったプロジェクトはまだありません。')).toBeTruthy();
     expect(screen.getByText(/参加しているプロジェクトは「参加中」のタブにあります/)).toBeTruthy();
+    // The "no recorded creator" hint belongs to a list with rows only.
+    expect(screen.queryByText(/作った人の記録がない古いプロジェクト/)).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'プロジェクトを作る' })[1] as HTMLElement);
     expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('an unknown ?tab= falls back to "created by me"', async () => {
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch, path: '/-/projects?tab=foo' });
+    await screen.findByText('Forge Web');
+    expect(projectQueries(server)).toEqual([['me', null]]);
+    expect(within(tabs()).getByRole('link', { name: '自分が作成' }).getAttribute('aria-current')).toBe('page');
+    expect(within(tabs()).getByRole('link', { name: '参加中' }).getAttribute('aria-current')).toBeNull();
+  });
+
+  it('browser Back from "参加中" returns to the created view and its query', async () => {
+    const server = mockServer(routes());
+    window.history.replaceState(null, '', '/-/projects');
+    const i18n = await createI18n('ja');
+    const api = createApiClient({ language: () => i18n.language, fetch: server.fetch });
+    const queryClient = createQueryClient();
+    queryClient.setDefaultOptions({ queries: { retry: false } });
+    render(
+      <AppProviders i18n={i18n} api={api} queryClient={queryClient}>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </AppProviders>,
+    );
+    await screen.findByText('Forge Web');
+    fireEvent.click(within(tabs()).getByRole('link', { name: '参加中' }));
+    await waitFor(() => {
+      expect(window.location.search).toBe('?tab=member');
+    });
+    await waitFor(() => {
+      expect(projectQueries(server)).toEqual([
+        ['me', null],
+        [null, 'true'],
+      ]);
+    });
+    window.history.back();
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+    await waitFor(() => {
+      expect(within(tabs()).getByRole('link', { name: '自分が作成' }).getAttribute('aria-current')).toBe('page');
+    });
+    expect(await screen.findByText(/作った人の記録がない古いプロジェクト/)).toBeTruthy();
+    // The created view is the `created_by=me` query again (served from the
+    // cache or refetched — never the membership one).
+    expect(projectQueries(server).every(([c, m]) => (c === 'me' && m === null) || (c === null && m === 'true'))).toBe(true);
+    expect(document.title).toBe('プロジェクト · GitStation');
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('an error on ?tab=member shows user_message + request_id only', async () => {
+    const server = mockServer(
+      routes({
+        'GET /api/v1/projects': () => apiError(500, '一覧を読めませんでした。', 'req-m-1', 'FG-DB-0001'),
+      }),
+    );
+    const { container } = await renderApp({ fetch: server.fetch, path: '/-/projects?tab=member' });
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('一覧を読めませんでした。');
+    expect(screen.getByTestId('request-id').textContent).toBe('req-m-1');
+    expect(container.textContent).not.toContain('FG-DB-0001');
+    expect(projectQueries(server)[0]).toEqual([null, 'true']);
   });
 
   it('the member tab keeps its own empty state', async () => {

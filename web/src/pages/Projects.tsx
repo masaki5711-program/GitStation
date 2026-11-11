@@ -9,7 +9,7 @@ import { Link, useSearchParams } from 'react-router';
 
 import controls from '../components/controls.module.css';
 import { CreateProjectDialog } from '../features/CreateDialogs';
-import { MyProjects, type ProjectScope } from '../features/MyProjects';
+import { MyProjects, type MyProjectScope } from '../features/MyProjects';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import styles from './Home.module.css';
 import tabStyles from './settings/Settings.module.css';
@@ -19,8 +19,8 @@ const BASE = '/-/projects';
 export function ProjectsPage() {
   const { t } = useTranslation();
   const [params] = useSearchParams();
-  const tab: ProjectScope = params.get('tab') === 'member' ? 'member' : 'created';
-  const tabs: { id: ProjectScope; label: string; to: string }[] = [
+  const tab: MyProjectScope = params.get('tab') === 'member' ? 'member' : 'created';
+  const tabs: { id: MyProjectScope; label: string; to: string }[] = [
     { id: 'created', label: t('projects.tabCreated'), to: BASE },
     { id: 'member', label: t('projects.tabMember'), to: `${BASE}?tab=member` },
   ];
@@ -56,7 +56,6 @@ export function ProjectsPage() {
           ))}
         </ul>
       </nav>
-      {tab === 'created' && <p className={tabStyles.hint}>{t('projects.createdHint')}</p>}
       <MyProjects key={tab} scope={tab} onCreate={create} />
       <CreateProjectDialog
         open={creating}

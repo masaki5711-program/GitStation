@@ -9,12 +9,15 @@ use sqlx::Connection;
 use super::*;
 use crate::resolve::load_project;
 
-/// The backfill statement of the migration, verbatim.
+/// The backfill statement of the migration, verbatim (exactly one).
 fn backfill_sql() -> &'static str {
-    include_str!("../../../migrations/20261209143000_project_created_by.sql")
-        .split(';')
-        .find(|s| s.contains("UPDATE forge.projects"))
-        .expect("the backfill statement")
+    let found: Vec<&str> =
+        include_str!("../../../migrations/20261209143000_project_created_by.sql")
+            .split(';')
+            .filter(|s| s.contains("UPDATE forge.projects"))
+            .collect();
+    assert_eq!(found.len(), 1, "exactly one backfill statement");
+    found[0].trim_start()
 }
 
 async fn created_by(su: &mut PgConnection, project: i64) -> Option<i64> {
@@ -124,9 +127,13 @@ async fn the_backfill_resolves_audited_creators_leaves_unknown_null_and_is_idemp
          INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
          request_id, details) VALUES ('system', 'project.created', 'failed', 'project', \
          {none}, 'r-3', '{{\"owner_id\": {bob}}}'); \
+         INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
+         request_id, details) VALUES ('system', 'project.created', 'succeeded', 'project', \
+         {b}, 'r-4', '{{\"owner_id\": {alice}}}'); \
          INSERT INTO forge.projects (id, display_name) OVERRIDING SYSTEM VALUE \
          VALUES ({none}, 'none'), ({ghost}, 'ghost')",
-        bob = bob.user_id.get()
+        bob = bob.user_id.get(),
+        alice = alice.user_id.get()
     ))
     .execute(&mut *tx)
     .await
@@ -138,6 +145,8 @@ async fn the_backfill_resolves_audited_creators_leaves_unknown_null_and_is_idemp
 
     assert_eq!(audited_su(&mut su, backfill_sql()).await, 2, "a and b");
     assert_eq!(created_by(&mut su, a).await, Some(alice.user_id.get()));
+    // b has a second, later project.created row naming alice: the
+    // earliest row decides.
     assert_eq!(created_by(&mut su, b).await, Some(bob.user_id.get()));
     assert_eq!(
         created_by(&mut su, none).await,
@@ -181,5 +190,61 @@ async fn created_by_cannot_change_without_an_audit_row() {
     .await
     .expect_err("unaudited change");
     crate::audited_tests::assert_refused(&err, "projects");
+    t.drop_now().await;
+}
+
+/// `?created_by=me`'s scan (`PROJECT_CREATED_PAGE_SQL`): only the named
+/// creator's projects, in id order, paged by id; and the partial index
+/// `projects_created_by (created_by, id)` can serve it without a sort.
+#[tokio::test]
+async fn the_created_by_page_scans_only_that_creators_projects_by_the_index() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    let a1 = create_ok(&t, &project("a1", alice.namespace_id, alice.user_id)).await;
+    let b1 = create_ok(&t, &project("b1", bob.namespace_id, bob.user_id)).await;
+    let a2 = create_ok(&t, &project("a2", alice.namespace_id, alice.user_id)).await;
+    let ids = |page: Vec<forge_core::ProjectRecord>| -> Vec<ProjectId> {
+        page.into_iter().map(|r| r.id).collect()
+    };
+    let mine = crate::lists::project_page(&t.db, None, alice.user_id, Some(alice.user_id), 10)
+        .await
+        .expect("page");
+    assert_eq!(ids(mine), [a1.project_id, a2.project_id]);
+    let next = crate::lists::project_page(
+        &t.db,
+        Some(a1.project_id),
+        alice.user_id,
+        Some(alice.user_id),
+        10,
+    )
+    .await
+    .expect("next page");
+    assert_eq!(ids(next), [a2.project_id]);
+    let one = crate::lists::project_page(&t.db, None, alice.user_id, Some(alice.user_id), 1)
+        .await
+        .expect("limit");
+    assert_eq!(ids(one), [a1.project_id]);
+    let bobs = crate::lists::project_page(&t.db, None, alice.user_id, Some(bob.user_id), 10)
+        .await
+        .expect("bob's");
+    assert_eq!(ids(bobs), [b1.project_id]);
+
+    let mut su = t.superuser().await;
+    sqlx::raw_sql("SET enable_seqscan = off")
+        .execute(&mut su)
+        .await
+        .expect("set");
+    let plan: Vec<String> = sqlx::query_scalar(&format!(
+        "EXPLAIN SELECT id FROM forge.projects WHERE created_by = {} AND id > 0 \
+         ORDER BY id LIMIT 10",
+        alice.user_id.get()
+    ))
+    .fetch_all(&mut su)
+    .await
+    .expect("explain");
+    let plan = plan.join("\n");
+    assert!(plan.contains("projects_created_by"), "{plan}");
+    assert!(!plan.contains("Sort"), "{plan}");
     t.drop_now().await;
 }

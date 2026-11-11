@@ -701,6 +701,8 @@ async fn project_page(
         lists.projects.project_page(
             after.map(ProjectId::new),
             viewer,
+            // A narrower scan only: show_project still decides every row.
+            filter.created_by_me.then_some(viewer),
             lists.scan_budget.saturating_add(1),
         ),
     )
