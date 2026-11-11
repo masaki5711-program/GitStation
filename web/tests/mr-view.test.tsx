@@ -44,7 +44,7 @@ describe('merge request header and status line', () => {
         ),
     });
     expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('!3');
-    expect(screen.getByText(/Opened by 佐藤 花子/)).toBeTruthy();
+    expect(screen.getByTestId('mr-opened').textContent).toMatch(/^Opened .+ by 佐藤 花子$/);
     expect(screen.getByText(/dev into main/)).toBeTruthy();
     const line = await statusLine();
     expect(line.getAttribute('role')).toBe('status');
