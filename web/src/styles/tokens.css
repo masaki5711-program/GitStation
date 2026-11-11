@@ -94,7 +94,6 @@
   --gs-sidebar-width: 14rem;
   --gs-aside-width: 16rem; /* a page's side panel (project info) */
   --gs-content-max-width: 72rem;
-  --gs-radius-pill: 999px; /* a count badge's rounded ends */
   --gs-badge-size: 1.5rem; /* a count badge's height and least width */
   --gs-badge-size-sm: 1.25rem; /* the same on a collapsed sidebar icon */
   --gs-card-min-width: 13rem; /* a count card in a grid (Home) */
