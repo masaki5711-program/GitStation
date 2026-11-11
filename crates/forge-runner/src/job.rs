@@ -37,7 +37,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use forge_client::forge_ci;
 use forge_core::{telemetry, ObjectId, RequestId};
@@ -120,8 +120,18 @@ struct Started {
     services: Vec<(String, String)>,
 }
 
-/// The most bytes of one service's log tail kept for the job log.
+/// The most bytes of one service's log tail kept for the job log (the
+/// last ones).
 const SERVICE_LOG_BYTES: usize = 64 * 1024;
+
+/// What is left of the job's time (`None`: nothing).
+fn left(deadline: Instant) -> Option<Duration> {
+    Some(deadline.saturating_duration_since(Instant::now())).filter(|d| !d.is_zero())
+}
+
+fn timed_out(timeout_s: u32) -> ForgeError {
+    ForgeError::new(ErrorCode::JobTimedOut).with_context("timeout_s", timeout_s)
+}
 
 fn fetch_failed(step: &'static str, reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::JobFetchFailed)
@@ -218,7 +228,10 @@ impl Executor {
         let name = container_name(job.job_id, job.attempt);
         let mut started = Started::default();
         let ran = self.steps(job, &name, &mut started, stop, &mut sink);
-        if !started.services.is_empty() && !matches!(ran, Ok(ScriptEnd::Exited(0))) {
+        // A failed job gets its services' log tails (not a stopped one: a
+        // cancel or a shutdown has no failure to explain).
+        let failed = matches!(ran, Ok(ScriptEnd::Exited(c)) if c != 0) || ran.is_err();
+        if failed && !started.services.is_empty() {
             self.append_service_logs(&started.services, &mut sink);
         }
         if started.container {
@@ -242,27 +255,8 @@ impl Executor {
                 );
             }
         }
-        if started.pod {
-            // The pod and every container in it (the services, the job's).
-            let removed = self.proc.run(
-                &self.podman.pod_remove(&name),
-                PODMAN_CLEANUP,
-                &|| false,
-                &mut |_| {},
-            );
-            if !removed.as_ref().is_ok_and(Ran::ok) {
-                tracing::warn!(
-                    target: "forge_runner",
-                    event = "forge.runner.pod_remove_failed",
-                    error_code = ErrorCode::ServiceStartFailed.id(),
-                    request_id = %request_id,
-                    job_id = job.job_id,
-                    pod = %name,
-                    "the job's pod could not be confirmed removed"
-                );
-            }
-        }
-        let workspace_dirty = !self.clean_workspace(&request_id, job.job_id);
+        let pod_left = started.pod && !self.remove_pod(&request_id, job.job_id, &name);
+        let workspace_dirty = !self.clean_workspace(&request_id, job.job_id) || pod_left;
         let outcome = match ran {
             Ok(ScriptEnd::Exited(0)) => Outcome {
                 result: JobResult::Succeeded,
@@ -406,13 +400,17 @@ impl Executor {
         )?;
         Workspace::write_script(&dirs, spec.script())
             .map_err(|e| start_failed("workspace_unusable").with_source(e))?;
-        // The pull is part of each create: bounded by the job's timeout.
-        let limit = Duration::from_secs(u64::from(timeout_s));
+        // One deadline for the whole container phase (review): the pulls
+        // (part of each create), the services and the script share the
+        // job's timeout.
+        let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_s));
         // 6a. The pod and its services.
         let pod = if spec.services().is_empty() {
             None
         } else {
-            if let Some(end) = self.start_services(job, name, spec, limit, started, stop, sink)? {
+            if let Some(end) =
+                self.start_services(job, name, spec, (deadline, timeout_s), started, stop, sink)?
+            {
                 return Ok(end);
             }
             Some(name)
@@ -431,6 +429,7 @@ impl Executor {
         });
         sink.line(&format!("running {} in {name}", job.image));
         started.container = true;
+        let limit = left(deadline).ok_or_else(|| timed_out(timeout_s))?;
         let created = self
             .run(&create, limit, stop, sink)
             .map_err(|e| start_failed("spawn_failed").with_source(e))?;
@@ -442,13 +441,10 @@ impl Executor {
                     .with_context("exit_code", code)
                     .with_context("podman_stderr", created.stderr_tail))
             }
-            Exit::TimedOut => {
-                return Err(
-                    ForgeError::new(ErrorCode::JobTimedOut).with_context("timeout_s", timeout_s)
-                )
-            }
+            Exit::TimedOut => return Err(timed_out(timeout_s)),
             Exit::Stopped => return Ok(ScriptEnd::Stopped),
         }
+        let limit = left(deadline).ok_or_else(|| timed_out(timeout_s))?;
         let ran = self
             .run(&self.podman.start(name), limit, stop, sink)
             .map_err(|e| start_failed("spawn_failed").with_source(e))?;
@@ -463,7 +459,7 @@ impl Executor {
             }
             Exit::TimedOut => {
                 self.kill(name);
-                Err(ForgeError::new(ErrorCode::JobTimedOut).with_context("timeout_s", timeout_s))
+                Err(timed_out(timeout_s))
             }
             Exit::Stopped => {
                 self.kill(name);
@@ -474,24 +470,24 @@ impl Executor {
 
     /// The job's pod (`--network=none`) and each service in it, created and
     /// started detached. `Some`: the job was stopped meanwhile. Podman's
-    /// failure is `FG-CI-0014`; the job's timeout bounds each call.
+    /// failure is `FG-CI-0014`; every call gets what is left before the
+    /// job's deadline (`FG-CI-0010` when nothing is).
     #[allow(clippy::too_many_arguments)] // one step of `steps`, its state passed in
     fn start_services(
         &self,
         job: &ClaimedJob,
         pod: &str,
         spec: &forge_ci::Job,
-        limit: Duration,
+        (deadline, timeout_s): (Instant, u32),
         started: &mut Started,
         stop: &AtomicBool,
         sink: &mut LogSink<'_>,
     ) -> Result<Option<ScriptEnd>, ForgeError> {
-        let timed_out =
-            || ForgeError::new(ErrorCode::JobTimedOut).with_context("timeout_s", limit.as_secs());
+        let limit = || left(deadline).ok_or_else(|| timed_out(timeout_s));
         sink.line(&format!("creating pod {pod} (no network)"));
         started.pod = true;
         let ran = self
-            .run(&self.podman.pod_create(pod), limit, stop, sink)
+            .run(&self.podman.pod_create(pod), limit()?, stop, sink)
             .map_err(|e| service_failed("spawn_failed").with_source(e))?;
         match ran.exit {
             Exit::Code(0) => {}
@@ -500,16 +496,12 @@ impl Executor {
                     .with_context("exit_code", code)
                     .with_context("podman_stderr", ran.stderr_tail))
             }
-            Exit::TimedOut => return Err(timed_out()),
+            Exit::TimedOut => return Err(timed_out(timeout_s)),
             Exit::Stopped => return Ok(Some(ScriptEnd::Stopped)),
         }
         for s in spec.services() {
             let container = service_container_name(job.job_id, job.attempt, s.name());
             sink.line(&format!("starting service {} ({})", s.name(), s.image()));
-            // clone: kept for the log tail and the error
-            started
-                .services
-                .push((s.name().to_owned(), container.clone()));
             let failed = |reason: &'static str, step: &'static str| {
                 service_failed(reason)
                     .with_context("service", s.name().to_owned())
@@ -528,7 +520,7 @@ impl Executor {
                 ("start", self.podman.service_start(&container)),
             ] {
                 let ran = self
-                    .run(&cmd, limit, stop, sink)
+                    .run(&cmd, limit()?, stop, sink)
                     .map_err(|e| failed("spawn_failed", step).with_source(e))?;
                 match ran.exit {
                     Exit::Code(0) => {}
@@ -537,8 +529,16 @@ impl Executor {
                             .with_context("exit_code", code)
                             .with_context("podman_stderr", ran.stderr_tail))
                     }
-                    Exit::TimedOut => return Err(timed_out()),
+                    Exit::TimedOut => return Err(timed_out(timeout_s)),
                     Exit::Stopped => return Ok(Some(ScriptEnd::Stopped)),
+                }
+                if step == "create" {
+                    // Created: it has a log from here on (a service that was
+                    // never created has none to read).
+                    // clone: kept for the log tail
+                    started
+                        .services
+                        .push((s.name().to_owned(), container.clone()));
                 }
             }
         }
@@ -557,21 +557,38 @@ impl Executor {
                 PODMAN_CLEANUP,
                 &|| false,
                 &mut |b| {
-                    let room = SERVICE_LOG_BYTES.saturating_sub(tail.len());
-                    tail.extend_from_slice(&b[..b.len().min(room)]);
+                    tail.extend_from_slice(b);
+                    if tail.len() > SERVICE_LOG_BYTES {
+                        tail.drain(..tail.len() - SERVICE_LOG_BYTES);
+                    }
                 },
             );
-            if !ran.as_ref().is_ok_and(Ran::ok) {
-                tracing::warn!(
-                    target: "forge_runner",
-                    event = "forge.runner.service_log_unread",
-                    error_code = ErrorCode::ServiceStartFailed.id(),
-                    service = %service,
-                    container = %container,
-                    "a service's log could not be read for the job log"
-                );
-                sink.line(&format!("the log of service {service} could not be read"));
-                continue;
+            match &ran {
+                Ok(r) if r.ok() => {}
+                Ok(r) if r.stderr_tail.contains("no such container") => {
+                    // Gone already (it exited and was cleaned up, or never
+                    // ran): nothing to copy, nothing wrong.
+                    tracing::debug!(
+                        target: "forge_runner",
+                        event = "forge.runner.service_log_missing",
+                        service = %service,
+                        container = %container,
+                        "a service's container has no log to copy"
+                    );
+                    continue;
+                }
+                Ok(_) | Err(_) => {
+                    // The job's result does not depend on it: no error code.
+                    tracing::warn!(
+                        target: "forge_runner",
+                        event = "forge.runner.service_log_unread",
+                        service = %service,
+                        container = %container,
+                        "a service's log could not be read for the job log"
+                    );
+                    sink.line(&format!("the log of service {service} could not be read"));
+                    continue;
+                }
             }
             sink.line(&format!("the last lines of service {service}:"));
             for line in String::from_utf8_lossy(&tail).lines() {
@@ -751,6 +768,34 @@ impl Executor {
                 "podman kill could not be started; the removal follows"
             );
         }
+    }
+
+    /// `podman pod rm --force` of the job's pod, retried once. `false`: it
+    /// may still exist — logged as `FG-CI-0007 reason=pod_remove`, and the
+    /// runner takes no further job (like a dirty work directory).
+    fn remove_pod(&self, request_id: &RequestId, job: i64, pod: &str) -> bool {
+        let mut last = None;
+        for _ in 0..2 {
+            match self.proc.run(
+                &self.podman.pod_remove(pod),
+                PODMAN_CLEANUP,
+                &|| false,
+                &mut |_| {},
+            ) {
+                Ok(ran) if ran.ok() => return true,
+                other => last = Some(other),
+            }
+        }
+        let mut e = start_failed("pod_remove")
+            .with_context("job_id", job)
+            .with_context("pod", pod.to_owned());
+        match last {
+            Some(Ok(ran)) => e = e.with_context("podman_stderr", ran.stderr_tail),
+            Some(Err(io)) => e = e.with_source(io),
+            None => {}
+        }
+        telemetry::log_failure(&e, request_id);
+        false
     }
 
     /// Remove the job directory; through `podman unshare` when the runner's

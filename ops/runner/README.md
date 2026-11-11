@@ -93,6 +93,9 @@ jobs:
 `pg_isready` の無いイメージでは、`timeout 60 sh -c 'until (echo > /dev/tcp/127.0.0.1/5432) 2>/dev/null; do sleep 1; done'`（bash）
 などで待つ。ジョブが失敗すると、ジョブのログの終わりに各サービスのログの最後の 50 行（`[service db] …`）が入る。
 キーは `name`（`[a-z][a-z0-9-]{0,30}`）・`image`（必須）と `env`（16 まで）・`user`・`tmpfs`（4 つまで、絶対パス、`/tmp` は常にある）だけ。
+`user` が `root`・`0`・`0:<gid>` だと `gstn ci lint` が警告を出す（`service_user_root`、エラーではない）。
+ジョブの `timeout` はサービスの起動（pull を含む）とジョブの実行の合計に掛かる。メモリの上限はポッド全体で 1 ジョブ分（ジョブとサービスの合計）。
+プロセス数の上限はコンテナごと。
 `command`・`ports`・`volumes`・特権は無い（`gstn ci lint` が `key_unknown`）。
 
 ## 本番と違うところ（試験だから許していること）
@@ -102,7 +105,7 @@ jobs:
 | seccomp | `seccomp=unconfined`（入れ子の rootless Podman に要る） | 専用ホストで Podman の既定 |
 | GitStation との通信 | http（`allow_insecure_http = true`） | https |
 | レジストリ | http、認証なし | 社内のミラー |
-| メモリとプロセス数の上限 | **外側のコンテナの上限（6 GB、4096）だけが効く。** ジョブごとの `--memory` は効かず、ジョブの中からは外側の値が見える | ジョブごとに効く |
+| メモリとプロセス数の上限 | **外側のコンテナの上限（6 GB、4096）だけが効く。** ジョブごと・ポッドごとの `--memory` は効かず（cgroups が無効）、ジョブの中からは外側の値が見える | ジョブごとに効く（サービスのあるジョブはポッドの合計にも） |
 | イメージの置き場 | Podman のイメージ（`podman-store`）はジョブの間で残る（コンテナとジョブのディレクトリは残らない） | 同じ。ジョブごとに消すのは作業ディレクトリとコンテナ |
 | 届く範囲 | Runner は Windows のホストの 127.0.0.1 に届く（ジョブは届かない） | Runner のホストから GitStation だけ |
 

@@ -137,8 +137,16 @@ FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podma
 `--cap-drop=all`、`no-new-privileges`、ジョブと同じメモリ・プロセス数・ulimit）、最後にジョブのコンテナを同じポッドに入れる。
 ポッドのネットワークはループバックだけ: サービスとジョブは `127.0.0.1` で届き合い、外にも Runner のホストにも届かない。
 サービスのイメージもジョブと同じく `image_registries` の中でダイジェストで固定。`env` の値は平文（**シークレットを書かない**。C6 の対象外）。
-Runner は準備ができるのを待たない（ジョブのスクリプトが待つ）。**どの終わり方でも**（成功・失敗・時間切れ・取り消し・停止・起動の失敗）
-`podman pod rm --force --ignore --time=0` でポッドとその中のコンテナを消す（失敗は `forge.runner.pod_remove_failed`、warn）。
+Runner は準備ができるのを待たない（ジョブのスクリプトが待つ）。ジョブの `timeout` は**コンテナの段の全体に 1 つの期限**で、ポッドの作成・
+各サービスの作成と起動（イメージの pull を含む）・ジョブのコンテナの作成と実行が残りの時間を分け合う（超えたら FG-CI-0010）。
+**上限**: ポッドの cgroup にジョブの `memory`（`--memory`・`--memory-swap` を同じ値）を付けるので、ジョブとサービスを合わせてもジョブ 1 つ分の
+メモリを超えない（各コンテナにも同じ上限が付く）。Podman のポッドには `--pids-limit` が無いので、プロセス数の上限はコンテナごと
+（サービス 2 つなら合計で `pids_limit` の 3 倍まで）。ポッドの infra コンテナは rootless Podman がその場で作る pause のイメージ
+（`localhost/podman-pause:<版>`）で、取得（pull）はしない（本物の Podman の試験で確かめる）。
+**どの終わり方でも**（成功・失敗・時間切れ・取り消し・停止・起動の失敗）`podman pod rm --force --ignore --time=0` でポッドとその中の
+コンテナを消す。失敗したら 1 回だけやり直し、それでも消せなければ FG-CI-0007 `reason=pod_remove`（`pod`、`podman_stderr`）を記録し、
+作業ディレクトリが消せないとき（`workspace_dirty`）と同じく **Runner は次のジョブを取らずに止まる**。消してから起動し直す（Mitigate）。
+サービスのログの末尾は、失敗したジョブ（取り消し・停止は除く）のときだけ足す（各 64 KiB まで、終わりの側を残す）。
 **起動のとき**は残ったコンテナに続けて `forge-job-<job>-<attempt>` の名前のポッドもすべて消す（`forge.runner.stale_pod_removed`、warn。
 消せなければ FG-CI-0007 `reason=stale_containers`）。手で確かめる（Runner の利用者で、読み取りのみ）: `podman pod ps --filter name=forge-job-`。
 
@@ -157,6 +165,8 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
 - FG-CI-0014: サービスのイメージをミラーに入れる、または `.forge-ci.yml` のサービスの `user`・`tmpfs`・`env` を直す（PostgreSQL は
   `user: "999:999"`、`tmpfs: [/var/lib/postgresql/data, /var/run/postgresql]`、`PGDATA` をデータの tmpfs の下の新しいディレクトリに）。
   その後パイプラインを再実行する。消え残ったポッドは Runner の利用者で `podman pod rm --force <名前>`（人の承認のあと）。
+- FG-CI-0007 `reason=pod_remove` で止まった Runner: Runner の利用者で `podman pod ps --filter name=forge-job-` を見て
+  `podman pod rm --force <名前>` の後に起動する（起動のときも残ったポッドを消す）。消せない理由は `podman_stderr`。
 - 無効にした Runner を有効に戻す（管理者の Web のセッション）: `PATCH /api/v1/admin/runners/{id}` `{"enabled": true}`。
 - ジョブのタグに合う Runner が無い: 管理者がタグを足す（`PATCH … {"tags": [...]}`）か、そのタグの Runner を登録する
   （`forge admin runner register …` または `POST /api/v1/admin/runners` `{"name", "tags"}`、表示された `token` を Runner の

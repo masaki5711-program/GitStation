@@ -93,6 +93,13 @@ struct Fake {
     pods: String,
     /// Which pod or service call fails (exit 125).
     service_fails: ServiceFails,
+    /// How long each `pod create`, `create` and `start` takes; a call whose
+    /// limit is shorter times out at its limit.
+    delay: Duration,
+    /// `podman pod rm` fails (exit 125) every time.
+    pod_rm_fails: bool,
+    /// What `podman logs` prints (`None`: the container does not exist).
+    service_log: Option<Vec<u8>>,
 }
 
 /// Which Podman call of a job's services fails.
@@ -106,7 +113,11 @@ enum ServiceFails {
 
 impl Fake {
     fn new(def: &str, podman: Podman) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::base(def, podman))
+    }
+
+    fn base(def: &str, podman: Podman) -> Self {
+        Self {
             calls: Mutex::new(Vec::new()),
             definition: Mutex::new(def.to_owned()),
             fetch_exit: 0,
@@ -115,7 +126,13 @@ impl Fake {
             ps: String::new(),
             pods: String::new(),
             service_fails: ServiceFails::No,
-        })
+            delay: Duration::ZERO,
+            pod_rm_fails: false,
+            // A service that printed the job's token, then failed.
+            service_log: Some(
+                b"LOG: starting fgj_7_secret\nFATAL: data directory not writable\n".to_vec(),
+            ),
+        }
     }
 
     fn calls(&self) -> Vec<Cmd> {
@@ -167,17 +184,30 @@ impl ProcessRunner for Fake {
     fn run(
         &self,
         cmd: &Cmd,
-        _limit: Duration,
+        limit: Duration,
         stop: &dyn Fn() -> bool,
         out: &mut dyn FnMut(&[u8]),
     ) -> std::io::Result<Ran> {
         self.calls.lock().unwrap().push(cmd.clone());
+        let sub = subcommand(cmd);
+        let slow = cmd.program_name() == "podman"
+            && ["pod create", "create", "start"].contains(&sub.as_str());
+        if slow && !self.delay.is_zero() {
+            if limit < self.delay {
+                std::thread::sleep(limit);
+                return Ok(Ran {
+                    exit: Exit::TimedOut,
+                    stdout: Vec::new(),
+                    stderr_tail: String::new(),
+                });
+            }
+            std::thread::sleep(self.delay);
+        }
         let ok = |stdout: Vec<u8>| Ran {
             exit: Exit::Code(0),
             stdout,
             stderr_tail: String::new(),
         };
-        let sub = subcommand(cmd);
         Ok(match (cmd.program_name().as_str(), sub.as_str()) {
             ("git", "fetch") if self.fetch_exit != 0 => Ran {
                 exit: Exit::Code(self.fetch_exit),
@@ -214,11 +244,22 @@ impl ProcessRunner for Fake {
                     ok(b"started\n".to_vec())
                 }
             }
-            ("podman", "logs") => {
-                // A service that printed the job's token, then failed.
-                out(b"LOG: starting fgj_7_secret\nFATAL: data directory not writable\n");
-                ok(Vec::new())
-            }
+            ("podman", "logs") => match &self.service_log {
+                Some(log) => {
+                    out(log);
+                    ok(Vec::new())
+                }
+                None => Ran {
+                    exit: Exit::Code(125),
+                    stdout: Vec::new(),
+                    stderr_tail: "Error: no such container forge-job-7-1-svc-db".to_owned(),
+                },
+            },
+            ("podman", "pod rm") if self.pod_rm_fails => Ran {
+                exit: Exit::Code(125),
+                stdout: Vec::new(),
+                stderr_tail: "Error: removing pod: device or resource busy".to_owned(),
+            },
             ("podman", "pod ps") => ok(self.pods.clone().into_bytes()),
             ("podman", "create") => match self.podman {
                 Podman::CreateFails => Ran {
@@ -591,14 +632,8 @@ fn a_podman_error_exit_is_container_start_failed() {
 fn a_failed_fetch_is_job_fetch_failed() {
     let def = definition("make");
     let fake = Arc::new(Fake {
-        calls: Mutex::new(Vec::new()),
-        definition: Mutex::new(def.clone()),
         fetch_exit: 128,
-        podman: Podman::Exit(0),
-        work: Mutex::new(None),
-        ps: String::new(),
-        pods: String::new(),
-        service_fails: ServiceFails::No,
+        ..Fake::base(&def, Podman::Exit(0))
     });
     let s = setup(&fake);
     let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
@@ -913,14 +948,10 @@ fn a_shutdown_kills_and_removes_the_running_container() {
 fn stale_job_containers_are_removed_at_startup() {
     let def = definition("make");
     let fake = Arc::new(Fake {
-        calls: Mutex::new(Vec::new()),
-        definition: Mutex::new(def.clone()),
-        fetch_exit: 0,
-        podman: Podman::Exit(0),
-        work: Mutex::new(None),
         ps: "forge-job-7-1\nforge-job-12-3\nforge-job-x\nforge-job-7-1-svc-db\n".to_owned(),
         pods: "forge-job-7-1\nforge-job-9-2\nother-pod\n".to_owned(),
         service_fails: ServiceFails::No,
+        ..Fake::base(&def, Podman::Exit(0))
     });
     let s = setup(&fake);
     assert_eq!(s.exec.remove_stale_containers().expect("removed"), 4);
@@ -996,14 +1027,8 @@ fn definition_with_db(script: &str, service_image: &str) -> String {
 
 fn fake_with(def: &str, podman: Podman, service_fails: ServiceFails) -> Arc<Fake> {
     Arc::new(Fake {
-        calls: Mutex::new(Vec::new()),
-        definition: Mutex::new(def.to_owned()),
-        fetch_exit: 0,
-        podman,
-        work: Mutex::new(None),
-        ps: String::new(),
-        pods: String::new(),
         service_fails,
+        ..Fake::base(def, podman)
     })
 }
 
@@ -1055,7 +1080,14 @@ fn a_job_with_services_runs_in_a_pod_without_network() {
     let pod = &fake.by("podman", "pod create")[0];
     assert_eq!(
         pod.argv(),
-        ["pod", "create", "--name=forge-job-7-1", "--network=none"]
+        [
+            "pod",
+            "create",
+            "--name=forge-job-7-1",
+            "--network=none",
+            "--memory=4g",
+            "--memory-swap=4g"
+        ]
     );
     let creates = fake.by("podman", "create");
     let (svc, job) = (creates[0].argv(), creates[1].argv());
@@ -1114,7 +1146,9 @@ fn a_service_that_fails_to_start_fails_the_job_and_its_pod_is_removed() {
                 .context()
                 .iter()
                 .any(|(k, v)| *k == "podman_stderr" && v.starts_with("Error:")));
-            assert_eq!(fake.by("podman", "logs").len(), 1);
+            // A service that was never created has no log to read.
+            let reads = usize::from(step == "start");
+            assert_eq!(fake.by("podman", "logs").len(), reads, "{step}");
         } else {
             assert!(fake.by("podman", "logs").is_empty());
         }
@@ -1238,8 +1272,10 @@ fn a_shutdown_removes_the_pod_of_a_job_with_services() {
     };
     runner.run_forever().expect("a clean stop");
     signal.join().expect("signal thread");
+    // Stopped: no service log is read (review); the pod is still removed.
     let order = podman_order(&fake);
-    assert_eq!(&order[order.len() - 4..], ["kill", "logs", "rm", "pod rm"]);
+    assert_eq!(&order[order.len() - 3..], ["kill", "rm", "pod rm"]);
+    assert!(fake.by("podman", "logs").is_empty());
     assert_eq!(
         forge.completed.lock().unwrap().as_slice(),
         [(7, JobResult::Failed, None)]
@@ -1345,6 +1381,27 @@ fn a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks() {
                 String::from_utf8_lossy(&logs)
             ));
         }
+        // The job's container shares the pod's name (Podman keeps pod and
+        // container names apart) and ran in it.
+        let state = run(&plan.state(pod));
+        if String::from_utf8_lossy(&state.stdout).trim() != "exited 0" {
+            return Err(format!("the job container {pod}: {state:?}"));
+        }
+        // The pod's infra container runs the locally built pause image (no
+        // pull, no `--infra-image`).
+        let infra = run(&plan.pod_infra(pod));
+        let infra_id = String::from_utf8_lossy(&infra.stdout).trim().to_owned();
+        let image = run(&Cmd::new("podman")
+            .arg("inspect")
+            .arg("--type=container")
+            .arg("--format={{.ImageName}}")
+            .arg("--")
+            .arg(&infra_id)
+            .captured());
+        let image = String::from_utf8_lossy(&image.stdout).trim().to_owned();
+        if !image.starts_with("localhost/podman-pause:") {
+            return Err(format!("infra image {image:?} ({infra:?})"));
+        }
         Ok(())
     };
     let result = steps();
@@ -1368,4 +1425,105 @@ fn a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks() {
         !String::from_utf8_lossy(&containers.stdout).contains("forge-job-test-2"),
         "{containers:?}"
     );
+}
+
+/// Review: one deadline for the whole container phase. Steps that each fit
+/// the job's timeout but together pass it fail with FG-CI-0010, and the pod
+/// is still removed.
+#[test]
+fn setup_steps_share_one_deadline_and_time_out_together() {
+    let def = definition_with_db("make", &pg_image()).replace("timeout: 10m", "timeout: 1s");
+    let mut job = claim(7, "fgj_7_secret", &def);
+    job.timeout_s = 1;
+    // pod create, the service's create and start: 3 x 400 ms > 1 s.
+    let fake = Arc::new(Fake {
+        delay: Duration::from_millis(400),
+        ..Fake::base(&def, Podman::Exit(0))
+    });
+    let s = setup(&fake);
+    let out = run(&s, &job, &Forge::default());
+    assert_eq!(out.error.expect("timed out").code(), ErrorCode::JobTimedOut);
+    assert_eq!(
+        podman_order(&fake),
+        ["pod create", "create", "start", "logs", "pod rm"]
+    );
+    // Without services: the job's create and start share it too.
+    let plain = definition("make").replace("timeout: 10m", "timeout: 1s");
+    let mut job = claim(8, "fgj_8_secret", &plain);
+    job.timeout_s = 1;
+    let fake = Arc::new(Fake {
+        delay: Duration::from_millis(600),
+        ..Fake::base(&plain, Podman::Exit(0))
+    });
+    let s = setup(&fake);
+    let out = run(&s, &job, &Forge::default());
+    assert_eq!(out.error.expect("timed out").code(), ErrorCode::JobTimedOut);
+    assert_eq!(podman_order(&fake), ["create", "start", "kill", "rm"]);
+}
+
+/// Review: a pod that cannot be removed is retried once, then the runner
+/// treats it like a dirty work directory (it takes no further job).
+#[test]
+fn a_pod_that_cannot_be_removed_stops_the_runner_like_a_dirty_workspace() {
+    let def = definition_with_db("make", &pg_image());
+    let fake = Arc::new(Fake {
+        pod_rm_fails: true,
+        ..Fake::base(&def, Podman::Exit(0))
+    });
+    let s = setup(&fake);
+    let forge = Arc::new(Forge::default());
+    forge
+        .claims
+        .lock()
+        .unwrap()
+        .push(claim(7, "fgj_7_secret", &def));
+    let runner = Runner {
+        api: Arc::clone(&forge) as Arc<dyn RunnerApi>,
+        exec: s.exec,
+        heartbeat_every: Duration::from_secs(30),
+        shutdown: Arc::new(AtomicBool::new(false)),
+    };
+    let err = runner.run_forever().expect_err("the runner stops");
+    assert_eq!(err.code(), ErrorCode::ContainerStartFailed);
+    assert!(has_context(&err, "reason", "workspace_dirty"), "{err:?}");
+    assert_eq!(fake.by("podman", "pod rm").len(), 2);
+    // The job itself succeeded and was reported.
+    assert_eq!(
+        forge.completed.lock().unwrap().as_slice(),
+        [(7, JobResult::Succeeded, Some(0))]
+    );
+    // One retry that works: nothing is dirty.
+    let fake = fake_with(&def, Podman::Exit(0), ServiceFails::No);
+    let s = setup(&fake);
+    let out = run(&s, &claim(8, "fgj_8_secret", &def), &Forge::default());
+    assert!(!out.workspace_dirty);
+}
+
+/// Review: the job log gets the END of a long service log; a service log
+/// that does not exist is not reported as unreadable.
+#[test]
+fn a_service_log_keeps_its_tail_and_a_missing_container_is_quiet() {
+    let def = definition_with_db("exit 3", &pg_image());
+    let mut long = b"FIRST-LINE\n".to_vec();
+    long.extend(std::iter::repeat_n(b'x', 100 * 1024));
+    long.extend_from_slice(b"\nLAST-LINE\n");
+    let fake = Arc::new(Fake {
+        service_log: Some(long),
+        ..Fake::base(&def, Podman::Exit(3))
+    });
+    let s = setup(&fake);
+    let forge = Forge::default();
+    run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    let logs = forge.logs.lock().unwrap().join("");
+    assert!(logs.contains("[service db] LAST-LINE"), "the tail is kept");
+    assert!(!logs.contains("FIRST-LINE"), "the head is dropped");
+    let fake = Arc::new(Fake {
+        service_log: None,
+        ..Fake::base(&def, Podman::Exit(3))
+    });
+    let s = setup(&fake);
+    let forge = Forge::default();
+    run(&s, &claim(8, "fgj_8_secret", &def), &forge);
+    let logs = forge.logs.lock().unwrap().join("");
+    assert!(!logs.contains("could not be read"), "{logs}");
 }

@@ -134,7 +134,17 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
   の互いだけで、外・Runner のホスト・社内のネットワークには届かない。DNS も無い。ジョブだけのときは従来どおりポッドを作らない。
 - サービスのコンテナはジョブと同じ閉じ方（読み取り専用のルート、`--cap-drop=all`、`no-new-privileges`、同じメモリ・プロセス数・ulimit、
   `--pull=missing`）。書ける場所は `/tmp` と、ファイルが宣言した `tmpfs`（4 つまで、絶対パス、`/proc`・`/sys`・`/dev` の下と `/` を断る、
-  `mode=1777`）だけ。権限を足す口（`command`・`ports`・`volumes`・特権・能力）は無く、未知のキーは lint が断る。root でない `user` を勧める。
+  `mode=1777`）だけ。権限を足す口（`command`・`ports`・`volumes`・特権・能力）は無く、未知のキーは lint が断る。root でない `user` を勧める:
+  `user` が `root`・`0`・`0:<gid>` なら lint は**警告** `service_user_root`（エラーにはしない。rootless Podman ではコンテナの root もホストの
+  Runner の利用者に写り、能力は無い。`gstn ci lint` は警告を出して exit 0）。
+- **上限**: ポッドの cgroup にジョブの `memory` を付ける（`pod create --memory --memory-swap`）ので、ジョブとサービスの合計もジョブ 1 つ分を
+  超えない（各コンテナにも同じ値）。Podman のポッドには `--pids-limit` が無いので、プロセス数はコンテナごとの上限（合計は最大 3 倍）。
+- **時間**: ジョブの `timeout` はコンテナの段の全体に 1 つの期限（ポッド・サービス・pull・スクリプトが残りを分け合う）。
+- **infra**: `--infra-image` は付けない。rootless Podman は pause のイメージをその場で作り（`localhost/podman-pause:<版>`、catatonit）、
+  取得しない。本物の Podman の試験がその名前を確かめる。ポッドとジョブのコンテナは同じ名前（`forge-job-<job>-<attempt>`。Podman では
+  ポッドとコンテナの名前は別で、同じ試験が確かめる）。
+- **後始末**: ポッドを消せなければ 1 回やり直し、それでも残れば FG-CI-0007 `reason=pod_remove` で Runner は次のジョブを取らない
+  （作業ディレクトリが消せないときと同じ）。
 - イメージはジョブと同じ規則（ダイジェストで固定、Runner の `image_registries`）。サービスは要求（claim）に無く、Runner が
   `definition_hash` で確かめた `.forge-ci.yml` から読むので、許されないサービスのイメージ（FG-CI-0011、`service`）は fetch の後・
   コンテナと pull の前に断る。

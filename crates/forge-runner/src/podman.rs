@@ -269,12 +269,37 @@ impl PodmanPlan {
     /// `podman pod create --name=<pod> --network=none`: the job's pod when
     /// it has services. Its containers share one network namespace that
     /// holds only a loopback (ADR-0029 amendment).
+    ///
+    /// The pod's cgroup gets the job's memory limit (without extra swap):
+    /// each container keeps its own limits, and the pod as a whole — job
+    /// and services together — cannot use more memory than one job may
+    /// (security review). Podman has no `--pids-limit` on a pod: the
+    /// process limit stays per container (at most 3 × `pids_limit` for a
+    /// job with 2 services; runbook `ci-runner`).
+    ///
+    /// No `--infra-image`: rootless Podman builds its pause image locally
+    /// (`localhost/podman-pause:<version>`, from `catatonit`) and never
+    /// pulls it; the real-Podman test asserts that image.
     pub fn pod_create(&self, pod: &str) -> Cmd {
         self.cmd()
             .arg("pod")
             .arg("create")
             .arg(format!("--name={pod}"))
             .arg("--network=none")
+            .arg(format!("--memory={}", self.limits.memory))
+            .arg(format!("--memory-swap={}", self.limits.memory))
+            .captured()
+    }
+
+    /// `podman pod inspect --format={{.InfraContainerID}} -- <pod>` (the
+    /// real-Podman test: which image the pod's infra container runs).
+    pub fn pod_infra(&self, pod: &str) -> Cmd {
+        self.cmd()
+            .arg("pod")
+            .arg("inspect")
+            .arg("--format={{.InfraContainerID}}")
+            .arg("--")
+            .arg(pod)
             .captured()
     }
 
@@ -535,7 +560,14 @@ mod tests {
         let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
         assert_eq!(
             plan.pod_create("forge-job-7-1").argv(),
-            ["pod", "create", "--name=forge-job-7-1", "--network=none"]
+            [
+                "pod",
+                "create",
+                "--name=forge-job-7-1",
+                "--network=none",
+                "--memory=4g",
+                "--memory-swap=4g"
+            ]
         );
         let pg = format!("registry.internal/postgres@sha256:{}", digest());
         let env = vec![("POSTGRES_PASSWORD".to_owned(), "a b;$(id)".to_owned())];
