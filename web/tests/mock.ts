@@ -21,9 +21,9 @@ export type Handler = (call: Call) => Response | Promise<Response>;
  * page outside a project or group (plan 15 MR 7). */
 export const MR_COUNTS_PATH = '/api/v1/user/merge-requests/counts';
 export const MR_COUNTS_ZERO = {
-  authored: { count: 0, capped: false },
-  approvable: { count: 0, capped: false },
-  attention: { count: 0, capped: false },
+  authored: { count: 0, capped: false, truncated: false },
+  approvable: { count: 0, capped: false, truncated: false },
+  attention: { count: 0, capped: false, truncated: false },
 };
 
 /** Answered when a test's table has no route of its own for them: the

@@ -13,6 +13,7 @@ import { Link, useSearchParams } from 'react-router';
 import {
   MR_SCOPES,
   isMrScope,
+  mrCountText,
   useUserMergeRequests,
   useUserMrCounts,
   type MrScope,
@@ -20,7 +21,6 @@ import {
 } from '../api/userMergeRequests';
 import controls from '../components/controls.module.css';
 import { Loading } from '../components/Loading';
-import { badgeText } from '../components/NotificationBell';
 import { QueryError } from '../components/QueryError';
 import { formatDateTime, formatRelative } from '../features/labels';
 import { pullUrl } from '../features/repoUrls';
@@ -178,8 +178,8 @@ function ScopeSection({ scope, initiallyOpen }: { scope: MrScope; initiallyOpen:
   const counts = useUserMrCounts();
   let countText: string | null = null;
   if (counts.data !== undefined) {
-    const { count, capped } = counts.data[scope];
-    countText = t('myMrs.summaryCount', { count, shown: badgeText(count, capped) });
+    const c = counts.data[scope];
+    countText = t('myMrs.summaryCount', { count: c.count, shown: mrCountText(c) });
   } else if (counts.isError) {
     countText = t('myMrs.countUnknown');
   }

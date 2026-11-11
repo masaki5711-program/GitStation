@@ -5,6 +5,7 @@
 // may still see; the screen shows only what it is given.
 import { queryOptions, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 
+import { badgeText } from '../components/NotificationBell';
 import { call, type ApiClient } from './client';
 import { useApi } from './context';
 import type { components } from './schema.gen';
@@ -17,6 +18,20 @@ export type UserMergeRequestCounts = S['UserMergeRequestCounts'];
 /** The scopes, in the order the screens show them: what waits on me first. */
 export const MR_SCOPES = ['attention', 'approvable', 'authored'] as const;
 export type MrScope = (typeof MR_SCOPES)[number];
+
+/** A count as drawn: "99+" when the server stopped at 100 (`capped`),
+ * "n+" when its scan stopped early and `count` is a lower bound
+ * (`truncated`), else the number. The unread count has no `truncated`. */
+export function mrCountText(c: { count: number; capped: boolean; truncated?: boolean }): string {
+  if (c.capped) return badgeText(c.count, true);
+  if (c.truncated === true) return `${String(c.count)}+`;
+  return badgeText(c.count, false);
+}
+
+/** Nothing to count: 0, and known to be 0 (neither capped nor truncated). */
+export function isNone(c: { count: number; capped: boolean; truncated?: boolean }): boolean {
+  return c.count === 0 && !c.capped && c.truncated !== true;
+}
 
 export function isMrScope(value: string | null): value is MrScope {
   return value !== null && (MR_SCOPES as readonly string[]).includes(value);

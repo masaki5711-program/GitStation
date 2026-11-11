@@ -6,8 +6,7 @@
 // loading or failed (Home and the page say why); none when it is 0.
 import { useTranslation } from 'react-i18next';
 
-import { useUserMrCounts } from '../../api/userMergeRequests';
-import { badgeText } from '../NotificationBell';
+import { isNone, mrCountText, useUserMrCounts } from '../../api/userMergeRequests';
 import styles from '../Sidebar.module.css';
 import { ItemList, type Item, type SectionProps } from './parts';
 
@@ -19,9 +18,14 @@ function useWaitingBadge(): Item['badge'] {
   if (!counts.isSuccess) return undefined;
   const { attention, approvable } = counts.data;
   const total = attention.count + approvable.count;
-  const capped = attention.capped || approvable.capped;
-  if (total === 0 && !capped) return undefined;
-  const shown = badgeText(total, capped);
+  // The sum is capped / a lower bound when either part is.
+  const sum = {
+    count: total,
+    capped: attention.capped || approvable.capped,
+    truncated: attention.truncated || approvable.truncated,
+  };
+  if (isNone(sum)) return undefined;
+  const shown = mrCountText(sum);
   return { shown, spoken: t('nav.mrBadge', { shown }) };
 }
 

@@ -8,7 +8,7 @@ import { json, renderApp } from './render';
 
 const LIST_PATH = '/api/v1/user/merge-requests';
 
-const count = (n: number, capped = false) => ({ count: n, capped });
+const count = (n: number, capped = false, truncated = false) => ({ count: n, capped, truncated });
 const counts = (attention: number, approvable: number, authored: number, cappedApprovable = false) => ({
   attention: count(attention),
   approvable: count(approvable, cappedApprovable),
@@ -331,6 +331,34 @@ describe('/-/merge-requests', () => {
     const { container } = await renderApp({ fetch: server.fetch, path: '/-/merge-requests?scope=attention' });
     await screen.findByRole('link', { name: 'Change 3' });
     expect(await violations(container)).toEqual([]);
+  });
+});
+
+describe('truncated counts (the scan stopped early: a lower bound)', () => {
+  const truncated = () =>
+    json(200, { attention: count(2, false, true), approvable: count(40, false, true), authored: count(7) });
+
+  it('Home cards show "n+", the sidebar badge sums to "n+", the summaries say "n+"', async () => {
+    const server = mockServer(routes({ [`GET ${MR_COUNTS_PATH}`]: truncated }));
+    const first = await renderApp({ fetch: server.fetch });
+    expect(await screen.findByRole('link', { name: '対応が必要な自分の MR 2+ 件' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '承認を待っている MR 40+ 件' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '自分の MR 7 件' })).toBeTruthy();
+    expect(await within(await nav()).findByRole('link', { name: /^マージリクエスト\s?、対応 42\+ 件$/ })).toBeTruthy();
+    first.unmount();
+
+    await renderApp({ fetch: server.fetch, path: '/-/merge-requests?scope=authored' });
+    expect(await screen.findByRole('region', { name: '承認を待っている MR 40+ 件' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: '対応が必要な自分の MR 2+ 件' })).toBeTruthy();
+  });
+
+  it('a truncated 0 is not "nothing": the card shows "0+" and no next step', async () => {
+    const server = mockServer(
+      routes({ [`GET ${MR_COUNTS_PATH}`]: () => json(200, { attention: count(0, false, true), approvable: count(0), authored: count(0) }) }),
+    );
+    await renderApp({ fetch: server.fetch });
+    const card = await screen.findByRole('link', { name: '対応が必要な自分の MR 0+ 件' });
+    expect(card.hasAttribute('aria-describedby')).toBe(false);
   });
 });
 

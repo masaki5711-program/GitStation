@@ -12,8 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { useUnreadCount } from '../api/notifications';
-import { useUserMrCounts, type UserMergeRequestCount } from '../api/userMergeRequests';
-import { badgeText } from '../components/NotificationBell';
+import { isNone, mrCountText, useUserMrCounts } from '../api/userMergeRequests';
 import { QueryError } from '../components/QueryError';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
@@ -30,11 +29,14 @@ function Block({ id, title, children }: { id: string; title: string; children: R
   );
 }
 
+/** A count as the API gives it (the unread count has no `truncated`). */
+type CardCount = { count: number; capped: boolean; truncated?: boolean };
+
 /** What a card knows: its number, nothing yet, or that it could not be read. */
 type CardValue =
   | { status: 'pending' }
   | { status: 'error' }
-  | { status: 'success'; count: UserMergeRequestCount };
+  | { status: 'success'; count: CardCount };
 
 function Card({
   to,
@@ -60,10 +62,10 @@ function Card({
   } else if (value.status === 'error') {
     description = t('home.countUnknown');
   } else {
-    const { count: n, capped } = value.count;
-    const shown = badgeText(n, capped);
+    const n = value.count.count;
+    const shown = mrCountText(value.count);
     const spoken = <span className={styles.srOnly}>{t('home.cardCount', { count: n, shown })}</span>;
-    if (n === 0 && !capped) {
+    if (isNone(value.count)) {
       count = spoken;
       description = next;
     } else {
@@ -97,7 +99,7 @@ function Card({
 }
 
 /** A query's state as a card's value (a later failed poll keeps the last number). */
-function valueOf<T>(query: { status: 'pending' | 'error' | 'success'; data: T | undefined }, pick: (data: T) => UserMergeRequestCount): CardValue {
+function valueOf<T>(query: { status: 'pending' | 'error' | 'success'; data: T | undefined }, pick: (data: T) => CardCount): CardValue {
   if (query.data !== undefined) return { status: 'success', count: pick(query.data) };
   return query.status === 'error' ? { status: 'error' } : { status: 'pending' };
 }
