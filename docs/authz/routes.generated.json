@@ -146,6 +146,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/merge-requests",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/merge-requests",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/notifications",
     "people_only": false,
     "public": true,

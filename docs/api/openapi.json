@@ -10984,6 +10984,44 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/-/merge-requests": {
+      "get": {
+        "operationId": "get_merge_requests",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's merge requests",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_merge_requests",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's merge requests",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/notifications": {
       "get": {
         "operationId": "get_notifications",
