@@ -95,17 +95,24 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
     let token = cfg.token(&|k| std::env::var(k).ok())?;
     let (empty_config, empty_hooks, empty_rootfs) = runner_files(&cfg)?;
     let proc: Arc<dyn ProcessRunner> = Arc::new(SystemRunner);
+    // Podman reads only the runner's own containers.conf (ADR-0029
+    // amendment 2026-11-12, FG-CI-0015).
+    let containers_conf = isolation::write_containers_conf(
+        &cfg.work_dir.join("runner").join("podman"),
+    )
+    .map_err(|e| {
+        ForgeError::new(ErrorCode::JobIsolationUnsafe)
+            .with_context("reason", "conf_unwritable")
+            .with_source(e)
+    })?;
     let podman = PodmanPlan::new(cfg.podman.clone(), cfg.limits.clone()) // clone: the plan owns its copy
-        .with_registries(cfg.image_registries.clone()); // clone: as above
+        .with_registries(cfg.image_registries.clone()) // clone: as above
+        .with_containers_conf(containers_conf)
+        .with_probe_rootfs(empty_rootfs);
     rootless(proc.as_ref(), &podman)?;
-    // Before any job: containers.conf adds no mount to a job's container
-    // (ADR-0029 amendment 2026-11-12, FG-CI-0015).
-    isolation::check(
-        proc.as_ref(),
-        &podman,
-        &isolation::probe_name(std::process::id()),
-        &empty_rootfs,
-    )?;
+    // Before any job (and again before every claim): a job's container
+    // gets nothing its flags did not ask for.
+    isolation::remove_stale(proc.as_ref(), &podman)?;
     let client_cfg = forge_client::config::Config {
         dir: cfg.work_dir.clone(), // clone: the client's config owns it
         host: cfg.server.clone(),  // clone: as above
@@ -134,6 +141,7 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
         heartbeat_every: HEARTBEAT_EVERY,
         shutdown: Arc::new(AtomicBool::new(false)),
     };
+    runner.exec.check_isolation()?;
     if matches!(cli.command, Some(Command::Check)) {
         println!("ok: configuration, token, rootless podman, job isolation");
         return Ok(());

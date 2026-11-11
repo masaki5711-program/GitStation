@@ -153,24 +153,35 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - Runner は準備を待たない（ジョブのスクリプトが待つ）。ポッドやサービスを起動できなければ FG-CI-0014、ポッドはどの終わり方でも
   `pod rm --force` で消し、起動のときも残りを消す。ジョブが失敗したら各サービスのログの最後の 50 行をジョブのログに足す（ジョブの出力と同じマスク）。
 
-## Amendment 2026-11-12 — ジョブの namespace とマウントを containers.conf に任せない（FG-CI-0015）
+## Amendment 2026-11-12 — ジョブのコンテナを containers.conf に任せない（FG-CI-0015）
 
 - **見つけたこと**（GitStation 自身の CI を試験環境の Runner で動かして）: Runner のイメージ quay.io/podman/stable は
   `~/.config/containers/containers.conf` に `volumes = ["/proc:/proc"]`、`/etc/containers/containers.conf` に `ipcns`・`utsns`・
   `cgroupns = "host"` を持つ。Runner はこれらを Podman の既定に任せていたので、ジョブとサービスのコンテナが Runner の /proc
   （Runner・他のジョブ・サービスのすべてのプロセス）を見られ、Runner の IPC・UTS の namespace を共有した。決定 5 の「ジョブの境界」の欠陥。
-- **決定**: (1) ジョブとサービスのすべてのコンテナに `--pid=private --ipc=private --uts=private --cgroupns=private` を付け、
-  ポッドは `--share=net`（ループバックの network namespace だけを共有。infra コンテナの ipc / uts は共有しない）。
-  (2) containers.conf の既定の `volumes` は**フラグで外せない**（Podman 5.3 で確かめた: ジョブ自身の `--volume` があっても足され、
-  `podman inspect` には出ない）ので、Runner は起動のとき（と `check`）に `--volume` の無いサービスと同じ作りの確かめのコンテナを
-  空のディレクトリから作り（`--rootfs`、起動しない、pull しない）、マウントが 1 つでもあれば FG-CI-0015 で起動しない。
-- **選ばなかったもの**: `CONTAINERS_CONF_OVERRIDE` で Runner 自身の設定を最後に読ませる — Runner がファイルを持ち、すべての
-  Podman の呼び出しに環境を足すことになり、その変数を知らない Podman では黙って効かない（黙った失敗）。確かめのコンテナを実際に
-  起動して `/proc` を読む — 起動できるイメージが要る（ジョブのイメージは起動のときには無い）。ジョブごとの確かめ — 作ったコンテナの
-  `podman inspect` は自身の `--volume` があると足されたマウントを隠すので確かめにならない。
-- **既存の Runner への影響**: containers.conf に `volumes` のあるホストの Runner は起動しなくなる（試験環境は
-  `ops/runner/containers.conf` の drop-in で `volumes = []`）。ipc / uts / pid / cgroup はフラグで決まるので設定の変更は要らない。
-  ジョブとサービスは同じポッドの中でも IPC（共有メモリ）を共有しなくなる（ループバックの TCP / UDP は従来どおり）。
+  レビュー（ci-runner-security-reviewer）で、containers.conf は他にも `env`・`env_host`・`devices`・`default_sysctls`・`annotations`・
+  `mounts.conf`・OCI hooks でジョブを広げられることが分かった。
+- **決定**:
+  1. Podman は **Runner 自身の containers.conf だけ**を読む。`<work_dir>/runner/podman/containers.conf` を起動のたびに書き直し
+     （閉じた値: `volumes`・`devices`・`default_sysctls`・`annotations` は空、`env_host`・`http_proxy`・`init` は false、namespace は
+     private、`shm_size = "64m"`、ホストの名前を `/etc/hosts` に入れない、空の `mounts.conf` と空の OCI hooks の場所）、すべての
+     Podman の呼び出しに `CONTAINERS_CONF` で渡す。これがあると Podman 5.3 はシステム・利用者の containers.conf も drop-in も読まない
+     （試験環境で確かめた）。Podman の呼び出しの環境は `PATH` と `CONTAINERS_CONF` だけ（従来から環境を消している）。
+  2. 各コンテナにもフラグで同じことを付ける: `--pid/--ipc/--uts/--cgroupns=private`・`--env-host=false`・`--http-proxy=false`・
+     `--init=false`・`--shm-size=64m`。ポッドは `--share=net`（ループバックだけを共有。infra の ipc / uts は共有しない）。
+  3. **ジョブを取る前に毎回**（と起動のとき・`check`）確かめのコンテナを作って `podman inspect` を読み、マウント・バインド・デバイス・
+     能力・特権・SecurityOpt・sysctl・namespace・user namespace・`/dev/shm`・注釈・想定外の環境変数のどれかが違えば FG-CI-0015 で
+     ジョブを取らない。containers.conf の `volumes` は**フラグで外せない**（ジョブ自身の `--volume` があっても足され、`podman inspect`
+     には出ない）ので、確かめのコンテナには `--volume` を付けない。
+- **選ばなかったもの**: `--userns=private`（rootless では uid の対応の指定が要る）・`--userns=auto`（入れ子の試験環境で
+  `gid_map` を書けない）— rootless Podman の user namespace（Runner の利用者の subuid）のまま。`--no-hosts` — `/etc/hosts` の無い
+  イメージ（ci/rust・ci/postgres）で `localhost` が引けなくなる（代わりに `base_hosts_file = "none"`・`host_containers_internal_ip = "none"`）。
+  `CONTAINERS_CONF_OVERRIDE` — 他の containers.conf の上に重ねるだけで、Runner の知らないキーが残る。確かめのコンテナを起動して
+  `/proc` を読む — 起動できるイメージが要る。
+- **既存の Runner への影響**: ホストの containers.conf（`[engine]` を含む）は Runner のジョブに効かなくなる（`cgroup_manager`・`runtime`
+  などを変えていたホストでは Podman の既定に戻る）。`storage.conf`・`registries.conf` は従来どおり。ジョブとサービスは同じポッドでも
+  IPC（共有メモリ）を共有しない。`/etc/hosts` にホストの名前・IP・`host.containers.internal` が入らない。ジョブを取る前に毎回 Podman を
+  4 回呼ぶ（約 1 秒）。
 - runbook `ci-runner`（「ジョブの切り離し」）、FG-CI-0015 JobIsolationUnsafe（新規、alert）。
 
 ## Error codes and runbooks affected
