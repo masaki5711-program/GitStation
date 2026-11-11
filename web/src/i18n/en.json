@@ -125,6 +125,7 @@
     "notice": "This location moved. The old address still opens it. Former path:"
   },
   "project": {
+    "preparing": "Preparing the repository. It appears shortly.",
     "emptyTitle": "The repository is empty",
     "emptyBody": "Send the first files with these commands.",
     "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",

@@ -2,13 +2,13 @@
 // the repository. Browsing files, commits and the rest is the next screen
 // group; this page says what is there (default branch, counts) or, for an
 // empty repository, how to make the first push.
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Link } from 'react-router';
 
-import { call } from '../api/client';
+import { ApiFailure, call } from '../api/client';
 import { useSpec } from '../api/repo';
 import { encodePath } from '../features/repoUrls';
 import { TreeListing } from './repo/TreeListing';
@@ -24,6 +24,16 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { rememberProject } from '../hooks/recent';
 import styles from './Namespace.module.css';
 
+/** A new project's repository is created by a worker job (FG-REPO-0016
+ * answers 503 until it is there, normally within seconds): keep asking for
+ * about half a minute instead of showing an error right after creating. */
+const PROVISIONING_RETRIES = 30;
+const PROVISIONING_DELAY_MS = 1000;
+
+function isNotReady(error: unknown): boolean {
+  return error instanceof ApiFailure && error.failure.kind === 'api' && error.failure.status === 503;
+}
+
 function RepositoryState({
   id,
   name,
@@ -38,6 +48,8 @@ function RepositoryState({
   const base = `/${encodePath(path)}`;
   const { t } = useTranslation();
   const api = useApi();
+  // Any other failure keeps the app's retry policy.
+  const fallback = useQueryClient().getDefaultOptions().queries?.retry;
   const refs = useQuery({
     queryKey: ['refs', id],
     queryFn: ({ signal }) =>
@@ -48,9 +60,25 @@ function RepositoryState({
             params: { path: { id } },
           }),
       ),
+    retry: (failureCount, error) => {
+      if (isNotReady(error)) return failureCount < PROVISIONING_RETRIES;
+      if (typeof fallback === 'function') return fallback(failureCount, error);
+      if (typeof fallback === 'number') return failureCount < fallback;
+      return fallback ?? false;
+    },
+    retryDelay: PROVISIONING_DELAY_MS,
   });
 
-  if (refs.isPending) return <Loading />;
+  if (refs.isPending) {
+    // The UI sees no error code (contract 3): on this route a 503 is the
+    // provisioning answer; a real outage shows its error after the wait.
+    if (!isNotReady(refs.failureReason)) return <Loading />;
+    return (
+      <p role="status" className={styles.hint}>
+        {t('project.preparing')}
+      </p>
+    );
+  }
   if (refs.isError) {
     return (
       <QueryError

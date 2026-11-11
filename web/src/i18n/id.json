@@ -125,6 +125,7 @@
     "notice": "Lokasi ini telah dipindahkan. Alamat lama tetap membukanya. Jalur sebelumnya:"
   },
   "project": {
+    "preparing": "Repositori sedang disiapkan. Akan segera muncul.",
     "emptyTitle": "Repositori masih kosong",
     "emptyBody": "Kirim berkas pertama dengan perintah berikut.",
     "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",
