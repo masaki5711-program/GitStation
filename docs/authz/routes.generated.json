@@ -1584,6 +1584,15 @@
     "word": "fixed"
   },
   {
+    "action": "ActivityRead",
+    "method": "GET",
+    "path": "/api/v1/user/activity",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "UserMergeRequestList",
     "method": "GET",
     "path": "/api/v1/user/merge-requests",

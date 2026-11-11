@@ -49,6 +49,7 @@ pub mod specs;
 // M3 X5: the context API (plan 03 §6).
 pub mod context;
 pub mod tokens;
+pub mod user_activity;
 pub mod user_merge_requests;
 pub mod user_sessions;
 pub mod users;

@@ -45,6 +45,7 @@ pub use forge_db::review::{
 };
 pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, UserName, MAX_PAGE};
 
+pub mod activity;
 mod after_version;
 pub mod approvals;
 pub mod conflicts;
@@ -65,6 +66,10 @@ pub mod work_items;
 #[cfg(test)]
 mod change_context_tests;
 
+pub use activity::{
+    ActivityActor, ActivityItem, ActivityMergeRequest, ActivityPage, ActivityQuery,
+    MAX_INVOLVED_PROJECTS, SHOWN_TYPES,
+};
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
 pub use forge_db::review::settings::loosens as settings_loosen_approvals;
 pub use forge_db::review::{

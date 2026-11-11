@@ -2192,6 +2192,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The recent events of the projects the caller is involved in (a role on the project, directly or through a group), newest first; only the shown types (project.created, repository.pushed and merge request events) with their allowed fields, only events the caller may read now (people only; a bad parameter is FG-WEB-0006) */
+        get: operations["get_api_v1_user_activity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user/merge-requests": {
         parameters: {
             query?: never;
@@ -6083,6 +6100,64 @@ export interface components {
             /** @description `updated`, or `unchanged` (nothing was written). */
             outcome: string;
             webhook: components["schemas"]["WebhookBody"];
+        };
+        /** @description Who caused an event. */
+        UserActivityActorBody: {
+            display_name: string;
+            username: string;
+        };
+        /** @description One event of the caller's activity. */
+        UserActivityEventBody: {
+            actor: null | components["schemas"]["UserActivityActorBody"];
+            merge_request: null | components["schemas"]["UserActivityMergeRequestBody"];
+            /** @description UTC, RFC 3339 with milliseconds. */
+            occurred_at: string;
+            /** Format: int64 */
+            project_id: number;
+            /** @description The project's path now (`group/project`). */
+            project_path: string;
+            /**
+             * Format: int64
+             * @description `repository.pushed` only: how many refs the push changed.
+             */
+            ref_count: number | null;
+            /**
+             * Format: int64
+             * @description The event's position (the keyset of `before`).
+             */
+            seq: number;
+            /**
+             * @description One of project.created, repository.pushed, merge_request.opened,
+             *     merge_request.closed, merge_request.reopened,
+             *     merge_request.commented, merge_request.merged,
+             *     merge_request.approved (more may be added: show an unknown type
+             *     with a general sentence).
+             */
+            type: string;
+        };
+        /** @description A page of the caller's activity. */
+        UserActivityList: {
+            events: components["schemas"]["UserActivityEventBody"][];
+            /**
+             * Format: int64
+             * @description Pass as `before` for the next (older) page; `null`: no more.
+             */
+            next_before: number | null;
+            /**
+             * @description The caller is involved in more than 500 projects: the events of the
+             *     oldest projects were not read.
+             */
+            truncated: boolean;
+        };
+        /** @description The merge request an event is about. */
+        UserActivityMergeRequestBody: {
+            /**
+             * Format: int64
+             * @description The project's own number of it.
+             */
+            iid: number;
+            /** @description Its current title (`null`: not found). */
+            title: string | null;
         };
         /** @description One merge request of the caller's lists. */
         UserMergeRequestBody: {
@@ -11906,6 +11981,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserSelf"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_activity: {
+        parameters: {
+            query?: {
+                /** @description Only events with a smaller seq (next_before of the previous page) */
+                before?: number;
+                /** @description Events read per page, 1..=100 (default 30), newest first; hidden events are skipped, so a page may hold fewer */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserActivityList"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

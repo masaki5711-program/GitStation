@@ -41,6 +41,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{read_query_error, Db};
 
+pub mod activity;
 pub mod approvals;
 mod commands;
 pub mod conflicts;

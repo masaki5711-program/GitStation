@@ -9805,6 +9805,148 @@
         ],
         "type": "object"
       },
+      "UserActivityActorBody": {
+        "additionalProperties": false,
+        "description": "Who caused an event.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "UserActivityEventBody": {
+        "additionalProperties": false,
+        "description": "One event of the caller's activity.",
+        "properties": {
+          "actor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UserActivityActorBody",
+                "description": "`null`: forge itself, or an account that is gone."
+              }
+            ]
+          },
+          "merge_request": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UserActivityMergeRequestBody",
+                "description": "Merge request events only (`null` otherwise)."
+              }
+            ]
+          },
+          "occurred_at": {
+            "description": "UTC, RFC 3339 with milliseconds.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_path": {
+            "description": "The project's path now (`group/project`).",
+            "type": "string"
+          },
+          "ref_count": {
+            "description": "`repository.pushed` only: how many refs the push changed.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "seq": {
+            "description": "The event's position (the keyset of `before`).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": {
+            "description": "One of project.created, repository.pushed, merge_request.opened,\nmerge_request.closed, merge_request.reopened,\nmerge_request.commented, merge_request.merged,\nmerge_request.approved (more may be added: show an unknown type\nwith a general sentence).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "occurred_at",
+          "project_id",
+          "project_path",
+          "actor",
+          "merge_request",
+          "ref_count"
+        ],
+        "type": "object"
+      },
+      "UserActivityList": {
+        "additionalProperties": false,
+        "description": "A page of the caller's activity.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/UserActivityEventBody"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "description": "Pass as `before` for the next (older) page; `null`: no more.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "truncated": {
+            "description": "The caller is involved in more than 500 projects: the events of the\noldest projects were not read.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "next_before",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "UserActivityMergeRequestBody": {
+        "additionalProperties": false,
+        "description": "The merge request an event is about.",
+        "properties": {
+          "iid": {
+            "description": "The project's own number of it.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": {
+            "description": "Its current title (`null`: not found).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "title"
+        ],
+        "type": "object"
+      },
       "UserMergeRequestBody": {
         "additionalProperties": false,
         "description": "One merge request of the caller's lists.",
@@ -18891,6 +19033,59 @@
         },
         "summary": "The caller's own account (M1 phase 8b MR6)",
         "x-forge-action": "UserSelfRead"
+      }
+    },
+    "/api/v1/user/activity": {
+      "get": {
+        "operationId": "get_api_v1_user_activity",
+        "parameters": [
+          {
+            "description": "Only events with a smaller seq (next_before of the previous page)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Events read per page, 1..=100 (default 30), newest first; hidden events are skipped, so a page may hold fewer",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserActivityList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The recent events of the projects the caller is involved in (a role on the project, directly or through a group), newest first; only the shown types (project.created, repository.pushed and merge request events) with their allowed fields, only events the caller may read now (people only; a bad parameter is FG-WEB-0006)",
+        "x-forge-action": "ActivityRead"
       }
     },
     "/api/v1/user/merge-requests": {
