@@ -48,6 +48,7 @@
    ```
 
    `.forge-ci.yml` では `image: registry:5000/ci/alpine@sha256:<ダイジェスト>`、`tags: [linux]`。
+   サービスに使うイメージ（`postgres:16` など）も同じ手順で入れる。
 
 4. 確かめる。
 
@@ -61,6 +62,38 @@
 
 止める: `docker compose stop runner`（動いているジョブは止められ、失敗として報告される。コンテナとジョブのディレクトリは残らない）。
 消す: `docker compose down`（`-v` を付けるとレジストリの中身も消える）。
+
+## ジョブのサービス（PostgreSQL の例）
+
+ジョブは `services` で横にコンテナを 2 つまで動かせる（計画 14 C5s）。ジョブとサービスは 1 つのポッドに入り、ネットワークは
+ループバックだけ（`--network=none`）。サービスには `127.0.0.1` で届く。Runner は準備ができるのを待たないので、スクリプトで待つ。
+
+```yaml
+version: 1
+stages: [test]
+jobs:
+  test:
+    stage: test
+    image: registry:5000/ci/rust@sha256:<ダイジェスト>
+    timeout: 30m
+    tags: [linux]
+    services:
+      - name: db
+        image: registry:5000/ci/postgres:16@sha256:<ダイジェスト>
+        user: "999:999"                 # postgres の利用者。root にしない
+        env:
+          POSTGRES_PASSWORD: test       # 平文。シークレットは書かない
+          PGDATA: /var/lib/postgresql/data/pgdata
+        tmpfs: [/var/lib/postgresql/data, /var/run/postgresql]   # 読み取り専用のルートの上の書ける場所
+    script:
+      - until pg_isready -h 127.0.0.1; do sleep 1; done
+      - FORGE_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:5432/postgres cargo test
+```
+
+`pg_isready` の無いイメージでは、`timeout 60 sh -c 'until (echo > /dev/tcp/127.0.0.1/5432) 2>/dev/null; do sleep 1; done'`（bash）
+などで待つ。ジョブが失敗すると、ジョブのログの終わりに各サービスのログの最後の 50 行（`[service db] …`）が入る。
+キーは `name`（`[a-z][a-z0-9-]{0,30}`）・`image`（必須）と `env`（16 まで）・`user`・`tmpfs`（4 つまで、絶対パス、`/tmp` は常にある）だけ。
+`command`・`ports`・`volumes`・特権は無い（`gstn ci lint` が `key_unknown`）。
 
 ## 本番と違うところ（試験だから許していること）
 
@@ -84,6 +117,8 @@ seccomp を外しているので、**信頼できないプロジェクトのジ�
 | 同じく `FG-AUTH-0001` | トークンが違う、または Runner が無効。`admin runner list` で確かめ、登録し直す |
 | `check` が FG-CI-0007 | Podman が rootless で動けない。`security_opt` と `/dev/fuse` が compose にあるか見る |
 | Git Bash で `docker run --device /dev/fuse` が失敗する | パスが書き換えられている。`MSYS_NO_PATHCONV=1` を付ける（compose 経由なら要らない） |
-| ジョブが FG-CI-0011 | イメージが `registry:5000/` で始まっていない |
+| ジョブが FG-CI-0011 | イメージ（サービスのイメージも、`context` の `service`）が `registry:5000/` で始まっていない |
+| ジョブが FG-CI-0014 | サービスのポッドかコンテナを起動できない。`podman_stderr` を見る（イメージをレジストリに入れたか、`tmpfs`・`user`） |
+| サービスのあるジョブが待ちで時間切れ | ジョブのログの `[service <名前>]` の行を見る（データのディレクトリに書けない、など） |
 
 コードの意味と手順は `ops/runbooks/ci-runner.md`。

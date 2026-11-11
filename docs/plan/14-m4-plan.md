@@ -134,6 +134,7 @@ M4-0 [root] ─▶ ADR-0029 / C0（Job の主体）─▶ C1（定義）─▶ C
 | **C11★** `feat/deploy-ssh` | `forge-deploy`: forge の worker から SSH（argv、`BatchMode=yes`、`ConnectTimeout`、固定した known_hosts、ターゲットごとのスクリプトだけ）、prod の承認、凍結期間、stg の自動ロールバック | DeployApprove ほか §4.2 | DEPLOY-a〜f | `deploy_*`・`deployments` / prod をエージェント・サービスアカウント・自動マージの主体が承認できない、鍵の不一致で止まる | `deploy-safety-reviewer`、`security-reviewer`、`authz-matrix-auditor` | `deploy`、ADR-0031 |
 | C12 `feat/ci-schedules-manual` | 定期・手動のジョブ、仕様の公開（04 §6 `spec-publish`） | PipelineCreate の手動 | — | — | `rust-reviewer` | — |
 | C13 `feat/git-ssh-transport` | SSH の git 転送（M4 の終盤、R1 の外） | RepoRead / RepoPush の SSH 経路 | GIT-next | — | `git-protocol-reviewer`、`security-reviewer` | `smart-http` 相当 |
+| **C5s★** `feat/ci-job-services` | ジョブの `services`（PostgreSQL など、2 つまで）: `forge-ci` の lint、`forge-runner` のポッド（`--network=none`、ループバックだけを共有）、どの終わり方でもポッドを消す、失敗のときサービスのログの末尾 | — | CI-0014 | — / ポッドの argv、どの経路でもポッドを消す、起動時に残りを消す、本物の Podman で PostgreSQL に 127.0.0.1 で届き外へは出ない | `ci-runner-security-reviewer`、`rust-reviewer` | ADR-0029 追記、`ci-runner` |
 | **X★** `chore/ops-ci-cutover` | `ci/gates` のスクリプトと `ci/pipeline` を並行し、5 回一致したら必須チェックを `ci/pipeline` に替え、`ci/` の割り当てを外す | — | — | — / 5 回の一致の記録 | `ci-runner-security-reviewer` | `checks-reporting` |
 
 **C1 の注記（2026-11-10）**: 契約 9 を改め（エージェントモデル 813c66e）、`forge-ci` を純粋な層（`forge-core → forge-ci → forge-doc → forge-errors`）に置いた。
@@ -183,6 +184,22 @@ target の先端) ごとに 1 行）。MR のパイプラインは行を新し�
 数え、`ci/pipeline` は head への実行を数えない。状態の契約に `merge_result_sha`・`checks[].stale` を足した（schema_version 1 のまま）。
 隠すこと・push の拒否は既存の `refs/merge-requests/` の設定で足り、テストで固定した。新しいルート・Action は無い。詳細は ADR-0024 Amendment
 （2026-11-11）。
+
+**C5s の注記（2026-11-11、X の前）**: GitStation 自身の CI（`.forge-ci.yml` を `forge-runner` で動かす）を必須チェック `ci/pipeline`
+にするには、試験が PostgreSQL に届く必要がある（`FORGE_TEST_DATABASE_URL`、`crates/forge-db/src/test_support.rs`。GitHub の
+`.github/workflows/ci.yml` は postgres のサービスを使う）。ジョブのコンテナは `--network=none`（ADR-0029、`forge-runner/src/podman.rs`）なので、
+今のままではどの DB にも届かない。計画 14 にはサービスが無かったので、X の前にこの段を足した。
+ジョブの `services` は `{ name, image, env?, user?, tmpfs? }` の 2 つまで（名前は `[a-z][a-z0-9-]{0,30}`、ジョブの中で一意。イメージは
+ジョブと同じくダイジェストで固定し `image_registries` の中。`env` は平文でシークレットではない。`tmpfs` は読み取り専用のルートの上の書ける場所で、
+これが無いと PostgreSQL のようにデータとソケットのディレクトリに書くイメージが動かない。権限は足さない）。lint の理由は `too_many_services`・`service_name_invalid`・
+`service_duplicate`・`service_env_invalid`・`too_many_service_env`・`service_user_invalid`・`service_tmpfs_invalid`・`too_many_service_tmpfs`
+と既存の `field_missing`・`image_not_pinned`・`key_unknown`・`field_invalid`。`gstn ci plan` は各ジョブのサービスの名前を出す。
+Runner はポッド `forge-job-<job>-<attempt>`（`--network=none`、Podman ではポッドとコンテナの名前は別なのでジョブのコンテナと同じ名前）を作り、
+サービスのコンテナ `…-svc-<名前>` を切り離して起動してから、ジョブのコンテナをポッドに入れる。準備は待たない（スクリプトで
+`until pg_isready -h 127.0.0.1; do sleep 1; done`）。起動の失敗は **FG-CI-0014** ServiceStartFailed（`reason=pod_create|service_start`、`service`、
+`step`）。どの終わり方でも `podman pod rm --force --ignore --time=0`、起動時は残ったポッドも消す。ジョブが失敗するとサービスのログの最後の 50 行を
+`[service <名前>]` 付きでジョブのログに足す（同じマスク）。本物の Podman（試験用の Runner のコンテナの中）で、ポッドの中の PostgreSQL 16 に
+ジョブが 127.0.0.1 で届き、DNS も外への接続も無く、ポッドもコンテナも残らないことを確かめた。詳細は ADR-0029 の追記（2026-11-11）。
 
 ## 6. 運用で足すもの
 

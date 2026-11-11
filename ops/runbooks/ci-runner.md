@@ -1,4 +1,4 @@
-# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
+# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
 
 M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブの取得の long-poll、心拍とリース、ログ、完了、リースの回収）が
 期待どおりに動かないとき。表 `forge.ci_runners`・`forge.ci_job_tokens`・`forge.ci_log_chunks`・`forge.ci_jobs`（`runner_id`・`lease_until`・
@@ -18,8 +18,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
 - Runner のホストのログ（`journalctl -u forge-runner`、JSON）に FG-CI-0007（コンテナを起動できない・ホストが rootless でない・
   ジョブのディレクトリを消せない）、FG-CI-0008（`.forge-ci.yml` が `definition_hash` と一致しない）、FG-CI-0009（固定した
   コミットを取得できない）、FG-CI-0010（ジョブの時間切れ）、FG-CI-0011（ジョブのイメージが `image_registries` の外）、
-  FG-CI-0012（ジョブの作業ディレクトリが `work_dir_max_bytes` を超えた）。
-  ジョブのログの最後の行にも同じコード
+  FG-CI-0012（ジョブの作業ディレクトリが `work_dir_max_bytes` を超えた）、FG-CI-0014（ジョブのサービスのポッドまたはコンテナを
+  起動できない、計画 14 C5s）。ジョブのログの最後の行にも同じコード
 
 ## Impact
 
@@ -67,7 +67,15 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
    - FG-CI-0012: `context` の `bytes`・`limit_bytes`。ジョブの終わりに `<work_dir>/job/work` がそれより大きかった（ジョブは失敗、
      ディレクトリは消えている）。`forge.runner.workspace_unmeasured`（warn）は測れなかっただけでジョブは失敗にしない
    - FG-CI-0010: ジョブの `timeout` を超えた。コンテナは `podman kill` と `podman rm --force` で消えている
-     （`podman ps -a --filter name=forge-job-` で残りが無いこと）
+     （`podman ps -a --filter name=forge-job-` で残りが無いこと。サービスのあるジョブは `podman pod ps --filter name=forge-job-` も）
+   - FG-CI-0014: `context` の `reason`。`pod_create` はポッド（`podman pod create --network=none`）を作れなかった
+     （pause のイメージを作れない、user namespace の設定）。`service_start` は `service` のコンテナの `step`（`create` / `start`）が
+     失敗した: `podman_stderr` を読む（イメージを取れない・容量・`tmpfs` や `user` がイメージに合わない）。ジョブのコンテナは作られていない。
+     ポッドとその中のコンテナは `podman pod rm --force` で消えている。サービスのイメージが `image_registries` の外なら FG-CI-0011
+     （`service` 付き、コンテナも pull も無い）
+   - サービスが起動した後に落ちた・応答しない: FG-CI-0014 ではない。ジョブのスクリプトの待ち（`until pg_isready -h 127.0.0.1; do sleep 1; done`）
+     が失敗または時間切れ（FG-CI-0010）になり、失敗したジョブのログの終わりに各サービスのログの最後の 50 行が `[service <名前>]` 付きで入る
+     （ジョブの出力と同じマスク）。読めなかったら `the log of service <名前> could not be read` と `forge.runner.service_log_unread`（warn）
 
 ## Runner のホストの準備（M4 C4、forge-runner）
 
@@ -122,9 +130,22 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
 FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podman create` → `podman start --attach` で動かし、終わると `podman rm --force` で必ず消える。ジョブのトークンは git の環境の設定
 （`http.extraHeader`）でだけ渡し、argv・コンテナの環境・ログに出さない（ログでは `[masked]`）。
 
+### ジョブのサービス（計画 14 C5s、ADR-0029 の追記 2026-11-11）
+
+`.forge-ci.yml` のジョブに `services`（2 つまで）があると、Runner はジョブごとにポッド `forge-job-<job>-<attempt>` を
+`--network=none` で作り、各サービスをその中のコンテナ `forge-job-<job>-<attempt>-svc-<名前>` として起動し（読み取り専用のルート、
+`--cap-drop=all`、`no-new-privileges`、ジョブと同じメモリ・プロセス数・ulimit）、最後にジョブのコンテナを同じポッドに入れる。
+ポッドのネットワークはループバックだけ: サービスとジョブは `127.0.0.1` で届き合い、外にも Runner のホストにも届かない。
+サービスのイメージもジョブと同じく `image_registries` の中でダイジェストで固定。`env` の値は平文（**シークレットを書かない**。C6 の対象外）。
+Runner は準備ができるのを待たない（ジョブのスクリプトが待つ）。**どの終わり方でも**（成功・失敗・時間切れ・取り消し・停止・起動の失敗）
+`podman pod rm --force --ignore --time=0` でポッドとその中のコンテナを消す（失敗は `forge.runner.pod_remove_failed`、warn）。
+**起動のとき**は残ったコンテナに続けて `forge-job-<job>-<attempt>` の名前のポッドもすべて消す（`forge.runner.stale_pod_removed`、warn。
+消せなければ FG-CI-0007 `reason=stale_containers`）。手で確かめる（Runner の利用者で、読み取りのみ）: `podman pod ps --filter name=forge-job-`。
+
 **本物の Podman の試験**: ホストを用意したら、そのホストで
 `FORGE_RUNNER_TEST_IMAGE=<image@sha256:…> cargo nextest run -p forge-runner --run-ignored only`
-（`a_real_container_runs_without_network_and_is_removed`）。
+（`a_real_container_runs_without_network_and_is_removed`）。サービスの試験は
+`FORGE_RUNNER_TEST_PG_IMAGE=<postgres:16 のミラー@sha256:…>` も付ける（`a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks`）。
 
 **試験環境**では、Runner を Docker の上のコンテナとして動かせる（`ops/runner/README.md`。本番では使わない: seccomp を外し、ジョブごとのメモリとプロセス数の上限が効かず、外側のコンテナの上限だけになる）。
 
@@ -133,6 +154,9 @@ FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podma
 - Runner のプロセスを起こす・ホストを直す（`systemctl restart forge-runner`）。回収されたジョブは自動でやり直される（新しい `attempt`）。
 - FG-CI-0007 `workspace_dirty` で止まった Runner: Runner の利用者で `podman unshare rm -rf <work_dir>/job` の後に起動する。
 - FG-CI-0007 `podman_exit`: イメージを社内のミラーに入れる・`podman system prune`（Runner の利用者）の後、パイプラインを再実行する。
+- FG-CI-0014: サービスのイメージをミラーに入れる、または `.forge-ci.yml` のサービスの `user`・`tmpfs`・`env` を直す（PostgreSQL は
+  `user: "999:999"`、`tmpfs: [/var/lib/postgresql/data, /var/run/postgresql]`、`PGDATA` をデータの tmpfs の下の新しいディレクトリに）。
+  その後パイプラインを再実行する。消え残ったポッドは Runner の利用者で `podman pod rm --force <名前>`（人の承認のあと）。
 - 無効にした Runner を有効に戻す（管理者の Web のセッション）: `PATCH /api/v1/admin/runners/{id}` `{"enabled": true}`。
 - ジョブのタグに合う Runner が無い: 管理者がタグを足す（`PATCH … {"tags": [...]}`）か、そのタグの Runner を登録する
   （`forge admin runner register …` または `POST /api/v1/admin/runners` `{"name", "tags"}`、表示された `token` を Runner の
@@ -169,5 +193,5 @@ FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podma
 
 ## 関連
 
-- 計画 14（M4）§4・§5 C3・C4・§6、ADR-0029、runbook `ci-pipelines`、`crates/forge-pipelines/README.md`、`crates/forge-auth/README.md`（CI principals）、
+- 計画 14（M4）§4・§5 C3・C4・C5s・§6、ADR-0029、runbook `ci-pipelines`、`crates/forge-pipelines/README.md`、`crates/forge-auth/README.md`（CI principals）、
   `crates/forge-runner/README.md`、`crates/forge-web/src/routes/job_fetch.rs`。

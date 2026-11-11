@@ -89,6 +89,19 @@ struct Fake {
     work: Mutex<Option<PathBuf>>,
     /// What `podman ps` prints (the containers a crashed run left).
     ps: String,
+    /// What `podman pod ps` prints (the pods a crashed run left).
+    pods: String,
+    /// Which pod or service call fails (exit 125).
+    service_fails: ServiceFails,
+}
+
+/// Which Podman call of a job's services fails.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ServiceFails {
+    No,
+    PodCreate,
+    Create,
+    Start,
 }
 
 impl Fake {
@@ -100,6 +113,8 @@ impl Fake {
             podman,
             work: Mutex::new(None),
             ps: String::new(),
+            pods: String::new(),
+            service_fails: ServiceFails::No,
         })
     }
 
@@ -121,9 +136,18 @@ fn subcommand(c: &Cmd) -> String {
     if c.program_name() == "git" {
         let at = argv.iter().position(|a| a == "-C").expect("-C");
         argv[at + 2].clone()
+    } else if argv[0] == "pod" {
+        format!("pod {}", argv[1])
     } else {
         argv[0].clone()
     }
+}
+
+/// A service container's call (its name has `-svc-`).
+fn is_service(c: &Cmd) -> bool {
+    c.argv()
+        .iter()
+        .any(|a| a.contains("-svc-") && !a.starts_with("--pod="))
 }
 
 fn work_mount(c: &Cmd) -> PathBuf {
@@ -163,6 +187,39 @@ impl ProcessRunner for Fake {
             ("git", "rev-parse") => ok(format!("{SHA}\n").into_bytes()),
             ("git", "cat-file") => ok(self.definition.lock().unwrap().clone().into_bytes()),
             ("git", _) => ok(Vec::new()),
+            ("podman", "pod create") if self.service_fails == ServiceFails::PodCreate => Ran {
+                exit: Exit::Code(125),
+                stdout: Vec::new(),
+                stderr_tail: "Error: building the pause image".to_owned(),
+            },
+            ("podman", "create") if is_service(cmd) => {
+                if self.service_fails == ServiceFails::Create {
+                    Ran {
+                        exit: Exit::Code(125),
+                        stdout: Vec::new(),
+                        stderr_tail: "Error: postgres image not known".to_owned(),
+                    }
+                } else {
+                    ok(b"5678abcd\n".to_vec())
+                }
+            }
+            ("podman", "start") if is_service(cmd) => {
+                if self.service_fails == ServiceFails::Start {
+                    Ran {
+                        exit: Exit::Code(125),
+                        stdout: Vec::new(),
+                        stderr_tail: "Error: crun: mount tmpfs".to_owned(),
+                    }
+                } else {
+                    ok(b"started\n".to_vec())
+                }
+            }
+            ("podman", "logs") => {
+                // A service that printed the job's token, then failed.
+                out(b"LOG: starting fgj_7_secret\nFATAL: data directory not writable\n");
+                ok(Vec::new())
+            }
+            ("podman", "pod ps") => ok(self.pods.clone().into_bytes()),
             ("podman", "create") => match self.podman {
                 Podman::CreateFails => Ran {
                     exit: Exit::Code(125),
@@ -540,6 +597,8 @@ fn a_failed_fetch_is_job_fetch_failed() {
         podman: Podman::Exit(0),
         work: Mutex::new(None),
         ps: String::new(),
+        pods: String::new(),
+        service_fails: ServiceFails::No,
     });
     let s = setup(&fake);
     let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
@@ -646,6 +705,7 @@ fn a_real_container_runs_without_network_and_is_removed() {
         pipeline_id: 1,
         project_id: 1,
         sha: SHA,
+        pod: None,
     });
     let created = SystemRunner
         .run(&create, Duration::from_secs(120), &|| false, &mut |_| {})
@@ -858,10 +918,12 @@ fn stale_job_containers_are_removed_at_startup() {
         fetch_exit: 0,
         podman: Podman::Exit(0),
         work: Mutex::new(None),
-        ps: "forge-job-7-1\nforge-job-12-3\nforge-job-x\n".to_owned(),
+        ps: "forge-job-7-1\nforge-job-12-3\nforge-job-x\nforge-job-7-1-svc-db\n".to_owned(),
+        pods: "forge-job-7-1\nforge-job-9-2\nother-pod\n".to_owned(),
+        service_fails: ServiceFails::No,
     });
     let s = setup(&fake);
-    assert_eq!(s.exec.remove_stale_containers().expect("removed"), 2);
+    assert_eq!(s.exec.remove_stale_containers().expect("removed"), 4);
     let ps = fake.by("podman", "ps");
     assert_eq!(ps.len(), 1);
     assert_eq!(
@@ -880,5 +942,430 @@ fn stale_job_containers_are_removed_at_startup() {
             ["rm", "--force", "--ignore", "--", "forge-job-7-1"],
             ["rm", "--force", "--ignore", "--", "forge-job-12-3"],
         ]
+    );
+    // Plan 14 C5s: the job pods too (their service containers go with
+    // them); another pod is left alone.
+    let pods: Vec<Vec<String>> = fake.by("podman", "pod rm").iter().map(Cmd::argv).collect();
+    assert_eq!(
+        pods,
+        [
+            [
+                "pod",
+                "rm",
+                "--force",
+                "--ignore",
+                "--time=0",
+                "--",
+                "forge-job-7-1"
+            ],
+            [
+                "pod",
+                "rm",
+                "--force",
+                "--ignore",
+                "--time=0",
+                "--",
+                "forge-job-9-2"
+            ],
+        ]
+    );
+    assert_eq!(
+        fake.by("podman", "pod ps")[0].argv(),
+        [
+            "pod",
+            "ps",
+            "--filter=name=^forge-job-",
+            "--format={{.Name}}"
+        ]
+    );
+}
+
+// ── services (plan 14 C5s) ──────────────────────────────────────────────
+
+fn pg_image() -> String {
+    format!("registry.internal/postgres@sha256:{}", "c".repeat(64))
+}
+
+/// [`definition`] with one PostgreSQL service `db`.
+fn definition_with_db(script: &str, service_image: &str) -> String {
+    format!(
+        "{}    services:\n      - name: db\n        image: {service_image}\n        user: \"999:999\"\n        env:\n          POSTGRES_PASSWORD: test\n        tmpfs: [/var/run/postgresql]\n",
+        definition(script)
+    )
+}
+
+fn fake_with(def: &str, podman: Podman, service_fails: ServiceFails) -> Arc<Fake> {
+    Arc::new(Fake {
+        calls: Mutex::new(Vec::new()),
+        definition: Mutex::new(def.to_owned()),
+        fetch_exit: 0,
+        podman,
+        work: Mutex::new(None),
+        ps: String::new(),
+        pods: String::new(),
+        service_fails,
+    })
+}
+
+fn podman_order(fake: &Fake) -> Vec<String> {
+    fake.calls()
+        .iter()
+        .filter(|c| c.program_name() == "podman")
+        .map(subcommand)
+        .collect()
+}
+
+fn has_context(e: &forge_errors::ForgeError, key: &str, value: &str) -> bool {
+    e.context().iter().any(|(k, v)| *k == key && v == value)
+}
+
+const POD_RM: [&str; 7] = [
+    "pod",
+    "rm",
+    "--force",
+    "--ignore",
+    "--time=0",
+    "--",
+    "forge-job-7-1",
+];
+
+/// The pod has no network; the service starts in it before the job,
+/// detached; the job joins the pod; on success no service log is copied and
+/// the pod is removed.
+#[test]
+fn a_job_with_services_runs_in_a_pod_without_network() {
+    let def = definition_with_db("pg_isready -h 127.0.0.1", &pg_image());
+    let fake = fake_with(&def, Podman::Exit(0), ServiceFails::No);
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert_eq!(
+        podman_order(&fake),
+        [
+            "pod create",
+            "create",
+            "start",
+            "create",
+            "start",
+            "rm",
+            "pod rm"
+        ]
+    );
+    let pod = &fake.by("podman", "pod create")[0];
+    assert_eq!(
+        pod.argv(),
+        ["pod", "create", "--name=forge-job-7-1", "--network=none"]
+    );
+    let creates = fake.by("podman", "create");
+    let (svc, job) = (creates[0].argv(), creates[1].argv());
+    for flag in [
+        "--pod=forge-job-7-1",
+        "--name=forge-job-7-1-svc-db",
+        "--read-only",
+        "--cap-drop=all",
+        "--security-opt=no-new-privileges",
+        "--user=999:999",
+        "--env=POSTGRES_PASSWORD=test",
+        "--tmpfs=/var/run/postgresql:rw,nosuid,nodev,size=1g,mode=1777",
+    ] {
+        assert!(svc.iter().any(|a| a == flag), "{flag}: {svc:?}");
+    }
+    assert_eq!(svc.last().map(String::as_str), Some(pg_image().as_str()));
+    assert!(job.iter().any(|a| a == "--pod=forge-job-7-1"), "{job:?}");
+    assert!(job.iter().all(|a| !a.starts_with("--network")), "{job:?}");
+    assert_eq!(
+        fake.by("podman", "start")[0].argv(),
+        ["start", "--", "forge-job-7-1-svc-db"]
+    );
+    assert_eq!(fake.by("podman", "pod rm")[0].argv(), POD_RM);
+    assert!(fake.by("podman", "logs").is_empty());
+    // A job without services has no pod at all.
+    let plain = definition("make");
+    let fake = Fake::new(&plain, Podman::Exit(0));
+    let s = setup(&fake);
+    run(&s, &claim(8, "fgj_8_secret", &plain), &Forge::default());
+    assert_eq!(podman_order(&fake), ["create", "start", "rm"]);
+}
+
+/// FG-CI-0014: a pod or a service Podman could not create or start fails
+/// the job before its container; the pod is removed on every path, and the
+/// service's log tail is in the job log.
+#[test]
+fn a_service_that_fails_to_start_fails_the_job_and_its_pod_is_removed() {
+    let def = definition_with_db("make", &pg_image());
+    for (fails, reason, step) in [
+        (ServiceFails::Create, "service_start", Some("create")),
+        (ServiceFails::Start, "service_start", Some("start")),
+        (ServiceFails::PodCreate, "pod_create", None),
+    ] {
+        let fake = fake_with(&def, Podman::Exit(0), fails);
+        let s = setup(&fake);
+        let forge = Forge::default();
+        let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+        assert_eq!(out.result, JobResult::Failed);
+        let err = out.error.expect("service failed");
+        assert_eq!(err.code(), ErrorCode::ServiceStartFailed, "{reason}");
+        assert!(has_context(&err, "reason", reason), "{err:?}");
+        if let Some(step) = step {
+            assert!(has_context(&err, "service", "db"), "{err:?}");
+            assert!(has_context(&err, "step", step), "{err:?}");
+            assert!(err
+                .context()
+                .iter()
+                .any(|(k, v)| *k == "podman_stderr" && v.starts_with("Error:")));
+            assert_eq!(fake.by("podman", "logs").len(), 1);
+        } else {
+            assert!(fake.by("podman", "logs").is_empty());
+        }
+        // The job's container never got created.
+        assert!(fake
+            .by("podman", "create")
+            .iter()
+            .all(|c| c.argv().iter().any(|a| a.contains("-svc-"))));
+        assert_eq!(fake.by("podman", "pod rm").len(), 1, "{reason}");
+        assert_eq!(
+            podman_order(&fake).last().map(String::as_str),
+            Some("pod rm")
+        );
+        assert!(s.exec.workspace.is_clean());
+        let logs = forge.logs.lock().unwrap().join("");
+        assert!(logs.contains("FG-CI-0014"), "{logs}");
+    }
+}
+
+/// A failed job gets the end of each service's log, prefixed and masked
+/// like its own output; then the pod is removed.
+#[test]
+fn a_failed_job_gets_the_service_log_tail_masked() {
+    let def = definition_with_db("exit 3", &pg_image());
+    let fake = fake_with(&def, Podman::Exit(3), ServiceFails::No);
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.exit_code, Some(3));
+    assert_eq!(
+        fake.by("podman", "logs")[0].argv(),
+        ["logs", "--tail=50", "--", "forge-job-7-1-svc-db"]
+    );
+    let logs = forge.logs.lock().unwrap().join("");
+    assert!(
+        logs.contains("[service db] FATAL: data directory not writable"),
+        "{logs}"
+    );
+    assert!(
+        logs.contains("[service db] LOG: starting [masked]"),
+        "{logs}"
+    );
+    assert!(!logs.contains("fgj_7_secret"), "{logs}");
+    // Logs before the removal.
+    assert_eq!(
+        podman_order(&fake),
+        [
+            "pod create",
+            "create",
+            "start",
+            "create",
+            "start",
+            "logs",
+            "rm",
+            "pod rm"
+        ]
+    );
+}
+
+/// A timeout with services: the job container killed, the service logs
+/// copied, the container and the pod removed.
+#[test]
+fn a_job_with_services_past_its_timeout_removes_its_pod() {
+    let def = definition_with_db("sleep 100000", &pg_image());
+    let fake = fake_with(&def, Podman::TimedOut, ServiceFails::No);
+    let s = setup(&fake);
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
+    assert_eq!(out.error.expect("timed out").code(), ErrorCode::JobTimedOut);
+    let order = podman_order(&fake);
+    assert_eq!(&order[order.len() - 4..], ["kill", "logs", "rm", "pod rm"]);
+    assert!(s.exec.workspace.is_clean());
+}
+
+/// A service image outside `image_registries` is FG-CI-0011 naming the
+/// service, before any Podman call.
+#[test]
+fn a_service_image_outside_the_allowed_registries_is_refused() {
+    let evil = format!("docker.io/library/postgres@sha256:{}", "c".repeat(64));
+    let def = definition_with_db("make", &evil);
+    let fake = fake_with(&def, Podman::Exit(0), ServiceFails::No);
+    let s = setup(&fake);
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
+    let err = out.error.expect("refused");
+    assert_eq!(err.code(), ErrorCode::JobImageNotAllowed);
+    assert!(has_context(&err, "service", "db"), "{err:?}");
+    assert!(podman_order(&fake).is_empty(), "{:?}", fake.calls());
+    assert!(s.exec.workspace.is_clean());
+}
+
+/// A shutdown during a job with services: the job container killed and
+/// removed, then its pod.
+#[test]
+fn a_shutdown_removes_the_pod_of_a_job_with_services() {
+    let def = definition_with_db("sleep 100000", &pg_image());
+    let fake = fake_with(&def, Podman::UntilStopped, ServiceFails::No);
+    let s = setup(&fake);
+    let forge = Arc::new(Forge::default());
+    forge
+        .claims
+        .lock()
+        .unwrap()
+        .push(claim(7, "fgj_7_secret", &def));
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let runner = Runner {
+        api: Arc::clone(&forge) as Arc<dyn RunnerApi>,
+        exec: s.exec,
+        heartbeat_every: Duration::from_secs(30),
+        shutdown: Arc::clone(&shutdown),
+    };
+    let signal = {
+        let (fake, shutdown) = (Arc::clone(&fake), Arc::clone(&shutdown));
+        std::thread::spawn(move || {
+            let until = std::time::Instant::now() + Duration::from_secs(20);
+            // The job's own start (the service's came first).
+            while fake.by("podman", "start").len() < 2 {
+                assert!(std::time::Instant::now() < until, "never started");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            shutdown.store(true, Ordering::SeqCst);
+        })
+    };
+    runner.run_forever().expect("a clean stop");
+    signal.join().expect("signal thread");
+    let order = podman_order(&fake);
+    assert_eq!(&order[order.len() - 4..], ["kill", "logs", "rm", "pod rm"]);
+    assert_eq!(
+        forge.completed.lock().unwrap().as_slice(),
+        [(7, JobResult::Failed, None)]
+    );
+    assert!(runner.exec.workspace.is_clean());
+}
+
+/// Real rootless Podman (plan 14 C5s): a PostgreSQL service in the job's
+/// pod is reached from the job over 127.0.0.1, the job still has no route
+/// out, and the pod and its containers are gone afterwards.
+#[test]
+#[ignore = "needs a Linux host with rootless Podman and FORGE_RUNNER_TEST_PG_IMAGE (postgres:16 pinned by digest) pullable; run on the runner host with --run-ignored"]
+fn a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks() {
+    use crate::process::SystemRunner;
+    let image = std::env::var("FORGE_RUNNER_TEST_PG_IMAGE").expect("FORGE_RUNNER_TEST_PG_IMAGE");
+    let dir = tempfile::tempdir().expect("dir");
+    let work = dir.path().join("work");
+    let script = dir.path().join("script");
+    std::fs::create_dir_all(&work).expect("work");
+    std::fs::create_dir_all(&script).expect("script");
+    std::fs::write(
+        script.join("script.sh"),
+        "i=0\nuntil pg_isready -q -h 127.0.0.1; do i=$((i+1)); [ $i -lt 60 ]; sleep 1; done\n\
+         PGPASSWORD=test psql -h 127.0.0.1 -U postgres -tAc 'select 40 + 2' > /workspace/answer\n\
+         ! getent hosts registry\n\
+         ! pg_isready -q -t 3 -h 192.0.2.1\n\
+         [ \"$(awk 'NR > 2 { print $1 }' /proc/net/dev)\" = lo: ]\n",
+    )
+    .expect("script");
+    let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+    let run = |cmd: &Cmd| {
+        SystemRunner
+            .run(cmd, Duration::from_secs(300), &|| false, &mut |_| {})
+            .expect("podman")
+    };
+    let pod = "forge-job-test-2";
+    let svc = "forge-job-test-2-svc-db";
+    let env = vec![
+        ("POSTGRES_PASSWORD".to_owned(), "test".to_owned()),
+        (
+            "PGDATA".to_owned(),
+            "/var/lib/postgresql/data/pgdata".to_owned(),
+        ),
+    ];
+    let tmpfs = vec![
+        "/var/lib/postgresql/data".to_owned(),
+        "/var/run/postgresql".to_owned(),
+    ];
+    let steps = || -> Result<(), String> {
+        let ran = run(&plan.pod_create(pod));
+        if !ran.ok() {
+            return Err(format!("pod create: {ran:?}"));
+        }
+        let ran = run(&plan.service_create(&crate::podman::ServiceContainer {
+            pod,
+            name: svc,
+            image: &image,
+            env: &env,
+            user: Some("999:999"),
+            tmpfs: &tmpfs,
+        }));
+        if !ran.ok() {
+            return Err(format!("service create: {ran:?}"));
+        }
+        let ran = run(&plan.service_start(svc));
+        if !ran.ok() {
+            return Err(format!("service start: {ran:?}"));
+        }
+        let ran = run(&plan.create(&crate::podman::Container {
+            name: pod,
+            image: &image,
+            work: &work,
+            script_dir: &script,
+            job_id: 2,
+            pipeline_id: 2,
+            project_id: 2,
+            sha: SHA,
+            pod: Some(pod),
+        }));
+        if !ran.ok() {
+            return Err(format!("job create: {ran:?}"));
+        }
+        let mut output = Vec::new();
+        let ran = SystemRunner
+            .run(
+                &plan.start(pod),
+                Duration::from_secs(300),
+                &|| false,
+                &mut |b| output.extend_from_slice(b),
+            )
+            .expect("start");
+        if !ran.ok() {
+            let mut logs = Vec::new();
+            let _ = SystemRunner.run(
+                &plan.logs_tail(svc),
+                Duration::from_secs(60),
+                &|| false,
+                &mut |b| logs.extend_from_slice(b),
+            );
+            return Err(format!(
+                "job: {ran:?}\n{}\nservice:\n{}",
+                String::from_utf8_lossy(&output),
+                String::from_utf8_lossy(&logs)
+            ));
+        }
+        Ok(())
+    };
+    let result = steps();
+    let removed = run(&plan.pod_remove(pod));
+    result.expect("the job reached its service");
+    assert!(removed.ok(), "{removed:?}");
+    assert_eq!(
+        std::fs::read_to_string(work.join("answer"))
+            .expect("answer")
+            .trim(),
+        "42"
+    );
+    // Nothing is left: no pod, no container.
+    let pods = run(&plan.stale_pods());
+    assert!(
+        !String::from_utf8_lossy(&pods.stdout).contains(pod),
+        "{pods:?}"
+    );
+    let containers = run(&plan.stale());
+    assert!(
+        !String::from_utf8_lossy(&containers.stdout).contains("forge-job-test-2"),
+        "{containers:?}"
     );
 }

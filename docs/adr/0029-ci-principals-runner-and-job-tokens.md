@@ -125,8 +125,27 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
   plan: `Trigger.protected` が偽（保護されていないブランチ）か MR のパイプラインで、選ばれたジョブがシークレットを持てば計画が失敗する
   （`secret_on_unprotected_ref`。黙って外さない）。C6 も保護ブランチにしか値を渡さない。
 
+## 追記（2026-11-11、計画 14 C5s）— ジョブのサービスとネットワーク
+
+- ジョブは `services`（2 つまで、`{ name, image, env?, user?, tmpfs? }`）で横にコンテナを動かせる。GitStation の試験は PostgreSQL が要り
+  （`FORGE_TEST_DATABASE_URL`）、ジョブのコンテナは `--network=none` なので、これが無いと `ci/pipeline` を必須にできない（X）。
+- **ネットワークは閉じたまま**。ジョブにサービスがあると Runner はポッドを `podman pod create --network=none` で作り、サービスとジョブの
+  コンテナを同じポッドに入れる。共有するのは**ループバックだけの network namespace**（と pod の既定の ipc / uts）: 届くのは `127.0.0.1`
+  の互いだけで、外・Runner のホスト・社内のネットワークには届かない。DNS も無い。ジョブだけのときは従来どおりポッドを作らない。
+- サービスのコンテナはジョブと同じ閉じ方（読み取り専用のルート、`--cap-drop=all`、`no-new-privileges`、同じメモリ・プロセス数・ulimit、
+  `--pull=missing`）。書ける場所は `/tmp` と、ファイルが宣言した `tmpfs`（4 つまで、絶対パス、`/proc`・`/sys`・`/dev` の下と `/` を断る、
+  `mode=1777`）だけ。権限を足す口（`command`・`ports`・`volumes`・特権・能力）は無く、未知のキーは lint が断る。root でない `user` を勧める。
+- イメージはジョブと同じ規則（ダイジェストで固定、Runner の `image_registries`）。サービスは要求（claim）に無く、Runner が
+  `definition_hash` で確かめた `.forge-ci.yml` から読むので、許されないサービスのイメージ（FG-CI-0011、`service`）は fetch の後・
+  コンテナと pull の前に断る。
+- `env` の値はファイルの平文で argv の 1 要素（`--env=K=V`、シェルを通らない）。**シークレットではない**（C6 のシークレットはサービスに
+  渡さない）。lint は不正な値を出力に書かない。
+- Runner は準備を待たない（ジョブのスクリプトが待つ）。ポッドやサービスを起動できなければ FG-CI-0014、ポッドはどの終わり方でも
+  `pod rm --force` で消し、起動のときも残りを消す。ジョブが失敗したら各サービスのログの最後の 50 行をジョブのログに足す（ジョブの出力と同じマスク）。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。
-- runbook: `ci-runner`（新規、C3）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
+- C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
+- runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。
