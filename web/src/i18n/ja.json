@@ -125,6 +125,7 @@
     "notice": "この場所は移動しました。古いアドレスでも開けます。以前のパス："
   },
   "project": {
+    "preparing": "リポジトリを準備しています。数秒で表示されます。",
     "emptyTitle": "リポジトリはまだ空です",
     "emptyBody": "次のコマンドで、最初のファイルを送ってください。",
     "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",

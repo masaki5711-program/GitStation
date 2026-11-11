@@ -75,6 +75,26 @@ describe('project top page', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Forge Web' })).toBeTruthy();
   });
 
+  it('right after creating, waits while the repository is prepared (503) instead of failing', async () => {
+    let asked = 0;
+    const server = mockServer({
+      ...project(),
+      'GET /api/v1/projects/7/repository/refs': () => {
+        asked += 1;
+        return asked <= 3
+          ? apiError(503, 'リポジトリを準備しています。', `req-prov-${String(asked)}`, 'FG-REPO-0016')
+          : json(200, REFS_EMPTY);
+      },
+    });
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });
+    expect(await screen.findByText('リポジトリを準備しています。数秒で表示されます。')).toBeTruthy();
+    expect(
+      await screen.findByRole('heading', { name: 'リポジトリはまだ空です' }, { timeout: 6000 }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(asked).toBe(4);
+  }, 10000);
+
   it('remembers the project for "recently viewed" in this browser', async () => {
     window.localStorage.clear();
     const server = mockServer(project());
