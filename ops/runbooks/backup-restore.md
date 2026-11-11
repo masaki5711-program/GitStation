@@ -179,8 +179,8 @@ Keycloak（とその DB）が動いていること、サインインできる管
    sudo -u postgres pgbackrest --stanza=forge --set=<db.label> --type=immediate --target-action=promote --delta restore
    systemctl start postgresql
    ```
-   **PG がコンテナのとき**（**この環境では未確認**）: PG のコンテナを止め、同じイメージ・同じデータのボリューム・pgBackRest の設定と
-   リポジトリのマウントで 1 回だけのコンテナを走らせてから、PG のコンテナを起動する。
+   **PG がコンテナのとき**（2026-11-11 の訓練で確認。リポジトリは `<backup.dir>/pgbackrest` をマウントした形）: PG のコンテナを止め、
+   同じイメージ・同じデータのボリューム・pgBackRest の設定とリポジトリのマウントで 1 回だけのコンテナを走らせてから、PG のコンテナを起動する。
    ```
    docker stop <PG のコンテナ>
    docker run --rm -u postgres -v <データのボリューム>:<pg1-path の親> -v <backup.dir>/pgbackrest:<repo1-path> \
@@ -188,6 +188,13 @@ Keycloak（とその DB）が動いていること、サインインできる管
      pgbackrest --stanza=forge --set=<db.label> --type=immediate --target-action=promote --delta restore
    docker start <PG のコンテナ>
    ```
+   `--delta` は空のディレクトリに対して警告を出すだけで、そのまま進む（データのボリュームを新しく作った場合も同じ）。
+   **データのボリュームを失ったとき**（既存のボリュームは使えない）: 次の順で行う。`docker start` で元のコンテナを起こしてはいけない（失ったボリュームを指したまま）。
+   1. 新しいデータのボリュームを作る（`docker volume create <新しいボリューム>`）。
+   2. そのボリュームに 1 回だけのコンテナで pgbackrest の restore を流す（上の `docker run --rm …` の `-v` の `<データのボリューム>` を `<新しいボリューム>` に替える）。
+   3. 元の PG のコンテナと同じイメージ・環境変数・ポート・ネットワークで、**新しい PG のコンテナを `docker run` で作り**、`<新しいボリューム>` をマウントして起動する。
+      元のコンテナは止めたままにしておく（記録のために残してよい）。
+   4. 以降の手順 5〜7 は同じ。
    （バックアップの点より後まで戻すのは、**リポジトリを失っていない**（手順 5 を飛ばす）ときだけ: 最後まで再生（`--type=immediate`
    を付けない）か、時点を指定する PITR（`--type=time --target=<時刻> --target-action=promote`）。どちらにしたかを記録に残す。
    その場合も下の 6〜7 はそのまま。）
@@ -257,6 +264,13 @@ Keycloak（とその DB）が動いていること、サインインできる管
     FG-DB-0015 で失敗する。worker の封印のタスクは 10 秒ごとに見て、前の封印から 60 秒たつ（または 1000 行を超える）と封印し、
     溜まった行は 5000 行ずつ続けて封印する。`context` の `unsealed_numbered` が 0 になれば ok。`unsequenced > 0` かつ
     `audit_sequencing=off` は待っても消えない（番号付けが止まっている）: runbook audit-seal-backlog の「想定どおりの場合」と Diagnose 2。
+    `audit.seal_backlog` の判定（`forge-db` の `seal/backlog.rs`）は `audit_sequencing` を見ない。**最も古い未封印の行**（最後の封印より後に
+    番号を振られた行、または番号のない行）が 5 分を超えると、`audit_sequencing=off` のままでも FG-DB-0015 で失敗する。
+    起動の直後（1〜2 分）は番号のない行だけでも ok（詳細 `nothing sealed yet … unnumbered rows waiting, audit sequencing off`）になりうるが、
+    これは判定の窓の中だからで、番号付けが動いている証拠ではない。`audit_sequencing=off` の間は、5 分を過ぎた後の FG-DB-0015 も想定どおり
+    （待って ok にはならない。直すのは番号付けの有効化＝C9 の比較の後）。
+    `feed.sink_compare` の警告（「database restore の後に `forge admin events new-epoch`」）は古い文言: `restore finish` が epoch を既に進めている
+    （`feed.epoch_rotated`）。**`new-epoch` は流さない**（流すと、すべての連携のカーソルがもう一度 410 `epoch_mismatch` になる）。
 11. **管理者がサインインし直す**: Keycloak が動いていることを確かめ（keycloak-unreachable）、手順 8 で残った・付け直した管理者が
     ブラウザで Keycloak 経由でサインインする（復元の前のセッションはすべて失効している）。サインインできる管理者がいなければ
     手順 12 の連携とサービスアカウントは進められない: `forge admin bootstrap-admin --user <username>` で付けてから。
@@ -283,7 +297,7 @@ integrations）。順序: ①管理者のサインイン → ②サービスア�
 ## 復元の訓練（四半期に 1 回）
 
 試験環境（m3-test-environment）で、本番と同じ手順を **合成のデータ** で通す。記録（日時・世代・かかった時間・`forge restore verify` の
-出力・見つかった問題）を `ops/incidents/` の訓練の記録に残す。
+出力・見つかった問題）を `ops/incidents/` の訓練の記録に残す。直近の記録: `ops/incidents/2026-11-11-drill-backup-restore.md`（使い捨ての `gs-drill`、2 回）。
 
 1. 試験環境で `forge backup`。`forge doctor` の `backup.last_success` が ok。
 2. バックアップの後に: トークンを 1 つ失効、利用者を 1 人無効化、プロジェクトの所属を 1 つ削除、ロールを 1 つ下げる、管理者の印を 1 つ外す、
