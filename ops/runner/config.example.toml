@@ -1,3 +1,4 @@
+# TEST ONLY (ops/runner/README.md): plain HTTP to the forge. Never copy to production.
 # Copy to ops/runner/.local/config.toml (test environment on this machine).
 server = "http://host.docker.internal:28080"
 allow_insecure_http = true            # test only: the test GitStation has no TLS
