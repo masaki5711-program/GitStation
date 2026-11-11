@@ -1,0 +1,75 @@
+# GitStation's own CI on forge-runner (plan 14 X; DRAFT until the cutover).
+# Mirrors .github/workflows/ci.yml (lint, test, generated). Jobs have no
+# network: the image (ops/ci-image) carries the toolchain and every crate of
+# Cargo.lock. Rebuild and re-pin both digests with
+# `node ops/ci-image/build-and-push.mjs` when rust-toolchain.toml or
+# Cargo.lock changes (a missing crate fails the job: cargo is offline).
+# Every job builds from scratch (no shared target/, debuginfo off): the
+# runner's work_dir must hold about 6.2 GB (ops/ci-image/README.md).
+version: 1
+stages: [check]
+
+jobs:
+  lint:
+    stage: check
+    image: registry:5000/ci/rust@sha256:e96601afbc8533373dd783de037b22dba07f5a4fd5a932cedcd2a4a94e5a634f
+    timeout: 45m
+    tags: [linux]
+    script:
+      - export CARGO_BUILD_JOBS=4
+      # No debuginfo: the full test build is 29.9 GB with it, 6.2 GB without (ops/ci-image/README.md).
+      - export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+      - rustc --version && cargo nextest --version && git --version
+      - cargo fmt --all -- --check
+      # The shipped binaries must never enable a `test-support` feature.
+      # (no pipe from cargo: sh has no pipefail, a failing cargo must fail the job)
+      - cargo tree --locked -p forge-cli -e normal,features > /tmp/tree-forge-cli.txt
+      - if grep -F 'feature "test-support"' /tmp/tree-forge-cli.txt; then echo "test-support is enabled in forge-cli's normal graph"; exit 1; fi
+      - cargo tree --locked -p forge-client -e normal,features > /tmp/tree-forge-client.txt
+      - if grep -F 'feature "test-support"' /tmp/tree-forge-client.txt; then echo "test-support is enabled in forge-client's normal graph"; exit 1; fi
+      - cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  test:
+    stage: check
+    image: registry:5000/ci/rust@sha256:e96601afbc8533373dd783de037b22dba07f5a4fd5a932cedcd2a4a94e5a634f
+    timeout: 90m
+    tags: [linux]
+    # Same user, password, database and port (55432) as ops/dev/compose.yml (ADR-0011):
+    # some DB tests assert the target 127.0.0.1:55432/forge_dev;
+    # max_connections=200 and the port are baked into the image (ops/ci-image/postgres.Containerfile).
+    # The DB tests reset the forge_* login roles, so the target must be loopback.
+    services:
+      - name: db
+        image: registry:5000/ci/postgres@sha256:dcc37320cb7b82f77b6eac3a5d58440d67d8b03790dcd3d63c43fc5605176206
+        user: "999:999"
+        env:
+          POSTGRES_USER: forge_dev
+          POSTGRES_PASSWORD: forge_dev
+          POSTGRES_DB: forge_dev
+          PGDATA: /var/lib/postgresql/data/pgdata
+          # The job reaches the server from 127.0.0.1, which initdb would trust;
+          # the tests need a wrong password refused (as over the Docker bridge on GitHub).
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        tmpfs: [/var/lib/postgresql/data, /var/run/postgresql]
+    script:
+      - export CARGO_BUILD_JOBS=4
+      # No debuginfo: the full test build is 29.9 GB with it, 6.2 GB without (ops/ci-image/README.md).
+      - export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+      - export FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev
+      - git --version
+      # The image has no pg_isready; the port opens only after initdb.
+      - timeout 120 bash -c 'until (echo > /dev/tcp/127.0.0.1/55432) 2>/dev/null; do sleep 1; done'
+      - cargo nextest run --locked --workspace --profile ci -j 4 --no-fail-fast --retries 1
+
+  generated:
+    stage: check
+    image: registry:5000/ci/rust@sha256:e96601afbc8533373dd783de037b22dba07f5a4fd5a932cedcd2a4a94e5a634f
+    timeout: 45m
+    tags: [linux]
+    script:
+      - export CARGO_BUILD_JOBS=4
+      # No debuginfo: the full test build is 29.9 GB with it, 6.2 GB without (ops/ci-image/README.md).
+      - export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+      # docs/errors/ from errors.toml; docs/authz/ from the permission matrix.
+      - cargo run --locked -q -p forge-errors --bin gen-catalog -- --check
+      - cargo run --locked -q -p forge-web --bin gen-authz -- --check
