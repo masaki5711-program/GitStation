@@ -18,10 +18,16 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use forge_auth::{Credential, Principal, Role, Scope};
+use forge_core::act_as::ActAsKeys;
 use forge_core::namespace_resolver::LookupFuture;
-use forge_core::{ProjectId, RefName, RepoId, RequestId, UserId};
+use forge_core::{ObjectId, ProjectId, RefName, RepoId, RequestId, UserId};
 use forge_db::change::{Actor, ChangeContext};
+use forge_db::ci_runners::lease;
+use forge_db::ci_runners::{register, NewRunner};
 use forge_db::groups::{self, NewGroup};
+use forge_db::pipelines::{
+    self as pipelines, NewCiJob, NewPipeline, PipelineRequest, Planned, Source,
+};
 use forge_db::projects::{self, NewProject};
 use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
@@ -36,17 +42,8 @@ use tower::ServiceExt;
 const LIST: &str = "/api/v1/user/merge-requests";
 const COUNTS: &str = "/api/v1/user/merge-requests/counts";
 
-struct NoTokens;
-
-impl forge_core::Authenticator for NoTokens {
-    fn authenticate<'a>(
-        &'a self,
-        _: &'a RequestId,
-        _: &'a str,
-    ) -> forge_core::authenticator::AuthFuture<'a> {
-        Box::pin(async { Err(ForgeError::new(ErrorCode::Unauthenticated)) })
-    }
-}
+/// The act-as keys of the synthetic kanflow integration.
+const KEYS: &str = "1:BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSY= active";
 
 /// No branch is looked up by these reads.
 struct NoBranches;
@@ -66,13 +63,19 @@ fn router(db: &Db) -> axum::Router {
     let state = AppState::new(
         "test",
         Vec::new(),
-        Arc::new(NoTokens),
+        // Real tokens (runner, job, service account) are authenticated by
+        // forge-db; people are injected as request extensions.
+        Arc::new(db.clone()),
         Lookups {
             namespaces: Arc::new(db.clone()),
             projects: Arc::new(db.clone()),
         },
     )
-    .with_review(Review::new(db.clone(), Arc::new(NoBranches)));
+    .with_review(Review::new(db.clone(), Arc::new(NoBranches)))
+    .with_act_as(forge_integ::ActAs::new(
+        db.clone(),
+        Some(ActAsKeys::parse(KEYS).expect("keys")),
+    ));
     forge_web::app(state, AppConfig::default()).expect("router")
 }
 
@@ -229,12 +232,19 @@ impl Answer {
 }
 
 async fn get(db: &Db, uri: &str, who: Principal) -> Answer {
-    let mut req = Request::builder()
-        .method("GET")
-        .uri(uri)
-        .body(Body::empty())
-        .expect("request");
-    req.extensions_mut().insert(who);
+    send(db, uri, Some(who), &[]).await
+}
+
+/// `GET uri` as `who` (injected) or with `headers` only (a bearer token).
+async fn send(db: &Db, uri: &str, who: Option<Principal>, headers: &[(&str, &str)]) -> Answer {
+    let mut builder = Request::builder().method("GET").uri(uri);
+    for (k, v) in headers {
+        builder = builder.header(*k, *v);
+    }
+    let mut req = builder.body(Body::empty()).expect("request");
+    if let Some(who) = who {
+        req.extensions_mut().insert(who);
+    }
     let res = router(db).oneshot(req).await.expect("infallible");
     let status = res.status();
     let raw = res.into_body().collect().await.expect("body").to_bytes();
@@ -253,6 +263,7 @@ async fn scope(db: &Db, scope: &str, who: Principal) -> Answer {
 
 fn count(a: &Answer, scope: &str) -> i64 {
     assert_eq!(a.json[scope]["capped"], false, "{}", a.json);
+    assert_eq!(a.json[scope]["truncated"], false, "{}", a.json);
     a.json[scope]["count"].as_i64().expect("count")
 }
 
@@ -444,5 +455,204 @@ async fn the_query_is_strict_and_only_the_persons_reading_credential_passes() {
         );
         let anonymous = get(&t.db, &uri, Principal::anonymous()).await;
         assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn a_count_that_stops_at_its_scan_bound_says_so() {
+    let t = FreshDb::migrated().await;
+    let dave = user(&t, "dave").await;
+    let hugo = user(&t, "hugo").await;
+    let mine = project(&t, "acme", dave, &[]).await;
+    // 1001 merge requests of dave's in hugo's project (dave cannot see
+    // it): more candidates than one count scans (10 pages of 100), none
+    // visible. The newest is one dave sees.
+    let hidden = project(&t, "secret", hugo, &[]).await;
+    let h = hidden.get();
+    t.commit_audited(
+        ("project", h),
+        &[
+            format!(
+                "INSERT INTO forge.merge_request_counters (project_id, last_iid) \
+                 VALUES ({h}, 1001)"
+            ),
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id, \
+                 source_branch, target_branch, head_sha) SELECT {h}, i, 'Change ' || i, {}, \
+                 'refs/heads/b' || i, 'refs/heads/main', lpad(to_hex(i), 40, '0') \
+                 FROM generate_series(1, 1001) AS i",
+                dave.get()
+            ),
+        ],
+    )
+    .await;
+    let _visible = mr(&t, mine, 1, dave, false).await;
+    let counts = get(&t.db, COUNTS, session(dave)).await;
+    assert_eq!(counts.status, StatusCode::OK, "{}", counts.json);
+    // 1000 candidates scanned, 999 hidden ones of them: a lower bound,
+    // said as such.
+    assert_eq!(counts.json["authored"]["count"], 1, "{}", counts.json);
+    assert_eq!(
+        counts.json["authored"]["truncated"], true,
+        "{}",
+        counts.json
+    );
+    assert_eq!(counts.json["authored"]["capped"], false);
+    assert_eq!(counts.json["approvable"]["truncated"], false);
+    // hugo's own count is not cut short (his candidates fit the scan).
+    let hugos = get(&t.db, COUNTS, session(hugo)).await;
+    assert_eq!(hugos.json["authored"]["truncated"], false, "{}", hugos.json);
+    // The page says more may follow even when it shows nothing.
+    let page = get(
+        &t.db,
+        &format!("{LIST}?scope=authored&limit=100"),
+        session(dave),
+    )
+    .await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.json);
+    assert!(page.json["next_before"].is_i64(), "{}", page.json);
+}
+
+#[tokio::test]
+async fn runner_job_and_act_as_credentials_are_refused_on_both_routes() {
+    let t = FreshDb::migrated().await;
+    let olga = users::create(&t.db, &ctx("req-user-olga"), &{
+        let mut n = NewUser::human("olga", "olga", "olga@example.test");
+        n.is_admin = true;
+        n
+    })
+    .await
+    .expect("olga")
+    .user_id;
+    let web = project(&t, "acme", olga, &[]).await;
+    let _one = mr(&t, web, 1, olga, false).await;
+    // A runner's token, and the token of a job it claimed.
+    let runner = register(
+        &t.db,
+        &ChangeContext::new(
+            Actor::User(olga),
+            RequestId::parse("req-runner").expect("id"),
+        ),
+        &NewRunner {
+            name: "linux-1".to_owned(),
+            description: String::new(),
+            tags: Vec::new(),
+        },
+    )
+    .await
+    .expect("runner");
+    let _pipeline = pipelines::create(
+        &t.db,
+        &NewPipeline {
+            request: PipelineRequest {
+                project: web,
+                git_ref: RefName::parse("refs/heads/main").expect("ref"),
+                sha: ObjectId::parse(&"b".repeat(40)).expect("sha"),
+                source: Source::Manual,
+                merge_request: None,
+                triggered_by: None,
+            },
+            request_id: "req-seed".to_owned(),
+            definition_hash: Some(pipelines::definition_hash(b"version: 1")),
+            protected: false,
+            copy_mark: pipelines::CopyMark::Open,
+            planned: Planned::Jobs(vec![NewCiJob {
+                name: "build".to_owned(),
+                stage: "build".to_owned(),
+                wave: 0,
+                needs: Vec::new(),
+                image: format!("registry.internal/rust@sha256:{}", "a".repeat(64)),
+                timeout_s: 600,
+                tags: Vec::new(),
+                secrets: Vec::new(),
+            }]),
+        },
+    )
+    .await
+    .expect("pipeline");
+    let job = lease::claim(&t.db, runner.runner.id)
+        .await
+        .expect("claim")
+        .expect("a job")
+        .token
+        .reveal();
+    // A service account's act-as token, acting for olga.
+    let sa = forge_db::service_accounts::create(
+        &t.db,
+        &ctx("req-sa"),
+        &forge_db::service_accounts::NewServiceAccount {
+            username: "kanflow-sync".to_owned(),
+            display_name: "kanflow".to_owned(),
+            owner: olga,
+            purpose: "synthetic act-as caller".to_owned(),
+        },
+        olga,
+    )
+    .await
+    .expect("sa")
+    .user_id;
+    let _integration = forge_db::integrations::create(
+        &t.db,
+        &ctx("req-int"),
+        &forge_db::integrations::NewIntegration {
+            kind: forge_core::IntegrationKind::Kanflow,
+            service_account: sa,
+            event_types: None,
+        },
+        olga,
+    )
+    .await
+    .expect("integration");
+    let kanflow = forge_db::tokens::issue_for_service_account(
+        &t.db,
+        &ctx("req-token"),
+        &forge_db::tokens::NewToken {
+            user: sa,
+            name: "kanflow".to_owned(),
+            scopes: vec![Scope::ReadApi, Scope::ActAs],
+            expires_in: None,
+            is_agent: false,
+        },
+        olga,
+    )
+    .await
+    .expect("token")
+    .token
+    .reveal();
+
+    let runner_auth = format!("Bearer {}", runner.token.reveal());
+    let job_auth = format!("Bearer {job}");
+    let kanflow_auth = format!("Bearer {kanflow}");
+    let act_as = format!("user:{}", olga.get());
+    for uri in [format!("{LIST}?scope=authored"), COUNTS.to_owned()] {
+        // The person herself is allowed (the control).
+        let own = get(&t.db, &uri, session(olga)).await;
+        assert_eq!(own.status, StatusCode::OK, "{uri}: {}", own.json);
+        for (who, headers) in [
+            ("runner", vec![("authorization", runner_auth.as_str())]),
+            ("job", vec![("authorization", job_auth.as_str())]),
+            (
+                "act-as",
+                vec![
+                    ("authorization", kanflow_auth.as_str()),
+                    ("forge-act-as", act_as.as_str()),
+                ],
+            ),
+        ] {
+            let a = send(&t.db, &uri, None, &headers).await;
+            assert!(
+                a.status == StatusCode::FORBIDDEN || a.status == StatusCode::NOT_FOUND,
+                "{who} {uri}: {} {}",
+                a.status,
+                a.json
+            );
+            assert!(
+                a.code().starts_with("FG-AUTH-") || a.code() == "FG-REPO-0005",
+                "{who} {uri}: {}",
+                a.json
+            );
+            assert!(a.json.get("merge_requests").is_none(), "{who} {uri}");
+            assert!(a.json.get("authored").is_none(), "{who} {uri}");
+        }
     }
 }

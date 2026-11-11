@@ -50,7 +50,7 @@
   { "action": "NotificationPreferencesWrite", "allow": 3, "deny": 10, "public": false, "git_operation": false },
   { "action": "NotificationInboxRead", "allow": 4, "deny": 9, "public": false, "git_operation": false },
   { "action": "NotificationInboxUpdate", "allow": 3, "deny": 11, "public": false, "git_operation": false },
-  { "action": "UserMergeRequestList", "allow": 5, "deny": 10, "public": false, "git_operation": false },
+  { "action": "UserMergeRequestList", "allow": 6, "deny": 10, "public": false, "git_operation": false },
   { "action": "UserCreate", "allow": 2, "deny": 6, "public": false, "git_operation": false },
   { "action": "UserDisable", "allow": 2, "deny": 11, "public": false, "git_operation": false },
   { "action": "UserSearch", "allow": 4, "deny": 6, "public": false, "git_operation": false },

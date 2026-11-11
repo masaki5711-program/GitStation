@@ -7,7 +7,9 @@
 //!   now; a page may be shorter than `limit` (hidden rows are skipped) and
 //!   `next_before` says whether more rows may follow.
 //! - `GET /api/v1/user/merge-requests/counts` (`UserMergeRequestList`): the
-//!   visible rows of every scope, each at most 100.
+//!   visible rows of every scope, each at most 100 (`capped`); a count
+//!   that stopped at its scan bound with candidates left says so
+//!   (`truncated`) instead of undercounting silently.
 //!
 //! The scopes are forge-review's (`user_lists`): `authored` (open, the
 //! caller's own), `approvable` (open, not draft, the caller may approve it
@@ -118,6 +120,10 @@ pub struct UserMergeRequestCount {
     pub count: i64,
     /// 100 visible rows were found (show "99+"); hidden rows never set it.
     pub capped: bool,
+    /// The scan stopped after 1000 candidates with more left (hidden rows
+    /// among them): `count` is a lower bound (show "n+"). Never true with
+    /// `capped`.
+    pub truncated: bool,
 }
 
 /// The counts of the caller's lists.
@@ -162,6 +168,7 @@ fn count_body(count: UserListCount) -> UserMergeRequestCount {
     UserMergeRequestCount {
         count: count.count,
         capped: count.capped,
+        truncated: count.truncated,
     }
 }
 
