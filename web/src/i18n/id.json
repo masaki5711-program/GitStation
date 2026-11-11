@@ -1166,7 +1166,8 @@
     "undecided": "Tidak dapat diprediksi.",
     "scanFailed": "Prediksi konflik tidak dapat dijalankan. Akan dijalankan lagi pada push berikutnya.",
     "scanIncomplete": "Tidak semua merge request lain dibandingkan.",
-    "scanStale": "Prediksi ini dibuat untuk versi atau target sebelumnya."
+    "scanStale": "Prediksi ini dibuat untuk versi atau target sebelumnya.",
+    "openPipeline": "Buka pipeline #{{id}}"
   },
   "docs": {
     "title": "Dokumen",
@@ -1225,6 +1226,100 @@
       "code": "({{code}})",
       "reload": "Muat ulang",
       "hidden": "Anda tidak punya akses, jadi hanya ID-nya yang ditampilkan."
+    }
+  },
+  "pipelines": {
+    "title": "Pipeline",
+    "listLabel": "Daftar pipeline",
+    "pagerLabel": "Halaman pipeline",
+    "empty": "Belum ada pipeline. Tambahkan .forge-ci.yml di tingkat teratas repositori lalu push; hasilnya akan tampil di sini.",
+    "emptyAction": "Buka berkas",
+    "emptyPage": "Tidak ada pipeline di halaman ini.",
+    "newest": "Terbaru",
+    "older": "Pipeline lebih lama",
+    "number": "Pipeline #{{id}}",
+    "openCommit": "Buka commit {{sha}}",
+    "took": "durasi {{duration}}",
+    "backToList": "Kembali ke daftar pipeline",
+    "statusNow": "Status: {{status}}",
+    "openFailedLog": "Lihat log job gagal \"{{job}}\"",
+    "cancel": "Batalkan",
+    "retry": "Jalankan ulang",
+    "status": {
+      "pending": "Menunggu",
+      "running": "Berjalan",
+      "succeeded": "Berhasil",
+      "failed": "Gagal",
+      "canceled": "Dibatalkan",
+      "skipped": "Tidak ada yang dijalankan",
+      "invalid": "Definisi salah",
+      "error": "Gagal dibaca",
+      "created": "Menunggu giliran"
+    },
+    "source": {
+      "push": "push",
+      "mergeRequest": "Merge request",
+      "schedule": "Terjadwal",
+      "manual": "Manual"
+    },
+    "by": {
+      "system": "Otomatis",
+      "you": "Anda",
+      "user": "Pengguna #{{id}}"
+    },
+    "duration": {
+      "hours": "{{h}} jam {{m}} mnt",
+      "minutes": "{{m}} mnt {{s}} dtk",
+      "seconds": "{{s}} dtk"
+    },
+    "line": {
+      "pending": "Menunggu dimulai. Akan berjalan saat runner tersedia.",
+      "running": "Sedang berjalan. Hasilnya akan muncul di halaman ini.",
+      "succeeded": "Semua job berhasil.",
+      "skipped": "Tidak ada job yang perlu dijalankan untuk commit ini.",
+      "failed": "Berhenti karena ada job yang gagal. Periksa penyebab dan log, lalu push perbaikan.",
+      "failedRetry": "Berhenti karena ada job yang gagal. Periksa penyebabnya, lalu push perbaikan atau tekan \"Jalankan ulang\".",
+      "failedJob": "Berhenti karena job \"{{job}}\" gagal. Periksa penyebab dan log, lalu push perbaikan.",
+      "failedJobRetry": "Berhenti karena job \"{{job}}\" gagal. Periksa penyebabnya, lalu push perbaikan atau tekan \"Jalankan ulang\".",
+      "canceled": "Dibatalkan.",
+      "canceledRetry": "Dibatalkan. Tekan \"Jalankan ulang\" untuk menjalankan lagi job yang gagal dan dibatalkan.",
+      "invalid": "Tidak dijalankan: .forge-ci.yml berisi kesalahan. Perbaiki bagian di bawah lalu push.",
+      "error": "Tidak dijalankan: .forge-ci.yml tidak dapat dibaca. Push lagi; jika terus terjadi, hubungi administrator."
+    },
+    "problems": {
+      "title": "Kesalahan di .forge-ci.yml",
+      "line": "Baris {{line}}",
+      "file": "Seluruh berkas"
+    },
+    "diagnosis": {
+      "title": "Penyebab kegagalan",
+      "none": "Belum ada job gagal yang tercatat.",
+      "pending": "Menganalisis kegagalan. Akan tampil dalam beberapa detik.",
+      "job": "Job \"{{job}}\" (tahap {{stage}})",
+      "seen": "Kegagalan yang sama terjadi {{count}} kali di proyek ini.",
+      "seenSince": "Kegagalan yang sama terjadi {{count}} kali di proyek ini (pertama {{date}}).",
+      "knownFixes": "Kegagalan yang sama diperbaiki oleh:",
+      "fix": "!{{iid}} {{title}}",
+      "openLog": "Lihat log job \"{{job}}\""
+    },
+    "jobs": {
+      "title": "Job",
+      "none": "Pipeline ini tidak memiliki job.",
+      "stage": "Tahap {{stage}}",
+      "attempt": "percobaan ke-{{attempt}}",
+      "needs": "menunggu: {{needs}}",
+      "log": "Log",
+      "logOf": "Log job \"{{job}}\""
+    },
+    "log": {
+      "title": "Log job \"{{job}}\"",
+      "attempt": "Ini log percobaan ke-{{attempt}}.",
+      "waiting": "Belum ada log. Akan tampil saat job dimulai.",
+      "empty": "Job ini tidak memiliki log.",
+      "truncated": "Log terlalu panjang; hanya bagian awal yang ditampilkan.",
+      "live": "Sedang berjalan: diperbarui setiap beberapa detik.",
+      "more": "Muat lagi",
+      "noSuchJob": "Pipeline ini tidak memiliki job tersebut."
     }
   }
 }

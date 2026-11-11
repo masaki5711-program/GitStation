@@ -22,6 +22,9 @@ import { CommitsScreen } from './CommitsScreen';
 import { CompareScreen } from './CompareScreen';
 import { DocumentScreen } from './DocumentScreen';
 import { DocumentsScreen } from './DocumentsScreen';
+import { parseId } from '../../api/pipelines';
+import { PipelineScreen } from './pipelines/PipelineScreen';
+import { PipelinesScreen } from './pipelines/PipelinesScreen';
 import { RefsScreen } from './RefsScreen';
 import { RepoError } from './common';
 import { TreeScreen } from './TreeScreen';
@@ -36,7 +39,7 @@ import { MembersScreen } from '../settings/Members';
 import { ProjectSettings } from '../settings/ProjectSettings';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines'];
 
 export function RepoViews({
   projectId,
@@ -73,6 +76,11 @@ export function RepoViews({
   const mrTab =
     tail.length === 1 ? 'overview' : tail.length === 2 && tail[1] === 'changes' ? 'changes' : null;
   if (word === 'pull' && (iid === null || mrTab === null)) return <NotFound />;
+  // `/-/pipelines[/{id}]`: the same rule for a pipeline id.
+  const pipelineId = word === 'pipelines' && tail.length === 1 ? parseId(tail[0]) : null;
+  if (word === 'pipelines' && tail.length > 0 && (tail.length > 1 || pipelineId === null)) {
+    return <NotFound />;
+  }
   if (info.isPending) return <Loading />;
   if (info.isError) {
     return (
@@ -138,6 +146,14 @@ export function RepoViews({
           <NotFound />
         );
       break;
+    case 'pipelines':
+      screen =
+        pipelineId === null ? (
+          <PipelinesScreen projectId={projectId} project={project} />
+        ) : (
+          <PipelineScreen key={pipelineId} projectId={projectId} project={project} id={pipelineId} />
+        );
+      break;
     case 'settings':
       screen = <ProjectSettings projectId={projectId} />;
       break;
@@ -175,6 +191,7 @@ export function RepoViews({
     { words: ['compare'], to: `${base}/-/compare`, label: t('repo.compare') },
     { words: ['pulls', 'pull'], to: `${base}/-/pulls`, label: t('repo.pulls') },
     { words: ['documents'], to: `${base}/-/documents`, label: t('docs.title') },
+    { words: ['pipelines'], to: `${base}/-/pipelines`, label: t('pipelines.title') },
     { words: ['members'], to: `${base}/-/members`, label: t('members.title') },
     ...(canManageHooks
       ? [{ words: ['webhooks'], to: `${base}/-/webhooks`, label: t('webhooks.title') }]

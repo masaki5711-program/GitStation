@@ -16,6 +16,7 @@ import {
   branchesUrl,
   commitUrl,
   isReadmeName,
+  pipelinesUrl,
   pullsUrl,
   tagsUrl,
 } from '../features/repoUrls';
@@ -240,6 +241,9 @@ function ProjectInfo({ id, path, created, cloneUrl }: { id: number; path: string
         )}
         <li>
           <Link to={pullsUrl(path)}>{t('project.mergeRequests')}</Link>
+        </li>
+        <li>
+          <Link to={pipelinesUrl(path)}>{t('pipelines.title')}</Link>
         </li>
       </ul>
       <section className={styles.cloneBlock} aria-labelledby="clone-title">

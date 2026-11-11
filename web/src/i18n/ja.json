@@ -1166,7 +1166,8 @@
     "undecided": "予測できませんでした。",
     "scanFailed": "衝突の予測を実行できませんでした。次のプッシュでもう一度実行されます。",
     "scanIncomplete": "ほかのマージリクエストの一部とは比べていません。",
-    "scanStale": "この予測は前の版または前のターゲットについてのものです。"
+    "scanStale": "この予測は前の版または前のターゲットについてのものです。",
+    "openPipeline": "パイプライン #{{id}} を開く"
   },
   "docs": {
     "title": "文書",
@@ -1225,6 +1226,100 @@
       "code": "（{{code}}）",
       "reload": "再読み込み",
       "hidden": "権限がないため、ID だけを表示しています。"
+    }
+  },
+  "pipelines": {
+    "title": "パイプライン",
+    "listLabel": "パイプラインの一覧",
+    "pagerLabel": "パイプラインのページ",
+    "empty": "まだパイプラインがありません。リポジトリの最上位に .forge-ci.yml を追加して push すると、ここに実行結果が並びます。",
+    "emptyAction": "ファイルを開く",
+    "emptyPage": "このページにはパイプラインがありません。",
+    "newest": "最新へ",
+    "older": "さらに古いパイプライン",
+    "number": "パイプライン #{{id}}",
+    "openCommit": "コミット {{sha}} を開く",
+    "took": "所要 {{duration}}",
+    "backToList": "パイプラインの一覧へ",
+    "statusNow": "状態: {{status}}",
+    "openFailedLog": "失敗したジョブ「{{job}}」のログを見る",
+    "cancel": "取り消す",
+    "retry": "再実行",
+    "status": {
+      "pending": "開始待ち",
+      "running": "実行中",
+      "succeeded": "成功",
+      "failed": "失敗",
+      "canceled": "取り消し",
+      "skipped": "対象なし",
+      "invalid": "設定に誤り",
+      "error": "読み込み失敗",
+      "created": "待機中"
+    },
+    "source": {
+      "push": "push",
+      "mergeRequest": "MR",
+      "schedule": "定期実行",
+      "manual": "手動実行"
+    },
+    "by": {
+      "system": "自動",
+      "you": "あなた",
+      "user": "ユーザー #{{id}}"
+    },
+    "duration": {
+      "hours": "{{h}}時間{{m}}分",
+      "minutes": "{{m}}分{{s}}秒",
+      "seconds": "{{s}}秒"
+    },
+    "line": {
+      "pending": "開始を待っています。ランナーが空くと始まります。",
+      "running": "実行中です。終わるとこの画面に結果が出ます。",
+      "succeeded": "すべてのジョブが成功しました。",
+      "skipped": "このコミットで実行するジョブはありませんでした。",
+      "failed": "失敗したジョブがあるため止まりました。原因とログを確認し、修正を push してください。",
+      "failedRetry": "失敗したジョブがあるため止まりました。原因を確認し、修正を push するか「再実行」を押してください。",
+      "failedJob": "ジョブ「{{job}}」が失敗したため止まりました。原因とログを確認し、修正を push してください。",
+      "failedJobRetry": "ジョブ「{{job}}」が失敗したため止まりました。原因を確認し、修正を push するか「再実行」を押してください。",
+      "canceled": "取り消されました。",
+      "canceledRetry": "取り消されました。「再実行」を押すと、失敗・取り消しのジョブをやり直します。",
+      "invalid": ".forge-ci.yml に誤りがあるため実行していません。下の箇所を直して push してください。",
+      "error": ".forge-ci.yml を読めなかったため実行していません。もう一度 push し、続く場合は管理者に問い合わせてください。"
+    },
+    "problems": {
+      "title": ".forge-ci.yml の誤り",
+      "line": "{{line}} 行目",
+      "file": "ファイル全体"
+    },
+    "diagnosis": {
+      "title": "失敗の原因",
+      "none": "失敗したジョブの記録はまだありません。",
+      "pending": "失敗の分析中です。数秒で表示されます。",
+      "job": "ジョブ「{{job}}」（ステージ {{stage}}）",
+      "seen": "このプロジェクトで同じ失敗が {{count}} 回ありました。",
+      "seenSince": "このプロジェクトで同じ失敗が {{count}} 回ありました（初回 {{date}}）。",
+      "knownFixes": "同じ失敗は次の MR で直りました:",
+      "fix": "!{{iid}} {{title}}",
+      "openLog": "ジョブ「{{job}}」のログを見る"
+    },
+    "jobs": {
+      "title": "ジョブ",
+      "none": "このパイプラインにはジョブがありません。",
+      "stage": "ステージ {{stage}}",
+      "attempt": "{{attempt}} 回目",
+      "needs": "待つジョブ: {{needs}}",
+      "log": "ログ",
+      "logOf": "ジョブ「{{job}}」のログ"
+    },
+    "log": {
+      "title": "ジョブ「{{job}}」のログ",
+      "attempt": "{{attempt}} 回目の実行のログです。",
+      "waiting": "まだログがありません。ジョブが始まると表示されます。",
+      "empty": "このジョブのログはありません。",
+      "truncated": "ログが長いため、途中までを表示しています。",
+      "live": "実行中のため、数秒ごとに更新しています。",
+      "more": "続きを読む",
+      "noSuchJob": "指定されたジョブはこのパイプラインにありません。"
     }
   }
 }

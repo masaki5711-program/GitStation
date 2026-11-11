@@ -1166,7 +1166,8 @@
     "undecided": "Could not be predicted.",
     "scanFailed": "The conflict prediction could not run. It runs again on the next push.",
     "scanIncomplete": "Not every other merge request was compared.",
-    "scanStale": "This prediction was made for an earlier version or target."
+    "scanStale": "This prediction was made for an earlier version or target.",
+    "openPipeline": "Open pipeline #{{id}}"
   },
   "docs": {
     "title": "Documents",
@@ -1225,6 +1226,100 @@
       "code": "({{code}})",
       "reload": "Reload",
       "hidden": "You do not have access, so only its ID is shown."
+    }
+  },
+  "pipelines": {
+    "title": "Pipelines",
+    "listLabel": "Pipeline list",
+    "pagerLabel": "Pipeline pages",
+    "empty": "No pipelines yet. Add .forge-ci.yml at the top of the repository and push; the runs will be listed here.",
+    "emptyAction": "Open the files",
+    "emptyPage": "There are no pipelines on this page.",
+    "newest": "Newest",
+    "older": "Older pipelines",
+    "number": "Pipeline #{{id}}",
+    "openCommit": "Open commit {{sha}}",
+    "took": "took {{duration}}",
+    "backToList": "Back to pipelines",
+    "statusNow": "Status: {{status}}",
+    "openFailedLog": "See the log of the failed job \"{{job}}\"",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "skipped": "Nothing to run",
+      "invalid": "Invalid definition",
+      "error": "Could not read",
+      "created": "Waiting"
+    },
+    "source": {
+      "push": "push",
+      "mergeRequest": "Merge request",
+      "schedule": "Scheduled",
+      "manual": "Manual run"
+    },
+    "by": {
+      "system": "Automatic",
+      "you": "You",
+      "user": "User #{{id}}"
+    },
+    "duration": {
+      "hours": "{{h}} h {{m}} min",
+      "minutes": "{{m}} min {{s}} s",
+      "seconds": "{{s}} s"
+    },
+    "line": {
+      "pending": "Waiting to start. It starts when a runner is free.",
+      "running": "Running. The result will appear on this page.",
+      "succeeded": "All jobs succeeded.",
+      "skipped": "No job had to run for this commit.",
+      "failed": "Stopped because a job failed. Check the cause and the log, then push a fix.",
+      "failedRetry": "Stopped because a job failed. Check the cause, then push a fix or press \"Retry\".",
+      "failedJob": "Stopped because the job \"{{job}}\" failed. Check the cause and the log, then push a fix.",
+      "failedJobRetry": "Stopped because the job \"{{job}}\" failed. Check the cause, then push a fix or press \"Retry\".",
+      "canceled": "Canceled.",
+      "canceledRetry": "Canceled. Press \"Retry\" to run the failed and canceled jobs again.",
+      "invalid": "Not run: .forge-ci.yml has mistakes. Fix the places below and push.",
+      "error": "Not run: .forge-ci.yml could not be read. Push again; if it keeps happening, contact an administrator."
+    },
+    "problems": {
+      "title": "Mistakes in .forge-ci.yml",
+      "line": "Line {{line}}",
+      "file": "Whole file"
+    },
+    "diagnosis": {
+      "title": "Why it failed",
+      "none": "No failed job has been recorded yet.",
+      "pending": "Analysing the failure. It will show in a few seconds.",
+      "job": "Job \"{{job}}\" (stage {{stage}})",
+      "seen": "The same failure happened {{count}} times in this project.",
+      "seenSince": "The same failure happened {{count}} times in this project (first {{date}}).",
+      "knownFixes": "The same failure was fixed by:",
+      "fix": "!{{iid}} {{title}}",
+      "openLog": "See the log of the job \"{{job}}\""
+    },
+    "jobs": {
+      "title": "Jobs",
+      "none": "This pipeline has no jobs.",
+      "stage": "Stage {{stage}}",
+      "attempt": "attempt {{attempt}}",
+      "needs": "waits for: {{needs}}",
+      "log": "Log",
+      "logOf": "Log of the job \"{{job}}\""
+    },
+    "log": {
+      "title": "Log of the job \"{{job}}\"",
+      "attempt": "This is the log of attempt {{attempt}}.",
+      "waiting": "No log yet. It appears when the job starts.",
+      "empty": "This job has no log.",
+      "truncated": "The log is long; only its first part is shown.",
+      "live": "Running: refreshed every few seconds.",
+      "more": "Load more",
+      "noSuchJob": "This pipeline has no such job."
     }
   }
 }

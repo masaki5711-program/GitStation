@@ -135,6 +135,9 @@ const SHELL_PATHS: &[&str] = &[
     "/acme/-/members",
     "/-/projects/42",
     "/-/projects/42/-/commits/main",
+    // The CI pipeline screens (plan 14 M4).
+    "/acme/x/-/pipelines",
+    "/acme/x/-/pipelines/12",
     // The act-as confirmation popup (U3): the same shell for everyone.
     "/-/confirm/projects/42/merge-requests/7",
     // The binding confirmation popup (X3).

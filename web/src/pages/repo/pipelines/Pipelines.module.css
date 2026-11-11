@@ -1,0 +1,158 @@
+/* The CI pipeline screens (plan 14 M4): list, detail, job log. */
+.list,
+.jobs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item,
+.job {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  align-items: baseline;
+  padding: var(--gs-space-3) 0;
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.itemMain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.number,
+.numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+.number {
+  font-weight: var(--gs-font-weight-bold);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.ref {
+  overflow-wrap: anywhere;
+}
+
+.pager {
+  display: flex;
+  gap: var(--gs-space-4);
+  margin: var(--gs-space-4) 0 0;
+}
+
+.empty {
+  margin: 0 0 var(--gs-space-4);
+  padding: var(--gs-space-4);
+  border: 1px dashed var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.empty p {
+  margin: 0 0 var(--gs-space-3);
+}
+
+/* The one line under the title: why it stopped and what to press next (plan 08). */
+.statusLine {
+  margin: 0 0 var(--gs-space-4);
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+}
+
+.statusLine p {
+  margin: 0;
+}
+
+.statusFailed {
+  border-left-color: var(--gs-color-danger-border);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+}
+
+.statusDone {
+  border-left-color: var(--gs-brand-teal-strong);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-3);
+  align-items: center;
+  margin: var(--gs-space-3) 0 0;
+}
+
+.sectionTitle {
+  margin: var(--gs-space-6) 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-lg);
+  color: var(--gs-brand-navy);
+}
+
+.stageTitle {
+  margin: var(--gs-space-4) 0 var(--gs-space-1);
+  font-size: var(--gs-font-size-md);
+  color: var(--gs-brand-navy);
+}
+
+.failure {
+  margin: 0 0 var(--gs-space-4);
+}
+
+.failure h3 {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+}
+
+.problems {
+  margin: 0;
+  padding-left: var(--gs-space-6);
+}
+
+/* Log text: monospace, whitespace kept, long lines wrap; never HTML. */
+.log {
+  max-height: 32rem;
+  margin: 0 0 var(--gs-space-3);
+  padding: var(--gs-space-3);
+  overflow: auto;
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-code-surface);
+  color: var(--gs-color-text);
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+  line-height: var(--gs-line-height);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: var(--gs-code-tab-size);
+}
+
+.hint {
+  margin: 0 0 var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
