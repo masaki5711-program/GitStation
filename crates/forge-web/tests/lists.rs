@@ -905,7 +905,11 @@ async fn created_by_me_lists_only_own_visible_projects() {
     ] {
         let (status, refused) = page(format!("/api/v1/projects?{bad}"), bob.user_id).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {refused}");
-        assert_eq!(refused["error_code"], ErrorCode::RequestInvalid.id(), "{bad}");
+        assert_eq!(
+            refused["error_code"],
+            ErrorCode::RequestInvalid.id(),
+            "{bad}"
+        );
     }
     let (status, refused) = page("/api/v1/groups?created_by=me".to_owned(), bob.user_id).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");

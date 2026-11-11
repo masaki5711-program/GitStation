@@ -135,7 +135,7 @@ pub(crate) const PROJECT_IDS_SQL: &str = concat!(
         @page ["page AS (SELECT DISTINCT x AS id FROM unnest($1::bigint[]) AS x), "],
         "project"
     ),
-    "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion,        a.steps, a.truncs, a.roles,        n.id AS namespace_id, n.full_path,        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed,        p.display_name, p.description, r.id AS repository_id, r.state AS repository_state,        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at      FROM page pg JOIN forge.projects p ON p.id = pg.id      LEFT JOIN agg a ON a.anchor = p.id      LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id      LEFT JOIN forge.repositories r ON r.project_id = p.id      ORDER BY p.id DESC"
+    "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion,        a.steps, a.truncs, a.roles,        n.id AS namespace_id, n.full_path,        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed,        p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state,        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at      FROM page pg JOIN forge.projects p ON p.id = pg.id      LEFT JOIN agg a ON a.anchor = p.id      LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id      LEFT JOIN forge.repositories r ON r.project_id = p.id      ORDER BY p.id DESC"
 );
 
 /// The most ids [`project_records`] reads in one statement.

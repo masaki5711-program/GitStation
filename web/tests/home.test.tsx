@@ -31,11 +31,12 @@ describe('my projects (/-/projects)', () => {
     await renderApp({ fetch: server.fetch, lang: 'en', path: PROJECTS });
     expect(await screen.findByRole('heading', { name: 'Projects', level: 1 })).toBeTruthy();
     expect(await screen.findByText('Forge Web')).toBeTruthy();
-    // The main list asks for the projects I hold a role in.
+    // The default tab asks for the projects I created (plan 15 MR 5).
     const mine = server.to('GET', '/api/v1/projects')[0];
     // ADR-0023: no repository-kind filter is sent.
     expect(mine?.query.get('kind')).toBeNull();
-    expect(mine?.query.get('membership')).toBe('true');
+    expect(mine?.query.get('created_by')).toBe('me');
+    expect(mine?.query.get('membership')).toBeNull();
     expect(mine?.headers.get('accept-language')).toBe('en');
     expect(server.unmatched).toEqual([]);
   });
@@ -51,7 +52,7 @@ describe('my projects (/-/projects)', () => {
     const server = mockServer(lists([]));
     await renderApp({ fetch: server.fetch, path: PROJECTS });
     expect(screen.getAllByText('読み込んでいます…').length).toBeGreaterThan(0);
-    expect(await screen.findByText('あなたがメンバーのプロジェクトはまだありません。')).toBeTruthy();
+    expect(await screen.findByText('あなたが作ったプロジェクトはまだありません。')).toBeTruthy();
   });
 
   it('filters the list by name or path', async () => {

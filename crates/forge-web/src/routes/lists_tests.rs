@@ -389,9 +389,19 @@ fn the_filters_are_parsed_strictly_per_list() {
             "unknown_parameter",
         ),
         // Plan 15 MR5: only `me` — never another user's id.
-        (List::Projects, "created_by=7", "created_by", "invalid_value"),
+        (
+            List::Projects,
+            "created_by=7",
+            "created_by",
+            "invalid_value",
+        ),
         (List::Projects, "created_by=", "created_by", "invalid_value"),
-        (List::Projects, "created_by=ME", "created_by", "invalid_value"),
+        (
+            List::Projects,
+            "created_by=ME",
+            "created_by",
+            "invalid_value",
+        ),
         (List::Projects, "created_by", "created_by", "invalid_value"),
         (
             List::Projects,
@@ -501,8 +511,11 @@ fn a_cursor_opens_only_under_its_own_filters() {
 /// Plan 15 MR5: `created_by=me` parses with the paging and other filters.
 #[test]
 fn created_by_me_is_a_project_filter() {
-    let f = parse_filters(Some("created_by=me&membership=true&limit=5"), List::Projects)
-        .expect("created_by=me");
+    let f = parse_filters(
+        Some("created_by=me&membership=true&limit=5"),
+        List::Projects,
+    )
+    .expect("created_by=me");
     assert!(f.created_by_me && f.membership && !f.pending_deletion);
     assert_eq!(
         parse_query(Some("created_by=me&limit=4"))

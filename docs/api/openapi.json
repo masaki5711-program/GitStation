@@ -13362,6 +13362,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "me: only projects the caller created (the only accepted value; never another user's id)",
+            "in": "query",
+            "name": "created_by",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
