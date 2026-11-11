@@ -50,6 +50,7 @@ pub mod mergeability;
 pub mod merges;
 mod refresh;
 pub mod settings;
+pub mod user_lists;
 mod version_bases;
 mod version_refs;
 pub mod versions;
