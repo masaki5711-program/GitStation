@@ -19,26 +19,49 @@
 
 .summary {
   composes: interactive from '../components/controls.module.css';
-  display: list-item;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2) var(--gs-space-3);
   min-height: var(--gs-tap-target);
   padding: var(--gs-space-3) var(--gs-space-4);
   border-radius: var(--gs-radius-md);
+  list-style: none;
 }
 
-.heading {
-  display: inline;
-  margin: 0;
+.summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The disclosure marker: a chevron drawn with borders (no glyph to
+   translate), right when closed, down when open. */
+.summary::before {
+  content: '';
+  flex: none;
+  width: var(--gs-space-2);
+  height: var(--gs-space-2);
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+details[open] > .summary::before {
+  transform: rotate(45deg);
+}
+
+.summaryTitle {
   font-size: var(--gs-font-size-lg);
+  font-weight: var(--gs-font-weight-bold);
   color: var(--gs-brand-navy);
 }
 
 .count {
-  margin-left: var(--gs-space-2);
   padding: 0 var(--gs-space-2);
-  border-radius: var(--gs-radius-md);
+  border-radius: var(--gs-radius-pill);
   background: var(--gs-color-active-surface);
   color: var(--gs-color-text);
   font-size: var(--gs-font-size-sm);
+  font-variant-numeric: var(--gs-numeric);
 }
 
 .hint {
@@ -96,6 +119,10 @@
   overflow-wrap: anywhere;
 }
 
+.time {
+  font-variant-numeric: var(--gs-numeric);
+}
+
 /* Not colour alone: the reason is written out. */
 .reason {
   padding: 0 var(--gs-space-1);
@@ -112,7 +139,7 @@
 }
 
 .status {
-  min-height: 1.5em;
+  min-height: var(--gs-status-min-height);
   margin: 0;
   padding: 0 var(--gs-space-4);
   color: var(--gs-color-text-muted);

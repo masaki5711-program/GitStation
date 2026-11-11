@@ -22,7 +22,7 @@ import controls from '../components/controls.module.css';
 import { Loading } from '../components/Loading';
 import { badgeText } from '../components/NotificationBell';
 import { QueryError } from '../components/QueryError';
-import { formatDateTime } from '../features/labels';
+import { formatDateTime, formatRelative } from '../features/labels';
 import { pullUrl } from '../features/repoUrls';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import styles from './MyMergeRequests.module.css';
@@ -63,14 +63,15 @@ function scopeHint(t: TFunction, scope: MrScope): string {
   }
 }
 
+/** An empty section says the next step (plan 08), as Home's cards do. */
 function scopeEmpty(t: TFunction, scope: MrScope): string {
   switch (scope) {
     case 'attention':
-      return t('myMrs.emptyAttention');
+      return t('home.nextAttention');
     case 'approvable':
-      return t('myMrs.emptyApprovable');
+      return t('home.nextApprovable');
     case 'authored':
-      return t('myMrs.emptyAuthored');
+      return t('home.nextAuthored');
   }
 }
 
@@ -94,8 +95,8 @@ function Row({ mr }: { mr: UserMergeRequest }) {
             {reasonLabel(t, r)}
           </span>
         ))}
-        <time dateTime={mr.updated_at}>
-          {t('myMrs.updated', { time: formatDateTime(mr.updated_at, i18n.language) })}
+        <time dateTime={mr.updated_at} title={formatDateTime(mr.updated_at, i18n.language)} className={styles.time}>
+          {t('myMrs.updated', { time: formatRelative(mr.updated_at, i18n.language) })}
         </time>
       </p>
     </li>
@@ -127,7 +128,7 @@ function ScopeList({ scope }: { scope: MrScope }) {
       <p className={styles.hint}>{scopeHint(t, scope)}</p>
       {list.isPending && <Loading />}
       {items.length > 0 && (
-        <ul className={styles.list} aria-label={scopeTitle(t, scope)}>
+        <ul className={styles.list}>
           {items.map((mr) => (
             <Row key={mr.id} mr={mr} />
           ))}
@@ -157,40 +158,60 @@ function ScopeList({ scope }: { scope: MrScope }) {
           </button>
         </p>
       )}
-      <p role="status" className={styles.status}>
-        {message}
-      </p>
+      {message !== '' && (
+        <p role="status" className={styles.status}>
+          {message}
+        </p>
+      )}
     </>
   );
 }
 
+/** A section is labelled by its summary (plain text: the native disclosure
+ * button; no heading inside it). The count comes from the shared counts
+ * query; when that failed the summary says the count is unknown (the page
+ * shows the reason once). */
 function ScopeSection({ scope, initiallyOpen }: { scope: MrScope; initiallyOpen: boolean }) {
   const { t } = useTranslation();
-  const headingId = useId();
+  const summaryId = useId();
   const [open, setOpen] = useState(initiallyOpen);
   const counts = useUserMrCounts();
-  const count = counts.isSuccess ? counts.data[scope] : null;
+  let countText: string | null = null;
+  if (counts.data !== undefined) {
+    const { count, capped } = counts.data[scope];
+    countText = t('myMrs.summaryCount', { count, shown: badgeText(count, capped) });
+  } else if (counts.isError) {
+    countText = t('myMrs.countUnknown');
+  }
   return (
-    <section aria-labelledby={headingId} className={styles.section}>
+    <section aria-labelledby={summaryId} className={styles.section}>
       <details
         open={open}
         onToggle={(e) => {
           setOpen(e.currentTarget.open);
         }}
       >
-        <summary className={styles.summary}>
-          <h2 id={headingId} className={styles.heading}>
-            {scopeTitle(t, scope)}{' '}
-            {count !== null && (
-              <span className={styles.count}>
-                {t('myMrs.summaryCount', { shown: badgeText(count.count, count.capped) })}
-              </span>
-            )}
-          </h2>
+        <summary id={summaryId} className={styles.summary}>
+          <span className={styles.summaryTitle}>{scopeTitle(t, scope)}</span>{' '}
+          {countText !== null && <span className={styles.count}>{countText}</span>}
         </summary>
         {open && <ScopeList scope={scope} />}
       </details>
     </section>
+  );
+}
+
+/** The counts failed: said once for the page, with its request id and a retry. */
+function CountsError() {
+  const counts = useUserMrCounts();
+  if (!counts.isError || counts.data !== undefined) return null;
+  return (
+    <QueryError
+      error={counts.error}
+      onRetry={() => {
+        void counts.refetch();
+      }}
+    />
   );
 }
 
@@ -204,6 +225,7 @@ export function MyMergeRequests() {
     <>
       <h1 className={styles.pageTitle}>{t('myMrs.title')}</h1>
       <p className={styles.explain}>{t('myMrs.explain')}</p>
+      <CountsError />
       {/* A new ?scope= (a card or the sidebar while here) opens afresh. */}
       <div key={scope ?? ''}>
         {MR_SCOPES.map((s) => (

@@ -44,6 +44,12 @@ const routes = (over: Record<string, Handler> = {}): Record<string, Handler> => 
   ...over,
 });
 
+/** The text a link's aria-describedby points at ('' without one). */
+const description = (el: HTMLElement) => {
+  const id = el.getAttribute('aria-describedby');
+  return id === null ? '' : (document.getElementById(id)?.textContent ?? '');
+};
+
 const nav = () => screen.findByRole('navigation', { name: 'マイワーク' });
 
 async function violations(root: HTMLElement): Promise<string[]> {
@@ -76,20 +82,58 @@ describe('home: count cards', () => {
     expect(server.unmatched).toEqual([]);
   });
 
-  it('a count of 0 says the next step in one line instead of "0"', async () => {
+  it('a count of 0 says the next step in one line (the description), not a drawn "0"', async () => {
     const server = mockServer(routes({ [`GET ${MR_COUNTS_PATH}`]: () => json(200, counts(0, 0, 0)) }));
     await renderApp({ fetch: server.fetch });
     await screen.findByText('ブランチを push して MR を作るとここに出ます。');
-    const authored = screen.getByRole('link', { name: /^自分の MR/ });
-    expect(authored.textContent).toContain('ブランチを push して MR を作るとここに出ます。');
-    expect(authored.textContent).not.toMatch(/\d/);
-    expect(screen.getByRole('link', { name: /^承認を待っている MR/ }).textContent).toContain(
+    // The link's name is its label and number only; the next step describes it.
+    const authored = screen.getByRole('link', { name: '自分の MR 0 件' });
+    expect(description(authored)).toBe('ブランチを push して MR を作るとここに出ます。');
+    expect(authored.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(description(screen.getByRole('link', { name: '承認を待っている MR 0 件' }))).toBe(
       '承認を頼まれた MR はここに出ます。',
     );
-    expect(screen.getByRole('link', { name: /^対応が必要な自分の MR/ }).textContent).toContain(
+    expect(description(screen.getByRole('link', { name: '対応が必要な自分の MR 0 件' }))).toBe(
       '衝突や失敗したチェックはありません。',
     );
     expect(await screen.findByText('新しい通知はありません。')).toBeTruthy();
+  });
+
+  it('a card that waits on me stands out when not 0; the others stay quiet', async () => {
+    const server = mockServer(routes({ [`GET ${MR_COUNTS_PATH}`]: () => json(200, counts(2, 0, 5)) }));
+    await renderApp({ fetch: server.fetch });
+    const card = async (name: string) => (await screen.findByRole('link', { name })).closest('li') as HTMLElement;
+    expect((await card('対応が必要な自分の MR 2 件')).className).toContain('cardWaiting');
+    expect((await card('承認を待っている MR 0 件')).className).not.toContain('cardWaiting');
+    expect((await card('自分の MR 5 件')).className).not.toContain('cardWaiting');
+    // A number has no description: the name says it all.
+    expect(screen.getByRole('link', { name: '自分の MR 5 件' }).hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('the count has its unit in every language (en)', async () => {
+    const server = mockServer(routes({ [`GET ${MR_COUNTS_PATH}`]: () => json(200, counts(1, 3, 0)) }));
+    await renderApp({ fetch: server.fetch, lang: 'en' });
+    expect(await screen.findByRole('link', { name: 'Your merge requests that need action 1 item' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Merge requests waiting for your approval 3 items' })).toBeTruthy();
+  });
+
+  it('a failed unread count shows its reason with the request id and a retry', async () => {
+    let fail = true;
+    const server = mockServer(
+      routes({
+        'GET /api/v1/user/notifications/unread-count': () =>
+          fail ? apiError(503, '通知の数を読めません。', 'req-unread-1') : json(200, { count: 2, capped: false }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch });
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('通知の数を読めません。');
+    expect(screen.getByTestId('request-id').textContent).toBe('req-unread-1');
+    expect(description(screen.getByRole('link', { name: /^未読の通知/ }))).toBe('数を読めませんでした。');
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'もう一度試す' }));
+    expect(await screen.findByRole('link', { name: '未読の通知 2 件' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('a capped count shows "99+" (the server stops counting at 100)', async () => {
@@ -113,7 +157,7 @@ describe('home: count cards', () => {
     expect(alert.textContent).toContain('数を読めませんでした（サーバー）。');
     expect(screen.getByTestId('request-id').textContent).toBe('req-counts-1');
     expect(container.textContent).not.toContain('FG-DB-0001');
-    expect(screen.getByRole('link', { name: /^自分の MR/ }).textContent).toContain('数を読めませんでした。');
+    expect(description(screen.getByRole('link', { name: /^自分の MR/ }))).toBe('数を読めませんでした。');
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: 'もう一度試す' }));
     expect(await screen.findByRole('link', { name: '対応が必要な自分の MR 1 件' })).toBeTruthy();
@@ -152,21 +196,32 @@ describe('/-/merge-requests', () => {
     expect(row.textContent).toContain('必須のチェックが失敗しました');
     expect(row.textContent).toContain('対応が必要です');
     expect(row.textContent).not.toContain('required_check_failed');
-    expect(row.querySelector('time')?.getAttribute('datetime')).toBe('2026-11-02T03:04:00Z');
+    // Relative time; the moment itself in the title.
+    const time = row.querySelector('time') as HTMLElement;
+    expect(time.getAttribute('datetime')).toBe('2026-11-02T03:04:00Z');
+    expect(time.textContent).toMatch(/^更新 /);
+    expect(time.getAttribute('title')).toMatch(/2026/);
     const approvable = screen.getByRole('region', { name: /^承認を待っている MR/ });
     expect(await within(approvable).findByRole('link', { name: 'Review me' })).toBeTruthy();
     expect(within(approvable).getByText('下書き')).toBeTruthy();
-    // The count of each section is in its heading.
-    expect(within(approvable).getByRole('heading', { level: 2 }).textContent).toContain('3 件');
+    // The section is named by its summary (plain text, the count with it);
+    // no heading inside the disclosure button, no second list name.
+    expect(screen.getByRole('region', { name: '承認を待っている MR 3 件' })).toBe(approvable);
+    expect(approvable.querySelector('summary h2')).toBeNull();
+    expect(approvable.querySelector('ul')?.hasAttribute('aria-label')).toBe(false);
+    // An empty section says the next step (plan 08), as Home's card does.
     const authored = screen.getByRole('region', { name: /^自分の MR/ });
-    expect(await within(authored).findByText('開いている自分の MR はありません。')).toBeTruthy();
+    expect(await within(authored).findByText('ブランチを push して MR を作るとここに出ます。')).toBeTruthy();
+    // No empty status line is left in the sections.
+    const statuses = [...document.querySelectorAll('section details [role="status"]')];
+    expect(statuses.filter((e) => e.textContent === '')).toEqual([]);
     expect(server.unmatched).toEqual([]);
   });
 
   it('?scope= opens that section alone; the others open (and read) on demand', async () => {
     const server = mockServer(routes());
     await renderApp({ fetch: server.fetch, path: '/-/merge-requests?scope=approvable' });
-    await screen.findByText('承認を待っている MR はありません。');
+    await screen.findByText('承認を頼まれた MR はここに出ます。');
     const details = (name: RegExp) =>
       screen.getByRole('region', { name }).querySelector('details') as HTMLDetailsElement;
     expect(details(/^承認を待っている MR/).open).toBe(true);
@@ -177,7 +232,7 @@ describe('/-/merge-requests', () => {
     const authored = details(/^自分の MR/);
     authored.open = true;
     fireEvent(authored, new Event('toggle'));
-    expect(await screen.findByText('開いている自分の MR はありません。')).toBeTruthy();
+    expect(await screen.findByText('ブランチを push して MR を作るとここに出ます。')).toBeTruthy();
     expect(server.to('GET', LIST_PATH).map((c) => c.query.get('scope'))).toEqual(['approvable', 'authored']);
   });
 
@@ -220,7 +275,7 @@ describe('/-/merge-requests', () => {
     expect(alert.textContent).toContain('一覧を読めませんでした。');
     expect(within(approvable).getByTestId('request-id').textContent).toBe('req-mrs-1');
     expect(container.textContent).not.toContain('FG-DB-0001');
-    expect(await screen.findByText('開いている自分の MR はありません。')).toBeTruthy();
+    expect(await screen.findByText('ブランチを push して MR を作るとここに出ます。')).toBeTruthy();
     fail = false;
     fireEvent.click(within(approvable).getByRole('button', { name: 'もう一度試す' }));
     expect(await within(approvable).findByRole('link', { name: 'Change 5' })).toBeTruthy();
@@ -245,6 +300,28 @@ describe('/-/merge-requests', () => {
     fireEvent.click(screen.getByRole('button', { name: 'もう一度試す' }));
     expect(await screen.findByRole('link', { name: 'Change 10' })).toBeTruthy();
     expect(server.to('GET', LIST_PATH).filter((c) => c.query.get('before') === null)).toHaveLength(1);
+  });
+
+  it('failed counts: said once for the page (request id, retry); each summary marks the count unknown', async () => {
+    let fail = true;
+    const server = mockServer(
+      routes({
+        [`GET ${MR_COUNTS_PATH}`]: () =>
+          fail ? apiError(500, '件数を読めませんでした。', 'req-counts-9') : json(200, counts(0, 3, 0)),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/-/merge-requests?scope=authored' });
+    const main = within(await screen.findByRole('main'));
+    const alert = await main.findByRole('alert');
+    expect(main.getAllByRole('alert')).toHaveLength(1);
+    expect(alert.textContent).toContain('件数を読めませんでした。');
+    expect(main.getByTestId('request-id').textContent).toBe('req-counts-9');
+    expect(screen.getByRole('region', { name: '承認を待っている MR 件数不明' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: '自分の MR 件数不明' })).toBeTruthy();
+    fail = false;
+    fireEvent.click(main.getByRole('button', { name: 'もう一度試す' }));
+    expect(await screen.findByRole('region', { name: '承認を待っている MR 3 件' })).toBeTruthy();
+    expect(main.queryByRole('alert')).toBeNull();
   });
 
   it('axe: no violations with rows and a closed section', async () => {

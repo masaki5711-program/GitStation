@@ -47,12 +47,13 @@
     "cardApprovable": "Merge requests waiting for your approval",
     "cardAuthored": "Your merge requests",
     "cardUnread": "Unread notifications",
-    "cardCount": "{{shown}}",
     "nextAttention": "No conflicts or failed checks.",
     "nextApprovable": "Merge requests you can approve appear here.",
     "nextAuthored": "Push a branch and open a merge request to see it here.",
     "nextUnread": "No new notifications.",
-    "countUnknown": "The number could not be read."
+    "countUnknown": "The number could not be read.",
+    "cardCount_one": "{{shown}} item",
+    "cardCount_other": "{{shown}} items"
   },
   "nav": {
     "myWork": "My work",
@@ -77,18 +78,17 @@
     "hintAttention": "A conflict or a failed required check waits for you.",
     "hintApprovable": "You can approve these and have not yet (your own are not included).",
     "hintAuthored": "You opened these and they are still open.",
-    "emptyAttention": "No merge request needs action.",
-    "emptyApprovable": "No merge request is waiting for your approval.",
-    "emptyAuthored": "You have no open merge requests.",
     "more": "Load more",
     "moreShown": "{{n}} more shown.",
-    "summaryCount": "{{shown}}",
     "draft": "Draft",
     "updated": "Updated {{time}}",
     "reasonConflict": "Has a conflict",
     "reasonConflictPredicted": "May conflict",
     "reasonCheckFailed": "A required check failed",
-    "reasonOther": "Needs action"
+    "reasonOther": "Needs action",
+    "summaryCount_one": "{{shown}} item",
+    "summaryCount_other": "{{shown}} items",
+    "countUnknown": "count unknown"
   },
   "projects": {
     "title": "Projects",

@@ -2,9 +2,12 @@
 // requests that need action, the ones waiting for my approval, my open ones,
 // unread notifications), each a link to its list; then what I looked at
 // recently (this browser only). The projects I take part in moved to
-// /-/projects (linked from here); groups live on /-/groups.
-// A card with nothing in it says the next step in one line (plan 08), not "0".
-import { useMemo, type ReactNode } from 'react';
+// /-/projects (a small link here); groups live on /-/groups.
+// A card's link is named by its label and number only; what the card says
+// besides (the next step when it is 0, loading, unknown) is its description
+// (plan 08: one line, not a bare "0"). A card that waits on me (needs action,
+// waiting for my approval) stands out when it is not 0.
+import { useId, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
@@ -16,78 +19,86 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
 import styles from './Home.module.css';
 
-/** `all`: the "see all" link to the full screen (plan 15 sidebar pages). */
-function Block({
-  id,
-  title,
-  all,
-  children,
-}: {
-  id: string;
-  title: string;
-  all?: { to: string; label: string };
-  children: ReactNode;
-}) {
+function Block({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section aria-labelledby={id} className={styles.block}>
-      <div className={styles.blockTop}>
-        <h2 id={id} className={styles.heading}>
-          {title}
-        </h2>
-        {all && (
-          <Link to={all.to} className={styles.all}>
-            {all.label}
-          </Link>
-        )}
-      </div>
+      <h2 id={id} className={styles.heading}>
+        {title}
+      </h2>
       {children}
     </section>
   );
 }
 
-/** What a card shows under its name: the number, the next step when it is
- * 0, a placeholder while it loads, or that it could not be read. */
+/** What a card knows: its number, nothing yet, or that it could not be read. */
 type CardValue =
   | { status: 'pending' }
   | { status: 'error' }
   | { status: 'success'; count: UserMergeRequestCount };
 
-/** A card is one link; its name is the card's whole text (label, then the
- * number with its unit for screen readers, or the next step). */
-function Card({ to, label, next, value }: { to: string; label: string; next: string; value: CardValue }) {
+function Card({
+  to,
+  label,
+  next,
+  value,
+  waitsOnMe = false,
+}: {
+  to: string;
+  label: string;
+  next: string;
+  value: CardValue;
+  /** Stands out when not 0 (it waits on me). */
+  waitsOnMe?: boolean;
+}) {
   const { t } = useTranslation();
-  let body: ReactNode;
+  const descriptionId = useId();
+  let count: ReactNode = null;
+  let description: string | null = null;
+  let emphasis = false;
   if (value.status === 'pending') {
-    body = <span className={styles.cardNext}>{t('common.loading')}</span>;
+    description = t('common.loading');
   } else if (value.status === 'error') {
-    body = <span className={styles.cardNext}>{t('home.countUnknown')}</span>;
-  } else if (value.count.count === 0 && !value.count.capped) {
-    body = <span className={styles.cardNext}>{next}</span>;
+    description = t('home.countUnknown');
   } else {
-    const shown = badgeText(value.count.count, value.count.capped);
-    body = (
-      <>
-        <span className={styles.cardCount} aria-hidden="true">
-          {shown}
-        </span>
-        <span className={styles.srOnly}>{t('home.cardCount', { shown })}</span>
-      </>
-    );
+    const { count: n, capped } = value.count;
+    const shown = badgeText(n, capped);
+    const spoken = <span className={styles.srOnly}>{t('home.cardCount', { count: n, shown })}</span>;
+    if (n === 0 && !capped) {
+      count = spoken;
+      description = next;
+    } else {
+      emphasis = waitsOnMe;
+      count = (
+        <>
+          <span className={styles.cardCount} aria-hidden="true">
+            {shown}
+          </span>
+          {spoken}
+        </>
+      );
+    }
   }
   return (
-    <li>
-      <Link to={to} className={styles.card}>
-        <span className={styles.cardLabel}>{label}</span> {body}
+    <li className={emphasis ? `${styles.card} ${styles.cardWaiting}` : styles.card}>
+      <Link
+        to={to}
+        className={styles.cardLink}
+        {...(description === null ? {} : { 'aria-describedby': descriptionId })}
+      >
+        <span className={styles.cardLabel}>{label}</span> {count}
       </Link>
+      {description !== null && (
+        <p id={descriptionId} className={styles.cardNext}>
+          {description}
+        </p>
+      )}
     </li>
   );
 }
 
-function valueOf<T>(
-  query: { status: 'pending' | 'error' | 'success'; data: T | undefined },
-  pick: (data: T) => UserMergeRequestCount,
-): CardValue {
-  if (query.status === 'success' && query.data !== undefined) return { status: 'success', count: pick(query.data) };
+/** A query's state as a card's value (a later failed poll keeps the last number). */
+function valueOf<T>(query: { status: 'pending' | 'error' | 'success'; data: T | undefined }, pick: (data: T) => UserMergeRequestCount): CardValue {
+  if (query.data !== undefined) return { status: 'success', count: pick(query.data) };
   return query.status === 'error' ? { status: 'error' } : { status: 'pending' };
 }
 
@@ -99,6 +110,8 @@ export function Home() {
   // request each, shared cache).
   const counts = useUserMrCounts();
   const unread = useUnreadCount();
+  const countsFailed = counts.isError && counts.data === undefined;
+  const unreadFailed = unread.isError && unread.data === undefined;
 
   return (
     <>
@@ -106,19 +119,21 @@ export function Home() {
         <h1 className={styles.title}>{t('home.title')}</h1>
       </div>
 
-      <Block id="home-work" title={t('home.work')} all={{ to: '/-/projects', label: t('home.allProjects') }}>
+      <Block id="home-work" title={t('home.work')}>
         <ul className={styles.cards}>
           <Card
             to="/-/merge-requests?scope=attention"
             label={t('home.cardAttention')}
             next={t('home.nextAttention')}
             value={valueOf(counts, (c) => c.attention)}
+            waitsOnMe
           />
           <Card
             to="/-/merge-requests?scope=approvable"
             label={t('home.cardApprovable')}
             next={t('home.nextApprovable')}
             value={valueOf(counts, (c) => c.approvable)}
+            waitsOnMe
           />
           <Card
             to="/-/merge-requests?scope=authored"
@@ -133,17 +148,31 @@ export function Home() {
             value={valueOf(unread, (u) => u)}
           />
         </ul>
-        {/* The bell says when the unread count failed; the merge request
-            counts are this page's own, so their reason is shown here. */}
-        {counts.isError && (
+        {/* One failure notice for the cards: the merge request counts' when
+            they failed (its retry asks for the unread count too), else the
+            unread count's. */}
+        {countsFailed && (
           <QueryError
             error={counts.error}
             onRetry={() => {
               void counts.refetch();
+              if (unreadFailed) void unread.refetch();
+            }}
+          />
+        )}
+        {!countsFailed && unreadFailed && (
+          <QueryError
+            error={unread.error}
+            onRetry={() => {
+              void unread.refetch();
             }}
           />
         )}
       </Block>
+
+      <p className={styles.projectsLink}>
+        <Link to="/-/projects">{t('home.allProjects')}</Link>
+      </p>
 
       {recent.length > 0 && (
         <Block id="home-recent" title={t('home.recent')}>

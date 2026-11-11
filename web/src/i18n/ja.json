@@ -47,12 +47,13 @@
     "cardApprovable": "承認を待っている MR",
     "cardAuthored": "自分の MR",
     "cardUnread": "未読の通知",
-    "cardCount": "{{shown}} 件",
     "nextAttention": "衝突や失敗したチェックはありません。",
     "nextApprovable": "承認を頼まれた MR はここに出ます。",
     "nextAuthored": "ブランチを push して MR を作るとここに出ます。",
     "nextUnread": "新しい通知はありません。",
-    "countUnknown": "数を読めませんでした。"
+    "countUnknown": "数を読めませんでした。",
+    "cardCount_one": "{{shown}} 件",
+    "cardCount_other": "{{shown}} 件"
   },
   "nav": {
     "myWork": "マイワーク",
@@ -77,18 +78,17 @@
     "hintAttention": "衝突や失敗した必須チェックがあり、あなたの対応を待っています。",
     "hintApprovable": "あなたが承認できて、まだ承認していないものです（自分の MR は入りません）。",
     "hintAuthored": "あなたが作って、まだ開いているものです。",
-    "emptyAttention": "対応が必要な MR はありません。",
-    "emptyApprovable": "承認を待っている MR はありません。",
-    "emptyAuthored": "開いている自分の MR はありません。",
     "more": "さらに読む",
     "moreShown": "{{n}} 件を足しました。",
-    "summaryCount": "{{shown}} 件",
     "draft": "下書き",
     "updated": "更新 {{time}}",
     "reasonConflict": "衝突があります",
     "reasonConflictPredicted": "衝突しそうです",
     "reasonCheckFailed": "必須のチェックが失敗しました",
-    "reasonOther": "対応が必要です"
+    "reasonOther": "対応が必要です",
+    "summaryCount_one": "{{shown}} 件",
+    "summaryCount_other": "{{shown}} 件",
+    "countUnknown": "件数不明"
   },
   "projects": {
     "title": "プロジェクト",
