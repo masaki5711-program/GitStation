@@ -51,7 +51,7 @@ async function violations(root: HTMLElement): Promise<string[]> {
 }
 
 describe('sidebar', () => {
-  it('lists Home, Projects, Groups, Merge requests under "My work" (no placeholder items)', async () => {
+  it('lists Home, Projects, Groups, Merge requests, Activity under "My work" (no placeholder items)', async () => {
     const server = mockServer(routes());
     await renderApp({ fetch: server.fetch });
     await screen.findByRole('heading', { name: 'ホーム', level: 1 });
@@ -62,6 +62,7 @@ describe('sidebar', () => {
       ['プロジェクト', '/-/projects'],
       ['グループ', '/-/groups'],
       ['マージリクエスト', '/-/merge-requests'],
+      ['アクティビティ', '/-/activity'],
     ]);
   });
 
@@ -124,7 +125,7 @@ describe('sidebar', () => {
     await renderApp({ fetch: server.fetch });
     await screen.findByRole('heading', { name: 'ホーム', level: 1 });
     const focusable = [...nav().querySelectorAll<HTMLElement>('a[href], button')];
-    expect(focusable.map((e) => e.textContent)).toEqual(['サイドバーを畳む', 'ホーム', 'プロジェクト', 'グループ', 'マージリクエスト']);
+    expect(focusable.map((e) => e.textContent)).toEqual(['サイドバーを畳む', 'ホーム', 'プロジェクト', 'グループ', 'マージリクエスト', 'アクティビティ']);
     for (const el of focusable) {
       expect(el.tabIndex).toBe(0);
       el.focus();

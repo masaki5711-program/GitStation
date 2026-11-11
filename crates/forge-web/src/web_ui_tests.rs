@@ -152,6 +152,8 @@ const SHELL_PATHS: &[&str] = &[
     "/-/groups",
     // The caller's merge requests (plan 15 MR 7).
     "/-/merge-requests",
+    // The caller's activity (plan 15 MR 9).
+    "/-/activity",
 ];
 
 #[tokio::test]
@@ -358,6 +360,7 @@ fn the_shell_route_gate_reads_the_spa_route_tables() {
         "/-/projects",
         "/-/groups",
         "/-/merge-requests",
+        "/-/activity",
         "/-/notifications",
         "/-/projects/1",
         "/-/confirm/projects/1/merge-requests/1",

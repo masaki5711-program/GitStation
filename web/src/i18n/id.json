@@ -53,7 +53,10 @@
     "nextUnread": "Tidak ada notifikasi baru.",
     "countUnknown": "Jumlahnya tidak dapat dibaca.",
     "cardCount_one": "{{shown}} item",
-    "cardCount_other": "{{shown}} item"
+    "cardCount_other": "{{shown}} item",
+    "activity": "Aktivitas",
+    "activityAll": "Lihat semua aktivitas",
+    "activityLead": "Hingga 10 peristiwa terbaru di proyek Anda."
   },
   "nav": {
     "myWork": "Pekerjaan saya",
@@ -67,7 +70,8 @@
     "groupMenu": "Menu grup",
     "showAll": "Lihat semua isinya",
     "mergeRequests": "Merge request",
-    "mrBadge": ", {{shown}} perlu ditindak"
+    "mrBadge": ", {{shown}} perlu ditindak",
+    "activity": "Aktivitas"
   },
   "myMrs": {
     "title": "Merge request",
@@ -89,6 +93,28 @@
     "summaryCount_one": "{{shown}} item",
     "summaryCount_other": "{{shown}} item",
     "countUnknown": "jumlah tidak diketahui"
+  },
+  "activity": {
+    "title": "Aktivitas",
+    "explain": "Yang terjadi di proyek tempat Anda menjadi anggota, terbaru lebih dulu. Peristiwa lama dihapus setelah masa simpan.",
+    "someone": "Seseorang",
+    "projectCreated": "{{actor}} membuat proyek",
+    "pushed_one": "{{actor}} melakukan push ke {{count}} branch atau tag",
+    "pushed_other": "{{actor}} melakukan push ke {{count}} branch atau tag",
+    "pushedNoCount": "{{actor}} melakukan push",
+    "mrOpened": "{{actor}} membuka merge request",
+    "mrClosed": "{{actor}} menutup merge request",
+    "mrReopened": "{{actor}} membuka kembali merge request",
+    "mrCommented": "{{actor}} mengomentari merge request",
+    "mrMerged": "{{actor}} menggabungkan merge request",
+    "mrApproved": "{{actor}} menyetujui merge request",
+    "other": "{{actor}} membuat perubahan di proyek",
+    "empty": "Belum ada aktivitas. Setelah Anda menjadi anggota proyek, yang terjadi di sana muncul di sini.",
+    "truncated": "Anda terlibat di banyak proyek: peristiwa dari sebagian proyek lama tidak ditampilkan.",
+    "more": "Muat lagi",
+    "moreShown": "{{n}} lagi ditampilkan.",
+    "noMore": "Tidak ada yang lebih lama.",
+    "dateUnknown": "Tanggal tidak diketahui"
   },
   "projects": {
     "title": "Proyek",

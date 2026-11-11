@@ -90,6 +90,11 @@ export const ICONS = {
       <path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4" />
     </Icon>
   ),
+  activity: (
+    <Icon>
+      <path d="M3 12h4l3-8 4 16 3-8h4" />
+    </Icon>
+  ),
   documents: (
     <Icon>
       <path d="M5 4h14v16H5Z" />

@@ -1,7 +1,8 @@
 // Home (plan 15 §3.3, MR 7): count cards for what waits on me (my merge
 // requests that need action, the ones waiting for my approval, my open ones,
-// unread notifications), each a link to its list; then what I looked at
-// recently (this browser only). The projects I take part in moved to
+// unread notifications), each a link to its list; then the latest 10
+// events of my projects (MR 9; headed "Activity", the sidebar's name, all of
+// them on /-/activity); then what I looked at recently (this browser only). The projects I take part in moved to
 // /-/projects (a small link here); groups live on /-/groups.
 // A card's link is named by its label and number only; what the card says
 // besides (the next step when it is 0, loading, unknown) is its description
@@ -11,9 +12,12 @@ import { useId, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
+import { useRecentActivity } from '../api/activity';
 import { useUnreadCount } from '../api/notifications';
 import { isNone, mrCountText, useUserMrCounts } from '../api/userMergeRequests';
+import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
+import { ActivityItem } from '../features/ActivityItem';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
 import styles from './Home.module.css';
@@ -104,6 +108,38 @@ function valueOf<T>(query: { status: 'pending' | 'error' | 'success'; data: T | 
   return query.status === 'error' ? { status: 'error' } : { status: 'pending' };
 }
 
+/** The latest events (plan 15 §3.3: 10), and the way to all of them. */
+function RecentActivity() {
+  const { t } = useTranslation();
+  const recent = useRecentActivity();
+  const events = recent.data?.events ?? [];
+  return (
+    <Block id="home-activity" title={t('home.activity')}>
+      <p className={styles.lead}>{t('home.activityLead')}</p>
+      {recent.isPending && <Loading />}
+      {recent.isError && (
+        <QueryError
+          error={recent.error}
+          onRetry={() => {
+            void recent.refetch();
+          }}
+        />
+      )}
+      {recent.isSuccess && events.length === 0 && <p className={styles.hint}>{t('activity.empty')}</p>}
+      {events.length > 0 && (
+        <ul className={styles.activity}>
+          {events.map((e) => (
+            <ActivityItem key={e.seq} event={e} />
+          ))}
+        </ul>
+      )}
+      <p className={styles.activityAll}>
+        <Link to="/-/activity">{t('home.activityAll')}</Link>
+      </p>
+    </Block>
+  );
+}
+
 export function Home() {
   const { t } = useTranslation();
   useDocumentTitle(t('home.title'));
@@ -175,6 +211,8 @@ export function Home() {
       <p className={styles.projectsLink}>
         <Link to="/-/projects">{t('home.allProjects')}</Link>
       </p>
+
+      <RecentActivity />
 
       {recent.length > 0 && (
         <Block id="home-recent" title={t('home.recent')}>

@@ -1,0 +1,58 @@
+/* /-/activity (plan 15 MR 9). Tokens only. */
+.title {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-xl);
+  color: var(--gs-brand-navy);
+}
+
+.explain {
+  margin: 0 0 var(--gs-space-6);
+  color: var(--gs-color-text-muted);
+}
+
+/* The cap note is quiet: it is not a failure. */
+.note {
+  margin: 0 0 var(--gs-space-4);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.day {
+  margin-bottom: var(--gs-space-6);
+}
+
+.dayHeading {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+  color: var(--gs-brand-navy);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--gs-color-border);
+  border-bottom: none;
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.empty {
+  margin: 0;
+  color: var(--gs-color-text-muted);
+}
+
+.more {
+  margin: var(--gs-space-3) 0 0;
+}
+
+.status {
+  min-height: var(--gs-status-min-height);
+  margin: var(--gs-space-2) 0 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.status:focus-visible {
+  outline: var(--gs-focus-ring);
+}

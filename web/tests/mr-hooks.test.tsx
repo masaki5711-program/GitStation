@@ -4,6 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { USER_ACTIVITY_KEY } from '../src/api/activity';
 import { createApiClient } from '../src/api/client';
 import { ApiProvider } from '../src/api/context';
 import {
@@ -12,6 +13,7 @@ import {
   shouldPollStatus,
   STATUS_POLL_MS,
   useAddComment,
+  useApprove,
   useCreateMergeRequest,
   useDiscussions,
   useMergeRequest,
@@ -31,6 +33,9 @@ const BASE = '/api/v1/projects/7/merge-requests';
 const MR = { iid: 3, title: 't', state: 'open' };
 const DISCUSSIONS = { iid: 3, discussions: [], truncated: false };
 const STATUS = status([]);
+// Home's recent activity (plan 15 MR 9): an in-app change reads it again.
+const ACTIVITY_RECENT_KEY = [...USER_ACTIVITY_KEY, 'recent'];
+const ACTIVITY_EMPTY = { events: [], next_before: null, truncated: false };
 const NEW_MR = { source_branch: 'f', target_branch: 'main', title: 't' };
 
 function setup(routes: Parameters<typeof mockServer>[0]) {
@@ -212,14 +217,16 @@ describe('merge request mutations', () => {
     expect(call?.body).toEqual(NEW_MR);
   });
 
-  it('create invalidates the MR list', async () => {
+  it('create invalidates the MR list and the activity', async () => {
     const { queryClient, wrapper } = setup({ [`POST ${BASE}`]: () => json(201, MR) });
     queryClient.setQueryData(mrKeys.list(7, {}), { merge_requests: [] });
+    queryClient.setQueryData(ACTIVITY_RECENT_KEY, ACTIVITY_EMPTY);
     const { result } = renderHook(() => useCreateMergeRequest(7), { wrapper });
     await act(async () => {
       await result.current.mutateAsync(NEW_MR);
     });
     expect(queryClient.getQueryState(mrKeys.list(7, {}))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(ACTIVITY_RECENT_KEY)?.isInvalidated).toBe(true);
   });
 
   it.each([
@@ -233,6 +240,7 @@ describe('merge request mutations', () => {
     });
     queryClient.setQueryData(mrKeys.discussions(7, 3), DISCUSSIONS);
     queryClient.setQueryData(mrKeys.status(7, 3), STATUS);
+    queryClient.setQueryData(ACTIVITY_RECENT_KEY, ACTIVITY_EMPTY);
     const { result } = renderHook(
       () => ({
         comment: useAddComment(7, 3),
@@ -253,6 +261,19 @@ describe('merge request mutations', () => {
     expect(call?.body).toEqual(body);
     expect(queryClient.getQueryState(mrKeys.discussions(7, 3))?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(mrKeys.status(7, 3))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(ACTIVITY_RECENT_KEY)?.isInvalidated).toBe(true);
+  });
+
+  it('approve refreshes the status and the activity', async () => {
+    const { queryClient, wrapper } = setup({ [`POST ${BASE}/3/approve`]: () => json(200, {}) });
+    queryClient.setQueryData(mrKeys.status(7, 3), STATUS);
+    queryClient.setQueryData(ACTIVITY_RECENT_KEY, ACTIVITY_EMPTY);
+    const { result } = renderHook(() => useApprove(7, 3), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('a'.repeat(40));
+    });
+    expect(queryClient.getQueryState(mrKeys.status(7, 3))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(ACTIVITY_RECENT_KEY)?.isInvalidated).toBe(true);
   });
 
   it('a failed mutation does not invalidate and rejects', async () => {
