@@ -87,7 +87,7 @@ describe('project top page', () => {
       },
     });
     await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });
-    expect(await screen.findByText('リポジトリを準備しています。数秒で表示されます。')).toBeTruthy();
+    expect(await screen.findByText('リポジトリを準備しています。まもなく表示されます。')).toBeTruthy();
     expect(
       await screen.findByRole('heading', { name: 'リポジトリはまだ空です' }, { timeout: 6000 }),
     ).toBeTruthy();

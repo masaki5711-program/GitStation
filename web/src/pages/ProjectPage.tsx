@@ -70,7 +70,9 @@ function RepositoryState({
   });
 
   if (refs.isPending) {
-    if (refs.failureCount === 0) return <Loading />;
+    // The UI sees no error code (contract 3): on this route a 503 is the
+    // provisioning answer; a real outage shows its error after the wait.
+    if (!isNotReady(refs.failureReason)) return <Loading />;
     return (
       <p role="status" className={styles.hint}>
         {t('project.preparing')}
