@@ -361,11 +361,14 @@ describe('navigation and languages', () => {
       });
     const admin = mockServer(asRole(null));
     const view = await renderApp({ fetch: admin.fetch, path: '/acme/forge-web/-/branches', lang: 'en' });
-    expect(await screen.findByRole('link', { name: 'Webhooks' })).toBeTruthy();
+    // In the page's navigation and in the sidebar.
+    const inPage = await screen.findByRole('navigation', { name: 'Repository screens' });
+    expect(within(inPage).getByRole('link', { name: 'Webhooks' })).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: 'Webhooks' })).toHaveLength(2);
     view.unmount();
     const reporter = mockServer(asRole('reporter'));
     await renderApp({ fetch: reporter.fetch, path: '/acme/forge-web/-/branches', lang: 'en' });
-    await screen.findByRole('link', { name: 'Commits' });
+    await screen.findByRole('navigation', { name: 'Repository screens' });
     expect(screen.queryByRole('link', { name: 'Webhooks' })).toBeNull();
   });
 

@@ -56,7 +56,7 @@
     "menu": "メニュー",
     "projectMenu": "プロジェクトのメニュー",
     "groupMenu": "グループのメニュー",
-    "childrenFailed": "中のグループとプロジェクトを読めませんでした。"
+    "showAll": "中身をすべて見る"
   },
   "projects": {
     "title": "プロジェクト",

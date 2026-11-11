@@ -3,7 +3,7 @@
 // place that knows what a path is, so it reports it here; the sidebar shows
 // the scope only while the address is still inside that namespace, so a
 // scope left over from an earlier page never shows on another one.
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { pathSegments } from '../features/paths';
 
@@ -23,18 +23,29 @@ const ScopeContext = createContext<Value>({
 
 export function SidebarScopeProvider({ children }: { children: ReactNode }) {
   const [scope, setScope] = useState<SidebarScope | null>(null);
-  return <ScopeContext.Provider value={{ scope, setScope }}>{children}</ScopeContext.Provider>;
+  const value = useMemo(() => ({ scope, setScope }), [scope]);
+  return <ScopeContext.Provider value={value}>{children}</ScopeContext.Provider>;
 }
 
-/** Reports the namespace this page is in (`null`: none, e.g. a person). */
-export function useReportSidebarScope(scope: SidebarScope | null): void {
+/** Reports the namespace this page is in: `null` none (a person, not
+ * found), `undefined` not known yet (still resolving, or about to be
+ * redirected): the last report stands. Leaving the page clears it. */
+export function useReportSidebarScope(scope: SidebarScope | null | undefined): void {
   const { setScope } = useContext(ScopeContext);
+  const known = scope !== undefined;
   const kind = scope?.kind ?? null;
   const id = scope?.id ?? null;
   const path = scope?.path ?? null;
   useEffect(() => {
+    if (!known) return;
     setScope(kind === null || id === null || path === null ? null : { kind, id, path });
-  }, [setScope, kind, id, path]);
+  }, [setScope, known, kind, id, path]);
+  useEffect(
+    () => () => {
+      setScope(null);
+    },
+    [setScope],
+  );
 }
 
 /** The namespace part of an address and the screen words after `/-/`. */

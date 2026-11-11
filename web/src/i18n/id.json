@@ -56,7 +56,7 @@
     "menu": "Menu",
     "projectMenu": "Menu proyek",
     "groupMenu": "Menu grup",
-    "childrenFailed": "Grup dan proyek di dalamnya tidak dapat dimuat."
+    "showAll": "Lihat semua isinya"
   },
   "projects": {
     "title": "Proyek",

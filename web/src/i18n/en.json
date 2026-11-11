@@ -56,7 +56,7 @@
     "menu": "Menu",
     "projectMenu": "Project menu",
     "groupMenu": "Group menu",
-    "childrenFailed": "Could not load the groups and projects inside."
+    "showAll": "See everything inside"
   },
   "projects": {
     "title": "Projects",

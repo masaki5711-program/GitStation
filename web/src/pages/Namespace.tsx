@@ -57,14 +57,22 @@ function Resolved({ path, view }: { path: string; view: string[] | null }) {
     // A path can move or be deleted: ask again on every visit.
     staleTime: 0,
   });
-  // The sidebar follows the namespace this address is in.
+  // The sidebar follows the namespace this address is in — once the address
+  // is the canonical one (a moved path or another spelling is redirected
+  // first, and reported after the redirect).
   const found = resolution.data;
   useReportSidebarScope(
-    found?.kind === 'project' && found.project_id != null
-      ? { kind: 'project', id: found.project_id, path: found.canonical_path }
-      : found?.kind === 'group' && found.group_id != null
-        ? { kind: 'group', id: found.group_id, path: found.canonical_path }
-        : null,
+    found === undefined
+      ? resolution.isError
+        ? null
+        : undefined
+      : found.canonical_path !== path
+        ? undefined
+        : found.kind === 'project' && found.project_id != null
+          ? { kind: 'project', id: found.project_id, path: found.canonical_path }
+          : found.kind === 'group' && found.group_id != null
+            ? { kind: 'group', id: found.group_id, path: found.canonical_path }
+            : null,
   );
 
   if (resolution.isPending) return <Loading />;

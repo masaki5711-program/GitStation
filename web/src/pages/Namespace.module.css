@@ -92,13 +92,6 @@
   color: var(--gs-brand-navy);
 }
 
-.cloneRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--gs-space-3);
-}
-
 .clone {
   flex: 1;
   min-width: 0;
@@ -132,7 +125,7 @@
    them; one column below the sidebar breakpoint (useNarrowScreen.ts). */
 .projectGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 16rem;
+  grid-template-columns: minmax(0, 1fr) var(--gs-aside-width);
   gap: var(--gs-space-6);
   align-items: start;
 }
@@ -196,7 +189,7 @@
 
 .commitSubject {
   margin: 0 0 var(--gs-space-1);
-  font-weight: bold;
+  font-weight: var(--gs-font-weight-bold);
   overflow-wrap: anywhere;
 }
 
@@ -211,4 +204,35 @@
 
 .srOnly {
   composes: srOnly from '../components/controls.module.css';
+}
+
+/* Counts, short ids and times line up (digits of one width). */
+.number {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The clone URL inside the info panel: compact, under the facts. */
+.cloneBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--gs-space-2);
+  margin-top: var(--gs-space-4);
+  padding-top: var(--gs-space-3);
+  border-top: 1px solid var(--gs-color-border);
+}
+
+.cloneBlock h3 {
+  margin: 0;
+  font-size: var(--gs-font-size-sm);
+  color: var(--gs-color-text-muted);
+}
+
+.cloneBlock .clone {
+  width: 100%;
+  font-size: var(--gs-font-size-sm);
+}
+
+.cloneBlock .hint {
+  margin: 0;
 }

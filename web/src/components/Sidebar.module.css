@@ -1,4 +1,4 @@
-/* The "My work" sidebar (tokens only). Breakpoint: useNarrowScreen.ts. */
+/* The sidebar: My work / project / group sections (tokens only). Breakpoint: useNarrowScreen.ts. */
 .sidebar {
   flex: none;
   align-self: flex-start;
@@ -32,7 +32,7 @@
   margin: var(--gs-space-2) var(--gs-space-3);
   color: var(--gs-color-text-muted);
   font-size: var(--gs-font-size-sm);
-  font-weight: bold;
+  font-weight: var(--gs-font-weight-bold);
 }
 
 .list {
@@ -65,7 +65,7 @@
   background: var(--gs-color-active-surface);
   box-shadow: inset 3px 0 0 var(--gs-color-action);
   color: var(--gs-color-link);
-  font-weight: bold;
+  font-weight: var(--gs-font-weight-bold);
 }
 
 .toggle {
@@ -94,26 +94,34 @@
   composes: srOnly from './controls.module.css';
 }
 
-/* A project / group section: the way back to "My work", then its name. */
+/* A project / group section: the way back to "My work", then its name.
+   The back link is a muted item: the shared hover / pressed / focus ring
+   (controls.module.css), and the text darkens on hover. */
 .back {
   composes: link;
   color: var(--gs-color-text-muted);
   font-size: var(--gs-font-size-sm);
 }
 
+.back:hover:not(:disabled),
+.back:active:not(:disabled) {
+  color: var(--gs-color-text);
+}
+
 .contextTitle {
   margin: var(--gs-space-2) 0;
-  font-size: var(--gs-font-size-md);
-  border-top: 1px solid var(--gs-color-border);
   padding-top: var(--gs-space-2);
+  border-top: 1px solid var(--gs-color-border);
 }
 
 .contextTitle .link {
-  font-weight: bold;
+  font-weight: var(--gs-font-weight-bold);
 }
 
-.note {
-  margin: var(--gs-space-2) var(--gs-space-3);
-  color: var(--gs-color-text-muted);
-  font-size: var(--gs-font-size-sm);
+/* The name while it loads: a bar of the item's height (no jump). */
+.placeholder {
+  min-height: var(--gs-tap-target);
+  margin: 0;
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-hover-surface);
 }

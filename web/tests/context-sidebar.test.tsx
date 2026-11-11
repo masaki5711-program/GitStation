@@ -1,9 +1,11 @@
 // The sidebar follows where I am (project / group / My work), and the project
 // top page's latest-commit strip and info panel.
 import axe from 'axe-core';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { CHILD_CAP } from '../src/components/sidebar/GroupSection';
+import { SidebarScopeProvider, useReportSidebarScope, useSidebarScope } from '../src/components/sidebarScope';
 import { formatRelative } from '../src/features/labels';
 import {
   GROUP,
@@ -178,7 +180,7 @@ describe('sidebar in a group', () => {
     expect(server.unmatched).toEqual([]);
   });
 
-  it('no settings for a member who is not the Owner; members page is marked', async () => {
+  it('no settings for a member who is not the Owner; members page is marked; no list requests there', async () => {
     const server = mockServer(
       groupRoutes({
         'GET /api/v1/groups/3': () => json(200, { ...GROUP, role: 'developer' }),
@@ -187,19 +189,188 @@ describe('sidebar in a group', () => {
     );
     await renderApp({ fetch: server.fetch, path: '/acme/-/members' });
     const nav = await groupNav();
-    await within(nav).findByRole('link', { name: 'Line 1' });
+    await within(nav).findByRole('link', { name: 'Acme Plant' });
     expect(within(nav).queryByRole('link', { name: '設定' })).toBeNull();
     expect(currentIn(nav)).toEqual(['メンバー']);
+    // The sidebar does not read the whole lists for itself: it leads to the group page.
+    expect(within(nav).getByRole('link', { name: '中身をすべて見る' }).getAttribute('href')).toBe('/acme');
+    expect(server.to('GET', '/api/v1/groups')).toHaveLength(0);
+    expect(server.to('GET', '/api/v1/projects')).toHaveLength(0);
   });
 
-  it('a failing list says so in the sidebar; the group links stay', async () => {
+  it(`lists at most ${String(CHILD_CAP)} of each, then "see everything" leads to the group page`, async () => {
+    const many = Array.from({ length: CHILD_CAP + 2 }, (_, i) => ({
+      ...LISTED_GROUP,
+      id: 100 + i,
+      namespace_id: 1000 + i,
+      path: `acme/line-${String(i + 10)}`,
+      name: `line-${String(i + 10)}`,
+      display_name: `Line ${String(i + 10)}`,
+    }));
+    const server = mockServer(groupRoutes({ 'GET /api/v1/groups': () => page([LISTED_GROUP, ...many]) }));
+    await renderApp({ fetch: server.fetch, path: '/acme' });
+    const nav = await groupNav();
+    await within(nav).findByRole('link', { name: 'Line 10' });
+    const listed = within(nav)
+      .getAllByRole('link')
+      .filter((l) => /^Line /.test(l.textContent));
+    expect(listed).toHaveLength(CHILD_CAP);
+    expect(within(nav).queryByRole('link', { name: `Line ${String(CHILD_CAP + 11)}` })).toBeNull();
+    expect(within(nav).getByRole('link', { name: '中身をすべて見る' }).getAttribute('href')).toBe('/acme');
+    // The group page has them all.
+    expect(within(screen.getByRole('main')).getByText(`Line ${String(CHILD_CAP + 11)}`)).toBeTruthy();
+  });
+
+  it('a list cut short (truncated) also offers "see everything", even with few children', async () => {
     const server = mockServer(
-      groupRoutes({ 'GET /api/v1/projects': () => apiError(500, '一覧を読めませんでした。', 'req-l-1') }),
+      groupRoutes({
+        // Every page says "more": the list stops at its page cap (truncated).
+        'GET /api/v1/groups': (c) =>
+          page(
+            c.query.get('cursor') === null
+              ? [
+                  LISTED_GROUP,
+                  { ...LISTED_GROUP, id: 4, namespace_id: 40, path: 'acme/line-1', name: 'line-1', display_name: 'Line 1' },
+                ]
+              : [],
+            { has_more: true, next_cursor: 'next' },
+          ),
+      }),
     );
     await renderApp({ fetch: server.fetch, path: '/acme' });
     const nav = await groupNav();
-    expect(await within(nav).findByText('中のグループとプロジェクトを読めませんでした。')).toBeTruthy();
+    await within(nav).findByRole('link', { name: 'Line 1' });
+    expect(await within(nav).findByRole('link', { name: '中身をすべて見る' })).toBeTruthy();
+  });
+
+  it('few children and complete lists: no "see everything"', async () => {
+    const server = mockServer(groupRoutes());
+    await renderApp({ fetch: server.fetch, path: '/acme' });
+    const nav = await groupNav();
+    await within(nav).findByRole('link', { name: 'Line 1' });
+    expect(within(nav).queryByRole('link', { name: '中身をすべて見る' })).toBeNull();
+  });
+
+  it('a failing list shows its request id and a retry in the sidebar; the group links stay', async () => {
+    let fail = true;
+    const server = mockServer(
+      groupRoutes({
+        'GET /api/v1/projects': () =>
+          fail ? apiError(500, '一覧を読めませんでした。', 'req-l-1', 'FG-DB-0001') : page([PROJECT]),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme' });
+    const nav = await groupNav();
+    const inline = within(await within(nav).findByTestId('inline-error'));
+    expect(inline.getByText('一覧を読めませんでした。')).toBeTruthy();
+    expect(inline.getByTestId('inline-request-id').textContent).toBe('req-l-1');
+    expect(nav.textContent).not.toContain('FG-DB-0001');
     expect(within(nav).getByRole('link', { name: 'メンバー' })).toBeTruthy();
+    fail = false;
+    fireEvent.click(inline.getByRole('button', { name: 'もう一度試す' }));
+    expect(await within(nav).findByRole('link', { name: 'Forge Web' })).toBeTruthy();
+    expect(within(nav).queryByTestId('inline-error')).toBeNull();
+  });
+});
+
+describe('sidebar title: loading and failure', () => {
+  it('a placeholder while the project loads; no role-only items until the role is known', async () => {
+    const server = mockServer(
+      repoRoutes({ 'GET /api/v1/projects/7': () => new Promise<Response>(() => undefined) }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/branches' });
+    const nav = await projectNav();
+    expect(within(nav).getByRole('status').textContent).toBe('読み込んでいます…');
+    expect(within(nav).getByRole('link', { name: 'コミット' })).toBeTruthy();
+    expect(within(nav).queryByRole('link', { name: '設定' })).toBeNull();
+  });
+
+  it('a failed project shows its request id and a retry; retrying brings the name back', async () => {
+    let fail = true;
+    const server = mockServer(
+      repoRoutes({
+        'GET /api/v1/projects/7': () =>
+          fail ? apiError(500, 'プロジェクトを読めませんでした。', 'req-p-9', 'FG-DB-0003') : json(200, PROJECT),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/branches' });
+    const nav = await projectNav();
+    const inline = within(await within(nav).findByTestId('inline-error'));
+    expect(inline.getByText('プロジェクトを読めませんでした。')).toBeTruthy();
+    expect(inline.getByTestId('inline-request-id').textContent).toBe('req-p-9');
+    expect(nav.textContent).not.toContain('FG-DB-0003');
+    // The project's screens are still there (their paths are known).
+    expect(within(nav).getByRole('link', { name: 'ブランチ' })).toBeTruthy();
+    fail = false;
+    fireEvent.click(inline.getByRole('button', { name: 'もう一度試す' }));
+    expect(await within(nav).findByRole('link', { name: 'Forge Web' })).toBeTruthy();
+  });
+
+  it('collapsed: the failure stays readable (visually hidden) and the retry reachable', async () => {
+    window.localStorage.setItem('gitstation.sidebar.collapsed', '1');
+    const server = mockServer(
+      repoRoutes({ 'GET /api/v1/projects/7': () => apiError(500, 'プロジェクトを読めませんでした。', 'req-p-8') }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/branches' });
+    const nav = await projectNav();
+    const box = await within(nav).findByTestId('inline-error');
+    expect(box.textContent).toContain('プロジェクトを読めませんでした。');
+    expect(box.textContent).toContain('req-p-8');
+    expect(box.querySelector('p')?.className).toContain('srOnly');
+    const retry = within(box).getByRole('button', { name: 'もう一度試す' });
+    retry.focus();
+    expect(document.activeElement).toBe(retry);
+    window.localStorage.clear();
+  });
+
+  it('403: no retry (asking again does not change it)', async () => {
+    const server = mockServer(
+      repoRoutes({ 'GET /api/v1/projects/7': () => apiError(403, '見る権限がありません。', 'req-403') }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/branches' });
+    const nav = await projectNav();
+    const box = within(await within(nav).findByTestId('inline-error'));
+    expect(box.getByTestId('inline-request-id').textContent).toBe('req-403');
+    expect(box.queryByRole('button')).toBeNull();
+  });
+});
+
+describe('sidebar scope', () => {
+  it('is cleared when the namespace page is left', () => {
+    function Probe({ path }: { path: string }) {
+      const found = useSidebarScope(path);
+      return <output data-testid="scope">{found === null ? 'none' : found.scope.kind}</output>;
+    }
+    function Reporter() {
+      useReportSidebarScope({ kind: 'project', id: 7, path: 'acme/forge-web' });
+      return null;
+    }
+    const view = render(
+      <SidebarScopeProvider>
+        <Reporter />
+        <Probe path="/acme/forge-web/-/tree" />
+      </SidebarScopeProvider>,
+    );
+    expect(screen.getByTestId('scope').textContent).toBe('project');
+    view.rerender(
+      <SidebarScopeProvider>
+        <Probe path="/acme/forge-web/-/tree" />
+      </SidebarScopeProvider>,
+    );
+    expect(screen.getByTestId('scope').textContent).toBe('none');
+  });
+
+  it('a moved path shows the project section after the redirect', async () => {
+    const server = mockServer(
+      repoRoutes({
+        'GET /api/v1/namespaces/resolve': () =>
+          json(200, { canonical_path: 'acme/forge-web', kind: 'project', moved: true, namespace_id: 11, project_id: 7 }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/old/forge-web/-/branches' });
+    const nav = await projectNav();
+    expect(screen.getByTestId('location').textContent).toBe('/acme/forge-web/-/branches');
+    expect(currentIn(nav)).toEqual(['ブランチ']);
   });
 });
 
@@ -251,6 +422,30 @@ describe('project top page: latest commit and info panel', () => {
     expect(screen.getByTestId('clone-url')).toBeTruthy();
     expect(await screen.findByRole('link', { name: 'src/' })).toBeTruthy();
     expect(screen.getByRole('complementary', { name: 'プロジェクト情報' })).toBeTruthy();
+  });
+
+  it('the info panel says it is loading, then shows the refs failure small, with its request id and a retry', async () => {
+    let answer: (r: Response) => void = () => undefined;
+    const server = mockServer(
+      repoRoutes({
+        'GET /api/v1/projects/7/repository/refs': () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });
+    const panel = await screen.findByRole('complementary', { name: 'プロジェクト情報' });
+    expect(within(panel).getByText('読み込んでいます…').getAttribute('role')).toBe('status');
+    act(() => {
+      answer(apiError(500, '参照を読めませんでした。', 'req-refs-2', 'FG-REPO-0016'));
+    });
+    const box = within(await within(panel).findByTestId('inline-error'));
+    expect(box.getByTestId('inline-request-id').textContent).toBe('req-refs-2');
+    expect(panel.textContent).not.toContain('FG-REPO-0016');
+    expect(box.getByRole('button', { name: 'もう一度試す' })).toBeTruthy();
+    // The clone URL is in the panel and stays.
+    expect(within(panel).getByTestId('clone-url')).toBeTruthy();
   });
 
   it('an empty repository has no commit strip and no README link', async () => {

@@ -1,7 +1,7 @@
 // The project top page (plan 10 §4.3): summary, the latest commit of the
-// default branch, clone URL, the files with their README and, beside them
-// (below on a narrow screen), the project's facts: default branch, branch and
-// tag counts, links to the README and the merge requests. An empty
+// default branch, the files with their README and, beside them (below on a
+// narrow screen), the project's facts: default branch, branch and tag counts,
+// links to the README and the merge requests, and the clone URL. An empty
 // repository says how to make the first push. The project's screens are in
 // the sidebar.
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -27,6 +27,7 @@ import { Breadcrumb } from '../components/Breadcrumb';
 import controls from '../components/controls.module.css';
 import { CopyButton } from '../components/CopyButton';
 import { MovedNotice } from '../components/MovedNotice';
+import { InlineError } from '../components/InlineError';
 import { QueryError } from '../components/QueryError';
 import { formatDate, formatDateTime, formatRelative, roleLabel, visibilityLabel } from '../features/labels';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -106,11 +107,11 @@ function LatestCommit({ id, path, branch }: { id: number; path: string; branch: 
       <p className={styles.commitSubject}>{commit.subject}</p>
       <p className={styles.commitMeta}>
         <span>{commit.author_name}</span>
-        <time dateTime={commit.authored_at} title={formatDateTime(commit.authored_at, i18n.language)}>
+        <time className={styles.number} dateTime={commit.authored_at} title={formatDateTime(commit.authored_at, i18n.language)}>
           {formatRelative(commit.authored_at, i18n.language)}
         </time>
         <Link to={commitUrl(path, commit.oid)} aria-label={t('project.openCommit', { sha })}>
-          <code>{sha}</code>
+          <code className={styles.number}>{sha}</code>
         </Link>
       </p>
     </section>
@@ -180,8 +181,10 @@ function useReadmeUrl(projectId: number, project: string): string | null {
   return readme === undefined ? null : blobUrl(project, rev.name, readme.path);
 }
 
-/** The project's facts and shortcuts, beside the files. */
-function ProjectInfo({ id, path, created }: { id: number; path: string; created: string }) {
+/** The project's facts and shortcuts beside the files, and the clone URL
+ * (compact: the commit and the files come first). The refs' own failure is
+ * shown here too, small, with its request id and a retry. */
+function ProjectInfo({ id, path, created, cloneUrl }: { id: number; path: string; created: string; cloneUrl: string }) {
   const { t, i18n } = useTranslation();
   const refs = useProjectRefs(id);
   const readme = useReadmeUrl(id, path);
@@ -191,6 +194,19 @@ function ProjectInfo({ id, path, created }: { id: number; path: string; created:
   return (
     <aside className={styles.info} aria-labelledby="project-info">
       <h2 id="project-info">{t('project.info')}</h2>
+      {refs.isPending && (
+        <p role="status" className={styles.hint}>
+          {t('common.loading')}
+        </p>
+      )}
+      {refs.isError && (
+        <InlineError
+          error={refs.error}
+          onRetry={() => {
+            void refs.refetch();
+          }}
+        />
+      )}
       <dl className={styles.facts}>
         {data !== undefined && data.default_branch !== null && (
           <>
@@ -203,11 +219,11 @@ function ProjectInfo({ id, path, created }: { id: number; path: string; created:
         {branches !== undefined && tags !== undefined && (
           <>
             <dt>{t('project.branches')}</dt>
-            <dd>
+            <dd className={styles.number}>
               <Link to={branchesUrl(path)}>{branches}</Link>
             </dd>
             <dt>{t('project.tags')}</dt>
-            <dd>
+            <dd className={styles.number}>
               <Link to={tagsUrl(path)}>{tags}</Link>
             </dd>
           </>
@@ -226,6 +242,14 @@ function ProjectInfo({ id, path, created }: { id: number; path: string; created:
           <Link to={pullsUrl(path)}>{t('project.mergeRequests')}</Link>
         </li>
       </ul>
+      <section className={styles.cloneBlock} aria-labelledby="clone-title">
+        <h3 id="clone-title">{t('project.clone')}</h3>
+        <code className={styles.clone} data-testid="clone-url">
+          {cloneUrl}
+        </code>
+        <CopyButton text={cloneUrl} label={t('project.copyClone')} />
+        <p className={styles.hint}>{t('project.cloneHint')}</p>
+      </section>
     </aside>
   );
 }
@@ -279,19 +303,9 @@ export function ProjectPage({ id }: { id: number }) {
       <div className={styles.projectGrid}>
         <div className={styles.projectMain}>
           <RepositoryState id={p.id} name={p.name} path={p.path} cloneUrl={cloneUrl} />
-          <section className={styles.card} aria-labelledby="clone-title">
-            <h2 id="clone-title">{t('project.clone')}</h2>
-            <div className={styles.cloneRow}>
-              <code className={styles.clone} data-testid="clone-url">
-                {cloneUrl}
-              </code>
-              <CopyButton text={cloneUrl} label={t('project.copyClone')} />
-            </div>
-            <p className={styles.hint}>{t('project.cloneHint')}</p>
-          </section>
           <ProjectFiles projectId={p.id} project={p.path} />
         </div>
-        <ProjectInfo id={p.id} path={p.path} created={p.created_at} />
+        <ProjectInfo id={p.id} path={p.path} created={p.created_at} cloneUrl={cloneUrl} />
       </div>
     </>
   );
