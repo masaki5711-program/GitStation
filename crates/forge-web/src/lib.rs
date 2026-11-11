@@ -27,6 +27,7 @@ pub mod context;
 mod csrf;
 mod dispatch;
 pub mod error;
+mod error_page;
 mod git_stream;
 mod guard;
 pub mod registry;

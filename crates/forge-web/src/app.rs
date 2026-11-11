@@ -2657,6 +2657,10 @@ pub(crate) fn build(
         // ADR-0019 Amendment M2: every 401 gets its class's challenges.
         .layer(middleware::from_fn(crate::error::challenge_layer))
         .layer(middleware::from_fn(context::request_id))
+        // A failed browser navigation of the sign-in flow is a page, not
+        // the JSON body (`crate::error_page`); every failure, the timeout's
+        // and the panic catcher's included, passes it.
+        .layer(middleware::from_fn(crate::error_page::auth_error_page))
         // Outermost: every answer, the timeout's and the panic catcher's
         // included, gets its class's headers (ADR-0022 §3).
         .layer(middleware::from_fn_with_state(
