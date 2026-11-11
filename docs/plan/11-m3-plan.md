@@ -405,6 +405,22 @@ runbook: `backup-restore`（訓練の手順を含む）、`gitlab-mirror`（遅�
    O3 がマージされるまで M3 を完了にしない。それまでは runbook `merge-request-mergeability` の手での `git prune --expire=<猶予>`（承認つき）。
 7. **R1 を始める条件**（M3 の外。人の決定と承認）: パイロットのチームの決定、本番の Kanflow の PG への切り替えを承認された runbook で終えること（Q2 で案 a の場合）。
 
+**達成の状況（2026-11-11）**: M3 は **まだ完了していない**（1 と 5 が残る）。
+- **1（未完）**: 自己ホストの MR の流れ（必須チェック `ci/gates` つき）は、M4 の切り替え X（CI イメージ `39bf475`、runner の作業ディレクトリ `77e693d`）と並行して進行中。
+- **2（達成、使い捨てのインスタンス）**: 2 回の訓練を `gs-drill`（合成のデータ）で実施。記録は `ops/incidents/2026-11-11-drill-backup-restore.md`。
+  2 回目は RTO 23.6 秒（目標 4 時間）、`forge restore verify` が consistent。1 回目で見つかった `verify` の偽陽性は 38c3065 で直した（回帰テストあり）。
+  Kanflow v2 の 410 `epoch_mismatch` からの回復は、同日に試験環境の Kanflow v2 で確認済み。**未了**: 手順 11〜12（Keycloak でのサインインし直し、ブラウザでの連携の再有効化。
+  訓練では SQL で代行）と、復元の後の実際の Kanflow の回復（`gs-m3-test` で行う）。
+- **3（達成、LAN の試験環境）**: Kanflow v2 の試験用インスタンス（`127.0.0.1:3401`、試験用 PG、`feat/L4-NOPBI-gitstation-ops` @ `7fb88d2`）で、
+  GitStationSource の回帰（02 §8.2 の 7 件を含む、fake-GitStation の suite 120/120）と実環境の確認を行った。
+  実環境: ① 取りこぼしなし（MR の 13 段階の流れと、マージせず閉じた MR）、② 停止・再起動の後にカーソルから続く、③ 410 `epoch_mismatch` の後に状態を読み直して続く（epoch の後に開いた MR も届く）。
+  観測: 状態の読み直しで初めて知った MR には作成者が無い（開発状況の API に無い）。MR の作成の直後の承認・マージは一時的に拒まれる（409 `stale_view` が 1 回、`mergeability_unknown` が約 30 秒）。
+- **4（達成、本物の Keycloak）**: ログイン、ログアウト（古い Cookie は 401 `session_revoked`）、GitStation での無効化（次の操作からセッションは 403 `owner_disabled`、PAT は 401）、
+  Keycloak での無効化（テスト用 realm でバックチャネルのログアウトを有効にした後、セッションは 0.1 秒後に拒まれ `revoked_reason=backchannel`。PAT は計画 09 §8.5 のとおり使えたまま）。
+  **未了**: GitStation で無効化した利用者の再有効化の操作がまだ無い。
+- **5（未了）**: Windows での全体のテストの実行。matrix と catalog のゲートは緑（全体の実行ではない）。
+- **6（達成）**: O3 がマージ済み。
+
 **確かめのコマンド**: `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`FORGE_TEST_DATABASE_URL=… cargo nextest run --workspace -j 4`、`gen-catalog` / `gen-authz` の差分なし、web の 6 つのゲート、`node scripts/self-heal.js --check`。Kanflow は自分のリポジトリのゲート（lint・typecheck・test、PG の DB のテスト）。
 
 ## 10. 利用者に決めてほしいこと（推奨つき）
