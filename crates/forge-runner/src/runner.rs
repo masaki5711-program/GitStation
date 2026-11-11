@@ -64,6 +64,9 @@ impl Runner {
             // token) or the client's (FG-CLI-0003: unreachable).
             ForgeError::new(ErrorCode::parse(e.code_id()).unwrap_or(ErrorCode::Internal))
                 .with_context("operation", "claim")
+                // The client's diagnosis class (`reason=connect|timeout|tls|…`):
+                // without it an unreachable server and a wrong address look alike.
+                .with_context("detail", e.detail().unwrap_or("").to_owned())
                 .with_context("request_id", e.request_id().unwrap_or("").to_owned())
         })?;
         let Some(job) = claimed else {
