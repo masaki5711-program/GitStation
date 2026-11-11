@@ -24,7 +24,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use forge_auth::{TokenCtx, TokenOwnerCtx, TokenRequestCtx};
 use forge_core::{parse_positive_id, Scope, UserId};
-use forge_errors::{ErrorCode, ForgeError};
+use forge_errors::ForgeError;
 use forge_hosting::accounts::{TokenFields, TokenInfo, MAX_EXPIRY, MIN_EXPIRY};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,7 +32,9 @@ use serde_json::Value;
 use crate::app::AppState;
 use crate::body::{param_invalid, request_invalid};
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup};
-use crate::routes::write::{absent, bounded, hosting, json, no_store, write_request};
+use crate::routes::write::{
+    absent, absent_because, bounded, hosting, json, no_store, own, write_request,
+};
 
 /// `GET` / `POST` the caller's tokens.
 pub const COLLECTION: &str = "/api/v1/user/tokens";
@@ -131,12 +133,8 @@ pub(crate) fn token_body(t: &TokenInfo) -> TokenBody {
     }
 }
 
-/// The caller (the registry's guard admitted an authenticated one).
-fn me(viewer: Option<UserId>) -> Result<UserId, ForgeError> {
-    viewer.ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal).with_context("reason", "token_route_without_user")
-    })
-}
+/// Why a caller without a user (a runner, a job) finds no tokens.
+const WITHOUT_USER: &str = "token_route_without_user";
 
 fn found<R>(ctx: R) -> Lookup<R> {
     Lookup::Found {
@@ -192,7 +190,7 @@ impl Loader<AppState> for OwnTokens {
         _: &'a Parts,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, TokenOwnerCtx> {
-        Box::pin(async move { Ok(found(TokenOwnerCtx::new(me(viewer)?))) })
+        Box::pin(async move { Ok(own(viewer, WITHOUT_USER, TokenOwnerCtx::new)) })
     }
 }
 
@@ -209,8 +207,12 @@ impl BodyLoader<AppState, CreateToken> for NewToken {
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, TokenRequestCtx> {
         Box::pin(async move {
+            // The caller first: a runner or a job is refused whatever the body.
+            let Some(me) = viewer else {
+                return Ok(absent_because(WITHOUT_USER));
+            };
             let scopes = scopes(&body.scopes)?;
-            Ok(found(TokenRequestCtx::new(me(viewer)?, scopes)))
+            Ok(found(TokenRequestCtx::new(me, scopes)))
         })
     }
 }

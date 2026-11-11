@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
 use crate::body::request_invalid;
-use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup};
-use crate::routes::write::{bounded, json, no_store};
+use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader};
+use crate::routes::write::{bounded, json, no_store, own};
 
 /// `GET` / `PUT` the caller's settings.
 pub const PREFERENCES: &str = "/api/v1/user/notification-preferences";
@@ -137,23 +137,8 @@ fn settings(state: &AppState) -> Result<&forge_notify::Settings, ForgeError> {
     })
 }
 
-/// The caller (the registry's guard admitted an authenticated one).
-fn me(viewer: Option<UserId>) -> Result<UserId, ForgeError> {
-    viewer.ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "notification_route_without_user")
-    })
-}
-
-fn found<R>(ctx: R) -> Lookup<R> {
-    Lookup::Found {
-        ctx,
-        canonical: None,
-        tombstone: None,
-        project: None,
-        group: None,
-    }
-}
+/// Why a caller without a user (a runner, a job) finds no notifications.
+const WITHOUT_USER: &str = "notification_route_without_user";
 
 /// `GET`: the caller's own settings.
 pub struct OwnPreferences;
@@ -166,7 +151,7 @@ impl Loader<AppState> for OwnPreferences {
         _: &'a Parts,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, NotificationPreferencesCtx> {
-        Box::pin(async move { Ok(found(NotificationPreferencesCtx::new(me(viewer)?))) })
+        Box::pin(async move { Ok(own(viewer, WITHOUT_USER, NotificationPreferencesCtx::new)) })
     }
 }
 
@@ -182,7 +167,7 @@ impl BodyLoader<AppState, PreferencesInput> for OwnPreferencesChange {
         _: &'a PreferencesInput,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, NotificationPreferencesCtx> {
-        Box::pin(async move { Ok(found(NotificationPreferencesCtx::new(me(viewer)?))) })
+        Box::pin(async move { Ok(own(viewer, WITHOUT_USER, NotificationPreferencesCtx::new)) })
     }
 }
 
