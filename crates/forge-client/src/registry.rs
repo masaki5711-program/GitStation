@@ -545,6 +545,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["merge_requests","next_before"],"properties":{"merge_requests":{"type":"array","items":{"type":"object","required":["project_id","iid","title","state","draft","source_branch","target_branch","author_id"]}},"next_before":{"type":["integer","null"]}}}"#,
     },
     CommandSpec {
+        name: "mr mine",
+        summary: "Your own merge requests across projects, newest first: one page of a scope (authored, approvable, attention; only those you may read now, so a page may hold fewer than --limit), or with --counts how many each scope holds.",
+        args: &[
+            arg("--scope", "option", false, "authored | approvable | attention (required without --counts)."),
+            arg("--limit", "option", false, "Rows per page, 1..=100."),
+            arg("--before", "option", false, "Continue below this next_before id."),
+            arg("--counts", "flag", false, "The count of every scope instead of a page (at most 100 each; capped / truncated say when more exist)."),
+        ],
+        examples: &["gstn mr mine --scope approvable --json", "gstn mr mine --counts"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/user/merge-requests", "GET /api/v1/user/merge-requests/counts"],
+        output: r#"{"type":"object","properties":{"scope":{"type":"string"},"merge_requests":{"type":"array","items":{"type":"object","required":["project_id","project_path","iid","title","state","draft","source_branch","target_branch","author_id","attention"]}},"next_before":{"type":["integer","null"]},"authored":{"type":"object","required":["count","capped","truncated"]},"approvable":{"type":"object","required":["count","capped","truncated"]},"attention":{"type":"object","required":["count","capped","truncated"]}}}"#,
+    },
+    CommandSpec {
         name: "mr view",
         summary: "Show one merge request.",
         args: &[
@@ -1360,6 +1374,19 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api"],
         routes: &["POST /api/v1/user/notifications/{id}/read", "POST /api/v1/user/notifications/read-all"],
         output: r#"{"type":"object","properties":{"id":{"type":"integer"},"read_at":{"type":"string"},"all_read":{"const":true}}}"#,
+    },
+    // ── plan 15 MR 8: your activity ──
+    CommandSpec {
+        name: "activity",
+        summary: "The recent events of the projects you are involved in, newest first: only those you may read, with only the allowed fields (a page may hold fewer than --limit); next_before pages back. A person's: an agent's token is refused.",
+        args: &[
+            arg("--before", "option", false, "Continue below this next_before seq."),
+            arg("--limit", "option", false, "Events read per page, 1..=100 (default 30)."),
+        ],
+        examples: &["gstn activity --json", "gstn activity --limit 10"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/user/activity"],
+        output: r#"{"type":"object","required":["events","next_before","truncated"],"properties":{"events":{"type":"array","items":{"type":"object","required":["seq","type","occurred_at","project_id","project_path","actor","merge_request","ref_count"]}},"next_before":{"type":["integer","null"]},"truncated":{"type":"boolean"}}}"#,
     },
     // ── M3 S0: service accounts (create and issue: the browser only) ──
     CommandSpec {

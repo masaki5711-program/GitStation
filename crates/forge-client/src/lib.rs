@@ -17,6 +17,7 @@
 /// on forge-ci directly).
 pub use forge_ci;
 
+pub mod activity;
 pub mod admin;
 pub mod app;
 pub mod browse;

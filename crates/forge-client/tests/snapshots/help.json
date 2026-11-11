@@ -2481,6 +2481,107 @@
     {
       "args": [
         {
+          "description": "authored | approvable | attention (required without --counts).",
+          "kind": "option",
+          "name": "--scope",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Rows per page, 1..=100.",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue below this next_before id.",
+          "kind": "option",
+          "name": "--before",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The count of every scope instead of a page (at most 100 each; capped / truncated say when more exist).",
+          "kind": "flag",
+          "name": "--counts",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mr mine --scope approvable --json",
+        "gstn mr mine --counts"
+      ],
+      "name": "mr mine",
+      "output": {
+        "properties": {
+          "approvable": {
+            "required": [
+              "count",
+              "capped",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "attention": {
+            "required": [
+              "count",
+              "capped",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "authored": {
+            "required": [
+              "count",
+              "capped",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "merge_requests": {
+            "items": {
+              "required": [
+                "project_id",
+                "project_path",
+                "iid",
+                "title",
+                "state",
+                "draft",
+                "source_branch",
+                "target_branch",
+                "author_id",
+                "attention"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/merge-requests",
+        "GET /api/v1/user/merge-requests/counts"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Your own merge requests across projects, newest first: one page of a scope (authored, approvable, attention; only those you may read now, so a page may hold fewer than --limit), or with --counts how many each scope holds."
+    },
+    {
+      "args": [
+        {
           "description": "The project id.",
           "kind": "option",
           "name": "--project",
@@ -7520,6 +7621,71 @@
         "api"
       ],
       "summary": "Mark one of your in-app notifications read, or every unread one with --all (somebody else's is not found)."
+    },
+    {
+      "args": [
+        {
+          "description": "Continue below this next_before seq.",
+          "kind": "option",
+          "name": "--before",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Events read per page, 1..=100 (default 30).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn activity --json",
+        "gstn activity --limit 10"
+      ],
+      "name": "activity",
+      "output": {
+        "properties": {
+          "events": {
+            "items": {
+              "required": [
+                "seq",
+                "type",
+                "occurred_at",
+                "project_id",
+                "project_path",
+                "actor",
+                "merge_request",
+                "ref_count"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "next_before",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/activity"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The recent events of the projects you are involved in, newest first: only those you may read, with only the allowed fields (a page may hold fewer than --limit); next_before pages back. A person's: an agent's token is refused."
     },
     {
       "args": [],

@@ -508,6 +508,10 @@ gstn = "mr resolve"
 reason = "Resolving a discussion changes a merge condition (ADR-0024 #2): people_only."
 
 [[excluded]]
+gstn = "activity"
+reason = "A person's own activity feed (plan 15 MR 8): the server refuses an agent token (ActivityRead is people_only)."
+
+[[excluded]]
 action = "DeployApprove"
 reason = "Approving a production deployment is human-only (M4 C11, CLAUDE.md contract 7)."
 
@@ -954,3 +958,7 @@ reason = "A person's own inbox; not asked for yet."
 [[deferred]]
 gstn = "notifications read"
 reason = "A person's own inbox; not asked for yet."
+
+[[deferred]]
+gstn = "mr mine"
+reason = "A person's own work lists across projects (plan 15 MR 6); not asked for yet."

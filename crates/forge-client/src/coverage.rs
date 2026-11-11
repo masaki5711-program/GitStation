@@ -87,6 +87,18 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/user/sessions/{public_id}",
         Coverage::BrowserOnly("ending one of your web sessions; tokens are refused (ADR-0021 §17)"),
     ),
+    // plan 15 MR 6 / MR 8: your own work across projects.
+    (
+        "GET",
+        "/api/v1/user/merge-requests",
+        Coverage::Command("mr mine"),
+    ),
+    (
+        "GET",
+        "/api/v1/user/merge-requests/counts",
+        Coverage::Command("mr mine"),
+    ),
+    ("GET", "/api/v1/user/activity", Coverage::Command("activity")),
     ("GET", "/api/v1/users", Coverage::Command("user search")),
     // M3 S0: service accounts.
     (
