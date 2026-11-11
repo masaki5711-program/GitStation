@@ -141,6 +141,9 @@ const SHELL_PATHS: &[&str] = &[
     "/-/confirm/projects/42/integration-bindings",
     // The in-app notifications page (U4).
     "/-/notifications",
+    // The "My work" sidebar pages (plan 15 MR 1).
+    "/-/projects",
+    "/-/groups",
 ];
 
 #[tokio::test]

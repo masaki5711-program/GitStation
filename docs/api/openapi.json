@@ -10779,6 +10779,44 @@
         "x-forge-max-body-bytes": 4096
       }
     },
+    "/-/groups": {
+      "get": {
+        "operationId": "get_groups",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the groups the caller can see",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_groups",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the groups the caller can see",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/notifications": {
       "get": {
         "operationId": "get_notifications",
@@ -10814,6 +10852,44 @@
         },
         "security": [],
         "summary": "SPA shell: the caller's in-app notifications",
+        "x-forge-action": "WebShell"
+      }
+    },
+    "/-/projects": {
+      "get": {
+        "operationId": "get_projects",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's projects",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_projects",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: the caller's projects",
         "x-forge-action": "WebShell"
       }
     },

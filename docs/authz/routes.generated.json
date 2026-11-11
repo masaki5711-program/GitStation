@@ -128,6 +128,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/groups",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/groups",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/notifications",
     "people_only": false,
     "public": true,
@@ -138,6 +156,24 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/-/notifications",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/-/projects",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/projects",
     "people_only": false,
     "public": true,
     "scope": "fixed",

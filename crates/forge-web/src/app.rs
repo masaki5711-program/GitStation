@@ -2496,6 +2496,22 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: the caller's in-app notifications",
                 shell,
             )
+            // The "My work" sidebar pages (plan 15 MR 1). Without a route a
+            // reload or a pasted link answers 404.
+            .route(
+                verb,
+                MY_PROJECTS_PAGE,
+                Action::WebShell,
+                "SPA shell: the caller's projects",
+                shell,
+            )
+            .route(
+                verb,
+                MY_GROUPS_PAGE,
+                Action::WebShell,
+                "SPA shell: the groups the caller can see",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -2705,3 +2721,8 @@ async fn request_timeout(
         .into_response(),
     }
 }
+
+/// The "My work" sidebar's projects page (plan 15).
+pub const MY_PROJECTS_PAGE: &str = "/-/projects";
+/// The "My work" sidebar's groups page (plan 15).
+pub const MY_GROUPS_PAGE: &str = "/-/groups";
