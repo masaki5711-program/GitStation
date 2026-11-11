@@ -279,6 +279,12 @@ const ROUTES: &[(&str, &str, &str, Option<&str>)] = &[
         "/api/v1/user/merge-requests/counts",
         None,
     ),
+    (
+        "GET",
+        "/api/v1/user/activity",
+        "/api/v1/user/activity",
+        None,
+    ),
 ];
 
 /// Token creations whose body the route would refuse (`FG-WEB-0006`): the
