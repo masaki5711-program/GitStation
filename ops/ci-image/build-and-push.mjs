@@ -138,7 +138,7 @@ async function runnerContainer() {
 /** Pushes `local` (already in the runner's Podman) as `remote`; returns the manifest digest. */
 async function pushFromRunner(runner, local, remote) {
   const script =
-    'set -eu; d=$(mktemp); podman push -q --digestfile "$d" "$1" "$2"; cat "$d"; rm -f "$d"';
+    'set -eu; d=$(mktemp); podman push -q --digestfile "$d" -- "$1" "$2"; cat "$d"; rm -f "$d"';
   const out = await run("docker", ["exec", runner, "sh", "-c", script, "push", local, remote], {
     timeoutMs: 20 * MIN,
   });
@@ -179,7 +179,7 @@ async function main() {
   await saveIntoRunner(localTag, runner, 30 * MIN);
   const rustDigest = await pushFromRunner(runner, `docker.io/${localTag}`, remote);
   // The pushed copy is what jobs pull (by digest); drop the loaded one.
-  await run("docker", ["exec", runner, "podman", "rmi", "--force", `docker.io/${localTag}`], { timeoutMs: 5 * MIN });
+  await run("docker", ["exec", runner, "podman", "rmi", "--force", "--", `docker.io/${localTag}`], { timeoutMs: 5 * MIN });
 
   let pgDigest = null;
   if (opts.postgres) {
@@ -193,7 +193,7 @@ async function main() {
       timeoutMs: 15 * MIN,
     });
     pgDigest = await pushFromRunner(runner, pgLocal, `${REGISTRY}/ci/postgres:16-forge`);
-    await run("docker", ["exec", runner, "podman", "rmi", "--force", pgLocal], { timeoutMs: 5 * MIN });
+    await run("docker", ["exec", runner, "podman", "rmi", "--force", "--", pgLocal], { timeoutMs: 5 * MIN });
   }
 
   const lines = [

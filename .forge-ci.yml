@@ -38,6 +38,9 @@ jobs:
     # some DB tests assert the target 127.0.0.1:55432/forge_dev;
     # max_connections=200 and the port are baked into the image (ops/ci-image/postgres.Containerfile).
     # The DB tests reset the forge_* login roles, so the target must be loopback.
+    # The password below is a synthetic, loopback-only test credential (same as ops/dev);
+    # the runner passes service env only to the service container, never to the job.
+    # Never copy this pattern for a real secret: use CI secrets instead.
     services:
       - name: db
         image: registry:5000/ci/postgres@sha256:dcc37320cb7b82f77b6eac3a5d58440d67d8b03790dcd3d63c43fc5605176206
