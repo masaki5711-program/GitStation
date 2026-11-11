@@ -179,7 +179,7 @@ export function statusHint(status: MergeStatus): string | null {
     case 'required_check_missing': {
       // M4 C7 review: the merge request pipeline runs only on a clean merge
       // result; without one (conflict, no target, failed check) say so.
-      const name = parseDetail(status.reasons[0]?.detail ?? null).name;
+      const name = parseDetail(status.reasons[0].detail ?? null).name;
       const waits = status.checks.some((c) => c.name === name && c.waits_for_merge_result);
       return waits ? t('mr.status.hint.checksWaitMergeResult') : t('mr.status.hint.checks');
     }
