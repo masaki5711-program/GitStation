@@ -13,6 +13,7 @@
 pub mod api;
 pub mod config;
 pub mod git;
+pub mod isolation;
 pub mod job;
 pub mod logsink;
 pub mod podman;

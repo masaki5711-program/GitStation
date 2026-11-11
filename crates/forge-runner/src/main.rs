@@ -13,6 +13,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use forge_runner::api::HttpApi;
 use forge_runner::config::RunnerConfig;
 use forge_runner::git::GitPlan;
+use forge_runner::isolation;
 use forge_runner::job::{Executor, GitLimits};
 use forge_runner::podman::PodmanPlan;
 use forge_runner::process::{ProcessRunner, SystemRunner};
@@ -33,7 +34,8 @@ struct Cli {
 enum Command {
     /// Claim and run jobs until stopped (the default).
     Run,
-    /// Check the host: configuration, token, git, rootless Podman.
+    /// Check the host: configuration, token, git, rootless Podman, job
+    /// isolation (FG-CI-0015).
     Check,
 }
 
@@ -48,19 +50,22 @@ fn not_root() -> Result<(), ForgeError> {
 }
 
 /// The runner's own files under the work directory: an empty git
-/// configuration and an empty hooks directory.
-fn runner_files(cfg: &RunnerConfig) -> Result<(PathBuf, PathBuf), ForgeError> {
+/// configuration, an empty hooks directory and the isolation probe's empty
+/// root directory.
+fn runner_files(cfg: &RunnerConfig) -> Result<(PathBuf, PathBuf, PathBuf), ForgeError> {
     let own = cfg.work_dir.join("runner");
     let hooks = own.join("empty-hooks");
     let config = own.join("empty.gitconfig");
+    let rootfs = own.join("empty-rootfs");
     let io = |e: std::io::Error| {
         ForgeError::new(ErrorCode::ContainerStartFailed)
             .with_context("reason", "workspace_unusable")
             .with_source(e)
     };
     std::fs::create_dir_all(&hooks).map_err(io)?;
+    std::fs::create_dir_all(&rootfs).map_err(io)?;
     std::fs::write(&config, b"").map_err(io)?;
-    Ok((config, hooks))
+    Ok((config, hooks, rootfs))
 }
 
 fn rootless(proc: &dyn ProcessRunner, podman: &PodmanPlan) -> Result<(), ForgeError> {
@@ -88,11 +93,19 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
     not_root()?;
     let cfg = RunnerConfig::load(&cli.config)?;
     let token = cfg.token(&|k| std::env::var(k).ok())?;
-    let (empty_config, empty_hooks) = runner_files(&cfg)?;
+    let (empty_config, empty_hooks, empty_rootfs) = runner_files(&cfg)?;
     let proc: Arc<dyn ProcessRunner> = Arc::new(SystemRunner);
     let podman = PodmanPlan::new(cfg.podman.clone(), cfg.limits.clone()) // clone: the plan owns its copy
         .with_registries(cfg.image_registries.clone()); // clone: as above
     rootless(proc.as_ref(), &podman)?;
+    // Before any job: containers.conf adds no mount to a job's container
+    // (ADR-0029 amendment 2026-11-12, FG-CI-0015).
+    isolation::check(
+        proc.as_ref(),
+        &podman,
+        &isolation::probe_name(std::process::id()),
+        &empty_rootfs,
+    )?;
     let client_cfg = forge_client::config::Config {
         dir: cfg.work_dir.clone(), // clone: the client's config owns it
         host: cfg.server.clone(),  // clone: as above
@@ -122,7 +135,7 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
         shutdown: Arc::new(AtomicBool::new(false)),
     };
     if matches!(cli.command, Some(Command::Check)) {
-        println!("ok: configuration, token, rootless podman");
+        println!("ok: configuration, token, rootless podman, job isolation");
         return Ok(());
     }
     // Anything a crashed earlier run left: its containers first (they

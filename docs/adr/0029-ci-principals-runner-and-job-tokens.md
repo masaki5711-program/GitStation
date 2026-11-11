@@ -130,7 +130,7 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - ジョブは `services`（2 つまで、`{ name, image, env?, user?, tmpfs? }`）で横にコンテナを動かせる。GitStation の試験は PostgreSQL が要り
   （`FORGE_TEST_DATABASE_URL`）、ジョブのコンテナは `--network=none` なので、これが無いと `ci/pipeline` を必須にできない（X）。
 - **ネットワークは閉じたまま**。ジョブにサービスがあると Runner はポッドを `podman pod create --network=none` で作り、サービスとジョブの
-  コンテナを同じポッドに入れる。共有するのは**ループバックだけの network namespace**（と pod の既定の ipc / uts）: 届くのは `127.0.0.1`
+  コンテナを同じポッドに入れる。共有するのは**ループバックだけの network namespace**（2026-11-12 の追記で `--share=net`。それまでは pod の既定の ipc / uts も共有した）: 届くのは `127.0.0.1`
   の互いだけで、外・Runner のホスト・社内のネットワークには届かない。DNS も無い。ジョブだけのときは従来どおりポッドを作らない。
 - サービスのコンテナはジョブと同じ閉じ方（読み取り専用のルート、`--cap-drop=all`、`no-new-privileges`、同じメモリ・プロセス数・ulimit、
   `--pull=missing`）。書ける場所は `/tmp` と、ファイルが宣言した `tmpfs`（4 つまで、絶対パス、`/proc`・`/sys`・`/dev` の下と `/` を断る、
@@ -153,9 +153,30 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - Runner は準備を待たない（ジョブのスクリプトが待つ）。ポッドやサービスを起動できなければ FG-CI-0014、ポッドはどの終わり方でも
   `pod rm --force` で消し、起動のときも残りを消す。ジョブが失敗したら各サービスのログの最後の 50 行をジョブのログに足す（ジョブの出力と同じマスク）。
 
+## Amendment 2026-11-12 — ジョブの namespace とマウントを containers.conf に任せない（FG-CI-0015）
+
+- **見つけたこと**（GitStation 自身の CI を試験環境の Runner で動かして）: Runner のイメージ quay.io/podman/stable は
+  `~/.config/containers/containers.conf` に `volumes = ["/proc:/proc"]`、`/etc/containers/containers.conf` に `ipcns`・`utsns`・
+  `cgroupns = "host"` を持つ。Runner はこれらを Podman の既定に任せていたので、ジョブとサービスのコンテナが Runner の /proc
+  （Runner・他のジョブ・サービスのすべてのプロセス）を見られ、Runner の IPC・UTS の namespace を共有した。決定 5 の「ジョブの境界」の欠陥。
+- **決定**: (1) ジョブとサービスのすべてのコンテナに `--pid=private --ipc=private --uts=private --cgroupns=private` を付け、
+  ポッドは `--share=net`（ループバックの network namespace だけを共有。infra コンテナの ipc / uts は共有しない）。
+  (2) containers.conf の既定の `volumes` は**フラグで外せない**（Podman 5.3 で確かめた: ジョブ自身の `--volume` があっても足され、
+  `podman inspect` には出ない）ので、Runner は起動のとき（と `check`）に `--volume` の無いサービスと同じ作りの確かめのコンテナを
+  空のディレクトリから作り（`--rootfs`、起動しない、pull しない）、マウントが 1 つでもあれば FG-CI-0015 で起動しない。
+- **選ばなかったもの**: `CONTAINERS_CONF_OVERRIDE` で Runner 自身の設定を最後に読ませる — Runner がファイルを持ち、すべての
+  Podman の呼び出しに環境を足すことになり、その変数を知らない Podman では黙って効かない（黙った失敗）。確かめのコンテナを実際に
+  起動して `/proc` を読む — 起動できるイメージが要る（ジョブのイメージは起動のときには無い）。ジョブごとの確かめ — 作ったコンテナの
+  `podman inspect` は自身の `--volume` があると足されたマウントを隠すので確かめにならない。
+- **既存の Runner への影響**: containers.conf に `volumes` のあるホストの Runner は起動しなくなる（試験環境は
+  `ops/runner/containers.conf` の drop-in で `volumes = []`）。ipc / uts / pid / cgroup はフラグで決まるので設定の変更は要らない。
+  ジョブとサービスは同じポッドの中でも IPC（共有メモリ）を共有しなくなる（ループバックの TCP / UDP は従来どおり）。
+- runbook `ci-runner`（「ジョブの切り離し」）、FG-CI-0015 JobIsolationUnsafe（新規、alert）。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。
 - C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
+- 2026-11-12: FG-CI-0015 JobIsolationUnsafe（新規、alert。runbook `ci-runner` の「ジョブの切り離し」）。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

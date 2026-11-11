@@ -1085,6 +1085,7 @@ fn a_job_with_services_runs_in_a_pod_without_network() {
             "create",
             "--name=forge-job-7-1",
             "--network=none",
+            "--share=net",
             "--memory=4g",
             "--memory-swap=4g"
         ]

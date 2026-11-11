@@ -119,6 +119,7 @@ seccomp を外しているので、**信頼できないプロジェクトのジ�
 | ログに `forge.runner.claim_failed`、`FG-CLI-0003`、`detail` が `reason=connect` | GitStation に届いていない。`server` のアドレス、GitStation が動いているか、`extra_hosts` を足していないかを見る |
 | 同じく `FG-AUTH-0001` | トークンが違う、または Runner が無効。`admin runner list` で確かめ、登録し直す |
 | `check` が FG-CI-0007 | Podman が rootless で動けない。`security_opt` と `/dev/fuse` が compose にあるか見る |
+| `check` が FG-CI-0015 `default_volumes` | `containers.conf`（`volumes = []` の drop-in）が compose で入っていない。イメージの既定の `/proc:/proc` がジョブに入る |
 | Git Bash で `docker run --device /dev/fuse` が失敗する | パスが書き換えられている。`MSYS_NO_PATHCONV=1` を付ける（compose 経由なら要らない） |
 | ジョブが FG-CI-0011 | イメージ（サービスのイメージも、`context` の `service`）が `registry:5000/` で始まっていない |
 | ジョブが FG-CI-0014 | サービスのポッドかコンテナを起動できない。`podman_stderr` を見る（イメージをレジストリに入れたか、`tmpfs`・`user`） |

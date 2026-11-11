@@ -1,4 +1,4 @@
-# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
+# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014、FG-CI-0015。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
 
 M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブの取得の long-poll、心拍とリース、ログ、完了、リースの回収）が
 期待どおりに動かないとき。表 `forge.ci_runners`・`forge.ci_job_tokens`・`forge.ci_log_chunks`・`forge.ci_jobs`（`runner_id`・`lease_until`・
@@ -20,6 +20,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
   コミットを取得できない）、FG-CI-0010（ジョブの時間切れ）、FG-CI-0011（ジョブのイメージが `image_registries` の外）、
   FG-CI-0012（ジョブの作業ディレクトリが `work_dir_max_bytes` を超えた）、FG-CI-0014（ジョブのサービスのポッドまたはコンテナを
   起動できない、計画 14 C5s）。ジョブのログの最後の行にも同じコード
+- Runner のホストのログに FG-CI-0015（**alert**）: ジョブのコンテナを Runner から切り離せない設定（containers.conf の既定の
+  `volumes`）で、Runner が起動しなかった（ADR-0029 の追記 2026-11-12）。Runner は 1 つもジョブを取っていない
 
 ## Impact
 
@@ -73,6 +75,11 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
      失敗した: `podman_stderr` を読む（イメージを取れない・容量・`tmpfs` や `user` がイメージに合わない）。ジョブのコンテナは作られていない。
      ポッドとその中のコンテナは `podman pod rm --force` で消えている。サービスのイメージが `image_registries` の外なら FG-CI-0011
      （`service` 付き、コンテナも pull も無い）
+   - FG-CI-0015 `reason=default_volumes`: `mounts`（例 `bind /proc`）が、containers.conf が**すべての**コンテナに足すマウント。
+     Runner の利用者で（読み取りのみ）`grep -rn volumes /usr/share/containers/containers.conf /etc/containers/containers.conf
+     /etc/containers/containers.conf.d ~/.config/containers/containers.conf ~/.config/containers/containers.conf.d`、
+     `echo $CONTAINERS_CONF $CONTAINERS_CONF_OVERRIDE`。`reason=probe_failed`: 確かめのコンテナを作れなかった（`step`、`podman_stderr`。
+     直し方は FG-CI-0007 と同じ）。下の「ジョブの切り離し」
    - サービスが起動した後に落ちた・応答しない: FG-CI-0014 ではない。ジョブのスクリプトの待ち（`until pg_isready -h 127.0.0.1; do sleep 1; done`）
      が失敗または時間切れ（FG-CI-0010）になり、失敗したジョブのログの終わりに各サービスのログの最後の 50 行が `[service <名前>]` 付きで入る
      （ジョブの出力と同じマスク）。読めなかったら `the log of service <名前> could not be read` と `forge.runner.service_log_unread`（warn）
@@ -118,7 +125,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
      `/etc/fstab` に `/var/lib/forge-runner.img /var/lib/forge-runner ext4 loop,nodev,nosuid 0 2`
    `work_dir_max_bytes` はクォータより小さくする（ジョブの後の確かめ。クォータが無い・大きすぎるホストの網）。
 
-6. 確かめる: `sudo -u forge-runner forge-runner --config /etc/forge-runner/config.toml check`（設定・トークン・rootless）。
+6. 確かめる: `sudo -u forge-runner forge-runner --config /etc/forge-runner/config.toml check`（設定・トークン・rootless・
+   ジョブの切り離し。下の「ジョブの切り離し」）。
 7. systemd のユニット（`User=forge-runner`、`ExecStart=/usr/local/bin/forge-runner --config /etc/forge-runner/config.toml run`、
    `Restart=on-failure`）で起動する。ログは JSON（`journalctl -u forge-runner`）。
 
@@ -129,6 +137,31 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
 すべて `podman rm --force` で消してから（`forge.runner.stale_container_removed`、warn）ジョブのディレクトリを消す。消せなければ
 FG-CI-0007 `reason=stale_containers` で起動しない。コンテナは `podman create` → `podman start --attach` で動かし、終わると `podman rm --force` で必ず消える。ジョブのトークンは git の環境の設定
 （`http.extraHeader`）でだけ渡し、argv・コンテナの環境・ログに出さない（ログでは `[masked]`）。
+
+### ジョブの切り離し（ADR-0029 の追記 2026-11-12、FG-CI-0015）
+
+ジョブとサービスのコンテナには、containers.conf の設定によらず `--pid=private --ipc=private --uts=private --cgroupns=private` が付き、
+ポッドは `--share=net`（ループバックだけを共有）で作る。**containers.conf の既定の `volumes` だけはフラグで外せない**（Podman は
+ジョブ自身の `--volume` があってもすべてのコンテナに足し、`podman inspect` にも出ない）。そこで Runner は起動のとき（と `check`）に、
+サービスと同じ作りで `--volume` の無い確かめのコンテナ `forge-isolation-probe-<pid>` を `<work_dir>/runner/empty-rootfs` から
+作り（起動しない・pull しない）、マウントを読んで消す。1 つでもあれば FG-CI-0015 で起動しない。
+
+- **本番の Runner のホスト**（準備のとき、変更は人の承認のあと）: Runner の利用者で
+  `grep -rn -E 'volumes|ipcns|utsns|pidns|cgroupns' /usr/share/containers/containers.conf /etc/containers/containers.conf
+  /etc/containers/containers.conf.d ~/.config/containers/containers.conf ~/.config/containers/containers.conf.d` を見る。
+  `volumes` に何かあれば消す、または `~/.config/containers/containers.conf.d/50-forge-job.conf` に `[containers]`・`volumes = []` を置く
+  （後から読まれるものが勝つ）。`ipcns`・`utsns` 等が `host` でもジョブは自分の namespace を持つ（フラグが勝つ）が、
+  Runner の利用者で他のコンテナを動かさないなら `private` に揃える。
+- **試験環境の Runner**（`ops/runner/compose.yml`）: イメージ quay.io/podman/stable は `~/.config/containers/containers.conf` に
+  `volumes = ["/proc:/proc"]`、`/etc/containers/containers.conf` に `ipcns`・`utsns`・`cgroupns = "host"` を持つ。compose が
+  `ops/runner/containers.conf` を `~/.config/containers/containers.conf.d/50-forge-job.conf` に読み取り専用で入れ、`volumes = []`・
+  `ipcns`・`utsns = "private"` にする（2026-11-12 まではこれが無く、ジョブがコンテナの外の Runner・他のジョブ・サービスの
+  プロセスを /proc で見られた）。入れ子の rootless Podman でも新しい procfs を張れることを確かめた（ジョブの中で
+  `readlink /proc/self` が小さい数）。
+- 直したら `forge-runner check` が `ok: …, job isolation` を出すこと、その後 Runner を起動し直す。containers.conf は Podman の
+  呼び出しのたびに読まれるが、確かめは起動のときだけ: **containers.conf を変えたら Runner を起動し直す**。
+- 確かめのコンテナが残っていたら（Runner が確かめの途中で落ちた）、次の起動が先に消す。手で消すなら
+  `podman rm --force forge-isolation-probe-<pid>`（Runner の利用者、人の承認のあと）。
 
 ### ジョブのサービス（計画 14 C5s、ADR-0029 の追記 2026-11-11）
 
@@ -167,6 +200,8 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
   その後パイプラインを再実行する。消え残ったポッドは Runner の利用者で `podman pod rm --force <名前>`（人の承認のあと）。
 - FG-CI-0007 `reason=pod_remove` で止まった Runner: Runner の利用者で `podman pod ps --filter name=forge-job-` を見て
   `podman pod rm --force <名前>` の後に起動する（起動のときも残ったポッドを消す）。消せない理由は `podman_stderr`。
+- FG-CI-0015 `default_volumes` で起動しない Runner: 上の「ジョブの切り離し」のとおり containers.conf の `volumes` を空にし
+  （人の承認のあと）、`forge-runner check` の後に起動する。`volumes` を残したまま動かす回避は無い（ジョブが Runner のプロセスを見られる）。
 - 無効にした Runner を有効に戻す（管理者の Web のセッション）: `PATCH /api/v1/admin/runners/{id}` `{"enabled": true}`。
 - ジョブのタグに合う Runner が無い: 管理者がタグを足す（`PATCH … {"tags": [...]}`）か、そのタグの Runner を登録する
   （`forge admin runner register …` または `POST /api/v1/admin/runners` `{"name", "tags"}`、表示された `token` を Runner の
