@@ -334,8 +334,11 @@ describe('navigation and languages', () => {
   it('the project navigation links the screen for a Maintainer', async () => {
     const server = mockServer(hookRoutes());
     await renderApp({ fetch: server.fetch, path: PATH, lang: 'en' });
-    const link = await screen.findByRole('link', { name: 'Webhooks' });
-    expect(link.getAttribute('aria-current')).toBe('page');
+    const nav = await screen.findByRole('navigation', { name: 'Repository screens' });
+    expect(within(nav).getByRole('link', { name: 'Webhooks' }).getAttribute('aria-current')).toBe('page');
+    // The sidebar marks it too.
+    const side = screen.getByRole('navigation', { name: 'Project menu' });
+    expect(within(side).getByRole('link', { name: 'Webhooks' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('shows the link to an administrator without a role, not to a Reporter', async () => {

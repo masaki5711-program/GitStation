@@ -53,7 +53,10 @@
     "groups": "グループ",
     "collapse": "サイドバーを畳む",
     "expand": "サイドバーを広げる",
-    "menu": "メニュー"
+    "menu": "メニュー",
+    "projectMenu": "プロジェクトのメニュー",
+    "groupMenu": "グループのメニュー",
+    "childrenFailed": "中のグループとプロジェクトを読めませんでした。"
   },
   "projects": {
     "title": "プロジェクト",
@@ -137,17 +140,20 @@
     "emptyTitle": "リポジトリはまだ空です",
     "emptyBody": "次のコマンドで、最初のファイルを送ってください。",
     "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",
-    "repository": "リポジトリ",
     "defaultBranch": "既定のブランチ",
     "branches": "ブランチの数",
     "tags": "タグの数",
     "refsTruncated": "数えられる上限に達したため、実際はこれより多くあります。",
-    "path": "パス",
     "created": "作成日",
     "clone": "clone の URL",
     "copyClone": "URL をコピー",
     "cloneHint": "ログインに使うのは、アクセストークンです。",
-    "copyCommands": "コマンドをコピー"
+    "copyCommands": "コマンドをコピー",
+    "info": "プロジェクト情報",
+    "latestCommit": "最新のコミット",
+    "openCommit": "コミット {{sha}} を開く",
+    "readme": "README",
+    "mergeRequests": "マージリクエスト"
   },
   "error": {
     "title": "うまくいきませんでした",

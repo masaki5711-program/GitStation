@@ -93,3 +93,27 @@
 .srOnly {
   composes: srOnly from './controls.module.css';
 }
+
+/* A project / group section: the way back to "My work", then its name. */
+.back {
+  composes: link;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.contextTitle {
+  margin: var(--gs-space-2) 0;
+  font-size: var(--gs-font-size-md);
+  border-top: 1px solid var(--gs-color-border);
+  padding-top: var(--gs-space-2);
+}
+
+.contextTitle .link {
+  font-weight: bold;
+}
+
+.note {
+  margin: var(--gs-space-2) var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}

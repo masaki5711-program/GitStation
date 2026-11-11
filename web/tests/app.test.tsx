@@ -112,7 +112,7 @@ describe('CSP: no injected <style> (ADR-0022 §3a)', () => {
     });
     const before = document.querySelectorAll('style').length;
     await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });
-    await screen.findByText('Forge Web');
+    await screen.findByRole('heading', { level: 1, name: 'Forge Web' });
     expect(document.querySelectorAll('style').length).toBe(before);
     expect(document.querySelectorAll('[style]').length).toBe(0);
   });

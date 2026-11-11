@@ -80,10 +80,11 @@ export function useSpec(projectId: number, spec: string) {
   } as const;
 }
 
-export function useTree(projectId: number, ref: string, path: string) {
+export function useTree(projectId: number, ref: string, path: string, enabled = true) {
   const api = useApi();
   return useQuery({
     queryKey: ['tree', projectId, ref, path],
+    enabled,
     queryFn: ({ signal }) =>
       call(() =>
         api.GET('/api/v1/projects/{id}/repository/tree', {

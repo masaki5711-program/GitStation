@@ -53,7 +53,10 @@
     "groups": "Grup",
     "collapse": "Ciutkan bilah samping",
     "expand": "Bentangkan bilah samping",
-    "menu": "Menu"
+    "menu": "Menu",
+    "projectMenu": "Menu proyek",
+    "groupMenu": "Menu grup",
+    "childrenFailed": "Grup dan proyek di dalamnya tidak dapat dimuat."
   },
   "projects": {
     "title": "Proyek",
@@ -137,17 +140,20 @@
     "emptyTitle": "Repositori masih kosong",
     "emptyBody": "Kirim berkas pertama dengan perintah berikut.",
     "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",
-    "repository": "Repositori",
     "defaultBranch": "Cabang bawaan",
     "branches": "Cabang",
     "tags": "Tag",
     "refsTruncated": "Hitungan mencapai batas; jumlah sebenarnya lebih banyak.",
-    "path": "Jalur",
     "created": "Dibuat",
     "clone": "URL clone",
     "copyClone": "Salin URL",
     "cloneHint": "Masuk ke Git dengan token akses.",
-    "copyCommands": "Salin perintah"
+    "copyCommands": "Salin perintah",
+    "info": "Info proyek",
+    "latestCommit": "Commit terbaru",
+    "openCommit": "Buka commit {{sha}}",
+    "readme": "README",
+    "mergeRequests": "Merge request"
   },
   "error": {
     "title": "Terjadi kesalahan",

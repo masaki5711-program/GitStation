@@ -34,11 +34,11 @@ describe('project top page', () => {
       `${window.location.origin}/acme/forge-web.git`,
     );
     expect(await screen.findByText('Default branch')).toBeTruthy();
-    const state = within(screen.getByRole('region', { name: 'Repository' }));
-    expect(state.getByText('main')).toBeTruthy();
-    // 2 branches, 1 tag.
-    expect(state.getByText('2')).toBeTruthy();
-    expect(state.getByText('1')).toBeTruthy();
+    const info = within(screen.getByRole('complementary', { name: 'Project info' }));
+    expect(info.getByText('main')).toBeTruthy();
+    // 2 branches, 1 tag, each linking its list.
+    expect(info.getByRole('link', { name: '2' }).getAttribute('href')).toBe('/acme/forge-web/-/branches');
+    expect(info.getByRole('link', { name: '1' }).getAttribute('href')).toBe('/acme/forge-web/-/tags');
     // The breadcrumb links the group; the current page is not a link.
     expect(screen.getByRole('link', { name: 'acme' }).getAttribute('href')).toBe('/acme');
     expect(document.title).toBe('Forge Web · GitStation');
@@ -118,7 +118,7 @@ describe('URL rescue (ADR-0015, plan 10 §4.3)', () => {
     const first = server.to('GET', '/api/v1/namespaces/resolve')[0];
     expect(first?.query.get('path')).toBe('acme/forge-web/settings');
     expect(first?.query.get('prefix')).toBe('true');
-    expect(screen.getByRole('link', { name: 'Forge Web' }).getAttribute('href')).toBe(
+    expect(within(screen.getByRole('main')).getByRole('link', { name: 'Forge Web' }).getAttribute('href')).toBe(
       '/acme/forge-web',
     );
   });
@@ -245,8 +245,10 @@ describe('group page', () => {
     const server = mockServer(group());
     await renderApp({ fetch: server.fetch, path: '/acme' });
     expect(await screen.findByRole('heading', { level: 1, name: 'Acme Plant' })).toBeTruthy();
-    expect(await screen.findByText('Line 1')).toBeTruthy();
-    expect(screen.getByText('Forge Web')).toBeTruthy();
+    // The sidebar lists the same children: look in the page.
+    const main = within(screen.getByRole('main'));
+    expect(await main.findByText('Line 1')).toBeTruthy();
+    expect(main.getByText('Forge Web')).toBeTruthy();
     expect(screen.queryByText('Cell')).toBeNull();
     expect(screen.queryByText('Deep')).toBeNull();
     expect(screen.queryByText('Other')).toBeNull();

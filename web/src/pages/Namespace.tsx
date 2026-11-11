@@ -17,6 +17,7 @@ import { Loading } from '../components/Loading';
 import { useApi } from '../api/context';
 import { isViewWord, pathSegments } from '../features/paths';
 import { QueryError } from '../components/QueryError';
+import { useReportSidebarScope } from '../components/sidebarScope';
 import { GroupPage, UserPage } from './GroupPage';
 import { NotFound } from './NotFound';
 import { ProjectPage } from './ProjectPage';
@@ -56,6 +57,15 @@ function Resolved({ path, view }: { path: string; view: string[] | null }) {
     // A path can move or be deleted: ask again on every visit.
     staleTime: 0,
   });
+  // The sidebar follows the namespace this address is in.
+  const found = resolution.data;
+  useReportSidebarScope(
+    found?.kind === 'project' && found.project_id != null
+      ? { kind: 'project', id: found.project_id, path: found.canonical_path }
+      : found?.kind === 'group' && found.group_id != null
+        ? { kind: 'group', id: found.group_id, path: found.canonical_path }
+        : null,
+  );
 
   if (resolution.isPending) return <Loading />;
   if (resolution.isError) {

@@ -127,3 +127,88 @@
   padding: 0;
   list-style: none;
 }
+
+/* The project top page: the files on the left, the project's facts beside
+   them; one column below the sidebar breakpoint (useNarrowScreen.ts). */
+.projectGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16rem;
+  gap: var(--gs-space-6);
+  align-items: start;
+}
+
+@media (max-width: 767.98px) {
+  .projectGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.projectMain {
+  min-width: 0;
+}
+
+.info {
+  padding: var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.info h2 {
+  margin: 0 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-md);
+  color: var(--gs-brand-navy);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  margin: 0 0 var(--gs-space-3);
+}
+
+.facts dt {
+  color: var(--gs-color-text-muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.infoLinks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The latest commit: what changed first, then who, when and which. */
+.commitStrip {
+  margin-bottom: var(--gs-space-6);
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.commitSubject {
+  margin: 0 0 var(--gs-space-1);
+  font-weight: bold;
+  overflow-wrap: anywhere;
+}
+
+.commitMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-3);
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.srOnly {
+  composes: srOnly from '../components/controls.module.css';
+}

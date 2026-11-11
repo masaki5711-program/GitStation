@@ -298,6 +298,9 @@ describe('members', () => {
       'GET /api/v1/namespaces/resolve': () => json(200, RESOLVE_GROUP),
       'GET /api/v1/groups/3': () => json(200, GROUP),
       'GET /api/v1/groups/3/members': () => json(200, { members: [member(5, 'taro', 'owner')], next_after: null }),
+      // The sidebar's group section lists what is inside.
+      'GET /api/v1/groups': () => page([]),
+      'GET /api/v1/projects': () => page([]),
     });
     await renderApp({ fetch: server.fetch, path: '/acme/-/members', lang: 'en' });
     expect(await screen.findByLabelText('Role of TARO')).toBeTruthy();
