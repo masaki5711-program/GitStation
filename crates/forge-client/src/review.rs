@@ -22,6 +22,37 @@ fn one(project: i64, iid: i64) -> String {
     format!("/api/v1/projects/{project}/merge-requests/{iid}")
 }
 
+/// `mr mine`: the caller's own lists across projects (plan 15 MR 6).
+const MINE: &str = "/api/v1/user/merge-requests";
+const MINE_COUNTS: &str = "/api/v1/user/merge-requests/counts";
+
+const MINE_KEYS: [&str; 6] = [
+    "project_path",
+    "iid",
+    "draft",
+    "source_branch",
+    "title",
+    "attention",
+];
+
+/// `mr mine --counts`: one line per scope, `+` when the count is a bound.
+fn mine_counts_human(body: &Value) -> String {
+    ["authored", "approvable", "attention"]
+        .iter()
+        .map(|scope| {
+            let c = body.get(*scope).unwrap_or(&Value::Null);
+            let more = c.get("capped").and_then(Value::as_bool) == Some(true)
+                || c.get("truncated").and_then(Value::as_bool) == Some(true);
+            format!(
+                "{scope}: {}{}",
+                c.get("count").and_then(Value::as_i64).unwrap_or(0),
+                if more { "+" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// `--all` without `--limit` asks for the largest page.
 const ALL_PAGE_SIZE: u32 = 100;
 
@@ -137,6 +168,37 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
                 "next_before",
                 "--before",
                 &ROW_KEYS,
+            );
+            emit(io, cli, body, &h)
+        }
+        MrCommand::Mine {
+            scope,
+            limit,
+            before,
+            counts,
+        } => {
+            let c = client(cli, env, io)?;
+            // clap: exactly one of --scope and --counts.
+            let (Some(scope), false) = (*scope, *counts) else {
+                let body = call(&c, Method::Get, MINE_COUNTS, &[], None)?;
+                let h = mine_counts_human(&body);
+                return emit(io, cli, body, &h);
+            };
+            // The scope is a fixed word from clap, never free text.
+            let mut query = vec![("scope".to_string(), scope.as_str().to_string())];
+            if let Some(n) = limit {
+                query.push(("limit".to_string(), n.to_string()));
+            }
+            if let Some(n) = before {
+                query.push(("before".to_string(), n.to_string()));
+            }
+            let body = call(&c, Method::Get, MINE, &query, None)?;
+            let h = list_human(
+                &body,
+                "merge_requests",
+                "next_before",
+                "--before",
+                &MINE_KEYS,
             );
             emit(io, cli, body, &h)
         }

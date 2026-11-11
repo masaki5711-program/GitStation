@@ -199,6 +199,16 @@ pub enum Command {
         #[command(subcommand)]
         command: NotificationsCommand,
     },
+    /// The recent events of the projects you are involved in, newest
+    /// first (plan 15 MR 8).
+    Activity {
+        /// Continue below this `next_before` seq (from a previous page).
+        #[arg(long, value_parser = parse_id, value_name = "SEQ")]
+        before: Option<i64>,
+        /// Events read per page, 1..=100 (server default 30).
+        #[arg(long, value_parser = parse_limit, value_name = "N")]
+        limit: Option<u32>,
+    },
     /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
     Admin {
@@ -759,6 +769,28 @@ impl MrState {
     }
 }
 
+/// The scopes of `mr mine --scope` (the server's `user_lists`).
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MineScope {
+    /// Open, your own.
+    Authored,
+    /// Open, not draft, you may approve its current head and have not yet.
+    Approvable,
+    /// Your open ones with a conflict, a predicted conflict or a failed
+    /// required check.
+    Attention,
+}
+
+impl MineScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Authored => "authored",
+            Self::Approvable => "approvable",
+            Self::Attention => "attention",
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum MrCommand {
     /// Open a merge request from one existing branch into another.
@@ -794,6 +826,21 @@ pub enum MrCommand {
         /// Follow next_before and merge every page (bounded).
         #[arg(long)]
         all: bool,
+    },
+    /// Your own merge requests across projects, newest first (plan 15
+    /// MR 6): one page of a scope, or with --counts how many each holds.
+    Mine {
+        #[arg(long, value_enum, required_unless_present = "counts")]
+        scope: Option<MineScope>,
+        /// Rows per page, 1..=100 (server default 20).
+        #[arg(long, value_parser = parse_limit, value_name = "N", conflicts_with = "counts")]
+        limit: Option<u32>,
+        /// Continue below this `next_before` id (from a previous page).
+        #[arg(long, value_parser = parse_id, value_name = "ID", conflicts_with = "counts")]
+        before: Option<i64>,
+        /// How many open merge requests each scope holds (no page).
+        #[arg(long, conflicts_with = "scope")]
+        counts: bool,
     },
     /// Show one merge request.
     View {
