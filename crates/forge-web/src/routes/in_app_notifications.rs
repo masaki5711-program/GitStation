@@ -34,7 +34,7 @@ use serde_json::Value;
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, QueryParam};
-use crate::routes::write::{absent, bounded, json, no_store};
+use crate::routes::write::{absent, bounded, json, no_store, own};
 
 /// The web page of the list (the SPA shell).
 pub const PAGE: &str = "/-/notifications";
@@ -162,13 +162,8 @@ fn inbox(state: &AppState) -> Result<&Inbox, ForgeError> {
     })
 }
 
-/// The caller (the registry's guard admitted an authenticated one).
-fn me(viewer: Option<UserId>) -> Result<UserId, ForgeError> {
-    viewer.ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "notification_route_without_user")
-    })
-}
+/// Why a caller without a user (a runner, a job) finds no notifications.
+const WITHOUT_USER: &str = "notification_route_without_user";
 
 fn found<R>(ctx: R) -> Lookup<R> {
     Lookup::Found {
@@ -198,7 +193,7 @@ impl Loader<AppState> for OwnInbox {
         _: &'a Parts,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, NotificationPreferencesCtx> {
-        Box::pin(async move { Ok(found(NotificationPreferencesCtx::new(me(viewer)?))) })
+        Box::pin(async move { Ok(own(viewer, WITHOUT_USER, NotificationPreferencesCtx::new)) })
     }
 }
 
@@ -211,7 +206,7 @@ impl BodyLoader<AppState, ReadAllInput> for OwnInbox {
         _: &'a ReadAllInput,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, NotificationPreferencesCtx> {
-        Box::pin(async move { Ok(found(NotificationPreferencesCtx::new(me(viewer)?))) })
+        Box::pin(async move { Ok(own(viewer, WITHOUT_USER, NotificationPreferencesCtx::new)) })
     }
 }
 

@@ -39,12 +39,24 @@
   },
   "home": {
     "title": "Home",
-    "mine": "Your projects",
-    "groups": "Your groups",
     "recent": "Recently viewed",
     "recentHint": "Remembered in this browser only.",
     "allProjects": "See all projects",
-    "allGroups": "See all groups"
+    "work": "Your work",
+    "cardAttention": "Your merge requests that need action",
+    "cardApprovable": "Merge requests waiting for your approval",
+    "cardAuthored": "Your merge requests",
+    "cardUnread": "Unread notifications",
+    "nextAttention": "No conflicts or failed checks.",
+    "nextApprovable": "Merge requests you can approve appear here.",
+    "nextAuthored": "Push a branch and open a merge request to see it here.",
+    "nextUnread": "No new notifications.",
+    "countUnknown": "The number could not be read.",
+    "cardCount_one": "{{shown}} item",
+    "cardCount_other": "{{shown}} items",
+    "activity": "Activity",
+    "activityAll": "See all activity",
+    "activityLead": "Up to 10 of the latest events in your projects."
   },
   "nav": {
     "myWork": "My work",
@@ -56,7 +68,53 @@
     "menu": "Menu",
     "projectMenu": "Project menu",
     "groupMenu": "Group menu",
-    "showAll": "See everything inside"
+    "showAll": "See everything inside",
+    "mergeRequests": "Merge requests",
+    "mrBadge": ", {{shown}} to act on",
+    "activity": "Activity"
+  },
+  "myMrs": {
+    "title": "Merge requests",
+    "explain": "Open merge requests only, from projects you may see.",
+    "attention": "Your merge requests that need action",
+    "approvable": "Merge requests waiting for your approval",
+    "authored": "Your merge requests",
+    "hintAttention": "A conflict or a failed required check waits for you.",
+    "hintApprovable": "You can approve these and have not yet (your own are not included).",
+    "hintAuthored": "You opened these and they are still open.",
+    "more": "Load more",
+    "moreShown": "{{n}} more shown.",
+    "draft": "Draft",
+    "updated": "Updated {{time}}",
+    "reasonConflict": "Has a conflict",
+    "reasonConflictPredicted": "May conflict",
+    "reasonCheckFailed": "A required check failed",
+    "reasonOther": "Needs action",
+    "summaryCount_one": "{{shown}} item",
+    "summaryCount_other": "{{shown}} items",
+    "countUnknown": "count unknown"
+  },
+  "activity": {
+    "title": "Activity",
+    "explain": "What happened in the projects you are a member of, newest first. Old events are removed after the keep period.",
+    "someone": "Someone",
+    "projectCreated": "{{actor}} created the project",
+    "pushed_one": "{{actor}} pushed to {{count}} branch or tag",
+    "pushed_other": "{{actor}} pushed to {{count}} branches or tags",
+    "pushedNoCount": "{{actor}} pushed",
+    "mrOpened": "{{actor}} opened a merge request",
+    "mrClosed": "{{actor}} closed a merge request",
+    "mrReopened": "{{actor}} reopened a merge request",
+    "mrCommented": "{{actor}} commented on a merge request",
+    "mrMerged": "{{actor}} merged a merge request",
+    "mrApproved": "{{actor}} approved a merge request",
+    "other": "{{actor}} made a change in the project",
+    "empty": "Nothing has happened yet. When you become a member of a project, what happens there appears here.",
+    "truncated": "You take part in many projects: the events of some older projects are not shown.",
+    "more": "Load more",
+    "moreShown": "{{n}} more shown.",
+    "noMore": "There is nothing older.",
+    "dateUnknown": "Unknown date"
   },
   "projects": {
     "title": "Projects",
@@ -663,6 +721,7 @@
     "number": "!{{iid}}",
     "draft": "Draft",
     "opened": "Opened by {{author}} on {{date}}",
+    "openedAgo": "Opened {{when}} by {{author}}",
     "branches": "{{source}} into {{target}}",
     "state": {
       "open": "Open",
@@ -700,7 +759,8 @@
       "overview": "Overview",
       "changes": "Changes",
       "description": "Description",
-      "noDescription": "No description."
+      "noDescription": "No description.",
+      "threadCount": "Unresolved threads: {{n}}"
     },
     "threads": {
       "title": "Threads",
@@ -821,6 +881,30 @@
       "running": "Running",
       "success": "Succeeded",
       "failed": "Did not succeed ({{conclusion}})"
+    },
+    "side": {
+      "title": "About this merge request",
+      "approvals": "Approvals",
+      "approvalsNone": "Not required",
+      "approvedBy": "Approved by",
+      "notCounted": "{{name}} (does not count)",
+      "checks": "Required checks",
+      "checksNone": "None required",
+      "threads": "Threads",
+      "threadsCount": "{{open}} unresolved of {{total}}",
+      "threadsNone": "None",
+      "versions": "Versions",
+      "latestHead": "Latest commit {{sha}}",
+      "workItem": "Work item",
+      "linked": "Linked",
+      "notLinked": "Not linked",
+      "updated": "Updated",
+      "conditions": "Approvals and checks",
+      "approvalsMet": "Approved {{counted}}/{{required}}",
+      "approvalsNeeded": "Approvals {{counted}}/{{required}}, {{missing}} more needed",
+      "checksPassed": "Checks {{passed}}/{{total}} passed",
+      "checksFailed": "{{failed}} failed (checks {{passed}}/{{total}} passed)",
+      "checksPending": "{{pending}} running or waiting (checks {{passed}}/{{total}} passed)"
     }
   },
   "webhooks": {
@@ -1172,7 +1256,8 @@
     "undecided": "Could not be predicted.",
     "scanFailed": "The conflict prediction could not run. It runs again on the next push.",
     "scanIncomplete": "Not every other merge request was compared.",
-    "scanStale": "This prediction was made for an earlier version or target."
+    "scanStale": "This prediction was made for an earlier version or target.",
+    "openPipeline": "Open pipeline #{{id}}"
   },
   "docs": {
     "title": "Documents",
@@ -1232,5 +1317,108 @@
       "reload": "Reload",
       "hidden": "You do not have access, so only its ID is shown."
     }
+  },
+  "pipelines": {
+    "title": "Pipelines",
+    "listLabel": "Pipeline list",
+    "pagerLabel": "Pipeline pages",
+    "empty": "No pipelines yet. Add .forge-ci.yml at the top of the repository and push; the runs will be listed here.",
+    "emptyAction": "Open the files",
+    "emptyPage": "There are no pipelines on this page.",
+    "newest": "Newest",
+    "older": "Older pipelines",
+    "number": "Pipeline #{{id}}",
+    "openCommit": "Open commit {{sha}}",
+    "took": "took {{duration}}",
+    "backToList": "Back to pipelines",
+    "statusNow": "Status: {{status}}",
+    "openFailedLog": "See the log of the failed job \"{{job}}\"",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "canceled": "Canceled",
+      "skipped": "Nothing to run",
+      "invalid": "Invalid definition",
+      "error": "Could not read",
+      "created": "Waiting"
+    },
+    "source": {
+      "push": "push",
+      "mergeRequest": "Merge request",
+      "schedule": "Scheduled",
+      "manual": "Manual run"
+    },
+    "by": {
+      "system": "Automatic",
+      "you": "You",
+      "user": "User #{{id}}"
+    },
+    "duration": {
+      "hours": "{{h}} h {{m}} min",
+      "minutes": "{{m}} min {{s}} s",
+      "seconds": "{{s}} s"
+    },
+    "line": {
+      "succeeded": "All jobs succeeded.",
+      "skipped": "No job had to run for this commit.",
+      "failed": "Stopped because a job failed. Check the cause and the log, then push a fix.",
+      "failedRetry": "Stopped because a job failed. Check the cause, then push a fix or press \"Retry\".",
+      "failedJob": "Stopped because the job \"{{job}}\" failed. Check the cause and the log, then push a fix.",
+      "failedJobRetry": "Stopped because the job \"{{job}}\" failed. Check the cause, then push a fix or press \"Retry\".",
+      "canceled": "Canceled.",
+      "canceledRetry": "Canceled. Press \"Retry\" to run the failed and canceled jobs again.",
+      "invalid": "Not run: .forge-ci.yml has mistakes. Fix .forge-ci.yml where shown below and push.",
+      "error": "Not run: .forge-ci.yml could not be read. Tell an administrator pipeline #{{id}} so they can look into it.",
+      "pendingOperate": "Waiting to start. It starts when a runner is free. To stop it, press \"Cancel\".",
+      "pendingAsk": "Waiting to start. It starts when a runner is free. If it must be stopped, ask a Developer or above of this project.",
+      "runningOperate": "Running. The result will appear on this page. To stop it, press \"Cancel\".",
+      "runningAsk": "Running. The result will appear on this page. If it must be stopped, ask a Developer or above of this project."
+    },
+    "problems": {
+      "title": "Mistakes in .forge-ci.yml",
+      "line": "Line {{line}}",
+      "file": "Whole file"
+    },
+    "diagnosis": {
+      "title": "Why it failed",
+      "none": "No failed job has been recorded yet.",
+      "pending": "Analysing the failure. It will show in a few seconds.",
+      "job": "Job \"{{job}}\" (stage {{stage}})",
+      "seen": "The same failure happened {{count}} times in this project.",
+      "seenSince": "The same failure happened {{count}} times in this project (first {{date}}).",
+      "knownFixes": "The same failure was fixed by:",
+      "fix": "!{{iid}} {{title}}",
+      "openLog": "See the log of the job \"{{job}}\"",
+      "excerpt": "Failing lines of the job \"{{job}}\""
+    },
+    "jobs": {
+      "title": "Jobs",
+      "none": "This pipeline has no jobs.",
+      "stage": "Stage {{stage}}",
+      "attempt": "attempt {{attempt}}",
+      "needs": "waits for: {{needs}}",
+      "log": "Log",
+      "logOf": "Log of the job \"{{job}}\""
+    },
+    "log": {
+      "title": "Log of the job \"{{job}}\"",
+      "attempt": "This is the log of attempt {{attempt}}.",
+      "waiting": "No log yet. It appears when the job starts.",
+      "empty": "This job has no log.",
+      "truncated": "The log is long; only its first part is shown.",
+      "live": "Running: refreshed every few seconds.",
+      "more": "Load more",
+      "noSuchJob": "This pipeline has no such job."
+    },
+    "canceling": "Canceling…",
+    "retrying": "Retrying…",
+    "cancelConfirm": "This stops the running jobs midway. Cancel the pipeline?",
+    "cancelYes": "Cancel it",
+    "cancelNo": "Keep running",
+    "span": "{{from}} – {{to}}"
   }
 }

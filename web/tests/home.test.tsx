@@ -21,13 +21,16 @@ const lists = (mine: unknown[], groups: unknown[] = []) => ({
   'GET /api/v1/groups': () => page(groups),
 });
 
-describe('home', () => {
-  it('shows my projects and groups in the UI language', async () => {
+// The projects I take part in moved from Home to /-/projects (plan 15 MR 7):
+// the same list (MyProjects), so its behaviour is tested there.
+const PROJECTS = '/-/projects';
+
+describe('my projects (/-/projects)', () => {
+  it('shows my projects in the UI language', async () => {
     const server = mockServer(lists([PROJECT], [LISTED_GROUP]));
-    await renderApp({ fetch: server.fetch, lang: 'en' });
-    expect(await screen.findByRole('heading', { name: 'Your projects' })).toBeTruthy();
+    await renderApp({ fetch: server.fetch, lang: 'en', path: PROJECTS });
+    expect(await screen.findByRole('heading', { name: 'Projects', level: 1 })).toBeTruthy();
     expect(await screen.findByText('Forge Web')).toBeTruthy();
-    expect(await screen.findByText('Acme Plant')).toBeTruthy();
     // The main list asks for the projects I hold a role in.
     const mine = server.to('GET', '/api/v1/projects')[0];
     // ADR-0023: no repository-kind filter is sent.
@@ -39,24 +42,22 @@ describe('home', () => {
 
   it('links a project to its address', async () => {
     const server = mockServer(lists([PROJECT]));
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: PROJECTS });
     const link = await screen.findByRole('link', { name: 'Forge Web' });
     expect(link.getAttribute('href')).toBe('/acme/forge-web');
   });
 
-  it('loading state, then the empty state with the way forward (no empty frames for the rest)', async () => {
+  it('loading state, then the empty state with the way forward', async () => {
     const server = mockServer(lists([]));
-    await renderApp({ fetch: server.fetch });
-    expect(screen.getByText('読み込んでいます…')).toBeTruthy();
+    await renderApp({ fetch: server.fetch, path: PROJECTS });
+    expect(screen.getAllByText('読み込んでいます…').length).toBeGreaterThan(0);
     expect(await screen.findByText('あなたがメンバーのプロジェクトはまだありません。')).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: '自分のグループ' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: '最近見たもの' })).toBeNull();
   });
 
   it('filters the list by name or path', async () => {
     const other = { ...PROJECT, id: 9, path: 'acme/press-line', display_name: 'Press Line' };
     const server = mockServer(lists([PROJECT, other]));
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: PROJECTS });
     await screen.findByText('Press Line');
     fireEvent.change(screen.getByLabelText('名前やパスで絞り込む'), { target: { value: 'press' } });
     expect(screen.queryByText('Forge Web')).toBeNull();
@@ -79,7 +80,7 @@ describe('home', () => {
       },
       'GET /api/v1/groups': () => page([]),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: PROJECTS });
     expect(await screen.findByText('P2')).toBeTruthy();
     expect(await screen.findByText('P3')).toBeTruthy();
     const mineCalls = server.to('GET', '/api/v1/projects');
@@ -97,7 +98,7 @@ describe('home', () => {
           : page([PROJECT]),
       'GET /api/v1/groups': () => page([]),
     });
-    const { container } = await renderApp({ fetch: server.fetch });
+    const { container } = await renderApp({ fetch: server.fetch, path: PROJECTS });
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('一覧を読めませんでした。');
     expect(screen.getByTestId('request-id').textContent).toBe('req-list-1');
@@ -109,7 +110,7 @@ describe('home', () => {
 });
 
 describe('create a project', () => {
-  const open = async (server: ReturnType<typeof mockServer>, path = '/') => {
+  const open = async (server: ReturnType<typeof mockServer>, path = PROJECTS) => {
     await renderApp({ fetch: server.fetch, path });
     fireEvent.click(await screen.findByRole('button', { name: 'プロジェクトを作る' }));
     return screen.getByRole('dialog');
@@ -210,7 +211,7 @@ describe('create a group', () => {
         json(200, { canonical_path: 'press', kind: 'group', moved: false, namespace_id: 400, group_id: 40 }),
       'GET /api/v1/groups/40': () => json(200, created),
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/groups' });
     fireEvent.click(await screen.findByRole('button', { name: 'グループを作る' }));
     const d = within(screen.getByRole('dialog'));
     fireEvent.change(d.getByLabelText('名前'), { target: { value: 'Press' } });

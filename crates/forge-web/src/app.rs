@@ -436,7 +436,9 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
 /// (`routes::content`, M2 MR7). `pulls` / `pull` are the merge request
 /// screens (MR B0; their data is the `MergeRequestList` / `MergeRequestRead`
 /// API). `documents` is the document screens (plan 13 stage 3; their data
-/// is the document API, `RepoBrowse`).
+/// is the document API, `RepoBrowse`). `pipelines` is the CI screens (plan 14
+/// M4; their data is the pipeline API, project readers). `webhooks` is the
+/// webhook screens (M3 I2; their data is the webhook API, Maintainer).
 pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Tree,
     RouteWord::Blob,
@@ -451,6 +453,8 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Pulls,
     RouteWord::Pull,
     RouteWord::Documents,
+    RouteWord::Pipelines,
+    RouteWord::Webhooks,
 ];
 
 /// The words whose page is the SPA shell on a group (no merge request
@@ -573,17 +577,62 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    runner_routes(pipeline_routes(doc_lint_routes(binding_routes(
-        act_as_routes(mirror_routes(webhook_routes(notification_routes(
-            check_routes(dev_status_routes(feed_routes(integration_routes(
-                service_account_routes(account_routes(history_routes(browse_routes(git_routes(
-                    shell_routes(merge_request_routes(member_routes(move_routes(
-                        hosting_routes(fixed),
+    user_activity_routes(user_merge_request_routes(runner_routes(pipeline_routes(
+        doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
+            webhook_routes(notification_routes(check_routes(dev_status_routes(
+                feed_routes(integration_routes(service_account_routes(account_routes(
+                    history_routes(browse_routes(git_routes(shell_routes(
+                        merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
                     )))),
-                ))))),
+                )))),
             )))),
         )))),
     ))))
+}
+
+/// The merge requests of the caller's own work across projects (plan 15
+/// MR 6): one page of a scope and the counts of every scope; each row is
+/// decided again on `MergeRequestRead` (forge-review `user_lists`).
+fn user_merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::user_merge_requests as u;
+    registry
+        .route_with(
+            Verb::Get,
+            u::LIST,
+            Action::UserMergeRequestList,
+            "The caller's own open merge requests of one scope (authored, approvable, attention), newest first; only rows whose merge request the caller may read now (an unknown or missing scope is FG-WEB-0006)",
+            u::OwnMergeRequests,
+            u::list,
+        )
+        .responds::<u::UserMergeRequestList>(Verb::Get, u::LIST)
+        .queries(Verb::Get, u::LIST, u::LIST_QUERY)
+        .route_with(
+            Verb::Get,
+            u::COUNTS,
+            Action::UserMergeRequestList,
+            "The number of the caller's merge requests in every scope (visible rows only; each at most 100, capped when 100 were found, truncated when the scan bound was reached with candidates left)",
+            u::OwnMergeRequests,
+            u::counts,
+        )
+        .responds::<u::UserMergeRequestCounts>(Verb::Get, u::COUNTS)
+}
+
+/// The recent events of the projects the caller is involved in (plan 15
+/// MR 8); each event is decided again on `ActivityRead` per project and
+/// visibility class (forge-review `activity`).
+fn user_activity_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::user_activity as a;
+    registry
+        .route_with(
+            Verb::Get,
+            a::ACTIVITY,
+            Action::ActivityRead,
+            "The recent events of the projects the caller is involved in (a role on the project, directly or through a group), newest first; only the shown types (project.created, repository.pushed and merge request events) with their allowed fields, only events the caller may read now (people only; a bad parameter is FG-WEB-0006)",
+            a::OwnActivity,
+            a::list,
+        )
+        .responds::<a::UserActivityList>(Verb::Get, a::ACTIVITY)
+        .queries(Verb::Get, a::ACTIVITY, a::ACTIVITY_QUERY)
 }
 
 /// CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1): the administration (an
@@ -2512,6 +2561,20 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
                 "SPA shell: the groups the caller can see",
                 shell,
             )
+            .route(
+                verb,
+                MY_MERGE_REQUESTS_PAGE,
+                Action::WebShell,
+                "SPA shell: the caller's merge requests",
+                shell,
+            )
+            .route(
+                verb,
+                MY_ACTIVITY_PAGE,
+                Action::WebShell,
+                "SPA shell: the caller's activity",
+                shell,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -2623,6 +2686,10 @@ pub(crate) fn build(
         // ADR-0019 Amendment M2: every 401 gets its class's challenges.
         .layer(middleware::from_fn(crate::error::challenge_layer))
         .layer(middleware::from_fn(context::request_id))
+        // A failed browser navigation of the sign-in flow is a page, not
+        // the JSON body (`crate::error_page`); every failure, the timeout's
+        // and the panic catcher's included, passes it.
+        .layer(middleware::from_fn(crate::error_page::auth_error_page))
         // Outermost: every answer, the timeout's and the panic catcher's
         // included, gets its class's headers (ADR-0022 §3).
         .layer(middleware::from_fn_with_state(
@@ -2726,3 +2793,7 @@ async fn request_timeout(
 pub const MY_PROJECTS_PAGE: &str = "/-/projects";
 /// The "My work" sidebar's groups page (plan 15).
 pub const MY_GROUPS_PAGE: &str = "/-/groups";
+/// The "My work" sidebar's merge requests page (plan 15 MR 7).
+pub const MY_MERGE_REQUESTS_PAGE: &str = "/-/merge-requests";
+/// The "My work" sidebar's activity page (plan 15 MR 9).
+pub const MY_ACTIVITY_PAGE: &str = "/-/activity";

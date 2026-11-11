@@ -90,10 +90,23 @@ export const ICONS = {
       <path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4" />
     </Icon>
   ),
+  activity: (
+    <Icon>
+      <path d="M3 12h4l3-8 4 16 3-8h4" />
+    </Icon>
+  ),
   documents: (
     <Icon>
       <path d="M5 4h14v16H5Z" />
       <path d="M9 9h6M9 13h6M9 17h3" />
+    </Icon>
+  ),
+  pipelines: (
+    <Icon>
+      <circle cx="5" cy="12" r="2.5" />
+      <circle cx="19" cy="6" r="2.5" />
+      <circle cx="19" cy="18" r="2.5" />
+      <path d="M7.5 12H12M12 6v12M12 6h4.5M12 18h4.5" />
     </Icon>
   ),
   members: (

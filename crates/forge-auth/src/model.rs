@@ -647,6 +647,16 @@ pub enum Resource {
     NotificationPreferences {
         owner: UserId,
     },
+    /// The merge requests of `owner`'s own work across projects
+    /// (`UserMergeRequestList`, plan 15 MR 6): only the person's own.
+    UserMergeRequests {
+        owner: UserId,
+    },
+    /// The recent events of the projects `owner` is involved in
+    /// (`ActivityRead`, plan 15 MR 8): only the person's own.
+    UserActivity {
+        owner: UserId,
+    },
     /// The web sessions of `owner` (`SessionList` / `SessionRevoke` on the
     /// user's own route, `AdminSessionList` / `AdminSessionRevoke` on the
     /// administration's; M2 MR6, ADR-0021 §17).

@@ -41,6 +41,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{read_query_error, Db};
 
+pub mod activity;
 pub mod approvals;
 mod commands;
 pub mod conflicts;
@@ -50,6 +51,7 @@ pub mod mergeability;
 pub mod merges;
 mod refresh;
 pub mod settings;
+pub mod user_lists;
 mod version_bases;
 mod version_refs;
 pub mod versions;

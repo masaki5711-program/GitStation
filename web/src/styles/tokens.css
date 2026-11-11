@@ -53,6 +53,8 @@
   --gs-color-warning-surface: #fff4e0;
   --gs-color-success-text: #1f6b3a;
   --gs-color-success-surface: #e8f6ee;
+  --gs-color-info-text: #0a4f9e;
+  --gs-color-info-surface: #e8f0fb;
 
   /* Header */
   --gs-header-background: #1b2a44;
@@ -87,9 +89,19 @@
   --gs-space-8: 2rem;
   --gs-radius-sm: 4px;
   --gs-radius-md: 8px;
+  --gs-radius-pill: 999px; /* a count or tag drawn as a pill */
+  --gs-count-min-width: 1.5em; /* a count pill keeps its shape for one digit */
   --gs-header-height: 3.5rem;
   --gs-tap-target: 2.5rem; /* the least height / width of a control (WCAG 2.5.8 with room) */
   --gs-sidebar-width: 14rem;
   --gs-aside-width: 16rem; /* a page's side panel (project info) */
   --gs-content-max-width: 72rem;
+  --gs-badge-size: 1.5rem; /* a count badge's height and least width */
+  --gs-badge-size-sm: 1.25rem; /* the same on a collapsed sidebar icon */
+  --gs-card-min-width: 13rem; /* a count card in a grid (Home) */
+  --gs-card-min-height: 6rem;
+  --gs-status-min-height: 1.5rem; /* a status line's reserved height (no jump when it fills) */
+  --gs-numeric: tabular-nums; /* counts and times: digits line up and do not jitter */
+  --gs-log-max-height: 32rem; /* a log or excerpt box before it scrolls */
+  --gs-accent-border-width: 4px; /* the coloured edge of a status line */
 }

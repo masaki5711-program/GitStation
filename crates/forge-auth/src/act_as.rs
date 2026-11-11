@@ -204,7 +204,9 @@ fn decide_rule(
             | Resource::ProjectEvents { .. }
             | Resource::ActAs(_)
             | Resource::ActAsConfirm(_)
-            | Resource::NotificationPreferences { .. } => Err(refused("act_as_facts_missing")),
+            | Resource::NotificationPreferences { .. }
+            | Resource::UserMergeRequests { .. }
+            | Resource::UserActivity { .. } => Err(refused("act_as_facts_missing")),
         };
     }
     let view: &ActAsView = match resource {
@@ -243,7 +245,9 @@ fn decide_rule(
         | Resource::IntegrationFeed(_)
         | Resource::ProjectEvents { .. }
         | Resource::ActAsConfirm(_)
-        | Resource::NotificationPreferences { .. } => return Err(refused("act_as_facts_missing")),
+        | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. }
+        | Resource::UserActivity { .. } => return Err(refused("act_as_facts_missing")),
     };
     // M3 X3: a binding intent's scope is the request's own integration and
     // the assertion's binding, not `via_bound` (the project may not be
@@ -388,7 +392,9 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_)
-        | Resource::NotificationPreferences { .. } => None,
+        | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. }
+        | Resource::UserActivity { .. } => None,
     }
 }
 
@@ -476,6 +482,8 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_)
-        | Resource::NotificationPreferences { .. } => Resource::Project(view),
+        | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. }
+        | Resource::UserActivity { .. } => Resource::Project(view),
     })
 }

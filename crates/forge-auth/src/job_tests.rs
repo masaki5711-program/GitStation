@@ -414,3 +414,36 @@ fn the_job_fetch_context_decides_like_the_pinned_copy() {
     .expect_err("a person");
     assert_eq!(ctx(&person, "reason"), Some("pinned_copy_without_job"));
 }
+
+/// Authorization review of the `/api/v1/user/*` fix (2026-11-11): those
+/// loaders answer an absent resource for a runner or a job (no user), and
+/// the CI arm must refuse it as `FG-AUTH-0003 ci_not_allowed` — the rule
+/// before the resource — never the `404` an absent resource gives others.
+#[test]
+fn a_ci_credential_on_an_absent_user_resource_is_forbidden_not_not_found() {
+    let absent = Resource::Unresolved(crate::model::UnresolvedReason::Absent);
+    for action in [
+        Action::UserSelfRead,
+        Action::TokenList,
+        Action::TokenCreate,
+        Action::TokenRevoke,
+        Action::SessionList,
+        Action::SessionRevoke,
+        Action::NotificationPreferencesRead,
+        Action::NotificationPreferencesWrite,
+        Action::NotificationInboxRead,
+        Action::NotificationInboxUpdate,
+        Action::UserMergeRequestList,
+    ] {
+        for (who, principal) in [("runner", runner()), ("job", job(JobTokenState::Live))] {
+            let err = authorize(&principal, action, &absent).expect_err("refused");
+            assert_eq!(err.code(), ErrorCode::Forbidden, "{who} {action:?}");
+            assert_eq!(
+                ctx(&err, "reason"),
+                Some("ci_not_allowed"),
+                "{who} {action:?}"
+            );
+            assert_eq!(ctx(&err, "credential"), Some(who), "{who} {action:?}");
+        }
+    }
+}

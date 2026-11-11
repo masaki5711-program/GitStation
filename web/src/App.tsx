@@ -6,11 +6,13 @@ import { Route, Routes } from 'react-router';
 import { ApiFailure, type ApiClient } from './api/client';
 import { ApiProvider } from './api/context';
 import { Layout } from './components/Layout';
+import { Activity } from './pages/Activity';
 import { ActAsBindingConfirm } from './pages/confirm/ActAsBindingConfirm';
 import { ActAsConfirm } from './pages/confirm/ActAsConfirm';
 import { GroupsPage } from './pages/Groups';
 import { Home } from './pages/Home';
 import { Inbox } from './pages/Inbox';
+import { MyMergeRequests } from './pages/MyMergeRequests';
 import { NamespaceRoute } from './pages/Namespace';
 import { NotFound } from './pages/NotFound';
 import { Permalink } from './pages/Permalink';
@@ -50,6 +52,8 @@ export function AppRoutes() {
         <Route index element={<Home />} />
         <Route path="-/projects" element={<ProjectsPage />} />
         <Route path="-/groups" element={<GroupsPage />} />
+        <Route path="-/merge-requests" element={<MyMergeRequests />} />
+        <Route path="-/activity" element={<Activity />} />
         <Route path="-/projects/:id/*" element={<Permalink />} />
         <Route path="-/notifications" element={<Inbox />} />
         <Route path="-/*" element={<NotFound />} />

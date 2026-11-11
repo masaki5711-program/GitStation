@@ -20,6 +20,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/activity",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/activity",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/assets/{file}",
     "people_only": false,
     "public": true,
@@ -138,6 +156,24 @@
     "action": "WebShell",
     "method": "HEAD",
     "path": "/-/groups",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/-/merge-requests",
+    "people_only": false,
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/merge-requests",
     "people_only": false,
     "public": true,
     "scope": "fixed",
@@ -1566,6 +1602,33 @@
     "word": "fixed"
   },
   {
+    "action": "ActivityRead",
+    "method": "GET",
+    "path": "/api/v1/user/activity",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserMergeRequestList",
+    "method": "GET",
+    "path": "/api/v1/user/merge-requests",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserMergeRequestList",
+    "method": "GET",
+    "path": "/api/v1/user/merge-requests/counts",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "NotificationPreferencesRead",
     "method": "GET",
     "path": "/api/v1/user/notification-preferences",
@@ -1971,6 +2034,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/{namespace}/-/pipelines/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "pipelines"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/pipelines/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "pipelines"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/{namespace}/-/pull/{*rest}",
     "people_only": false,
     "public": true,
@@ -2093,6 +2174,24 @@
     "public": true,
     "scope": "project",
     "word": "tree"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/webhooks/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "webhooks"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/webhooks/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "webhooks"
   },
   {
     "action": "UserCreate",

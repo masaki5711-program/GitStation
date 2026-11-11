@@ -3,6 +3,8 @@
 //! Body: `{ "error_code", "user_message", "request_id" }` — nothing else,
 //! except the integration feed's 410 (`FG-INT-0007`), which adds its fixed
 //! `reason` word (plan 02 §11.2: the consumer recovers by it).
+//! A failed browser navigation of the sign-in flow (`/-/auth/…`) shows the
+//! same `user_message` and `request_id` as an HTML page (`crate::error_page`).
 //! Context, sources, paths and git stderr stay in the log, written once here.
 //! Every 401 carries the authentication challenges (one place for them:
 //! [`challenges`], applied to the whole application by [`challenge_layer`]).
@@ -182,7 +184,15 @@ impl IntoResponse for ApiError {
             request_id: self.request_id.as_str(),
             reason: feed_gone_reason(&self.err),
         };
+        let view = crate::error_page::ErrorView {
+            user_message: body.user_message.to_owned(),
+            request_id: body.request_id.to_owned(),
+            lang: self.lang,
+        };
         let mut res = (status, Json(body)).into_response();
+        // A browser navigation of the sign-in flow shows it as a page
+        // (`crate::error_page`); never sent as it is.
+        res.extensions_mut().insert(view);
         res.extensions_mut().insert(Failure {
             code,
             reason: self

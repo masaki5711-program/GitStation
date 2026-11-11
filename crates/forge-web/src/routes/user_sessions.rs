@@ -24,7 +24,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use forge_auth::SessionCtx;
 use forge_core::{parse_positive_id, UserId};
-use forge_errors::{ErrorCode, ForgeError};
+use forge_errors::ForgeError;
 use forge_hosting::accounts::{is_session_public_id, SessionInfo};
 use serde::Serialize;
 use serde_json::Value;
@@ -32,7 +32,7 @@ use serde_json::Value;
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{Dispatched, LoadFuture, Loader, Lookup};
-use crate::routes::write::{absent, bounded, hosting, json, no_store, write_request};
+use crate::routes::write::{absent, bounded, hosting, json, no_store, own, write_request};
 
 /// `GET` the caller's sessions.
 pub const OWN: &str = "/api/v1/user/sessions";
@@ -90,12 +90,6 @@ fn found<R>(ctx: R) -> Lookup<R> {
     }
 }
 
-fn me(viewer: Option<UserId>) -> Result<UserId, ForgeError> {
-    viewer.ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal).with_context("reason", "session_route_without_user")
-    })
-}
-
 /// The `{id}` of `/api/v1/admin/users/{id}/sessions`.
 fn admin_target(parts: &Parts) -> Result<UserId, ForgeError> {
     parts
@@ -120,7 +114,11 @@ impl Loader<AppState> for OwnSessions {
         _: &'a Parts,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, SessionCtx> {
-        Box::pin(async move { Ok(found(SessionCtx::new(me(viewer)?, None))) })
+        Box::pin(async move {
+            Ok(own(viewer, "session_route_without_user", |me| {
+                SessionCtx::new(me, None)
+            }))
+        })
     }
 }
 

@@ -29,6 +29,7 @@ pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
 mod matrix_rows_act_as;
+mod matrix_rows_activity;
 mod matrix_rows_approval;
 mod matrix_rows_bindings;
 mod matrix_rows_checks;
@@ -92,10 +93,10 @@ pub use prove::{
     GroupTransferCtx, InstanceCtx, LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent,
     LoadedProject, LoadedProtection, LoadedTarget, LoadedTombstone, LoadedTransferTarget,
     LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx, PinnedCopyCtx, ProjectCtx,
-    ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, RunnerJobCtx, ServiceAccountCtx,
-    ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx,
-    TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx,
-    UserTargetCtx, VisibilityChangeCtx,
+    ProjectEventsCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, RunnerJobCtx,
+    ServiceAccountCtx, ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx,
+    TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserActivityCtx,
+    UserMergeRequestsCtx, UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 pub use repo_copy::authorize_repo_copy;

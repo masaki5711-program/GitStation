@@ -120,7 +120,7 @@ describe('login screen', () => {
       'GET /api/v1/projects': signedOut,
       'GET /api/v1/groups': signedOut,
     });
-    await renderApp({ fetch: server.fetch });
+    await renderApp({ fetch: server.fetch, path: '/-/projects' });
     expect((await screen.findAllByText('ログインの有効期限が切れました')).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: 'IoT ポータルでログイン' }).length).toBeGreaterThan(0);
   });

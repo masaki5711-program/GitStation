@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { SESSION_KEY } from '../session/session';
+import { invalidateActivity } from './activity';
 import { ApiFailure, call } from './client';
 import { useApi } from './context';
 import type {
@@ -172,7 +173,8 @@ export function useCreateMergeRequest(project: number) {
           body,
         }),
       ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: mrKeys.all(project) }),
+    onSuccess: () =>
+      Promise.all([queryClient.invalidateQueries({ queryKey: mrKeys.all(project) }), invalidateActivity(queryClient)]),
     onError: refreshSession,
   });
 }
@@ -184,6 +186,7 @@ function useAfterDiscussionChange(project: number, iid: number) {
     Promise.all([
       queryClient.invalidateQueries({ queryKey: mrKeys.discussions(project, iid) }),
       queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) }),
+      invalidateActivity(queryClient),
     ]);
 }
 
@@ -263,7 +266,11 @@ export function useUnresolve(project: number, iid: number) {
 /** After an approval changes, the status (counts, viewer flags) is stale. */
 function useAfterApprovalChange(project: number, iid: number) {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) });
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) }),
+      invalidateActivity(queryClient),
+    ]);
 }
 
 /** Approve the head the person saw (`sha` from the status they read): the
@@ -418,6 +425,7 @@ export function useMergeAttempt(project: number, iid: number, since: number | nu
       if (isFinished(latest.merge)) {
         void queryClient.invalidateQueries({ queryKey: mrKeys.one(project, iid) });
         void queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) });
+        void invalidateActivity(queryClient);
       }
       return latest;
     },

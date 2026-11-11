@@ -3,7 +3,7 @@
 server = "http://host.docker.internal:28080"
 allow_insecure_http = true            # test only: the test GitStation has no TLS
 token_file = "/etc/forge-runner/token"
-work_dir = "/var/lib/forge-runner"    # a size-capped tmpfs in compose.yml
+work_dir = "/var/lib/forge-runner"    # the runner-work volume in compose.yml
 image_registries = ["registry:5000/"]
-memory = "2g"
-work_dir_max_bytes = 3221225472       # 3 GiB, below the 4 GiB tmpfs
+memory = "4g"                         # a Rust test job; inside compose mem_limit 8g
+work_dir_max_bytes = 10737418240      # 10 GiB: Rust test build without debuginfo is 6.2 GB

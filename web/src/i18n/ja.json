@@ -39,12 +39,24 @@
   },
   "home": {
     "title": "ホーム",
-    "mine": "自分のプロジェクト",
-    "groups": "自分のグループ",
     "recent": "最近見たもの",
     "recentHint": "このブラウザの中だけに覚えています。",
     "allProjects": "プロジェクトをすべて見る",
-    "allGroups": "グループをすべて見る"
+    "work": "自分の作業",
+    "cardAttention": "対応が必要な自分の MR",
+    "cardApprovable": "承認を待っている MR",
+    "cardAuthored": "自分の MR",
+    "cardUnread": "未読の通知",
+    "nextAttention": "衝突や失敗したチェックはありません。",
+    "nextApprovable": "承認を頼まれた MR はここに出ます。",
+    "nextAuthored": "ブランチを push して MR を作るとここに出ます。",
+    "nextUnread": "新しい通知はありません。",
+    "countUnknown": "数を読めませんでした。",
+    "cardCount_one": "{{shown}} 件",
+    "cardCount_other": "{{shown}} 件",
+    "activity": "アクティビティ",
+    "activityAll": "アクティビティをすべて見る",
+    "activityLead": "関わっているプロジェクトの新しい動きを 10 件まで出しています。"
   },
   "nav": {
     "myWork": "マイワーク",
@@ -56,7 +68,53 @@
     "menu": "メニュー",
     "projectMenu": "プロジェクトのメニュー",
     "groupMenu": "グループのメニュー",
-    "showAll": "中身をすべて見る"
+    "showAll": "中身をすべて見る",
+    "mergeRequests": "マージリクエスト",
+    "mrBadge": "、対応 {{shown}} 件",
+    "activity": "アクティビティ"
+  },
+  "myMrs": {
+    "title": "マージリクエスト",
+    "explain": "あなたが見てよいプロジェクトの、開いている MR だけを出しています。",
+    "attention": "対応が必要な自分の MR",
+    "approvable": "承認を待っている MR",
+    "authored": "自分の MR",
+    "hintAttention": "衝突や失敗した必須チェックがあり、あなたの対応を待っています。",
+    "hintApprovable": "あなたが承認できて、まだ承認していないものです（自分の MR は入りません）。",
+    "hintAuthored": "あなたが作って、まだ開いているものです。",
+    "more": "さらに読む",
+    "moreShown": "{{n}} 件を足しました。",
+    "draft": "下書き",
+    "updated": "更新 {{time}}",
+    "reasonConflict": "衝突があります",
+    "reasonConflictPredicted": "衝突しそうです",
+    "reasonCheckFailed": "必須のチェックが失敗しました",
+    "reasonOther": "対応が必要です",
+    "summaryCount_one": "{{shown}} 件",
+    "summaryCount_other": "{{shown}} 件",
+    "countUnknown": "件数不明"
+  },
+  "activity": {
+    "title": "アクティビティ",
+    "explain": "あなたがメンバーのプロジェクトの動きを、新しい順に出しています。古い動きは保存の期間を過ぎると消えます。",
+    "someone": "だれか",
+    "projectCreated": "{{actor}} がプロジェクトを作りました",
+    "pushed_one": "{{actor}} が {{count}} 個のブランチやタグに push しました",
+    "pushed_other": "{{actor}} が {{count}} 個のブランチやタグに push しました",
+    "pushedNoCount": "{{actor}} が push しました",
+    "mrOpened": "{{actor}} がマージリクエストを開きました",
+    "mrClosed": "{{actor}} がマージリクエストを閉じました",
+    "mrReopened": "{{actor}} がマージリクエストをもう一度開きました",
+    "mrCommented": "{{actor}} がマージリクエストにコメントしました",
+    "mrMerged": "{{actor}} がマージリクエストをマージしました",
+    "mrApproved": "{{actor}} がマージリクエストを承認しました",
+    "other": "{{actor}} がプロジェクトで何かを変えました",
+    "empty": "まだ動きはありません。プロジェクトのメンバーになると、そこでの動きがここに出ます。",
+    "truncated": "関わっているプロジェクトが多いため、一部の古いプロジェクトの動きは出ていません。",
+    "more": "さらに読む",
+    "moreShown": "さらに {{n}} 件を表示しました。",
+    "noMore": "これより前の動きはありません。",
+    "dateUnknown": "日付不明"
   },
   "projects": {
     "title": "プロジェクト",
@@ -663,6 +721,7 @@
     "number": "!{{iid}}",
     "draft": "下書き",
     "opened": "{{author}} が {{date}} に作成",
+    "openedAgo": "{{when}}に {{author}} が作成",
     "branches": "{{source}} から {{target}} へ",
     "state": {
       "open": "開いている",
@@ -700,7 +759,8 @@
       "overview": "概要",
       "changes": "変更",
       "description": "説明",
-      "noDescription": "説明はありません。"
+      "noDescription": "説明はありません。",
+      "threadCount": "未解決のスレッド {{n}} 件"
     },
     "threads": {
       "title": "スレッド",
@@ -821,6 +881,30 @@
       "running": "実行中",
       "success": "成功",
       "failed": "成功していません（{{conclusion}}）"
+    },
+    "side": {
+      "title": "このマージリクエストについて",
+      "approvals": "承認",
+      "approvalsNone": "不要",
+      "approvedBy": "承認した人",
+      "notCounted": "{{name}}（数に入りません）",
+      "checks": "必須のチェック",
+      "checksNone": "必須のチェックはありません",
+      "threads": "スレッド",
+      "threadsCount": "{{total}} 件中 {{open}} 件が未解決",
+      "threadsNone": "なし",
+      "versions": "バージョン",
+      "latestHead": "最新のコミット {{sha}}",
+      "workItem": "作業項目",
+      "linked": "リンクあり",
+      "notLinked": "リンクなし",
+      "updated": "更新",
+      "conditions": "承認とチェック",
+      "approvalsMet": "承認済み {{counted}}/{{required}}",
+      "approvalsNeeded": "承認 {{counted}}/{{required}}（あと {{missing}} 件）",
+      "checksPassed": "チェック {{passed}}/{{total}} 通過",
+      "checksFailed": "{{failed}} 件失敗（チェック {{passed}}/{{total}} 通過）",
+      "checksPending": "{{pending}} 件が実行中・待ち（チェック {{passed}}/{{total}} 通過）"
     }
   },
   "webhooks": {
@@ -1172,7 +1256,8 @@
     "undecided": "予測できませんでした。",
     "scanFailed": "衝突の予測を実行できませんでした。次のプッシュでもう一度実行されます。",
     "scanIncomplete": "ほかのマージリクエストの一部とは比べていません。",
-    "scanStale": "この予測は前の版または前のターゲットについてのものです。"
+    "scanStale": "この予測は前の版または前のターゲットについてのものです。",
+    "openPipeline": "パイプライン #{{id}} を開く"
   },
   "docs": {
     "title": "文書",
@@ -1232,5 +1317,108 @@
       "reload": "再読み込み",
       "hidden": "権限がないため、ID だけを表示しています。"
     }
+  },
+  "pipelines": {
+    "title": "パイプライン",
+    "listLabel": "パイプラインの一覧",
+    "pagerLabel": "パイプラインのページ",
+    "empty": "まだパイプラインがありません。リポジトリの最上位に .forge-ci.yml を追加して push すると、ここに実行結果が並びます。",
+    "emptyAction": "ファイルを開く",
+    "emptyPage": "このページにはパイプラインがありません。",
+    "newest": "最新へ",
+    "older": "さらに古いパイプライン",
+    "number": "パイプライン #{{id}}",
+    "openCommit": "コミット {{sha}} を開く",
+    "took": "所要 {{duration}}",
+    "backToList": "パイプラインの一覧へ",
+    "statusNow": "状態: {{status}}",
+    "openFailedLog": "失敗したジョブ「{{job}}」のログを見る",
+    "cancel": "取り消す",
+    "retry": "再実行",
+    "status": {
+      "pending": "開始待ち",
+      "running": "実行中",
+      "succeeded": "成功",
+      "failed": "失敗",
+      "canceled": "取り消し",
+      "skipped": "対象なし",
+      "invalid": "設定に誤り",
+      "error": "読み込み失敗",
+      "created": "待機中"
+    },
+    "source": {
+      "push": "push",
+      "mergeRequest": "MR",
+      "schedule": "定期実行",
+      "manual": "手動実行"
+    },
+    "by": {
+      "system": "自動",
+      "you": "あなた",
+      "user": "ユーザー #{{id}}"
+    },
+    "duration": {
+      "hours": "{{h}}時間{{m}}分",
+      "minutes": "{{m}}分{{s}}秒",
+      "seconds": "{{s}}秒"
+    },
+    "line": {
+      "succeeded": "すべてのジョブが成功しました。",
+      "skipped": "このコミットで実行するジョブはありませんでした。",
+      "failed": "失敗したジョブがあるため止まりました。原因とログを確認し、修正を push してください。",
+      "failedRetry": "失敗したジョブがあるため止まりました。原因を確認し、修正を push するか「再実行」を押してください。",
+      "failedJob": "ジョブ「{{job}}」が失敗したため止まりました。原因とログを確認し、修正を push してください。",
+      "failedJobRetry": "ジョブ「{{job}}」が失敗したため止まりました。原因を確認し、修正を push するか「再実行」を押してください。",
+      "canceled": "取り消されました。",
+      "canceledRetry": "取り消されました。「再実行」を押すと、失敗・取り消しのジョブをやり直します。",
+      "invalid": ".forge-ci.yml に誤りがあるため実行していません。下に示す箇所の .forge-ci.yml を直して push してください。",
+      "error": ".forge-ci.yml を読めなかったため実行していません。管理者にパイプライン #{{id}} を伝えて調べてもらってください。",
+      "pendingOperate": "開始を待っています。ランナーが空くと始まります。止める場合は「取り消す」を押してください。",
+      "pendingAsk": "開始を待っています。ランナーが空くと始まります。止める必要があるときは、このプロジェクトの Developer 以上のメンバーに依頼してください。",
+      "runningOperate": "実行中です。終わるとこの画面に結果が出ます。止める場合は「取り消す」を押してください。",
+      "runningAsk": "実行中です。終わるとこの画面に結果が出ます。止める必要があるときは、このプロジェクトの Developer 以上のメンバーに依頼してください。"
+    },
+    "problems": {
+      "title": ".forge-ci.yml の誤り",
+      "line": "{{line}} 行目",
+      "file": "ファイル全体"
+    },
+    "diagnosis": {
+      "title": "失敗の原因",
+      "none": "失敗したジョブの記録はまだありません。",
+      "pending": "失敗の分析中です。数秒で表示されます。",
+      "job": "ジョブ「{{job}}」（ステージ {{stage}}）",
+      "seen": "このプロジェクトで同じ失敗が {{count}} 回ありました。",
+      "seenSince": "このプロジェクトで同じ失敗が {{count}} 回ありました（初回 {{date}}）。",
+      "knownFixes": "同じ失敗は次の MR で直りました:",
+      "fix": "!{{iid}} {{title}}",
+      "openLog": "ジョブ「{{job}}」のログを見る",
+      "excerpt": "ジョブ「{{job}}」の失敗箇所"
+    },
+    "jobs": {
+      "title": "ジョブ",
+      "none": "このパイプラインにはジョブがありません。",
+      "stage": "ステージ {{stage}}",
+      "attempt": "{{attempt}} 回目",
+      "needs": "待つジョブ: {{needs}}",
+      "log": "ログ",
+      "logOf": "ジョブ「{{job}}」のログ"
+    },
+    "log": {
+      "title": "ジョブ「{{job}}」のログ",
+      "attempt": "{{attempt}} 回目の実行のログです。",
+      "waiting": "まだログがありません。ジョブが始まると表示されます。",
+      "empty": "このジョブのログはありません。",
+      "truncated": "ログが長いため、途中までを表示しています。",
+      "live": "実行中のため、数秒ごとに更新しています。",
+      "more": "続きを読む",
+      "noSuchJob": "指定されたジョブはこのパイプラインにありません。"
+    },
+    "canceling": "取り消し中…",
+    "retrying": "再実行中…",
+    "cancelConfirm": "実行中のジョブを途中で止めます。取り消しますか？",
+    "cancelYes": "取り消しを確定",
+    "cancelNo": "やめる",
+    "span": "{{from}} – {{to}}"
   }
 }

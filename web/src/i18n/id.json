@@ -39,12 +39,24 @@
   },
   "home": {
     "title": "Beranda",
-    "mine": "Proyek Anda",
-    "groups": "Grup Anda",
     "recent": "Baru dilihat",
     "recentHint": "Hanya diingat di peramban ini.",
     "allProjects": "Lihat semua proyek",
-    "allGroups": "Lihat semua grup"
+    "work": "Pekerjaan Anda",
+    "cardAttention": "Merge request Anda yang perlu ditindak",
+    "cardApprovable": "Merge request menunggu persetujuan Anda",
+    "cardAuthored": "Merge request Anda",
+    "cardUnread": "Notifikasi belum dibaca",
+    "nextAttention": "Tidak ada konflik atau pemeriksaan yang gagal.",
+    "nextApprovable": "Merge request yang dapat Anda setujui muncul di sini.",
+    "nextAuthored": "Push sebuah branch dan buka merge request agar muncul di sini.",
+    "nextUnread": "Tidak ada notifikasi baru.",
+    "countUnknown": "Jumlahnya tidak dapat dibaca.",
+    "cardCount_one": "{{shown}} item",
+    "cardCount_other": "{{shown}} item",
+    "activity": "Aktivitas",
+    "activityAll": "Lihat semua aktivitas",
+    "activityLead": "Hingga 10 peristiwa terbaru di proyek Anda."
   },
   "nav": {
     "myWork": "Pekerjaan saya",
@@ -56,7 +68,53 @@
     "menu": "Menu",
     "projectMenu": "Menu proyek",
     "groupMenu": "Menu grup",
-    "showAll": "Lihat semua isinya"
+    "showAll": "Lihat semua isinya",
+    "mergeRequests": "Merge request",
+    "mrBadge": ", {{shown}} perlu ditindak",
+    "activity": "Aktivitas"
+  },
+  "myMrs": {
+    "title": "Merge request",
+    "explain": "Hanya merge request yang terbuka, dari proyek yang boleh Anda lihat.",
+    "attention": "Merge request Anda yang perlu ditindak",
+    "approvable": "Merge request menunggu persetujuan Anda",
+    "authored": "Merge request Anda",
+    "hintAttention": "Ada konflik atau pemeriksaan wajib yang gagal menunggu Anda.",
+    "hintApprovable": "Anda dapat menyetujui ini dan belum melakukannya (milik Anda sendiri tidak termasuk).",
+    "hintAuthored": "Anda membukanya dan masih terbuka.",
+    "more": "Muat lagi",
+    "moreShown": "{{n}} lagi ditampilkan.",
+    "draft": "Draf",
+    "updated": "Diperbarui {{time}}",
+    "reasonConflict": "Ada konflik",
+    "reasonConflictPredicted": "Mungkin konflik",
+    "reasonCheckFailed": "Pemeriksaan wajib gagal",
+    "reasonOther": "Perlu ditindak",
+    "summaryCount_one": "{{shown}} item",
+    "summaryCount_other": "{{shown}} item",
+    "countUnknown": "jumlah tidak diketahui"
+  },
+  "activity": {
+    "title": "Aktivitas",
+    "explain": "Yang terjadi di proyek tempat Anda menjadi anggota, terbaru lebih dulu. Peristiwa lama dihapus setelah masa simpan.",
+    "someone": "Seseorang",
+    "projectCreated": "{{actor}} membuat proyek",
+    "pushed_one": "{{actor}} melakukan push ke {{count}} branch atau tag",
+    "pushed_other": "{{actor}} melakukan push ke {{count}} branch atau tag",
+    "pushedNoCount": "{{actor}} melakukan push",
+    "mrOpened": "{{actor}} membuka merge request",
+    "mrClosed": "{{actor}} menutup merge request",
+    "mrReopened": "{{actor}} membuka kembali merge request",
+    "mrCommented": "{{actor}} mengomentari merge request",
+    "mrMerged": "{{actor}} menggabungkan merge request",
+    "mrApproved": "{{actor}} menyetujui merge request",
+    "other": "{{actor}} membuat perubahan di proyek",
+    "empty": "Belum ada aktivitas. Setelah Anda menjadi anggota proyek, yang terjadi di sana muncul di sini.",
+    "truncated": "Anda terlibat di banyak proyek: peristiwa dari sebagian proyek lama tidak ditampilkan.",
+    "more": "Muat lagi",
+    "moreShown": "{{n}} lagi ditampilkan.",
+    "noMore": "Tidak ada yang lebih lama.",
+    "dateUnknown": "Tanggal tidak diketahui"
   },
   "projects": {
     "title": "Proyek",
@@ -663,6 +721,7 @@
     "number": "!{{iid}}",
     "draft": "Draf",
     "opened": "Dibuat oleh {{author}} pada {{date}}",
+    "openedAgo": "Dibuat {{when}} oleh {{author}}",
     "branches": "{{source}} ke {{target}}",
     "state": {
       "open": "Terbuka",
@@ -700,7 +759,8 @@
       "overview": "Ringkasan",
       "changes": "Perubahan",
       "description": "Deskripsi",
-      "noDescription": "Tidak ada deskripsi."
+      "noDescription": "Tidak ada deskripsi.",
+      "threadCount": "Utas belum selesai: {{n}}"
     },
     "threads": {
       "title": "Utas",
@@ -821,6 +881,30 @@
       "running": "Berjalan",
       "success": "Berhasil",
       "failed": "Tidak berhasil ({{conclusion}})"
+    },
+    "side": {
+      "title": "Tentang merge request ini",
+      "approvals": "Persetujuan",
+      "approvalsNone": "Tidak diperlukan",
+      "approvedBy": "Disetujui oleh",
+      "notCounted": "{{name}} (tidak dihitung)",
+      "checks": "Pemeriksaan wajib",
+      "checksNone": "Tidak ada yang wajib",
+      "threads": "Utas",
+      "threadsCount": "{{open}} belum selesai dari {{total}}",
+      "threadsNone": "Tidak ada",
+      "versions": "Versi",
+      "latestHead": "Commit terbaru {{sha}}",
+      "workItem": "Item kerja",
+      "linked": "Tertaut",
+      "notLinked": "Tidak tertaut",
+      "updated": "Diperbarui",
+      "conditions": "Persetujuan dan pemeriksaan",
+      "approvalsMet": "Disetujui {{counted}}/{{required}}",
+      "approvalsNeeded": "Persetujuan {{counted}}/{{required}}, perlu {{missing}} lagi",
+      "checksPassed": "Pemeriksaan {{passed}}/{{total}} lolos",
+      "checksFailed": "{{failed}} gagal (pemeriksaan {{passed}}/{{total}} lolos)",
+      "checksPending": "{{pending}} berjalan atau menunggu (pemeriksaan {{passed}}/{{total}} lolos)"
     }
   },
   "webhooks": {
@@ -1172,7 +1256,8 @@
     "undecided": "Tidak dapat diprediksi.",
     "scanFailed": "Prediksi konflik tidak dapat dijalankan. Akan dijalankan lagi pada push berikutnya.",
     "scanIncomplete": "Tidak semua merge request lain dibandingkan.",
-    "scanStale": "Prediksi ini dibuat untuk versi atau target sebelumnya."
+    "scanStale": "Prediksi ini dibuat untuk versi atau target sebelumnya.",
+    "openPipeline": "Buka pipeline #{{id}}"
   },
   "docs": {
     "title": "Dokumen",
@@ -1232,5 +1317,108 @@
       "reload": "Muat ulang",
       "hidden": "Anda tidak punya akses, jadi hanya ID-nya yang ditampilkan."
     }
+  },
+  "pipelines": {
+    "title": "Pipeline",
+    "listLabel": "Daftar pipeline",
+    "pagerLabel": "Halaman pipeline",
+    "empty": "Belum ada pipeline. Tambahkan .forge-ci.yml di tingkat teratas repositori lalu push; hasilnya akan tampil di sini.",
+    "emptyAction": "Buka berkas",
+    "emptyPage": "Tidak ada pipeline di halaman ini.",
+    "newest": "Terbaru",
+    "older": "Pipeline lebih lama",
+    "number": "Pipeline #{{id}}",
+    "openCommit": "Buka commit {{sha}}",
+    "took": "durasi {{duration}}",
+    "backToList": "Kembali ke daftar pipeline",
+    "statusNow": "Status: {{status}}",
+    "openFailedLog": "Lihat log job gagal \"{{job}}\"",
+    "cancel": "Batalkan",
+    "retry": "Jalankan ulang",
+    "status": {
+      "pending": "Menunggu",
+      "running": "Berjalan",
+      "succeeded": "Berhasil",
+      "failed": "Gagal",
+      "canceled": "Dibatalkan",
+      "skipped": "Tidak ada yang dijalankan",
+      "invalid": "Definisi salah",
+      "error": "Gagal dibaca",
+      "created": "Menunggu giliran"
+    },
+    "source": {
+      "push": "push",
+      "mergeRequest": "Merge request",
+      "schedule": "Terjadwal",
+      "manual": "Manual"
+    },
+    "by": {
+      "system": "Otomatis",
+      "you": "Anda",
+      "user": "Pengguna #{{id}}"
+    },
+    "duration": {
+      "hours": "{{h}} jam {{m}} mnt",
+      "minutes": "{{m}} mnt {{s}} dtk",
+      "seconds": "{{s}} dtk"
+    },
+    "line": {
+      "succeeded": "Semua job berhasil.",
+      "skipped": "Tidak ada job yang perlu dijalankan untuk commit ini.",
+      "failed": "Berhenti karena ada job yang gagal. Periksa penyebab dan log, lalu push perbaikan.",
+      "failedRetry": "Berhenti karena ada job yang gagal. Periksa penyebabnya, lalu push perbaikan atau tekan \"Jalankan ulang\".",
+      "failedJob": "Berhenti karena job \"{{job}}\" gagal. Periksa penyebab dan log, lalu push perbaikan.",
+      "failedJobRetry": "Berhenti karena job \"{{job}}\" gagal. Periksa penyebabnya, lalu push perbaikan atau tekan \"Jalankan ulang\".",
+      "canceled": "Dibatalkan.",
+      "canceledRetry": "Dibatalkan. Tekan \"Jalankan ulang\" untuk menjalankan lagi job yang gagal dan dibatalkan.",
+      "invalid": "Tidak dijalankan: .forge-ci.yml berisi kesalahan. Perbaiki .forge-ci.yml di bagian yang ditunjukkan di bawah lalu push.",
+      "error": "Tidak dijalankan: .forge-ci.yml tidak dapat dibaca. Beri tahu administrator pipeline #{{id}} agar diperiksa.",
+      "pendingOperate": "Menunggu dimulai. Akan berjalan saat runner tersedia. Untuk menghentikannya, tekan \"Batalkan\".",
+      "pendingAsk": "Menunggu dimulai. Akan berjalan saat runner tersedia. Jika perlu dihentikan, minta Developer atau lebih tinggi di proyek ini.",
+      "runningOperate": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Untuk menghentikannya, tekan \"Batalkan\".",
+      "runningAsk": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Jika perlu dihentikan, minta Developer atau lebih tinggi di proyek ini."
+    },
+    "problems": {
+      "title": "Kesalahan di .forge-ci.yml",
+      "line": "Baris {{line}}",
+      "file": "Seluruh berkas"
+    },
+    "diagnosis": {
+      "title": "Penyebab kegagalan",
+      "none": "Belum ada job gagal yang tercatat.",
+      "pending": "Menganalisis kegagalan. Akan tampil dalam beberapa detik.",
+      "job": "Job \"{{job}}\" (tahap {{stage}})",
+      "seen": "Kegagalan yang sama terjadi {{count}} kali di proyek ini.",
+      "seenSince": "Kegagalan yang sama terjadi {{count}} kali di proyek ini (pertama {{date}}).",
+      "knownFixes": "Kegagalan yang sama diperbaiki oleh:",
+      "fix": "!{{iid}} {{title}}",
+      "openLog": "Lihat log job \"{{job}}\"",
+      "excerpt": "Baris gagal job \"{{job}}\""
+    },
+    "jobs": {
+      "title": "Job",
+      "none": "Pipeline ini tidak memiliki job.",
+      "stage": "Tahap {{stage}}",
+      "attempt": "percobaan ke-{{attempt}}",
+      "needs": "menunggu: {{needs}}",
+      "log": "Log",
+      "logOf": "Log job \"{{job}}\""
+    },
+    "log": {
+      "title": "Log job \"{{job}}\"",
+      "attempt": "Ini log percobaan ke-{{attempt}}.",
+      "waiting": "Belum ada log. Akan tampil saat job dimulai.",
+      "empty": "Job ini tidak memiliki log.",
+      "truncated": "Log terlalu panjang; hanya bagian awal yang ditampilkan.",
+      "live": "Sedang berjalan: diperbarui setiap beberapa detik.",
+      "more": "Muat lagi",
+      "noSuchJob": "Pipeline ini tidak memiliki job tersebut."
+    },
+    "canceling": "Membatalkan…",
+    "retrying": "Menjalankan ulang…",
+    "cancelConfirm": "Ini menghentikan job yang sedang berjalan. Batalkan pipeline?",
+    "cancelYes": "Ya, batalkan",
+    "cancelNo": "Biarkan berjalan",
+    "span": "{{from}} – {{to}}"
   }
 }

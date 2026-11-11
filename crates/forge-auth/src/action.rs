@@ -217,6 +217,24 @@ actions! {
     /// `POST /api/v1/user/notifications/{id}/read` and `…/read-all`: mark
     /// one's own read.
     NotificationInboxUpdate,
+    /// `GET /api/v1/user/merge-requests` and `…/counts` (plan 15 MR 6): the
+    /// merge requests of one's own work across projects (authored,
+    /// approvable, needing attention). Only the person: another user's are
+    /// not found, administrators included; each row is decided again on
+    /// `MergeRequestRead` (and an approvable one on `MergeRequestApprove`)
+    /// when it is listed or counted.
+    UserMergeRequestList,
+    /// `GET /api/v1/user/activity` (plan 15 MR 8): the recent events of the
+    /// projects one is involved in. The route (`Resource::UserActivity`):
+    /// only the person, people only (an agent's token, a service account
+    /// and a bot are refused; act-as and CI credentials too); another
+    /// user's is not found, administrators included. Each event is decided
+    /// again per project and visibility class (`Resource::ProjectEvents`):
+    /// the integration class only, Reporter and above by role
+    /// (administrator rights pass the role, as everywhere: an administrator
+    /// sees the events of every project they hold a membership in, a Guest
+    /// one included). `read_api`.
+    ActivityRead,
     UserCreate,
     /// `POST /api/v1/admin/users/{id}/disable` (M2 MR6): administrators,
     /// never an agent; the administration guard always holds over HTTP
@@ -576,6 +594,8 @@ impl Action {
                 | Action::CheckNamespaceGrantManage
                 | Action::IntegrationManage
                 | Action::IntegrationRead
+                // Plan 15 MR 8: the activity list is a person's.
+                | Action::ActivityRead
                 | Action::IntegrationBindingManage
                 | Action::IntegrationBindingRemove
                 | Action::ActAsConfirmView
@@ -646,6 +666,8 @@ impl Action {
             | Action::TokenList
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
+            | Action::UserMergeRequestList
+            | Action::ActivityRead
             | Action::AdminSessionList
             | Action::UserSearch
             | Action::UserAdminList
@@ -819,6 +841,8 @@ impl Action {
             | Action::ContextRead
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
+            | Action::UserMergeRequestList
+            | Action::ActivityRead
             | Action::NotificationPreferencesWrite
             | Action::NotificationInboxUpdate
             | Action::WebhookRead
@@ -948,6 +972,8 @@ impl Action {
             | Action::ContextRead
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
+            | Action::UserMergeRequestList
+            | Action::ActivityRead
             | Action::NotificationPreferencesWrite
             | Action::NotificationInboxUpdate
             | Action::WebhookRead

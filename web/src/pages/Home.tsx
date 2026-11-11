@@ -1,126 +1,218 @@
-// Home (plan 10 §4.2): my projects (the ones I hold a role in) with a filter
-// (MyProjects, shared with /-/projects; plan 15 MR 7 reshapes Home),
-// my groups and what I looked at recently (this browser only).
-// No "coming soon" frames: a section appears when it has something to show,
-// the main list always shows its loading / empty / error state.
-import { useQuery } from '@tanstack/react-query';
-import { useMemo, useState, type ReactNode } from 'react';
+// Home (plan 15 §3.3, MR 7): count cards for what waits on me (my merge
+// requests that need action, the ones waiting for my approval, my open ones,
+// unread notifications), each a link to its list; then the latest 10
+// events of my projects (MR 9; headed "Activity", the sidebar's name, all of
+// them on /-/activity); then what I looked at recently (this browser only). The projects I take part in moved to
+// /-/projects (a small link here); groups live on /-/groups.
+// A card's link is named by its label and number only; what the card says
+// besides (the next step when it is 0, loading, unknown) is its description
+// (plan 08: one line, not a bare "0"). A card that waits on me (needs action,
+// waiting for my approval) stands out when it is not 0.
+import { useId, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
-import { useApi } from '../api/context';
-import { groupsQuery, projectsQuery } from '../api/lists';
-import type { All } from '../api/pages';
-import controls from '../components/controls.module.css';
+import { useRecentActivity } from '../api/activity';
+import { useUnreadCount } from '../api/notifications';
+import { isNone, mrCountText, useUserMrCounts } from '../api/userMergeRequests';
+import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
-import { CreateGroupDialog, CreateProjectDialog } from '../features/CreateDialogs';
-import { GroupList } from '../features/Lists';
-import { MyProjects } from '../features/MyProjects';
+import { ActivityItem } from '../features/ActivityItem';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
-import { useSession } from '../session/session';
 import styles from './Home.module.css';
 
-/** `all`: the "see all" link to the full screen (plan 15 sidebar pages). */
-function Block({
-  id,
-  title,
-  all,
-  children,
-}: {
-  id: string;
-  title: string;
-  all?: { to: string; label: string };
-  children: ReactNode;
-}) {
+function Block({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section aria-labelledby={id} className={styles.block}>
-      <div className={styles.blockTop}>
-        <h2 id={id} className={styles.heading}>
-          {title}
-        </h2>
-        {all && (
-          <Link to={all.to} className={styles.all}>
-            {all.label}
-          </Link>
-        )}
-      </div>
+      <h2 id={id} className={styles.heading}>
+        {title}
+      </h2>
       {children}
     </section>
   );
 }
 
-function Truncated({ all }: { all: All<unknown> }) {
+/** A count as the API gives it (the unread count has no `truncated`). */
+type CardCount = { count: number; capped: boolean; truncated?: boolean };
+
+/** What a card knows: its number, nothing yet, or that it could not be read. */
+type CardValue =
+  | { status: 'pending' }
+  | { status: 'error' }
+  | { status: 'success'; count: CardCount };
+
+function Card({
+  to,
+  label,
+  next,
+  value,
+  waitsOnMe = false,
+}: {
+  to: string;
+  label: string;
+  next: string;
+  value: CardValue;
+  /** Stands out when not 0 (it waits on me). */
+  waitsOnMe?: boolean;
+}) {
   const { t } = useTranslation();
-  return all.truncated ? <p className={styles.hint}>{t('common.truncated')}</p> : null;
+  const descriptionId = useId();
+  let count: ReactNode = null;
+  let description: string | null = null;
+  let emphasis = false;
+  if (value.status === 'pending') {
+    description = t('common.loading');
+  } else if (value.status === 'error') {
+    description = t('home.countUnknown');
+  } else {
+    const n = value.count.count;
+    const shown = mrCountText(value.count);
+    const spoken = <span className={styles.srOnly}>{t('home.cardCount', { count: n, shown })}</span>;
+    if (isNone(value.count)) {
+      count = spoken;
+      description = next;
+    } else {
+      emphasis = waitsOnMe;
+      count = (
+        <>
+          <span className={styles.cardCount} aria-hidden="true">
+            {shown}
+          </span>
+          {spoken}
+        </>
+      );
+    }
+  }
+  return (
+    <li className={emphasis ? `${styles.card} ${styles.cardWaiting}` : styles.card}>
+      <Link
+        to={to}
+        className={styles.cardLink}
+        {...(description === null ? {} : { 'aria-describedby': descriptionId })}
+      >
+        <span className={styles.cardLabel}>{label}</span> {count}
+      </Link>
+      {description !== null && (
+        <p id={descriptionId} className={styles.cardNext}>
+          {description}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** A query's state as a card's value (a later failed poll keeps the last number). */
+function valueOf<T>(query: { status: 'pending' | 'error' | 'success'; data: T | undefined }, pick: (data: T) => CardCount): CardValue {
+  if (query.data !== undefined) return { status: 'success', count: pick(query.data) };
+  return query.status === 'error' ? { status: 'error' } : { status: 'pending' };
+}
+
+/** The latest events (plan 15 §3.3: 10), and the way to all of them. */
+function RecentActivity() {
+  const { t } = useTranslation();
+  const recent = useRecentActivity();
+  const events = recent.data?.events ?? [];
+  return (
+    <Block id="home-activity" title={t('home.activity')}>
+      <p className={styles.lead}>{t('home.activityLead')}</p>
+      {recent.isPending && <Loading />}
+      {recent.isError && (
+        <QueryError
+          error={recent.error}
+          onRetry={() => {
+            void recent.refetch();
+          }}
+        />
+      )}
+      {recent.isSuccess && events.length === 0 && <p className={styles.hint}>{t('activity.empty')}</p>}
+      {events.length > 0 && (
+        <ul className={styles.activity}>
+          {events.map((e) => (
+            <ActivityItem key={e.seq} event={e} />
+          ))}
+        </ul>
+      )}
+      <p className={styles.activityAll}>
+        <Link to="/-/activity">{t('home.activityAll')}</Link>
+      </p>
+    </Block>
+  );
 }
 
 export function Home() {
   const { t } = useTranslation();
-  const api = useApi();
-  const { user } = useSession();
   useDocumentTitle(t('home.title'));
-  const [dialog, setDialog] = useState<'project' | 'group' | null>(null);
   const recent = useMemo(() => readRecent(), []);
-
-  // The same query as MyProjects (one request, shared cache): when it fails,
-  // its error is the one the page shows.
-  const mine = useQuery(projectsQuery(api, { membership: true }));
-  const groups = useQuery(groupsQuery(api, { membership: true }));
+  // The same queries as the sidebar's badge and the header's bell (one
+  // request each, shared cache).
+  const counts = useUserMrCounts();
+  const unread = useUnreadCount();
+  const countsFailed = counts.isError && counts.data === undefined;
+  const unreadFailed = unread.isError && unread.data === undefined;
 
   return (
     <>
       <div className={styles.top}>
         <h1 className={styles.title}>{t('home.title')}</h1>
-        <div className={styles.actions}>
-          <button
-            type="button"
-            className={controls.primary}
-            onClick={() => {
-              setDialog('project');
-            }}
-          >
-            {t('projects.new')}
-          </button>
-          {/* Only an administrator may create a top-level group (as /-/groups). */}
-          {user.is_admin && (
-            <button
-              type="button"
-              className={controls.button}
-              onClick={() => {
-                setDialog('group');
-              }}
-            >
-              {t('groups.new')}
-            </button>
-          )}
-        </div>
       </div>
 
-      <Block id="home-mine" title={t('home.mine')} all={{ to: '/-/projects', label: t('home.allProjects') }}>
-        <MyProjects
-          onCreate={() => {
-            setDialog('project');
-          }}
-        />
-      </Block>
-
-      {!mine.isError && groups.isError && (
-        <Block id="home-groups" title={t('home.groups')}>
+      <Block id="home-work" title={t('home.work')}>
+        <ul className={styles.cards}>
+          <Card
+            to="/-/merge-requests?scope=attention"
+            label={t('home.cardAttention')}
+            next={t('home.nextAttention')}
+            value={valueOf(counts, (c) => c.attention)}
+            waitsOnMe
+          />
+          <Card
+            to="/-/merge-requests?scope=approvable"
+            label={t('home.cardApprovable')}
+            next={t('home.nextApprovable')}
+            value={valueOf(counts, (c) => c.approvable)}
+            waitsOnMe
+          />
+          <Card
+            to="/-/merge-requests?scope=authored"
+            label={t('home.cardAuthored')}
+            next={t('home.nextAuthored')}
+            value={valueOf(counts, (c) => c.authored)}
+          />
+          <Card
+            to="/-/notifications?unread=1"
+            label={t('home.cardUnread')}
+            next={t('home.nextUnread')}
+            value={valueOf(unread, (u) => u)}
+          />
+        </ul>
+        {/* One failure notice for the cards: the merge request counts' when
+            they failed (its retry asks for the unread count too), else the
+            unread count's. */}
+        {countsFailed && (
           <QueryError
-            error={groups.error}
+            error={counts.error}
             onRetry={() => {
-              void groups.refetch();
+              void counts.refetch();
+              if (unreadFailed) void unread.refetch();
             }}
           />
-        </Block>
-      )}
-      {groups.isSuccess && groups.data.items.length > 0 && (
-        <Block id="home-groups" title={t('home.groups')} all={{ to: '/-/groups', label: t('home.allGroups') }}>
-          <GroupList items={groups.data.items} />
-          <Truncated all={groups.data} />
-        </Block>
-      )}
+        )}
+        {!countsFailed && unreadFailed && (
+          <QueryError
+            error={unread.error}
+            onRetry={() => {
+              void unread.refetch();
+            }}
+          />
+        )}
+      </Block>
+
+      <p className={styles.projectsLink}>
+        <Link to="/-/projects">{t('home.allProjects')}</Link>
+      </p>
+
+      <RecentActivity />
 
       {recent.length > 0 && (
         <Block id="home-recent" title={t('home.recent')}>
@@ -133,21 +225,6 @@ export function Home() {
           </ul>
           <p className={styles.hint}>{t('home.recentHint')}</p>
         </Block>
-      )}
-
-      <CreateProjectDialog
-        open={dialog === 'project'}
-        onClose={() => {
-          setDialog(null);
-        }}
-      />
-      {user.is_admin && (
-        <CreateGroupDialog
-          open={dialog === 'group'}
-          onClose={() => {
-            setDialog(null);
-          }}
-        />
       )}
     </>
   );

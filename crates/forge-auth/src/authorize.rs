@@ -655,6 +655,50 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::NotificationInboxUpdate,
             Resource::NotificationPreferences { owner },
         ) => own_preferences(*owner),
+        // Plan 15 MR 6: the merge requests of a person's own work, for
+        // nobody else — an administrator included. Each listed row is
+        // decided again on `MergeRequestRead` (an approvable one also on
+        // `MergeRequestApprove`) by forge-review.
+        (Action::UserMergeRequestList, Resource::UserMergeRequests { owner }) => {
+            if *owner == user {
+                Ok(())
+            } else {
+                Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_merge_request_list"))
+            }
+        }
+        // Plan 15 MR 8: the recent events of the projects a person is
+        // involved in, for nobody else — an administrator included — and
+        // for people only (an agent's token, a service account and a bot
+        // are refused; act-as and CI credentials never reach here). Each
+        // listed event is decided again below, per project and class.
+        (Action::ActivityRead, Resource::UserActivity { owner }) => {
+            if *owner != user {
+                return Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_activity"));
+            }
+            people_only()
+        }
+        // One project's events of one class for the activity list
+        // (visibility and pending deletion were decided above:
+        // FG-REPO-0005 / FG-REPO-0006): people only, the integration class
+        // only (never the maintainer, deployment or admin class, whatever
+        // the role), Reporter and above by role — an internal project the
+        // person merely reads is not one they are involved in. As in every
+        // `need`, administrator rights pass the role: an administrator sees
+        // every project they hold a membership in, a Guest one included.
+        (Action::ActivityRead, Resource::ProjectEvents { project, class }) => {
+            people_only()?;
+            match class {
+                forge_core::VisibilityClass::Integration => {}
+                forge_core::VisibilityClass::Maintainer
+                | forge_core::VisibilityClass::Deployment
+                | forge_core::VisibilityClass::Admin => {
+                    return Err(
+                        refused("class_not_in_activity").with_context("class", class.as_str())
+                    )
+                }
+            }
+            need(Role::Reporter, project.role)
+        }
 
         (Action::UserCreate | Action::UserAdminList | Action::Metrics, Resource::Instance) => {
             admin_only()
@@ -1336,6 +1380,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::TokenRevoke
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
+            | Action::UserMergeRequestList
+            | Action::ActivityRead
             | Action::NotificationPreferencesWrite
             | Action::NotificationInboxUpdate
             | Action::UserCreate
@@ -1427,6 +1473,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::VisibilityChange { .. }
             | Resource::Token { .. }
             | Resource::NotificationPreferences { .. }
+            | Resource::UserMergeRequests { .. }
+            | Resource::UserActivity { .. }
             | Resource::Session { .. }
             | Resource::TokenRequest { .. }
             | Resource::Admission { .. }
@@ -1525,6 +1573,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Namespace { .. }
         | Resource::Token { .. }
         | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. } | Resource::UserActivity { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }
@@ -1583,6 +1632,8 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
         | Resource::NotificationPreferences { .. }
+        | Resource::UserMergeRequests { .. }
+        | Resource::UserActivity { .. }
         | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }

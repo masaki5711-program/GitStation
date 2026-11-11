@@ -17,6 +17,25 @@ export interface Call {
 
 export type Handler = (call: Call) => Response | Promise<Response>;
 
+/** The merge request counts the sidebar's "My work" badge reads on every
+ * page outside a project or group (plan 15 MR 7). */
+export const MR_COUNTS_PATH = '/api/v1/user/merge-requests/counts';
+/** The caller's activity: Home's "recent updates" and /-/activity (plan 15 MR 9). */
+export const ACTIVITY_PATH = '/api/v1/user/activity';
+export const MR_COUNTS_ZERO = {
+  authored: { count: 0, capped: false, truncated: false },
+  approvable: { count: 0, capped: false, truncated: false },
+  attention: { count: 0, capped: false, truncated: false },
+};
+
+/** Answered when a test's table has no route of its own for them: the
+ * requests a page makes as a side effect of its frame, not of its content. */
+const defaults: Record<string, Handler> = {
+  [`GET ${MR_COUNTS_PATH}`]: () => json(200, MR_COUNTS_ZERO),
+  // Home's "recent updates" (plan 15 MR 9).
+  [`GET ${ACTIVITY_PATH}`]: () => json(200, { events: [], next_before: null, truncated: false }),
+};
+
 export function mockServer(routes: Record<string, Handler>) {
   const calls: Call[] = [];
   const unmatched: string[] = [];
@@ -36,7 +55,7 @@ export function mockServer(routes: Record<string, Handler>) {
       body,
     };
     calls.push(call);
-    const handler = routes[`${req.method} ${url.pathname}`];
+    const handler = routes[`${req.method} ${url.pathname}`] ?? defaults[`${req.method} ${url.pathname}`];
     if (handler === undefined) {
       unmatched.push(`${req.method} ${url.pathname}`);
       return json(500, {
@@ -135,8 +154,9 @@ export const REFS_FILLED = {
 /** The unread count the header's bell polls on every signed-in page. */
 export const BELL_PATH = '/api/v1/user/notifications/unread-count';
 
-/** The paths a test asked for, the bell's poll left out. */
-export const askedPaths = (calls: Call[]) => calls.map((c) => c.path).filter((p) => p !== BELL_PATH);
+/** The paths a test asked for, the bell's poll and the sidebar's counts left out. */
+export const askedPaths = (calls: Call[]) =>
+  calls.map((c) => c.path).filter((p) => p !== BELL_PATH && p !== MR_COUNTS_PATH);
 
 /** The routes every signed-in page needs; spread into a test's table (the
  * header's notification bell polls the unread count, M3 U4). */
