@@ -9,7 +9,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forge_auth::{ResourceCtx, UnresolvedCtx, UnresolvedReason};
-use forge_core::{parse_positive_id, Role};
+use forge_core::{parse_positive_id, Role, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_hosting::{Hosting, WriteRequest};
 use serde::Serialize;
@@ -67,6 +67,28 @@ pub(crate) fn absent_because<R>(why: &'static str) -> Lookup<R> {
     Lookup::Unresolved {
         ctx: UnresolvedCtx::new(UnresolvedReason::Absent),
         why: Some(why),
+    }
+}
+
+/// The caller's own resource (`/api/v1/user/*`). A runner's or a job's
+/// credential has no user (the guard lets it through by design): there is
+/// nothing of theirs, so the lookup is absent with `why` and `authorize()`
+/// refuses it (its CI arm first, `FG-AUTH-0003`) instead of an internal
+/// error here.
+pub(crate) fn own<R>(
+    viewer: Option<UserId>,
+    why: &'static str,
+    ctx: impl FnOnce(UserId) -> R,
+) -> Lookup<R> {
+    match viewer {
+        Some(me) => Lookup::Found {
+            ctx: ctx(me),
+            canonical: None,
+            tombstone: None,
+            project: None,
+            group: None,
+        },
+        None => absent_because(why),
     }
 }
 
