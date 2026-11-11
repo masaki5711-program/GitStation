@@ -180,6 +180,195 @@ async fn the_shell_is_byte_identical_for_every_path_by_hash() {
     assert_common(&first, "shell");
 }
 
+// ── every client page has a server shell route ───────────────────────────
+//
+// Twice a client page shipped without its server WebShell route, so a reload
+// or a pasted link answered 404 (`/-/projects`, `/-/groups`;
+// `/{project}/-/webhooks`). This gate reads the SPA's own route tables at
+// test time and asks the product router for each of them.
+
+/// The SPA's top-level routes (`<Route path="…">`).
+const APP_ROUTES: &str = "web/src/App.tsx";
+/// The project screen words (`const SCREEN_WORDS = [ … ]`).
+const PROJECT_VIEWS: &str = "web/src/pages/repo/RepoViews.tsx";
+/// The group / user screen words (`word === '…'`).
+const NAMESPACE_VIEWS: &str = "web/src/pages/Namespace.tsx";
+
+/// Screen words the SPA routes that the server does not serve its shell for
+/// yet: `("project:<word>" | "namespace:<word>", reason)`. An entry the
+/// server serves fails the gate (remove it then).
+const CLIENT_ONLY: &[(&str, &str)] = &[("project:webhooks", "fixed by feat/ui-pipelines")];
+
+/// A web source file, read relative to this crate (`Git/web/src/…`).
+fn web_source(rel: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel);
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {} ({e})", path.display()))
+}
+
+/// Every literal between `open` and the next `close` in `text`.
+fn literals_after<'a>(text: &'a str, open: &str, close: char) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(open) {
+        rest = &rest[at + open.len()..];
+        let Some(end) = rest.find(close) else { break };
+        out.push(&rest[..end]);
+        rest = &rest[end + close.len_utf8()..];
+    }
+    out
+}
+
+/// The SPA's top-level page URLs, a sample per pattern (`:param` → `1`, a
+/// trailing `/*` dropped). The catch-alls (`*`, `-/*`) are not pages.
+fn client_top_level_urls() -> Vec<String> {
+    let src = web_source(APP_ROUTES);
+    let patterns = literals_after(&src, "path=\"", '"');
+    assert!(
+        patterns.contains(&"-/projects"),
+        "{APP_ROUTES}: no `path=\"…\"` routes found - has the router moved? Update this gate."
+    );
+    patterns
+        .into_iter()
+        .filter(|p| *p != "*" && *p != "-/*")
+        .map(|p| {
+            let p = p.strip_suffix("/*").unwrap_or(p);
+            let segments: Vec<&str> = p
+                .split('/')
+                .map(|s| if s.starts_with(':') { "1" } else { s })
+                .collect();
+            format!("/{}", segments.join("/"))
+        })
+        .collect()
+}
+
+/// The words of `const SCREEN_WORDS = [ … ]` in the project views.
+fn client_project_words() -> Vec<String> {
+    let src = web_source(PROJECT_VIEWS);
+    let start = src.find("const SCREEN_WORDS = [").unwrap_or_else(|| {
+        panic!("{PROJECT_VIEWS}: no `const SCREEN_WORDS = [` - update this gate")
+    });
+    let list = &src[start..];
+    let end = list
+        .find(']')
+        .unwrap_or_else(|| panic!("{PROJECT_VIEWS}: SCREEN_WORDS does not close"));
+    literals_after(&list[..end], "'", '\'')
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The words a group or a user namespace routes (`word === '…'`).
+fn client_namespace_words() -> Vec<String> {
+    let src = web_source(NAMESPACE_VIEWS);
+    let mut words: Vec<String> = literals_after(&src, "word === '", '\'')
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    words.sort();
+    words.dedup();
+    words
+}
+
+/// Whether the product router answers `uri` with the shell's bytes.
+async fn serves_shell(uri: &str) -> bool {
+    let a = get(uri).await;
+    a.status == StatusCode::OK && sha256(&a.bytes) == sha256(crate::ui::shell_html())
+}
+
+/// Whether `word` is in the server's `list` and `uri` answers the shell.
+async fn word_served(word: &str, list: &[forge_core::web_path::RouteWord], uri: &str) -> bool {
+    let listed = forge_core::web_path::RouteWord::parse(word).is_some_and(|w| list.contains(&w));
+    listed && serves_shell(uri).await
+}
+
+#[tokio::test]
+async fn every_client_page_url_is_served_by_the_server_shell() {
+    use crate::app::{GROUP_SHELL_WORDS, PROJECT_SHELL_WORDS};
+    let mut missing = Vec::new();
+    let mut served_allowlisted = Vec::new();
+    let allowlisted = |key: &str| CLIENT_ONLY.iter().any(|(k, _)| *k == key);
+
+    for url in client_top_level_urls() {
+        if !serves_shell(&url).await {
+            missing.push(format!(
+                "{url} (from {APP_ROUTES}): register a WebShell route for it in \
+                 crates/forge-web/src/app.rs (next to MY_MERGE_REQUESTS_PAGE) and add it \
+                 to SHELL_PATHS in crates/forge-web/src/web_ui_tests.rs"
+            ));
+        }
+    }
+    for word in client_project_words() {
+        let key = format!("project:{word}");
+        let uri = format!("/acme/x/-/{word}");
+        let served = word_served(&word, PROJECT_SHELL_WORDS, &uri).await;
+        match (served, allowlisted(&key)) {
+            (true, true) => served_allowlisted.push(key),
+            (false, false) => missing.push(format!(
+                "{uri} (screen word `{word}` in {PROJECT_VIEWS}): add it to \
+                 PROJECT_SHELL_WORDS in crates/forge-web/src/app.rs (and to RouteWord / \
+                 RouteWord::ALL in crates/forge-core/src/web_path.rs if it is new), or \
+                 list `{key}` in CLIENT_ONLY with a reason"
+            )),
+            _ => {}
+        }
+    }
+    for word in client_namespace_words() {
+        let key = format!("namespace:{word}");
+        let uri = format!("/acme/-/{word}");
+        let served = word_served(&word, GROUP_SHELL_WORDS, &uri).await;
+        match (served, allowlisted(&key)) {
+            (true, true) => served_allowlisted.push(key),
+            (false, false) => missing.push(format!(
+                "{uri} (namespace word `{word}` in {NAMESPACE_VIEWS}): add it to \
+                 GROUP_SHELL_WORDS in crates/forge-web/src/app.rs (and to RouteWord in \
+                 crates/forge-core/src/web_path.rs if it is new), or list `{key}` in \
+                 CLIENT_ONLY with a reason"
+            )),
+            _ => {}
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "client pages without a server shell route (a reload or a pasted link would \
+         answer 404):\n{}",
+        missing.join("\n")
+    );
+    assert!(
+        served_allowlisted.is_empty(),
+        "CLIENT_ONLY entries the server now serves - remove them from CLIENT_ONLY in \
+         crates/forge-web/src/web_ui_tests.rs: {served_allowlisted:?}"
+    );
+}
+
+/// The gate's parsers find what the SPA routes today (a parser that finds
+/// nothing would pass everything).
+#[test]
+fn the_shell_route_gate_reads_the_spa_route_tables() {
+    let top = client_top_level_urls();
+    for url in [
+        "/-/projects",
+        "/-/groups",
+        "/-/merge-requests",
+        "/-/notifications",
+        "/-/projects/1",
+        "/-/confirm/projects/1/merge-requests/1",
+    ] {
+        assert!(top.iter().any(|u| u == url), "{url} not in {top:?}");
+    }
+    assert!(!top.iter().any(|u| u == "/*" || u == "/-"), "{top:?}");
+    let project = client_project_words();
+    for word in ["tree", "blob", "tags", "pulls", "settings", "documents"] {
+        assert!(
+            project.iter().any(|w| w == word),
+            "{word} not in {project:?}"
+        );
+    }
+    assert_eq!(client_namespace_words(), ["members", "settings"]);
+}
+
 /// ADR-0025 §5.4: the confirmation popup cannot be framed - `frame-ancestors
 /// 'none'` (modern) and `X-Frame-Options: DENY` (old browsers), on the page
 /// itself, on HEAD, with a state in the query, and on every other class but
