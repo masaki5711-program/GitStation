@@ -38,6 +38,23 @@
 //! - The job's token is never in the container's environment.
 //! - A timeout or a cancel: `podman kill`; then always `podman rm
 //!   --force` (the container is removed whatever happened).
+//!
+//! A job with `services` (plan 14 C5s, ADR-0029 amendment) runs in a pod:
+//!
+//! ```text
+//! podman pod create --name=forge-job-<job>-<attempt> --network=none
+//! podman create --pod=<pod> --name=forge-job-<job>-<attempt>-svc-<name> <the same
+//!   confinement and limits> [--user=<user>] [--tmpfs=<path>:…,mode=1777]…
+//!   [--env=K=V]… -- <service image@sha256:…>
+//! podman start -- <service container>                (each service, detached)
+//! podman create --name=forge-job-<job>-<attempt> --pod=<pod> … (the job, as above)
+//! podman pod rm --force --ignore --time=0 -- <pod>    (always)
+//! ```
+//!
+//! The pod's network namespace holds only a loopback: services and the job
+//! reach each other on `127.0.0.1`, and nothing else. Pod and container
+//! names are separate in Podman, so the pod shares the job container's
+//! name.
 
 use std::path::{Path, PathBuf};
 
@@ -116,6 +133,15 @@ pub fn container_name(job: i64, attempt: i32) -> String {
     format!("forge-job-{job}-{attempt}")
 }
 
+/// `forge-job-<job>-<attempt>-svc-<service>`: a service's container in the
+/// job's pod (the service name is forge-ci's `[a-z][a-z0-9-]{0,30}`).
+pub fn service_container_name(job: i64, attempt: i32, service: &str) -> String {
+    format!("forge-job-{job}-{attempt}-svc-{service}")
+}
+
+/// The lines of a service's log appended to a failed job's log.
+pub const SERVICE_LOG_LINES: u32 = 50;
+
 /// Builds the Podman calls.
 #[derive(Debug, Clone)]
 pub struct PodmanPlan {
@@ -137,6 +163,21 @@ pub struct Container<'a> {
     pub pipeline_id: i64,
     pub project_id: i64,
     pub sha: &'a str,
+    /// The job's pod when it has services: the container joins it (and
+    /// its `--network=none` namespace) instead of getting its own.
+    pub pod: Option<&'a str>,
+}
+
+/// What one service container runs (plan 14 C5s): the image's own
+/// entrypoint, in the job's pod.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceContainer<'a> {
+    pub pod: &'a str,
+    pub name: &'a str,
+    pub image: &'a str,
+    pub env: &'a [(String, String)],
+    pub user: Option<&'a str>,
+    pub tmpfs: &'a [String],
 }
 
 impl PodmanPlan {
@@ -173,32 +214,19 @@ impl PodmanPlan {
     /// `podman create …` (module docs; its stdout is the container id).
     /// The caller checked [`PodmanPlan::image_allowed`].
     pub fn create(&self, c: &Container<'_>) -> Cmd {
-        // The configuration checked the size; 4 GiB if it did not.
-        let fsize = size_bytes(&self.limits.file_size).unwrap_or(4 << 30);
         let mut work = std::ffi::OsString::from("--volume=");
         work.push(c.work);
         work.push(":/workspace:rw,Z");
         let mut script = std::ffi::OsString::from("--volume=");
         script.push(c.script_dir);
         script.push(":/forge:ro,Z");
-        self.cmd()
-            .arg("create")
-            .arg(format!("--name={}", c.name))
-            .arg("--network=none")
-            .arg("--read-only")
-            .arg(format!(
-                "--tmpfs=/tmp:rw,nosuid,nodev,size={}",
-                self.limits.tmpfs
-            ))
-            .arg("--security-opt=no-new-privileges")
-            .arg("--cap-drop=all")
-            .arg(format!("--pids-limit={}", self.limits.pids))
-            .arg(format!("--memory={}", self.limits.memory))
-            // No swap on top of the memory limit.
-            .arg(format!("--memory-swap={}", self.limits.memory))
-            .arg(format!("--ulimit=fsize={fsize}:{fsize}"))
-            .arg(format!("--ulimit=nofile={n}:{n}", n = self.limits.nofile))
-            .arg("--pull=missing")
+        let cmd = self.cmd().arg("create").arg(format!("--name={}", c.name));
+        // In a pod the network namespace is the pod's (`--network=none`).
+        let cmd = match c.pod {
+            Some(pod) => cmd.arg(format!("--pod={pod}")),
+            None => cmd.arg("--network=none"),
+        };
+        self.confined(cmd)
             .arg(work)
             .arg(script)
             .arg("--workdir=/workspace")
@@ -212,6 +240,133 @@ impl PodmanPlan {
             .arg(c.image)
             .arg("-eu")
             .arg(SCRIPT_IN_CONTAINER)
+            .captured()
+    }
+
+    /// The flags every container of a job gets (the job's and its
+    /// services'): a read-only root with a bounded `/tmp`, no capabilities,
+    /// no new privileges, the same memory, process, file-size and open-file
+    /// limits.
+    fn confined(&self, cmd: Cmd) -> Cmd {
+        // The configuration checked the size; 4 GiB if it did not.
+        let fsize = size_bytes(&self.limits.file_size).unwrap_or(4 << 30);
+        cmd.arg("--read-only")
+            .arg(format!(
+                "--tmpfs=/tmp:rw,nosuid,nodev,size={}",
+                self.limits.tmpfs
+            ))
+            .arg("--security-opt=no-new-privileges")
+            .arg("--cap-drop=all")
+            .arg(format!("--pids-limit={}", self.limits.pids))
+            .arg(format!("--memory={}", self.limits.memory))
+            // No swap on top of the memory limit.
+            .arg(format!("--memory-swap={}", self.limits.memory))
+            .arg(format!("--ulimit=fsize={fsize}:{fsize}"))
+            .arg(format!("--ulimit=nofile={n}:{n}", n = self.limits.nofile))
+            .arg("--pull=missing")
+    }
+
+    /// `podman pod create --name=<pod> --network=none`: the job's pod when
+    /// it has services. Its containers share one network namespace that
+    /// holds only a loopback (ADR-0029 amendment).
+    ///
+    /// The pod's cgroup gets the job's memory limit (without extra swap):
+    /// each container keeps its own limits, and the pod as a whole — job
+    /// and services together — cannot use more memory than one job may
+    /// (security review). Podman has no `--pids-limit` on a pod: the
+    /// process limit stays per container (at most 3 × `pids_limit` for a
+    /// job with 2 services; runbook `ci-runner`).
+    ///
+    /// No `--infra-image`: rootless Podman builds its pause image locally
+    /// (`localhost/podman-pause:<version>`, from `catatonit`) and never
+    /// pulls it; the real-Podman test asserts that image.
+    pub fn pod_create(&self, pod: &str) -> Cmd {
+        self.cmd()
+            .arg("pod")
+            .arg("create")
+            .arg(format!("--name={pod}"))
+            .arg("--network=none")
+            .arg(format!("--memory={}", self.limits.memory))
+            .arg(format!("--memory-swap={}", self.limits.memory))
+            .captured()
+    }
+
+    /// `podman pod inspect --format={{.InfraContainerID}} -- <pod>` (the
+    /// real-Podman test: which image the pod's infra container runs).
+    pub fn pod_infra(&self, pod: &str) -> Cmd {
+        self.cmd()
+            .arg("pod")
+            .arg("inspect")
+            .arg("--format={{.InfraContainerID}}")
+            .arg("--")
+            .arg(pod)
+            .captured()
+    }
+
+    /// `podman create --pod=<pod> --name=<svc> <confined> [--user=…]
+    /// [--tmpfs=<path>:…,mode=1777]… [--env=K=V]… -- <image>`: a service
+    /// runs its image's own entrypoint. The caller checked
+    /// [`PodmanPlan::image_allowed`]; forge-ci checked the name, user, paths
+    /// and environment (each one argv element; the image after `--`).
+    pub fn service_create(&self, s: &ServiceContainer<'_>) -> Cmd {
+        let mut cmd = self.confined(
+            self.cmd()
+                .arg("create")
+                .arg(format!("--pod={}", s.pod))
+                .arg(format!("--name={}", s.name)),
+        );
+        if let Some(user) = s.user {
+            cmd = cmd.arg(format!("--user={user}"));
+        }
+        for path in s.tmpfs {
+            cmd = cmd.arg(format!(
+                "--tmpfs={path}:rw,nosuid,nodev,size={},mode=1777",
+                self.limits.tmpfs
+            ));
+        }
+        for (key, value) in s.env {
+            cmd = cmd.arg(format!("--env={key}={value}"));
+        }
+        cmd.arg("--").arg(s.image).captured()
+    }
+
+    /// `podman start -- <svc>`: a service runs detached (its output stays
+    /// in its own log, [`PodmanPlan::logs_tail`]).
+    pub fn service_start(&self, name: &str) -> Cmd {
+        self.cmd().arg("start").arg("--").arg(name).captured()
+    }
+
+    /// `podman logs --tail=<n> -- <svc>`: the end of a service's output
+    /// (to the job's log after a failure).
+    pub fn logs_tail(&self, name: &str) -> Cmd {
+        self.cmd()
+            .arg("logs")
+            .arg(format!("--tail={SERVICE_LOG_LINES}"))
+            .arg("--")
+            .arg(name)
+    }
+
+    /// `podman pod rm --force --ignore --time=0 -- <pod>`: the pod and every
+    /// container in it are gone whatever happened.
+    pub fn pod_remove(&self, pod: &str) -> Cmd {
+        self.cmd()
+            .arg("pod")
+            .arg("rm")
+            .arg("--force")
+            .arg("--ignore")
+            .arg("--time=0")
+            .arg("--")
+            .arg(pod)
+    }
+
+    /// `podman pod ps --filter=name=^forge-job- --format={{.Name}}`: the
+    /// job pods that exist (at startup: a crashed run's leftovers).
+    pub fn stale_pods(&self) -> Cmd {
+        self.cmd()
+            .arg("pod")
+            .arg("ps")
+            .arg("--filter=name=^forge-job-")
+            .arg("--format={{.Name}}")
             .captured()
     }
 
@@ -329,6 +484,7 @@ mod tests {
             pipeline_id: 3,
             project_id: 2,
             sha: &"b".repeat(40),
+            pod: None,
         });
         let argv = cmd.argv();
         for flag in [
@@ -373,6 +529,7 @@ mod tests {
                 pipeline_id: 3,
                 project_id: 2,
                 sha: &"b".repeat(40),
+                pod: None,
             })
             .argv();
         let dash = argv.iter().position(|a| a == "--").expect("--");
@@ -392,5 +549,101 @@ mod tests {
         assert_eq!(size_bytes("4g"), Some(4 * 1024 * 1024 * 1024));
         assert_eq!(size_bytes("16k"), Some(16 * 1024));
         assert_eq!(size_bytes("4x"), None);
+    }
+
+    /// Plan 14 C5s: the pod has no network; a service gets the job's
+    /// confinement and limits, its own writable paths, its image after
+    /// `--` and no command; the job joins the pod instead of its own
+    /// `--network=none`.
+    #[test]
+    fn a_pod_and_its_services_are_confined_like_the_job() {
+        let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+        assert_eq!(
+            plan.pod_create("forge-job-7-1").argv(),
+            [
+                "pod",
+                "create",
+                "--name=forge-job-7-1",
+                "--network=none",
+                "--memory=4g",
+                "--memory-swap=4g"
+            ]
+        );
+        let pg = format!("registry.internal/postgres@sha256:{}", digest());
+        let env = vec![("POSTGRES_PASSWORD".to_owned(), "a b;$(id)".to_owned())];
+        let tmpfs = vec!["/var/run/postgresql".to_owned()];
+        let argv = plan
+            .service_create(&ServiceContainer {
+                pod: "forge-job-7-1",
+                name: "forge-job-7-1-svc-db",
+                image: &pg,
+                env: &env,
+                user: Some("999:999"),
+                tmpfs: &tmpfs,
+            })
+            .argv();
+        let dash = argv.iter().position(|a| a == "--").expect("--");
+        assert_eq!(&argv[dash + 1..], [pg.as_str()]);
+        for flag in [
+            "create",
+            "--pod=forge-job-7-1",
+            "--name=forge-job-7-1-svc-db",
+            "--read-only",
+            "--tmpfs=/tmp:rw,nosuid,nodev,size=1g",
+            "--security-opt=no-new-privileges",
+            "--cap-drop=all",
+            "--pids-limit=4096",
+            "--memory=4g",
+            "--memory-swap=4g",
+            "--ulimit=nofile=4096:4096",
+            "--user=999:999",
+            "--tmpfs=/var/run/postgresql:rw,nosuid,nodev,size=1g,mode=1777",
+            // One argv element: the value never meets a shell.
+            "--env=POSTGRES_PASSWORD=a b;$(id)",
+        ] {
+            let at = argv.iter().position(|a| a == flag);
+            assert!(at.is_some_and(|i| i < dash), "{flag}: {argv:?}");
+        }
+        assert!(argv.iter().all(|a| !a.starts_with("--network")
+            && !a.starts_with("--privileged")
+            && !a.starts_with("--cap-add")
+            && !a.starts_with("--entrypoint")));
+        let job = plan
+            .create(&Container {
+                name: "forge-job-7-1",
+                image: &pg,
+                work: Path::new("/r/job/work"),
+                script_dir: Path::new("/r/job/script"),
+                job_id: 7,
+                pipeline_id: 3,
+                project_id: 2,
+                sha: &"b".repeat(40),
+                pod: Some("forge-job-7-1"),
+            })
+            .argv();
+        assert!(job.iter().any(|a| a == "--pod=forge-job-7-1"), "{job:?}");
+        assert!(job.iter().all(|a| !a.starts_with("--network")), "{job:?}");
+        assert!(job.iter().any(|a| a == "--read-only"));
+        assert_eq!(
+            plan.service_start("forge-job-7-1-svc-db").argv(),
+            ["start", "--", "forge-job-7-1-svc-db"]
+        );
+        assert_eq!(
+            plan.logs_tail("forge-job-7-1-svc-db").argv(),
+            ["logs", "--tail=50", "--", "forge-job-7-1-svc-db"]
+        );
+        assert_eq!(
+            plan.pod_remove("forge-job-7-1").argv(),
+            [
+                "pod",
+                "rm",
+                "--force",
+                "--ignore",
+                "--time=0",
+                "--",
+                "forge-job-7-1"
+            ]
+        );
+        assert_eq!(service_container_name(7, 1, "db"), "forge-job-7-1-svc-db");
     }
 }

@@ -710,3 +710,278 @@ fn events_parse_and_print() {
     assert_eq!(Event::parse("tag"), None);
     assert_eq!(Event::MergeRequest.to_string(), "merge_request");
 }
+
+// ── services (plan 14 C5s) ──────────────────────────────────────────────
+
+fn pg_image() -> String {
+    format!("registry.internal/postgres:16@sha256:{D}")
+}
+
+/// `base_job()` plus `services:` with `body` (a YAML list, indented 2 under
+/// the key).
+fn with_services(body: &str) -> String {
+    let services: String = body.lines().map(|l| format!("  {l}\n")).collect();
+    one_job(&format!("{}services:\n{services}", base_job()))
+}
+
+fn db(extra: &str) -> String {
+    format!("- name: db\n  image: {}\n{extra}", pg_image())
+}
+
+fn reasons_and_subjects(text: &str) -> Vec<(&'static str, Option<String>)> {
+    problems(text)
+        .into_iter()
+        .map(|p| (p.reason, p.subject))
+        .collect()
+}
+
+#[test]
+fn a_job_with_services_keeps_them_in_order() {
+    let text = with_services(&format!(
+        "{}  user: \"999:999\"\n  env:\n    POSTGRES_PASSWORD: test\n    PGDATA: /var/lib/postgresql/data/pgdata\n  tmpfs: [/var/lib/postgresql/data, /var/run/postgresql]\n- name: cache-2\n  image: {}\n",
+        db(""),
+        image()
+    ));
+    let def = check(text.as_bytes(), &ctx()).expect("valid");
+    let services = def.jobs[0].services();
+    assert_eq!(services.len(), 2);
+    let pg = &services[0];
+    assert_eq!(pg.name(), "db");
+    assert_eq!(pg.image(), pg_image());
+    assert_eq!(pg.user(), Some("999:999"));
+    assert_eq!(
+        pg.env(),
+        [
+            ("POSTGRES_PASSWORD".to_owned(), "test".to_owned()),
+            (
+                "PGDATA".to_owned(),
+                "/var/lib/postgresql/data/pgdata".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(
+        pg.tmpfs(),
+        ["/var/lib/postgresql/data", "/var/run/postgresql"]
+    );
+    assert_eq!(services[1].name(), "cache-2");
+    assert_eq!(services[1].user(), None);
+    assert!(services[1].env().is_empty());
+    // The plan names them.
+    let p = plan(
+        &def,
+        &Trigger {
+            event: Event::Push,
+            branch: "main".to_owned(),
+            protected: true,
+        },
+    )
+    .expect("plan");
+    assert_eq!(p.jobs[0].services, ["db", "cache-2"]);
+    // A job without the key has none; `services:` empty is none.
+    let plain = check(one_job(&base_job()).as_bytes(), &ctx()).expect("valid");
+    assert!(plain.jobs[0].services().is_empty());
+    assert!(problems(&one_job(&format!("{}services:\n", base_job()))).is_empty());
+}
+
+#[test]
+fn more_than_two_services_is_too_many_services() {
+    let three = format!(
+        "{}{}{}",
+        db(""),
+        db("").replace("name: db", "name: db2"),
+        db("").replace("name: db", "name: db3")
+    );
+    assert_eq!(reasons(&with_services(&three)), ["too_many_services"]);
+    let two = format!("{}{}", db(""), db("").replace("name: db", "name: db2"));
+    assert!(problems(&with_services(&two)).is_empty());
+}
+
+#[test]
+fn service_names_follow_the_pattern_and_are_unique() {
+    let longest = format!("a{}", "b".repeat(30));
+    for ok in ["a", "db", "pg-16", longest.as_str()] {
+        let text = with_services(&db("").replace("name: db", &format!("name: {ok}")));
+        assert!(problems(&text).is_empty(), "{ok}");
+    }
+    let too_long = format!("a{}", "b".repeat(31));
+    for bad in [
+        "Db",
+        "1db",
+        "\"-db\"",
+        "db_1",
+        "db.1",
+        "\"db 1\"",
+        "\"--privileged\"",
+        too_long.as_str(),
+    ] {
+        let text = with_services(&db("").replace("name: db", &format!("name: {bad}")));
+        assert_eq!(reasons(&text), ["service_name_invalid"], "{bad}");
+    }
+    let twice = format!("{}{}", db(""), db(""));
+    assert_eq!(
+        reasons_and_subjects(&with_services(&twice)),
+        [("service_duplicate", Some("db".to_owned()))]
+    );
+}
+
+#[test]
+fn a_service_needs_a_name_and_a_pinned_image() {
+    let text = with_services(&format!("- image: {}\n", pg_image()));
+    assert_eq!(
+        reasons_and_subjects(&text),
+        [("field_missing", Some("name".to_owned()))]
+    );
+    let text = with_services("- name: db\n");
+    assert_eq!(
+        reasons_and_subjects(&text),
+        [("field_missing", Some("image".to_owned()))]
+    );
+    for bad in [
+        "postgres:16".to_owned(),
+        format!("\"--privileged@sha256:{D}\""),
+        format!("postgres@sha256:{}", &D[..63]),
+    ] {
+        let text = with_services(&db("").replace(&pg_image(), &bad));
+        assert_eq!(
+            reasons_and_subjects(&text),
+            [("image_not_pinned", Some("db".to_owned()))],
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn services_of_the_wrong_shape_are_field_invalid_or_key_unknown() {
+    for shape in ["services: db\n", "services:\n  name: db\n"] {
+        let text = one_job(&format!("{}{shape}", base_job()));
+        assert_eq!(reasons(&text), ["field_invalid"], "{shape:?}");
+    }
+    assert_eq!(reasons(&with_services("- db\n")), ["field_invalid"]);
+    // No command, ports, volumes or privileges: every other key is unknown.
+    for key in [
+        "command: [sh]",
+        "privileged: true",
+        "volumes: [/x]",
+        "ports: [5432]",
+    ] {
+        let text = with_services(&db(&format!("  {key}\n")));
+        assert_eq!(reasons(&text), ["key_unknown"], "{key}");
+    }
+}
+
+#[test]
+fn service_env_is_bounded_and_never_echoed() {
+    for ok in [
+        "A: b",
+        "_X1: \"\"",
+        "PGDATA: /var/lib/x",
+        "PORT: 5432",
+        "EMPTY:",
+    ] {
+        let text = with_services(&db(&format!("  env:\n    {ok}\n")));
+        assert!(problems(&text).is_empty(), "{ok}");
+    }
+    let long = format!("A: {}", "x".repeat(1025));
+    for bad in [
+        "1A: secret-value",
+        "A-B: secret-value",
+        "\"A B\": secret-value",
+        "A: [secret-value]",
+        "A: {b: secret-value}",
+        "A: \"line\\nsecret-value\"",
+        long.as_str(),
+    ] {
+        let text = with_services(&db(&format!("  env:\n    {bad}\n")));
+        let found = problems(&text);
+        assert_eq!(
+            found
+                .iter()
+                .map(|p| (p.reason, p.subject.as_deref()))
+                .collect::<Vec<_>>(),
+            [("service_env_invalid", Some("db"))],
+            "{bad}"
+        );
+        assert!(!format!("{found:?}").contains("secret-value"));
+    }
+    let many: String = (0..=MAX_SERVICE_ENV)
+        .map(|i| format!("    K{i}: v\n"))
+        .collect();
+    let text = with_services(&db(&format!("  env:\n{many}")));
+    assert_eq!(reasons(&text), ["too_many_service_env"]);
+    let text = with_services(&db("  env: [A=b]\n"));
+    assert_eq!(reasons(&text), ["field_invalid"]);
+}
+
+#[test]
+fn a_service_user_is_a_name_a_uid_or_uid_and_gid() {
+    for ok in ["postgres", "_svc", "999", "\"999:999\"", "redis-1"] {
+        let text = with_services(&db(&format!("  user: {ok}\n")));
+        assert!(problems(&text).is_empty(), "{ok}");
+    }
+    let huge = "9".repeat(11);
+    for bad in [
+        "Postgres",
+        "\"999:\"",
+        "\":999\"",
+        "\"postgres:postgres\"",
+        "\"--privileged\"",
+        "\"a b\"",
+        "\"1:2:3\"",
+        huge.as_str(),
+    ] {
+        let text = with_services(&db(&format!("  user: {bad}\n")));
+        assert_eq!(reasons(&text), ["service_user_invalid"], "{bad}");
+    }
+}
+
+#[test]
+fn service_tmpfs_paths_are_absolute_and_stay_off_the_kernel_trees() {
+    for ok in ["/var/lib/postgresql/data", "/run/x", "/data", "/tmp/sub"] {
+        let text = with_services(&db(&format!("  tmpfs: [{ok}]\n")));
+        assert!(problems(&text).is_empty(), "{ok}");
+    }
+    for bad in [
+        "/",
+        "/tmp",
+        "relative/x",
+        "/proc",
+        "/sys/fs",
+        "/dev/shm",
+        "/a/../etc",
+        "/a/./b",
+        "/a//b",
+        "/a:b",
+        "/a,size=99g",
+        "/a b",
+    ] {
+        let text = with_services(&db(&format!("  tmpfs: [\"{bad}\"]\n")));
+        assert_eq!(reasons(&text), ["service_tmpfs_invalid"], "{bad}");
+    }
+    let many: Vec<String> = (0..=MAX_SERVICE_TMPFS).map(|i| format!("/d{i}")).collect();
+    let text = with_services(&db(&format!("  tmpfs: [{}]\n", many.join(", "))));
+    assert_eq!(reasons(&text), ["too_many_service_tmpfs"]);
+}
+
+/// Security review: a service running as root (`0`, `0:<gid>`, `root`) is
+/// allowed but warned about; a non-root user or none is not.
+#[test]
+fn a_root_service_user_is_a_warning_not_a_problem() {
+    for root in ["root", "0", "\"0:0\"", "\"0:999\""] {
+        let text = with_services(&db(&format!("  user: {root}\n")));
+        let def = check(text.as_bytes(), &ctx()).expect("valid");
+        let warnings = def.warnings();
+        let warned: Vec<(&str, Option<&str>)> = warnings
+            .iter()
+            .map(|w| (w.reason, w.subject.as_deref()))
+            .collect();
+        assert_eq!(warned, [("service_user_root", Some("db"))], "{root}");
+        assert_eq!(def.warnings()[0].line, 12, "{root}");
+    }
+    for ok in ["postgres", "999", "\"999:0\"", "rootless"] {
+        let text = with_services(&db(&format!("  user: {ok}\n")));
+        let def = check(text.as_bytes(), &ctx()).expect("valid");
+        assert!(def.warnings().is_empty(), "{ok}");
+    }
+    let def = check(with_services(&db("")).as_bytes(), &ctx()).expect("valid");
+    assert!(def.warnings().is_empty());
+}

@@ -249,3 +249,89 @@ fn ci_plan_refuses_secrets_on_a_branch_not_protected() {
         "secret_on_unprotected_ref"
     );
 }
+
+/// Plan 14 C5s: a job's services are linted (each rule a reason) and named
+/// in the plan.
+#[test]
+fn ci_lint_and_plan_show_a_jobs_services() {
+    let with_db = valid().replace(
+        "    script: [cargo test]\n",
+        &format!(
+            "    script: [cargo test]\n    services:\n      - name: db\n        image: registry.internal/postgres@sha256:{D}\n        user: \"999:999\"\n        tmpfs: [/var/run/postgresql]\n"
+        ),
+    );
+    let r = repo(&with_db);
+    let o = gstn(
+        r.path(),
+        &[
+            "ci",
+            "plan",
+            "--branch",
+            "main",
+            "--protected",
+            "main",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{} {}", o.stdout, o.stderr);
+    let v = o.json();
+    assert_eq!(v["jobs"][1]["name"], "unit");
+    assert_eq!(v["jobs"][1]["services"], serde_json::json!(["db"]));
+    assert_eq!(v["jobs"][0]["services"], serde_json::json!([]));
+    let o = gstn(
+        r.path(),
+        &["ci", "plan", "--branch", "main", "--protected", "main"],
+    );
+    assert!(
+        o.stdout
+            .contains("unit [test] timeout 3600s after build services db"),
+        "{}",
+        o.stdout
+    );
+    // An unpinned service image and a bad tmpfs path: one line each.
+    let bad = with_db
+        .replace("postgres@sha256:", "postgres:16-")
+        .replace("/var/run/postgresql", "/proc/x");
+    std::fs::write(r.path().join(".forge-ci.yml"), bad).unwrap();
+    let o = gstn(r.path(), &["ci", "lint", "--protected", "main", "--json"]);
+    assert_eq!(o.code, 1);
+    let reasons: Vec<String> = o.json()["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["reason"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(reasons, ["image_not_pinned", "service_tmpfs_invalid"]);
+    assert!(o.stderr.contains("FG-CI-0001"), "{}", o.stderr);
+}
+
+/// Security review: a root service user passes the lint (exit 0) with a
+/// warning line; `--json` lists it under `warnings`.
+#[test]
+fn ci_lint_warns_about_a_root_service_user() {
+    let text = valid().replace(
+        "    script: [cargo test]\n",
+        &format!(
+            "    script: [cargo test]\n    services:\n      - name: db\n        image: registry.internal/postgres@sha256:{D}\n        user: root\n"
+        ),
+    );
+    let r = repo(&text);
+    let o = gstn(r.path(), &["ci", "lint", "--protected", "main"]);
+    assert_eq!(o.code, 0, "{} {}", o.stdout, o.stderr);
+    assert!(
+        o.stdout
+            .contains(".forge-ci.yml:18: warning service_user_root — db"),
+        "{}",
+        o.stdout
+    );
+    let o = gstn(r.path(), &["ci", "lint", "--protected", "main", "--json"]);
+    assert_eq!(o.code, 0);
+    let v = o.json();
+    assert_eq!(v["problems"], serde_json::json!([]));
+    assert_eq!(v["warnings"][0]["reason"], "service_user_root");
+    assert_eq!(v["warnings"][0]["subject"], "db");
+    // A clean file has an empty list.
+    let r = repo(&valid());
+    let o = gstn(r.path(), &["ci", "lint", "--protected", "main", "--json"]);
+    assert_eq!(o.json()["warnings"], serde_json::json!([]));
+}

@@ -1146,7 +1146,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn ci lint", "gstn ci lint --protected main,release/* --json", "gstn ci lint ci/other.yml"],
         scopes: &[],
         routes: &[],
-        output: r#"{"type":"object","required":["path","problems"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","reason","subject"],"properties":{"line":{"type":"integer"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}}}}"#,
+        output: r#"{"type":"object","required":["path","problems","warnings"],"properties":{"path":{"type":"string"},"problems":{"type":"array","items":{"type":"object","required":["line","reason","subject"],"properties":{"line":{"type":"integer"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}},"warnings":{"type":"array","items":{"type":"object","required":["line","reason","subject"]}}}}"#,
     },
     CommandSpec {
         name: "ci plan",
@@ -1160,7 +1160,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn ci plan --branch main --protected main", "gstn ci plan --branch feature-x --event mr --json"],
         scopes: &[],
         routes: &[],
-        output: r#"{"type":"object","required":["path","event","branch","protected","jobs"],"properties":{"path":{"type":"string"},"event":{"enum":["push","merge_request"]},"branch":{"type":"string"},"protected":{"type":"boolean"},"jobs":{"type":"array","items":{"type":"object","required":["name","stage","wave","after","image","timeout_secs","tags","secrets","script_lines"],"properties":{"wave":{"type":"integer"},"after":{"type":"array","items":{"type":"string"}}}}}}}"#,
+        output: r#"{"type":"object","required":["path","event","branch","protected","jobs"],"properties":{"path":{"type":"string"},"event":{"enum":["push","merge_request"]},"branch":{"type":"string"},"protected":{"type":"boolean"},"jobs":{"type":"array","items":{"type":"object","required":["name","stage","wave","after","image","timeout_secs","tags","secrets","script_lines","services"],"properties":{"wave":{"type":"integer"},"after":{"type":"array","items":{"type":"string"}}}}}}}"#,
     },
     CommandSpec {
         name: "context work-item",

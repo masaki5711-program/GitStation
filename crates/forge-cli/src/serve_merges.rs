@@ -162,6 +162,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobTimedOut
         | ErrorCode::JobImageNotAllowed
         | ErrorCode::JobWorkspaceTooLarge
+        | ErrorCode::ServiceStartFailed
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

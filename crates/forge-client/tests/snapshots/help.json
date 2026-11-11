@@ -6221,11 +6221,23 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "required": [
+                "line",
+                "reason",
+                "subject"
+              ],
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
           "path",
-          "problems"
+          "problems",
+          "warnings"
         ],
         "type": "object"
       },
@@ -6302,7 +6314,8 @@
                 "timeout_secs",
                 "tags",
                 "secrets",
-                "script_lines"
+                "script_lines",
+                "services"
               ],
               "type": "object"
             },
