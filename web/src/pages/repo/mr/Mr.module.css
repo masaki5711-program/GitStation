@@ -122,10 +122,10 @@
 /* A count next to a tab's name ("Overview 3"). */
 .tabCount {
   display: inline-block;
-  min-width: 1.5em;
+  min-width: var(--gs-count-min-width);
   margin-left: var(--gs-space-2);
   padding: 0 var(--gs-space-1);
-  border-radius: var(--gs-radius-md);
+  border-radius: var(--gs-radius-pill);
   background: var(--gs-color-code-surface);
   color: var(--gs-color-text);
   font-size: var(--gs-font-size-sm);
@@ -133,21 +133,36 @@
   text-align: center;
 }
 
-/* Overview: the main column and the side panel; one column when narrow
-   (the side panel follows the main column, as in the reading order). */
+/* Overview: the side panel comes first in the document, so on a narrow
+   screen it sits right after the status line and the tabs, before the
+   detail sections; on a wide one it is the right-hand column. */
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--gs-space-6);
 }
 
-.mainColumn {
+.mainColumn,
+.sideColumn {
   min-width: 0;
 }
 
+/* 64rem: the app sidebar (--gs-sidebar-width) + the side panel
+   (--gs-aside-width) + a main column of at least ~30rem with the gaps.
+   A custom property cannot be used in a media query, hence the number. */
 @media (min-width: 64rem) {
   .layout {
-    grid-template-columns: minmax(0, 1fr) 16rem;
+    grid-template-columns: minmax(0, 1fr) var(--gs-aside-width);
     align-items: start;
+  }
+
+  .mainColumn {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .sideColumn {
+    grid-column: 2;
+    grid-row: 1;
   }
 }

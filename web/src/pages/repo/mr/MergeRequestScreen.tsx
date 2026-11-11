@@ -3,8 +3,10 @@
 // and threads) and Changes. The status line and the threads read on their
 // own: a failure of one shows in its place only, with its request_id.
 // The Overview has a side panel (MrSidePanel.tsx: approvals, checks,
-// threads, versions at a glance) that stacks below the main column on a
-// narrow screen; the Changes tab keeps the whole width for the diff.
+// threads, versions at a glance). It comes first in the document, so on a
+// narrow screen it follows the status line and the tabs, before the detail
+// sections; on a wide one the grid puts it in the right-hand column. The
+// Changes tab keeps the whole width for the diff.
 // The Overview starts with the merge conditions panel (U2: every reason,
 // approve / withdraw, merge), then the detail of the head's check runs and
 // the conflicts predicted with other merge requests (CheckRuns.tsx).
@@ -66,7 +68,8 @@ export function MergeRequestScreen({
     );
   }
 
-  const threadCount = threads.data?.discussions.length ?? 0;
+  // The same number as the side panel's "unresolved" (what is left to do).
+  const unresolvedCount = threads.data?.discussions.filter((d) => !d.resolved).length ?? 0;
   const firstUnresolved = threads.data?.discussions.find((d) => !d.resolved);
   const focusFirstUnresolved =
     firstUnresolved === undefined
@@ -95,12 +98,12 @@ export function MergeRequestScreen({
               {...(tab === 'overview' ? { 'aria-current': 'page' as const } : {})}
             >
               {t('mr.view.overview')}
-              {threadCount > 0 && (
+              {unresolvedCount > 0 && (
                 <>
-                  <span className={styles.tabCount} aria-hidden="true">
-                    {threadCount}
+                  <span className={styles.tabCount} aria-hidden="true" data-testid="mr-tab-count">
+                    {unresolvedCount}
                   </span>
-                  <span className={repo.srOnly}>{t('mr.view.threadCount', { n: threadCount })}</span>
+                  <span className={repo.srOnly}>{t('mr.view.threadCount', { n: unresolvedCount })}</span>
                 </>
               )}
             </Link>
@@ -118,10 +121,12 @@ export function MergeRequestScreen({
       </nav>
       {tab === 'overview' ? (
         <div className={styles.layout}>
+          <div className={styles.sideColumn}>
+            <MrSidePanel projectId={projectId} mr={mr.data} threads={threads} />
+          </div>
           <div className={styles.mainColumn}>
             <Overview projectId={projectId} project={project} mr={mr.data} threads={threads} />
           </div>
-          <MrSidePanel projectId={projectId} mr={mr.data} threads={threads} />
         </div>
       ) : (
         <section aria-labelledby="mr-changes-title">
@@ -141,6 +146,20 @@ export function MergeRequestScreen({
   );
 }
 
+/** Markers put into the sentence in place of the author and the time, so
+ * both are rendered as React nodes (never parsed as markup), in the order
+ * the language puts them. A private-use character (built at run time):
+ * never in a dictionary string. */
+const MARK = String.fromCharCode(0xe000);
+const AUTHOR_MARK = `${MARK}author${MARK}`;
+const WHEN_MARK = `${MARK}when${MARK}`;
+const MARKS = new RegExp(`(${MARK}(?:author|when)${MARK})`, 'u');
+
+/** "Opened {when} by {author}" with the markers → ['Opened ', WHEN_MARK, ' by ', AUTHOR_MARK]. */
+export function openedParts(sentence: string): string[] {
+  return sentence.split(MARKS).filter((p) => p !== '');
+}
+
 function Header({ mr }: { mr: MergeRequest }) {
   const { t, i18n } = useTranslation();
   return (
@@ -152,15 +171,26 @@ function Header({ mr }: { mr: MergeRequest }) {
       <p className={styles.headerMeta}>
         <StateBadge tone={mrTone(mr.state)}>{mrStateLabel(t, mr.state)}</StateBadge>
         {mr.draft && <StateBadge tone="draft">{t('mr.draft')}</StateBadge>}
-        <span>{t('mr.openedBy', { author: mr.author.display_name })}</span>
-        <time
-          className={styles.number}
-          dateTime={mr.created_at}
-          title={formatDateTime(mr.created_at, i18n.language)}
-          data-testid="mr-opened-at"
-        >
-          {formatRelative(mr.created_at, i18n.language)}
-        </time>
+        {/* One sentence per language: the word order is the dictionary's. */}
+        <span data-testid="mr-opened">
+          {openedParts(t('mr.openedAgo', { author: AUTHOR_MARK, when: WHEN_MARK })).map((part, i) =>
+            part === AUTHOR_MARK ? (
+              <span key={i}>{mr.author.display_name}</span>
+            ) : part === WHEN_MARK ? (
+              <time
+                key={i}
+                className={styles.number}
+                dateTime={mr.created_at}
+                title={formatDateTime(mr.created_at, i18n.language)}
+                data-testid="mr-opened-at"
+              >
+                {formatRelative(mr.created_at, i18n.language)}
+              </time>
+            ) : (
+              part
+            ),
+          )}
+        </span>
       </p>
       {/* "source → target": the words for a screen reader, the chips and
           the arrow (drawn by CSS) for the eye. */}

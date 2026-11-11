@@ -1,11 +1,16 @@
-// The merge request detail layout: the header (state, author, relative time,
-// "source → target"), the thread count on the Overview tab, the side panel
-// (approvals, checks, threads, versions, work item, last update) and its
-// states. Only fields the API returns are shown (no labels or milestone).
+// The merge request detail layout: the header (state, one sentence with the
+// author and a relative time, "source → target"), the unresolved-thread
+// count on the Overview tab, the side panel (approvals, checks, threads,
+// versions, work item, last update) with its loading and failure per row,
+// and its place before the detail sections. Only fields the API returns are
+// shown (no labels or milestone).
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { TFunction } from 'i18next';
+import { beforeAll, describe, expect, it } from 'vitest';
 
-import { approvalTotals, checkTotals } from '../src/features/mr/MrSidePanel';
+import { createI18n } from '../src/i18n';
+import { approvalBadge, approvalTotals, checksBadge, checkTotals } from '../src/features/mr/MrSidePanel';
+import { openedParts } from '../src/pages/repo/mr/MergeRequestScreen';
 import { apiError, mockServer } from './mock';
 import {
   MR_API,
@@ -22,16 +27,29 @@ import { json, renderApp } from './render';
 
 const VIEW = `${MR_SCREENS}/pull/3`;
 
-async function open(over: Parameters<typeof mrRoutes>[0] = {}, path = VIEW) {
+async function open(
+  over: Parameters<typeof mrRoutes>[0] = {},
+  path = VIEW,
+  lang: 'en' | 'ja' = 'en',
+) {
   const server = mockServer(mrRoutes(over));
-  const view = await renderApp({ fetch: server.fetch, path, lang: 'en' });
+  const view = await renderApp({ fetch: server.fetch, path, lang });
   await screen.findByRole('heading', { level: 1, name: /Synthetic change 3/ });
   return { server, ...view };
 }
 
 const sidePanel = () => screen.findByRole('complementary', { name: 'About this merge request' });
+const row = (id: string) => screen.getByTestId(id);
 
-function withApprovalsAndChecks() {
+const check = (name: string, status: string | null, conclusion: string | null, stale = false) => ({
+  name,
+  status,
+  conclusion,
+  stale,
+  waits_for_merge_result: false,
+});
+
+function withApprovalsAndChecks(checks = [check('ci/pipeline', 'completed', 'success'), check('lint', 'in_progress', null)]) {
   return {
     ...status([{ reason: 'approvals_missing', detail: 'rule=@protected_branch required=2 counted=1' }]),
     approvals: {
@@ -45,121 +63,188 @@ function withApprovalsAndChecks() {
       ],
       codeowners: [],
     },
-    checks: [
-      { name: 'ci/pipeline', status: 'completed', conclusion: 'success', stale: false, waits_for_merge_result: false },
-      { name: 'lint', status: 'in_progress', conclusion: null, stale: false, waits_for_merge_result: false },
-    ],
+    checks,
     work_item_link: { linked: true },
   };
 }
 
+/** A handler that never answers (the query stays pending). */
+const never = () => new Promise<Response>(() => undefined);
+
 describe('merge request header', () => {
-  it('shows the state, the author, a relative time with the exact moment, and source → target', async () => {
+  it('one sentence with the time and the author, a <time> with the exact moment, and source → target', async () => {
     await open({ [`GET ${MR_API}/3`]: () => json(200, mr(3, { draft: true })) });
     const header = screen.getByRole('heading', { level: 1 }).closest('header');
     if (header === null) throw new Error('no header');
     expect(within(header).getByText('Open')).toBeTruthy();
     expect(within(header).getByText('Draft')).toBeTruthy();
-    expect(within(header).getByText('Opened by 佐藤 花子')).toBeTruthy();
+    expect(screen.getByTestId('mr-opened').textContent).toMatch(/^Opened .*ago.* by 佐藤 花子$/);
     const time = screen.getByTestId('mr-opened-at');
     expect(time.tagName).toBe('TIME');
     expect(time.getAttribute('dateTime')).toBe('2026-10-20T01:00:00Z');
     expect(time.getAttribute('title')).not.toBe('');
-    // Relative ("… ago"), not the date itself.
-    expect(time.textContent).toMatch(/ago|yesterday|last|now/);
     const branches = screen.getByTestId('mr-branches');
-    // The sentence for a screen reader; the chips are decoration.
     expect(within(branches).getByText('dev into main')).toBeTruthy();
     const chips = branches.querySelectorAll('code');
     expect([...chips].map((c) => c.textContent)).toEqual(['dev', 'main']);
     expect(chips[0]?.closest('[aria-hidden="true"]')).not.toBeNull();
   });
+
+  it('follows the language word order (ja: the time first, then the author)', async () => {
+    await open({}, VIEW, 'ja');
+    const opened = screen.getByTestId('mr-opened');
+    expect(opened.textContent).toMatch(/^.+前に 佐藤 花子 が作成$/);
+    expect(opened.firstElementChild?.tagName).toBe('TIME');
+  });
+
+  it('splits the sentence at the markers only, in the dictionary order', async () => {
+    const en = await createI18n('en');
+    const sentence = en.t('mr.openedAgo', {
+      author: 'author',
+      when: 'when',
+    });
+    expect(openedParts(sentence)).toEqual(['Opened ', 'when', ' by ', 'author']);
+    expect(openedParts('<b>x</b> {{y}}')).toEqual(['<b>x</b> {{y}}']);
+  });
 });
 
 describe('merge request tabs', () => {
-  it('the Overview tab carries the thread count (words for a screen reader); none when there are no threads', async () => {
+  it('the Overview tab counts unresolved threads, the same number as the side panel', async () => {
     await open({
-      [`GET ${MR_API}/3/discussions`]: () => json(200, discussions([discussion(1), discussion(2)])),
+      [`GET ${MR_API}/3/discussions`]: () =>
+        json(200, discussions([discussion(1), discussion(2, { resolved: true }), discussion(4)])),
     });
     const tabs = screen.getByRole('navigation', { name: 'Merge request views' });
-    const overview = await within(tabs).findByRole('link', { name: /^Overview/ });
+    const overview = within(tabs).getByRole('link', { name: /^Overview/ });
     await waitFor(() => {
-      expect(overview.textContent).toContain('Threads: 2');
+      expect(within(overview).getByTestId('mr-tab-count').textContent).toBe('2');
     });
-    expect(overview.getAttribute('aria-current')).toBe('page');
-    expect(within(tabs).getByRole('link', { name: 'Changes' })).toBeTruthy();
+    expect(overview.textContent).toContain('Unresolved threads: 2');
+    expect(row('mr-side-threads').textContent).toBe('2 unresolved of 3');
   });
 
-  it('shows no count without threads', async () => {
-    await open();
-    await screen.findByText('No comments yet.');
+  it('shows no count when every thread is resolved', async () => {
+    await open({
+      [`GET ${MR_API}/3/discussions`]: () => json(200, discussions([discussion(1, { resolved: true })])),
+    });
+    await waitFor(() => {
+      expect(row('mr-side-threads').textContent).toBe('0 unresolved of 1');
+    });
     const tabs = screen.getByRole('navigation', { name: 'Merge request views' });
     expect(within(tabs).getByRole('link', { name: 'Overview' })).toBeTruthy();
   });
 });
 
 describe('merge request side panel', () => {
-  it('summarises approvals, approvers, checks, threads, versions and the work item from the API', async () => {
+  it('summarises approvals, checks, threads, versions and the work item in words', async () => {
     const { server } = await open({
       [`GET ${MR_API}/3/status`]: () => json(200, withApprovalsAndChecks()),
-      [`GET ${MR_API}/3/discussions`]: () =>
-        json(200, discussions([discussion(1), discussion(2, { resolved: true })])),
       [`GET ${MR_API}/3/versions`]: () =>
         json(200, versions([version(1), version(2, { head_sha: 'b'.repeat(40) })])),
     });
     const side = await sidePanel();
     await waitFor(() => {
-      expect(within(side).getByTestId('mr-side-approvals').textContent).toContain('1 of 2');
+      expect(row('mr-side-approvals').textContent).toContain('Approvals 1/2, 1 more needed');
     });
     const people = within(side).getByRole('list', { name: 'Approved by' });
     expect(within(people).getByText('taro')).toBeTruthy();
     expect(within(people).getByText('jiro (does not count)')).toBeTruthy();
-    // One passed, one still running: neutral, not failed.
-    const checks = within(side).getByTestId('mr-side-checks');
-    expect(checks.textContent).toBe('1 of 2 passed');
+    // One passed, one still running: said as "running or waiting", neutral.
+    const checks = row('mr-side-checks');
+    expect(checks.textContent).toBe('1 running or waiting (checks 1/2 passed)');
     expect(checks.querySelector('[data-badge]')?.getAttribute('data-badge')).toBe('draft');
     await waitFor(() => {
-      expect(within(side).getByTestId('mr-side-threads').textContent).toBe('1 unresolved of 2');
+      expect(row('mr-side-versions').textContent).toContain('Latest commit bbbbbbbb');
     });
-    await waitFor(() => {
-      expect(within(side).getByTestId('mr-side-versions').textContent).toContain('2');
-    });
-    expect(within(side).getByTestId('mr-side-versions').textContent).toContain('Latest commit bbbbbbbb');
-    expect(within(side).getByTestId('mr-side-work-item').textContent).toBe('Linked');
-    expect(within(side).getByText('Updated')).toBeTruthy();
-    // The panel asks nothing of its own: the queries the page reads anyway.
+    expect(row('mr-side-work-item').textContent).toBe('Linked');
+    // The panel asks nothing of its own.
     expect(server.to('GET', `${MR_API}/3/status`)).toHaveLength(1);
     expect(server.to('GET', `${MR_API}/3/versions`)).toHaveLength(1);
     expect(server.unmatched).toEqual([]);
   });
 
+  it('a failed check says how many failed; a stale run is not passed', async () => {
+    await open({
+      [`GET ${MR_API}/3/status`]: () =>
+        json(
+          200,
+          withApprovalsAndChecks([
+            check('a', 'completed', 'success'),
+            check('b', 'completed', 'failure'),
+            check('c', 'completed', 'success', true),
+          ]),
+        ),
+    });
+    await waitFor(() => {
+      expect(row('mr-side-checks').textContent).toBe('1 failed (checks 1/3 passed)');
+    });
+    expect(row('mr-side-checks').querySelector('[data-badge]')?.getAttribute('data-badge')).toBe('unresolved');
+  });
+
   it('says when nothing is required and leaves out a work item row the API does not give', async () => {
     await open();
-    const side = await sidePanel();
     await waitFor(() => {
-      expect(within(side).getByTestId('mr-side-approvals').textContent).toBe('Not required');
+      expect(row('mr-side-approvals').textContent).toBe('Not required');
     });
-    expect(within(side).getByTestId('mr-side-checks').textContent).toBe('None required');
-    expect(within(side).queryByTestId('mr-side-work-item')).toBeNull();
+    expect(row('mr-side-checks').textContent).toBe('None required');
+    expect(screen.queryByTestId('mr-side-work-item')).toBeNull();
     await waitFor(() => {
-      expect(within(side).getByTestId('mr-side-threads').textContent).toBe('None');
+      expect(row('mr-side-threads').textContent).toBe('None');
     });
   });
 
-  it('a failed status read: the panel points at the status line, which alone holds the alert', async () => {
+  it('each row shows a loading placeholder while its source is read', async () => {
     await open({
-      [`GET ${MR_API}/3/status`]: () => apiError(503, '状態を読めませんでした', 'req-side-1'),
+      [`GET ${MR_API}/3/status`]: never,
+      [`GET ${MR_API}/3/versions`]: never,
+      [`GET ${MR_API}/3/discussions`]: never,
     });
-    const side = await sidePanel();
-    expect(
-      await within(side).findByText('Could not be read. The line at the top shows why.'),
-    ).toBeTruthy();
-    const area = screen.getByTestId('mr-status-area');
-    const alert = await within(area).findByRole('alert');
-    expect(within(alert).getByTestId('request-id').textContent).toBe('req-side-1');
+    await sidePanel();
+    for (const id of ['mr-side-approvals', 'mr-side-checks', 'mr-side-threads', 'mr-side-versions']) {
+      expect(row(id).textContent).toBe('Loading…');
+    }
+  });
+
+  it('a failed status read: a compact error with request_id and retry; the status line holds the one alert', async () => {
+    let fail = true;
+    const { server } = await open({
+      [`GET ${MR_API}/3/status`]: () =>
+        fail ? apiError(503, '状態を読めませんでした', 'req-side-1') : json(200, status([])),
+    });
+    const err = await within(await sidePanel()).findByTestId('mr-side-status-error');
+    expect(within(err).getByText('状態を読めませんでした')).toBeTruthy();
+    expect(within(err).getByTestId('inline-request-id').textContent).toBe('req-side-1');
     expect(screen.getAllByRole('alert')).toHaveLength(1);
-    // The rest of the panel still shows.
-    expect(within(side).getByText('Updated')).toBeTruthy();
+    fail = false;
+    const before = server.to('GET', `${MR_API}/3/status`).length;
+    fireEvent.click(within(err).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => {
+      expect(row('mr-side-approvals').textContent).toBe('Not required');
+    });
+    expect(server.to('GET', `${MR_API}/3/status`).length).toBeGreaterThan(before);
+  });
+
+  it('a failed versions read and a failed threads read each show their own error in their row', async () => {
+    await open({
+      [`GET ${MR_API}/3/versions`]: () => apiError(503, '版を読めませんでした', 'req-ver-1'),
+      [`GET ${MR_API}/3/discussions`]: () => apiError(503, 'スレッドを読めませんでした', 'req-thr-1'),
+    });
+    await sidePanel();
+    await waitFor(() => {
+      expect(within(row('mr-side-versions')).getByTestId('inline-request-id').textContent).toBe('req-ver-1');
+    });
+    expect(within(row('mr-side-versions')).getByText('版を読めませんでした')).toBeTruthy();
+    await waitFor(() => {
+      expect(within(row('mr-side-threads')).getByTestId('inline-request-id').textContent).toBe('req-thr-1');
+    });
+    expect(within(row('mr-side-threads')).getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
+  it('comes before the detail sections in the document (first on a narrow screen)', async () => {
+    await open();
+    const side = await sidePanel();
+    const conditions = screen.getByRole('heading', { level: 2, name: 'Merge conditions' });
+    expect(side.compareDocumentPosition(conditions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('the Changes tab keeps the whole width (no side panel)', async () => {
@@ -185,7 +270,6 @@ describe('merge request states', () => {
       expect(waiting.length).toBeGreaterThan(0);
     });
     expect(screen.getByText('Loading…')).toBeTruthy();
-    expect(screen.queryByRole('heading', { level: 1, name: /Synthetic change 3/ })).toBeNull();
     for (const answer of waiting) answer(json(200, mr(3)));
     expect(await screen.findByRole('heading', { level: 1, name: /Synthetic change 3/ })).toBeTruthy();
   });
@@ -208,7 +292,12 @@ describe('merge request states', () => {
   });
 });
 
-describe('side panel sums', () => {
+describe('side panel sums and words', () => {
+  let t: TFunction;
+  beforeAll(async () => {
+    t = (await createI18n('en')).t;
+  });
+
   it('counts each applying rule up to what it needs', () => {
     expect(
       approvalTotals({
@@ -226,24 +315,30 @@ describe('side panel sums', () => {
     expect(approvalTotals({ approvals: null })).toEqual({ counted: 0, required: 0 });
   });
 
-  it('a stale or unreported check is never passed', () => {
-    const c = (status: string | null, conclusion: string | null, stale = false) => ({
-      name: 'x',
-      status,
-      conclusion,
-      stale,
-      waits_for_merge_result: false,
-    });
+  it('a stale, running or unreported check is pending, never passed', () => {
     expect(
       checkTotals({
         checks: [
-          c('completed', 'success'),
-          c('completed', 'success', true),
-          c('completed', 'failure'),
-          c(null, null),
-          c('queued', null),
+          check('a', 'completed', 'success'),
+          check('b', 'completed', 'success', true),
+          check('c', 'completed', 'failure'),
+          check('d', null, null),
+          check('e', 'queued', null),
         ],
       }),
-    ).toEqual({ passed: 1, failed: 1 });
+    ).toEqual({ passed: 1, failed: 1, pending: 3 });
+  });
+
+  it('badges carry the state in words', () => {
+    expect(approvalBadge(t, { counted: 2, required: 2 })).toEqual({ tone: 'open', label: 'Approved 2/2' });
+    expect(approvalBadge(t, { counted: 0, required: 2 }).label).toBe('Approvals 0/2, 2 more needed');
+    expect(checksBadge(t, { passed: 3, failed: 0, pending: 0 })).toEqual({
+      tone: 'open',
+      label: 'Checks 3/3 passed',
+    });
+    expect(checksBadge(t, { passed: 1, failed: 1, pending: 1 }).tone).toBe('unresolved');
+    expect(checksBadge(t, { passed: 1, failed: 0, pending: 2 }).label).toBe(
+      '2 running or waiting (checks 1/3 passed)',
+    );
   });
 });

@@ -657,7 +657,7 @@
     "number": "!{{iid}}",
     "draft": "下書き",
     "opened": "{{author}} が {{date}} に作成",
-    "openedBy": "作成: {{author}}",
+    "openedAgo": "{{when}}に {{author}} が作成",
     "branches": "{{source}} から {{target}} へ",
     "state": {
       "open": "開いている",
@@ -696,7 +696,7 @@
       "changes": "変更",
       "description": "説明",
       "noDescription": "説明はありません。",
-      "threadCount": "スレッド {{n}} 件"
+      "threadCount": "未解決のスレッド {{n}} 件"
     },
     "threads": {
       "title": "スレッド",
@@ -821,12 +821,10 @@
     "side": {
       "title": "このマージリクエストについて",
       "approvals": "承認",
-      "approvalsCount": "{{required}} 件中 {{counted}} 件",
       "approvalsNone": "不要",
       "approvedBy": "承認した人",
       "notCounted": "{{name}}（数に入りません）",
       "checks": "必須のチェック",
-      "checksCount": "{{total}} 件中 {{passed}} 件が成功",
       "checksNone": "必須のチェックはありません",
       "threads": "スレッド",
       "threadsCount": "{{total}} 件中 {{open}} 件が未解決",
@@ -837,7 +835,12 @@
       "linked": "リンクあり",
       "notLinked": "リンクなし",
       "updated": "更新",
-      "unread": "読み込めませんでした。理由は上の行に表示しています。"
+      "conditions": "承認とチェック",
+      "approvalsMet": "承認済み {{counted}}/{{required}}",
+      "approvalsNeeded": "承認 {{counted}}/{{required}}（あと {{missing}} 件）",
+      "checksPassed": "チェック {{passed}}/{{total}} 通過",
+      "checksFailed": "{{failed}} 件失敗（チェック {{passed}}/{{total}} 通過）",
+      "checksPending": "{{pending}} 件が実行中・待ち（チェック {{passed}}/{{total}} 通過）"
     }
   },
   "webhooks": {

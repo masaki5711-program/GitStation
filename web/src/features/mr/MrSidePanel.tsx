@@ -4,14 +4,18 @@
 // versions, the work item link and the last update. The detail (every
 // reason, the actions) stays in the conditions panel; this panel adds no
 // request of its own (the status, versions and threads queries are the ones
-// the page already reads). A failed status or versions read is shown with
-// its request_id elsewhere on the page (one alert per failure), so here only
-// a pointer to it.
+// the page already reads). Each source loads and fails on its own row: a
+// placeholder while it is read, and on failure a compact InlineError (the
+// server's user_message, the request_id, a retry). InlineError is not a
+// live region, so the page keeps one announced alert per failure.
+// Badges say the state in words, never by colour alone.
+import type { TFunction } from 'i18next';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { latestVersion, useMergeStatus, useVersions, type useDiscussions } from '../../api/mergeRequests';
 import type { MergeRequest, MergeStatus } from '../../api/types';
-import { Loading } from '../../components/Loading';
+import { InlineError } from '../../components/InlineError';
 import { shortOid } from '../../pages/repo/common';
 import { formatDateTime, formatRelative } from '../labels';
 import { StateBadge, type BadgeTone } from './StateBadge';
@@ -32,17 +36,60 @@ export function approvalTotals(status: Pick<MergeStatus, 'approvals'>): {
   );
 }
 
-/** Required checks that finished with success (no report is never a
- * success; a stale run does not count) and those that finished otherwise. */
-export function checkTotals(status: Pick<MergeStatus, 'checks'>): { passed: number; failed: number } {
+/** Required checks: finished with success, finished otherwise, and not
+ * finished (no report, still running, or a stale run — never a success). */
+export function checkTotals(status: Pick<MergeStatus, 'checks'>): {
+  passed: number;
+  failed: number;
+  pending: number;
+} {
   let passed = 0;
   let failed = 0;
+  let pending = 0;
   for (const c of status.checks) {
-    if (c.status !== 'completed' || c.stale) continue;
-    if (c.conclusion === 'success') passed += 1;
+    if (c.status !== 'completed' || c.stale) pending += 1;
+    else if (c.conclusion === 'success') passed += 1;
     else failed += 1;
   }
-  return { passed, failed };
+  return { passed, failed, pending };
+}
+
+/** The approvals badge: the words carry the state ("1/2 approved, 1 more needed"). */
+export function approvalBadge(
+  t: TFunction,
+  a: { counted: number; required: number },
+): { tone: BadgeTone; label: string } {
+  if (a.counted >= a.required) return { tone: 'open', label: t('mr.side.approvalsMet', a) };
+  return {
+    tone: 'draft',
+    label: t('mr.side.approvalsNeeded', { ...a, missing: a.required - a.counted }),
+  };
+}
+
+/** The checks badge: failed first, then not finished, then all passed. */
+export function checksBadge(
+  t: TFunction,
+  c: { passed: number; failed: number; pending: number },
+): { tone: BadgeTone; label: string } {
+  const total = c.passed + c.failed + c.pending;
+  const values = { ...c, total };
+  if (c.failed > 0) return { tone: 'unresolved', label: t('mr.side.checksFailed', values) };
+  if (c.pending > 0) return { tone: 'draft', label: t('mr.side.checksPending', values) };
+  return { tone: 'open', label: t('mr.side.checksPassed', values) };
+}
+
+function Row({ term, testId, children }: { term: string; testId: string; children: ReactNode }) {
+  return (
+    <div className={styles.sideRow}>
+      <dt>{term}</dt>
+      <dd data-testid={testId}>{children}</dd>
+    </div>
+  );
+}
+
+function Pending() {
+  const { t } = useTranslation();
+  return <span className={styles.nextHint}>{t('common.loading')}</span>;
 }
 
 export function MrSidePanel({
@@ -66,47 +113,77 @@ export function MrSidePanel({
       <h2 id="mr-side-title" className={styles.sideTitle}>
         {t('mr.side.title')}
       </h2>
-      {status.isPending && <Loading />}
-      {status.isError && <p className={styles.nextHint}>{t('mr.side.unread')}</p>}
       <dl className={styles.sideList}>
+        {status.isPending && (
+          <>
+            <Row term={t('mr.side.approvals')} testId="mr-side-approvals">
+              <Pending />
+            </Row>
+            <Row term={t('mr.side.checks')} testId="mr-side-checks">
+              <Pending />
+            </Row>
+          </>
+        )}
+        {status.isError && (
+          <Row term={t('mr.side.conditions')} testId="mr-side-status-error">
+            <InlineError
+              error={status.error}
+              onRetry={() => {
+                void status.refetch();
+              }}
+            />
+          </Row>
+        )}
         {status.isSuccess && <StatusRows status={status.data} />}
-        {threads.isSuccess && (
-          <div className={styles.sideRow}>
-            <dt>{t('mr.side.threads')}</dt>
-            <dd className={styles.number} data-testid="mr-side-threads">
+        <Row term={t('mr.side.threads')} testId="mr-side-threads">
+          {threads.isPending && <Pending />}
+          {threads.isError && (
+            <InlineError
+              error={threads.error}
+              onRetry={() => {
+                void threads.refetch();
+              }}
+            />
+          )}
+          {threads.isSuccess && (
+            <span className={styles.number}>
               {all.length === 0
                 ? t('mr.side.threadsNone')
                 : t('mr.side.threadsCount', { open, total: all.length })}
-            </dd>
-          </div>
-        )}
-        {versions.isSuccess && (
-          <div className={styles.sideRow}>
-            <dt>{t('mr.side.versions')}</dt>
-            <dd className={styles.number} data-testid="mr-side-versions">
-              {versions.data.versions.length}
+            </span>
+          )}
+        </Row>
+        <Row term={t('mr.side.versions')} testId="mr-side-versions">
+          {versions.isPending && <Pending />}
+          {versions.isError && (
+            <InlineError
+              error={versions.error}
+              onRetry={() => {
+                void versions.refetch();
+              }}
+            />
+          )}
+          {versions.isSuccess && (
+            <>
+              <span className={styles.number}>{versions.data.versions.length}</span>
               {latest !== null && (
                 <span className={styles.sideNote}>
                   {t('mr.side.latestHead', { sha: shortOid(latest.head_sha) })}
                 </span>
               )}
-            </dd>
-          </div>
-        )}
-        <div className={styles.sideRow}>
-          <dt>{t('mr.side.updated')}</dt>
-          <dd>
-            <time
-              className={styles.number}
-              dateTime={mr.updated_at}
-              title={formatDateTime(mr.updated_at, i18n.language)}
-            >
-              {formatRelative(mr.updated_at, i18n.language)}
-            </time>
-          </dd>
-        </div>
+            </>
+          )}
+        </Row>
+        <Row term={t('mr.side.updated')} testId="mr-side-updated">
+          <time
+            className={styles.number}
+            dateTime={mr.updated_at}
+            title={formatDateTime(mr.updated_at, i18n.language)}
+          >
+            {formatRelative(mr.updated_at, i18n.language)}
+          </time>
+        </Row>
       </dl>
-      {versions.isError && !status.isError && <p className={styles.nextHint}>{t('mr.side.unread')}</p>}
     </aside>
   );
 }
@@ -115,53 +192,42 @@ function StatusRows({ status }: { status: MergeStatus }) {
   const { t } = useTranslation();
   const approvals = approvalTotals(status);
   const given = status.approvals?.approvals ?? [];
-  const { passed, failed } = checkTotals(status);
-  const total = status.checks.length;
-  const checkTone: BadgeTone = passed === total ? 'open' : failed > 0 ? 'unresolved' : 'draft';
+  const checks = checkTotals(status);
+  const aBadge = approvals.required === 0 ? null : approvalBadge(t, approvals);
+  const cBadge = status.checks.length === 0 ? null : checksBadge(t, checks);
   return (
     <>
-      <div className={styles.sideRow}>
-        <dt>{t('mr.side.approvals')}</dt>
-        <dd data-testid="mr-side-approvals">
-          {approvals.required === 0 ? (
-            t('mr.side.approvalsNone')
-          ) : (
-            <StateBadge tone={approvals.counted >= approvals.required ? 'open' : 'draft'}>
-              <span className={styles.number}>
-                {t('mr.side.approvalsCount', approvals)}
-              </span>
-            </StateBadge>
-          )}
-          {given.length > 0 && (
-            <ul className={styles.sidePeople} aria-label={t('mr.side.approvedBy')}>
-              {given.map((g) => (
-                <li key={g.approver_id}>
-                  {g.counted ? g.username : t('mr.side.notCounted', { name: g.username })}
-                </li>
-              ))}
-            </ul>
-          )}
-        </dd>
-      </div>
-      <div className={styles.sideRow}>
-        <dt>{t('mr.side.checks')}</dt>
-        <dd data-testid="mr-side-checks">
-          {total === 0 ? (
-            t('mr.side.checksNone')
-          ) : (
-            <StateBadge tone={checkTone}>
-              <span className={styles.number}>{t('mr.side.checksCount', { passed, total })}</span>
-            </StateBadge>
-          )}
-        </dd>
-      </div>
+      <Row term={t('mr.side.approvals')} testId="mr-side-approvals">
+        {aBadge === null ? (
+          t('mr.side.approvalsNone')
+        ) : (
+          <StateBadge tone={aBadge.tone}>
+            <span className={styles.number}>{aBadge.label}</span>
+          </StateBadge>
+        )}
+        {given.length > 0 && (
+          <ul className={styles.sidePeople} aria-label={t('mr.side.approvedBy')}>
+            {given.map((g) => (
+              <li key={g.approver_id}>
+                {g.counted ? g.username : t('mr.side.notCounted', { name: g.username })}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Row>
+      <Row term={t('mr.side.checks')} testId="mr-side-checks">
+        {cBadge === null ? (
+          t('mr.side.checksNone')
+        ) : (
+          <StateBadge tone={cBadge.tone}>
+            <span className={styles.number}>{cBadge.label}</span>
+          </StateBadge>
+        )}
+      </Row>
       {status.work_item_link !== null && (
-        <div className={styles.sideRow}>
-          <dt>{t('mr.side.workItem')}</dt>
-          <dd data-testid="mr-side-work-item">
-            {status.work_item_link.linked ? t('mr.side.linked') : t('mr.side.notLinked')}
-          </dd>
-        </div>
+        <Row term={t('mr.side.workItem')} testId="mr-side-work-item">
+          {status.work_item_link.linked ? t('mr.side.linked') : t('mr.side.notLinked')}
+        </Row>
       )}
     </>
   );
