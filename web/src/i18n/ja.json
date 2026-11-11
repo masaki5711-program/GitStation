@@ -53,7 +53,10 @@
     "groups": "グループ",
     "collapse": "サイドバーを畳む",
     "expand": "サイドバーを広げる",
-    "menu": "メニュー"
+    "menu": "メニュー",
+    "projectMenu": "プロジェクトのメニュー",
+    "groupMenu": "グループのメニュー",
+    "showAll": "中身をすべて見る"
   },
   "projects": {
     "title": "プロジェクト",
@@ -69,7 +72,15 @@
     "empty": "見られるグループはまだありません。",
     "emptyMember": "参加しているグループがここに出ます。",
     "emptyHint": "管理者に作成を依頼してください。",
-    "emptyHintAdmin": "「グループを作る」から最初のグループを作ってください。"
+    "emptyHintAdmin": "「グループを作る」から最初のグループを作ってください。",
+    "truncated": "グループが多く、表示できる上限に達しました。一部のグループ（サブグループを含む）が表示されていない場合があります。親が表示されていないグループは、いちばん上にフルパスで出しています。",
+    "toggle": "{{name}} のサブグループ",
+    "expandAll": "すべて開く",
+    "collapseAll": "すべて閉じる",
+    "subgroupCount_one": "サブグループ {{count}} 件",
+    "subgroupCount_other": "サブグループ {{count}} 件",
+    "newSubgroupIn": "サブグループを作る（{{name}}）",
+    "newProjectIn": "プロジェクトを作る（{{name}}）"
   },
   "create": {
     "parent": "作る場所",
@@ -129,17 +140,20 @@
     "emptyTitle": "リポジトリはまだ空です",
     "emptyBody": "次のコマンドで、最初のファイルを送ってください。",
     "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",
-    "repository": "リポジトリ",
     "defaultBranch": "既定のブランチ",
     "branches": "ブランチの数",
     "tags": "タグの数",
     "refsTruncated": "数えられる上限に達したため、実際はこれより多くあります。",
-    "path": "パス",
     "created": "作成日",
     "clone": "clone の URL",
     "copyClone": "URL をコピー",
     "cloneHint": "ログインに使うのは、アクセストークンです。",
-    "copyCommands": "コマンドをコピー"
+    "copyCommands": "コマンドをコピー",
+    "info": "プロジェクト情報",
+    "latestCommit": "最新のコミット",
+    "openCommit": "コミット {{sha}} を開く",
+    "readme": "README",
+    "mergeRequests": "マージリクエスト"
   },
   "error": {
     "title": "うまくいきませんでした",

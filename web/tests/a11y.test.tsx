@@ -3,7 +3,7 @@
 // computes the ratios of the token pairs; the Playwright journey runs axe in a
 // real browser with every rule on).
 import axe from 'axe-core';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -125,7 +125,8 @@ describe('axe', () => {
       'GET /api/v1/projects': () => page([PROJECT]),
     });
     const group = await renderApp({ fetch: server.fetch, path: '/acme' });
-    await screen.findByText('Forge Web');
+    // The sidebar lists it too: look in the page.
+    await within(screen.getByRole('main')).findByText('Forge Web');
     expect(await violations(group.container)).toEqual([]);
     group.unmount();
 

@@ -53,7 +53,10 @@
     "groups": "Groups",
     "collapse": "Collapse the sidebar",
     "expand": "Expand the sidebar",
-    "menu": "Menu"
+    "menu": "Menu",
+    "projectMenu": "Project menu",
+    "groupMenu": "Group menu",
+    "showAll": "See everything inside"
   },
   "projects": {
     "title": "Projects",
@@ -69,7 +72,15 @@
     "empty": "There are no groups you can see yet.",
     "emptyMember": "The groups you belong to appear here.",
     "emptyHint": "Ask an administrator to create one.",
-    "emptyHintAdmin": "Create the first group with \"New group\"."
+    "emptyHintAdmin": "Create the first group with \"New group\".",
+    "truncated": "There are more groups than can be shown, so some groups (subgroups included) may be missing. A group whose parent is not shown is listed at the top with its full path.",
+    "toggle": "Subgroups of {{name}}",
+    "expandAll": "Expand all",
+    "collapseAll": "Collapse all",
+    "subgroupCount_one": "{{count}} subgroup",
+    "subgroupCount_other": "{{count}} subgroups",
+    "newSubgroupIn": "New subgroup in {{name}}",
+    "newProjectIn": "New project in {{name}}"
   },
   "create": {
     "parent": "Create in",
@@ -129,17 +140,20 @@
     "emptyTitle": "The repository is empty",
     "emptyBody": "Send the first files with these commands.",
     "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",
-    "repository": "Repository",
     "defaultBranch": "Default branch",
     "branches": "Branches",
     "tags": "Tags",
     "refsTruncated": "The count reached its limit; there are more than shown.",
-    "path": "Path",
     "created": "Created",
     "clone": "Clone URL",
     "copyClone": "Copy the URL",
     "cloneHint": "Sign in to Git with an access token.",
-    "copyCommands": "Copy the commands"
+    "copyCommands": "Copy the commands",
+    "info": "Project info",
+    "latestCommit": "Latest commit",
+    "openCommit": "Open commit {{sha}}",
+    "readme": "README",
+    "mergeRequests": "Merge requests"
   },
   "error": {
     "title": "Something went wrong",

@@ -126,3 +126,8 @@ export const documentUrl = (
 /** The element id of a block's card (the `user-content-` prefix keeps
  * document ids from clobbering the page's globals, as Markdown headings). */
 export const blockAnchor = (block: string) => `user-content-block-${block}`;
+
+/** The file shown as a folder's README (`README`, `readme.md`, …). */
+export function isReadmeName(name: string): boolean {
+  return /^readme(\.(md|markdown|txt))?$/i.test(name);
+}
