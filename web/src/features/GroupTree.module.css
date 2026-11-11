@@ -1,0 +1,111 @@
+/* The nested group list (plan 15 MR 4). Tokens only. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin-bottom: var(--gs-space-3);
+}
+
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.children {
+  list-style: none;
+  margin: 0;
+  /* One step of indentation per level; the line shows the parent. */
+  padding: 0 0 0 var(--gs-space-6);
+  border-left: 1px solid var(--gs-color-border);
+  margin-left: calc(var(--gs-space-4) + var(--gs-tap-target) / 2);
+}
+
+.children[hidden] {
+  display: none;
+}
+
+.node {
+  border-top: 1px solid var(--gs-color-border);
+}
+
+.tree > .node:first-child {
+  border-top: none;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  padding: var(--gs-space-2) var(--gs-space-4);
+}
+
+.toggle {
+  composes: interactive from '../components/controls.module.css';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--gs-tap-target);
+  height: var(--gs-tap-target);
+  padding: 0;
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text);
+}
+
+.spacer {
+  flex: none;
+  width: var(--gs-tap-target);
+}
+
+/* A chevron drawn with borders (no glyph to translate): right when closed,
+ * down when open. */
+.chevron {
+  width: var(--gs-space-2);
+  height: var(--gs-space-2);
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+.toggle[aria-expanded='true'] .chevron {
+  transform: rotate(45deg);
+}
+
+.label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  min-width: 0;
+}
+
+.name {
+  font-weight: bold;
+  overflow-wrap: anywhere;
+}
+
+.path {
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin-left: auto;
+}
+
+.actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+}

@@ -17,6 +17,7 @@ import controls from '../components/controls.module.css';
 import { QueryError } from '../components/QueryError';
 import { CreateGroupDialog, CreateProjectDialog } from '../features/CreateDialogs';
 import { GroupList, ProjectList } from '../features/Lists';
+import { mayCreateProject, mayCreateSubgroup } from '../features/groupTreeModel';
 import { roleLabel } from '../features/labels';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { encodePath } from '../features/repoUrls';
@@ -104,7 +105,10 @@ export function GroupPage({ id, path }: { id: number; path: string }) {
   }
   const g = group.data;
   const role = roleLabel(t, g.role);
-  const canCreate = g.role !== null || session.user.is_admin;
+  // The same rule as the tree on /-/groups (plan 15 MR 4): Maintainer+ for a
+  // project, Owner for a subgroup, or an administrator. The server decides again.
+  const canProject = mayCreateProject(g.role, session.user.is_admin);
+  const canSubgroup = mayCreateSubgroup(g.role, session.user.is_admin);
   return (
     <>
       <Breadcrumb path={g.path} />
@@ -122,26 +126,30 @@ export function GroupPage({ id, path }: { id: number; path: string }) {
             <Link to={`/${encodePath(g.path)}/-/settings`}>{t('settings.title')}</Link>
           </p>
         </div>
-        {canCreate && (
+        {(canProject || canSubgroup) && (
           <div className={styles.actions}>
-            <button
-              type="button"
-              className={controls.primary}
-              onClick={() => {
-                setDialog('project');
-              }}
-            >
-              {t('namespace.newProject')}
-            </button>
-            <button
-              type="button"
-              className={controls.button}
-              onClick={() => {
-                setDialog('group');
-              }}
-            >
-              {t('namespace.newSubgroup')}
-            </button>
+            {canProject && (
+              <button
+                type="button"
+                className={controls.primary}
+                onClick={() => {
+                  setDialog('project');
+                }}
+              >
+                {t('namespace.newProject')}
+              </button>
+            )}
+            {canSubgroup && (
+              <button
+                type="button"
+                className={controls.button}
+                onClick={() => {
+                  setDialog('group');
+                }}
+              >
+                {t('namespace.newSubgroup')}
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -69,7 +69,15 @@
     "empty": "Belum ada grup yang dapat Anda lihat.",
     "emptyMember": "Grup tempat Anda bergabung muncul di sini.",
     "emptyHint": "Minta administrator untuk membuatnya.",
-    "emptyHintAdmin": "Buat grup pertama dengan \"Grup baru\"."
+    "emptyHintAdmin": "Buat grup pertama dengan \"Grup baru\".",
+    "truncated": "Jumlah grup melebihi batas tampilan, jadi sebagian grup (termasuk subgrup) mungkin tidak terlihat. Grup yang induknya tidak ditampilkan dicantumkan di atas dengan path lengkapnya.",
+    "toggle": "Subgrup dari {{name}}",
+    "expandAll": "Buka semua",
+    "collapseAll": "Tutup semua",
+    "subgroupCount_one": "{{count}} subgrup",
+    "subgroupCount_other": "{{count}} subgrup",
+    "newSubgroupIn": "Subgrup baru di {{name}}",
+    "newProjectIn": "Proyek baru di {{name}}"
   },
   "create": {
     "parent": "Buat di",

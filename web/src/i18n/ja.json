@@ -69,7 +69,15 @@
     "empty": "見られるグループはまだありません。",
     "emptyMember": "参加しているグループがここに出ます。",
     "emptyHint": "管理者に作成を依頼してください。",
-    "emptyHintAdmin": "「グループを作る」から最初のグループを作ってください。"
+    "emptyHintAdmin": "「グループを作る」から最初のグループを作ってください。",
+    "truncated": "グループが多く、表示できる上限に達しました。一部のグループ（サブグループを含む）が表示されていない場合があります。親が表示されていないグループは、いちばん上にフルパスで出しています。",
+    "toggle": "{{name}} のサブグループ",
+    "expandAll": "すべて開く",
+    "collapseAll": "すべて閉じる",
+    "subgroupCount_one": "サブグループ {{count}} 件",
+    "subgroupCount_other": "サブグループ {{count}} 件",
+    "newSubgroupIn": "サブグループを作る（{{name}}）",
+    "newProjectIn": "プロジェクトを作る（{{name}}）"
   },
   "create": {
     "parent": "作る場所",
