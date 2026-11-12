@@ -29,7 +29,7 @@
             ],
             "checks_state": "pending",
             "link": { "source": "auto", "linked_at": "2026-11-04T01:00:01Z" },
-            "author": { "id": 41, "username": "sato", "employee_number": "E-1041" },
+            "author": { "id": 41, "username": "sato", "display_name": "Sato Hanako", "employee_number": "E-1041" },
             "merged_by": null
           },
           {
@@ -49,7 +49,7 @@
             "checks": [],
             "checks_state": "none",
             "link": { "source": "auto", "linked_at": "2026-11-03T09:00:01Z" },
-            "author": { "id": 41, "username": "sato", "employee_number": "E-1041" },
+            "author": { "id": 41, "username": "sato", "display_name": "Sato Hanako", "employee_number": "E-1041" },
             "merged_by": null
           },
           {
@@ -71,8 +71,8 @@
             ],
             "checks_state": "success",
             "link": { "source": "auto", "linked_at": "2026-11-02T08:00:01Z" },
-            "author": { "id": 41, "username": "sato", "employee_number": "E-1041" },
-            "merged_by": { "id": 42, "username": "tanaka", "employee_number": "E-1042" }
+            "author": { "id": 41, "username": "sato", "display_name": "Sato Hanako", "employee_number": "E-1041" },
+            "merged_by": { "id": 42, "username": "tanaka", "display_name": "Tanaka Ichiro", "employee_number": "E-1042" }
           }
         ],
         "merge_requests_truncated": false

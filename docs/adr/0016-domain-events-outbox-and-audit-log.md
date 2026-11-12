@@ -1660,10 +1660,11 @@ kanflow のマージの履歴（作成者が空だった）と「自分の止ま
 I1d の Amendment 3 の MR の欄に 2 つを **足した**（schema_version 1 のまま。消す・変える欄は無い）。
 
 1. **`author`**（MR を開いた人）と **`merged_by`**（適用されたマージの試みの `requested_by`。`state = merged` でなければ `null`）。
-   どちらも `{id, username, employee_number}`。`merged_at` も同じ試み（終了の新しいもの）から取る。
+   どちらも `{id, username, display_name, employee_number}`（`display_name` は MR の API の `author.display_name` と同じ値。kanflow の
+   表示が取り直しのたびに名前と表示名で入れ替わらないように）。`merged_at` も同じ試み（終了の新しいもの）から取る。
 2. **人の欄の開示はイベントの履歴の `actor` と同じ規則**（新しいスコープは作らない）: `employee_number` はトークンが `user_employee_number`
    を持つときだけ。持たないとき・値の無い利用者は欄ごと無い。メールは出さない。
-3. **読み方**: id と名前は MR の文の中で `forge.users` を結合して読む（読み取りのプールが見られる列だけ。N+1 にしない）。社員番号は
+3. **読み方**: id・名前・表示名は MR の文の中で `forge.users` を結合して読む（読み取りのプールが見られる列だけ。N+1 にしない）。社員番号は
    読み取りのプールから見えない（ADR-0018 §2）ので、スコープがあるときだけ履歴と同じ `feed::personal_facts` で、答えのすべての人を
    書き込みのプールから 1 回で読む。
 

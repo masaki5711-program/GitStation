@@ -16,7 +16,7 @@
 //!   with `merge_request.approved` / `.unapproved` admitted, check runs
 //!   only with `check.completed` (I1d review). Each names its author and,
 //!   once merged, who merged it (the applied attempt's requester), joined
-//!   in the same statement — id and username only: the read pool cannot
+//!   in the same statement — id, username and display name only: the read pool cannot
 //!   see employee numbers (forge-integ adds them for a token holding
 //!   `user_employee_number`, like the feed's actor).
 //!
@@ -112,16 +112,19 @@ pub struct DevPerson {
     pub id: UserId,
     /// The current username (`None`: no row, never expected).
     pub username: Option<String>,
+    /// The current display name (`None`: no row, never expected).
+    pub display_name: Option<String>,
     /// Never read here (the read pool cannot see it): forge-integ fills it
     /// for a token holding `user_employee_number`.
     pub employee_number: Option<String>,
 }
 
 impl DevPerson {
-    fn of(id: i64, username: Option<String>) -> Self {
+    fn of(id: i64, username: Option<String>, display_name: Option<String>) -> Self {
         Self {
             id: UserId::new(id),
             username,
+            display_name,
             employee_number: None,
         }
     }
@@ -212,7 +215,14 @@ type MrRow = (
     Option<String>,
     i64,
     (String, String, String, String),
-    (i64, Option<String>, Option<i64>, Option<String>),
+    (
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+    ),
 );
 
 impl FeedSnapshot {
@@ -386,9 +396,10 @@ impl FeedSnapshot {
                    ROW(x.link_source, to_char(x.linked_at AT TIME ZONE 'UTC', {TS}), \
                      to_char(x.created_at AT TIME ZONE 'UTC', {TS}), \
                      to_char(x.updated_at AT TIME ZONE 'UTC', {TS})), \
-                   ROW(x.author_id, au.username, \
+                   ROW(x.author_id, au.username, au.display_name, \
                      CASE WHEN x.state = 'merged' THEN g.requested_by END, \
-                     CASE WHEN x.state = 'merged' THEN mu.username END) \
+                     CASE WHEN x.state = 'merged' THEN mu.username END, \
+                     CASE WHEN x.state = 'merged' THEN mu.display_name END) \
                  FROM ( \
                    SELECT l.work_item_id, l.source AS link_source, l.linked_at, m.*, \
                      row_number() OVER (PARTITION BY l.work_item_id ORDER BY m.id DESC) AS rank \
@@ -471,7 +482,14 @@ impl FeedSnapshot {
                     closed_at,
                     approvals,
                     (link_source, linked_at, created_at, updated_at),
-                    (author_id, author_name, merger_id, merger_name),
+                    (
+                        author_id,
+                        author_name,
+                        author_display,
+                        merger_id,
+                        merger_name,
+                        merger_display,
+                    ),
                 ) = row;
                 let entry = out.entry(item).or_default();
                 if entry.merge_requests.len() >= MAX_MERGE_REQUESTS_PER_ITEM {
@@ -506,8 +524,8 @@ impl FeedSnapshot {
                     checks: show_checks.then(Vec::new),
                     link_source,
                     linked_at,
-                    author: DevPerson::of(author_id, author_name),
-                    merged_by: merger_id.map(|id| DevPerson::of(id, merger_name)),
+                    author: DevPerson::of(author_id, author_name, author_display),
+                    merged_by: merger_id.map(|id| DevPerson::of(id, merger_name, merger_display)),
                 });
             }
             heads.sort();

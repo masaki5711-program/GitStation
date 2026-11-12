@@ -3377,6 +3377,13 @@
         "additionalProperties": false,
         "description": "A person a merge request names (no employee number without the\ntoken's `user_employee_number` scope).",
         "properties": {
+          "display_name": {
+            "description": "The current display name, as the merge request API's\n`author.display_name` (`null`: the account is gone).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "employee_number": {
             "description": "Only with the `user_employee_number` scope (absent otherwise, and\nfor a person without one).",
             "type": [
@@ -3399,7 +3406,8 @@
         },
         "required": [
           "id",
-          "username"
+          "username",
+          "display_name"
         ],
         "type": "object"
       },

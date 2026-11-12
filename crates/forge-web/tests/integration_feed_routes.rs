@@ -1098,17 +1098,20 @@ async fn dev_status_names_who_opened_and_who_merged() {
     .await;
     assert_eq!(plain.status, StatusCode::OK, "{}", plain.json);
     let open = mr_of(&plain.json, open_iid);
-    assert_eq!(open["author"], json!({"id": bob.get(), "username": "bob"}));
+    assert_eq!(
+        open["author"],
+        json!({"id": bob.get(), "username": "bob", "display_name": "Synthetic bob"})
+    );
     assert!(open["merged_by"].is_null(), "{open}");
     let merged = mr_of(&plain.json, merged_iid);
     assert_eq!(merged["state"], "merged");
     assert_eq!(
         merged["author"],
-        json!({"id": bob.get(), "username": "bob"})
+        json!({"id": bob.get(), "username": "bob", "display_name": "Synthetic bob"})
     );
     assert_eq!(
         merged["merged_by"],
-        json!({"id": carol.get(), "username": "carol"})
+        json!({"id": carol.get(), "username": "carol", "display_name": "Synthetic carol"})
     );
 
     let scoped = [Scope::ReadApi, Scope::UserEmployeeNumber];
@@ -1123,14 +1126,14 @@ async fn dev_status_names_who_opened_and_who_merged() {
     assert_eq!(numbered.status, StatusCode::OK, "{}", numbered.json);
     assert_eq!(
         mr_of(&numbered.json, open_iid)["author"],
-        json!({"id": bob.get(), "username": "bob", "employee_number": "E-1002"})
+        json!({"id": bob.get(), "username": "bob", "display_name": "Synthetic bob", "employee_number": "E-1002"})
     );
     assert!(mr_of(&numbered.json, open_iid)["merged_by"].is_null());
     let merged = mr_of(&numbered.json, merged_iid);
     assert_eq!(merged["author"]["employee_number"], "E-1002");
     assert_eq!(
         merged["merged_by"],
-        json!({"id": carol.get(), "username": "carol", "employee_number": "E-1003"})
+        json!({"id": carol.get(), "username": "carol", "display_name": "Synthetic carol", "employee_number": "E-1003"})
     );
 
     // The paged route discloses the same way.

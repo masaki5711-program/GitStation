@@ -27,7 +27,7 @@
 //! else, repeated or empty is refused. The cursor's value is never logged.
 //!
 //! Each merge request names its `author` and `merged_by` (`null` unless
-//! merged) as `{id, username, employee_number}`; the employee number only
+//! merged) as `{id, username, display_name, employee_number}`; the employee number only
 //! for a token holding `user_employee_number`, like the feed's actor.
 
 use std::time::Duration;
@@ -148,6 +148,10 @@ pub struct DevStatusPersonBody {
     /// The current username (`null`: the account is gone).
     #[schema(required = true)]
     pub username: Option<String>,
+    /// The current display name, as the merge request API's
+    /// `author.display_name` (`null`: the account is gone).
+    #[schema(required = true)]
+    pub display_name: Option<String>,
     /// Only with the `user_employee_number` scope (absent otherwise, and
     /// for a person without one).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -258,6 +262,7 @@ fn person_body(person: DevPerson) -> DevStatusPersonBody {
     DevStatusPersonBody {
         id: person.id.get(),
         username: person.username,
+        display_name: person.display_name,
         employee_number: person.employee_number,
     }
 }
@@ -534,6 +539,7 @@ mod unit {
         DevPerson {
             id: UserId::new(id),
             username: Some(format!("u{id}")),
+            display_name: Some(format!("User {id}")),
             employee_number: number.map(str::to_owned),
         }
     }
@@ -691,7 +697,7 @@ mod unit {
         // `merged_by` is `null`, never absent.
         assert_eq!(
             got["author"],
-            serde_json::json!({"id": 41, "username": "u41"})
+            serde_json::json!({"id": 41, "username": "u41", "display_name": "User 41"})
         );
         assert!(got.as_object().is_some_and(|o| o.contains_key("merged_by")));
         assert!(got["merged_by"].is_null(), "{got}");
