@@ -243,6 +243,8 @@ impl ScopedRoute {
                 RouteWord::Documents => "/{namespace}/-/documents/{*rest}",
                 RouteWord::Pipelines => "/{namespace}/-/pipelines/{*rest}",
                 RouteWord::Webhooks => "/{namespace}/-/webhooks/{*rest}",
+                RouteWord::Edit => "/{namespace}/-/edit/{*rest}",
+                RouteWord::New => "/{namespace}/-/new/{*rest}",
             },
             ScopedRoute::Git(g) => match g {
                 GitRoute::InfoRefsUploadPack | GitRoute::InfoRefsReceivePack => {

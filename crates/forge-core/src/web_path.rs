@@ -70,6 +70,11 @@ pub enum RouteWord {
     /// A project's webhooks (`/-/webhooks`, `/-/webhooks/{id}/deliveries`;
     /// M3 I2, ADR-0016 §8).
     Webhooks,
+    /// The simple editor on a file of a branch (`/-/edit/{ref}/{path}`; E2,
+    /// docs/api/single-file-commit.md).
+    Edit,
+    /// The simple editor for a new file (`/-/new/{ref}[/{dir}]`; E2).
+    New,
 }
 
 impl RouteWord {
@@ -92,6 +97,8 @@ impl RouteWord {
         Self::Documents,
         Self::Pipelines,
         Self::Webhooks,
+        Self::Edit,
+        Self::New,
     ];
 
     /// The URL word (also the log / manifest form).
@@ -114,6 +121,8 @@ impl RouteWord {
             Self::Documents => "documents",
             Self::Pipelines => "pipelines",
             Self::Webhooks => "webhooks",
+            Self::Edit => "edit",
+            Self::New => "new",
         }
     }
 

@@ -2007,6 +2007,24 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/{namespace}/-/edit/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "edit"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/edit/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "edit"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/{namespace}/-/members/{*rest}",
     "people_only": false,
     "public": true,
@@ -2039,6 +2057,24 @@
     "public": true,
     "scope": "project",
     "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/new/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "new"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/new/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "new"
   },
   {
     "action": "WebShell",
