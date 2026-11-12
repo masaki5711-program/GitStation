@@ -223,11 +223,34 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - **保持**: 30 日（計画 14 §9 の 6）。`keep`（デプロイした版、C11 で立てる）は消さない。worker の `ci_artifact_expiry`。
 - コード: FG-CI-0019 ArtifactTooLarge、FG-CI-0020 ArtifactTransferFailed（runbook `ci-runner` の「成果物」）。
 
+## Amendment 2026-11-12（C6 のレビュー: security-reviewer・ci-runner-security-reviewer）— シークレットを受け取ったジョブの出力
+
+- **値を渡すのは常に保護された push のパイプラインだけ**（義務 5）。`protected_only` は今は何も広げない（偽でも同じ）。
+- **渡したことを記録する**: Runner の取得で値を渡すとき、値が forge を出る前に、同じトランザクションで `ci_jobs.secrets_released`
+  （一度立てたら戻さない）と、その試行に渡した封じた値の写し `ci_job_secret_snapshots`（`ci_variables` と同じ暗号文、
+  (プロジェクト, 名前) に結びつく。読み取り用の接続は暗号文を読めない）を書く。ログのマスクと成果物の検査はこの写しを使うので、
+  ジョブの途中で変数を変えても消しても、渡した値はマスクされる。
+- **成果物（HIGH）**: そのようなジョブの成果物は、(a) 送られてくる間にマスクの形（下）を探し、見つかれば保存せず FG-CI-0021
+  SecretInArtifact（422、Runner はジョブを FG-CI-0020 `server_code=FG-CI-0021` で失敗にする）。(b) 読めるのはプロジェクトの
+  Maintainer 以上の**人**だけ（`authorize_ci_artifact`、`Resource::CiOutput.secret_job`）。AI の相手は印に関係なく FG-AUTH-0022
+  `reason=secret_job mark_of=job`、サービスアカウント・ボットも同じ。`needs` で受け取れるのも保護された push のパイプラインの中だけ。
+- **マスクの形**: 値、base64（標準・URL 安全、パディングの有無、前に 1・2 バイトある位置でも値だけで決まる部分 — `user:secret` を
+  まとめて符号化したもの）、末尾の改行付きの base64、16 進（小文字・大文字）、パーセント符号化、JSON の文字列のエスケープ。
+  **限界**: 暗号化・圧縮・分割・他の符号化・8 文字未満の base64 の部分は見つからない。だから (b) で読み手を絞る。
+- **上限**: 1 ファイル・1 試行の上限と、プロジェクトの割り当て `ci.artifact_quota_bytes`（既定 5 GiB、FG-CI-0022）を、記録の
+  トランザクションでジョブの行をロックしプロジェクトの勧告ロックを取って数え直す（並行の PUT で越えられない）。`needs` の
+  ファイルが 1000 を超えると FG-CI-0019 `too_many_needed_files`（黙って短くしない）。
+- **Runner**: 成果物はコンテナ（とポッド）を消したことを確かめてから送る（消せなければ FG-CI-0020 `container_not_removed`）。
+  ファイルはリンクをたどらずに開き、`collect` が見たファイルと同じか（Unix では装置と inode）を確かめる。送受は 1 ジョブで
+  30 分の期限（`reason=deadline`）、ファイルの間で停止を確かめる（`reason=stopped`）。心拍は送受の間も続く（試験）。
+  `secrets/` はモード 0700 で一度に作り、Runner の起動のときに作業ディレクトリごと消す。Windows（開発機だけ）では env ファイルは
+  作業ディレクトリの ACL に頼る。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。
 - C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
 - 2026-11-12: FG-CI-0015 JobIsolationUnsafe（新規、alert。runbook `ci-runner` の「ジョブの切り離し」）。
-- C6: FG-CI-0016 SecretKeyUnavailable（alert）、FG-CI-0017 SecretOnUnprotectedRef、FG-CI-0018 SecretNotDefined（info）、runbook `ci-secrets`（新規）。FG-CI-0019 ArtifactTooLarge（info）、FG-CI-0020 ArtifactTransferFailed（warn、runbook `ci-runner`）。
+- C6: FG-CI-0016 SecretKeyUnavailable（alert）、FG-CI-0017 SecretOnUnprotectedRef、FG-CI-0018 SecretNotDefined（info）、runbook `ci-secrets`（新規）。FG-CI-0019 ArtifactTooLarge（info）、FG-CI-0020 ArtifactTransferFailed（warn、runbook `ci-runner`）。C6 のレビュー: FG-CI-0021 SecretInArtifact（warn、runbook `ci-secrets`）、FG-CI-0022 ArtifactQuotaExceeded（info）。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。
