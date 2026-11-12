@@ -209,3 +209,43 @@ pre-receive フックを、**push の検査のために**入れた。保護 ref 
 - テスト: `a_push_with_a_private_key_is_refused_with_fg_git_0022`、`a_push_with_a_large_file_is_refused_with_fg_git_0021`、
   `only_new_objects_are_checked_and_a_marked_fixture_passes`（forge-cli の本物の git の e2e）、forge-git の `push_scan` / `push_hook` /
   `secret_scan` の単体テスト（`a_hook_without_its_policy_fails_closed`、`a_scan_past_its_byte_cap_is_incomplete_and_accepted` など）。
+
+## Amendment（2026-11-12、履歴の取り込み — 空のリポジトリへの 1 回限りの許可）
+
+X8 の秘密の検査は push が持ち込むオブジェクトを**すべて**調べるので、古いコミットに鍵（合成のテスト用でも）がある既存のプロジェクトは
+履歴ごと取り込めなかった（GitStation 自身の履歴にも印の無い古いテストファイルが 7 つある）。利用者の決定（2026-11-12、推奨案を承認）:
+
+- **許可**: インスタンスの管理者が、サーバー上の CLI だけで `forge admin repo allow-import <repo_id> [--ttl-hours N]`（既定 24 時間、
+  最大 168 時間）。HTTP のルートは作らない（認可の表は変わらない。CLI はホストの運用者が信頼の根、ADR-0019 §8）。ref が 1 つでもある
+  リポジトリ・`ready` でないリポジトリは拒否（FG-GIT-0025、info）。表 `forge.repository_history_imports`（migration 20261210100000、
+  プロジェクトに監査される、1 リポジトリ 1 行）。監査 `repository.history_import_allowed`。
+- **使う push**: serve は push の前の ref のスナップショット（R5）が**空**で、許可が開いている（未使用・期限内）ときだけ、policy に
+  `history_import=1` を書く。フックは `ScanMode::HistoryImport` で検査する:
+  - push した各先端のツリーの blob を `git ls-tree -r -z --full-tree --end-of-options <tip>` で全部読む（読み切れなければ FG-GIT-0023 で拒否 =
+    fail closed）。**先端のツリーにある秘密は今まで通り拒否**（FG-GIT-0022）。大きさの検査（FG-GIT-0021）も変えない。
+  - それ以外の秘密（**履歴にだけある**）は拒否しない。result の `history` 行（規則・blob・コミット・パス。値は無い）として serve に渡し、
+    利用者には `FG-GIT-0022 warning` の行で知らせる。serve は 1 件ずつ `forge.git.push_history_finding`（warn、request_id 付き）をログに出す。
+  - ref が反映された受理の push で、許可を使い切り（`consumed_at`、`consumed_request_id`）、`repository.history_imported` と 1 件ごとの
+    `repository.history_secret_imported`（最大 500 件、すべて数える）を 1 つのトランザクションで書く（actor は push した人）。書けなければ
+    FG-GIT-0026（alert、runbook push-checks）。許可の読み取りに失敗したら、ログに出して全部を検査する（厳しい側に倒す）。
+- **使い切り・期限**: 最初に受理された push で使い切る。拒否された push は使わない。期限切れは無視（全部を検査）。2 回目以降の push は全部を
+  検査する。同じ空のリポジトリへの同時の push は両方とも取り込みとして検査されうる（どちらも先端は検査する）。
+- **責任**: 取り込んだ履歴に本物の秘密があれば、**取り込んだ側が失効・交換する**（runbook push-checks「履歴の取り込み」）。
+  GitStation は履歴から消さない。
+- 却下した案: 管理者が検査を止める（先端の秘密も通る）、ファイルごとの印を履歴に後から足す（履歴の書き換えが要る）。
+- テスト: forge-git `an_import_scan_keeps_a_history_only_secret_apart`、`an_import_scan_still_refuses_a_secret_in_the_tip_tree`、
+  `an_import_accepts_a_history_only_secret_and_reports_it`、forge-db `history_imports_tests`（使い切り・期限切れ・ready でない）、
+  forge-cli `allow_import_refuses_a_repository_with_refs`、本物の git の e2e
+  `a_history_import_accepts_an_old_key_once_and_audits_it`、`a_key_in_the_tip_is_refused_even_under_the_import_allowance`、
+  `without_an_allowance_or_into_a_repository_with_refs_history_is_checked_in_full`、forge-web `a_history_import_that_cannot_be_recorded_is_fg_git_0026`。
+- **レビュー（2026-11-12、security / database）を受けて**:
+  - 確認と使い切りが原子的でなかった（HIGH）: 同時の 2 つの最初の push が両方とも緩い検査を受けられた。push は receive-pack の前に
+    `UPDATE … SET claimed_at, claimed_request_id WHERE claimed_at IS NULL AND consumed_at IS NULL AND expires_at > now() RETURNING` で許可を
+    **確保**し、確保できた 1 つだけが緩い検査を受ける。ref を反映しなかった push は確保を返し、反映した push は監査のトランザクションで
+    使い切る（確保した request_id だけ）。確保されたまま使い切られなかった許可（記録の失敗、serve の停止）は二度と開かない。確保の失敗は
+    全部を検査する。確保の列は監査しない列（`unaudited_columns`）で、監査の行は使い切りで書く。
+  - `project_id` をリポジトリの `project_id` に縛る（複合外部キー → `repositories (id, project_id)`、UNIQUE `repositories_id_project` を追加）。
+  - 「履歴にだけある」は先端から辿れて先端のツリーに無い blob。先端から辿れないパックのオブジェクトは X8 のとおり秘密の検査をしない。
+  - ログと利用者向けの行のパスは 120 文字で切る。先端のツリーの一覧は出力の上限で切れたら拒否（既知の制限、fail closed）。
+  - テスト: forge-db `concurrent_claims_have_exactly_one_winner`、`the_allowance_project_must_be_the_repository_project`、
+    forge-web `a_push_that_applied_nothing_releases_its_claim`。

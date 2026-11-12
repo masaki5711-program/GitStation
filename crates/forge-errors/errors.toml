@@ -1179,6 +1179,34 @@ fix = "Nothing is broken. If the push may hold secrets (an import from outside),
 runbook = "push-checks"
 test = "a_scan_past_its_byte_cap_is_incomplete_and_accepted"
 
+[[error]]
+code = "FG-GIT-0025"
+name = "HistoryImportRefused"
+http_status = 409
+severity = "info"
+user_message_ja = "履歴の取り込みを許可できませんでした。リポジトリが空であることを確認してください。"
+user_message_en = "The history import could not be allowed. Make sure the repository is empty."
+user_message_id = "Impor riwayat tidak dapat diizinkan. Pastikan repositori masih kosong."
+cause = "`forge admin repo allow-import <repo_id> [--ttl-hours N]` (2026-11-12, ADR-0008 amendment \"history import\") refused to allow the one-time history import: `reason=repository_not_empty` (the repository already has refs: the allowance is only for the first push into an empty repository), `repository_not_ready` (the repository is still `provisioning` or is being purged), `ttl_out_of_range` (the TTL is outside 1 to 168 hours). Nothing was written."
+diagnosis = "The CLI prints the code and fails; its log line carries `reason`, `repo_id` and, for `repository_not_empty`, `refs` (the refs read). Check read-only: `git --git-dir=$(forge admin repo-path <repo_id>) for-each-ref | head` and `forge doctor` (repositories)."
+fix = "Use the allowance only on a new, empty repository (create a new project for the import, or delete its refs first with an approved step). Pick a TTL between 1 and 168 hours. Runbook push-checks, \"history import\"."
+runbook = "push-checks"
+test = "allow_import_refuses_a_repository_with_refs"
+
+[[error]]
+code = "FG-GIT-0026"
+name = "HistoryImportRecordFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "履歴の取り込みは反映されましたが、その記録を保存できませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The history import was applied, but its record could not be saved. Contact the administrator with the request ID."
+user_message_id = "Impor riwayat sudah diterapkan, tetapi catatannya tidak dapat disimpan. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "A push accepted under the one-time history import allowance (2026-11-12, ADR-0008 amendment \"history import\") was applied, but `forge serve` could not write its audit rows (`repository.history_imported` and one `repository.history_secret_imported` per finding only in history) nor mark the allowance used: the database failed or timed out (`cause_code`), `reason=record_failed` / `timeout`. The refs are updated; the allowance stays CLAIMED by that push, so it is never available again (an operator must allow anew, which the CLI refuses while the repository has refs). Also `reason=release_failed`: a push under the claim applied no ref but the claim could not be given back — the allowance stays claimed (closed) until an operator allows anew."
+diagnosis = "One alert log line with `error_code=FG-GIT-0026`, `request_id`, `repo_id`, `history_findings` and `cause_code`. Every history finding was logged before it with the same `request_id`: `forge.git.push_history_finding` (`rule`, `path`, `commit`, `blob`; never the value)."
+fix = "Fix the database cause (`cause_code`'s runbook). record_failed / timeout: check the audit gap (no `repository.history_imported` row for the request id; the row in `forge.repository_history_imports` has `claimed_request_id` = the request id and `consumed_at` NULL — closed, nothing to do to the allowance), copy the `forge.git.push_history_finding` lines of the request id into the incident record and make sure the importer rotates every real secret among them. release_failed: if the import is still wanted, allow it again (`forge admin repo allow-import`, an approved step). Runbook push-checks, \"history import\"."
+runbook = "push-checks"
+test = "a_history_import_that_cannot_be_recorded_is_fg_git_0026"
+
 # --- WEB: the HTTP layer (forge-web) ----------------------------------------
 
 [[error]]

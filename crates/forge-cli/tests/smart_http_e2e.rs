@@ -113,6 +113,8 @@ struct Server {
     carol_write: String,
     dave_admin: String,
     web: CreatedProject,
+    /// An empty, ready repository (alice/fresh; the history import rows).
+    fresh: CreatedProject,
     tip: String,
     secret_commit: String,
     secret_blob: String,
@@ -184,7 +186,8 @@ fn ok(out: &Output, what: &str) -> String {
 
 /// alice owns the private project `alice/web` (ready, two commits on
 /// `main`; a deleted branch `secret` left a commit and a blob no ref
-/// reaches) and `alice/pending` (still provisioning). bob is signed in and
+/// reaches), `alice/pending` (still provisioning) and `alice/fresh` (ready,
+/// empty: the history import rows). bob is signed in and
 /// not a member. Tokens: alice `read_repository`, alice `api`, bob
 /// `read_repository`.
 fn server(opts: Options) -> Server {
@@ -201,7 +204,7 @@ fn server(opts: Options) -> Server {
     cfg.max_streams_per_principal = opts.max_streams.min(4);
     cfg.acquire_timeout = opts.acquire_timeout;
     let git = Git::new(cfg);
-    let (t, alice, alice_api, bob, web, bare, pushers) = rt.block_on(async {
+    let (t, alice, alice_api, bob, web, bare, pushers, fresh) = rt.block_on(async {
         let t = FreshDb::migrated().await;
         let new_user = |name: &'static str| {
             let db = t.db.clone(); // clone: pool handle
@@ -245,6 +248,21 @@ fn server(opts: Options) -> Server {
         };
         let web = project("web").await;
         let _pending = project("pending").await;
+        // 2026-11-12: an empty, ready repository (the history import rows).
+        let fresh = project("fresh").await;
+        let fresh_target = repositories::provision_target(&t.db, fresh.repository_id)
+            .await
+            .expect("target");
+        root.init_bare_or_adopt(&git, fresh.repository_id, fresh_target.token, None)
+            .await
+            .expect("init fresh");
+        let marked = repositories::mark_ready(&t.db, &ctx("req-ready-fresh"), fresh.repository_id)
+            .await
+            .expect("ready");
+        assert!(
+            matches!(marked, repositories::MarkReady::Marked { .. }),
+            "{marked:?}"
+        );
         let target = repositories::provision_target(&t.db, web.repository_id)
             .await
             .expect("target");
@@ -305,7 +323,7 @@ fn server(opts: Options) -> Server {
             )
             .await,
         );
-        (t, alice_tok, alice_api, bob_tok, web, bare, pushers)
+        (t, alice_tok, alice_api, bob_tok, web, bare, pushers, fresh)
     });
     let (alice_write, carol_write, dave_admin) = pushers;
     // Content, pushed straight into the bare repository (not through forge).
@@ -389,14 +407,16 @@ fn server(opts: Options) -> Server {
             } else {
                 smart
             };
-            smart.with_push(
-                Arc::new(db.clone()),
-                if opts.failing_recorder {
-                    Arc::new(DownRecorder) as Arc<dyn PushRecorder>
-                } else {
-                    Arc::new(db.clone())
-                },
-            )
+            smart
+                .with_push(
+                    Arc::new(db.clone()),
+                    if opts.failing_recorder {
+                        Arc::new(DownRecorder) as Arc<dyn PushRecorder>
+                    } else {
+                        Arc::new(db.clone())
+                    },
+                )
+                .with_history_imports(Arc::new(db.clone())) // clone: pool handle
         });
         let router = forge_web::app(state, AppConfig::default()).expect("router");
         let listener = forge_web::server::bind("127.0.0.1:0").await.expect("bind");
@@ -428,6 +448,7 @@ fn server(opts: Options) -> Server {
         carol_write,
         dave_admin,
         web,
+        fresh,
         tip,
         secret_commit,
         secret_blob,
@@ -2173,4 +2194,157 @@ fn a_verbatim_windows_exe_path_runs_the_hook() {
     let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/win"]);
     refused(&out, ErrorCode::PushSecretDetected);
     s.wait_no_check_runs();
+}
+
+// ── 2026-11-12: the one-time history import of an empty repository ─────
+
+impl Server {
+    /// A new local repository (no remote) with a key added by its first
+    /// commit and removed by the second: the key is only in history.
+    fn history_with_old_key(&self) -> (PathBuf, String) {
+        let work = self.home.path().join(format!("import-{}", rand_suffix()));
+        self.local(
+            self.home.path(),
+            &["init", "-q", "-b", "main", work.to_str().expect("utf-8")],
+        );
+        std::fs::create_dir_all(work.join("deploy")).expect("dir");
+        let old = self.commit(&work, "deploy/id_ed25519", &synthetic_key());
+        self.local(&work, &["rm", "-q", "deploy/id_ed25519"]);
+        self.local(&work, &["commit", "-q", "-m", "drop the key"]);
+        (work, old)
+    }
+
+    fn allow_import(&self, repo: forge_core::RepoId, request: &str) {
+        let t = self.t.as_ref().expect("db");
+        self.rt.block_on(async {
+            forge_db::history_imports::allow(&t.db, &ctx(request), repo, Duration::from_secs(3600))
+                .await
+                .expect("allowed")
+        });
+    }
+
+    fn import_open(&self, repo: forge_core::RepoId) -> bool {
+        let t = self.t.as_ref().expect("db");
+        self.rt.block_on(async {
+            forge_db::history_imports::import_allowed(&t.db, repo)
+                .await
+                .expect("read")
+        })
+    }
+
+    fn audit_rows(&self, action: &str) -> Vec<serde_json::Value> {
+        let t = self.t.as_ref().expect("db");
+        self.rt.block_on(async {
+            t.json_rows(&format!(
+                "SELECT request_id, details FROM forge.audit_log \
+                 WHERE action = '{action}' ORDER BY id"
+            ))
+            .await
+        })
+    }
+
+    /// Wait for the push task to write `action` (it records after the answer).
+    fn wait_rows(&self, action: &str, n: usize) -> Vec<serde_json::Value> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let rows = self.audit_rows(action);
+            if rows.len() >= n || Instant::now() > deadline {
+                return rows;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+#[test]
+fn a_history_import_accepts_an_old_key_once_and_audits_it() {
+    let s = server(Options::default());
+    let repo = s.fresh.repository_id;
+    s.allow_import(repo, "req-allow-fresh");
+    let (work, old) = s.history_with_old_key();
+    let out = s.push_to(
+        &s.alice_write,
+        &work,
+        "alice/fresh.git",
+        &["HEAD:refs/heads/main"],
+    );
+    let text = ok(&out, "import push");
+    let text = format!("{text}{}", stderr(&out));
+    assert!(text.contains("FG-GIT-0022 warning"), "{text}");
+    assert!(text.contains("deploy/id_ed25519"), "{text}");
+    assert!(!text.contains("b3BlbnNzaC1rZXkt"), "{text}");
+    let secrets = s.wait_rows("repository.history_secret_imported", 1);
+    assert_eq!(secrets.len(), 1, "{secrets:?}");
+    let d = &secrets[0]["details"];
+    assert_eq!(d["path"], "deploy/id_ed25519");
+    assert_eq!(d["rule"], "private_key");
+    assert_eq!(d["commit"], old);
+    assert!(!d.to_string().contains("b3BlbnNzaC1rZXkt"), "{d}");
+    let imported = s.wait_rows("repository.history_imported", 1);
+    assert_eq!(imported[0]["details"]["consumed"], true, "{imported:?}");
+    assert!(!s.import_open(repo));
+    s.wait_no_check_runs();
+
+    // The second push is checked in full again: a key in a new commit,
+    // removed by the next, is refused.
+    std::fs::create_dir_all(work.join("keys")).expect("dir");
+    s.commit(&work, "keys/id_rsa", &synthetic_key());
+    s.local(&work, &["rm", "-q", "keys/id_rsa"]);
+    s.local(&work, &["commit", "-q", "-m", "drop it again"]);
+    let out = s.push_to(
+        &s.alice_write,
+        &work,
+        "alice/fresh.git",
+        &["HEAD:refs/heads/next"],
+    );
+    refused(&out, ErrorCode::PushSecretDetected);
+    s.wait_no_check_runs();
+}
+
+#[test]
+fn a_key_in_the_tip_is_refused_even_under_the_import_allowance() {
+    let s = server(Options::default());
+    let repo = s.fresh.repository_id;
+    s.allow_import(repo, "req-allow-fresh-tip");
+    let work = s.home.path().join("import-tip");
+    s.local(
+        s.home.path(),
+        &["init", "-q", "-b", "main", work.to_str().expect("utf-8")],
+    );
+    s.commit(&work, "id_ed25519", &synthetic_key());
+    let out = s.push_to(
+        &s.alice_write,
+        &work,
+        "alice/fresh.git",
+        &["HEAD:refs/heads/main"],
+    );
+    let text = refused(&out, ErrorCode::PushSecretDetected);
+    assert!(text.contains("id_ed25519"), "{text}");
+    s.wait_no_check_runs();
+    // A refused push does not use the allowance up.
+    assert!(s.import_open(repo));
+    assert!(s.audit_rows("repository.history_imported").is_empty());
+}
+
+#[test]
+fn without_an_allowance_or_into_a_repository_with_refs_history_is_checked_in_full() {
+    let s = server(Options::default());
+    // No allowance: an empty repository is checked like any other.
+    let (work, _) = s.history_with_old_key();
+    let out = s.push_to(
+        &s.alice_write,
+        &work,
+        "alice/fresh.git",
+        &["HEAD:refs/heads/main"],
+    );
+    refused(&out, ErrorCode::PushSecretDetected);
+    s.wait_no_check_runs();
+    // An allowance on a repository that has refs (the CLI refuses that;
+    // written here straight to the database) changes nothing.
+    s.allow_import(s.web.repository_id, "req-allow-web");
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/imported"]);
+    refused(&out, ErrorCode::PushSecretDetected);
+    s.wait_no_check_runs();
+    assert!(s.import_open(s.web.repository_id));
+    assert!(s.audit_rows("repository.history_imported").is_empty());
 }

@@ -16,6 +16,8 @@ pub mod event_type;
 pub mod pipeline;
 // ── M3 I1c: the event feed's visible set and cursor position ──
 pub mod feed;
+// 2026-11-12: the one-time history import of an empty repository.
+pub mod history_import;
 // ── end M3 I1c ──
 pub mod ids;
 pub mod integration;
@@ -85,6 +87,9 @@ pub use discussion::{CommentAction, DiscussionKind, DiscussionSide};
 pub use event_type::{EventType, VisibilityClass};
 pub use feed::{
     DevStatusPosition, FeedBinding, FeedMaterial, FeedPosition, VisibleProject, VisibleSet,
+};
+pub use history_import::{
+    HistoryFinding, HistoryImportChange, HistoryImportRecorded, HistoryImportUse, HistoryImports,
 };
 pub use ids::{
     ApprovalId, ApprovalRuleId, DiscussionId, GroupId, IntegrationId, MergeRequestId, NamespaceId,

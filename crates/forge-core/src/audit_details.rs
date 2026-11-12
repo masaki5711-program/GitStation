@@ -5,6 +5,7 @@ use crate::approval::ApprovalRuleChange;
 use crate::checks::CheckRunChange;
 use crate::doc_lint_migration::DocLintMigrationChange;
 use crate::event_type::EventType;
+use crate::history_import::HistoryImportChange;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::integration::IntegrationChange;
 use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
@@ -392,6 +393,10 @@ pub enum AuditDetails {
     /// M3 O2: a push mirror set or removed (resource the project, no
     /// event). Shapes: [`PushMirrorChange::to_value`].
     PushMirror(PushMirrorChange),
+    /// `repository.history_import_allowed` / `.history_imported` /
+    /// `.history_secret_imported` (2026-11-12, audit only, no event).
+    /// Shapes: [`HistoryImportChange::to_value`].
+    HistoryImport(HistoryImportChange),
     /// Plan 13 Q13: the document lint's migration date set or cleared
     /// (resource the project, no event). Shapes:
     /// [`DocLintMigrationChange::to_value`].
@@ -570,6 +575,7 @@ impl AuditDetails {
             Self::WorkItem(change) => change.action(),
             Self::Webhook(change) => change.action(),
             Self::PushMirror(change) => change.action(),
+            Self::HistoryImport(change) => change.action(),
             Self::DocLintMigration(change) => change.action(),
             Self::Pipeline(change) => change.action(),
             Self::Runner(change) => change.action(),
@@ -630,6 +636,7 @@ impl AuditDetails {
             | Self::CheckRunsExpired { .. }
             | Self::Integration(_)
             | Self::PushMirror(_)
+            | Self::HistoryImport(_)
             | Self::DocLintMigration(_)
             | Self::Pipeline(_)
             | Self::Runner(_) => None,
@@ -1052,6 +1059,7 @@ impl AuditDetails {
             Self::WorkItem(change) => change.to_value(),
             Self::Webhook(change) => change.to_value(),
             Self::PushMirror(change) => change.to_value(),
+            Self::HistoryImport(change) => change.to_value(),
             Self::DocLintMigration(change) => change.to_value(),
             Self::Pipeline(change) => change.to_value(),
             Self::Runner(change) => change.to_value(),
@@ -1136,6 +1144,7 @@ impl AuditDetails {
             | Self::WorkItem(_)
             | Self::Webhook(_)
             | Self::PushMirror(_)
+            | Self::HistoryImport(_)
             | Self::DocLintMigration(_)
             | Self::Pipeline(_)
             | Self::Runner(_) => self.to_value(),

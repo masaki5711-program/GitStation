@@ -140,6 +140,10 @@ pub struct SmartHttp {
     /// pre-receive`, M3 X8). `None`: no hook (receive-pack keeps the empty
     /// hooks directory) — `forge serve` always sets it.
     pub(crate) push_checks: Option<PushChecks>,
+    /// The one-time history import allowance (2026-11-12, ADR-0008
+    /// amendment): read before a push into an empty repository, used up by
+    /// the first accepted one. `None`: no import is ever allowed.
+    pub(crate) history_imports: Option<Arc<dyn forge_core::HistoryImports>>,
     /// The browse API and the raw / archive routes (M2 MR7): the same git
     /// and storage, the browse limits, the per-repository cap and the ref
     /// cache every push drops.
@@ -247,6 +251,7 @@ impl SmartHttp {
             push: None,
             push_tasks: PushTasks::default(),
             push_checks: None,
+            history_imports: None,
             browse,
             copy_marks: Arc::default(),
             copy_limits: ConfidentialLimits::default(),
@@ -304,6 +309,13 @@ impl SmartHttp {
         self.git.install_push_hook()?;
         self.push_checks = Some(PushChecks { exe, limits: None });
         Ok(self)
+    }
+
+    /// The history import allowance store (`forge serve`: the database).
+    #[must_use]
+    pub fn with_history_imports(mut self, imports: Arc<dyn forge_core::HistoryImports>) -> Self {
+        self.history_imports = Some(imports);
+        self
     }
 
     /// Other scan limits than the defaults (tests: tiny caps).

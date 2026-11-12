@@ -607,6 +607,14 @@ async fn finish_steps(
         "projects.purge.finish.doc_lint_migrations",
     )
     .await?;
+    // 2026-11-12: the history import allowance references the repository.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.repository_history_imports WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.repository_history_imports",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.merge_request_merges WHERE project_id = $1",

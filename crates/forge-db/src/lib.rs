@@ -112,6 +112,8 @@ pub mod projects;
 #[cfg(test)]
 mod projects_schema_tests;
 pub mod repositories;
+// 2026-11-12: the one-time history import allowance (ADR-0008 amendment).
+pub mod history_imports;
 // ── end D4 ──
 // ── D4 MR5: protected ref rules ──
 pub mod protected_refs;

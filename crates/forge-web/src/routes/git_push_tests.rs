@@ -102,6 +102,7 @@ fn receiver(dir: &std::path::Path, recorder: Arc<dyn PushRecorder>) -> Receiver 
         snapshot_ms: 0,
         checks: None,
         hook_declined: false,
+        history_import: None,
     }
 }
 
@@ -503,6 +504,7 @@ fn check_run(r: &Receiver) -> forge_git::push_hook::PushCheckRun {
                 lang: Lang::En,
                 repo_id: RepoId::new(9),
                 limits: ScanLimits::new(1),
+                history_import: false,
             },
         )
         .expect("run")
@@ -584,7 +586,7 @@ async fn a_refused_check_is_logged_with_its_first_finding() {
         "version\t1\nnonce\t{}\nverdict\trefused\nreason\t-\ndetail\t-\ncause_code\t-\n\
          incomplete\t-\nobjects\t3\nblobs_scanned\t1\nbytes_scanned\t40\nallowed\t0\n\
          total_findings\t1\npack_objects\t3\nskipped_large\t0\nskipped_binary\t0\n\
-         finding\tsecret\tprivate_key\t{}\t{}\tdeploy/id_rsa\n",
+         total_history\t0\nfinding\tsecret\tprivate_key\t{}\t{}\tdeploy/id_rsa\n",
         run.dir()
             .file_name()
             .and_then(|n| n.to_str())
@@ -627,4 +629,156 @@ impl PushRecorder for DownRecorderForChecks {
             Err(ForgeError::new(ErrorCode::Internal).with_context("reason", "unused"))
         })
     }
+}
+
+// ── 2026-11-12: the one-time history import ─────────────────────────────
+
+/// An allowance store whose record answers `answer` (and keeps what it got).
+struct Imports {
+    fail: bool,
+    seen: Mutex<Vec<forge_core::HistoryImportUse>>,
+    released: AtomicU32,
+}
+
+impl forge_core::HistoryImports for Imports {
+    fn claim_import<'a>(&'a self, _: RepoId, _: &'a RequestId) -> LookupFuture<'a, bool> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn release_import<'a>(&'a self, _: RepoId, _: &'a RequestId) -> LookupFuture<'a, ()> {
+        Box::pin(async move {
+            self.released.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn record_import<'a>(
+        &'a self,
+        _: &'a Pusher,
+        _: RepoId,
+        used: &'a forge_core::HistoryImportUse,
+    ) -> LookupFuture<'a, forge_core::HistoryImportRecorded> {
+        Box::pin(async move {
+            self.seen.lock().expect("lock").push(used.clone());
+            if self.fail {
+                Err(ForgeError::new(ErrorCode::DbUnavailable).with_context("reason", "synthetic"))
+            } else {
+                Ok(forge_core::HistoryImportRecorded::Consumed)
+            }
+        })
+    }
+}
+
+fn accepted_import() -> HookOutcome {
+    HookOutcome {
+        verdict: Verdict::Accepted,
+        reason: None,
+        detail: None,
+        cause_code: None,
+        report: forge_git::push_scan::ScanReport {
+            history: vec![forge_git::push_scan::Finding {
+                kind: forge_git::push_scan::FindingKind::Secret {
+                    rule: "private_key".to_owned(),
+                },
+                blob: "e".repeat(40),
+                path: "old/id_rsa".to_owned(),
+                commit: Some("f".repeat(40)),
+            }],
+            total_history: 1,
+            ..forge_git::push_scan::ScanReport::default()
+        },
+    }
+}
+
+#[tokio::test]
+async fn an_accepted_import_is_recorded_and_its_findings_logged() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    let imports = Arc::new(Imports {
+        fail: false,
+        seen: Mutex::new(Vec::new()),
+        released: AtomicU32::new(0),
+    });
+    r.history_import = Some(Arc::clone(&imports) as Arc<dyn forge_core::HistoryImports>);
+    let outcome = accepted_import();
+    let (buf, _guard) = capture();
+    r.log_checked(&outcome, "1");
+    r.history_imported(&outcome).await;
+    let events = buf.events();
+    let logged: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["message"] == "forge.git.push_history_finding")
+        .collect();
+    assert_eq!(logged.len(), 1, "{events:?}");
+    assert_eq!(logged[0]["path"], "old/id_rsa");
+    assert_eq!(logged[0]["rule"], "private_key");
+    assert_eq!(logged[0]["request_id"], "req-push-unit");
+    assert!(
+        events
+            .iter()
+            .any(|e| e["message"] == "forge.git.history_imported" && e["consumed"] == true),
+        "{events:?}"
+    );
+    let seen = imports.seen.lock().expect("lock");
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].total, 1);
+    assert_eq!(seen[0].findings[0].path, "old/id_rsa");
+    assert_eq!(
+        seen[0].findings[0].commit.as_deref(),
+        Some("f".repeat(40).as_str())
+    );
+}
+
+#[tokio::test]
+async fn a_history_import_that_cannot_be_recorded_is_fg_git_0026() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    r.history_import = Some(Arc::new(Imports {
+        fail: true,
+        seen: Mutex::new(Vec::new()),
+        released: AtomicU32::new(0),
+    }));
+    let (buf, _guard) = capture();
+    r.history_imported(&accepted_import()).await;
+    let events = buf.events();
+    let failed: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["error_code"] == ErrorCode::HistoryImportRecordFailed.id())
+        .collect();
+    assert_eq!(failed.len(), 1, "{events:?}");
+    let context = failed[0]["context"].as_str().unwrap_or_default();
+    assert!(context.contains("reason=record_failed"), "{context}");
+    assert!(context.contains("history_findings=1"), "{context}");
+    assert!(context.contains("cause_code=FG-DB-0001"), "{context}");
+    // A refused push never uses the allowance.
+    let (buf, _guard) = capture();
+    let mut refused = accepted_import();
+    refused.verdict = Verdict::Refused;
+    r.history_imported(&refused).await;
+    assert!(buf.events().is_empty());
+}
+
+/// A push under the claim that applied no ref gives the claim back; one
+/// whose refs landed keeps it (used up, or never re-armed).
+#[tokio::test]
+async fn a_push_that_applied_nothing_releases_its_claim() {
+    let dir = tempfile::tempdir().expect("dir");
+    let imports = Arc::new(Imports {
+        fail: false,
+        seen: Mutex::new(Vec::new()),
+        released: AtomicU32::new(0),
+    });
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    r.history_import = Some(Arc::clone(&imports) as Arc<dyn forge_core::HistoryImports>);
+    let (buf, _guard) = capture();
+    r.after_push(Vec::new(), "report").await;
+    assert_eq!(imports.released.load(Ordering::SeqCst), 1);
+    assert!(
+        buf.events()
+            .iter()
+            .any(|e| e["message"] == "forge.git.history_import_released"),
+        "{:?}",
+        buf.events()
+    );
+    assert!(imports.seen.lock().expect("lock").is_empty());
 }
