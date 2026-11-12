@@ -110,6 +110,12 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             )
             .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
         );
+        // M4 C8 (ADR-0030 §13): the merge queue's worker, next to the merges
+        // (its landing writes the target branches under the same lock).
+        let queue_tasks = crate::serve_merge_queue::spawn(Arc::new(forge_review::MergeQueue::new(
+            forge_review::Merger::clone(&merger),
+            format!("serve-{}", forge_core::RequestId::generate()),
+        )));
         let merge_tasks = crate::serve_merges::spawn(&db, merger)?;
         let oidc = crate::oidc::service(cfg, &db)?;
         let mut state = app_state(&db, database, cfg.web.session_idle, oidc.as_ref())
@@ -250,6 +256,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // The merge in progress gets its grace, then is released (an
         // `executing` attempt is the reconciliation's after the restart).
         // A task that panicked or did not end in time is logged there.
+        queue_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         merge_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         // A receive-pack whose body was complete runs on in its own task
         // (and records the push afterwards): let it finish before the

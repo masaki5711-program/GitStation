@@ -47,6 +47,7 @@ mod attribution;
 pub mod conditions;
 pub mod evaluate;
 mod execute;
+pub mod queue;
 mod reconcile;
 mod request;
 mod source;
@@ -59,6 +60,7 @@ pub use evaluate::{
 pub(crate) use execute::account_commit_identity;
 pub use execute::{MergeReport, RECONCILE_BATCH};
 pub use forge_db::review::merges::{CredentialRef, StoredMerge};
+pub use queue::{MergeQueue, QueueAsk, QueueLimits, TickReport};
 pub use reconcile::ReconcileReport;
 pub use request::MergeAsk;
 pub(crate) use request::{head_changed as request_head_changed, is_ref_not_found};

@@ -4205,6 +4205,27 @@
         ],
         "type": "object"
       },
+      "EnqueueMergeRequest": {
+        "additionalProperties": false,
+        "description": "`POST …/merge-queue`.",
+        "properties": {
+          "method": {
+            "description": "`merge_commit`, `squash` or `fast_forward` (when the project allows\nit); absent: the project's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "description": "The head commit the requester reviewed (required): another head is\nrefused (FG-REVIEW-0008 stale_view).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "type": "object"
+      },
       "EntryBody": {
         "additionalProperties": false,
         "description": "One tree entry.",
@@ -5702,6 +5723,85 @@
         ],
         "type": "object"
       },
+      "MergeQueueBody": {
+        "additionalProperties": false,
+        "description": "A target branch's merge queue.",
+        "properties": {
+          "batch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QueueBatchBody"
+              }
+            ]
+          },
+          "batch_limit": {
+            "description": "The bound of the next batch (4; halved after a red batch).",
+            "format": "int64",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "entries": {
+            "description": "The live entries (`queued` / `testing`) in order.",
+            "items": {
+              "$ref": "#/components/schemas/QueueEntryBody"
+            },
+            "type": "array"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "paused_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paused_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "recent": {
+            "description": "The latest merged or removed entries, newest first (at most 20).",
+            "items": {
+              "$ref": "#/components/schemas/QueueEntryBody"
+            },
+            "type": "array"
+          },
+          "target_branch": {
+            "description": "The target branch without `refs/heads/`.",
+            "type": "string"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/QueueViewerBody"
+          }
+        },
+        "required": [
+          "project_id",
+          "target_branch",
+          "paused",
+          "paused_by",
+          "paused_at",
+          "batch_limit",
+          "batch",
+          "entries",
+          "recent",
+          "viewer"
+        ],
+        "type": "object"
+      },
       "MergeRequestBody": {
         "additionalProperties": false,
         "description": "One merge request as the API shows it.",
@@ -6443,7 +6543,7 @@
             "type": "string"
           },
           "source": {
-            "description": "`push`, `merge_request`, `schedule`, `manual`.",
+            "description": "`push`, `merge_request`, `schedule`, `manual`, `merge_queue` (M4 C8: a\nmerge queue's train, on the target branch).",
             "type": "string"
           },
           "status": {
@@ -7235,6 +7335,236 @@
           "reset_approvals_on_push",
           "committer_approvals_excluded",
           "expected_updated_at"
+        ],
+        "type": "object"
+      },
+      "QueueBatchBody": {
+        "additionalProperties": false,
+        "description": "The batch being tested (ADR-0030 §3, §5).",
+        "properties": {
+          "base_sha": {
+            "description": "The target tip the train was built on.",
+            "type": "string"
+          },
+          "batch_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "deadline_at": {
+            "description": "UTC, RFC 3339: tested past it, the batch is reaped (FG-CI-0019).",
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "description": "`testing` or `landing`.",
+            "type": "string"
+          },
+          "train_sha": {
+            "description": "The train's last commit (its pipeline's sha, source `merge_queue`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "state",
+          "base_sha",
+          "train_sha",
+          "size",
+          "deadline_at",
+          "request_id",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "QueueEntryBody": {
+        "additionalProperties": false,
+        "description": "One merge request's entry in a merge queue (ADR-0030 §12).",
+        "properties": {
+          "batch_id": {
+            "description": "The batch testing it (`testing` only).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "enqueued_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "entry_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "error_code": {
+            "description": "The code of a removal by the queue (FG-CI-0018, FG-CI-0019, …).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "isolate": {
+            "description": "Why it runs in a batch of its own: `migration`, `risk_stop`,\n`fast_forward` (`null`: may share a batch, or not batched yet).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merge_id": {
+            "description": "The merge attempt that landed it (`merged`).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "position": {
+            "description": "1-based among the live entries of the queue (`null` once merged or\nremoved).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why it was removed (`dequeued`, `checks_failed`, `conflict`,\n`head_changed`, `stalled`, …).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "description": "The request that queued it.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`queued`, `testing`, `merged` or `removed`.",
+            "type": "string"
+          },
+          "target_branch": {
+            "description": "The target branch without `refs/heads/`.",
+            "type": "string"
+          },
+          "train_sha": {
+            "description": "Its commit in the train (`testing`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entry_id",
+          "iid",
+          "state",
+          "position",
+          "target_branch",
+          "head_sha",
+          "method",
+          "isolate",
+          "batch_id",
+          "train_sha",
+          "merge_id",
+          "reason",
+          "error_code",
+          "enqueued_by",
+          "request_id",
+          "created_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "QueueEntryStatusBody": {
+        "additionalProperties": false,
+        "description": "`GET …/merge-queue`: the latest entry (`null`: never queued).",
+        "properties": {
+          "entry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QueueEntryBody"
+              }
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "iid",
+          "entry"
+        ],
+        "type": "object"
+      },
+      "QueueTarget": {
+        "additionalProperties": false,
+        "description": "`POST …/merge-queue/pause` and `…/resume`.",
+        "properties": {
+          "target": {
+            "description": "The target branch: `main` or `refs/heads/main`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "QueueViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do now (a hint; the routes decide again).",
+        "properties": {
+          "can_pause": {
+            "type": "boolean"
+          },
+          "can_resume": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_pause",
+          "can_resume"
         ],
         "type": "object"
       },
@@ -14932,6 +15262,160 @@
         "x-forge-max-body-bytes": 1024
       }
     },
+    "/api/v1/projects/{id}/merge-queue": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The target branch (`main` or `refs/heads/main`); required",
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeQueueBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A target branch's merge queue (target required): paused or not, the next batch bound, the batch being tested (base, train, deadline), the live entries in order and the latest merged or removed ones with their reason and code (as the repository browse API)",
+        "x-forge-action": "MergeQueueRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-queue/pause": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_queue_pause",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeQueueBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Pause a target branch's merge queue (the emergency stop): no new batch is built and no batch lands until it is resumed; merge requests may still be added (people only; Developer)",
+        "x-forge-action": "MergeQueuePause",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/merge-queue/resume": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_queue_resume",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeQueueBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Resume a paused merge queue (people only; Maintainer)",
+        "x-forge-action": "MergeQueueManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
     "/api/v1/projects/{id}/merge-requests": {
       "get": {
         "operationId": "get_api_v1_projects_id_merge_requests",
@@ -15966,6 +16450,160 @@
         "summary": "Merge a merge request (people only; the target branch's push role; a token needs merge_execute). Queues the merge job",
         "x-forge-action": "MergeRequestMerge",
         "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_merge_requests_iid_merge_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueEntryBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Take a merge request out of the merge queue (as adding it); 409 FG-CI-0020 when it is not queued",
+        "x-forge-action": "MergeQueueDequeue"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_merge_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueEntryStatusBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's latest merge queue entry (null: never queued) with its place among the live entries (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_merge_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnqueueMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueEntryBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target branch's push role; a token needs merge_execute); everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0020 when already queued",
+        "x-forge-action": "MergeQueueEnqueue",
+        "x-forge-max-body-bytes": 1024
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/mergeability": {

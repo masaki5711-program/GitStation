@@ -459,6 +459,8 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Pull,
     RouteWord::Documents,
     RouteWord::Pipelines,
+    // M4 C8: a target's merge queue (its data: the merge queue API).
+    RouteWord::MergeQueue,
     RouteWord::Webhooks,
     RouteWord::Edit,
     RouteWord::New,
@@ -585,12 +587,12 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::QUERY,
         );
     user_activity_routes(user_merge_request_routes(runner_routes(pipeline_routes(
-        doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
-            webhook_routes(notification_routes(check_routes(dev_status_routes(
-                feed_routes(integration_routes(service_account_routes(account_routes(
-                    history_routes(browse_routes(git_routes(shell_routes(
+        merge_queue_routes(doc_lint_routes(binding_routes(act_as_routes(
+            mirror_routes(webhook_routes(notification_routes(check_routes(
+                dev_status_routes(feed_routes(integration_routes(service_account_routes(
+                    account_routes(history_routes(browse_routes(git_routes(shell_routes(
                         merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
-                    )))),
+                    ))))),
                 )))),
             )))),
         )))),
@@ -806,6 +808,44 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::diagnosis,
         )
         .responds::<p::DiagnosisBody>(Verb::Get, p::DIAGNOSIS)
+}
+
+/// The merge queue (M4 C8, ADR-0030): a target's queue, its emergency
+/// stop and its restart. The merge request's own routes (enqueue, dequeue,
+/// its entry) are in `merge_request_routes`.
+fn merge_queue_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::merge_queue as q;
+    registry
+        .route_with(
+            Verb::Get,
+            q::QUEUE,
+            Action::MergeQueueRead,
+            "A target branch's merge queue (target required): paused or not, the next batch bound, the batch being tested (base, train, deadline), the live entries in order and the latest merged or removed ones with their reason and code (as the repository browse API)",
+            q::QueueOf,
+            q::read,
+        )
+        .responds::<q::MergeQueueBody>(Verb::Get, q::QUEUE)
+        .queries(Verb::Get, q::QUEUE, q::QUEUE_QUERY)
+        .route_with_body(
+            Verb::Post,
+            q::PAUSE,
+            Action::MergeQueuePause,
+            "Pause a target branch's merge queue (the emergency stop): no new batch is built and no batch lands until it is resumed; merge requests may still be added (people only; Developer)",
+            q::MAX_BODY,
+            q::QueueOf,
+            q::pause,
+        )
+        .responds::<q::MergeQueueBody>(Verb::Post, q::PAUSE)
+        .route_with_body(
+            Verb::Post,
+            q::RESUME,
+            Action::MergeQueueManage,
+            "Resume a paused merge queue (people only; Maintainer)",
+            q::MAX_BODY,
+            q::QueueOf,
+            q::resume,
+        )
+        .responds::<q::MergeQueueBody>(Verb::Post, q::RESUME)
 }
 
 /// A project's document lint migration setting (plan 13 Q13, ADR-0026):
@@ -2185,6 +2225,36 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::merge_status,
         )
         .responds::<mr::MergeStatusBody>(Verb::Get, mr::MERGE)
+        // M4 C8 (ADR-0030 §2, §10, §11): "merge when ready" — the merge
+        // request in its target's merge queue.
+        .route_with_body(
+            Verb::Post,
+            mr::MERGE_QUEUE,
+            Action::MergeQueueEnqueue,
+            "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target branch's push role; a token needs merge_execute); everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0020 when already queued",
+            mr::MERGE_QUEUE_MAX_BODY,
+            mr::MergeRequestToQueue,
+            mr::merge_queue_enqueue,
+        )
+        .responds_created::<mr::QueueEntryBody>(Verb::Post, mr::MERGE_QUEUE)
+        .route_with(
+            Verb::Delete,
+            mr::MERGE_QUEUE,
+            Action::MergeQueueDequeue,
+            "Take a merge request out of the merge queue (as adding it); 409 FG-CI-0020 when it is not queued",
+            mr::MergeRequestToDequeue,
+            mr::merge_queue_dequeue,
+        )
+        .responds::<mr::QueueEntryBody>(Verb::Delete, mr::MERGE_QUEUE)
+        .route_with(
+            Verb::Get,
+            mr::MERGE_QUEUE,
+            Action::MergeRequestRead,
+            "A merge request's latest merge queue entry (null: never queued) with its place among the live entries (as the repository browse API)",
+            mr::QueueEntryOf,
+            mr::merge_queue_entry,
+        )
+        .responds::<mr::QueueEntryStatusBody>(Verb::Get, mr::MERGE_QUEUE)
         // M3 R5 (ADR-0024 §8, §9): approvals of the head the caller saw,
         // their evaluation, and the project's approval rules.
         .route_with_body(

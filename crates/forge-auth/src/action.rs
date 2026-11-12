@@ -439,6 +439,27 @@ actions! {
     PipelineCancel,
     /// `POST …/pipelines/{pipeline_id}/retry`: Developer and above; `api`.
     PipelineRetry,
+    // --- merge queue (M4 C8, plan 14 §4.2, ADR-0030) ---
+    /// `GET /api/v1/projects/{id}/merge-queue?target=`: a queue's entries
+    /// (one merge request's place is `MergeRequestRead` on
+    /// `GET …/merge-requests/{iid}/merge-queue`). As `RepoBrowse` (an agent audience too: the
+    /// queue is metadata); `read_api`.
+    MergeQueueRead,
+    /// `POST …/merge-requests/{iid}/merge-queue`: "merge when ready" — add
+    /// the merge request to its target's queue. Decided as
+    /// `MergeRequestMerge` (people only; the target's push role; a token
+    /// needs `merge_execute`): the queue merges for the person who asked.
+    MergeQueueEnqueue,
+    /// `DELETE …/merge-requests/{iid}/merge-queue`: take it out of the
+    /// queue. As `MergeQueueEnqueue` (who may merge it may stop it).
+    MergeQueueDequeue,
+    /// `POST /api/v1/projects/{id}/merge-queue/pause`: the emergency stop
+    /// of a target's queue (no new batch, no landing). People only,
+    /// Developer and above (plan 14 §4.2); `api`.
+    MergeQueuePause,
+    /// `POST /api/v1/projects/{id}/merge-queue/resume`: start a paused
+    /// queue again. People only, Maintainer and above; `api`.
+    MergeQueueManage,
     // --- CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1) ---
     /// `POST /api/v1/admin/runners`: register a runner and show its token
     /// once. An administrator's web session, people only (a token is
@@ -608,6 +629,11 @@ impl Action {
                 | Action::DocLintMigrationManage
                 | Action::RunnerRegister
                 | Action::RunnerManage
+                // M4 C8: the queue merges for a person (ADR-0030 §2, §9).
+                | Action::MergeQueueEnqueue
+                | Action::MergeQueueDequeue
+                | Action::MergeQueuePause
+                | Action::MergeQueueManage
         )
     }
 
@@ -693,6 +719,7 @@ impl Action {
             | Action::PipelineRead
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::MergeQueueRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -736,9 +763,14 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
-            Action::MergeRequestMerge => Some(Scope::MergeExecute),
+            Action::MergeRequestMerge
+            // M4 C8: adding to the queue is the merge, delayed.
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue => Some(Scope::MergeExecute),
             // M3 R5: satisfied by `merge_approve` alone.
             Action::MergeRequestApprove | Action::MergeRequestUnapprove => {
                 Some(Scope::MergeApprove)
@@ -863,6 +895,12 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C8: the merge queue is no act-as action.
+            | Action::MergeQueueRead
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             // M4 C3: runners are no act-as action.
             | Action::RunnerRegister
             | Action::RunnerManage
@@ -992,6 +1030,12 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C8: a job never reads or changes a merge queue.
+            | Action::MergeQueueRead
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

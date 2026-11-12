@@ -775,6 +775,37 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis",
         Coverage::Command("pipeline diagnosis"),
     ),
+    // M4 C8 (ADR-0030): the merge queue.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-queue",
+        Coverage::Command("queue list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-queue/pause",
+        Coverage::Command("queue pause"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-queue/resume",
+        Coverage::Command("queue resume"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
+        Coverage::Command("queue add"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
+        Coverage::Command("queue remove"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
+        Coverage::Command("queue status"),
+    ),
     // M4 C3 (plan 14, ADR-0029): runners. The administration is an
     // administrator's web session; the runner API takes a runner's token
     // (forge-runner, C4), never a person's.

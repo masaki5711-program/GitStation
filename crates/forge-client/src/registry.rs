@@ -1797,6 +1797,81 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["POST /api/v1/projects/{id}/push-mirror/sync"],
         output: r#"{"type":"object","required":["queued"],"properties":{"queued":{"type":"boolean"}}}"#,
     },
+    // ── M4 C8: the merge queue (ADR-0030, runbook merge-queue) ──
+    CommandSpec {
+        name: "queue add",
+        summary: "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target's push role; a token needs merge_execute). Everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0020 when already queued.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request number."),
+            arg("--sha", "option", true, "The head commit you reviewed."),
+            arg("--method", "option", false, "merge_commit, squash or fast_forward (default: the project's)."),
+        ],
+        examples: &["gstn queue add --project 7 --iid 12 --sha 0123456789abcdef0123456789abcdef01234567"],
+        scopes: &["merge_execute"],
+        routes: &["POST /api/v1/projects/{id}/merge-requests/{iid}/merge-queue"],
+        output: r#"{"type":"object","required":["entry_id","iid","state","position","target_branch","head_sha","method","isolate","batch_id","train_sha","merge_id","reason","error_code","enqueued_by","request_id","created_at","finished_at"]}"#,
+    },
+    CommandSpec {
+        name: "queue remove",
+        summary: "Take a merge request out of the merge queue (as adding it). 409 FG-CI-0020 when it is not queued.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request number."),
+        ],
+        examples: &["gstn queue remove --project 7 --iid 12"],
+        scopes: &["merge_execute"],
+        routes: &["DELETE /api/v1/projects/{id}/merge-requests/{iid}/merge-queue"],
+        output: r#"{"type":"object","required":["entry_id","iid","state","position","target_branch","head_sha","method","isolate","batch_id","train_sha","merge_id","reason","error_code","enqueued_by","request_id","created_at","finished_at"]}"#,
+    },
+    CommandSpec {
+        name: "queue status",
+        summary: "A merge request's latest merge queue entry (null: never queued): its state, place, why it runs alone, and why it left (reason and code).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request number."),
+        ],
+        examples: &["gstn queue status --project 7 --iid 12 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/merge-queue"],
+        output: r#"{"type":"object","required":["iid","entry"]}"#,
+    },
+    CommandSpec {
+        name: "queue list",
+        summary: "A target branch's merge queue: paused or not, the next batch bound, the batch being tested (base, train, deadline), the queued entries in order and the latest merged or removed ones.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--target", "option", true, "The target branch (main or refs/heads/main)."),
+        ],
+        examples: &["gstn queue list --project 7 --target main --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-queue"],
+        output: r#"{"type":"object","required":["project_id","target_branch","paused","paused_by","paused_at","batch_limit","batch","entries","recent","viewer"]}"#,
+    },
+    CommandSpec {
+        name: "queue pause",
+        summary: "Pause a target branch's merge queue (the emergency stop): no new batch, no landing; merge requests may still be added (people only; Developer).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--target", "option", true, "The target branch."),
+        ],
+        examples: &["gstn queue pause --project 7 --target main"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/merge-queue/pause"],
+        output: r#"{"type":"object","required":["project_id","target_branch","paused","paused_by","paused_at","batch_limit","batch","entries","recent","viewer"]}"#,
+    },
+    CommandSpec {
+        name: "queue resume",
+        summary: "Resume a paused merge queue (people only; Maintainer).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--target", "option", true, "The target branch."),
+        ],
+        examples: &["gstn queue resume --project 7 --target main"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/merge-queue/resume"],
+        output: r#"{"type":"object","required":["project_id","target_branch","paused","paused_by","paused_at","batch_limit","batch","entries","recent","viewer"]}"#,
+    },
     // ── M4 C2: CI pipelines (runbook ci-pipelines) ──
     CommandSpec {
         name: "pipeline list",
