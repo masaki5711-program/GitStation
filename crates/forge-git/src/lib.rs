@@ -42,6 +42,7 @@
 //!   push brings inside git's quarantine (blob sizes, secrets) and the
 //!   secret patterns.
 
+mod batch;
 pub mod browse;
 mod command;
 pub mod commit;
@@ -52,6 +53,7 @@ pub mod hidden_refs;
 pub mod maintenance;
 pub mod merge_result;
 pub mod mergeability;
+mod metrics;
 pub mod mirror;
 pub mod pkt_line;
 mod process;
@@ -81,6 +83,7 @@ pub mod version;
 mod want_check;
 
 pub use command::{Git, GitCommand, GitConfig, GitOutput};
+pub use metrics::git_spawns;
 pub use push_check::{Ancestry, CommitList, CommitQuery};
 pub use refs::{PipelineRef, RefChange, RefUpdateResult};
 pub use revision::Revision;
