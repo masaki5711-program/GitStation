@@ -128,6 +128,8 @@ fn all_lists_every_event_type_once() {
             "merge_request.source_branch_deleted",
             "merge_request.approved",
             "merge_request.unapproved",
+            "merge_request.work_items_changed",
+            "merge_request.relink_requested",
             "merge_settings.codeowners_enforcement_changed",
             "merge_settings.codeowners_enforcement_restored",
             "check.completed",

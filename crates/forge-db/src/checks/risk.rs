@@ -373,6 +373,8 @@ impl Subscriber for RiskRequests {
                 | EventType::CheckCompleted
                 | EventType::WorkItemLinked
                 | EventType::WorkItemUnlinked
+                | EventType::MergeRequestWorkItemsChanged
+                | EventType::MergeRequestRelinkRequested
                 | EventType::WebhookDisabled => Ok(()),
             }
         })

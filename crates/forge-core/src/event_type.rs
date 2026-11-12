@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`; M3 R6: `merge_settings.codeowners_enforcement_changed`, `.codeowners_enforcement_restored`; M3 C1: `check.completed`; M3 I1b: `work_item.linked`, `.unlinked`; M3 I2: `webhook.disabled`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`; M3 R6: `merge_settings.codeowners_enforcement_changed`, `.codeowners_enforcement_restored`; M3 C1: `check.completed`; M3 I1b: `work_item.linked`, `.unlinked`; M3 I2: `webhook.disabled`; M4 work item relink: `merge_request.work_items_changed`, `merge_request.relink_requested`); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -160,6 +160,27 @@ pub enum EventType {
     /// new target (`target_changed`). Deduplicated by
     /// `merge_request_unapproved:<approval_id>` (each row ends once).
     MergeRequestUnapproved,
+    /// `merge_request.work_items_changed` (ADR-0016 Amendment 2026-11-12;
+    /// integration class): a merge request's work item links changed by
+    /// hand (a person's or a credential's link / unlink, with its
+    /// `work_item.*` audit row and event) or by the re-detection after a
+    /// binding (`reason=relink`, derived by `work-item-sync`). One event
+    /// per merge request and change, naming the links added and removed:
+    /// the `merge_request.*` signal an integration that follows merge
+    /// requests (kanflow) reads the merge request again on. Deduplicated by
+    /// `merge_request_work_items_changed:link:<link_id>:<linked|unlinked>`
+    /// (by hand) or `merge_request_work_items_changed:seq:<source seq>`
+    /// (re-detection).
+    MergeRequestWorkItemsChanged,
+    /// `merge_request.relink_requested` (ADR-0016 Amendment 2026-11-12; admin
+    /// class: internal, never in an integration's feed or a project
+    /// webhook): the `work_items.relink` job asks `work-item-sync` to
+    /// detect a merge request's work items again after its project got a
+    /// binding that resolves work items. One per (merge request, binding),
+    /// deduplicated by `merge_request_relink_requested:<merge_request_id>:<binding_id>`;
+    /// each is its own root, so one merge request's links and events stay
+    /// within the derivation limit.
+    MergeRequestRelinkRequested,
     /// `merge_settings.codeowners_enforcement_changed` (M3 R6, ADR-0024 §9;
     /// maintainer class): a person suspended CODEOWNERS enforcement (with
     /// its expiry, at most 24 hours) or enforced it again. No dedup key
@@ -198,7 +219,7 @@ pub enum EventType {
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 38] = [
+    pub const ALL: [EventType; 40] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -231,6 +252,8 @@ impl EventType {
         EventType::MergeRequestSourceBranchDeleted,
         EventType::MergeRequestApproved,
         EventType::MergeRequestUnapproved,
+        EventType::MergeRequestWorkItemsChanged,
+        EventType::MergeRequestRelinkRequested,
         EventType::CodeownersEnforcementChanged,
         EventType::CodeownersEnforcementRestored,
         EventType::CheckCompleted,
@@ -274,6 +297,8 @@ impl EventType {
             EventType::MergeRequestSourceBranchDeleted => "merge_request.source_branch_deleted",
             EventType::MergeRequestApproved => "merge_request.approved",
             EventType::MergeRequestUnapproved => "merge_request.unapproved",
+            EventType::MergeRequestWorkItemsChanged => "merge_request.work_items_changed",
+            EventType::MergeRequestRelinkRequested => "merge_request.relink_requested",
             EventType::CodeownersEnforcementChanged => {
                 "merge_settings.codeowners_enforcement_changed"
             }
@@ -315,6 +340,7 @@ impl EventType {
             | EventType::MergeRequestSourceBranchDeleted
             | EventType::MergeRequestApproved
             | EventType::MergeRequestUnapproved
+            | EventType::MergeRequestWorkItemsChanged
             | EventType::CheckCompleted
             | EventType::WorkItemLinked
             | EventType::WorkItemUnlinked => VisibilityClass::Integration,
@@ -322,7 +348,8 @@ impl EventType {
             | EventType::TokenRevoked
             | EventType::ProjectPurged
             | EventType::GroupMoved
-            | EventType::UserRenamed => VisibilityClass::Admin,
+            | EventType::UserRenamed
+            | EventType::MergeRequestRelinkRequested => VisibilityClass::Admin,
             EventType::MemberAdded
             | EventType::MemberRoleChanged
             | EventType::MemberRemoved

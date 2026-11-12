@@ -1,5 +1,6 @@
 use crate::work_item::{
-    find_refs, LinkActorKind, LinkSource, UnlinkSource, WorkItem, WorkItemChange, WorkItemRef,
+    find_refs, LinkActorKind, LinkSource, LinksChangedReason, UnlinkSource, WorkItem,
+    WorkItemChange, WorkItemRef, WorkItemsChanged,
 };
 use crate::{EventType, IntegrationId, IntegrationKind, MergeRequestId, ProjectId, UserId};
 
@@ -147,4 +148,100 @@ fn work_item_events_carry_the_reference_and_are_integration_class() {
         assert!(crate::integration::event_type_entry_ok(t.as_str()));
     }
     assert!(crate::integration::event_type_entry_ok("work_item.*"));
+}
+
+/// Kanflow follows `merge_request.*` events and reads the merge request
+/// they name (`data.iid`): a link made or ended by hand, or by the
+/// re-detection after a (re)binding, is one `merge_request.work_items_changed`
+/// naming what was added and removed (integration class, under
+/// `merge_request.*`).
+#[test]
+fn work_items_changed_names_the_added_and_removed_links() {
+    let linked = WorkItemChange::Linked {
+        project: ProjectId::new(5),
+        merge_request: MergeRequestId::new(9),
+        iid: 2,
+        link: 11,
+        work_item: item(),
+        source: LinkSource::Manual,
+        by: Some((UserId::new(4), LinkActorKind::Human)),
+        replaces: None,
+    };
+    let changed = linked.to_changed();
+    assert_eq!(
+        changed.event_type(),
+        EventType::MergeRequestWorkItemsChanged
+    );
+    assert_eq!(
+        changed.event_type().as_str(),
+        "merge_request.work_items_changed"
+    );
+    assert_eq!(
+        changed.to_value(),
+        serde_json::json!({
+            "merge_request_id": 9, "iid": 2, "reason": "manual",
+            "added": [{"link_id": 11, "work_item_id": 7, "source": "manual",
+                "work_item": {"provider": "kanflow", "project_id": "kf-12", "ref": "PBI-43"}}],
+            "removed": [],
+            "by": 4, "by_kind": "human",
+        })
+    );
+    let unlinked = WorkItemChange::Unlinked {
+        project: ProjectId::new(5),
+        merge_request: MergeRequestId::new(9),
+        iid: 2,
+        link: 11,
+        work_item: item(),
+        source: UnlinkSource::Manual,
+        by: Some((UserId::new(4), LinkActorKind::Human)),
+    }
+    .to_changed();
+    assert_eq!(unlinked.to_value()["added"], serde_json::json!([]));
+    assert_eq!(
+        unlinked.to_value()["removed"],
+        serde_json::json!([{"link_id": 11, "work_item_id": 7, "unlink_source": "manual",
+            "work_item": {"provider": "kanflow", "project_id": "kf-12", "ref": "PBI-43"}}])
+    );
+    let relinked = WorkItemsChanged {
+        project: ProjectId::new(5),
+        merge_request: MergeRequestId::new(9),
+        iid: 2,
+        reason: LinksChangedReason::Relink,
+        added: vec![(12, item(), LinkSource::Auto)],
+        removed: Vec::new(),
+        by: None,
+    };
+    let value = relinked.to_value();
+    assert_eq!(value["reason"], "relink");
+    assert_eq!(value["by"], serde_json::Value::Null);
+    assert_eq!(value["added"][0]["source"], "auto");
+    assert!(!relinked.is_empty());
+    assert!(WorkItemsChanged {
+        added: Vec::new(),
+        ..relinked
+    }
+    .is_empty());
+    assert_eq!(
+        EventType::MergeRequestWorkItemsChanged.visibility_class(),
+        crate::VisibilityClass::Integration
+    );
+    assert!(crate::integration::event_type_entry_ok(
+        "merge_request.work_items_changed"
+    ));
+}
+
+/// The re-detection's own trigger (one per merge request, written by the
+/// `work_items.relink` job) is internal: admin class, never in an
+/// integration's feed, never admitted by an allowlist.
+#[test]
+fn relink_requested_is_admin_class() {
+    let t = EventType::MergeRequestRelinkRequested;
+    assert_eq!(t.as_str(), "merge_request.relink_requested");
+    assert_eq!(t.visibility_class(), crate::VisibilityClass::Admin);
+    assert!(!crate::integration::event_type_entry_ok(t.as_str()));
+    assert!(!crate::feed::allowed_event_types(&["merge_request.*".to_owned()]).contains(&t));
+    assert!(
+        crate::feed::allowed_event_types(&["merge_request.*".to_owned()])
+            .contains(&EventType::MergeRequestWorkItemsChanged)
+    );
 }

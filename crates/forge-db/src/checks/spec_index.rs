@@ -382,6 +382,8 @@ impl Subscriber for SpecIndexRequests {
                 | EventType::CodeownersEnforcementChanged
                 | EventType::CodeownersEnforcementRestored
                 | EventType::CheckCompleted
+                | EventType::MergeRequestWorkItemsChanged
+                | EventType::MergeRequestRelinkRequested
                 | EventType::WebhookDisabled => Ok(()),
             }
         })
