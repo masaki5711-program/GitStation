@@ -7,7 +7,7 @@
 .title {
   margin: 0 0 var(--gs-space-3);
   font-size: var(--gs-font-size-xl);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }
 
 .lead {

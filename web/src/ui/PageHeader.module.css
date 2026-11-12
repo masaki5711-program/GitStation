@@ -24,7 +24,7 @@
   height: var(--gs-accent-rule-width);
   margin-bottom: var(--gs-space-3);
   border-radius: var(--gs-radius-pill);
-  background: var(--gs-brand-teal);
+  background: var(--gs-color-accent);
 }
 
 .title {
@@ -32,7 +32,7 @@
   font-size: var(--gs-font-size-2xl);
   font-weight: var(--gs-font-weight-semibold);
   line-height: var(--gs-line-height-tight);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
   overflow-wrap: anywhere;
 }
 

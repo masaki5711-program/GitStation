@@ -21,6 +21,13 @@
     "account": "Account settings",
     "admin": "Administration"
   },
+  "theme": {
+    "legend": "Theme",
+    "system": "Match the system",
+    "white": "White",
+    "navy": "Navy",
+    "dark": "Dark"
+  },
   "language": {
     "ja": "日本語",
     "en": "English",

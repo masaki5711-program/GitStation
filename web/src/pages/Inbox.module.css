@@ -44,7 +44,7 @@
 
 /* Unread: a teal-strong bar, a tint and the written mark (not colour alone). */
 .unread {
-  border-left: var(--gs-accent-border-width) solid var(--gs-brand-teal-strong);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-accent-strong);
   background: var(--gs-color-active-surface);
 }
 

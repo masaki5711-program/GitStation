@@ -7,8 +7,17 @@
  *
  * Teal and orange are too light for body text on white: text uses
  * teal-strong or navy.
+ *
+ * Themes (user menu → テーマ; src/theme.ts sets <html data-theme>): `:root`
+ * is ホワイト; `navy` and `dark` override every colour below except the
+ * brand values and pure white; `system` (and no attribute, before the
+ * script runs) follows prefers-color-scheme with the dark values, a copy the
+ * test keeps equal. Components use the semantic tokens (heading, accent,
+ * attention, on-*), never a brand value directly, so every theme reads.
  */
 :root {
+  color-scheme: light;
+
   /* Brand (docs/brand/README.md) */
   --gs-brand-navy: #1b2a44;
   --gs-brand-teal: #22b8a0;
@@ -27,6 +36,15 @@
   /* One step darker than the surface, so cards lift off the page
      (link 4.67:1, muted text 6.70:1 on it). */
   --gs-color-background: #ecf3f5;
+  /* Page and section headings (navy on the light theme). */
+  --gs-color-heading: #1b2a44;
+  /* Decorative teal rules and edges; accent-strong is the 3:1 indicator
+     (a current page's bar, a button's edge, a ready status). */
+  --gs-color-accent: #22b8a0;
+  --gs-color-accent-strong: #128f7c;
+  /* "Needs a human": the orange edge, dot and count pill (navy text on it). */
+  --gs-color-attention: #ff7a45;
+  --gs-color-on-attention: #1b2a44;
 
   /* Interactive */
   --gs-color-link: #0f7a69;
@@ -34,6 +52,7 @@
   --gs-color-action: #0f7a69;
   --gs-color-action-hover: #0b6154;
   --gs-color-action-active: #084a40;
+  --gs-color-on-action: #ffffff; /* text on a primary button */
   --gs-color-hover-surface: #eef8f6;
   --gs-color-active-surface: #e8f5f2;
   /* The sidebar's current page: a stronger tint (link 4.57:1) with a
@@ -63,6 +82,8 @@
   --gs-color-success-surface: #e8f6ee;
   --gs-color-info-text: #0a4f9e;
   --gs-color-info-surface: #e8f0fb;
+  /* A status icon's glyph on its solid danger / warning disc. */
+  --gs-color-on-status: #ffffff;
 
   /* Header */
   --gs-header-background: #1b2a44;
@@ -83,6 +104,11 @@
   --gs-focus-offset: 2px;
   --gs-border-width-strong: 2px; /* a pressed toggle's edge */
   --gs-color-scrim: rgb(27 42 68 / 55%);
+  /* The theme choice's previews: fixed in every theme (decorative; the
+     label names the theme). */
+  --gs-swatch-white: #ffffff;
+  --gs-swatch-navy: #172640;
+  --gs-swatch-dark: #1c1f24;
   /* Elevation: 1 a card at rest, 2 a clickable card under the pointer,
      3 a dialog or menu above the page. Navy-tinted, never pure black. */
   --gs-shadow-1: 0 1px 2px rgb(27 42 68 / 6%), 0 1px 3px rgb(27 42 68 / 8%);
@@ -144,4 +170,204 @@
   --gs-accent-rule-width: 3px; /* the brand-teal rule on a page header or card */
   --gs-accent-rule-length: 2.5rem;
   --gs-empty-icon-size: 2.5rem;
+}
+
+/* ネイビー: the brand theme. */
+:root[data-theme='navy'] {
+  color-scheme: dark;
+
+  /* Surfaces: a deep navy page, cards one step lighter. */
+  --gs-color-text: #e6eef5;
+  --gs-color-text-muted: #a9b8c9;
+  --gs-color-border: #4a6285;
+  --gs-color-border-subtle: #2b4063;
+  --gs-color-surface: #172640;
+  --gs-color-background: #0e192b;
+  --gs-color-heading: #f4fbfc;
+  --gs-color-accent: #22b8a0;
+  --gs-color-accent-strong: #2cc5ab;
+  --gs-color-attention: #ff8a5c;
+  --gs-color-on-attention: #0e192b;
+
+  /* Interactive: teal buttons with navy text. */
+  --gs-color-link: #5ee0c9;
+  --gs-color-action: #2cc5ab;
+  --gs-color-action-hover: #4fd8c0;
+  --gs-color-action-active: #7ee3d1;
+  --gs-color-on-action: #0e192b;
+  --gs-color-hover-surface: #1f3150;
+  --gs-color-active-surface: #223658;
+  --gs-color-nav-active-surface: #193e4c;
+  --gs-color-focus: #5ee0c9;
+
+  /* Code and diffs */
+  --gs-color-code-surface: #111e33;
+  --gs-color-hunk-surface: #1d3152;
+  --gs-code-keyword: #ff8ccf;
+  --gs-code-string: #7ee2a8;
+  --gs-code-comment: #95a7bd;
+  --gs-code-number: #f5b86b;
+  --gs-code-title: #8cc4ff;
+  --gs-code-meta: #c4a8ff;
+
+  /* Status */
+  --gs-color-danger-text: #ff9e9e;
+  --gs-color-danger-surface: #3a1f2e;
+  --gs-color-danger-border: #a85a68;
+  --gs-color-danger-surface-hover: #4a2639;
+  --gs-color-warning-text: #ffc66d;
+  --gs-color-warning-surface: #332c1d;
+  --gs-color-success-text: #7ee2a8;
+  --gs-color-success-surface: #153530;
+  --gs-color-info-text: #8cc4ff;
+  --gs-color-info-surface: #172f50;
+  --gs-color-on-status: #0e192b;
+
+  /* Header: the logo's navy on the left (its box must not show). */
+  --gs-header-background: #1b2a44;
+  --gs-header-background-deep: #0a1322;
+  --gs-header-text: #f4fbfc;
+  --gs-header-hover: #2c3e5f;
+  --gs-header-active: #3a4f75;
+
+  /* Shadows barely show on navy: borders carry the edges, shadows only deepen. */
+  --gs-color-scrim: rgb(3 8 16 / 72%);
+  --gs-shadow-1: 0 1px 2px rgb(0 0 0 / 24%);
+  --gs-shadow-2: 0 2px 4px rgb(0 0 0 / 28%), 0 4px 12px rgb(0 0 0 / 24%);
+  --gs-shadow-3: 0 4px 8px rgb(0 0 0 / 32%), 0 12px 32px rgb(0 0 0 / 40%);
+}
+
+/* ダーク: neutral near-black. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Surfaces: neutral graphite, cards one step lighter. */
+  --gs-color-text: #e4e7eb;
+  --gs-color-text-muted: #a6aeb9;
+  --gs-color-border: #4b525c;
+  --gs-color-border-subtle: #30353d;
+  --gs-color-surface: #1c1f24;
+  --gs-color-background: #131518;
+  --gs-color-heading: #f3f5f7;
+  --gs-color-accent: #22b8a0;
+  --gs-color-accent-strong: #2cc5ab;
+  --gs-color-attention: #ff8a5c;
+  --gs-color-on-attention: #131518;
+
+  /* Interactive: teal buttons with graphite text. */
+  --gs-color-link: #5ed6c1;
+  --gs-color-action: #2cc5ab;
+  --gs-color-action-hover: #4fd8c0;
+  --gs-color-action-active: #7ee3d1;
+  --gs-color-on-action: #131518;
+  --gs-color-hover-surface: #252930;
+  --gs-color-active-surface: #292e36;
+  --gs-color-nav-active-surface: #1d3532;
+  --gs-color-focus: #5ed6c1;
+
+  /* Code and diffs */
+  --gs-color-code-surface: #17191d;
+  --gs-color-hunk-surface: #212a36;
+  --gs-code-keyword: #ff8ccf;
+  --gs-code-string: #7ee2a8;
+  --gs-code-comment: #9aa3ae;
+  --gs-code-number: #f5b86b;
+  --gs-code-title: #8cc4ff;
+  --gs-code-meta: #c4a8ff;
+
+  /* Status */
+  --gs-color-danger-text: #ff9e9e;
+  --gs-color-danger-surface: #3a1e21;
+  --gs-color-danger-border: #9a5055;
+  --gs-color-danger-surface-hover: #4a2529;
+  --gs-color-warning-text: #ffc66d;
+  --gs-color-warning-surface: #332a19;
+  --gs-color-success-text: #7ee2a8;
+  --gs-color-success-surface: #163024;
+  --gs-color-info-text: #8cc4ff;
+  --gs-color-info-surface: #182a40;
+  --gs-color-on-status: #131518;
+
+  /* Header: the logo's navy on the left (its box must not show), into graphite. */
+  --gs-header-background: #1b2a44;
+  --gs-header-background-deep: #0d0f12;
+  --gs-header-text: #f4fbfc;
+  --gs-header-hover: #2c3e5f;
+  --gs-header-active: #3a4f75;
+
+  /* Shadows barely show on graphite: borders carry the edges. */
+  --gs-color-scrim: rgb(0 0 0 / 70%);
+  --gs-shadow-1: 0 1px 2px rgb(0 0 0 / 30%);
+  --gs-shadow-2: 0 2px 4px rgb(0 0 0 / 32%), 0 4px 12px rgb(0 0 0 / 28%);
+  --gs-shadow-3: 0 4px 8px rgb(0 0 0 / 36%), 0 12px 32px rgb(0 0 0 / 48%);
+}
+
+/* システムに合わせる: the dark values when the OS asks for dark (a copy of
+   the block above; tests/tokens.test.ts keeps the two equal). Also before
+   src/theme.ts has run, when <html> has no data-theme yet. */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme='system'],
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    /* Surfaces: neutral graphite, cards one step lighter. */
+    --gs-color-text: #e4e7eb;
+    --gs-color-text-muted: #a6aeb9;
+    --gs-color-border: #4b525c;
+    --gs-color-border-subtle: #30353d;
+    --gs-color-surface: #1c1f24;
+    --gs-color-background: #131518;
+    --gs-color-heading: #f3f5f7;
+    --gs-color-accent: #22b8a0;
+    --gs-color-accent-strong: #2cc5ab;
+    --gs-color-attention: #ff8a5c;
+    --gs-color-on-attention: #131518;
+
+    /* Interactive: teal buttons with graphite text. */
+    --gs-color-link: #5ed6c1;
+    --gs-color-action: #2cc5ab;
+    --gs-color-action-hover: #4fd8c0;
+    --gs-color-action-active: #7ee3d1;
+    --gs-color-on-action: #131518;
+    --gs-color-hover-surface: #252930;
+    --gs-color-active-surface: #292e36;
+    --gs-color-nav-active-surface: #1d3532;
+    --gs-color-focus: #5ed6c1;
+
+    /* Code and diffs */
+    --gs-color-code-surface: #17191d;
+    --gs-color-hunk-surface: #212a36;
+    --gs-code-keyword: #ff8ccf;
+    --gs-code-string: #7ee2a8;
+    --gs-code-comment: #9aa3ae;
+    --gs-code-number: #f5b86b;
+    --gs-code-title: #8cc4ff;
+    --gs-code-meta: #c4a8ff;
+
+    /* Status */
+    --gs-color-danger-text: #ff9e9e;
+    --gs-color-danger-surface: #3a1e21;
+    --gs-color-danger-border: #9a5055;
+    --gs-color-danger-surface-hover: #4a2529;
+    --gs-color-warning-text: #ffc66d;
+    --gs-color-warning-surface: #332a19;
+    --gs-color-success-text: #7ee2a8;
+    --gs-color-success-surface: #163024;
+    --gs-color-info-text: #8cc4ff;
+    --gs-color-info-surface: #182a40;
+    --gs-color-on-status: #131518;
+
+    /* Header: the logo's navy on the left (its box must not show), into graphite. */
+    --gs-header-background: #1b2a44;
+    --gs-header-background-deep: #0d0f12;
+    --gs-header-text: #f4fbfc;
+    --gs-header-hover: #2c3e5f;
+    --gs-header-active: #3a4f75;
+
+    /* Shadows barely show on graphite: borders carry the edges. */
+    --gs-color-scrim: rgb(0 0 0 / 70%);
+    --gs-shadow-1: 0 1px 2px rgb(0 0 0 / 30%);
+    --gs-shadow-2: 0 2px 4px rgb(0 0 0 / 32%), 0 4px 12px rgb(0 0 0 / 28%);
+    --gs-shadow-3: 0 4px 8px rgb(0 0 0 / 36%), 0 12px 32px rgb(0 0 0 / 48%);
+  }
 }

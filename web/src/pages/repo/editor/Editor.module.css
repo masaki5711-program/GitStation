@@ -35,7 +35,7 @@
 }
 
 .status[data-dirty='true'] .statusDot {
-  background: var(--gs-brand-orange);
+  background: var(--gs-color-attention);
 }
 
 .pathField {
@@ -134,7 +134,7 @@
 }
 
 .tab[aria-selected='true'] {
-  border-bottom-color: var(--gs-brand-teal);
+  border-bottom-color: var(--gs-color-accent);
   color: var(--gs-color-text);
   font-weight: var(--gs-font-weight-semibold);
 }
@@ -157,7 +157,7 @@
   margin: 0 0 var(--gs-space-3);
   padding: var(--gs-space-2) var(--gs-space-3);
   border: 1px solid var(--gs-color-border);
-  border-left: var(--gs-accent-rule-width) solid var(--gs-brand-orange);
+  border-left: var(--gs-accent-rule-width) solid var(--gs-color-attention);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-warning-surface);
   color: var(--gs-color-warning-text);
@@ -223,7 +223,7 @@
 }
 
 .savedWarning {
-  border-left-color: var(--gs-brand-orange);
+  border-left-color: var(--gs-color-attention);
   background: var(--gs-color-warning-surface);
   color: var(--gs-color-warning-text);
 }
@@ -251,7 +251,7 @@
 /* The edit pane leads: a teal edge, and a teal border while it holds the
    focus; the preview sits back on the code surface. */
 .paneEdit {
-  border-top: var(--gs-accent-rule-width) solid var(--gs-brand-teal);
+  border-top: var(--gs-accent-rule-width) solid var(--gs-color-accent);
   transition:
     border-color var(--gs-duration-fast) var(--gs-ease),
     box-shadow var(--gs-duration-fast) var(--gs-ease);
@@ -259,11 +259,11 @@
 
 .paneEdit:hover {
   border-color: var(--gs-color-border);
-  border-top-color: var(--gs-brand-teal);
+  border-top-color: var(--gs-color-accent);
 }
 
 .paneEdit:focus-within {
-  border-color: var(--gs-brand-teal-strong);
+  border-color: var(--gs-color-accent-strong);
   box-shadow: var(--gs-shadow-2);
 }
 
@@ -286,7 +286,7 @@
   margin-right: var(--gs-space-2);
   border-radius: var(--gs-radius-pill);
   background: var(--gs-color-warning-text);
-  color: var(--gs-color-white);
+  color: var(--gs-color-on-status);
   font-weight: var(--gs-font-weight-bold);
   vertical-align: middle;
 }
