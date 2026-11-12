@@ -23,6 +23,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { encodePath } from '../features/repoUrls';
 import { useSession } from '../session/session';
 import styles from './Namespace.module.css';
+import { PageHeader } from '../ui/PageHeader';
 
 function Children({ path }: { path: string }) {
   const { t } = useTranslation();
@@ -113,22 +114,12 @@ export function GroupPage({ id, path }: { id: number; path: string }) {
     <>
       <Breadcrumb path={g.path} />
       <MovedNotice />
-      <div className={styles.top}>
-        <div>
-          <h1 className={styles.title}>{g.display_name}</h1>
-          <p className={styles.meta}>
-            <span className={controls.badge}>{t('namespace.group')}</span>
-            {role !== null && <span className={controls.badge}>{role}</span>}
-          </p>
-          {g.description !== '' && <p>{g.description}</p>}
-          <p className={styles.actions}>
-            <Link to={`/${encodePath(g.path)}/-/members`}>{t('members.title')}</Link>
-            <Link to={`/${encodePath(g.path)}/-/settings`}>{t('settings.title')}</Link>
-          </p>
-        </div>
-        {(canProject || canSubgroup) && (
-          <div className={styles.actions}>
-            {canProject && (
+      <PageHeader
+        title={g.display_name}
+        actions={
+          canProject || canSubgroup ? (
+            <>
+              {canProject && (
               <button
                 type="button"
                 className={controls.primary}
@@ -150,9 +141,20 @@ export function GroupPage({ id, path }: { id: number; path: string }) {
                 {t('namespace.newSubgroup')}
               </button>
             )}
-          </div>
-        )}
-      </div>
+            </>
+          ) : null
+        }
+      >
+        <p className={styles.meta}>
+          <span className={controls.badge}>{t('namespace.group')}</span>
+          {role !== null && <span className={controls.badge}>{role}</span>}
+        </p>
+        {g.description !== '' && <p className={styles.description}>{g.description}</p>}
+        <p className={styles.headLinks}>
+          <Link to={`/${encodePath(g.path)}/-/members`}>{t('members.title')}</Link>
+          <Link to={`/${encodePath(g.path)}/-/settings`}>{t('settings.title')}</Link>
+        </p>
+      </PageHeader>
       <Children path={g.path} />
       <CreateProjectDialog
         open={dialog === 'project'}
@@ -182,15 +184,10 @@ export function UserPage({ path, namespaceId }: { path: string; namespaceId: num
     <>
       <Breadcrumb path={path} />
       <MovedNotice />
-      <div className={styles.top}>
-        <div>
-          <h1 className={styles.title}>{path}</h1>
-          <p className={styles.meta}>
-            <span className={controls.badge}>{t('namespace.user')}</span>
-          </p>
-        </div>
-        {(own || session.user.is_admin) && (
-          <div className={styles.actions}>
+      <PageHeader
+        title={path}
+        actions={
+          own || session.user.is_admin ? (
             <button
               type="button"
               className={controls.primary}
@@ -200,9 +197,13 @@ export function UserPage({ path, namespaceId }: { path: string; namespaceId: num
             >
               {t('namespace.newProject')}
             </button>
-          </div>
-        )}
-      </div>
+          ) : null
+        }
+      >
+        <p className={styles.meta}>
+          <span className={controls.badge}>{t('namespace.user')}</span>
+        </p>
+      </PageHeader>
       <Children path={path} />
       <CreateProjectDialog
         open={open}

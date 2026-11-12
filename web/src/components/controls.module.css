@@ -13,6 +13,11 @@
  * pressed and keyboard focus look the same everywhere (tokens only). */
 .interactive {
   cursor: pointer;
+  transition:
+    background-color var(--gs-duration-fast) var(--gs-ease),
+    border-color var(--gs-duration-fast) var(--gs-ease),
+    color var(--gs-duration-fast) var(--gs-ease),
+    box-shadow var(--gs-duration-fast) var(--gs-ease);
 }
 
 .interactive:hover:not(:disabled) {
@@ -28,8 +33,16 @@
   outline-offset: 2px;
 }
 
-.interactive:disabled {
+/* Cannot be pressed: not-allowed. A wait under way says so with aria-busy
+   (on the control or a group around it): progress. */
+.interactive:disabled,
+.interactive[aria-disabled='true'] {
   opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.interactive[aria-busy='true'],
+[aria-busy='true'] .interactive {
   cursor: progress;
 }
 
@@ -39,12 +52,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.5rem;
+  min-height: var(--gs-tap-target);
   max-width: 100%;
   padding: var(--gs-space-2) var(--gs-space-4);
   border: 1px solid var(--gs-brand-teal-strong);
   border-radius: var(--gs-radius-sm);
   font: inherit;
+  font-weight: var(--gs-font-weight-medium);
   text-align: center;
   text-decoration: none;
   /* Long translations (id) wrap instead of overflowing. */
@@ -70,6 +84,44 @@
   background: var(--gs-color-action-active);
 }
 
+/* A destructive action: red text on a red tint; pressed, white on red. */
+.danger {
+  composes: button;
+  border-color: var(--gs-color-danger-border);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+.danger:hover:not(:disabled, [aria-disabled='true']) {
+  border-color: var(--gs-color-danger-text);
+  background: var(--gs-color-danger-surface-hover);
+}
+
+.danger:active:not(:disabled, [aria-disabled='true']) {
+  background: var(--gs-color-danger-text);
+  color: var(--gs-color-white);
+}
+
+.danger[aria-disabled='true']:hover,
+.danger[aria-disabled='true']:active {
+  background: var(--gs-color-danger-surface);
+}
+
+/* A quiet action next to a stronger one: no box until hovered. */
+.ghost {
+  composes: button;
+  border-color: transparent;
+  background: transparent;
+}
+
+/* Compose with a variant (`${button} ${small}`): a dense row of actions. */
+.small {
+  min-height: var(--gs-tap-target-sm);
+  padding: var(--gs-space-1) var(--gs-space-3);
+  font-size: var(--gs-font-size-sm);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -92,13 +144,14 @@
 
 .input {
   cursor: text;
-  min-height: 2.5rem;
+  min-height: var(--gs-tap-target);
   padding: var(--gs-space-2) var(--gs-space-3);
   border: 1px solid var(--gs-color-text-muted);
   border-radius: var(--gs-radius-sm);
   font: inherit;
   color: var(--gs-color-text);
   background: var(--gs-color-surface);
+  transition: border-color var(--gs-duration-fast) var(--gs-ease);
 }
 
 .input:hover:not(:disabled) {
@@ -114,10 +167,10 @@
   opacity: 0.6;
 }
 
-/* A save under way: the button keeps the focus (aria-disabled, not disabled). */
+/* A save under way: the button keeps the focus (aria-disabled, not disabled;
+   the cursor rule is on .interactive). */
 .primary[aria-disabled='true'] {
   opacity: 0.6;
-  cursor: progress;
 }
 
 .primary[aria-disabled='true']:hover,

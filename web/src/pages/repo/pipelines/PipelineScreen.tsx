@@ -34,13 +34,13 @@ import { blobUrl, commitUrl, pipelineUrl, pipelinesUrl } from '../../../features
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { useSession } from '../../../session/session';
 import { RepoError } from '../common';
-import repo from '../Repo.module.css';
 import { PipelineActions } from './Actions';
 import { FailureView } from './FailureView';
 import { JobLog } from './JobLog';
 import { PipelineBadge } from './PipelineBadge';
 import { Stages } from './Stages';
 import styles from './Pipelines.module.css';
+import { PageHeader } from '../../../ui/PageHeader';
 
 /** The CI definition's file (ADR-0029). */
 const CI_FILE = '.forge-ci.yml';
@@ -62,7 +62,7 @@ export function PipelineScreen({
   if (pipeline.isError) {
     return (
       <>
-        <h1 className={repo.title}>{title}</h1>
+        <PageHeader title={title} />
         <RepoError
           error={pipeline.error}
           onRetry={() => {
@@ -113,9 +113,13 @@ function PipelineView({
       <p className={styles.hint}>
         <Link to={pipelinesUrl(project)}>{t('pipelines.backToList')}</Link>
       </p>
-      <h1 className={repo.title}>
-        {title} <PipelineBadge status={p.status} />
-      </h1>
+      <PageHeader
+        title={
+          <>
+            {title} <PipelineBadge status={p.status} />
+          </>
+        }
+      />
       {/* The status alone, announced when it changes (not the whole line). */}
       <p role="status" className={styles.srOnly}>
         {t('pipelines.statusNow', { status })}

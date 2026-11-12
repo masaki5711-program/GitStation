@@ -10,6 +10,7 @@ import { archiveUrl, commitUrl, treeUrl } from '../../features/repoUrls';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { RepoError, shortOid } from './common';
 import styles from './Repo.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 export function RefsScreen({
   projectId,
@@ -40,7 +41,7 @@ export function RefsScreen({
   const shared = (name: string) => refs.data.refs.filter((r) => r.name === name).length > 1;
   return (
     <>
-      <h1 className={styles.title}>{title}</h1>
+      <PageHeader title={title} />
       {refs.data.truncated && (
         <p className={styles.warning} role="status" data-testid="refs-truncated">
           {t('repo.refsTruncated')}

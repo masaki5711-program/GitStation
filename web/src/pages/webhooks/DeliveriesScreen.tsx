@@ -18,6 +18,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { Denied } from '../settings/common';
 import styles from '../settings/Settings.module.css';
 import { EnabledChip, StopReason } from './common';
+import { PageHeader } from '../../ui/PageHeader';
 
 function stateChip(state: string): string {
   switch (state) {
@@ -53,7 +54,7 @@ export function DeliveriesScreen({
       <p>
         <Link to={back}>{t('webhooks.back')}</Link>
       </p>
-      <h1 className={styles.title}>{t('webhooks.historyTitle')}</h1>
+      <PageHeader title={t('webhooks.historyTitle')} />
       {hook.isError && (
         <QueryError
           error={hook.error}

@@ -28,6 +28,7 @@ import { NotFound } from '../NotFound';
 import { RepoError } from './common';
 import { ReferencedBy } from './ReferencedBy';
 import styles from './Documents.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 export function ClassificationBadge({ value }: { value: string }) {
   const { t } = useTranslation();
@@ -87,7 +88,7 @@ function Document({
   if (doc.isError) {
     return (
       <>
-        <h1 className={styles.title}>{docId}</h1>
+        <PageHeader title={docId} />
         <RepoError
           error={doc.error}
           onRetry={() => {
@@ -124,9 +125,7 @@ function Document({
       <p className={styles.back}>
         <Link to={documentsUrl(project, keep)}>{t('docs.backToList')}</Link>
       </p>
-      <h1 id="doc-title" className={styles.title}>
-        {d.title ?? d.id}
-      </h1>
+      <PageHeader title={d.title ?? d.id} titleId="doc-title" />
       <Summary d={d} project={project} />
       {d.translations.length > 0 && (
         <nav aria-label={t('docs.translations')} className={styles.translations}>

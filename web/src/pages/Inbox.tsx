@@ -20,13 +20,15 @@ import {
   useNotifications,
   type InAppNotification,
 } from '../api/notifications';
-import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
+import { SkeletonList } from '../components/Skeleton';
 import controls from '../components/controls.module.css';
 import { formatDateTime } from '../features/labels';
 import { pullUrl } from '../features/repoUrls';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useSession } from '../session/session';
+import { EmptyState } from '../ui/EmptyState';
+import { PageHeader } from '../ui/PageHeader';
 import { Denied } from './settings/common';
 import styles from './Inbox.module.css';
 
@@ -126,13 +128,17 @@ export function Inbox() {
 
   return (
     <section aria-labelledby="inbox-title">
-      <h1 id="inbox-title" ref={heading} tabIndex={-1} className={styles.title}>
-        {t('inbox.title')}
-      </h1>
-      <p className={styles.hint}>
-        {t('inbox.explain')}{' '}
-        <Link to={`/${session.user.username}/-/settings?tab=notifications`}>{t('inbox.settings')}</Link>
-      </p>
+      <PageHeader
+        title={t('inbox.title')}
+        titleId="inbox-title"
+        titleRef={heading}
+        subtitle={
+          <>
+            {t('inbox.explain')}{' '}
+            <Link to={`/${session.user.username}/-/settings?tab=notifications`}>{t('inbox.settings')}</Link>
+          </>
+        }
+      />
       <div className={styles.toolbar}>
         <div role="group" aria-label={t('inbox.filter')} className={styles.filter}>
           <button
@@ -177,7 +183,7 @@ export function Inbox() {
         )}
       </div>
       {markAll.isError && <Denied error={markAll.error} />}
-      {list.isPending && <Loading />}
+      {list.isPending && <SkeletonList row={{ lines: ['long', 'medium', 'short'], action: true }} />}
       {list.isError && (
         <QueryError
           error={list.error}
@@ -187,7 +193,7 @@ export function Inbox() {
         />
       )}
       {list.isSuccess && items.length === 0 && !list.hasNextPage && (
-        <p className={styles.empty}>{unread ? t('inbox.emptyUnread') : t('inbox.empty')}</p>
+        <EmptyState icon="inbox" reason={unread ? t('inbox.emptyUnread') : t('inbox.empty')} live />
       )}
       {items.length > 0 && (
         <ul ref={listRef} className={styles.list} aria-label={unread ? t('inbox.unreadOnly') : t('inbox.all')}>

@@ -6,7 +6,39 @@
   border-radius: var(--gs-radius-md);
   background: var(--gs-color-surface);
   color: var(--gs-color-text);
-  box-shadow: var(--gs-shadow-1);
+  box-shadow: var(--gs-shadow-3);
+}
+
+/* Opening: the dialog fades and grows a little, the scrim fades in. Under
+   reduced motion the durations are 0 (global.css). */
+.dialog[open] {
+  animation: modal-in var(--gs-duration-base) var(--gs-ease);
+}
+
+.dialog[open]::backdrop {
+  animation: scrim-in var(--gs-duration-base) var(--gs-ease);
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .dialog::backdrop {
@@ -28,5 +60,6 @@
 .title {
   margin: 0;
   font-size: var(--gs-font-size-lg);
+  font-weight: var(--gs-font-weight-semibold);
   color: var(--gs-brand-navy);
 }

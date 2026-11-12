@@ -4,11 +4,6 @@
   max-width: 72rem;
 }
 
-.title {
-  margin: 0 0 var(--gs-space-3);
-  overflow-wrap: anywhere;
-}
-
 .back {
   margin: 0 0 var(--gs-space-2);
 }

@@ -13,6 +13,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { RepoError } from './common';
 import { ClassificationBadge } from './DocumentScreen';
 import styles from './Documents.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 export function DocumentsScreen({ projectId, project }: { projectId: number; project: string }) {
   const { t } = useTranslation();
@@ -100,9 +101,7 @@ export function DocumentsScreen({ projectId, project }: { projectId: number; pro
   }
   return (
     <section aria-labelledby="docs-title">
-      <h1 id="docs-title" className={styles.title}>
-        {t('docs.title')}
-      </h1>
+      <PageHeader title={t('docs.title')} titleId="docs-title" />
       {body}
     </section>
   );

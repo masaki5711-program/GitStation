@@ -4,13 +4,14 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { PageHeader } from '../ui/PageHeader';
 
 export function NotFound() {
   const { t } = useTranslation();
   useDocumentTitle(t('notFound.title'));
   return (
     <section aria-labelledby="not-found-title">
-      <h1 id="not-found-title">{t('notFound.title')}</h1>
+      <PageHeader title={t('notFound.title')} titleId="not-found-title" />
       <p>{t('notFound.body')}</p>
       <p>
         <Link to="/">{t('notFound.home')}</Link>

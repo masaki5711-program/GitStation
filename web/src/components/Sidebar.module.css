@@ -28,11 +28,18 @@
   border-bottom: 1px solid var(--gs-color-border);
 }
 
+/* A section label: small, semibold and muted (no uppercase: Japanese has
+   none, so size and weight carry it). */
 .heading {
-  margin: var(--gs-space-2) var(--gs-space-3);
+  margin: var(--gs-space-4) var(--gs-space-3) var(--gs-space-2);
   color: var(--gs-color-text-muted);
   font-size: var(--gs-font-size-sm);
-  font-weight: var(--gs-font-weight-bold);
+  font-weight: var(--gs-font-weight-semibold);
+  line-height: var(--gs-line-height-tight);
+}
+
+.heading:first-child {
+  margin-top: var(--gs-space-2);
 }
 
 .list {
@@ -59,13 +66,14 @@
   text-decoration: none;
 }
 
-/* Where I am: not colour alone — a bar and bold text as well. */
+/* Where I am: not colour alone — a 4px teal bar and semibold text as well
+   (the bar is 3.49:1 on the tint, WCAG 1.4.11). */
 .link[aria-current='page'],
 .link[aria-current='page']:hover:not(:disabled) {
-  background: var(--gs-color-active-surface);
-  box-shadow: inset 3px 0 0 var(--gs-color-action);
+  background: var(--gs-color-nav-active-surface);
+  box-shadow: inset var(--gs-accent-border-width) 0 0 var(--gs-brand-teal-strong);
   color: var(--gs-color-link);
-  font-weight: var(--gs-font-weight-bold);
+  font-weight: var(--gs-font-weight-semibold);
 }
 
 .toggle {

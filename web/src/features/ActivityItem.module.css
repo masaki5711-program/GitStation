@@ -2,7 +2,11 @@
    Tokens only. */
 .item {
   padding: var(--gs-space-3) var(--gs-space-4);
-  border-bottom: 1px solid var(--gs-color-border);
+  border-bottom: 1px solid var(--gs-color-border-subtle);
+}
+
+.item:last-child {
+  border-bottom: none;
 }
 
 .item:focus-visible {

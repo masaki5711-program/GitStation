@@ -1,20 +1,7 @@
-/* /-/merge-requests (plan 15 MR 7). Tokens only. */
-.pageTitle {
-  margin: 0 0 var(--gs-space-2);
-  font-size: var(--gs-font-size-xl);
-  color: var(--gs-brand-navy);
-}
-
-.explain {
-  margin: 0 0 var(--gs-space-6);
-  color: var(--gs-color-text-muted);
-}
-
+/* /-/merge-requests (plan 15 MR 7). Tokens only; the head is ui/PageHeader. */
 .section {
+  composes: card from '../ui/surfaces.module.css';
   margin-bottom: var(--gs-space-4);
-  border: 1px solid var(--gs-color-border);
-  border-radius: var(--gs-radius-md);
-  background: var(--gs-color-surface);
 }
 
 .summary {
@@ -51,7 +38,7 @@ details[open] > .summary::before {
 
 .summaryTitle {
   font-size: var(--gs-font-size-lg);
-  font-weight: var(--gs-font-weight-bold);
+  font-weight: var(--gs-font-weight-semibold);
   color: var(--gs-brand-navy);
 }
 
@@ -75,12 +62,12 @@ details[open] > .summary::before {
   margin: 0;
   padding: 0;
   list-style: none;
-  border-top: 1px solid var(--gs-color-border);
+  border-top: 1px solid var(--gs-color-border-subtle);
 }
 
 .item {
   padding: var(--gs-space-3) var(--gs-space-4);
-  border-bottom: 1px solid var(--gs-color-border);
+  border-bottom: 1px solid var(--gs-color-border-subtle);
 }
 
 .titleLine {
@@ -123,19 +110,15 @@ details[open] > .summary::before {
   font-variant-numeric: var(--gs-numeric);
 }
 
-/* Not colour alone: the reason is written out. */
+/* Not colour alone: the reason is written out. Orange marks what a person
+   must act on (a conflict, a failed check). */
 .reason {
   padding: 0 var(--gs-space-1);
+  border-left: var(--gs-accent-rule-width) solid var(--gs-brand-orange);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-warning-surface);
   color: var(--gs-color-warning-text);
   font-weight: var(--gs-font-weight-bold);
-}
-
-.empty {
-  margin: 0;
-  padding: var(--gs-space-3) var(--gs-space-4);
-  color: var(--gs-color-text-muted);
 }
 
 .status {

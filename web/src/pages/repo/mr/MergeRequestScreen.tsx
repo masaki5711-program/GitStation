@@ -36,6 +36,7 @@ import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
 import repo from '../Repo.module.css';
 import styles from './Mr.module.css';
+import { PageHeader } from '../../../ui/PageHeader';
 
 export type MrTab = 'overview' | 'changes';
 
@@ -164,10 +165,14 @@ function Header({ mr }: { mr: MergeRequest }) {
   const { t, i18n } = useTranslation();
   return (
     <header className={styles.header}>
-      <h1 className={repo.title}>
-        {mr.title}{' '}
-        <span className={`${repo.titleNote} ${styles.number}`}>{t('mr.number', { iid: mr.iid })}</span>
-      </h1>
+      <PageHeader
+        title={
+          <>
+            {mr.title}{' '}
+            <span className={`${repo.titleNote} ${styles.number}`}>{t('mr.number', { iid: mr.iid })}</span>
+          </>
+        }
+      />
       <p className={styles.headerMeta}>
         <StateBadge tone={mrTone(mr.state)}>{mrStateLabel(t, mr.state)}</StateBadge>
         {mr.draft && <StateBadge tone="draft">{t('mr.draft')}</StateBadge>}

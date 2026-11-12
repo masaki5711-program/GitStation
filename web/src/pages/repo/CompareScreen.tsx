@@ -15,6 +15,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { CommitList } from './CommitsScreen';
 import { RepoError } from './common';
 import styles from './Repo.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 /** `a...b` from the address tail; `null` when it is not of that form. */
 export function parseCompare(spec: string): { from: string; to: string } | null {
@@ -105,7 +106,7 @@ export function CompareScreen({
 
   return (
     <>
-      <h1 className={styles.title}>{t('compare.title')}</h1>
+      <PageHeader title={t('compare.title')} />
       {/* Keyed by the address: the inputs follow it (back / forward, a link). */}
       <CompareForm key={spec} projectId={projectId} project={project} parsed={parsed} />
       <p className={styles.hint}>{t('compare.hint')}</p>

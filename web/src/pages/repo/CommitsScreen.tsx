@@ -14,6 +14,7 @@ import { commitUrl, commitsUrl } from '../../features/repoUrls';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { RefSwitcher, RepoError, shortOid, WithSpec } from './common';
 import styles from './Repo.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 export function CommitList({
   project,
@@ -105,7 +106,7 @@ function History({
   const all = commits.data.pages.flatMap((p) => p.commits);
   return (
     <>
-      <h1 className={styles.title}>{t('commits.title')}</h1>
+      <PageHeader title={t('commits.title')} />
       <RefSwitcher
         projectId={projectId}
         current={rev.name}

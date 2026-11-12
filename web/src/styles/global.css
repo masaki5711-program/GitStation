@@ -34,7 +34,49 @@ a {
   color: var(--gs-color-link);
 }
 
+/* Also a heading focused by script after a navigation (tabIndex -1):
+   browsers match :focus-visible there when the move followed the keyboard. */
 :focus-visible {
   outline: var(--gs-focus-ring);
-  outline-offset: 2px;
+  outline-offset: var(--gs-focus-offset);
+}
+
+/* The type scale: headings are tight and semibold; a page's own class may
+   still set its margin and colour. */
+h1,
+h2,
+h3 {
+  line-height: var(--gs-line-height-tight);
+  font-weight: var(--gs-font-weight-semibold);
+}
+
+h1 {
+  font-size: var(--gs-font-size-2xl);
+}
+
+h2 {
+  font-size: var(--gs-font-size-xl);
+}
+
+h3 {
+  font-size: var(--gs-font-size-lg);
+}
+
+/* Reduced motion: one switch for the whole UI. The duration tokens go to 0
+   and anything that still animates stops (WCAG 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --gs-duration-fast: 0ms;
+    --gs-duration-base: 0ms;
+    --gs-duration-loop: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }

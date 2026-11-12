@@ -14,6 +14,7 @@ import { baseName, blobUrl, commitUrl, treeUrl } from '../../features/repoUrls';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { PathCrumbs, RepoError, shortOid, WithSpec } from './common';
 import styles from './Repo.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 /** Lines of blame in the page at first, and added by each "Show more". */
 export const BLAME_WINDOW = 500;
@@ -102,9 +103,13 @@ function BlameTable({
   return (
     <>
       <PathCrumbs project={project} rev={rev.name} path={path} />
-      <h1 className={styles.title}>
-        {baseName(path)} <span className={styles.titleNote}>{t('blame.title')}</span>
-      </h1>
+      <PageHeader
+        title={
+          <>
+            {baseName(path)} <span className={styles.titleNote}>{t('blame.title')}</span>
+          </>
+        }
+      />
       <p className={styles.actions}>
         <Link to={blobUrl(project, rev.name, path)}>{t('blame.backToFile')}</Link>
       </p>

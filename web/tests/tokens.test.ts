@@ -61,6 +61,10 @@ describe('tokens', () => {
     expect(contrast(value(fg), value(bg))).toBeGreaterThanOrEqual(4.5);
   });
 
+  it.each(tokens.nonTextPairs)('state indicator %s on %s is at least 3:1', (fg, bg) => {
+    expect(contrast(value(fg), value(bg))).toBeGreaterThanOrEqual(3);
+  });
+
   it.each(tokens.largeTextPairs)('large text %s on %s is at least 3:1', (fg, bg) => {
     expect(contrast(value(fg), value(bg))).toBeGreaterThanOrEqual(3);
   });

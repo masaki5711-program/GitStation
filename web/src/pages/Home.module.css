@@ -1,24 +1,4 @@
-.top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--gs-space-4);
-  margin-bottom: var(--gs-space-6);
-}
-
-.title {
-  margin: 0;
-  font-size: var(--gs-font-size-xl);
-  color: var(--gs-brand-navy);
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--gs-space-3);
-}
-
+/* Home (plan 15 §3.3). Tokens only; the head is ui/PageHeader. */
 .block {
   margin-bottom: var(--gs-space-8);
 }
@@ -26,6 +6,7 @@
 .heading {
   margin: 0 0 var(--gs-space-3);
   font-size: var(--gs-font-size-lg);
+  font-weight: var(--gs-font-weight-semibold);
   color: var(--gs-brand-navy);
 }
 
@@ -58,26 +39,29 @@
   list-style: none;
 }
 
+/* A clickable card with the brand-teal rule on top. */
 .card {
+  composes: cardClickable from '../ui/surfaces.module.css';
   position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--gs-space-2);
   min-height: var(--gs-card-min-height);
   padding: var(--gs-space-4);
-  border: 1px solid var(--gs-color-border);
-  border-radius: var(--gs-radius-md);
-  background: var(--gs-color-surface);
+  border-top: var(--gs-accent-rule-width) solid var(--gs-brand-teal);
 }
 
 .card:hover {
+  border-top-color: var(--gs-brand-teal);
   background: var(--gs-color-hover-surface);
 }
 
-/* Waits on me and not 0: a stronger border and a tinted surface (the number
-   says it too: not colour alone). */
-.cardWaiting {
-  border: 2px solid var(--gs-color-warning-text);
+/* Waits on me and not 0: orange is kept for "a person must act" - an
+   orange top rule and a tinted surface (the number says it too: not colour
+   alone). */
+.cardWaiting,
+.cardWaiting:hover {
+  border-top-color: var(--gs-brand-orange);
   background: var(--gs-color-warning-surface);
 }
 
@@ -102,16 +86,17 @@
 
 .cardLink:focus-visible::after {
   outline: var(--gs-focus-ring);
-  outline-offset: 2px;
+  outline-offset: var(--gs-focus-offset);
 }
 
 .cardLabel {
-  font-weight: var(--gs-font-weight-bold);
+  font-weight: var(--gs-font-weight-semibold);
   color: var(--gs-brand-navy);
 }
 
 .cardCount {
-  font-size: var(--gs-font-size-xl);
+  font-size: var(--gs-font-size-2xl);
+  line-height: var(--gs-line-height-tight);
   font-weight: var(--gs-font-weight-bold);
   font-variant-numeric: var(--gs-numeric);
   color: var(--gs-color-link);
@@ -134,13 +119,10 @@
 
 /* The latest events (plan 15 MR 9): the same rows as /-/activity. */
 .activity {
+  composes: card from '../ui/surfaces.module.css';
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--gs-color-border);
-  border-bottom: none;
-  border-radius: var(--gs-radius-md);
-  background: var(--gs-color-surface);
 }
 
 .activityAll {

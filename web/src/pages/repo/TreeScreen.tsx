@@ -12,6 +12,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { exactRef, PathCrumbs, RefSwitcher, WithSpec } from './common';
 import { TreeListing } from './TreeListing';
 import styles from './Repo.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 export function TreeScreen({
   projectId,
@@ -48,7 +49,7 @@ function Files({
   return (
     <>
       <PathCrumbs project={project} rev={rev} path={spec.path} />
-      <h1 className={styles.title}>{spec.path === '' ? t('tree.title') : folder}</h1>
+      <PageHeader title={spec.path === '' ? t('tree.title') : folder} />
       <div className={styles.toolbar}>
         <RefSwitcher projectId={projectId} current={rev} to={(ref) => treeUrl(project, ref)} />
         <p className={styles.links}>

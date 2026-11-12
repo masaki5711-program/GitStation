@@ -18,8 +18,8 @@ import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { useSession } from '../../../session/session';
 import { RepoError } from '../common';
 import { PipelineBadge } from './PipelineBadge';
-import repo from '../Repo.module.css';
 import styles from './Pipelines.module.css';
+import { PageHeader } from '../../../ui/PageHeader';
 
 export function PipelinesScreen({ projectId, project }: { projectId: number; project: string }) {
   const { t } = useTranslation();
@@ -31,7 +31,7 @@ export function PipelinesScreen({ projectId, project }: { projectId: number; pro
 
   return (
     <>
-      <h1 className={repo.title}>{title}</h1>
+      <PageHeader title={title} />
       {page.isPending && <Loading />}
       {page.isError && (
         <RepoError

@@ -36,6 +36,7 @@ import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefresh
 import styles from '../settings/Settings.module.css';
 import { EnabledChip, StopReason } from './common';
 import { ALL_EVENTS, EventTypePicker } from './EventTypePicker';
+import { PageHeader } from '../../ui/PageHeader';
 
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -57,7 +58,7 @@ export function WebhooksScreen({ projectId, project }: { projectId: number; proj
   useDocumentTitle(t('webhooks.title'));
   return (
     <>
-      <h1 className={styles.title}>{t('webhooks.title')}</h1>
+      <PageHeader title={t('webhooks.title')} />
       <p className={styles.hint}>{t('webhooks.explain')}</p>
       {/* Always in the page, so a change of its text is announced. */}
       <p role="status" className={styles.srOnly}>

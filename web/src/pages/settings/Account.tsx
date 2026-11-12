@@ -24,6 +24,7 @@ import styles from './Settings.module.css';
 import { Notifications } from './Notifications';
 import { ServiceAccounts } from './ServiceAccounts';
 import { Tokens } from './Tokens';
+import { PageHeader } from '../../ui/PageHeader';
 
 type Tab = 'tokens' | 'sessions' | 'notifications' | 'trash' | 'admin' | 'service-accounts' | 'integrations';
 
@@ -54,7 +55,7 @@ export function Account({ path }: { path: string }) {
   useDocumentTitle(current === undefined ? t('account.title') : `${current.label} · ${t('account.title')}`);
   return (
     <>
-      <h1 className={styles.title}>{t('account.title')}</h1>
+      <PageHeader title={t('account.title')} />
       <nav aria-label={t('account.tabs')}>
         <ul className={styles.tabs}>
           {tabs.map((x) => (

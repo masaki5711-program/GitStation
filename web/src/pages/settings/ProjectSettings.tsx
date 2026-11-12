@@ -28,6 +28,7 @@ import { IntegrationBindingsSection } from './IntegrationBindings';
 import { ApprovalRulesSection, MergeConditionsSection, MergingSection, useMergeViewer } from './MergeSettings';
 import { patternProblem } from './patterns';
 import styles from './Settings.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 export function ProjectSettings({ projectId }: { projectId: number }) {
   const { t } = useTranslation();
@@ -59,7 +60,7 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
   };
   return (
     <>
-      <h1 className={styles.title}>{t('settings.title')}</h1>
+      <PageHeader title={t('settings.title')} />
       <Section id="general-title" title={t('settings.general')}>
         <GeneralForm
           displayName={p.display_name}

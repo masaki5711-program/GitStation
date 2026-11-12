@@ -1,0 +1,52 @@
+/* A page's head (tokens only): a short brand-teal rule, the title, one line
+   of subtitle, and the page's primary action on the right; on a narrow
+   screen the action wraps under the title. */
+.root {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--gs-space-3) var(--gs-space-6);
+  margin: 0 0 var(--gs-space-6);
+  padding-bottom: var(--gs-space-4);
+  border-bottom: 1px solid var(--gs-color-border-subtle);
+}
+
+.text {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.text::before {
+  content: '';
+  display: block;
+  width: var(--gs-accent-rule-length);
+  height: var(--gs-accent-rule-width);
+  margin-bottom: var(--gs-space-3);
+  border-radius: var(--gs-radius-pill);
+  background: var(--gs-brand-teal);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--gs-font-size-2xl);
+  font-weight: var(--gs-font-weight-semibold);
+  line-height: var(--gs-line-height-tight);
+  color: var(--gs-brand-navy);
+  overflow-wrap: anywhere;
+}
+
+.subtitle {
+  margin: var(--gs-space-2) 0 0;
+  max-width: 48rem;
+  color: var(--gs-color-text-muted);
+}
+
+.actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-3);
+  max-width: 100%;
+}
