@@ -1429,7 +1429,9 @@
     "subtitle": "Editing a file on the branch {{branch}}.",
     "save": "Save changes",
     "statusUnsaved": "Unsaved changes",
-    "statusSaved": "Saved",
+    "statusUnchanged": "No changes yet",
+    "statusTooLarge": "Too large to save",
+    "statusNeedContent": "Write some content to save",
     "statusEmpty": "Nothing written yet",
     "editPane": "Edit",
     "previewPane": "Preview",
@@ -1474,7 +1476,9 @@
       "directRole": "This branch is protected; your role cannot commit to it directly.",
       "submitBranch": "Save and open a merge request",
       "submitDirect": "Commit",
-      "saving": "Saving…"
+      "saving": "Saving…",
+      "rulesLoading": "Checking the branch rules…",
+      "rulesFailed": "The branch rules could not be checked, so you can save to a new branch only."
     },
     "error": {
       "title": "The changes could not be saved",
@@ -1487,7 +1491,9 @@
       "secretTitle": "The content looks like it contains a secret",
       "secretNext": "Remove keys, tokens and passwords from the text, then save again. Revoke any secret that may have leaked.",
       "rateLimitTitle": "Too many saves",
-      "rateLimitNext": "Wait about a minute, then save again. Your edits are kept."
+      "rateLimitNext": "Wait about a minute, then save again. Your edits are kept.",
+      "reloadConfirm": "Your edits will be discarded. Copy them first, then reload.",
+      "reloadDiscard": "Discard and reload"
     },
     "saved": {
       "mr": "Your change was saved and a merge request was opened (branch {{branch}}).",

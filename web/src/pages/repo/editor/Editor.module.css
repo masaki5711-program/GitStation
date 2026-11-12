@@ -178,7 +178,7 @@
 }
 
 .branchField {
-  margin: var(--gs-space-2) 0 0 1.75rem;
+  margin: var(--gs-space-2) 0 0 var(--gs-choice-indent);
 }
 
 .branchField input {
@@ -245,5 +245,71 @@
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* The edit pane leads: a teal edge, and a teal border while it holds the
+   focus; the preview sits back on the code surface. */
+.paneEdit {
+  border-top: var(--gs-accent-rule-width) solid var(--gs-brand-teal);
+  transition:
+    border-color var(--gs-duration-fast) var(--gs-ease),
+    box-shadow var(--gs-duration-fast) var(--gs-ease);
+}
+
+.paneEdit:hover {
+  border-color: var(--gs-color-border);
+  border-top-color: var(--gs-brand-teal);
+}
+
+.paneEdit:focus-within {
+  border-color: var(--gs-brand-teal-strong);
+  box-shadow: var(--gs-shadow-2);
+}
+
+.panePreview {
+  background: var(--gs-color-code-surface);
+  box-shadow: none;
+}
+
+.status[data-blocked='true'] {
+  color: var(--gs-color-danger-text);
+}
+
+/* "!" in a circle before an alert's text (decorative: the text says it). */
+.alertIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--gs-space-5);
+  height: var(--gs-space-5);
+  margin-right: var(--gs-space-2);
+  border-radius: var(--gs-radius-pill);
+  background: var(--gs-color-warning-text);
+  color: var(--gs-color-white);
+  font-weight: var(--gs-font-weight-bold);
+  vertical-align: middle;
+}
+
+.alertIcon::before {
+  content: '!';
+}
+
+.confirmRow {
+  margin-top: var(--gs-space-3);
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-danger-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-danger-surface);
+}
+
+.confirmText {
+  margin: 0 0 var(--gs-space-2);
+  color: var(--gs-color-danger-text);
+}
+
+@media (max-width: 47.99rem) {
+  .hintKey {
+    display: none;
   }
 }

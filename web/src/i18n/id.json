@@ -1429,7 +1429,9 @@
     "subtitle": "Mengedit berkas di branch {{branch}}.",
     "save": "Simpan perubahan",
     "statusUnsaved": "Ada perubahan yang belum disimpan",
-    "statusSaved": "Tersimpan",
+    "statusUnchanged": "Belum ada perubahan",
+    "statusTooLarge": "Terlalu besar untuk disimpan",
+    "statusNeedContent": "Tulis isi agar dapat disimpan",
     "statusEmpty": "Belum ada yang ditulis",
     "editPane": "Edit",
     "previewPane": "Pratinjau",
@@ -1474,7 +1476,9 @@
       "directRole": "Branch ini dilindungi; peran Anda tidak dapat commit langsung.",
       "submitBranch": "Simpan dan buka merge request",
       "submitDirect": "Commit",
-      "saving": "Menyimpan…"
+      "saving": "Menyimpan…",
+      "rulesLoading": "Memeriksa aturan branch…",
+      "rulesFailed": "Aturan branch tidak dapat diperiksa, sehingga Anda hanya dapat menyimpan ke branch baru."
     },
     "error": {
       "title": "Perubahan tidak dapat disimpan",
@@ -1487,7 +1491,9 @@
       "secretTitle": "Isinya tampak mengandung rahasia",
       "secretNext": "Hapus kunci, token, dan kata sandi dari teks, lalu simpan lagi. Cabut rahasia yang mungkin bocor.",
       "rateLimitTitle": "Terlalu sering menyimpan",
-      "rateLimitNext": "Tunggu sekitar satu menit, lalu simpan lagi. Suntingan Anda tetap ada."
+      "rateLimitNext": "Tunggu sekitar satu menit, lalu simpan lagi. Suntingan Anda tetap ada.",
+      "reloadConfirm": "Suntingan Anda akan dibuang. Salin dulu, lalu muat ulang.",
+      "reloadDiscard": "Buang dan muat ulang"
     },
     "saved": {
       "mr": "Perubahan disimpan dan merge request dibuka (branch {{branch}}).",

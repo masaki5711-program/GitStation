@@ -5,18 +5,29 @@
 //   file in a folder (the path is typed here).
 // - Two panes of equal weight (Edit | Preview) on a wide screen; below 48rem
 //   tabs. The preview is the same Markdown renderer as the file screen.
-// - "Save" (or Ctrl+S / Cmd+S) opens the save dialog; the commit goes to a
-//   new branch with a merge request by default, or to the branch itself.
+// - "Save" (or Ctrl+S / Cmd+S while the focus is in the editor) opens the
+//   save dialog; the commit goes to a new branch with a merge request by
+//   default, or to the branch itself. Save is disabled (with the reason in
+//   the status line) while nothing changed, a new file lacks its path or
+//   content, or the content is over the size limit.
 // - Unsaved text is guarded: reload / close (beforeunload), in-app links and
 //   Back (useLeaveGuard).
 // The file is read at the resolved commit, and that commit is `start_sha`: a
 // file someone changed since is refused by the server (FG-GIT-0027), never
 // overwritten.
-import { useCallback, useDeferredValue, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useDeferredValue,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 
-import { MAX_CONTENT_BYTES, type SingleFileCommitResult } from '../../../api/fileCommits';
+import { MAX_CONTENT_BYTES, type SingleFileCommitDone } from '../../../api/fileCommits';
 import { useBlob } from '../../../api/repo';
 import type { Rev } from '../../../api/types';
 import { Loading } from '../../../components/Loading';
@@ -240,36 +251,45 @@ function Editor({
   }, [dirty, saving]);
   const leave = useLeaveGuard(dirty && !saving, () => undefined);
 
-  const openSave = useCallback(() => {
-    if (mode === 'new') {
-      const problem = pathProblem(path);
-      if (problem !== null) {
-        setPathError(problem === 'empty' ? t('editor.pathRequired') : t('editor.pathIsFolder'));
-        pathInput.current?.focus();
-        return;
-      }
+  // Why Save cannot be pressed now (the status line says it), or null.
+  const pathIssue = mode === 'new' ? pathProblem(path) : null;
+  const blocked: 'tooLarge' | 'unchanged' | 'path' | 'empty' | null = tooLarge
+    ? 'tooLarge'
+    : !dirty
+      ? 'unchanged'
+      : pathIssue !== null
+        ? 'path'
+        : mode === 'new' && text === ''
+          ? 'empty'
+          : null;
+
+  const openSave = () => {
+    if (pathIssue !== null) {
+      setPathError(pathIssue === 'empty' ? t('editor.pathRequired') : t('editor.pathIsFolder'));
+      pathInput.current?.focus();
+      return;
     }
+    if (blocked !== null) return;
     setPathError(null);
     setDialog(true);
-  }, [mode, path, t]);
+  };
 
-  // Ctrl+S / Cmd+S: the save dialog, not the browser's "save page".
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        if (!dialog) openSave();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [dialog, openSave]);
+  // Ctrl+S / Cmd+S while the focus is in the editor (the path field or the
+  // text): the save dialog, not the browser's "save page". Elsewhere, and
+  // while the dialog is open, the key is the browser's.
+  const onEditorKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (dialog) return;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      openSave();
+    }
+  };
 
-  const onSaved = (result: SingleFileCommitResult) => {
+  const onSaved = (result: SingleFileCommitDone) => {
     setSaving(true);
     setDialog(false);
+    // Before navigating: the guard's cleanup must never step back.
+    leave.release();
     const mr = result.merge_request ?? null;
     const to = mr !== null ? pullUrl(project, mr.iid) : blobUrl(project, result.branch, result.path);
     // replace: the guard's sentinel entry (if any) is not left behind.
@@ -277,7 +297,19 @@ function Editor({
   };
 
   const title = mode === 'edit' ? path : t('editor.newTitle');
-  const status = dirty ? t('editor.statusUnsaved') : mode === 'new' ? t('editor.statusEmpty') : t('editor.statusSaved');
+  const status =
+    blocked === 'tooLarge'
+      ? t('editor.statusTooLarge')
+      : blocked === 'unchanged'
+        ? mode === 'new'
+          ? t('editor.statusEmpty')
+          : t('editor.statusUnchanged')
+        : blocked === 'empty'
+          ? t('editor.statusNeedContent')
+          : t('editor.statusUnsaved');
+  const statusId = `${ids}-status`;
+  const warningId = `${ids}-too-large`;
+  const tabRefs = useRef<Record<'edit' | 'preview', HTMLButtonElement | null>>({ edit: null, preview: null });
   const editPanelId = `${ids}-edit`;
   const previewPanelId = `${ids}-preview`;
   const showEdit = !narrow || !showPreview || tab === 'edit';
@@ -285,7 +317,7 @@ function Editor({
 
   const editorPane = (
     <section
-      className={styles.pane}
+      className={`${styles.pane} ${styles.paneEdit}`}
       aria-labelledby={`${editPanelId}-title`}
       {...(narrow && showPreview ? { id: editPanelId, role: 'tabpanel' } : {})}
       hidden={!showEdit}
@@ -303,7 +335,7 @@ function Editor({
         spellCheck={false}
         autoCapitalize="off"
         autoComplete="off"
-        aria-describedby={`${ids}-counts`}
+        aria-describedby={tooLarge ? `${ids}-counts ${warningId}` : `${ids}-counts`}
         onChange={(e) => {
           setText(e.target.value);
         }}
@@ -312,7 +344,7 @@ function Editor({
   );
   const previewPane = showPreview ? (
     <section
-      className={styles.pane}
+      className={`${styles.pane} ${styles.panePreview}`}
       aria-labelledby={`${previewPanelId}-title`}
       {...(narrow ? { id: previewPanelId, role: 'tabpanel' } : {})}
       hidden={!showPrev}
@@ -345,17 +377,32 @@ function Editor({
         title={<span className={styles.title}>{title}</span>}
         subtitle={t('editor.subtitle', { branch: rev.name })}
         actions={
-          <button ref={saveButton} type="button" className={controls.primary} onClick={openSave}>
+          <button
+            ref={saveButton}
+            type="button"
+            className={controls.primary}
+            aria-disabled={blocked !== null ? 'true' : undefined}
+            aria-describedby={blocked !== null ? statusId : undefined}
+            onClick={openSave}
+          >
             {t('editor.save')}
           </button>
         }
       >
-        <p className={styles.status} role="status" data-dirty={dirty ? 'true' : 'false'}>
+        <p
+          id={statusId}
+          className={styles.status}
+          role="status"
+          data-dirty={dirty ? 'true' : 'false'}
+          data-blocked={blocked === 'tooLarge' ? 'true' : undefined}
+        >
           <span className={styles.statusDot} aria-hidden="true" />
           {status}
         </p>
       </PageHeader>
 
+      {/* The editor: Ctrl+S is handled only for a focus in here. */}
+      <div onKeyDown={onEditorKey}>
       {mode === 'new' && (
         <div className={`${controls.field} ${styles.pathField}`}>
           <label htmlFor={`${ids}-path`} className={controls.label}>
@@ -401,6 +448,9 @@ function Editor({
               aria-selected={tab === which}
               aria-controls={which === 'edit' ? editPanelId : previewPanelId}
               tabIndex={tab === which ? 0 : -1}
+              ref={(el) => {
+                tabRefs.current[which] = el;
+              }}
               onClick={() => {
                 setTab(which);
               }}
@@ -409,9 +459,7 @@ function Editor({
                   e.preventDefault();
                   const next = which === 'edit' ? 'preview' : 'edit';
                   setTab(next);
-                  const list = e.currentTarget.parentElement;
-                  const other = list?.querySelector<HTMLButtonElement>(`[aria-controls="${next === 'edit' ? editPanelId : previewPanelId}"]`);
-                  other?.focus();
+                  tabRefs.current[next]?.focus();
                 }
               }}
             >
@@ -425,6 +473,7 @@ function Editor({
         {editorPane}
         {previewPane}
       </div>
+      </div>
 
       <p id={`${ids}-counts`} className={styles.counts}>
         <span>{t('editor.counts', { lines: counts.lines.toLocaleString(i18n.language), chars: counts.chars.toLocaleString(i18n.language) })}</span>
@@ -432,7 +481,8 @@ function Editor({
         <span className={styles.hintKey}>{t('editor.shortcutHint')}</span>
       </p>
       {tooLarge && (
-        <p className={styles.warning} role="status">
+        <p id={warningId} className={styles.warning} role="alert">
+          <span className={styles.alertIcon} aria-hidden="true" />
           {t('editor.tooLarge', { size: formatBytes(MAX_CONTENT_BYTES, i18n.language) })}
         </p>
       )}

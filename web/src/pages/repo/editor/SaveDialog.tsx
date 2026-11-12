@@ -6,7 +6,7 @@
 // request_id; a conflict, a secret and the rate limit get their own words and
 // next steps. Esc / Cancel close it; the editor puts the focus back.
 import { useQueryClient } from '@tanstack/react-query';
-import { useId, useState, type SyntheticEvent } from 'react';
+import { useId, useRef, useState, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { failureOf } from '../../../api/client';
@@ -17,7 +17,7 @@ import {
   commitErrorCode,
   useSingleFileCommit,
   type SingleFileCommit,
-  type SingleFileCommitResult,
+  type SingleFileCommitDone,
 } from '../../../api/fileCommits';
 import { useProtectedRefs } from '../../../api/mergeSettings';
 import type { Rev } from '../../../api/types';
@@ -44,7 +44,7 @@ export function SaveDialog(props: {
   role: string | null;
   isAdmin: boolean;
   onCancel: () => void;
-  onSaved: (result: SingleFileCommitResult) => void;
+  onSaved: (result: SingleFileCommitDone) => void;
 }) {
   const { t } = useTranslation();
   const save = useSingleFileCommit(props.projectId);
@@ -82,13 +82,15 @@ function SaveForm({
   role: string | null;
   isAdmin: boolean;
   onCancel: () => void;
-  onSaved: (result: SingleFileCommitResult) => void;
+  onSaved: (result: SingleFileCommitDone) => void;
   save: ReturnType<typeof useSingleFileCommit>;
 }) {
   const { t } = useTranslation();
   const ids = useId();
   const rules = useProtectedRefs(projectId);
   const block = directCommitBlock(rules.data?.rules, rev.name, role, isAdmin);
+  // One request at a time, even for two clicks before React re-renders.
+  const sending = useRef(false);
   const [message, setMessage] = useState(() =>
     mode === 'edit' ? t('editor.dialog.defaultUpdate', { path }) : t('editor.dialog.defaultAdd', { path }),
   );
@@ -105,12 +107,13 @@ function SaveForm({
       : submitted && target === 'branch' && branch.trim() === rev.name
         ? t('editor.dialog.branchSame')
         : null;
-  const directDisabled = block !== null;
+  // Direct is offered only once the rules are known to allow it.
+  const directDisabled = !rules.isSuccess || block !== null;
   const effectiveTarget: Target = directDisabled ? 'branch' : target;
 
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
-    if (save.isPending) return;
+    if (save.isPending || sending.current) return;
     setSubmitted(true);
     const subject = message.trim();
     const name = branch.trim();
@@ -124,15 +127,24 @@ function SaveForm({
       message: describe && body !== '' ? `${subject}\n\n${body}` : subject,
       ...(effectiveTarget === 'branch' ? { create_branch: name, open_merge_request: true } : {}),
     };
-    save.mutate(payload, { onSuccess: onSaved });
+    sending.current = true;
+    save.mutate(payload, {
+      onSuccess: onSaved,
+      onSettled: () => {
+        sending.current = false;
+      },
+    });
   };
 
-  const directReason =
-    block === 'forbidden'
-      ? t('editor.dialog.directForbidden')
-      : block === 'role'
-        ? t('editor.dialog.directRole')
-        : t('editor.dialog.directHelp', { branch: rev.name });
+  const directReason = rules.isPending
+    ? t('editor.dialog.rulesLoading')
+    : rules.isError
+      ? t('editor.dialog.rulesFailed')
+      : block === 'forbidden'
+        ? t('editor.dialog.directForbidden')
+        : block === 'role'
+          ? t('editor.dialog.directRole')
+          : t('editor.dialog.directHelp', { branch: rev.name });
 
   return (
     <form onSubmit={submit} noValidate className={styles.dialogForm} aria-busy={save.isPending}>
@@ -271,6 +283,7 @@ function CommitError({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const [confirmReload, setConfirmReload] = useState(false);
   const failure = failureOf(error);
   const code = commitErrorCode(error);
   if (code === CODE_CONFLICT) {
@@ -292,15 +305,41 @@ function CommitError({
           <button
             type="button"
             className={controls.danger}
+            aria-expanded={confirmReload}
             onClick={() => {
-              // A new commit at the address remounts the editor on the latest file.
-              void queryClient.invalidateQueries({ queryKey: ['resolve-spec', projectId] });
-              void queryClient.invalidateQueries({ queryKey: ['refs', projectId] });
+              setConfirmReload(true);
             }}
           >
             {t('editor.error.reloadLatest')}
           </button>
         </div>
+        {confirmReload && (
+          <div className={styles.confirmRow}>
+            <p className={styles.confirmText}>{t('editor.error.reloadConfirm')}</p>
+            <div className={styles.nextActions}>
+              <button
+                type="button"
+                className={controls.ghost}
+                onClick={() => {
+                  setConfirmReload(false);
+                }}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className={controls.danger}
+                onClick={() => {
+                  // A new commit at the address remounts the editor on the latest file.
+                  void queryClient.invalidateQueries({ queryKey: ['resolve-spec', projectId] });
+                  void queryClient.invalidateQueries({ queryKey: ['refs', projectId] });
+                }}
+              >
+                {t('editor.error.reloadDiscard')}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

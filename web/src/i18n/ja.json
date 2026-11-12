@@ -1429,7 +1429,9 @@
     "subtitle": "ブランチ {{branch}} のファイルを編集しています。",
     "save": "変更を保存",
     "statusUnsaved": "未保存の変更あり",
-    "statusSaved": "保存済み",
+    "statusUnchanged": "まだ変更はありません",
+    "statusTooLarge": "内容が大きすぎるため保存できません",
+    "statusNeedContent": "内容を入力すると保存できます",
     "statusEmpty": "まだ何も書いていません",
     "editPane": "編集",
     "previewPane": "プレビュー",
@@ -1474,7 +1476,9 @@
       "directRole": "このブランチは保護されていて、あなたの役割では直接コミットできません。",
       "submitBranch": "保存して MR を作成",
       "submitDirect": "コミットする",
-      "saving": "保存しています…"
+      "saving": "保存しています…",
+      "rulesLoading": "ブランチの規則を確認しています…",
+      "rulesFailed": "ブランチの規則を確認できなかったため、新しいブランチにだけ保存できます。"
     },
     "error": {
       "title": "保存できませんでした",
@@ -1487,7 +1491,9 @@
       "secretTitle": "秘密情報らしい内容があるため保存できません",
       "secretNext": "鍵・トークン・パスワードなどを本文から取り除いてから、もう一度保存してください。漏れた可能性がある秘密は失効させてください。",
       "rateLimitTitle": "保存の回数が多すぎます",
-      "rateLimitNext": "1 分ほど待ってから、もう一度保存してください。編集した内容は残っています。"
+      "rateLimitNext": "1 分ほど待ってから、もう一度保存してください。編集した内容は残っています。",
+      "reloadConfirm": "今の編集は消えます。コピーしてから読み込み直してください。",
+      "reloadDiscard": "本当に破棄して読み込む"
     },
     "saved": {
       "mr": "変更を保存し、マージリクエストを作成しました（ブランチ {{branch}}）。",

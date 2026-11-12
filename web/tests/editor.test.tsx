@@ -48,8 +48,11 @@ function location() {
   return screen.getByTestId('location').textContent;
 }
 
+/** Ctrl+S inside the editor (the textarea has the focus). */
 function pressCtrlS() {
-  fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+  const text = screen.getByRole('textbox', { name: /の内容$/ });
+  text.focus();
+  return fireEvent.keyDown(text, { key: 's', ctrlKey: true });
 }
 
 afterEach(() => {
@@ -141,7 +144,7 @@ describe('the editor', () => {
     const { text } = await openEditor();
     expect(screen.getByRole('heading', { level: 1, name: 'README.md' })).toBeTruthy();
     expect(text.value).toBe(README);
-    expect(screen.getByText('保存済み')).toBeTruthy();
+    expect(screen.getByText('まだ変更はありません')).toBeTruthy();
     expect(screen.getByText(`${countText(README).lines} 行 · ${countText(README).chars} 文字`)).toBeTruthy();
     const preview = screen.getByTestId('editor-preview');
     expect(await within(preview).findByRole('heading', { name: 'Press Line Spec' })).toBeTruthy();
@@ -433,5 +436,144 @@ describe('the editor', () => {
     pressCtrlS();
     await screen.findByRole('dialog');
     expect(await run()).toEqual([]);
+  });
+});
+
+describe('review fixes', () => {
+  it('Ctrl+S belongs to the editor only inside it, and not while the dialog is open', async () => {
+    await openEditor();
+    fireEvent.change(screen.getByRole('textbox', { name: 'README.md の内容' }), { target: { value: 'x' } });
+    // Outside the editor: the browser keeps its shortcut.
+    const outside = fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
+    expect(outside).toBe(true);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(pressCtrlS()).toBe(false);
+    const dialog = await screen.findByRole('dialog');
+    const message = within(dialog).getByRole('textbox', { name: 'コミットメッセージ' });
+    expect(fireEvent.keyDown(message, { key: 's', ctrlKey: true })).toBe(true);
+  });
+
+  it('after a save the leave guard is released before navigating (no history.back)', async () => {
+    const back = vi.spyOn(window.history, 'back');
+    try {
+      const { text } = await openEditor();
+      fireEvent.change(text, { target: { value: 'saved\n' } });
+      pressCtrlS();
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '保存して MR を作成' }));
+      await waitFor(() => {
+        expect(location()).toBe(`${BASE}/pull/12`);
+      });
+      expect(back).not.toHaveBeenCalled();
+    } finally {
+      back.mockRestore();
+    }
+  });
+
+  it('reloading the latest version after a conflict asks first, naming the loss', async () => {
+    const { server, text } = await openEditor({
+      [`POST ${COMMIT_PATH}`]: () => apiError(409, '競合しました。', 'req-conflict', 'FG-GIT-0027'),
+    });
+    fireEvent.change(text, { target: { value: 'mine\n' } });
+    pressCtrlS();
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存して MR を作成' }));
+    const conflict = await within(dialog).findByTestId('editor-conflict');
+    const resolves = () => server.to('GET', '/api/v1/projects/7/repository/resolve').length;
+    const before = resolves();
+    fireEvent.click(within(conflict).getByRole('button', { name: '最新の内容を読み込み直す（今の編集は消えます）' }));
+    expect(within(conflict).getByText('今の編集は消えます。コピーしてから読み込み直してください。')).toBeTruthy();
+    expect(resolves()).toBe(before);
+    fireEvent.click(within(conflict).getByRole('button', { name: '本当に破棄して読み込む' }));
+    await waitFor(() => {
+      expect(resolves()).toBeGreaterThan(before);
+    });
+  });
+
+  it('while the branch rules load, direct commit is disabled with a reason', async () => {
+    const { text } = await openEditor({ [`GET ${RULES_PATH}`]: () => new Promise<Response>(() => undefined) });
+    fireEvent.change(text, { target: { value: 'x' } });
+    pressCtrlS();
+    const dialog = await screen.findByRole('dialog');
+    const direct = within(dialog).getByRole<HTMLInputElement>('radio', { name: 'このブランチ（main）に直接コミット' });
+    expect(direct.disabled).toBe(true);
+    expect(within(dialog).getByText('ブランチの規則を確認しています…')).toBeTruthy();
+    expect(
+      within(dialog).getByRole<HTMLInputElement>('radio', { name: '新しいブランチを作って変更を申請（MR）' }).checked,
+    ).toBe(true);
+  });
+
+  it('when the branch rules cannot be read, direct commit stays disabled with a reason', async () => {
+    const { text } = await openEditor({ [`GET ${RULES_PATH}`]: () => apiError(500, 'x', 'req-rules') });
+    fireEvent.change(text, { target: { value: 'x' } });
+    pressCtrlS();
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      await within(dialog).findByText('ブランチの規則を確認できなかったため、新しいブランチにだけ保存できます。'),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByRole<HTMLInputElement>('radio', { name: 'このブランチ（main）に直接コミット' }).disabled,
+    ).toBe(true);
+  });
+
+  it('Save is disabled until something changed', async () => {
+    const { text } = await openEditor();
+    const save = screen.getByRole('button', { name: '変更を保存' });
+    expect(save.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(save);
+    pressCtrlS();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.change(text, { target: { value: 'x' } });
+    expect(save.getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('a new file: Save stays disabled until path and content exist', async () => {
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch, path: `${BASE}/new/main` });
+    const save = await screen.findByRole('button', { name: '変更を保存' });
+    expect(save.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.change(screen.getByRole('textbox', { name: 'ファイルのパス' }), { target: { value: 'a.md' } });
+    expect(save.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.change(screen.getByRole('textbox', { name: 'a.md の内容' }), { target: { value: 'hi' } });
+    expect(save.getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('too large content blocks saving with an alert tied to the textarea', async () => {
+    const { text } = await openEditor();
+    fireEvent.change(text, { target: { value: 'a'.repeat(512 * 1024 + 1) } });
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('エディターからは保存できません');
+    expect(text.getAttribute('aria-describedby')?.split(' ')).toContain(alert.id);
+    const save = screen.getByRole('button', { name: '変更を保存' });
+    expect(save.getAttribute('aria-disabled')).toBe('true');
+    pressCtrlS();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('a merge request that could not be opened is said with the request id', async () => {
+    const { text } = await openEditor({
+      [`POST ${COMMIT_PATH}`]: () =>
+        json(
+          201,
+          {
+            commit_sha: 'c'.repeat(40),
+            parent_sha: C1,
+            branch: 'edit/readme-1',
+            branch_created: true,
+            path: 'README.md',
+            blob_sha: 'd'.repeat(40),
+            merge_request: null,
+            merge_request_error: { error_code: 'FG-AUTH-0002', message: '権限がありません。' },
+          },
+          { 'x-request-id': 'req-mr' },
+        ),
+    });
+    fireEvent.change(text, { target: { value: 'x' } });
+    pressCtrlS();
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存して MR を作成' }));
+    const notice = await screen.findByTestId('file-saved');
+    expect(notice.textContent).toContain('権限がありません。');
+    expect(notice.textContent).toContain('req-mr');
   });
 });

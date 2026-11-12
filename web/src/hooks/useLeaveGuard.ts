@@ -62,6 +62,12 @@ export function useLeaveGuard(active: boolean, onLeave: () => void) {
   }, [active]);
   return {
     target,
+    /** The page leaves by code (a save): forget the sentinel so the cleanup
+     * never steps back. Call it before `navigate(…, { replace: true })`,
+     * which then replaces the sentinel entry. */
+    release: () => {
+      armed.current = false;
+    },
     stay: () => {
       if (target?.kind === 'back') {
         window.history.pushState({ ...(window.history.state as object | null), gsSecretGuard: true }, '');

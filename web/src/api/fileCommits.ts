@@ -15,6 +15,9 @@ import type { components } from './schema.gen';
 
 export type SingleFileCommit = components['schemas']['SingleFileCommit'];
 export type SingleFileCommitResult = components['schemas']['SingleFileCommitBody'];
+/** The answer and its request id (`x-request-id`): shown with a merge request
+ * that could not be opened, so the administrator can find the log line. */
+export type SingleFileCommitDone = SingleFileCommitResult & { requestId: string | null };
 
 /** The codes the editor words differently (errors.toml). */
 export const CODE_CONFLICT = 'FG-GIT-0027';
@@ -63,18 +66,21 @@ export function useSingleFileCommit(projectId: number) {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (body: SingleFileCommit): Promise<SingleFileCommitResult> => {
+    mutationFn: async (body: SingleFileCommit): Promise<SingleFileCommitDone> => {
       let code: string | null = null;
+      let requestId: string | null = null;
       try {
-        return await call(async () => {
+        const data = await call(async () => {
           const result = await api.POST('/api/v1/projects/{id}/repository/commits/single-file', {
             params: { path: { id: projectId } },
             body,
           });
+          requestId = result.response.headers.get('x-request-id');
           const error: unknown = result.error;
           if (isRecord(error) && typeof error.error_code === 'string') code = error.error_code;
           return result;
         });
+        return { ...data, requestId };
       } catch (e) {
         if (e instanceof ApiFailure) throw new CommitFailure(e, code);
         throw e;
