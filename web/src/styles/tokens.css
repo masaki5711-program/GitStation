@@ -21,8 +21,14 @@
   --gs-color-text: #1b2a44;
   --gs-color-text-muted: #4a5568;
   --gs-color-border: #c9d3dd;
+  /* A card's edge: decorative (the card's text names it), so no 3:1 needed. */
+  --gs-color-border-subtle: #dde4ea;
   --gs-color-surface: #ffffff;
-  --gs-color-background: #f4fbfc;
+  /* Dialogs and menus over cards: the surface, lifted by --gs-shadow-3. */
+  --gs-color-surface-raised: var(--gs-color-surface);
+  /* One step darker than the surface, so cards lift off the page
+     (link 4.67:1, muted text 6.70:1 on it). */
+  --gs-color-background: #ecf3f5;
 
   /* Interactive */
   --gs-color-link: #0f7a69;
@@ -32,6 +38,9 @@
   --gs-color-action-active: #084a40;
   --gs-color-hover-surface: #eef8f6;
   --gs-color-active-surface: #e8f5f2;
+  /* The sidebar's current page: a stronger tint (link 4.57:1) with a
+     teal-strong bar (3.49:1 on it, WCAG 1.4.11). */
+  --gs-color-nav-active-surface: #dff4ef;
   --gs-color-focus: #128f7c;
 
   /* Code and diffs (syntax classes, never style attributes): every colour
@@ -49,6 +58,7 @@
   --gs-color-danger-text: #a61b1b;
   --gs-color-danger-surface: #fdecec;
   --gs-color-danger-border: #e08a8a;
+  --gs-color-danger-surface-hover: #f9dcdc; /* danger text 5.83:1 */
   --gs-color-warning-text: #7a4a00;
   --gs-color-warning-surface: #fff4e0;
   --gs-color-success-text: #1f6b3a;
@@ -58,6 +68,13 @@
 
   /* Header */
   --gs-header-background: #1b2a44;
+  --gs-header-background-deep: #0f1a2e; /* header text 16.6:1 */
+  /* Navy behind the logo (its navy box must not show), deeper to the right. */
+  --gs-header-gradient: linear-gradient(
+    90deg,
+    var(--gs-header-background) 0 12rem,
+    var(--gs-header-background-deep) 100%
+  );
   --gs-header-text: #f4fbfc;
   --gs-header-hover: #2c3e5f;
   --gs-header-active: #3a4f75;
@@ -66,17 +83,33 @@
   --gs-focus-ring: 2px solid var(--gs-color-focus);
   --gs-focus-ring-on-dark: 2px solid var(--gs-header-text);
   --gs-color-scrim: rgb(27 42 68 / 55%);
-  --gs-shadow-1: 0 2px 8px rgb(27 42 68 / 18%);
+  /* Elevation: 1 a card at rest, 2 a clickable card under the pointer,
+     3 a dialog or menu above the page. Navy-tinted, never pure black. */
+  --gs-shadow-1: 0 1px 2px rgb(27 42 68 / 6%), 0 1px 3px rgb(27 42 68 / 8%);
+  --gs-shadow-2: 0 2px 4px rgb(27 42 68 / 8%), 0 4px 12px rgb(27 42 68 / 10%);
+  --gs-shadow-3: 0 4px 8px rgb(27 42 68 / 10%), 0 12px 32px rgb(27 42 68 / 18%);
+
+  /* Motion: short and quiet; global.css zeroes both under reduced motion. */
+  --gs-duration-fast: 120ms;
+  --gs-duration-base: 200ms;
+  --gs-duration-loop: 1400ms; /* one sweep of a loading sheen */
+  --gs-ease: cubic-bezier(0.2, 0, 0, 1);
 
   /* Typography: system fonts only (on-prem, no CDN; 0 bytes served). */
   --gs-font-body: "Yu Gothic UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
   --gs-font-mono: "BIZ UDGothic", "Consolas", "Menlo", "Noto Sans Mono", ui-monospace, monospace;
+  --gs-font-size-xs: 0.75rem; /* section labels only, never body text */
   --gs-font-size-sm: 0.875rem;
   --gs-font-size-md: 1rem;
   --gs-font-size-lg: 1.25rem;
   --gs-font-size-xl: 1.5rem;
+  --gs-font-size-2xl: 2rem;
+  --gs-font-weight-medium: 500;
+  --gs-font-weight-semibold: 600;
   --gs-font-weight-bold: 700;
   --gs-line-height: 1.6;
+  --gs-line-height-tight: 1.25; /* headings */
+  --gs-letter-spacing-label: 0.06em; /* the small uppercase section labels */
   --gs-code-line-height: 1.5rem; /* >= 24px: the line-number links are touch targets (WCAG 2.5.8) */
   --gs-code-tab-size: 4;
 
@@ -85,14 +118,17 @@
   --gs-space-2: 0.5rem;
   --gs-space-3: 0.75rem;
   --gs-space-4: 1rem;
+  --gs-space-5: 1.25rem;
   --gs-space-6: 1.5rem;
   --gs-space-8: 2rem;
+  --gs-space-12: 3rem;
   --gs-radius-sm: 4px;
   --gs-radius-md: 8px;
   --gs-radius-pill: 999px; /* a count or tag drawn as a pill */
   --gs-count-min-width: 1.5em; /* a count pill keeps its shape for one digit */
   --gs-header-height: 3.5rem;
   --gs-tap-target: 2.5rem; /* the least height / width of a control (WCAG 2.5.8 with room) */
+  --gs-tap-target-sm: 2rem; /* a small button: still above the 24px of WCAG 2.5.8 */
   --gs-sidebar-width: 14rem;
   --gs-aside-width: 16rem; /* a page's side panel (project info) */
   --gs-content-max-width: 72rem;
@@ -104,4 +140,7 @@
   --gs-numeric: tabular-nums; /* counts and times: digits line up and do not jitter */
   --gs-log-max-height: 32rem; /* a log or excerpt box before it scrolls */
   --gs-accent-border-width: 4px; /* the coloured edge of a status line */
+  --gs-accent-rule-width: 3px; /* the brand-teal rule on a page header or card */
+  --gs-accent-rule-length: 2.5rem;
+  --gs-empty-icon-size: 2.5rem;
 }
