@@ -11,11 +11,13 @@ import { useTranslation } from 'react-i18next';
 
 import { useUserActivity, type ActivityEvent } from '../api/activity';
 import controls from '../components/controls.module.css';
-import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
+import { SkeletonList } from '../components/Skeleton';
 import { ActivityItem } from '../features/ActivityItem';
 import { formatDate } from '../features/labels';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { EmptyState } from '../ui/EmptyState';
+import { PageHeader } from '../ui/PageHeader';
 import styles from './Activity.module.css';
 
 /** The local calendar day of a moment (`2026-11-11`); '' when unreadable. */
@@ -105,10 +107,9 @@ export function Activity() {
 
   return (
     <>
-      <h1 className={styles.title}>{t('activity.title')}</h1>
-      <p className={styles.explain}>{t('activity.explain')}</p>
+      <PageHeader title={t('activity.title')} subtitle={t('activity.explain')} />
       {truncated && <p className={styles.note}>{t('activity.truncated')}</p>}
-      {list.isPending && <Loading />}
+      {list.isPending && <SkeletonList />}
       {groupByDay(events).map((g) => {
         const first = g.events[0];
         if (first === undefined) return null;
@@ -145,7 +146,7 @@ export function Activity() {
         </div>
       )}
       {list.isSuccess && events.length === 0 && !list.hasNextPage && (
-        <p className={styles.empty}>{t('activity.empty')}</p>
+        <EmptyState icon="activity" reason={t('activity.empty')} />
       )}
       {list.isSuccess && list.hasNextPage && (
         <p className={styles.more}>

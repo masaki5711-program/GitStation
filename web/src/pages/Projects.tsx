@@ -11,7 +11,7 @@ import controls from '../components/controls.module.css';
 import { CreateProjectDialog } from '../features/CreateDialogs';
 import { MyProjects, type MyProjectScope } from '../features/MyProjects';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import styles from './Home.module.css';
+import { PageHeader } from '../ui/PageHeader';
 import tabStyles from './settings/Settings.module.css';
 
 const BASE = '/-/projects';
@@ -33,14 +33,14 @@ export function ProjectsPage() {
   };
   return (
     <>
-      <div className={styles.top}>
-        <h1 className={styles.title}>{t('projects.title')}</h1>
-        <div className={styles.actions}>
+      <PageHeader
+        title={t('projects.title')}
+        actions={
           <button type="button" className={controls.primary} onClick={create}>
             {t('projects.new')}
           </button>
-        </div>
-      </div>
+        }
+      />
       <nav aria-label={t('projects.tabs')}>
         <ul className={tabStyles.tabs}>
           {tabs.map((x) => (

@@ -11,8 +11,9 @@ import { useTranslation } from 'react-i18next';
 import { useApi } from '../api/context';
 import { projectsQuery, type ProjectScope } from '../api/lists';
 import controls from '../components/controls.module.css';
-import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
+import { SkeletonList } from '../components/Skeleton';
+import { EmptyState } from '../ui/EmptyState';
 import { ProjectList } from './Lists';
 import styles from './Lists.module.css';
 
@@ -32,7 +33,7 @@ export function MyProjects({
   const [filter, setFilter] = useState('');
   const mine = useQuery(projectsQuery(api, scope));
 
-  if (mine.isPending) return <Loading />;
+  if (mine.isPending) return <SkeletonList />;
   if (mine.isError) {
     return (
       <QueryError
@@ -45,15 +46,16 @@ export function MyProjects({
   }
   if (mine.data.items.length === 0) {
     return (
-      <div className={styles.empty}>
-        <p>{scope === 'created' ? t('projects.emptyCreated') : t('projects.empty')}</p>
-        <p className={styles.hint}>
-          {scope === 'created' ? t('projects.emptyCreatedHint') : t('projects.emptyHint')}
-        </p>
-        <button type="button" className={controls.primary} onClick={onCreate}>
-          {t('projects.new')}
-        </button>
-      </div>
+      <EmptyState
+        icon="folder"
+        reason={scope === 'created' ? t('projects.emptyCreated') : t('projects.empty')}
+        hints={[scope === 'created' ? t('projects.emptyCreatedHint') : t('projects.emptyHint')]}
+        action={
+          <button type="button" className={controls.primary} onClick={onCreate}>
+            {t('projects.new')}
+          </button>
+        }
+      />
     );
   }
 

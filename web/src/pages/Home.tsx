@@ -15,11 +15,13 @@ import { Link } from 'react-router';
 import { useRecentActivity } from '../api/activity';
 import { useUnreadCount } from '../api/notifications';
 import { isNone, mrCountText, useUserMrCounts } from '../api/userMergeRequests';
-import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
+import { SkeletonList } from '../components/Skeleton';
 import { ActivityItem } from '../features/ActivityItem';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
+import { EmptyState } from '../ui/EmptyState';
+import { PageHeader } from '../ui/PageHeader';
 import styles from './Home.module.css';
 
 function Block({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -116,7 +118,7 @@ function RecentActivity() {
   return (
     <Block id="home-activity" title={t('home.activity')}>
       <p className={styles.lead}>{t('home.activityLead')}</p>
-      {recent.isPending && <Loading />}
+      {recent.isPending && <SkeletonList />}
       {recent.isError && (
         <QueryError
           error={recent.error}
@@ -125,7 +127,7 @@ function RecentActivity() {
           }}
         />
       )}
-      {recent.isSuccess && events.length === 0 && <p className={styles.hint}>{t('activity.empty')}</p>}
+      {recent.isSuccess && events.length === 0 && <EmptyState icon="activity" reason={t('activity.empty')} />}
       {events.length > 0 && (
         <ul className={styles.activity}>
           {events.map((e) => (
@@ -153,9 +155,7 @@ export function Home() {
 
   return (
     <>
-      <div className={styles.top}>
-        <h1 className={styles.title}>{t('home.title')}</h1>
-      </div>
+      <PageHeader title={t('home.title')} />
 
       <Block id="home-work" title={t('home.work')}>
         <ul className={styles.cards}>

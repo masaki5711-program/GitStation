@@ -16,15 +16,16 @@ import { useTranslation } from 'react-i18next';
 import { useApi } from '../api/context';
 import { groupsQuery } from '../api/lists';
 import controls from '../components/controls.module.css';
-import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
+import { SkeletonList } from '../components/Skeleton';
 import { CreateGroupDialog, CreateProjectDialog } from '../features/CreateDialogs';
 import { GroupTree, type CreateTarget } from '../features/GroupTree';
 import { buildGroupTree } from '../features/groupTreeModel';
 import lists from '../features/Lists.module.css';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useSession } from '../session/session';
-import styles from './Home.module.css';
+import { EmptyState } from '../ui/EmptyState';
+import { PageHeader } from '../ui/PageHeader';
 
 type Dialog = 'group' | 'subgroup' | 'project' | null;
 
@@ -56,11 +57,8 @@ export function GroupsPage() {
 
   return (
     <>
-      <div className={styles.top}>
-        <h1 className={styles.title}>{t('groups.title')}</h1>
-        {createButton !== null && <div className={styles.actions}>{createButton}</div>}
-      </div>
-      {groups.isPending && <Loading />}
+      <PageHeader title={t('groups.title')} actions={createButton} />
+      {groups.isPending && <SkeletonList />}
       {groups.isError && (
         <QueryError
           error={groups.error}
@@ -71,17 +69,13 @@ export function GroupsPage() {
       )}
       {groups.isSuccess &&
         (groups.data.items.length === 0 ? (
-          <div className={lists.empty}>
-            <p>{t('groups.empty')}</p>
-            {user.is_admin ? (
-              <p className={lists.hint}>{t('groups.emptyHintAdmin')}</p>
-            ) : (
-              <>
-                <p className={lists.hint}>{t('groups.emptyMember')}</p>
-                <p className={lists.hint}>{t('groups.emptyHint')}</p>
-              </>
-            )}
-          </div>
+          <EmptyState
+            icon="group"
+            reason={t('groups.empty')}
+            hints={
+              user.is_admin ? [t('groups.emptyHintAdmin')] : [t('groups.emptyMember'), t('groups.emptyHint')]
+            }
+          />
         ) : (
           <>
             {groups.data.truncated && (

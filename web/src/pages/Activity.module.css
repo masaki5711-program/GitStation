@@ -1,14 +1,4 @@
-/* /-/activity (plan 15 MR 9). Tokens only. */
-.title {
-  margin: 0 0 var(--gs-space-2);
-  font-size: var(--gs-font-size-xl);
-  color: var(--gs-brand-navy);
-}
-
-.explain {
-  margin: 0 0 var(--gs-space-6);
-  color: var(--gs-color-text-muted);
-}
+/* /-/activity (plan 15 MR 9). Tokens only; the head is ui/PageHeader. */
 
 /* The cap note is quiet: it is not a failure. */
 .note {
@@ -23,23 +13,16 @@
 
 .dayHeading {
   margin: 0 0 var(--gs-space-2);
-  font-size: var(--gs-font-size-md);
-  color: var(--gs-brand-navy);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-semibold);
+  color: var(--gs-color-text-muted);
 }
 
 .list {
+  composes: card from '../ui/surfaces.module.css';
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--gs-color-border);
-  border-bottom: none;
-  border-radius: var(--gs-radius-md);
-  background: var(--gs-color-surface);
-}
-
-.empty {
-  margin: 0;
-  color: var(--gs-color-text-muted);
 }
 
 .more {

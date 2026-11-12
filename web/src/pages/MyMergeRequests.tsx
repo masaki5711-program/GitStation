@@ -20,11 +20,13 @@ import {
   type UserMergeRequest,
 } from '../api/userMergeRequests';
 import controls from '../components/controls.module.css';
-import { Loading } from '../components/Loading';
 import { QueryError } from '../components/QueryError';
+import { SkeletonList } from '../components/Skeleton';
 import { formatDateTime, formatRelative } from '../features/labels';
 import { pullUrl } from '../features/repoUrls';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { EmptyState } from '../ui/EmptyState';
+import { PageHeader } from '../ui/PageHeader';
 import styles from './MyMergeRequests.module.css';
 
 /** Why a merge request waits on its author, in plain words. */
@@ -126,7 +128,7 @@ function ScopeList({ scope }: { scope: MrScope }) {
   return (
     <>
       <p className={styles.hint}>{scopeHint(t, scope)}</p>
-      {list.isPending && <Loading />}
+      {list.isPending && <SkeletonList />}
       {items.length > 0 && (
         <ul className={styles.list}>
           {items.map((mr) => (
@@ -144,7 +146,7 @@ function ScopeList({ scope }: { scope: MrScope }) {
         />
       )}
       {list.isSuccess && items.length === 0 && !list.hasNextPage && (
-        <p className={styles.empty}>{scopeEmpty(t, scope)}</p>
+        <EmptyState icon="mergeRequest" reason={scopeEmpty(t, scope)} compact />
       )}
       {list.isSuccess && list.hasNextPage && (
         <p className={styles.more}>
@@ -223,8 +225,7 @@ export function MyMergeRequests() {
   const scope = isMrScope(raw) ? raw : null;
   return (
     <>
-      <h1 className={styles.pageTitle}>{t('myMrs.title')}</h1>
-      <p className={styles.explain}>{t('myMrs.explain')}</p>
+      <PageHeader title={t('myMrs.title')} subtitle={t('myMrs.explain')} />
       <CountsError />
       {/* A new ?scope= (a card or the sidebar while here) opens afresh. */}
       <div key={scope ?? ''}>
