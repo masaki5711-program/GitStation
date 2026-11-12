@@ -1626,12 +1626,13 @@ kanflow との通しの試験で見つかった 2 つの抜け（I1b / I1c の�
      `work_item.relink_requested`、プロジェクトの行、`actor_kind = system`）で書き、`work-item-sync` が `merge_request.*` と同じ処理
      （同じ規則・上限 20、人の解除を尊重）でリンクを合わせる。イベントを MR ごとにしたのは、派生イベントの上限（根ごとに 100、§6）を
      1 つの MR の範囲（付け 20 + 外し 20 + 合図 1）に収めるため。1 つの根から 500 の MR を処理すると上限を超える。
-   - **範囲**: 開いた MR（古い順に最大 500）と、**90 日以内にマージした MR**（新しい順に最大 500。マージの時刻は適用したマージの終了、
+   - **範囲**: 開いた MR（新しい順に最大 500。kanflow がまだ見ていそうなものを先に）と、**90 日以内にマージした MR**（新しい順に最大 500。マージの時刻は適用したマージの終了、
      無ければ `updated_at`）。マージした MR も入れたのは、結び直しの後も kanflow のマージの履歴（開発状況の `merged`）が見えるようにするため。
      90 日は feed の保持の既定と同じ。**クローズした MR は入れない**（kanflow の開発状況には古いクローズまで要らない。次の編集で付く）。
      超えた分はログ `forge.work_items.relink_capped`（warn）。
    - **少なくとも 1 回**: やり直したジョブは、もう書いたイベントのキーを読んで飛ばす。同時の 2 つ目（リースの取り直し）で変更が
-     `Deduped` になったら 1 回だけ読み直す。結びつけが無くなっていれば何も書かない（`forge.work_items.relink_skipped`）。
+     `Deduped` になったら、足りない分が無くなるまで読み直して書く（10 回まで。超えたら `FG-DB-0002 reason=relink_contended` で
+     ジョブがやり直す）。マージした MR は `updated_at`（マージのジョブが適用と同じトランザクションで進め、戻らない）で先に絞る。結びつけが無くなっていれば何も書かない（`forge.work_items.relink_skipped`）。
    - 試験（forge-db `feed::tests::relink`）: `rebinding_detects_open_and_recently_merged_merge_requests_again`（開いた・5 日前のマージは
      付く、100 日前のマージ・クローズは付かない、feed と開発状況に出る、内部のイベントは feed に出ない、2 回目は何も書かない）、
      `rebinding_to_another_kanflow_project_links_its_work_items`、`a_persons_unlink_survives_a_rebind`、`relink_is_bounded_per_binding`、

@@ -333,8 +333,9 @@ async fn a_persons_unlink_survives_a_rebind() {
     w.t.drop_now().await;
 }
 
-/// The caps: at most `open` open merge requests (oldest first) are asked
-/// for, the cut is reported; batches are separate changes.
+/// The caps: at most `open` open merge requests (newest first: the ones
+/// kanflow most likely still shows) are asked for, the cut is reported;
+/// batches are separate changes.
 #[tokio::test]
 async fn relink_is_bounded_per_binding() {
     let w = world().await;
@@ -356,9 +357,9 @@ async fn relink_is_bounded_per_binding() {
     .await;
     assert_eq!((ran.open, ran.open_capped, ran.requested), (2, true, 2));
     drain(&w.t).await;
-    assert_eq!(open_links_of(&w, &a).await.len(), 1);
+    assert!(open_links_of(&w, &a).await.is_empty(), "the oldest is cut");
     assert_eq!(open_links_of(&w, &b).await.len(), 1);
-    assert!(open_links_of(&w, &c).await.is_empty(), "beyond the cap");
+    assert_eq!(open_links_of(&w, &c).await.len(), 1);
     let audited: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM forge.audit_log WHERE action = 'work_item.relink_requested'",
     )
@@ -420,5 +421,64 @@ async fn a_link_and_unlink_by_hand_reach_the_feed_as_work_items_changed() {
     // The development status agrees: nothing linked now.
     let status = dev_status(&w, "PBI-9", MrStateFilter::All).await;
     assert!(status[0].1.merge_requests.is_empty());
+    w.t.drop_now().await;
+}
+
+/// A merged merge request whose row was last updated before the window is
+/// not read (the `updated_at` pre-filter: the merge job moves it with the
+/// merge, so nothing merged in the window is older), even when its
+/// attempt's time says otherwise.
+#[tokio::test]
+async fn merged_rows_not_updated_in_the_window_are_not_read() {
+    let w = world().await;
+    let p = w.web.project_id;
+    let stale = open_mr(&w, p, "Stale PBI-5", "stale-five").await;
+    let fresh = open_mr(&w, p, "Fresh PBI-6", "fresh-six").await;
+    merged_days_ago(&w, &stale, 5).await;
+    merged_days_ago(&w, &fresh, 5).await;
+    w.t.commit_audited(
+        ("project", p.get()),
+        &[format!(
+            "UPDATE forge.merge_requests SET updated_at = now() - interval '100 days', revision = revision + 1 WHERE id = {}",
+            stale.id.get()
+        )],
+    )
+    .await;
+    drain(&w.t).await;
+    unbind(&w, p).await;
+    bind(&w, p, "kf-1").await;
+    let ran = run_relink(&w, None).await;
+    assert_eq!((ran.merged, ran.requested), (1, 1), "{ran:?}");
+    drain(&w.t).await;
+    assert!(open_links_of(&w, &stale).await.is_empty());
+    assert_eq!(open_links_of(&w, &fresh).await.len(), 1);
+    w.t.drop_now().await;
+}
+
+/// Two runs of the same job at once (a lease taken over) both succeed and
+/// together ask for each merge request exactly once.
+#[tokio::test]
+async fn concurrent_runs_ask_for_each_merge_request_once() {
+    let w = world().await;
+    let p = w.web.project_id;
+    let mut mrs = Vec::new();
+    for n in 1..=6 {
+        mrs.push(open_mr(&w, p, &format!("MR PBI-{n}"), &format!("mr-{n}")).await);
+    }
+    drain(&w.t).await;
+    unbind(&w, p).await;
+    bind(&w, p, "kf-1").await;
+    let limits = RelinkLimits {
+        open: 500,
+        merged: 500,
+        batch: 2,
+    };
+    let (one, two) = tokio::join!(run_relink(&w, Some(limits)), run_relink(&w, Some(limits)));
+    assert_eq!(one.requested + two.requested, 6, "{one:?} {two:?}");
+    assert_eq!(count_events(&w, "merge_request.relink_requested").await, 6);
+    drain(&w.t).await;
+    for mr in &mrs {
+        assert_eq!(open_links_of(&w, mr).await.len(), 1);
+    }
     w.t.drop_now().await;
 }

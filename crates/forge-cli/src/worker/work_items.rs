@@ -8,8 +8,10 @@
 //!
 //! Success is logged once by forge-db (`forge.work_items.relink_requested`);
 //! a failure is returned to the job runner, which logs it once. Database
-//! failures retry with the queue's backoff (each batch is idempotent); a
-//! malformed payload is dead at once (`FG-DB-0006`).
+//! failures retry with the queue's backoff (each batch is idempotent),
+//! also `FG-DB-0002 reason=relink_contended` (a concurrent run of the same
+//! job kept taking the batch); a malformed payload is `FG-SYS-0001
+//! reason=invalid_job_payload` and the job is dead at once (`FG-DB-0006`).
 
 use forge_core::RequestId;
 use forge_db::change::{Actor, ChangeContext};
@@ -62,5 +64,21 @@ impl JobHandler for RelinkHandler {
                 Err(e) => Err(JobFailure::permanent(e)),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retryable;
+    use forge_errors::{ErrorCode, ForgeError};
+
+    /// A batch contended by a concurrent run (`relink_contended`, FG-DB-0002)
+    /// is retried, never dead; a malformed payload (FG-SYS-0001) is not.
+    #[test]
+    fn contention_is_retried_and_a_bad_payload_is_not() {
+        let contended =
+            ForgeError::new(ErrorCode::DbQueryFailed).with_context("reason", "relink_contended");
+        assert!(retryable(&contended));
+        assert!(!retryable(&ForgeError::new(ErrorCode::Internal)));
     }
 }

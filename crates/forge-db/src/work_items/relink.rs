@@ -12,7 +12,7 @@
 //! constraint `merge_request_work_items_derived`) — to detect each merge
 //! request again:
 //!
-//! - the **open** merge requests (at most [`MAX_RELINK_OPEN`], oldest
+//! - the **open** merge requests (at most [`MAX_RELINK_OPEN`], newest
 //!   first) and the merge requests **merged** in the last
 //!   [`RELINK_MERGED_DAYS`] days (at most [`MAX_RELINK_MERGED`], newest
 //!   first; merged at = the applied merge attempt's end, else the row's
@@ -63,6 +63,8 @@ pub const RELINK_BATCH: usize = 100;
 pub const RELINK_TIMEOUT: Duration = Duration::from_secs(300);
 
 const ACTION: &str = "work_item.relink_requested";
+/// Rounds of one batch against a concurrent run (`request_batch`).
+const MAX_BATCH_ROUNDS: usize = 10;
 const EVENT_DEDUP: &str = "merge_request_relink_requested";
 
 /// The job's payload: the project and the binding (its `generation`).
@@ -131,8 +133,9 @@ pub fn relink_job(
     })
 }
 
-/// The payload of a claimed job (`FG-SYS-0001 reason=invalid_job_payload`
-/// for anything else: forge wrote it).
+/// The payload of a claimed job: anything else is `FG-SYS-0001
+/// reason=invalid_job_payload` (forge wrote it), and the handler makes the
+/// job dead at once (`FG-DB-0006`).
 pub fn relink_payload(payload: &serde_json::Value) -> Result<RelinkRequest, ForgeError> {
     let positive = |field: &str| {
         payload
@@ -147,14 +150,22 @@ pub fn relink_payload(payload: &serde_json::Value) -> Result<RelinkRequest, Forg
     })
 }
 
-/// (id, iid) of the merge requests to detect again: open ones oldest
-/// first, then merged ones newest first; each list one longer than its
-/// limit when cut.
+/// (id, iid) of the merge requests to detect again: open ones and merged
+/// ones, each newest first (the ones kanflow most likely still shows when
+/// a list is cut) and one longer than its limit when cut.
+///
+/// Merged ones: `updated_at` is the cheap pre-filter. The merge job — the
+/// only writer of `state = 'merged'` — sets `updated_at = now()` in the
+/// transaction that marks its attempt `applied` (`finished_at = now()`),
+/// and `updated_at` never goes back, so `updated_at >= merged at` and the
+/// pre-filter drops no merge of the window; the correlated read of the
+/// attempt runs only for rows updated in the window.
 const CANDIDATES_SQL: &str = "(SELECT m.id, m.iid, 'open' AS state FROM forge.merge_requests AS m \
-     WHERE m.project_id = $1 AND m.state = 'open' ORDER BY m.id LIMIT $2) \
+     WHERE m.project_id = $1 AND m.state = 'open' ORDER BY m.id DESC LIMIT $2) \
      UNION ALL \
      (SELECT m.id, m.iid, 'merged' FROM forge.merge_requests AS m \
      WHERE m.project_id = $1 AND m.state = 'merged' \
+     AND m.updated_at >= pg_catalog.now() - pg_catalog.make_interval(days => $4) \
      AND COALESCE((SELECT max(g.finished_at) FROM forge.merge_request_merges AS g \
        WHERE g.merge_request_id = m.id AND g.state = 'applied'), m.updated_at) \
        >= pg_catalog.now() - pg_catalog.make_interval(days => $4) \
@@ -279,7 +290,10 @@ fn event_key(merge_request: i64, binding: i64) -> Result<DedupKey, ForgeError> {
 /// One change: the batch's merge requests that have no event for this
 /// binding yet, one event each and one audit row. A concurrent run of the
 /// same job (a lease taken over) makes the change `Deduped`: read again
-/// once and write what is still missing.
+/// and write what is still missing, until nothing is (each round either
+/// writes or sees more written by the other run). Still contended after
+/// [`MAX_BATCH_ROUNDS`]: `FG-DB-0002 reason=relink_contended`, which the
+/// handler retries.
 async fn request_batch(
     db: &Db,
     ctx: &ChangeContext,
@@ -291,7 +305,7 @@ async fn request_batch(
     for (id, _) in batch {
         keys.push(event_key(*id, request.binding)?.as_str().to_owned());
     }
-    for _ in 0..2 {
+    for _ in 0..MAX_BATCH_ROUNDS {
         let mut tx = ChangeTx::begin(db, ctx).await?;
         let keys = keys.clone(); // clone: each attempt binds its own copy
                                  // `None`: the binding went away meanwhile (nothing more to ask).
@@ -377,8 +391,10 @@ async fn request_batch(
             Committed::Deduped => continue,
         }
     }
-    Err(ForgeError::new(ErrorCode::Internal)
-        .with_context("reason", "relink_deduped_twice")
+    Err(ForgeError::new(ErrorCode::DbQueryFailed)
+        .with_context("query", "work_items.relink.batch")
+        .with_context("reason", "relink_contended")
+        .with_context("rounds", MAX_BATCH_ROUNDS)
         .with_context("project_id", project.get())
         .with_context("binding_id", request.binding))
 }
