@@ -10,7 +10,7 @@
 - 新しい監査の行が封印されていない間、その行の改ざんは封印では検知できない（ADR-0018 §4）。画面と git の操作は動き続ける。
 - 数十分なら SEV3。1 時間を超える、または `FG-DB-0011` と同時なら SEV2（Runbook `audit-seal-mismatch.md` を先に）。
 - **想定どおりの場合**: 監査の番号付けが止まっている間（`audit_sequencing=off`）。
-  - 導入の直後（C9 の送出先との最初の比較の前で、まだ何も番号付け・封印していない）は、doctor は失敗ではなく **warn**（`audit numbering has not started yet …`）を出す。対処は不要。
+  - 導入の直後（C9 の送出先との最初の比較の前で、まだ何も番号付け・封印していない）は、doctor は失敗ではなく **warn**（`audit numbering has not started yet …`）を出す。対処は不要。ただし最も古い行が 7 日を超えた、または `forge.event_feed_state` の行がない（シーケンサーが一度も動いていない）ときは `FG-DB-0015` の失敗に戻る。リストアした DB の改ざんの検出はこの warn ではなく `audit.seal_verify`（`FG-DB-0011`）の役目。
   - 巻き戻しを検出して封印の再同期を待っている間（C9。封印済みの行がある）は `FG-DB-0015` の失敗が出続ける。
 
 ## Diagnose（読み取りのみ）

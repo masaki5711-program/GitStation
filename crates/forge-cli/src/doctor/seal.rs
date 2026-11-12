@@ -65,7 +65,7 @@ fn backlog_detail(b: &seal::SealBacklog) -> String {
 fn not_started_detail(b: &seal::SealBacklog) -> String {
     format!(
         "audit numbering has not started yet ({} unnumbered rows waiting, nothing sealed): \
-         expected before the first seal sink comparison (C9), see runbook audit-seal-backlog",
+         expected before the first seal sink comparison (C9) for up to 7 days, see runbook audit-seal-backlog",
         sequencer::shown(b.unsequenced)
     )
 }

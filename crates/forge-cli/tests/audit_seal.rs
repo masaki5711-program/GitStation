@@ -208,6 +208,9 @@ fn doctor_warns_but_does_not_fail_while_audit_numbering_has_not_started() {
     let rt = runtime();
     let _lock = rt.block_on(ClusterLock::shared());
     let t = rt.block_on(FreshDb::migrated());
+    // The sequencer's first run creates the feed state (numbering stays off).
+    rt.block_on(run_once(&t.db, BatchSize::MAX, AuditSequencing::IfEnabled))
+        .expect("feed state");
     rt.block_on(t.exec_superuser(
         "ALTER TABLE forge.audit_log DISABLE TRIGGER audit_log_append_only; \
          UPDATE forge.audit_log SET occurred_at = now() - interval '6 minutes'; \

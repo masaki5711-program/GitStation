@@ -13,6 +13,10 @@ use crate::{read_query_error, Db};
 /// An unsealed row older than this is a backlog.
 pub const BACKLOG_AFTER: Duration = Duration::from_secs(5 * 60);
 
+/// How long a fresh installation may wait for audit numbering to start
+/// (the first seal sink comparison, C9) before the wait is a backlog again.
+pub const NOT_STARTED_GRACE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealBacklog {
     /// `None`: nothing is sealed yet.
@@ -29,15 +33,19 @@ pub struct SealBacklog {
 }
 
 impl SealBacklog {
-    /// Audit numbering has never started: sequencing off, nothing numbered
-    /// and nothing sealed. This is a fresh installation before the first
-    /// seal sink comparison (C9) turns numbering on — expected, unlike a
-    /// numbering stop after a detected rollback, which has seals behind it.
+    /// Audit numbering has never started: the feed state exists with
+    /// sequencing off, nothing numbered and nothing sealed, and the oldest
+    /// waiting row is younger than [`NOT_STARTED_GRACE`]. This is a fresh
+    /// installation before the first seal sink comparison (C9) turns
+    /// numbering on — expected, unlike a numbering stop after a detected
+    /// rollback (seals behind it) or a missing feed state (no sequencer).
     pub fn numbering_not_started(&self) -> bool {
+        let grace = i64::try_from(NOT_STARTED_GRACE.as_millis()).unwrap_or(i64::MAX);
         !self.audit_sequencing
             && self.last_sealed_seq.is_none()
             && self.unsealed_numbered == 0
-            && self.audit_high_seq.unwrap_or(0) == 0
+            && self.audit_high_seq == Some(0)
+            && self.oldest_age_ms.is_none_or(|age| age <= grace)
     }
 
     /// `FG-DB-0015` when the oldest unsealed row is older than
@@ -141,20 +149,31 @@ mod unit {
     fn numbering_has_not_started_only_before_any_number_or_seal() {
         let fresh = SealBacklog {
             last_sealed_seq: None,
-            audit_high_seq: None,
+            audit_high_seq: Some(0),
             audit_sequencing: false,
             unsealed_numbered: 0,
             unsequenced: 7,
             oldest_age_ms: Some(600_000),
         };
         assert!(fresh.numbering_not_started());
+        let week = i64::try_from(NOT_STARTED_GRACE.as_millis()).expect("ms");
         assert!(SealBacklog {
-            audit_high_seq: Some(0),
+            oldest_age_ms: Some(week),
             ..fresh.clone()
         }
         .numbering_not_started());
-        // A rollback stop has seals (or numbers) behind it: still a backlog.
+        // A rollback stop has seals (or numbers) behind it, a missing feed
+        // state means no sequencer ran, and a week is too long a wait: all
+        // still a backlog.
         for stopped in [
+            SealBacklog {
+                audit_high_seq: None,
+                ..fresh.clone()
+            },
+            SealBacklog {
+                oldest_age_ms: Some(week + 1),
+                ..fresh.clone()
+            },
             SealBacklog {
                 last_sealed_seq: Some(9),
                 ..fresh.clone()
