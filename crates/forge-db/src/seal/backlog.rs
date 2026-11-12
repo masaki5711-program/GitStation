@@ -29,6 +29,17 @@ pub struct SealBacklog {
 }
 
 impl SealBacklog {
+    /// Audit numbering has never started: sequencing off, nothing numbered
+    /// and nothing sealed. This is a fresh installation before the first
+    /// seal sink comparison (C9) turns numbering on — expected, unlike a
+    /// numbering stop after a detected rollback, which has seals behind it.
+    pub fn numbering_not_started(&self) -> bool {
+        !self.audit_sequencing
+            && self.last_sealed_seq.is_none()
+            && self.unsealed_numbered == 0
+            && self.audit_high_seq.unwrap_or(0) == 0
+    }
+
     /// `FG-DB-0015` when the oldest unsealed row is older than
     /// [`BACKLOG_AFTER`].
     pub fn check(&self) -> Result<(), ForgeError> {
@@ -123,6 +134,42 @@ mod unit {
             "audit_sequencing=off",
         ] {
             assert!(text.contains(part), "{text}");
+        }
+    }
+
+    #[test]
+    fn numbering_has_not_started_only_before_any_number_or_seal() {
+        let fresh = SealBacklog {
+            last_sealed_seq: None,
+            audit_high_seq: None,
+            audit_sequencing: false,
+            unsealed_numbered: 0,
+            unsequenced: 7,
+            oldest_age_ms: Some(600_000),
+        };
+        assert!(fresh.numbering_not_started());
+        assert!(SealBacklog {
+            audit_high_seq: Some(0),
+            ..fresh.clone()
+        }
+        .numbering_not_started());
+        // A rollback stop has seals (or numbers) behind it: still a backlog.
+        for stopped in [
+            SealBacklog {
+                last_sealed_seq: Some(9),
+                ..fresh.clone()
+            },
+            SealBacklog {
+                audit_high_seq: Some(4),
+                unsealed_numbered: 4,
+                ..fresh.clone()
+            },
+            SealBacklog {
+                audit_sequencing: true,
+                ..fresh.clone()
+            },
+        ] {
+            assert!(!stopped.numbering_not_started(), "{stopped:?}");
         }
     }
 }

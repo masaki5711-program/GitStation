@@ -199,3 +199,30 @@ fn worker_refuses_to_start_without_the_seal_keys() {
         assert!(err.contains(part), "missing {part:?} in {err}");
     }
 }
+
+/// A fresh installation before C9: numbering is off, nothing numbered or
+/// sealed, and the waiting rows are old. Expected — a warning, not
+/// `FG-DB-0015` (a doctor red on every M3 installation is no signal).
+#[test]
+fn doctor_warns_but_does_not_fail_while_audit_numbering_has_not_started() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::migrated());
+    rt.block_on(t.exec_superuser(
+        "ALTER TABLE forge.audit_log DISABLE TRIGGER audit_log_append_only; \
+         UPDATE forge.audit_log SET occurred_at = now() - interval '6 minutes'; \
+         ALTER TABLE forge.audit_log ENABLE ALWAYS TRIGGER audit_log_append_only;",
+    ));
+    let (vars, _pw) = t.env();
+    let storage = tempfile::tempdir().expect("storage root");
+    let root = storage.path().to_string_lossy().into_owned();
+    let out = forge(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
+    let text = stdout(&out);
+    let backlog = line(&text, "audit.seal_backlog");
+    assert!(backlog.starts_with("warn  "), "{HINT}\n{text}");
+    assert!(
+        backlog.contains("audit numbering has not started yet"),
+        "{backlog}"
+    );
+    assert!(!backlog.contains("FG-DB-0015"), "{backlog}");
+}
