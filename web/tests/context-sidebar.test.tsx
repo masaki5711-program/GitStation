@@ -151,6 +151,37 @@ describe('sidebar in a project', () => {
     expect(button.getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('wide screen: a project screen has no second bar of the same links, only the breadcrumb', async () => {
+    const server = mockServer(repoRoutes());
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/commits' });
+    const nav = await projectNav();
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByRole('navigation', { name: 'リポジトリの画面' })).toBeNull();
+    // Each screen name is a link once: in the sidebar.
+    expect(screen.getAllByRole('link', { name: 'ブランチ' })).toEqual([within(nav).getByRole('link', { name: 'ブランチ' })]);
+    // The breadcrumb leads back to the group and to the project.
+    const crumbs = screen.getByRole('navigation', { name: 'いまの場所' });
+    expect(within(crumbs).getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual([
+      '/acme',
+      '/acme/forge-web',
+    ]);
+  });
+
+  it('narrow screen: the screens stay one tap away above the page (the sidebar is behind the menu)', async () => {
+    const mql = {
+      matches: true,
+      media: '(max-width: 767.98px)',
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    };
+    vi.stubGlobal('matchMedia', () => mql);
+    const server = mockServer(repoRoutes());
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/commits' });
+    const bar = await screen.findByRole('navigation', { name: 'リポジトリの画面' });
+    expect(within(bar).getByRole('link', { name: 'コミット' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.queryByRole('navigation', { name: 'いまの場所' })).toBeNull();
+  });
+
   it('axe: no violations on the project page with its sidebar', async () => {
     const server = mockServer(repoRoutes());
     const { container } = await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });

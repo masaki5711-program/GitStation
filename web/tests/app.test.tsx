@@ -33,8 +33,9 @@ describe('error display (CLAUDE.md contract 3)', () => {
     const server = mockServer({
       ...signedIn(),
       'GET /api/v1/projects': () =>
+        // A 500 (a 502/503/504 page is "the server is restarting", client.test.tsx).
         new Response('<html>proxy error: upstream 10.0.0.1</html>', {
-          status: 502,
+          status: 500,
           headers: { 'x-request-id': 'req-proxy' },
         }),
       'GET /api/v1/groups': () => page([]),

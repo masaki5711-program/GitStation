@@ -82,11 +82,33 @@
   font-size: var(--gs-font-size-sm);
 }
 
-.collapsed .link,
-.collapsed .toggle {
+.collapsed .link {
   justify-content: center;
   width: var(--gs-tap-target);
   padding: var(--gs-space-2);
+}
+
+/* Collapsed: the way back is a framed, tinted button at the top of the
+   rail, so it reads as a control and not as one more item. */
+.expandButton {
+  composes: interactive from './controls.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--gs-tap-target);
+  min-height: var(--gs-tap-target);
+  margin-bottom: var(--gs-space-3);
+  padding: var(--gs-space-2);
+  border: 1px solid var(--gs-brand-teal-strong);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-nav-active-surface);
+  box-shadow: var(--gs-shadow-1);
+  color: var(--gs-color-link);
+  font: inherit;
+}
+
+.expandButton:hover:not(:disabled) {
+  background: var(--gs-color-hover-surface);
 }
 
 .icon {
