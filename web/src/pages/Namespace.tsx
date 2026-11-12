@@ -23,8 +23,7 @@ import { GroupPage, UserPage } from './GroupPage';
 import { NotFound } from './NotFound';
 import { ProjectPage } from './ProjectPage';
 import { RepoViews } from './repo/RepoViews';
-import { Account } from './settings/Account';
-import { GroupViews } from './settings/GroupSettings';
+import { Account, GroupViews } from './lazyScreens';
 import { useSession } from '../session/session';
 
 const encode = (segments: string[]) => segments.map(encodeURIComponent).join('/');

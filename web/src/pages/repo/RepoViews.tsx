@@ -10,11 +10,12 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
-import { call } from '../../api/client';
 import { useApi } from '../../api/context';
+import { projectQuery } from '../../api/namespaces';
 import { Breadcrumb } from '../../components/Breadcrumb';
 import { Loading } from '../../components/Loading';
 import { MovedNotice } from '../../components/MovedNotice';
+import { PrefetchLink } from '../../components/PrefetchLink';
 import { encodePath } from '../../features/repoUrls';
 import { useNarrowScreen } from '../../hooks/useNarrowScreen';
 import { useSession } from '../../session/session';
@@ -27,12 +28,9 @@ import { CommitsScreen } from './CommitsScreen';
 import { CompareScreen } from './CompareScreen';
 import { DocumentScreen } from './DocumentScreen';
 import { DocumentsScreen } from './DocumentsScreen';
-import { EditorScreen } from './editor/EditorScreen';
 import { SavedNotice } from './editor/SavedNotice';
 import { mayPush } from '../../api/fileCommits';
 import { parseId } from '../../api/pipelines';
-import { PipelineScreen } from './pipelines/PipelineScreen';
-import { PipelinesScreen } from './pipelines/PipelinesScreen';
 import { RefsScreen } from './RefsScreen';
 import { RepoError } from './common';
 import { TreeScreen } from './TreeScreen';
@@ -40,11 +38,16 @@ import { parseIid } from '../../api/mergeRequests';
 import { MergeRequestScreen } from './mr/MergeRequestScreen';
 import { MergeRequestsScreen } from './mr/MergeRequestsScreen';
 import { NewMergeRequestScreen } from './mr/NewMergeRequestScreen';
-import { DeliveriesScreen } from '../webhooks/DeliveriesScreen';
-import { WebhooksScreen } from '../webhooks/WebhooksScreen';
 import { parseHookId } from '../webhooks/common';
-import { MembersScreen } from '../settings/Members';
-import { ProjectSettings } from '../settings/ProjectSettings';
+import {
+  DeliveriesScreen,
+  EditorScreen,
+  MembersScreen,
+  PipelineScreen,
+  PipelinesScreen,
+  ProjectSettings,
+  WebhooksScreen,
+} from '../lazyScreens';
 import styles from './Repo.module.css';
 
 const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'edit', 'new'];
@@ -66,13 +69,7 @@ export function RepoViews({
   const narrow = useNarrowScreen();
   const word = view[0] ?? '';
   const tail = view.slice(1);
-  const info = useQuery({
-    queryKey: ['project', projectId],
-    queryFn: ({ signal }) =>
-      call(() =>
-        api.GET('/api/v1/projects/{id}', { signal, params: { path: { id: projectId } } }),
-      ),
-  });
+  const info = useQuery(projectQuery(api, projectId));
   const known = info.data;
   useEffect(() => {
     if (known !== undefined) rememberProject({ path: known.path, name: known.display_name });
@@ -239,13 +236,13 @@ export function RepoViews({
           <ul className={styles.navList}>
             {items.map((item) => (
               <li key={item.to}>
-                <Link
+                <PrefetchLink
                   to={item.to}
                   className={styles.navLink}
                   {...(item.words.includes(word) ? { 'aria-current': 'page' as const } : {})}
                 >
                   {item.label}
-                </Link>
+                </PrefetchLink>
               </li>
             ))}
           </ul>

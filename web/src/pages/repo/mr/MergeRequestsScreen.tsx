@@ -7,6 +7,7 @@ import { Link, useSearchParams } from 'react-router';
 import { useMergeRequests, type MrState } from '../../../api/mergeRequests';
 import type { MergeRequest } from '../../../api/types';
 import { Loading } from '../../../components/Loading';
+import { PrefetchLink } from '../../../components/PrefetchLink';
 import controls from '../../../components/controls.module.css';
 import { formatDate, formatDateTime, mrStateLabel } from '../../../features/labels';
 import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
@@ -117,9 +118,9 @@ function MrList({ project, items }: { project: string; items: MergeRequest[] }) 
           <span className={styles.itemTitle}>
             <StateBadge tone={mrTone(m.state)}>{mrStateLabel(t, m.state)}</StateBadge>
             {m.draft && <StateBadge tone="draft">{t('mr.draft')}</StateBadge>}
-            <Link to={pullUrl(project, m.iid)} className={repo.subject}>
+            <PrefetchLink to={pullUrl(project, m.iid)} className={repo.subject}>
               {m.title}
-            </Link>
+            </PrefetchLink>
           </span>
           <span className={repo.hint}>
             <span className={styles.number}>{t('mr.number', { iid: m.iid })}</span> {'·'}{' '}

@@ -35,6 +35,8 @@ if (dom) {
 // lazy import resolve from the module cache; the Suspense boundary is still
 // exercised, it just no longer depends on machine load.
 await import('../src/features/Markdown');
+// The same for the screens split out of the main chunk (pages/lazyScreens.tsx).
+await (await import('../src/pages/lazyScreens')).loadAllScreens();
 
 afterEach(() => {
   cleanup();
