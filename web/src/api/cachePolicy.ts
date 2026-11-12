@@ -24,7 +24,10 @@ export const IMMUTABLE_GC_MS = 30 * 60_000;
 export const IMMUTABLE = { staleTime: Infinity, gcTime: IMMUTABLE_GC_MS } as const;
 
 /** `IMMUTABLE` when every one of `refs` is a full commit id, else nothing
- * (the app's defaults apply). */
+ * (the app's defaults apply). Only for refs from `refParam` (a branch or tag
+ * is passed as its full name `refs/heads/…`, so a bare hex string is a
+ * commit) or an address that names a commit: never for a typed name, which
+ * may be a branch called like a commit id (see `compareQuery`). */
 export function cacheFor(...refs: (string | null | undefined)[]): Partial<typeof IMMUTABLE> {
   return refs.every((r) => typeof r === 'string' && isFullOid(r)) ? IMMUTABLE : {};
 }

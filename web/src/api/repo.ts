@@ -201,19 +201,23 @@ export function useCommit(projectId: number, oid: string, enabled = true) {
   return useQuery({ ...commitQuery(useApi(), projectId, oid), enabled });
 }
 
-export function useCompare(projectId: number, from: string | null, to: string | null) {
-  const api = useApi();
-  return useQuery({
+/** Never immutable, even between two hex strings: the screen's `from` and
+ * `to` are typed names, and a branch may be named like a commit id. */
+export const compareQuery = (api: ApiClient, projectId: number, from: string, to: string) =>
+  queryOptions({
     queryKey: ['compare', projectId, from, to],
-    enabled: from !== null && to !== null,
-    // Between two commit ids the diff never changes.
-    ...cacheFor(from, to),
     queryFn: ({ signal }) =>
       call(() =>
         api.GET('/api/v1/projects/{id}/repository/compare', {
           signal,
-          params: { path: { id: projectId }, query: { from: from ?? '', to: to ?? '' } },
+          params: { path: { id: projectId }, query: { from, to } },
         }),
       ),
+  });
+
+export function useCompare(projectId: number, from: string | null, to: string | null) {
+  return useQuery({
+    ...compareQuery(useApi(), projectId, from ?? '', to ?? ''),
+    enabled: from !== null && to !== null,
   });
 }

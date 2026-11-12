@@ -5,8 +5,9 @@
 // cache. Rules:
 //
 // - only addresses inside this app's namespace routes (`/{path}[/-/…]`);
-// - at most one prefetch in flight per target (a second hover joins it);
-// - nothing on a slow connection or with Save-Data;
+// - at most one prefetch in flight per target (a second hover joins it),
+//   and at most MAX_FLIGHTS targets at once (more are skipped, not queued);
+// - nothing on a slow connection, with Save-Data, or in a hidden tab;
 // - a failure is not hidden: TanStack Query keeps it as the query's state,
 //   and the screen asks again when it opens (and shows the error with its
 //   request id through ErrorNotice if it fails again). Prefetching itself
@@ -34,6 +35,9 @@ import { isFullOid } from '../api/cachePolicy';
 import { pathSegments } from './paths';
 import { preloadScreen } from '../pages/lazyScreens';
 import { isReadmeName } from './repoUrls';
+
+/** Targets prefetched at the same time; a sweep over a long list skips the rest. */
+export const MAX_FLIGHTS = 3;
 
 /** How long the pointer must rest on a link before its screen is asked for. */
 export const INTENT_DELAY_MS = 50;
@@ -64,7 +68,7 @@ const flights = new WeakMap<QueryClient, Map<string, Promise<void>>>();
 /** Asks for what the screen at `to` reads first. Resolves when done (never
  * rejects); a second call for the same target while the first runs joins it. */
 export function prefetchRoute(queryClient: QueryClient, api: ApiClient, to: string): Promise<void> {
-  if (connectionIsSlow()) return Promise.resolve();
+  if (connectionIsSlow() || document.hidden) return Promise.resolve();
   let url: URL;
   try {
     url = new URL(to, window.location.origin);
@@ -80,6 +84,7 @@ export function prefetchRoute(queryClient: QueryClient, api: ApiClient, to: stri
   }
   const current = running.get(target);
   if (current !== undefined) return current;
+  if (running.size >= MAX_FLIGHTS) return Promise.resolve();
   const map = running;
   const flight = prefetchAddress(queryClient, api, url)
     // The failure stays in the query's state (see the header comment).

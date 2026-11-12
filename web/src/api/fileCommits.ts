@@ -90,7 +90,7 @@ export function useSingleFileCommit(projectId: number) {
       // The branch moved (or was created) and the file changed: every browse
       // answer of the project may be stale. Marked only (no refetch now): the
       // editor must not reload under the person; the next screen reads anew.
-      for (const word of ['refs', 'resolve-spec', 'tree', 'blob', 'commits']) {
+      for (const word of ['refs', 'resolve-spec', 'tree', 'blob', 'commits', 'commits-latest']) {
         void queryClient.invalidateQueries({ queryKey: [word, projectId], refetchType: 'none' });
       }
     },

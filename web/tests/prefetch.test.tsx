@@ -7,10 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IMMUTABLE } from '../src/api/cachePolicy';
 import { createApiClient } from '../src/api/client';
 import { mergeRequestsQuery } from '../src/api/mergeRequests';
-import { forgetResolutions, resolveKeys, resolveQuery } from '../src/api/namespaces';
-import { blobQuery, commitQuery, treeQuery } from '../src/api/repo';
+import { forgetResolutions, resolveKeys, resolveQuery, watchSessionUser } from '../src/api/namespaces';
+import { blobQuery, commitQuery, compareQuery, treeQuery } from '../src/api/repo';
 import { createQueryClient } from '../src/App';
-import { connectionIsSlow, prefetchRoute } from '../src/features/prefetch';
+import { connectionIsSlow, MAX_FLIGHTS, prefetchRoute } from '../src/features/prefetch';
 import { mockServer, PROJECT, RESOLVE_PROJECT, SESSION, signedIn, page } from './mock';
 import { json, renderApp } from './render';
 import { C1, repoRoutes } from './repo-fixtures';
@@ -254,5 +254,76 @@ describe('namespace resolution cache', () => {
       expect(screen.getByTestId('location').textContent).toBe(`/${SESSION.user.username}/-/settings?tab=trash`);
     });
     expect(queryClient.getQueryState(resolveKeys.one('acme/forge-web', false))).toBeUndefined();
+  });
+
+  it('a visibility change marks the cached path meanings stale', async () => {
+    const server = mockServer({
+      ...settingsRoutes(),
+      'PUT /api/v1/projects/7/visibility': () => json(200, { ...PROJECT, role: 'owner', visibility: 'private' }),
+    });
+    const { queryClient } = await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/settings', lang: 'en', appStaleTime: true });
+    await screen.findByLabelText('Name');
+    fireEvent.click(screen.getByLabelText(/^Private/));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[1] as HTMLElement);
+    await waitFor(() => {
+      expect(server.to('PUT', '/api/v1/projects/7/visibility')).toHaveLength(1);
+    });
+    // The shown path is read again (and stays shown meanwhile).
+    const ofProject = () => server.to('GET', RESOLVE).filter((c) => c.query.get('path') === 'acme/forge-web');
+    await waitFor(() => {
+      expect(ofProject()).toHaveLength(2);
+    });
+    expect(queryClient.getQueryData(resolveKeys.one('acme/forge-web', false))).toBeDefined();
+  });
+
+  it('another signed-in user drops the cached path meanings', async () => {
+    const server = mockServer(routes());
+    const { queryClient, api } = clients(server.fetch);
+    watchSessionUser(queryClient);
+    queryClient.setQueryData(['session'], { ...SESSION });
+    await queryClient.query(resolveQuery(api, queryClient, 'acme/forge-web', false));
+    queryClient.setQueryData(['session'], { ...SESSION, csrf_token: 'd'.repeat(64) });
+    expect(queryClient.getQueryData(resolveKeys.one('acme/forge-web', false))).toBeDefined();
+    queryClient.setQueryData(['session'], { ...SESSION, user: { ...SESSION.user, id: 99 } });
+    expect(queryClient.getQueryData(resolveKeys.one('acme/forge-web', false))).toBeUndefined();
+  });
+});
+
+describe('prefetch limits', () => {
+  it('nothing is prefetched while the page is hidden', async () => {
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    try {
+      const server = mockServer(routes());
+      const { queryClient, api } = clients(server.fetch);
+      await prefetchRoute(queryClient, api, '/acme/forge-web/-/tree');
+      expect(server.calls).toHaveLength(0);
+    } finally {
+      Reflect.deleteProperty(document, 'hidden');
+    }
+  });
+
+  it(`at most ${MAX_FLIGHTS} prefetches run at once`, async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const server = mockServer({
+      ...routes(),
+      [`GET ${RESOLVE}`]: async (c) => {
+        await gate;
+        return json(200, { ...RESOLVE_PROJECT, canonical_path: c.query.get('path') ?? '' });
+      },
+    });
+    const { queryClient, api } = clients(server.fetch);
+    const flights = ['a/p1', 'a/p2', 'a/p3', 'a/p4', 'a/p5'].map((p) => prefetchRoute(queryClient, api, `/${p}/-/members`));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(server.to('GET', RESOLVE)).toHaveLength(MAX_FLIGHTS);
+    release();
+    await Promise.all(flights);
+  });
+
+  it('a compare is never cached as immutable (its names may be branch names)', () => {
+    const { api } = clients(mockServer({}).fetch);
+    expect(compareQuery(api, 7, C1, C1).staleTime).toBeUndefined();
   });
 });

@@ -5,6 +5,7 @@ import { Route, Routes } from 'react-router';
 
 import { ApiFailure, type ApiClient } from './api/client';
 import { ApiProvider } from './api/context';
+import { watchSessionUser } from './api/namespaces';
 import { Layout } from './components/Layout';
 import { Activity } from './pages/Activity';
 import { GroupsPage } from './pages/Groups';
@@ -28,11 +29,14 @@ function shouldRetry(failureCount: number, error: unknown): boolean {
 }
 
 export function createQueryClient(): QueryClient {
-  return new QueryClient({
+  const client = new QueryClient({
     defaultOptions: {
       queries: { retry: shouldRetry, refetchOnWindowFocus: false, staleTime: 30_000 },
     },
   });
+  // Lives as long as the client (one per app; tests make their own).
+  watchSessionUser(client);
+  return client;
 }
 
 /** `/` is Home; `/-/projects` and `/-/groups` the "My work" lists (plan 15);

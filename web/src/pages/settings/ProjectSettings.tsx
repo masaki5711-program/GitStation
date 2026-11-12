@@ -12,7 +12,7 @@ import { useNavigate } from 'react-router';
 
 import { call, callNoContent } from '../../api/client';
 import { useApi } from '../../api/context';
-import { forgetResolutions, projectQuery } from '../../api/namespaces';
+import { forgetResolutions, projectQuery, refreshResolutions } from '../../api/namespaces';
 import type { Project, Visibility } from '../../api/types';
 import { SelectField, RadioField, TextField } from '../../components/Field';
 import { Loading } from '../../components/Loading';
@@ -72,7 +72,14 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
         />
       </Section>
       <Section id="visibility-title" title={t('form.visibility')}>
-        <VisibilityForm project={p} onSaved={store} />
+        <VisibilityForm
+          project={p}
+          onSaved={(next) => {
+            store(next);
+            // Who may resolve the path changed.
+            void refreshResolutions(queryClient);
+          }}
+        />
       </Section>
       <Section id="refs-title" title={t('settings.refs.title')}>
         <ProtectedRefs projectId={projectId} />
