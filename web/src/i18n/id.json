@@ -65,6 +65,8 @@
     "groups": "Grup",
     "collapse": "Ciutkan bilah samping",
     "expand": "Bentangkan bilah samping",
+    "collapseHint": "Ciutkan bilah samping (tombol [)",
+    "expandHint": "Bentangkan bilah samping (tombol [)",
     "menu": "Menu",
     "projectMenu": "Menu proyek",
     "groupMenu": "Menu grup",

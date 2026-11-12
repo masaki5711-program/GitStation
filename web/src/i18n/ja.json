@@ -65,6 +65,8 @@
     "groups": "グループ",
     "collapse": "サイドバーを畳む",
     "expand": "サイドバーを広げる",
+    "collapseHint": "サイドバーを畳む（[ キー）",
+    "expandHint": "サイドバーを広げる（[ キー）",
     "menu": "メニュー",
     "projectMenu": "プロジェクトのメニュー",
     "groupMenu": "グループのメニュー",

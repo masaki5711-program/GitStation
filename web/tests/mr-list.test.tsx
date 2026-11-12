@@ -30,7 +30,7 @@ describe('merge request list', () => {
     expect(
       within(items[1] as HTMLElement).getByRole('link', { name: 'Older one' }).getAttribute('href'),
     ).toBe(`${MR_SCREENS}/pull/3`);
-    const nav = screen.getByRole('navigation', { name: 'Repository screens' });
+    const nav = await screen.findByRole('navigation', { name: 'Project menu' });
     expect(within(nav).getByRole('link', { name: 'MR' }).getAttribute('aria-current')).toBe('page');
     // The default filter is "open", asked for explicitly.
     expect(server.to('GET', MR_API)[0]?.query.get('state')).toBe('open');

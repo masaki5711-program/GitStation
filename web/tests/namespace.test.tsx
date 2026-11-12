@@ -118,9 +118,9 @@ describe('URL rescue (ADR-0015, plan 10 §4.3)', () => {
     const first = server.to('GET', '/api/v1/namespaces/resolve')[0];
     expect(first?.query.get('path')).toBe('acme/forge-web/settings');
     expect(first?.query.get('prefix')).toBe('true');
-    expect(within(screen.getByRole('main')).getByRole('link', { name: 'Forge Web' }).getAttribute('href')).toBe(
-      '/acme/forge-web',
-    );
+    // The breadcrumb leads to the project.
+    const crumbs = within(screen.getByRole('main')).getByRole('navigation', { name: 'いまの場所' });
+    expect(within(crumbs).getByRole('link', { name: 'forge-web' }).getAttribute('href')).toBe('/acme/forge-web');
   });
 
   it('a remainder that is not a screen word is not found (no guessing)', async () => {

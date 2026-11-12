@@ -56,7 +56,7 @@ describe('merge request header and status line', () => {
     expect(screen.getByText('Push a fix')).toBeTruthy();
     // No viewer flag: no approve or merge button (U2 shows them from the flags only).
     expect(screen.queryByRole('button', { name: /approve|merge/i })).toBeNull();
-    const nav = screen.getByRole('navigation', { name: 'Repository screens' });
+    const nav = await screen.findByRole('navigation', { name: 'Project menu' });
     expect(within(nav).getByRole('link', { name: 'MR' }).getAttribute('aria-current')).toBe('page');
     expect(server.unmatched).toEqual([]);
   });

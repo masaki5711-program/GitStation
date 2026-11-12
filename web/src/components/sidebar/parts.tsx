@@ -40,6 +40,9 @@ export function NavItem({
       to={item.to}
       className={className ?? styles.link ?? ''}
       {...(item.current ? { 'aria-current': 'page' as const } : {})}
+      // Collapsed to an icon: the name shows as a tooltip (it stays the
+      // link's accessible name as visually hidden text).
+      {...(collapsed ? { title: item.text } : {})}
       onClick={() => {
         onNavigate(item.to);
       }}

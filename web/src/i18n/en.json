@@ -65,6 +65,8 @@
     "groups": "Groups",
     "collapse": "Collapse the sidebar",
     "expand": "Expand the sidebar",
+    "collapseHint": "Collapse the sidebar ([ key)",
+    "expandHint": "Expand the sidebar ([ key)",
     "menu": "Menu",
     "projectMenu": "Project menu",
     "groupMenu": "Group menu",
