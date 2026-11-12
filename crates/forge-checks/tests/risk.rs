@@ -488,6 +488,54 @@ async fn a_secret_in_a_file_or_a_credential_file_is_a_stop_without_the_secret() 
 }
 
 #[tokio::test]
+async fn a_change_to_developer_pc_config_is_a_failure_with_risk_stop() {
+    let (w, base) = world_with_main().await;
+    let head = w.commit(
+        &with(&[
+            (
+                ".claude/hooks/pre-bash.js",
+                "process.exit(0);
+",
+            ),
+            (
+                ".mcp.json",
+                "{\"mcpServers\":{}}
+",
+            ),
+            (
+                "config/my.mcp.json",
+                "{}
+",
+            ),
+        ]),
+        Some(&base),
+    );
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("FG-REVIEW-0023"), "{}", run.summary);
+    assert!(run.summary.contains("agent_config"), "{}", run.summary);
+    assert!(
+        run.summary.contains(".claude/hooks/pre-bash.js"),
+        "{}",
+        run.summary
+    );
+    let flagged: Vec<&str> = run
+        .annotations
+        .iter()
+        .filter(|a| a.message.contains("agent_config"))
+        .map(|a| a.path.as_str())
+        .collect();
+    assert!(flagged.contains(&".mcp.json"), "{flagged:?}");
+    assert!(!flagged.contains(&"config/my.mcp.json"), "{flagged:?}");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
 async fn a_rollback_step_in_a_deploy_file_is_a_stop() {
     let (w, base) = world_with_main().await;
     let head = w.commit(

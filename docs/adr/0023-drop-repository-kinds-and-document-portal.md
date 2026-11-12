@@ -256,7 +256,7 @@
      `sql_drop_constraint`、`sql_disable_guard`（`DISABLE TRIGGER` / `ROW LEVEL SECURITY`）、`deploy_rollback`（CI・デプロイのファイルの `migrate revert` / `db:rollback` / `dropdb` / `DROP DATABASE`）、
      `secret_file`（`.env`（`.example` 等を除く）、`id_rsa` など、`.htpasswd`、`.netrc`、`.p12` / `.pfx` / `.jks`。削除は除く）、`secret_in_content`（X8 の `forge_git::secret_scan` と同じ規則。
      `forge:allow-secret` のあるファイルは除く）、`data_lifecycle_job`（ファイル名に `backup` / `restore` / `retention`。スクリプト・ジョブ・設定のファイル、または運用のディレクトリの非ソースのファイルだけ。アプリケーションのソース（`events_retention.rs` など）・文書・テストは除く。X7 レビューで狭めた）、
-     `mass_deletion_lines`（削除行 500 以上かつ target の text 行の 30 % 以上）、`mass_deletion_files`（削除ファイル 20 以上かつ 30 % 以上）、`too_many_changes`（5000 ファイル超）、`critical_content_unread`（新しい migration か CI・デプロイのファイルを読めなかった。X7 レビュー）。
+     `agent_config`（W15 A2、2026-11-12 追加。`.claude` / `.gitstation` のディレクトリの下、どの階層の `CLAUDE.md` / `CLAUDE.local.md` / `.mcp.json`。追加・変更・削除・改名の前後のどちらか。文書・テストも除かない。名前は部品ごとに比べ、ASCII の大文字・小文字を区別しない（開発者の PC の NTFS・APFS では `.Claude/` も `.claude/` に入るため）。`forge/agent-lock` が緑のときの例外は計画 16 の A7 で足す。ADR-0017 Amendment（2026-11-12））、`mass_deletion_lines`（削除行 500 以上かつ target の text 行の 30 % 以上）、`mass_deletion_files`（削除ファイル 20 以上かつ 30 % 以上）、`too_many_changes`（5000 ファイル超）、`critical_content_unread`（新しい migration か CI・デプロイのファイルを読めなかった。X7 レビュー）。
    - `warn`: `new_migration`、`sql_drop_object`、`sql_privilege`、`auth_change`（パスの語が auth / permission / acl / rbac / oidc / ldap / codeowners など。文書・テストは除く）、
      `ci_deploy_config`、`dependency_change`、`special_entry`（シンボリックリンク・サブモジュール）、`content_not_scanned`（読めなかったファイルがある）。
    - 大量削除は計画の仮置きの数字のとおり（行は numstat の削除行の合計で、編集内の削除も数える。バイナリは行でなくファイル数。生成物・ロックファイルも例外にしない）。

@@ -14,6 +14,11 @@
 //!   (an applied migration changed, a destructive statement), a leak of a
 //!   secret (a credential file by name), a data lifecycle job changed, a
 //!   rollback step in a deploy file. Nothing lowers it, in any merge mode.
+//!   Plus (W15 A2, plan 16 §9 item 1, ADR-0017 Amendment 2026-11-12) code
+//!   that runs on developers' PCs: `agent_config`, a change to `.claude/**`,
+//!   `CLAUDE.md` at any level, `.mcp.json` or `.gitstation/**`. It has no
+//!   exemption yet; the required `forge/agent-lock` check (plan 16 MR A7)
+//!   adds one for a change whose lock check is green.
 //! - `warn` — authentication / permission code, CI or deploy
 //!   configuration, a dependency manifest, a new migration, a symlink or a
 //!   submodule, an object dropped or a privilege changed in SQL. The merge
@@ -130,6 +135,11 @@ pub const RULES: &[Rule] = &[
         "data_lifecycle_job",
         RiskLevel::Stop,
         "a backup, restore or retention job is changed",
+    ),
+    rule(
+        "agent_config",
+        RiskLevel::Stop,
+        "a Claude Code configuration (.claude, CLAUDE.md, .mcp.json or .gitstation) changed; it runs on developers' PCs, so a person reviews it",
     ),
     rule(
         "mass_deletion_lines",
@@ -531,6 +541,22 @@ fn is_lifecycle_job(path: &str) -> bool {
                 .any(|c| JOB_DIRS.contains(&c)))
 }
 
+/// Claude Code configuration, which runs (hooks, MCP servers) or steers an
+/// agent on every developer's PC that checks the repository out: anything
+/// under a `.claude` or `.gitstation` directory, a `CLAUDE.md` /
+/// `CLAUDE.local.md` at any level, a `.mcp.json` at any level. Whole
+/// components are compared, so `docs/.claude-notes.md` and `my.mcp.json`
+/// are not. ASCII case is ignored on purpose: a developer's NTFS or APFS
+/// checkout puts `.Claude/settings.json` in the `.claude` directory.
+fn is_agent_config(path: &str) -> bool {
+    let name = basename(path);
+    ["claude.md", "claude.local.md", ".mcp.json"]
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
+        || components(path)
+            .any(|c| c.eq_ignore_ascii_case(".claude") || c.eq_ignore_ascii_case(".gitstation"))
+}
+
 fn add(findings: &mut Vec<Finding>, id: &'static str, path: &str) {
     findings.push(Finding::of(id).at(path));
 }
@@ -554,6 +580,11 @@ pub fn path_findings(file: &ChangedFile) -> Vec<Finding> {
                 add(&mut found, "new_migration", path);
             }
         }
+    }
+    // Neither docs nor tests are exempt: a CLAUDE.md is both a doc and a
+    // prompt, and a deletion or a rename out of `.claude` changes what runs.
+    if is_agent_config(path) || file.old_path.as_deref().is_some_and(is_agent_config) {
+        add(&mut found, "agent_config", path);
     }
     let quiet = is_doc(path) || is_test(path);
     if present && !quiet && is_secret_file(path) {
