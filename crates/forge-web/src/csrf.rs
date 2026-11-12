@@ -4,13 +4,18 @@
 //!
 //! 1. **The browser check** ([`browser_origin`], a middleware on every
 //!    request, before authentication): a request that is not GET / HEAD /
-//!    OPTIONS and carries fetch metadata (`Sec-Fetch-Site` / `-Mode` /
-//!    `-Dest`) or an `Origin` must have `Sec-Fetch-Site: same-origin` when
+//!    OPTIONS and carries `Sec-Fetch-Site` or an `Origin` must have
+//!    `Sec-Fetch-Site: same-origin` when
 //!    present (`fetch_site`) and an `Origin` equal to `web.base_url`'s origin
 //!    (`origin_missing`, `origin_mismatch`) — whatever its credentials:
 //!    Bearer and anonymous requests included. git and `gstn` send neither
 //!    header, so they are unaffected; a page of another site posting to
 //!    git Smart HTTP with a remembered Basic credential is not.
+//!    `Sec-Fetch-Mode` / `-Dest` alone do not mark a browser: every browser
+//!    that sends them also sends `Sec-Fetch-Site` (the three shipped
+//!    together), while server-side clients add them by themselves — Node's
+//!    `fetch` (undici) sends `Sec-Fetch-Mode: cors` on every request, which
+//!    made Kanflow's Bearer POSTs fail with `origin_missing`.
 //! 2. **The token check** ([`session_check`], called by the cookie
 //!    authentication): a state-changing request authenticated by anything
 //!    but `Authorization: Bearer` on the API or raw / archive — in practice
@@ -57,12 +62,10 @@ pub(crate) fn changes_state(method: &Method) -> bool {
     !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-/// The request carries a browser's marks: fetch metadata or `Origin`.
+/// The request carries a browser's marks: `Sec-Fetch-Site` or `Origin`
+/// (not `Sec-Fetch-Mode` / `-Dest` alone — see the module documentation).
 fn from_a_browser(headers: &HeaderMap) -> bool {
-    [SEC_FETCH_SITE, SEC_FETCH_MODE, SEC_FETCH_DEST]
-        .iter()
-        .any(|h| headers.contains_key(*h))
-        || headers.contains_key(ORIGIN)
+    headers.contains_key(SEC_FETCH_SITE) || headers.contains_key(ORIGIN)
 }
 
 /// `Sec-Fetch-Site`, when present, is `same-origin`; then `Origin` is
@@ -239,6 +242,30 @@ mod tests {
         );
     }
 
+    /// Node's fetch (undici) adds `Sec-Fetch-Mode: cors` (and some clients
+    /// `Sec-Fetch-Dest: empty`) to server-to-server calls; with a Bearer
+    /// token and no `Sec-Fetch-Site` / `Origin` that is not a browser.
+    #[test]
+    fn fetch_mode_or_dest_alone_is_not_a_browser() {
+        assert_eq!(check(&[("sec-fetch-mode", "cors")]), Ok(()));
+        assert_eq!(
+            check(&[("sec-fetch-mode", "cors"), ("sec-fetch-dest", "empty")]),
+            Ok(())
+        );
+        // A browser always adds Sec-Fetch-Site: still checked.
+        assert_eq!(
+            check(&[("sec-fetch-mode", "cors"), ("sec-fetch-site", "cross-site")]),
+            Err("fetch_site")
+        );
+        assert_eq!(
+            check(&[
+                ("sec-fetch-mode", "navigate"),
+                ("origin", "https://evil.example.test")
+            ]),
+            Err("origin_mismatch")
+        );
+    }
+
     #[test]
     fn the_browser_check_needs_same_origin_and_the_exact_origin() {
         assert_eq!(
@@ -256,7 +283,10 @@ mod tests {
             ];
             assert_eq!(check(&h), Err("fetch_site"), "{site}");
         }
-        assert_eq!(check(&[("sec-fetch-mode", "cors")]), Err("origin_missing"));
+        assert_eq!(
+            check(&[("sec-fetch-site", "same-origin")]),
+            Err("origin_missing")
+        );
         for origin in [
             "https://other.example.test",
             "http://git.example.test",
