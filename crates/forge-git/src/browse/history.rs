@@ -278,29 +278,43 @@ impl Browser {
         let skip = after.map_or(0, |c| c.skip.saturating_sub(1));
         let take = limit + 1 + usize::from(after.is_some());
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
-        let mut cmd = self
-            .git
-            .command("log")
-            .arg("-z")
-            .arg(LIST_FORMAT)
-            .arg("--no-color")
-            .arg("--no-decorate")
-            .arg("-n")
-            .arg_owned(take.to_string());
-        if skip > 0 {
-            cmd = cmd.arg("--skip").arg_owned(skip.to_string());
+        // A page of a commit id's history never changes (objects.rs).
+        let page_key = format!("{tip}\0{}\0{skip}\0{take}", path.as_str());
+        let (page, fresh) = match self.cached_log(repo, &page_key) {
+            Some(page) => (page, false),
+            None => {
+                let _slot = self.claim(repo)?;
+                let mut cmd = self
+                    .git
+                    .command("log")
+                    .arg("-z")
+                    .arg(LIST_FORMAT)
+                    .arg("--no-color")
+                    .arg("--no-decorate")
+                    .arg("-n")
+                    .arg_owned(take.to_string());
+                if skip > 0 {
+                    cmd = cmd.arg("--skip").arg_owned(skip.to_string());
+                }
+                cmd = cmd.revision(Revision::object_id(&tip)?);
+                if !path.is_root() {
+                    cmd = cmd.path(path.as_str());
+                }
+                let (out, cut) = cmd
+                    .repo(&dir)
+                    .timeout(deadline.left()?)
+                    .output_truncated(LOG_OUTPUT_BYTES)
+                    .await?;
+                let mut stdout = out.stdout;
+                stdout.shrink_to_fit(); // the cache counts its capacity
+                (std::sync::Arc::new((stdout, cut)), true)
+            }
+        };
+        let (stdout, cut) = (&page.0, page.1);
+        let parsed = parse_log(stdout, cut, false)?;
+        if fresh {
+            self.store_log(repo, page_key, std::sync::Arc::clone(&page));
         }
-        cmd = cmd.revision(Revision::object_id(&tip)?);
-        if !path.is_root() {
-            cmd = cmd.path(path.as_str());
-        }
-        let (out, cut) = cmd
-            .repo(&dir)
-            .timeout(deadline.left()?)
-            .output_truncated(LOG_OUTPUT_BYTES)
-            .await?;
-        let parsed = parse_log(&out.stdout, cut, false)?;
         log_lossy(repo, parsed.lossy);
         let mut records = parsed.records;
         if let Some(cursor) = after {

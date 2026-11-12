@@ -82,6 +82,9 @@ impl Browser {
     ) -> Result<Option<TreeEntry>, ForgeError> {
         let dir = self.storage.existing(repo)?;
         let _slot = self.claim(repo)?;
+        if let Some(found) = self.fast_entry_at(repo, &dir, commit, path, deadline).await {
+            return Ok(found);
+        }
         let (out, cut) = self
             .git
             .command("ls-tree")
@@ -131,7 +134,14 @@ impl Browser {
             }
         };
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let slot = self.claim(repo)?;
+        if let Some(tree) = self
+            .fast_tree(repo, &dir, commit, &target, path, deadline)
+            .await
+        {
+            return Ok(tree);
+        }
+        let _slot = slot;
         let (out, truncated_bytes) = self
             .git
             .command("ls-tree")
@@ -156,6 +166,29 @@ impl Browser {
             oid,
             entries,
             truncated: truncated || truncated_bytes,
+        })
+    }
+
+    /// [`Self::tree`] through the batch process (`None`: fall back).
+    async fn fast_tree(
+        &self,
+        repo: RepoId,
+        dir: &std::path::Path,
+        commit: &str,
+        target: &str,
+        path: &RepoPath,
+        deadline: Deadline,
+    ) -> Option<Tree> {
+        let oid = if path.is_root() {
+            self.fast_root_tree(repo, dir, commit, deadline).await?
+        } else {
+            target.to_owned()
+        };
+        let listing = self.fast_listing(repo, dir, &oid, deadline).await?;
+        Some(Tree {
+            oid,
+            entries: listing.entries.clone(), // clone: the cache keeps its listing
+            truncated: listing.truncated,
         })
     }
 

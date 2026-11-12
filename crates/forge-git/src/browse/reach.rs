@@ -360,6 +360,16 @@ impl Browser {
     ) -> Result<String, ForgeError> {
         let dir = self.storage.existing(repo)?;
         let _slot = self.claim(repo)?;
+        match self.fast_info(repo, &dir, id, deadline).await {
+            Some(crate::batch::Info::Found { kind, .. }) if kind == "commit" => {
+                return Ok(id.to_owned())
+            }
+            Some(crate::batch::Info::Found { .. }) => {
+                return Err(not_resolved("ref_not_found").with_context("object", "not_a_commit"))
+            }
+            Some(crate::batch::Info::Missing) => return Err(not_resolved("ref_not_found")),
+            None => {}
+        }
         let out = self
             .git
             .command("cat-file")

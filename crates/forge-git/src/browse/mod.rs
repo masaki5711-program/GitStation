@@ -41,6 +41,12 @@
 //!   [`BrowseLimits::refs_ttl`] (5 s) and dropped by
 //!   [`Browser::invalidate`] (every push). A list loaded while an
 //!   invalidation happened is not stored.
+//! - **Object reads** (`objects.rs`): trees, blobs and commit headers are
+//!   read through the repository's long-lived `cat-file --batch-command`
+//!   process ([`crate::batch`], no git start per read) and what is
+//!   immutable by id is cached; any read it cannot answer runs the
+//!   one-shot command above (a failed exchange logged once,
+//!   FG-GIT-0032). Refs never go through it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -50,6 +56,7 @@ use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 use tokio::time::Instant;
 
+use crate::batch::{BatchConfig, CatFilePool};
 use crate::command::Git;
 use crate::storage::StorageRoot;
 
@@ -57,6 +64,7 @@ mod blame;
 mod content;
 mod diff;
 mod history;
+mod objects;
 mod path;
 mod reach;
 mod refs;
@@ -133,6 +141,24 @@ pub struct BrowseLimits {
     pub reach_caller_burst: u32,
     /// One token comes back per this interval.
     pub reach_caller_refill: Duration,
+    /// Long-lived `cat-file --batch-command` processes per repository
+    /// (`objects.rs`, [`crate::batch`]); 0: none, every object read is a
+    /// one-shot git.
+    pub batch_per_repo: usize,
+    /// Repositories with such processes at once.
+    pub batch_max_repos: usize,
+    /// A process unused this long is closed.
+    pub batch_idle: Duration,
+    /// One exchange with a process (never past the operation's deadline);
+    /// past it the process is killed and the one-shot command answers
+    /// (FG-GIT-0032).
+    pub batch_timeout: Duration,
+    /// How long a read waits for a busy repository's process before it
+    /// runs the one-shot command instead.
+    pub batch_wait: Duration,
+    /// Bytes of the cache of what is immutable by object id (trees,
+    /// listings, a commit's root tree, history pages of a commit id).
+    pub object_cache_bytes: usize,
 }
 
 impl Default for BrowseLimits {
@@ -163,6 +189,12 @@ impl Default for BrowseLimits {
             reach_caller_wait: Duration::from_secs(2),
             reach_caller_burst: 60,
             reach_caller_refill: Duration::from_millis(250),
+            batch_per_repo: 2,
+            batch_max_repos: 32,
+            batch_idle: Duration::from_secs(60),
+            batch_timeout: Duration::from_secs(2),
+            batch_wait: Duration::from_millis(50),
+            object_cache_bytes: 32 * 1024 * 1024,
         }
     }
 }
@@ -191,6 +223,9 @@ pub struct Browser {
     slots: Arc<Mutex<HashMap<RepoId, usize>>>,
     cache: Arc<RefCache>,
     reach: Arc<reach::ReachCache>,
+    /// `None` when `batch_per_repo` is 0.
+    batch: Option<CatFilePool>,
+    objects: Arc<objects::ObjectCache>,
 }
 
 #[derive(Debug, Default)]
@@ -263,9 +298,68 @@ fn object_id(raw: &str) -> Option<String> {
         .then(|| raw.to_ascii_lowercase())
 }
 
+/// How long [`release_repository`] waits for the processes it closes.
+pub const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Before a repository's files are removed or rewritten (a purge, a gc, a
+/// restore): close every long-lived `cat-file` process **this process**
+/// runs for it and wait — at most [`RELEASE_TIMEOUT`] — until each has
+/// exited (on Windows a file another process holds open can be neither
+/// deleted nor renamed), and drop its cached objects (a restored
+/// repository never answers from an older copy). Blocking (short sleeps):
+/// from async code use [`release_repository_async`]. `false`: a process
+/// was still running at the deadline (logged once, FG-GIT-0032
+/// `reason=release_timeout`); the caller goes on — its own step reports
+/// a file still in use. Another process's batch processes (a `forge
+/// serve` while the worker purges) close after
+/// [`BrowseLimits::batch_idle`] unused.
+pub fn release_repository(storage: &StorageRoot, repo: RepoId) -> bool {
+    objects::forget_everywhere(repo);
+    let closed = crate::batch::close_everywhere(&storage.path_for(repo), RELEASE_TIMEOUT);
+    if !closed {
+        release_timed_out(repo);
+    }
+    closed
+}
+
+/// [`release_repository`] on the blocking pool.
+pub async fn release_repository_async(storage: &StorageRoot, repo: RepoId) -> bool {
+    objects::forget_everywhere(repo);
+    let closed =
+        crate::batch::close_everywhere_async(&storage.path_for(repo), RELEASE_TIMEOUT).await;
+    if !closed {
+        release_timed_out(repo);
+    }
+    closed
+}
+
+fn release_timed_out(repo: RepoId) {
+    tracing::warn!(
+        target: "forge_git::batch",
+        error_code = ErrorCode::GitBatchFailed.id(),
+        reason = "release_timeout",
+        repo_id = repo.get(),
+        timeout_ms = RELEASE_TIMEOUT.as_millis(),
+        "forge.git.batch.release_timeout"
+    );
+}
+
 impl Browser {
     pub fn new(git: Git, storage: StorageRoot, limits: BrowseLimits) -> Self {
+        let batch = (limits.batch_per_repo > 0).then(|| {
+            CatFilePool::new(
+                git.clone(), // clone: a shared handle
+                BatchConfig {
+                    per_repo: limits.batch_per_repo,
+                    max_repos: limits.batch_max_repos,
+                    idle: limits.batch_idle,
+                    wait: limits.batch_wait,
+                },
+            )
+        });
         Self {
+            batch,
+            objects: objects::ObjectCache::new(limits.object_cache_bytes),
             git,
             storage,
             limits,
@@ -347,3 +441,9 @@ mod tests;
 
 #[cfg(test)]
 mod scan_tests;
+
+#[cfg(test)]
+mod bench_tests;
+
+#[cfg(test)]
+mod objects_tests;

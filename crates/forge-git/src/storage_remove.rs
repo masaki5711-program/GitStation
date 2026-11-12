@@ -3,6 +3,14 @@
 //! from a request — and every directory from the root down to the shard
 //! must be a real directory (no symlink, no file), as for creation.
 //!
+//! First every long-lived `cat-file` process this process runs for the
+//! repository is closed and its cached objects dropped
+//! ([`crate::browse::release_repository`]): on Windows a directory holding
+//! a file another process has open can be neither renamed nor deleted. A
+//! `forge serve` process elsewhere closes its own after
+//! `BrowseLimits::batch_idle` (60 s) unused; a removal it blocks fails with
+//! `FG-REPO-0003` and the purge's next run resumes it.
+//!
 //! The removal is idempotent and resumable, so the purge can run it again
 //! after a crash or a timeout: the repository directory is first renamed
 //! aside to `.purge-<id>-<uuid>.git` in its shard (one atomic rename: the
@@ -25,13 +33,28 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 use uuid::Uuid;
 
 use super::{io_failed, rejected, Budget, StorageRoot};
+
+/// How long a removal blocked by a file in use waits before its one
+/// retry: a `forge serve` process closes an idle batch process after
+/// `BrowseLimits::batch_idle` (60 s), its sweep runs every 30 s.
+pub const FILES_IN_USE_RETRY: Duration = Duration::from_secs(95);
+
+/// An I/O failure because another process holds a file or directory open
+/// (Windows `ERROR_SHARING_VIOLATION` 32 / `ERROR_LOCK_VIOLATION` 33).
+fn files_in_use(e: &ForgeError) -> bool {
+    cfg!(windows)
+        && e.code() == ErrorCode::StorageIoFailed
+        && std::error::Error::source(e)
+            .and_then(|s| s.downcast_ref::<io::Error>())
+            .is_some_and(|io| matches!(io.raw_os_error(), Some(32 | 33)))
+}
 
 /// What [`StorageRoot::remove_until`] found and removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +84,9 @@ impl StorageRoot {
     /// missing directory, shard or `repos/` is not an error.
     pub async fn remove_until(&self, id: RepoId, deadline: Instant) -> Result<Removal, ForgeError> {
         let budget = Budget(Some(deadline));
+        // This process's batch processes hold the repository's files open
+        // (Windows cannot rename or delete those): closed first, bounded.
+        crate::browse::release_repository_async(self, id).await;
         let path = self.path_for(id);
         let Some(shard) = path.parent().map(Path::to_path_buf) else {
             return Err(rejected("outside_root").with_context("repo_id", id));
@@ -88,7 +114,51 @@ impl StorageRoot {
     /// the blocking pool): the purge (D5 MR4) runs it in a task that keeps
     /// the project's purge lock until it really ends, so a removal slower
     /// than the purge's wait is never started twice on the same tree.
+    ///
+    /// A file in use (Windows os error 32 / 33: another process — a git a
+    /// `forge serve` still runs there — holds the directory or a file in
+    /// it) is retried once after [`FILES_IN_USE_RETRY`], by when every
+    /// idle batch process of `forge serve` has closed; still in use, it is
+    /// `FG-REPO-0003` with `reason=files_in_use` (the purge logs it once,
+    /// as FG-REPO-0020, and its next run resumes).
     pub fn remove_blocking(&self, id: RepoId) -> Result<Removal, ForgeError> {
+        self.remove_blocking_retrying(id, FILES_IN_USE_RETRY)
+    }
+
+    /// [`StorageRoot::remove_blocking`] with another wait before the retry
+    /// (tests).
+    pub(crate) fn remove_blocking_retrying(
+        &self,
+        id: RepoId,
+        retry_after: Duration,
+    ) -> Result<Removal, ForgeError> {
+        // As in `remove_until`: no open file of this process in the way.
+        crate::browse::release_repository(self, id);
+        match self.remove_once(id) {
+            Err(e) if files_in_use(&e) => {
+                tracing::info!(
+                    target: "forge_git::storage",
+                    event = "forge.repo.remove_in_use_retry",
+                    repo_id = id.get(),
+                    retry_after_s = retry_after.as_secs(),
+                    "a file of the repository is in use; the removal is retried once"
+                );
+                std::thread::sleep(retry_after);
+                crate::browse::release_repository(self, id);
+                self.remove_once(id).map_err(|e| {
+                    if files_in_use(&e) {
+                        e.with_context("reason", "files_in_use")
+                            .with_context("retried_after_s", retry_after.as_secs())
+                    } else {
+                        e
+                    }
+                })
+            }
+            other => other,
+        }
+    }
+
+    fn remove_once(&self, id: RepoId) -> Result<Removal, ForgeError> {
         let path = self.path_for(id);
         let Some(shard) = path.parent().map(Path::to_path_buf) else {
             return Err(rejected("outside_root").with_context("repo_id", id));

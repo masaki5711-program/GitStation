@@ -81,10 +81,16 @@ impl Fixture {
     }
 
     /// A browser whose git is `bin` (the repository stays real). Only the
-    /// unix fake-binary tests use it.
+    /// unix fake-binary tests use it. They fake the one-shot commands, so
+    /// the long-lived batch processes are off (the batch path has its own
+    /// tests: `objects_tests.rs`, `batch_tests.rs`).
     #[cfg(unix)]
     pub(super) fn browser_with_bin(&self, bin: &Path, limits: BrowseLimits) -> Browser {
         let git = Git::new(GitConfig::new(bin, &self.home));
+        let limits = BrowseLimits {
+            batch_per_repo: 0,
+            ..limits
+        };
         Browser::new(git, self.storage.clone(), limits)
     }
 }
