@@ -88,6 +88,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::GitTimeout
         | ErrorCode::GitProcessFailed
         | ErrorCode::GitBusy
+        | ErrorCode::GitBatchFailed
         | ErrorCode::StorageIoFailed
         | ErrorCode::RepositoryNotReady
         | ErrorCode::DbUnavailable
