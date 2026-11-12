@@ -986,3 +986,177 @@ async fn the_dev_status_answers_the_golden_example_shape() {
     );
     w.t.drop_now().await;
 }
+
+// ── who opened and who merged (kanflow's merge history, N10) ───────────
+
+async fn numbered_person(t: &FreshDb, name: &str, number: &str) -> UserId {
+    let mut new = NewUser::human(
+        name,
+        &format!("Synthetic {name}"),
+        &format!("{name}@example.test"),
+    );
+    new.employee_number = Some(number.to_owned());
+    users::create(&t.db, &ctx(&format!("req-user-{name}")), &new)
+        .await
+        .expect("user")
+        .user_id
+}
+
+/// `author` opens a merge request in `web` from `source` (decided: the
+/// status reads only the rows).
+async fn open_mr_as(w: &World, author: UserId, source: &str) -> (i64, i64) {
+    let (stored, ()) = forge_db::review::open_mr_decided(
+        &w.t.db,
+        &ChangeContext::new(
+            Actor::User(author),
+            RequestId::parse(&format!("req-open-{}", source.replace('/', "-"))).expect("id"),
+        ),
+        w.web,
+        author,
+        &forge_db::review::NewMergeRequest {
+            title: format!("Work on {source}"),
+            description: String::new(),
+            source_branch: RefName::parse(&format!("refs/heads/{source}")).expect("branch"),
+            target_branch: RefName::parse("refs/heads/main").expect("branch"),
+            draft: false,
+        },
+        |_| Ok(()),
+    )
+    .await
+    .expect("open");
+    (stored.id.get(), stored.iid)
+}
+
+/// The merge's end state (the merge job needs git; the status reads only
+/// the rows): the merge request `merged`, its applied attempt by `by`.
+async fn mark_merged_by(w: &World, mr: i64, by: UserId) {
+    let p = w.web.get();
+    let sha = "c".repeat(40);
+    w.t.commit_audited(
+        ("project", p),
+        &[
+            format!(
+                "UPDATE forge.merge_requests SET state = 'merged', revision = revision + 1 \
+                 WHERE id = {mr}"
+            ),
+            format!(
+                "INSERT INTO forge.merge_request_merges (merge_request_id, project_id, method, \
+                 requested_by, credential_kind, credential_id, request_id, head_sha, \
+                 target_branch, delete_source_branch) VALUES ({mr}, {p}, 'merge_commit', {}, \
+                 'session', 1, 'req-merge', '{sha}', 'refs/heads/main', false)",
+                by.get()
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'prepared', \
+                 expected_old = '{sha}', new_sha = '{sha}' WHERE merge_request_id = {mr}"
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'executing', \
+                 executing_at = now() WHERE merge_request_id = {mr}"
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'applied', \
+                 finished_at = '2026-11-04T05:06:07Z' WHERE merge_request_id = {mr}"
+            ),
+        ],
+    )
+    .await;
+}
+
+/// The merge request of `iid` in the first work item's list.
+fn mr_of(answer: &Value, iid: i64) -> Value {
+    answer["work_items"][0]["merge_requests"]
+        .as_array()
+        .and_then(|mrs| mrs.iter().find(|m| m["iid"] == iid))
+        .cloned()
+        .unwrap_or_else(|| panic!("no merge request {iid} in {answer}"))
+}
+
+/// Kanflow's merge history and "my stuck merge requests" (N10) match on
+/// people: each merge request names its `author` and — once merged, else
+/// `null` — who merged it (`merged_by`, the applied attempt's requester).
+/// The employee number is disclosed exactly like the feed's actor: only to
+/// a token holding `user_employee_number` (absent otherwise; never the
+/// e-mail here), on both routes.
+#[tokio::test]
+async fn dev_status_names_who_opened_and_who_merged() {
+    let w = world().await;
+    let bob = numbered_person(&w.t, "bob", "E-1002").await;
+    let carol = numbered_person(&w.t, "carol", "E-1003").await;
+    let (_, open_iid) = open_mr_as(&w, bob, "feature/PBI-21-open").await;
+    let (merged_id, merged_iid) = open_mr_as(&w, bob, "feature/PBI-21-merged").await;
+    mark_merged_by(&w, merged_id, carol).await;
+    drain(&w.t).await;
+
+    let plain = call(
+        &w.t.db,
+        "GET",
+        &dev_status_uri(w.integration, "PBI-21"),
+        sa_token(w.sa, READ),
+        None,
+    )
+    .await;
+    assert_eq!(plain.status, StatusCode::OK, "{}", plain.json);
+    let open = mr_of(&plain.json, open_iid);
+    assert_eq!(open["author"], json!({"id": bob.get(), "username": "bob"}));
+    assert!(open["merged_by"].is_null(), "{open}");
+    let merged = mr_of(&plain.json, merged_iid);
+    assert_eq!(merged["state"], "merged");
+    assert_eq!(
+        merged["author"],
+        json!({"id": bob.get(), "username": "bob"})
+    );
+    assert_eq!(
+        merged["merged_by"],
+        json!({"id": carol.get(), "username": "carol"})
+    );
+
+    let scoped = [Scope::ReadApi, Scope::UserEmployeeNumber];
+    let numbered = call(
+        &w.t.db,
+        "GET",
+        &dev_status_uri(w.integration, "PBI-21"),
+        sa_token(w.sa, &scoped),
+        None,
+    )
+    .await;
+    assert_eq!(numbered.status, StatusCode::OK, "{}", numbered.json);
+    assert_eq!(
+        mr_of(&numbered.json, open_iid)["author"],
+        json!({"id": bob.get(), "username": "bob", "employee_number": "E-1002"})
+    );
+    assert!(mr_of(&numbered.json, open_iid)["merged_by"].is_null());
+    let merged = mr_of(&numbered.json, merged_iid);
+    assert_eq!(merged["author"]["employee_number"], "E-1002");
+    assert_eq!(
+        merged["merged_by"],
+        json!({"id": carol.get(), "username": "carol", "employee_number": "E-1003"})
+    );
+
+    // The paged route discloses the same way.
+    for (scopes, wanted) in [(READ, None), (&scoped[..], Some("E-1003"))] {
+        let page = call(
+            &w.t.db,
+            "GET",
+            &dev_status_all_uri(w.integration),
+            sa_token(w.sa, scopes),
+            None,
+        )
+        .await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.json);
+        let item = page.json["work_items"]
+            .as_array()
+            .and_then(|items| items.iter().find(|i| i["ref"] == "PBI-21"))
+            .cloned()
+            .expect("PBI-21 on the page");
+        let merged = mr_of(&json!({"work_items": [item]}), merged_iid);
+        assert_eq!(
+            merged["merged_by"]
+                .get("employee_number")
+                .and_then(Value::as_str),
+            wanted,
+            "{merged}"
+        );
+    }
+    w.t.drop_now().await;
+}

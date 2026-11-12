@@ -62,7 +62,7 @@ pub use act_as::{ActAs, ActAsParts, ClaimAnswer, SWEEP_INTERVAL};
 pub use forge_db::act_as::AssertedSubject as ClaimedSubject;
 
 pub use dev_status::{
-    checks_state, CheckConclusion, CheckStatus, DevMergeRequest, DevStatus, PageQuery,
+    checks_state, CheckConclusion, CheckStatus, DevMergeRequest, DevPerson, DevStatus, PageQuery,
     WorkItemQuery, WorkItemStatus, DEFAULT_DEV_STATUS_LIMIT,
 };
 pub use forge_db::feed::{DevCheckRun, MrStateFilter, MAX_DEV_STATUS_LIMIT};
@@ -418,18 +418,7 @@ impl Feed {
         proof: &Authorized<IntegrationFeedCtx>,
         mut page: EventsPage,
     ) -> Result<EventsPage, ForgeError> {
-        let scopes: &[Scope] = match proof.principal().credential() {
-            Credential::Token(scopes) => scopes,
-            // The feed's principal always holds a token (a service account
-            // never has a session); a session sees nothing personal.
-            Credential::Session => &[],
-            // Refused on the feed (ADR-0025 §4); nothing personal.
-            Credential::ActAs(_) => &[],
-            // Refused on the feed (ADR-0029 §8); nothing personal.
-            Credential::Runner(_) | Credential::Job(_) => &[],
-        };
-        let email = scopes.contains(&Scope::UserEmail);
-        let employee = scopes.contains(&Scope::UserEmployeeNumber);
+        let (email, employee) = personal_scopes(proof);
         if !(email || employee) {
             return Ok(page);
         }
@@ -480,6 +469,26 @@ impl Feed {
             ),
         }
     }
+}
+
+/// Whether the feed's token may see e-mail addresses (`user_email`) and
+/// employee numbers (`user_employee_number`) — the one rule for every
+/// person the feed and the development status name.
+fn personal_scopes(proof: &Authorized<IntegrationFeedCtx>) -> (bool, bool) {
+    let scopes: &[Scope] = match proof.principal().credential() {
+        Credential::Token(scopes) => scopes,
+        // The feed's principal always holds a token (a service account
+        // never has a session); a session sees nothing personal.
+        Credential::Session => &[],
+        // Refused on the feed (ADR-0025 §4); nothing personal.
+        Credential::ActAs(_) => &[],
+        // Refused on the feed (ADR-0029 §8); nothing personal.
+        Credential::Runner(_) | Credential::Job(_) => &[],
+    };
+    (
+        scopes.contains(&Scope::UserEmail),
+        scopes.contains(&Scope::UserEmployeeNumber),
+    )
 }
 
 /// The lag of a read whose oldest unread event is older than half the

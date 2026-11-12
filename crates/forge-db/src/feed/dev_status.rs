@@ -14,7 +14,11 @@
 //!   check runs (M3 C1), and the time it merged (the applied attempt).
 //!   The integration's allowlist narrows them like the feed: approvals only
 //!   with `merge_request.approved` / `.unapproved` admitted, check runs
-//!   only with `check.completed` (I1d review).
+//!   only with `check.completed` (I1d review). Each names its author and,
+//!   once merged, who merged it (the applied attempt's requester), joined
+//!   in the same statement — id and username only: the read pool cannot
+//!   see employee numbers (forge-integ adds them for a token holding
+//!   `user_employee_number`, like the feed's actor).
 //!
 //! Only the set's project ids turn into SQL; nothing here decides. The
 //! caller (forge-integ) proved the set with `forge_auth::prove_visible`.
@@ -22,7 +26,7 @@
 use std::collections::BTreeMap;
 
 use forge_core::checks::{CheckConclusion, CheckStatus};
-use forge_core::{ProjectId, VisibleSet, WorkItemRef};
+use forge_core::{ProjectId, UserId, VisibleSet, WorkItemRef};
 use forge_errors::{ErrorCode, ForgeError};
 
 use super::FeedSnapshot;
@@ -102,6 +106,27 @@ pub struct DevCheckRun {
     pub conclusion: Option<CheckConclusion>,
 }
 
+/// A person a merge request names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevPerson {
+    pub id: UserId,
+    /// The current username (`None`: no row, never expected).
+    pub username: Option<String>,
+    /// Never read here (the read pool cannot see it): forge-integ fills it
+    /// for a token holding `user_employee_number`.
+    pub employee_number: Option<String>,
+}
+
+impl DevPerson {
+    fn of(id: i64, username: Option<String>) -> Self {
+        Self {
+            id: UserId::new(id),
+            username,
+            employee_number: None,
+        }
+    }
+}
+
 /// One linked merge request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevMergeRequest {
@@ -134,6 +159,10 @@ pub struct DevMergeRequest {
     /// How the open link was made (`auto` / `manual`).
     pub link_source: String,
     pub linked_at: String,
+    /// Who opened it.
+    pub author: DevPerson,
+    /// Who requested the applied merge attempt (`None` unless merged).
+    pub merged_by: Option<DevPerson>,
 }
 
 /// What [`FeedSnapshot::dev_status_of`] read: the merge requests by work
@@ -183,6 +212,7 @@ type MrRow = (
     Option<String>,
     i64,
     (String, String, String, String),
+    (i64, Option<String>, Option<i64>, Option<String>),
 );
 
 impl FeedSnapshot {
@@ -348,16 +378,17 @@ impl FeedSnapshot {
             let rows: Vec<MrRow> = sqlx::query_as(&format!(
                 "SELECT x.work_item_id, x.id, x.project_id, n.full_path, x.iid, x.title, x.state, \
                    x.draft, x.source_branch, x.target_branch, x.head_sha, \
-                   (SELECT to_char(max(g.finished_at) AT TIME ZONE 'UTC', {TS}) \
-                      FROM forge.merge_request_merges g \
-                     WHERE g.merge_request_id = x.id AND g.state = 'applied'), \
+                   to_char(g.finished_at AT TIME ZONE 'UTC', {TS}), \
                    to_char(x.closed_at AT TIME ZONE 'UTC', {TS}), \
                    (SELECT count(*) FROM forge.merge_request_approvals a \
                      WHERE a.merge_request_id = x.id AND a.revoked_at IS NULL \
                        AND a.head_sha = x.head_sha AND a.target_branch = x.target_branch), \
                    ROW(x.link_source, to_char(x.linked_at AT TIME ZONE 'UTC', {TS}), \
                      to_char(x.created_at AT TIME ZONE 'UTC', {TS}), \
-                     to_char(x.updated_at AT TIME ZONE 'UTC', {TS})) \
+                     to_char(x.updated_at AT TIME ZONE 'UTC', {TS})), \
+                   ROW(x.author_id, au.username, \
+                     CASE WHEN x.state = 'merged' THEN g.requested_by END, \
+                     CASE WHEN x.state = 'merged' THEN mu.username END) \
                  FROM ( \
                    SELECT l.work_item_id, l.source AS link_source, l.linked_at, m.*, \
                      row_number() OVER (PARTITION BY l.work_item_id ORDER BY m.id DESC) AS rank \
@@ -373,6 +404,12 @@ impl FeedSnapshot {
                      AND ($4::text IS NULL OR m.state = $4) \
                  ) AS x \
                  LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = x.project_id \
+                 LEFT JOIN LATERAL (SELECT ma.finished_at, ma.requested_by \
+                     FROM forge.merge_request_merges ma \
+                    WHERE ma.merge_request_id = x.id AND ma.state = 'applied' \
+                    ORDER BY ma.finished_at DESC NULLS LAST, ma.id DESC LIMIT 1) AS g ON true \
+                 LEFT JOIN forge.users au ON au.id = x.author_id \
+                 LEFT JOIN forge.users mu ON mu.id = g.requested_by \
                  WHERE x.rank <= $5 \
                  ORDER BY x.work_item_id, x.id DESC"
             ))
@@ -434,6 +471,7 @@ impl FeedSnapshot {
                     closed_at,
                     approvals,
                     (link_source, linked_at, created_at, updated_at),
+                    (author_id, author_name, merger_id, merger_name),
                 ) = row;
                 let entry = out.entry(item).or_default();
                 if entry.merge_requests.len() >= MAX_MERGE_REQUESTS_PER_ITEM {
@@ -468,6 +506,8 @@ impl FeedSnapshot {
                     checks: show_checks.then(Vec::new),
                     link_source,
                     linked_at,
+                    author: DevPerson::of(author_id, author_name),
+                    merged_by: merger_id.map(|id| DevPerson::of(id, merger_name)),
                 });
             }
             heads.sort();
