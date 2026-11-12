@@ -50,7 +50,18 @@
 //! (`skipped_binary`) but do not make it incomplete: the rules are text
 //! patterns. A git failure other than a timeout is an error (FG-GIT-0023,
 //! fail closed). Object ids reach git only on stdin, validated.
+//!
+//! **The history import** ([`ScanMode::HistoryImport`], 2026-11-12, ADR-0008
+//! amendment "history import"): the first push into an empty repository
+//! that an administrator allowed once (`forge admin repo allow-import`).
+//! The scan is the same; before it, the blobs of every pushed tip's tree
+//! are listed (`git ls-tree -r -z --full-tree --end-of-options <tip>`,
+//! complete or an error — FG-GIT-0023, the push is refused). A secret whose
+//! blob a tip tree holds refuses the push as always; any other secret
+//! finding (only in history) goes to [`ScanReport::history`] instead and
+//! does not refuse. Size findings refuse in both modes.
 
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -60,6 +71,7 @@ use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::time::Instant;
 
 use crate::command::{Git, GitCommand};
+use crate::revision::Revision;
 use crate::secret_scan::{self, SecretScan};
 use crate::upload_request::is_object_id;
 
@@ -79,6 +91,20 @@ pub const MAX_FINDINGS: usize = 20;
 const BATCH_BYTES: u64 = 8 * 1024 * 1024;
 /// The longest path kept for a finding (bytes, at a character boundary).
 const MAX_PATH: usize = 256;
+
+/// The most history findings kept (all are counted).
+pub const MAX_HISTORY_FINDINGS: usize = forge_core::history_import::MAX_AUDITED_FINDINGS;
+
+/// What a secret finding does (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScanMode {
+    /// Every secret finding refuses the push.
+    #[default]
+    Full,
+    /// The one-time history import: only a secret in a pushed tip's tree
+    /// refuses; the others are reported in [`ScanReport::history`].
+    HistoryImport,
+}
 
 /// The scan's bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +199,12 @@ pub struct ScanReport {
     /// Why the secret scan stopped early or left something out
     /// (`objects_cap`, `bytes_cap`, `deadline`, `large_blob_unscanned`).
     pub incomplete: Option<&'static str>,
+    /// [`ScanMode::HistoryImport`]: the secret findings only in history (no
+    /// pushed tip tree holds the blob), at most [`MAX_HISTORY_FINDINGS`];
+    /// they do not refuse. Always empty in [`ScanMode::Full`].
+    pub history: Vec<Finding>,
+    /// Every history finding counted.
+    pub total_history: usize,
 }
 
 /// A finding the allow marker waived (serve logs each with its path).
@@ -262,6 +294,19 @@ impl Git {
         tips: &[String],
         limits: &ScanLimits,
     ) -> Result<ScanReport, ForgeError> {
+        self.scan_push_with(repo, quarantine, tips, limits, ScanMode::Full)
+            .await
+    }
+
+    /// [`Git::scan_push`] in `mode` (see the module docs).
+    pub async fn scan_push_with(
+        &self,
+        repo: &Path,
+        quarantine: Option<&Quarantine>,
+        tips: &[String],
+        limits: &ScanLimits,
+        mode: ScanMode,
+    ) -> Result<ScanReport, ForgeError> {
         if !tips.iter().all(|t| is_object_id(t)) {
             return Err(ForgeError::new(ErrorCode::PushCheckFailed)
                 .with_context("reason", "stdin_invalid")
@@ -281,6 +326,12 @@ impl Git {
             repo,
             quarantine,
             deadline: Instant::now() + limits.timeout,
+        };
+        // The history import: what the pushed tips' trees hold (complete
+        // or the push is refused).
+        let tip_blobs = match mode {
+            ScanMode::Full => None,
+            ScanMode::HistoryImport => Some(scan.tip_blobs(tips).await?),
         };
         let listed = scan
             .list(tips, limits, &mut report)
@@ -331,23 +382,38 @@ impl Git {
                 commit: None,
             })
             .collect();
+        let in_tip = |i: usize| match &tip_blobs {
+            None => true,
+            Some(blobs) => listed.get(i).is_some_and(|l| blobs.contains(&l.id)),
+        };
+        let (found, history): (Vec<_>, Vec<_>) = found.into_iter().partition(|(i, _)| in_tip(*i));
         report.total_findings = total_large + found.len();
+        report.total_history = history.len();
+        let finding = |i: usize, kind: FindingKind| {
+            listed.get(i).map(|l| Finding {
+                kind,
+                blob: l.id.clone(), // clone: the report owns its copy
+                path: clean_path(&l.path),
+                commit: None,
+            })
+        };
         for (i, kind) in found {
             if findings.len() >= limits.max_findings {
                 break;
             }
-            if let Some(l) = listed.get(i) {
-                findings.push(Finding {
-                    kind,
-                    blob: l.id.clone(), // clone: the report owns its copy
-                    path: clean_path(&l.path),
-                    commit: None,
-                });
+            findings.extend(finding(i, kind));
+        }
+        let kept = findings.len();
+        for (i, kind) in history {
+            if findings.len() - kept >= MAX_HISTORY_FINDINGS {
+                break;
             }
+            findings.extend(finding(i, kind));
         }
         if !findings.is_empty() {
             scan.attribute(tips, &mut findings).await;
         }
+        report.history = findings.split_off(kept);
         report.findings = findings;
         Ok(report)
     }
@@ -467,6 +533,52 @@ impl Scan<'_> {
                 .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", q.alternates.clone());
         }
         Some(cmd)
+    }
+
+    /// Every blob the trees of `tips` hold (the history import). Complete
+    /// or an error (FG-GIT-0023, fail closed): a tip tree that cannot be
+    /// listed in full cannot tell a tip secret from a history one.
+    async fn tip_blobs(&self, tips: &[String]) -> Result<HashSet<String>, ForgeError> {
+        let failed = |detail: &'static str| {
+            ForgeError::new(ErrorCode::PushCheckFailed)
+                .with_context("reason", "git_failed")
+                .with_context("subcommand", "ls-tree")
+                .with_context("detail", detail)
+        };
+        let mut blobs = HashSet::new();
+        for tip in tips {
+            let Some(cmd) = self.command("ls-tree") else {
+                return Err(failed("deadline"));
+            };
+            let cap = self.git.config().max_output_bytes;
+            let (out, truncated) = cmd
+                .arg("-r")
+                .arg("-z")
+                .arg("--full-tree")
+                .revision(Revision::object_id(tip)?)
+                .output_truncated(cap)
+                .await
+                .map_err(|e| git_failed("ls-tree", e))?;
+            if truncated {
+                return Err(failed("tip_tree_truncated"));
+            }
+            // `<mode> SP <type> SP <oid> TAB <path>` NUL
+            for record in out.stdout.split(|b| *b == 0) {
+                let head = record.split(|b| *b == b'\t').next().unwrap_or_default();
+                let Ok(head) = std::str::from_utf8(head) else {
+                    return Err(failed("tip_tree_unreadable"));
+                };
+                let mut parts = head.split(' ');
+                if let (Some(_), Some("blob"), Some(id)) =
+                    (parts.next(), parts.next(), parts.next())
+                {
+                    if is_object_id(id) {
+                        blobs.insert(id.to_owned());
+                    }
+                }
+            }
+        }
+        Ok(blobs)
     }
 
     /// The new objects with their names; `None` when the deadline passed

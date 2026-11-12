@@ -255,6 +255,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // 2026-11-12: the history import allowance.
+            AuditedTable {
+                name: "repository_history_imports".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
             // M3 S0 (20261113100000).
             AuditedTable {
                 name: "service_account_profiles".into(),

@@ -26,7 +26,10 @@
 //!   stderr (git relays them as `remote: …`) and exits 1 to refuse.
 //!   Findings refuse; an internal failure refuses (fail closed,
 //!   FG-GIT-0023); a bound hit accepts with a warn line (fail open,
-//!   FG-GIT-0024).
+//!   FG-GIT-0024). With `history_import` (2026-11-12, the one-time import
+//!   serve allowed for this push) the scan runs in
+//!   [`ScanMode::HistoryImport`]: secrets only in history are written as
+//!   `history` lines and told to the pusher, and do not refuse.
 //! - **After git exits** serve reads the result ([`PushCheckRun::outcome`]):
 //!   none (or another nonce) while refs were applied means the hook did
 //!   not run (`FG-GIT-0023 reason=hook_not_run`, an alert) — git skips a
@@ -42,7 +45,9 @@ use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError, Lang};
 
 use crate::command::{Git, GitCommand, GitConfig};
-use crate::push_scan::{Finding, FindingKind, Quarantine, ScanLimits, ScanReport, Waiver};
+use crate::push_scan::{
+    Finding, FindingKind, Quarantine, ScanLimits, ScanMode, ScanReport, Waiver,
+};
 use crate::storage::StorageRoot;
 use crate::upload_request::is_object_id;
 
@@ -76,6 +81,9 @@ pub struct PushCheckPolicy {
     pub lang: Lang,
     pub repo_id: RepoId,
     pub limits: ScanLimits,
+    /// The one-time history import (serve found an open allowance and an
+    /// empty repository): [`ScanMode::HistoryImport`].
+    pub history_import: bool,
 }
 
 /// The forge binary as the hook script runs it: absolute, UTF-8, without
@@ -241,6 +249,10 @@ impl Git {
         put("timeout_ms", &l.timeout.as_millis().to_string());
         put("size_timeout_ms", &l.size_timeout.as_millis().to_string());
         put("max_findings", &l.max_findings.to_string());
+        put(
+            "history_import",
+            if policy.history_import { "1" } else { "0" },
+        );
         write_private(&dir.join("policy"), text.as_bytes()).map_err(|e| {
             failed("run_dir")
                 .with_context("detail", "policy_write")
@@ -423,6 +435,7 @@ struct ReadPolicy {
     git_bin: PathBuf,
     git_home: PathBuf,
     limits: ScanLimits,
+    mode: ScanMode,
 }
 
 fn read_policy(dir: &Path) -> Result<ReadPolicy, ForgeError> {
@@ -460,6 +473,11 @@ fn read_policy(dir: &Path) -> Result<ReadPolicy, ForgeError> {
             size_timeout: Duration::from_millis(number(&get, "size_timeout_ms")?),
             max_findings: usize::try_from(number(&get, "max_findings")?)
                 .map_err(|_| invalid("max_findings"))?,
+        },
+        mode: match get("history_import")?.as_str() {
+            "0" => ScanMode::Full,
+            "1" => ScanMode::HistoryImport,
+            _ => return Err(invalid("history_import")),
         },
     })
 }
@@ -546,8 +564,14 @@ async fn check(policy: &ReadPolicy, env: &HookEnv, stdin: &[u8]) -> Result<ScanR
     cfg.max_output_bytes = HOOK_MAX_OUTPUT;
     cfg.max_concurrency = 2;
     let git = Git::new(cfg);
-    git.scan_push(&repo, quarantine.as_ref(), &tips, &policy.limits)
-        .await
+    git.scan_push_with(
+        &repo,
+        quarantine.as_ref(),
+        &tips,
+        &policy.limits,
+        policy.mode,
+    )
+    .await
 }
 
 fn failed_outcome(e: &ForgeError) -> HookOutcome {
@@ -576,6 +600,9 @@ fn decide(policy: &ReadPolicy, report: ScanReport) -> (HookOutcome, HookExit) {
             let code = ErrorCode::PushCheckIncomplete;
             let _ = writeln!(stderr, "{} {}", code.id(), code.user_message(lang));
             // ignore: String
+        }
+        if report.total_history > 0 {
+            history_lines(&mut stderr, policy, &report);
         }
     } else {
         let mut codes: Vec<ErrorCode> = Vec::new();
@@ -616,6 +643,34 @@ fn decide(policy: &ReadPolicy, report: ScanReport) -> (HookOutcome, HookExit) {
         },
         HookExit { accept, stderr },
     )
+}
+
+/// The history import's accepted findings, for the pusher: a warn, one
+/// line per finding (never content), the importer's duty to rotate.
+fn history_lines(stderr: &mut String, policy: &ReadPolicy, report: &ScanReport) {
+    let code = ErrorCode::PushSecretDetected;
+    let _ = writeln!(
+        stderr,
+        "{} warning: {} secret finding(s) only in the imported history were accepted \
+         under the one-time history import allowance and recorded in the audit log. \
+         Rotate every real secret among them.",
+        code.id(),
+        report.total_history
+    ); // ignore: String
+    for f in report.history.iter().take(policy.limits.max_findings) {
+        let _ = writeln!(
+            stderr,
+            "  {}",
+            finding_line(f, policy.limits.max_blob_bytes)
+        ); // ignore: String
+    }
+    let more = report
+        .total_history
+        .saturating_sub(report.history.len().min(policy.limits.max_findings));
+    if more > 0 {
+        let _ = writeln!(stderr, "  … and {more} more"); // ignore: String
+    }
+    let _ = writeln!(stderr, "(request_id: {})", policy.request_id); // ignore: String
 }
 
 /// One finding for the pusher: rule, path, commit — never content.
@@ -668,7 +723,7 @@ fn write_result(dir: &Path, nonce: &str, o: &HookOutcome) -> Result<(), ForgeErr
         text,
         "version\t{VERSION}\nnonce\t{nonce}\nverdict\t{}\nreason\t{}\ndetail\t{}\ncause_code\t{}\n\
          incomplete\t{}\nobjects\t{}\nblobs_scanned\t{}\nbytes_scanned\t{}\nallowed\t{}\ntotal_findings\t{}\n\
-         pack_objects\t{}\nskipped_large\t{}\nskipped_binary\t{}\n",
+         pack_objects\t{}\nskipped_large\t{}\nskipped_binary\t{}\ntotal_history\t{}\n",
         o.verdict.as_str(),
         opt(&o.reason),
         opt(&o.detail),
@@ -682,6 +737,7 @@ fn write_result(dir: &Path, nonce: &str, o: &HookOutcome) -> Result<(), ForgeErr
         r.pack_objects,
         r.skipped_large,
         r.skipped_binary,
+        r.total_history,
     ); // ignore: writing to a String cannot fail
     for w in &r.waivers {
         let _ = writeln!(
@@ -692,18 +748,20 @@ fn write_result(dir: &Path, nonce: &str, o: &HookOutcome) -> Result<(), ForgeErr
             one_line(&w.path)
         ); // ignore: as above
     }
-    for f in &r.findings {
-        let (kind, detail) = match &f.kind {
-            FindingKind::LargeBlob { size } => ("large_blob", size.to_string()),
-            FindingKind::Secret { rule } => ("secret", one_line(rule)),
-        };
-        let _ = writeln!(
-            text,
-            "finding\t{kind}\t{detail}\t{}\t{}\t{}",
-            f.blob,
-            f.commit.as_deref().unwrap_or("-"),
-            one_line(&f.path)
-        ); // ignore: as above
+    for (line, list) in [("finding", &r.findings), ("history", &r.history)] {
+        for f in list {
+            let (kind, detail) = match &f.kind {
+                FindingKind::LargeBlob { size } => ("large_blob", size.to_string()),
+                FindingKind::Secret { rule } => ("secret", one_line(rule)),
+            };
+            let _ = writeln!(
+                text,
+                "{line}\t{kind}\t{detail}\t{}\t{}\t{}",
+                f.blob,
+                f.commit.as_deref().unwrap_or("-"),
+                one_line(&f.path)
+            ); // ignore: as above
+        }
     }
     let tmp = dir.join("result.tmp");
     write_private(&tmp, text.as_bytes())
@@ -759,36 +817,8 @@ fn parse_result(text: &str) -> Result<(String, HookOutcome), ForgeError> {
             path: path.to_owned(),
         });
     }
-    let mut findings = Vec::new();
-    for line in text.lines() {
-        let Some(rest) = line.strip_prefix("finding\t") else {
-            continue;
-        };
-        let mut p = rest.splitn(5, '\t');
-        let (Some(kind), Some(detail), Some(blob), Some(commit), Some(path)) =
-            (p.next(), p.next(), p.next(), p.next(), p.next())
-        else {
-            return Err(invalid("finding"));
-        };
-        let kind = match kind {
-            "large_blob" => FindingKind::LargeBlob {
-                size: detail.parse().map_err(|_| invalid("finding"))?,
-            },
-            "secret" => FindingKind::Secret {
-                rule: detail.to_owned(),
-            },
-            _ => return Err(invalid("finding")),
-        };
-        if !is_object_id(blob) || (commit != "-" && !is_object_id(commit)) {
-            return Err(invalid("finding"));
-        }
-        findings.push(Finding {
-            kind,
-            blob: blob.to_owned(),
-            path: path.to_owned(),
-            commit: (commit != "-").then(|| commit.to_owned()),
-        });
-    }
+    let findings = finding_lines(text, "finding\t")?;
+    let history = finding_lines(text, "history\t")?;
     let outcome = HookOutcome {
         verdict: Verdict::parse(get("verdict")?).ok_or_else(|| invalid("verdict"))?,
         reason: opt("reason")?,
@@ -806,9 +836,47 @@ fn parse_result(text: &str) -> Result<(String, HookOutcome), ForgeError> {
             skipped_large: count("skipped_large")?,
             skipped_binary: count("skipped_binary")?,
             incomplete,
+            history,
+            total_history: count("total_history")?,
         },
     };
     Ok((get("nonce")?.to_owned(), outcome))
+}
+
+/// The `finding` / `history` lines of a result file.
+fn finding_lines(text: &str, prefix: &str) -> Result<Vec<Finding>, ForgeError> {
+    let invalid = || failed("result_invalid").with_context("detail", "finding");
+    let mut findings = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix(prefix) else {
+            continue;
+        };
+        let mut p = rest.splitn(5, '\t');
+        let (Some(kind), Some(detail), Some(blob), Some(commit), Some(path)) =
+            (p.next(), p.next(), p.next(), p.next(), p.next())
+        else {
+            return Err(invalid());
+        };
+        let kind = match kind {
+            "large_blob" => FindingKind::LargeBlob {
+                size: detail.parse().map_err(|_| invalid())?,
+            },
+            "secret" => FindingKind::Secret {
+                rule: detail.to_owned(),
+            },
+            _ => return Err(invalid()),
+        };
+        if !is_object_id(blob) || (commit != "-" && !is_object_id(commit)) {
+            return Err(invalid());
+        }
+        findings.push(Finding {
+            kind,
+            blob: blob.to_owned(),
+            path: path.to_owned(),
+            commit: (commit != "-").then(|| commit.to_owned()),
+        });
+    }
+    Ok(findings)
 }
 
 #[cfg(test)]

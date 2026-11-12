@@ -51,6 +51,7 @@ impl Fixture {
                     lang: Lang::En,
                     repo_id: self.id,
                     limits: crate::push_scan::ScanLimits::new(max_blob_bytes),
+                    history_import: false,
                 },
             )
             .expect("run")
@@ -168,6 +169,7 @@ fn policy(f: &Fixture) -> PushCheckPolicy {
         lang: Lang::En,
         repo_id: f.id,
         limits: crate::push_scan::ScanLimits::new(1),
+        history_import: false,
     }
 }
 
@@ -266,4 +268,64 @@ async fn receive_pack_with_checks_uses_the_push_hooks() {
     );
     assert_eq!(cmd.env_value(DIR_ENV), Some(run.dir().as_os_str()));
     assert!(cmd.env_value(EXE_ENV).is_some());
+}
+
+// ── 2026-11-12: the one-time history import ─────────────────────────────
+
+impl Fixture {
+    fn import_run(&self) -> PushCheckRun {
+        let exe = std::env::current_exe().expect("exe");
+        self.git
+            .push_check_run(
+                &self.root,
+                &exe,
+                &PushCheckPolicy {
+                    history_import: true,
+                    limits: crate::push_scan::ScanLimits::new(1 << 20),
+                    ..policy(self)
+                },
+            )
+            .expect("run")
+    }
+}
+
+#[tokio::test]
+async fn an_import_accepts_a_history_only_secret_and_reports_it() {
+    let f = fixture().await;
+    let old = commit(&f.path, &[("deploy/id_rsa", &key_file())], None);
+    let tip = commit(&f.path, &[("README", b"clean\n")], Some(&old));
+    let stdin = format!("{ZERO} {tip} refs/heads/main\n");
+    // Without the import: refused as always.
+    let run = f.run(1 << 20);
+    let exit = run_pre_receive(env_of(&run), stdin.as_bytes()).await;
+    assert!(!exit.accept, "{}", exit.stderr);
+    // With it: accepted, the pusher told, the finding in the result.
+    let run = f.import_run();
+    let exit = run_pre_receive(env_of(&run), stdin.as_bytes()).await;
+    assert!(exit.accept, "{}", exit.stderr);
+    assert!(exit.stderr.contains("FG-GIT-0022"), "{}", exit.stderr);
+    assert!(exit.stderr.contains("deploy/id_rsa"), "{}", exit.stderr);
+    assert!(exit.stderr.contains(&old[..12]), "{}", exit.stderr);
+    assert!(!exit.stderr.contains("MIIE"), "{}", exit.stderr);
+    let outcome = run.outcome().expect("readable").expect("written");
+    assert_eq!(outcome.verdict, Verdict::Accepted);
+    assert!(outcome.report.findings.is_empty());
+    assert_eq!(outcome.report.total_history, 1);
+    let h = outcome.report.history.first().expect("history");
+    assert_eq!(h.kind.rule(), "private_key");
+    assert_eq!(h.path, "deploy/id_rsa");
+    assert_eq!(h.commit.as_deref(), Some(old.as_str()));
+}
+
+#[tokio::test]
+async fn an_import_still_refuses_a_secret_in_the_tip() {
+    let f = fixture().await;
+    let tip = commit(&f.path, &[("id_rsa", &key_file())], None);
+    let run = f.import_run();
+    let stdin = format!("{ZERO} {tip} refs/heads/main\n");
+    let exit = run_pre_receive(env_of(&run), stdin.as_bytes()).await;
+    assert!(!exit.accept, "{}", exit.stderr);
+    let outcome = run.outcome().expect("readable").expect("written");
+    assert_eq!(outcome.verdict, Verdict::Refused);
+    assert!(outcome.report.history.is_empty());
 }
