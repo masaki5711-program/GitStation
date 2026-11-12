@@ -3,8 +3,9 @@
 // first load of the app carries only the browsing screens. Each one waits
 // behind a skeleton the first time; a link that prefetches its screen
 // (features/prefetch.ts) also starts loading its chunk (`preloadScreen`).
-import { lazy, Suspense, type ComponentProps, type ComponentType } from 'react';
+import { lazy, Suspense, useState, type ComponentProps, type ComponentType } from 'react';
 
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { SkeletonList } from '../components/Skeleton';
 
 const loaders = {
@@ -21,17 +22,32 @@ const loaders = {
   actAsBinding: () => import('./confirm/ActAsBindingConfirm'),
 };
 
-/** A lazy component with a skeleton while its chunk loads. */
-function screen<P extends object>(load: () => Promise<ComponentType<P>>) {
-  const Lazy = lazy(() => load().then((c) => ({ default: c })));
+/** A lazy component with a skeleton while its chunk loads. React.lazy
+ * keeps a failed load for good, so a failure (offline, a file replaced by a
+ * deploy) shows the error with a retry that builds a new lazy component and
+ * asks for the chunk again. */
+export function lazyScreen<P extends object>(load: () => Promise<ComponentType<P>>) {
+  const make = () => lazy(() => load().then((c) => ({ default: c })));
+  let Lazy = make();
   return function LazyScreen(props: P) {
+    const [attempt, setAttempt] = useState(0);
     return (
-      <Suspense fallback={<SkeletonList />}>
-        <Lazy {...(props as ComponentProps<typeof Lazy>)} />
-      </Suspense>
+      <ErrorBoundary
+        key={attempt}
+        onRetry={() => {
+          Lazy = make();
+          setAttempt((a) => a + 1);
+        }}
+      >
+        <Suspense fallback={<SkeletonList />}>
+          <Lazy {...(props as ComponentProps<typeof Lazy>)} />
+        </Suspense>
+      </ErrorBoundary>
     );
   };
 }
+
+const screen = lazyScreen;
 
 export const ProjectSettings = screen(() => loaders.settings().then((m) => m.ProjectSettings));
 export const MembersScreen = screen(() => loaders.members().then((m) => m.MembersScreen));
@@ -56,8 +72,8 @@ const BY_WORD: Record<string, (() => Promise<unknown>) | undefined> = {
 };
 
 /** Starts loading the chunk of a screen word ahead of the click. A failed
- * load is not hidden: the screen's own `lazy` import tries again on render
- * and an error there reaches the ErrorBoundary. */
+ * preload is only a missed head start: the screen's own `lazy` import asks
+ * again on render, and its failure shows with a retry (`lazyScreen`). */
 export function preloadScreen(word: string): void {
   const load = BY_WORD[word];
   if (load !== undefined) void load().catch(() => undefined);

@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import logo from '../assets/brand/gitstation-v1-logo-dark.svg';
-import { LANGUAGES, rememberLanguage, type Language } from '../i18n';
+import { LANGUAGES, switchLanguage, type Language } from '../i18n';
 import { useSessionState } from '../session/session';
 import styles from './Header.module.css';
 import { NotificationBell } from './NotificationBell';
@@ -32,10 +32,9 @@ export function Header({ nav }: { nav?: NavToggle }) {
   const current = (LANGUAGES as readonly string[]).includes(i18n.language) ? i18n.language : 'ja';
 
   const choose = (lng: Language) => {
-    rememberLanguage(lng);
-    void i18n.changeLanguage(lng).then(() => {
+    void switchLanguage(i18n, lng).then((switched) => {
       // Server messages come back in the new language.
-      void queryClient.invalidateQueries();
+      if (switched) void queryClient.invalidateQueries();
     });
   };
 

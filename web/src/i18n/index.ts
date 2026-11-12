@@ -86,9 +86,26 @@ export async function createI18n(lng?: Language): Promise<i18n> {
     interpolation: { escapeValue: false },
     returnNull: false,
   });
-  // A language chunk that did not load would show raw keys: fail loudly.
+  // A language chunk that did not load (offline, or a shell older than the
+  // deployed files): start in the bundled ja rather than a blank page or
+  // raw keys. The stored choice stays; the next start tries it again.
   if (!instance.hasResourceBundle(language, 'translation')) {
-    throw new Error(`the ${language} language bundle did not load`);
+    console.error(`gitstation: the ${language} language bundle did not load; showing ja`);
+    await instance.changeLanguage('ja');
   }
   return instance;
+}
+
+/** Switch to `lng` once its strings are loaded, and remember the choice
+ * only then. `false` (logged once): the chunk did not load and nothing
+ * changed. */
+export async function switchLanguage(instance: i18n, lng: Language): Promise<boolean> {
+  await instance.loadLanguages(lng);
+  if (!instance.hasResourceBundle(lng, 'translation')) {
+    console.error(`gitstation: the ${lng} language bundle did not load; keeping ${instance.language}`);
+    return false;
+  }
+  await instance.changeLanguage(lng);
+  rememberLanguage(lng);
+  return true;
 }

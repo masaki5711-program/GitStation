@@ -1,10 +1,12 @@
-// A render error in a page (a bug): shown as the generic error, logged once
-// with the original error. Reset by the route (the Layout keys it by path).
+// A render error in a page (a bug, or a screen chunk that did not load):
+// shown as the generic error, logged once with the original error. Reset by
+// the route (the Layout keys it by path), or by `onRetry` when given (a lazy
+// screen loads its chunk again).
 import { Component, type ReactNode } from 'react';
 
 import { ErrorNotice } from './ErrorNotice';
 
-export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+export class ErrorBoundary extends Component<{ children: ReactNode; onRetry?: () => void }, { failed: boolean }> {
   override state = { failed: false };
 
   static getDerivedStateFromError(): { failed: boolean } {
@@ -17,7 +19,20 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: 
 
   override render(): ReactNode {
     if (this.state.failed) {
-      return <ErrorNotice failure={{ kind: 'unexpected', status: null, requestId: null }} />;
+      const retry = this.props.onRetry;
+      return (
+        <ErrorNotice
+          failure={{ kind: 'unexpected', status: null, requestId: null }}
+          {...(retry === undefined
+            ? {}
+            : {
+                onRetry: () => {
+                  retry();
+                  this.setState({ failed: false });
+                },
+              })}
+        />
+      );
     }
     return this.props.children;
   }
