@@ -78,21 +78,7 @@
 }
 
 .danger {
-  composes: button from '../../components/controls.module.css';
-  border-color: var(--gs-color-danger-border);
-  background: var(--gs-color-danger-surface);
-  color: var(--gs-color-danger-text);
-  font-weight: bold;
-}
-
-.danger:hover:not([aria-disabled='true']) {
-  border-color: var(--gs-color-danger-text);
-  box-shadow: inset 0 0 0 1px var(--gs-color-danger-text);
-}
-
-.danger:active:not([aria-disabled='true']) {
-  background: var(--gs-color-danger-text);
-  color: var(--gs-color-white);
+  composes: danger from '../../components/controls.module.css';
 }
 
 .dangerQuiet {
@@ -147,11 +133,6 @@
   margin: 0 0 var(--gs-space-2);
   font-size: var(--gs-font-size-lg);
   color: inherit;
-}
-
-.danger[aria-disabled='true'] {
-  opacity: 0.6;
-  cursor: progress;
 }
 
 .zone {

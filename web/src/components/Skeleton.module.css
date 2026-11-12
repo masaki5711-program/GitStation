@@ -1,0 +1,63 @@
+/* The skeleton of a list while it loads (tokens only): grey bars in a card,
+   about the shape of the rows to come, so the page does not jump. The sheen
+   stops under reduced motion (here and in global.css). */
+.list {
+  composes: card from '../ui/surfaces.module.css';
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  padding: var(--gs-space-4);
+  border-top: 1px solid var(--gs-color-border-subtle);
+}
+
+.row:first-of-type {
+  border-top: none;
+}
+
+.line,
+.lineShort {
+  display: block;
+  height: var(--gs-space-3);
+  border-radius: var(--gs-radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--gs-color-border-subtle) 0%,
+    var(--gs-color-background) 50%,
+    var(--gs-color-border-subtle) 100%
+  );
+  background-size: 200% 100%;
+  animation: sheen var(--gs-duration-loop) linear infinite;
+}
+
+.line {
+  width: 60%;
+}
+
+.lineShort {
+  width: 35%;
+}
+
+@keyframes sheen {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .line,
+  .lineShort {
+    animation: none;
+  }
+}
+
+.srOnly {
+  composes: srOnly from './controls.module.css';
+}

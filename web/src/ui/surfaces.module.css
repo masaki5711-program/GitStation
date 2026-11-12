@@ -1,0 +1,23 @@
+/* Shared surfaces (tokens only): a card lifts off the page background with a
+   subtle edge and shadow-1; only a card that is itself a target (a link
+   stretched over it) rises to shadow-2 under the pointer. Compose them:
+   `composes: card from '../ui/surfaces.module.css'`. */
+.card {
+  border: 1px solid var(--gs-color-border-subtle);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+  box-shadow: var(--gs-shadow-1);
+}
+
+.cardClickable {
+  composes: card;
+  transition:
+    box-shadow var(--gs-duration-base) var(--gs-ease),
+    border-color var(--gs-duration-base) var(--gs-ease),
+    background-color var(--gs-duration-base) var(--gs-ease);
+}
+
+.cardClickable:hover {
+  border-color: var(--gs-color-border);
+  box-shadow: var(--gs-shadow-2);
+}

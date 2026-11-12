@@ -48,7 +48,7 @@
   border-radius: var(--gs-radius-md);
   background: var(--gs-color-surface);
   color: var(--gs-color-text);
-  box-shadow: var(--gs-shadow-1);
+  box-shadow: var(--gs-shadow-3);
 }
 
 .panel[hidden] {
