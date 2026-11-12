@@ -15,7 +15,11 @@
 //! writes them from the outbox; a person's link and unlink are the review
 //! commands `link_work_item_mr_decided` / `unlink_work_item_mr_decided`
 //! (forge-db `review::work_item_links`, called by forge-review only), which
-//! write the link row with a `work_item.*` audit row and event.
+//! write the link row with a `work_item.*` audit row and event (and a
+//! `merge_request.work_items_changed`). A new binding that resolves work
+//! items enqueues the `work_items.relink` job (`relink.rs`), which asks
+//! `work-item-sync` to detect the project's open and recently merged merge
+//! requests again (ADR-0016 Amendment 2026-11-12).
 
 use forge_core::ids::{IntegrationId, MergeRequestId, ProjectId, UserId};
 use forge_core::{IntegrationKind, LinkActorKind, LinkSource, UnlinkSource, WorkItem, WorkItemRef};
@@ -25,10 +29,15 @@ use sqlx::postgres::PgConnection;
 use crate::{query_error, read_query_error, Db};
 
 mod context;
+mod relink;
 mod sync;
 
 pub use context::{
     confidential_work_items, work_item_context, KnownWorkItem, LinkedMergeRequest, WorkItemContext,
+};
+pub use relink::{
+    relink_job, relink_payload, request_relink, request_relink_with, RelinkLimits, RelinkRequest,
+    Relinked, MAX_RELINK_MERGED, MAX_RELINK_OPEN, RELINK_BATCH, RELINK_JOB, RELINK_MERGED_DAYS,
 };
 pub use sync::{WorkItemSync, WORK_ITEM_SYNC};
 

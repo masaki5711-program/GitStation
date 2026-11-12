@@ -37,6 +37,7 @@ use super::risk::RiskHandler;
 use super::spec_drift::SpecDriftHandler;
 use super::spec_index::SpecIndexHandler;
 use super::supervise::Next;
+use super::work_items::RelinkHandler;
 
 /// How often an idle runner looks for a ready job.
 pub(crate) const JOB_POLL_PERIOD: Duration = Duration::from_secs(1);
@@ -52,7 +53,8 @@ pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 /// `check.spec_drift` (M3 X2: `forge/spec-drift`), `check.risk` (M3 X7:
 /// `forge/risk`) and `check.spec_index` (M3 X4: `forge/spec-lint` and
 /// `forge/spec-trace`; plan 13 stage 2: `forge/doc-lint`; plan 14 C1:
-/// `forge/ci-lint`).
+/// `forge/ci-lint`) and `work_items.relink` (ADR-0016 Amendment
+/// 2026-11-12: work items of existing merge requests after a binding).
 pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHandler>>, ForgeError> {
     // clone: the handler owns its storage handles (paths and an Arc)
     let provision = ProvisionHandler::new(db, storage.clone())?;
@@ -64,6 +66,8 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
     let spec_index = SpecIndexHandler::new(db, storage)?;
     // M4 C2: `ci.pipeline_create` (CI pipelines from pushes and versions).
     let pipelines = PipelineHandler::new(db, storage)?;
+    // ADR-0016 Amendment 2026-11-12: detect merge requests again after a binding.
+    let relink = RelinkHandler::new(db)?;
     Ok(vec![
         Arc::new(provision),
         Arc::new(refresh),
@@ -73,6 +77,7 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
         Arc::new(risk),
         Arc::new(spec_index),
         Arc::new(pipelines),
+        Arc::new(relink),
     ])
 }
 
