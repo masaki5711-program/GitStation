@@ -62,6 +62,10 @@ pub mod telemetry;
 pub mod token;
 // M4 C3: the runner's and the job's tokens (ADR-0029 §1).
 pub mod ci_token;
+// M4 C6: CI variables (secrets) and their masking (ADR-0029 C6).
+pub mod ci_secret;
+// M4 C6: CI artifacts (paths, limits, retention).
+pub mod ci_artifact;
 pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;
@@ -136,8 +140,8 @@ pub use webhook::{
     DisableReason, WebhookChange, WebhookDeliverySet, WebhookField, WebhookMaterial,
 };
 pub use work_item::{
-    find_refs, LinkActorKind, LinkSource, LinkTarget, UnlinkSource, WorkItem, WorkItemChange,
-    WorkItemRef,
+    find_refs, LinkActorKind, LinkSource, LinkTarget, LinksChangedReason, UnlinkSource, WorkItem,
+    WorkItemChange, WorkItemRef, WorkItemsChanged, WORK_ITEMS_CHANGED_DEDUP,
 };
 
 #[cfg(test)]

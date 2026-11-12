@@ -52,11 +52,46 @@ pub fn authorize_ci_output(
     tip_mark: CopyMark,
     declared_agent: bool,
 ) -> Result<CiOutputAllowed, ForgeError> {
-    let action = proof.action();
-    if !matches!(action, Action::CiLogRead | Action::PipelineDiagnosisRead) {
+    decide_output(proof, (pipeline_mark, tip_mark), declared_agent, false)
+}
+
+/// [`authorize_ci_output`] for a job's artifacts (`CiArtifactRead`, M4 C6
+/// review): `secret_job` — the job was given secrets — narrows the read to
+/// a project Maintainer who is a person; an AI agent audience is refused
+/// (`FG-AUTH-0022 reason=secret_job mark_of=job`) whatever the marks.
+pub fn authorize_ci_artifact(
+    proof: &Authorized<ProjectCtx>,
+    pipeline_mark: CopyMark,
+    tip_mark: CopyMark,
+    declared_agent: bool,
+    secret_job: bool,
+) -> Result<CiOutputAllowed, ForgeError> {
+    if proof.action() != Action::CiArtifactRead {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "proof_action_mismatch")
-            .with_context("route_action", "CiLogRead|PipelineDiagnosisRead")
+            .with_context("route_action", "CiArtifactRead")
+            .with_context("proof_action", proof.action().name()));
+    }
+    decide_output(proof, (pipeline_mark, tip_mark), declared_agent, secret_job)
+}
+
+fn decide_output(
+    proof: &Authorized<ProjectCtx>,
+    (pipeline_mark, tip_mark): (CopyMark, CopyMark),
+    declared_agent: bool,
+    secret_job: bool,
+) -> Result<CiOutputAllowed, ForgeError> {
+    let action = proof.action();
+    if !matches!(
+        action,
+        Action::CiLogRead | Action::PipelineDiagnosisRead | Action::CiArtifactRead
+    ) {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "proof_action_mismatch")
+            .with_context(
+                "route_action",
+                "CiLogRead|PipelineDiagnosisRead|CiArtifactRead",
+            )
             .with_context("proof_action", action.name()));
     }
     let project = *proof.id();
@@ -68,6 +103,7 @@ pub fn authorize_ci_output(
             pipeline_mark,
             tip_mark,
             declared_agent,
+            secret_job,
         },
     )
     .map_err(|e| e.with_context("project_id", project.get()))?;

@@ -1059,6 +1059,47 @@ impl ResourceCtx for PinnedCopyCtx {
     }
 }
 
+/// A CI job as its own token's routes load it (M4 C6: its artifacts, the
+/// artifacts of its needs): the job the path names and its project, from
+/// one row. `authorize()` decides `JobArtifactUpload` /
+/// `JobArtifactDownload` on `Resource::JobSelf`: only the token of that job
+/// passes (`job.rs`). The id is the job's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobSelfCtx {
+    target: crate::model::JobSelf,
+}
+
+impl JobSelfCtx {
+    /// The job the path names and its project.
+    pub fn new(job: i64, project: ProjectId) -> Self {
+        Self {
+            target: crate::model::JobSelf::new(project, job),
+        }
+    }
+
+    /// The job the path names.
+    pub fn job(&self) -> i64 {
+        self.target.job()
+    }
+
+    /// Its project.
+    pub fn project(&self) -> ProjectId {
+        self.target.project()
+    }
+}
+
+impl sealed::Sealed for JobSelfCtx {}
+
+impl ResourceCtx for JobSelfCtx {
+    type Id = i64;
+    fn resource(&self) -> Resource {
+        Resource::JobSelf(self.target)
+    }
+    fn id(&self) -> i64 {
+        self.target.job()
+    }
+}
+
 impl sealed::Sealed for RunnerJobCtx {}
 
 impl ResourceCtx for RunnerJobCtx {

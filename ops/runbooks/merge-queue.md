@@ -1,4 +1,4 @@
-# Runbook: merge-queue（FG-CI-0019。関連: FG-CI-0018、FG-CI-0020、FG-CI-0005、FG-CI-0002、FG-REVIEW-0009）
+# Runbook: merge-queue（FG-CI-0024。関連: FG-CI-0023、FG-CI-0025、FG-CI-0005、FG-CI-0002、FG-REVIEW-0009）
 
 M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_queue`、表 `forge.merge_queues` / `forge.merge_queue_batches` /
 `forge.merge_queue_entries`、隠した ref `refs/merge-queue/<queue_id>/train`、パイプラインの `source = merge_queue`）が
@@ -6,12 +6,12 @@ M4 C8（ADR-0030）のマージキュー（`forge serve` のタスク `merge_que
 
 ## Trigger
 
-- `forge serve` のログに `FG-CI-0019` MergeQueueStalled（error、`forge.merge_queue.batch_stalled` / `operation=merge_queue_reap`）:
+- `forge serve` のログに `FG-CI-0024` MergeQueueStalled（error、`forge.merge_queue.batch_stalled` / `operation=merge_queue_reap`）:
   バッチが期限（既定 2 時間）までに試し終わらず、捨てて MR を列に戻した。3 回目の MR は列から外れた（`forge.merge_queue.entry_removed`、
   `reason=stalled`）。
-- `forge doctor` の `review.merge_queue` が FG-CI-0019 で失敗: 期限を過ぎた生きたバッチがある（`batch_ids`）、または貸し出しが
+- `forge doctor` の `review.merge_queue` が FG-CI-0024 で失敗: 期限を過ぎた生きたバッチがある（`batch_ids`）、または貸し出しが
   10 分以上前に切れたままの列がある（`reason=worker_not_running`、`queue_ids`）。
-- 利用者から「キューに入れたのにマージされない」「キューから外れた（FG-CI-0018 / FG-CI-0020）」と問い合わせがあった。
+- 利用者から「キューに入れたのにマージされない」「キューから外れた（FG-CI-0023 / FG-CI-0025）」と問い合わせがあった。
 - `forge serve` のログに `FG-SYS-0005` ServeFailed（`operation=merge_queue_tick`、`reason=merge_queue_tick_timeout` など）が
   1 分に 1 回まで続く。
 

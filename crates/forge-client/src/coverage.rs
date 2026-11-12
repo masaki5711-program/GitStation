@@ -806,6 +806,48 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
         Coverage::Command("queue status"),
     ),
+    // M4 C6 (ADR-0029 decision 8): a project's CI variables.
+    (
+        "GET",
+        "/api/v1/projects/{id}/ci/variables",
+        Coverage::Command("ci variable list"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/ci/variables/{name}",
+        Coverage::Command("ci variable set"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/ci/variables/{name}",
+        Coverage::Command("ci variable delete"),
+    ),
+    // M4 C6: CI artifacts, decided on their marks like the log.
+    (
+        "GET",
+        "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts",
+        Coverage::Command("pipeline artifacts"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}",
+        Coverage::Command("pipeline artifact-download"),
+    ),
+    (
+        "PUT",
+        "/api/v1/runner/jobs/{job_id}/artifacts",
+        Coverage::NotForCli("a job's artifact upload: forge-runner with the job's own token (M4 C6); a person's token is refused (job_only)"),
+    ),
+    (
+        "GET",
+        "/api/v1/runner/jobs/{job_id}/needs/artifacts",
+        Coverage::NotForCli("a job's needs: forge-runner with the job's own token (M4 C6)"),
+    ),
+    (
+        "GET",
+        "/api/v1/runner/jobs/{job_id}/needs/artifacts/{artifact_id}",
+        Coverage::NotForCli("a job's needs: forge-runner with the job's own token (M4 C6)"),
+    ),
     // M4 C3 (plan 14, ADR-0029): runners. The administration is an
     // administrator's web session; the runner API takes a runner's token
     // (forge-runner, C4), never a person's.

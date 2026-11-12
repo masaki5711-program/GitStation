@@ -1,10 +1,11 @@
 // Merge request queries and mutations (U1). Keys start with
 // ['mr', projectId] so one invalidation reaches everything of a project.
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { SESSION_KEY } from '../session/session';
 import { invalidateActivity } from './activity';
-import { ApiFailure, call } from './client';
+import { IMMUTABLE } from './cachePolicy';
+import { ApiFailure, call, type ApiClient } from './client';
 import { useApi } from './context';
 import type {
   CreateMergeRequestBody,
@@ -61,9 +62,8 @@ function statusPollInterval(query: { state: { data: MergeStatus | undefined } })
   return shouldPollStatus(query.state.data) ? STATUS_POLL_MS : false;
 }
 
-export function useMergeRequests(project: number, filter: MrListFilter = {}) {
-  const api = useApi();
-  return useQuery({
+export const mergeRequestsQuery = (api: ApiClient, project: number, filter: MrListFilter = {}) =>
+  queryOptions({
     queryKey: mrKeys.list(project, filter),
     queryFn: ({ signal }) =>
       call(() =>
@@ -73,11 +73,9 @@ export function useMergeRequests(project: number, filter: MrListFilter = {}) {
         }),
       ),
   });
-}
 
-export function useMergeRequest(project: number, iid: number) {
-  const api = useApi();
-  return useQuery({
+export const mergeRequestQuery = (api: ApiClient, project: number, iid: number) =>
+  queryOptions({
     queryKey: mrKeys.one(project, iid),
     enabled: valid(iid),
     queryFn: ({ signal }) =>
@@ -88,6 +86,13 @@ export function useMergeRequest(project: number, iid: number) {
         }),
       ),
   });
+
+export function useMergeRequests(project: number, filter: MrListFilter = {}) {
+  return useQuery(mergeRequestsQuery(useApi(), project, filter));
+}
+
+export function useMergeRequest(project: number, iid: number) {
+  return useQuery(mergeRequestQuery(useApi(), project, iid));
 }
 
 export function useMergeStatus(project: number, iid: number) {
@@ -141,6 +146,8 @@ export function useVersionDiff(project: number, iid: number, version: number) {
   return useQuery({
     queryKey: mrKeys.diff(project, iid, version),
     enabled: valid(iid) && valid(version),
+    // A version is a pair of commit ids: its diff never changes.
+    ...IMMUTABLE,
     queryFn: ({ signal }) =>
       call(() =>
         api.GET('/api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff', {

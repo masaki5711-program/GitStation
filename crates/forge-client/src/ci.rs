@@ -24,7 +24,7 @@ use forge_ci::{Event, LintContext, Plan, Problem, Trigger, MAX_BYTES};
 use forge_errors::ErrorCode;
 use serde_json::{json, Value};
 
-use crate::app::{emit, Io};
+use crate::app::{emit, EnvFn, Io};
 use crate::cli::{CiCommand, CiEvent, Cli};
 use crate::error::{ClientError, Result};
 
@@ -32,8 +32,10 @@ use crate::error::{ClientError, Result};
 pub const DEFAULT_FILE: &str = ".forge-ci.yml";
 
 /// `gstn ci …` (module docs).
-pub fn ci(cli: &Cli, cmd: &CiCommand, io: &mut Io<'_>) -> Result<()> {
+pub fn ci(cli: &Cli, cmd: &CiCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     match cmd {
+        // M4 C6: the one `ci` subcommand that calls the server.
+        CiCommand::Variable { command } => crate::ci_variables::variable(cli, command, env, io),
         CiCommand::Lint { path, protected } => {
             let (shown, bytes) = read_definition(path.as_deref())?;
             let ctx = context(protected.as_deref());

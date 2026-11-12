@@ -948,6 +948,9 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "doc migration clear",
             "ci lint",
             "ci plan",
+            "ci variable list",
+            "ci variable set",
+            "ci variable delete",
             "context work-item",
             "context requirement",
             "context merge-request",
@@ -1006,6 +1009,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "pipeline run",
             "pipeline log",
             "pipeline diagnosis",
+            "pipeline artifacts",
+            "pipeline artifact-download",
             "api",
             "help",
             "schema"

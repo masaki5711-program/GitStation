@@ -444,7 +444,7 @@ async fn four(w: &mut World) -> Vec<StoredMergeRequest> {
 }
 
 /// Every merge request of `mrs` is merged exactly when it is not in `bad`;
-/// the bad ones were removed with FG-CI-0018.
+/// the bad ones were removed with FG-CI-0023.
 async fn assert_outcome(w: &World, mrs: &[StoredMergeRequest], bad: &BTreeSet<i64>) {
     for mr in mrs {
         let entry = w.entry_of(mr).await;

@@ -95,6 +95,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: s(&["updated_at", "last_contact_at"]),
                 txn_audited_columns: vec![],
             },
+            // M4 C6: CI variables.
+            AuditedTable {
+                name: "ci_variables".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "doc_lint_migrations".into(),
                 audit_resource: AuditResource::Literal("project".into()),

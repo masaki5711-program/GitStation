@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 
 import { call, callNoContent, type ApiClient } from '../../api/client';
 import { useApi } from '../../api/context';
+import { refreshResolutions } from '../../api/namespaces';
 import type { components } from '../../api/schema.gen';
 import { SelectField, TextField } from '../../components/Field';
 import { Loading } from '../../components/Loading';
@@ -168,6 +169,8 @@ function MemberTable({ scope, members }: { scope: Scope; members: Member[] }) {
     mutationFn: (id: number) => removeMember(api, scope, id),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: key });
+      // A removed member (possibly the person) may no longer see the path.
+      void refreshResolutions(queryClient);
       confirm.close();
       focusHeading('members-list-title');
     },

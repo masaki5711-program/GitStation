@@ -151,7 +151,8 @@ fn service_account_still_withheld() {
 
 #[test]
 fn ci_rule_is_exhaustive_and_default_deny() {
-    // Only the job's copy and the runner API (M4 C3) are open to CI.
+    // Only the job's copy, its own artifacts (M4 C6) and the runner API
+    // (M4 C3) are open to CI.
     let open: Vec<Action> = Action::ALL
         .iter()
         .copied()
@@ -161,6 +162,8 @@ fn ci_rule_is_exhaustive_and_default_deny() {
         open,
         vec![
             Action::RepoRead,
+            Action::JobArtifactUpload,
+            Action::JobArtifactDownload,
             Action::RunnerJobRequest,
             Action::RunnerJobHeartbeat,
             Action::RunnerLogAppend,
@@ -213,13 +216,24 @@ fn ci_rule_is_exhaustive_and_default_deny() {
             a.name()
         );
     }
-    // The job's one allowed row exists; the runner's allow rows are its
-    // own API's only.
+    // The job's allowed rows: its pinned copy and its own artifacts (M4
+    // C6), on its own resources only; the runner's allow rows are its own
+    // API's only.
     let allowed: Vec<_> = ROWS
         .iter()
         .filter(|r| matches!(r.actor, Actor::Job(_)) && r.expect == Expect::Allow)
         .collect();
-    assert_eq!(allowed.len(), 1, "{allowed:?}");
+    assert_eq!(allowed.len(), 3, "{allowed:?}");
+    assert!(allowed.iter().all(|r| matches!(
+        r.fixture,
+        Fixture::PinnedCopy {
+            other_project: false,
+            other_sha: false
+        } | Fixture::JobSelf {
+            other_project: false,
+            other_job: false
+        }
+    )));
     assert!(ROWS
         .iter()
         .filter(|r| r.actor == Actor::Runner && r.expect == Expect::Allow)

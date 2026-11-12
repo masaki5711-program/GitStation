@@ -21,6 +21,7 @@ function requestIdOf(failure: Failure): string | null {
       return failure.requestId;
     case 'unauthenticated':
     case 'unexpected':
+    case 'unavailable':
       return failure.requestId;
     case 'network':
       return null;
@@ -36,7 +37,9 @@ export function ErrorNotice({ failure, title, onRetry }: ErrorNoticeProps) {
       ? failure.userMessage
       : failure.kind === 'network'
         ? t('error.network')
-        : t('error.unexpected');
+        : failure.kind === 'unavailable'
+          ? t('error.unavailable')
+          : t('error.unexpected');
   const requestId = requestIdOf(failure);
 
   // The clipboard can be missing (plain http is not a secure context) or

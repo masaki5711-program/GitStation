@@ -3,9 +3,8 @@
 // "My work", then the section's own name, a placeholder while it loads, or a
 // compact error with a retry).
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
-
 import { InlineError } from '../InlineError';
+import { PrefetchLink } from '../PrefetchLink';
 import styles from '../Sidebar.module.css';
 import { ICONS, type IconKey } from './icons';
 
@@ -36,10 +35,13 @@ export function NavItem({
   className,
 }: SectionProps & { item: Item; className?: string | undefined }) {
   return (
-    <Link
+    <PrefetchLink
       to={item.to}
       className={className ?? styles.link ?? ''}
       {...(item.current ? { 'aria-current': 'page' as const } : {})}
+      // Collapsed to an icon: the name shows as a tooltip (it stays the
+      // link's accessible name as visually hidden text).
+      {...(collapsed ? { title: item.text } : {})}
       onClick={() => {
         onNavigate(item.to);
       }}
@@ -54,7 +56,7 @@ export function NavItem({
           <span className={styles.srOnly}>{item.badge.spoken}</span>
         </>
       )}
-    </Link>
+    </PrefetchLink>
   );
 }
 

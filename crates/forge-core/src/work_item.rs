@@ -357,3 +357,153 @@ impl WorkItemChange {
         value
     }
 }
+
+impl WorkItemChange {
+    /// The `merge_request.work_items_changed` of this link change made by
+    /// hand (`reason=manual`): the link added or removed, and who.
+    pub fn to_changed(&self) -> WorkItemsChanged {
+        match self {
+            Self::Linked {
+                project,
+                merge_request,
+                iid,
+                link,
+                work_item,
+                source,
+                by,
+                ..
+            } => WorkItemsChanged {
+                project: *project,
+                merge_request: *merge_request,
+                iid: *iid,
+                reason: LinksChangedReason::Manual,
+                added: vec![(*link, work_item.clone(), *source)], // clone: the event owns one
+                removed: Vec::new(),
+                by: *by,
+            },
+            Self::Unlinked {
+                project,
+                merge_request,
+                iid,
+                link,
+                work_item,
+                source,
+                by,
+            } => WorkItemsChanged {
+                project: *project,
+                merge_request: *merge_request,
+                iid: *iid,
+                reason: LinksChangedReason::Manual,
+                added: Vec::new(),
+                removed: vec![(*link, work_item.clone(), *source)], // clone: as above
+                by: *by,
+            },
+        }
+    }
+}
+
+/// Why a merge request's links changed (`reason` of
+/// `merge_request.work_items_changed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LinksChangedReason {
+    /// A link or unlink by hand (a person, an agent, a service account, a
+    /// bot: `by_kind`).
+    Manual,
+    /// The re-detection after the project got a binding that resolves work
+    /// items (`work_items.relink`).
+    Relink,
+}
+
+impl LinksChangedReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Relink => "relink",
+        }
+    }
+}
+
+/// `merge_request.work_items_changed` (integration class, ADR-0016
+/// Amendment 2026-11-12): the links of one merge request that one change
+/// added and removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkItemsChanged {
+    pub project: ProjectId,
+    pub merge_request: MergeRequestId,
+    pub iid: i64,
+    pub reason: LinksChangedReason,
+    /// (link id, work item, how it was linked).
+    pub added: Vec<(i64, WorkItem, LinkSource)>,
+    /// (link id, work item, how it ended).
+    pub removed: Vec<(i64, WorkItem, UnlinkSource)>,
+    /// Who changed it by hand (`None` for the re-detection).
+    pub by: Option<(UserId, LinkActorKind)>,
+}
+
+/// The dedup key prefix of `merge_request.work_items_changed`.
+pub const WORK_ITEMS_CHANGED_DEDUP: &str = "merge_request_work_items_changed";
+
+fn work_item_value(link: i64, item: &WorkItem) -> serde_json::Value {
+    serde_json::json!({
+        "link_id": link,
+        "work_item_id": item.id,
+        "work_item": {
+            "provider": item.kind.as_str(),
+            "project_id": item.external_project_id,
+            "ref": item.reference.as_str(),
+        },
+    })
+}
+
+impl WorkItemsChanged {
+    pub fn event_type(&self) -> EventType {
+        EventType::MergeRequestWorkItemsChanged
+    }
+
+    /// Nothing added and nothing removed (no event is written).
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+
+    /// Every work item it names (added first), for `event_work_items`.
+    pub fn work_item_ids(&self) -> Vec<i64> {
+        self.added
+            .iter()
+            .map(|(_, w, _)| w.id)
+            .chain(self.removed.iter().map(|(_, w, _)| w.id))
+            .collect()
+    }
+
+    /// `{"merge_request_id","iid","reason","added":[{"link_id",
+    /// "work_item_id","work_item":{"provider","project_id","ref"},
+    /// "source"}],"removed":[{…,"unlink_source"}],"by","by_kind"}` (ids
+    /// and references only).
+    pub fn to_value(&self) -> serde_json::Value {
+        let entry = |link: i64, item: &WorkItem, field: &str, value: &str| {
+            let mut v = work_item_value(link, item);
+            if let Some(map) = v.as_object_mut() {
+                map.insert(field.to_owned(), serde_json::json!(value));
+            }
+            v
+        };
+        let added: Vec<serde_json::Value> = self
+            .added
+            .iter()
+            .map(|(link, item, source)| entry(*link, item, "source", source.as_str()))
+            .collect();
+        let removed: Vec<serde_json::Value> = self
+            .removed
+            .iter()
+            .map(|(link, item, source)| entry(*link, item, "unlink_source", source.as_str()))
+            .collect();
+        serde_json::json!({
+            "merge_request_id": self.merge_request.get(),
+            "iid": self.iid,
+            "reason": self.reason.as_str(),
+            "added": added,
+            "removed": removed,
+            "by": self.by.map(|(u, _)| u.get()),
+            "by_kind": self.by.map(|(_, k)| k.as_str()),
+        })
+    }
+}

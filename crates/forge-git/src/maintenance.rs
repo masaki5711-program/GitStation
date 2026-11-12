@@ -27,6 +27,11 @@
 //!    written by its own step (so each is bounded and reported alone). A gc
 //!    already running (git's own `gc.pid` check: same host, live pid, at
 //!    most 12 h old) is [`GcRun::AlreadyRunning`], never a failure.
+//!    This process's long-lived `cat-file` processes of the repository are
+//!    closed first (`browse::release_repository`); a pack git could not
+//!    delete because another process holds it is retried once after
+//!    [`FILES_IN_USE_RETRY`] and otherwise said once (FG-GIT-0032
+//!    `reason=files_in_use`): the next gc removes it.
 //! 3. [`Git::pack_refs`] — `git pack-refs --all --prune`. The caller holds
 //!    the repository's merge lock (`merge:<repo_id>`, try-lock: a merge in
 //!    progress skips this step for the run).
@@ -58,6 +63,43 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::command::Git;
 use crate::storage::StorageRoot;
 use crate::GitCommand;
+
+/// How long gc waits before its one retry when a file was in use: a
+/// `forge serve` process closes an idle batch process after
+/// `BrowseLimits::batch_idle` (60 s), its sweep runs every 30 s.
+pub const FILES_IN_USE_RETRY: Duration = Duration::from_secs(95);
+
+/// The time a gc retry needs at least to be worth starting.
+const MIN_GC_RETRY_RUN: Duration = Duration::from_secs(30);
+
+/// A gc that met a file in use: it ran and said so, or it failed saying so.
+fn gc_hit_files_in_use(outcome: &Result<(GcRun, Option<String>), ForgeError>) -> bool {
+    match outcome {
+        Ok((_, in_use)) => in_use.is_some(),
+        Err(e) => {
+            e.code() == ErrorCode::RepositoryMaintenanceFailed
+                && e.context()
+                    .iter()
+                    .any(|(k, v)| *k == "stderr" && files_in_use(v))
+        }
+    }
+}
+
+/// Whether git's stderr says a file could not be deleted because it is in
+/// use (Git for Windows: `Unlink of file '…' failed`, `unable to unlink
+/// '…': Permission denied`, `Deletion of directory '…' failed`).
+pub(crate) fn files_in_use(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    [
+        "unable to unlink",
+        "unlink of file",
+        "deletion of directory",
+        "being used by another process",
+        "sharing violation",
+    ]
+    .iter()
+    .any(|p| s.contains(p))
+}
 
 /// The prefix of receive-pack's quarantine directories under `objects/`
 /// (git's `tmp-objdir.c`: `tmp_objdir-incoming-XXXXXX`).
@@ -297,26 +339,94 @@ impl Git {
                 .with_context("config_key", "maintenance.prune_grace_hours")
                 .with_context("reason", "below_min"));
         }
+        self.gc_retrying(storage, id, prune_grace, timeout, FILES_IN_USE_RETRY)
+            .await
+    }
+
+    /// [`Self::gc_objects`] with its wait before the retry (tests). This
+    /// process's batch processes of the repository are closed first; when
+    /// git still says a file was in use (an old pack it could not delete:
+    /// another process holds it, e.g. a `forge serve` batch process on a
+    /// Windows git without delete sharing) gc runs once more after
+    /// `retry_after` (when the time left allows), and a pack still left
+    /// behind is said once — FG-GIT-0032 `reason=files_in_use`, warn — and
+    /// the run goes on (the next gc removes it).
+    pub(crate) async fn gc_retrying(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        prune_grace: Duration,
+        timeout: Duration,
+        retry_after: Duration,
+    ) -> Result<GcRun, ForgeError> {
+        let started = std::time::Instant::now();
         let repo = storage.existing(id)?;
-        let cmd = self.gc_command(&repo, prune_grace, timeout)?;
+        crate::browse::release_repository_async(storage, id).await;
+        let mut outcome = self.gc_once(&repo, id, prune_grace, timeout).await;
+        let mut retried = false;
+        if gc_hit_files_in_use(&outcome) {
+            let left = timeout.saturating_sub(started.elapsed());
+            if left > retry_after + MIN_GC_RETRY_RUN {
+                tokio::time::sleep(retry_after).await;
+                crate::browse::release_repository_async(storage, id).await;
+                retried = true;
+                outcome = self
+                    .gc_once(&repo, id, prune_grace, left - retry_after)
+                    .await;
+            }
+        }
+        match outcome {
+            Ok((ran, None)) => Ok(ran),
+            Ok((ran, Some(stderr))) => {
+                tracing::warn!(
+                    target: "forge_git::maintenance",
+                    error_code = ErrorCode::GitBatchFailed.id(),
+                    reason = "files_in_use",
+                    step = Step::Gc.as_str(),
+                    repo_id = id.get(),
+                    retried,
+                    stderr = %stderr,
+                    "forge.git.maintenance.files_in_use"
+                );
+                Ok(ran)
+            }
+            // Still failing: the job logs it once (FG-GIT-0018, its stderr).
+            Err(e) if retried => Err(e.with_context("retried_after_s", retry_after.as_secs())),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// One gc; the stderr when git said a file was in use.
+    async fn gc_once(
+        &self,
+        repo: &Path,
+        id: RepoId,
+        prune_grace: Duration,
+        timeout: Duration,
+    ) -> Result<(GcRun, Option<String>), ForgeError> {
+        let cmd = self.gc_command(repo, prune_grace, timeout)?;
         // 128: git's `die`, which is also how a running gc refuses.
         let run = cmd
             .output_accepting(STEP_OUTPUT_CAP, &[0, 128])
             .await
             .map_err(|e| step_error(Step::Gc, id, e))?;
-        match run.exit_code {
-            Some(0) => Ok(GcRun::Ran),
-            Some(_) if run.stderr.contains("gc is already running") => Ok(GcRun::AlreadyRunning),
-            code => Err(ForgeError::new(ErrorCode::RepositoryMaintenanceFailed)
-                .with_context("subcommand", "gc")
-                .with_context(
-                    "exit_code",
-                    code.map_or_else(|| "truncated".to_owned(), |c| c.to_string()),
-                )
-                .with_context("stderr", &run.stderr)
-                .with_context("step", Step::Gc.as_str())
-                .with_context("repo_id", id.get())),
-        }
+        let in_use = files_in_use(&run.stderr).then(|| run.stderr.clone()); // clone: logged, the run is matched below
+        let ran = match run.exit_code {
+            Some(0) => GcRun::Ran,
+            Some(_) if run.stderr.contains("gc is already running") => GcRun::AlreadyRunning,
+            code => {
+                return Err(ForgeError::new(ErrorCode::RepositoryMaintenanceFailed)
+                    .with_context("subcommand", "gc")
+                    .with_context(
+                        "exit_code",
+                        code.map_or_else(|| "truncated".to_owned(), |c| c.to_string()),
+                    )
+                    .with_context("stderr", &run.stderr)
+                    .with_context("step", Step::Gc.as_str())
+                    .with_context("repo_id", id.get()))
+            }
+        };
+        Ok((ran, in_use))
     }
 
     /// The pack-refs command of step 3.

@@ -94,3 +94,8 @@ gstn: `gstn integration dev-status <id> --ref PBI-<n>` と `gstn integration dev
 3. 1 の位置から `GET …/events` を読む（2 の最初のページの `feed_cursor` からでもよい。どちらも取りこぼさない）
 
 2 の途中で 410 になったら 1 からやり直す。
+
+**結び直しの直後**（ADR-0016 Amendment 2026-11-12）: 結びつけると、そのプロジェクトの開いた MR と 90 日以内にマージした MR の参照を
+ジョブ `work_items.relink` が見つけ直す。ジョブは結びつけの直後に動くが、2 がそれより先に終わると、その MR はまだ `work_items` に出ない。
+見つけ直したリンクは 3 で読むイベント `merge_request.work_items_changed`（`reason=relink`、その MR の `iid` と作業項目）で届くので、
+そのまま 3 を続ければよい（取りこぼさない）。クローズした MR は見つけ直さない。

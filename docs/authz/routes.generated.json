@@ -693,6 +693,33 @@
     "word": "fixed"
   },
   {
+    "action": "CiVariableManage",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/ci/variables",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CiVariableManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/ci/variables/{name}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CiVariableManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/ci/variables/{name}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "CheckRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/commits/{sha}/checks",
@@ -1242,6 +1269,24 @@
     "word": "fixed"
   },
   {
+    "action": "CiArtifactRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CiArtifactRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "CiLogRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log",
@@ -1602,6 +1647,15 @@
     "word": "fixed"
   },
   {
+    "action": "JobArtifactUpload",
+    "method": "PUT",
+    "path": "/api/v1/runner/jobs/{job_id}/artifacts",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RunnerJobComplete",
     "method": "POST",
     "path": "/api/v1/runner/jobs/{job_id}/complete",
@@ -1623,6 +1677,24 @@
     "action": "RunnerLogAppend",
     "method": "POST",
     "path": "/api/v1/runner/jobs/{job_id}/log",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "JobArtifactDownload",
+    "method": "GET",
+    "path": "/api/v1/runner/jobs/{job_id}/needs/artifacts",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "JobArtifactDownload",
+    "method": "GET",
+    "path": "/api/v1/runner/jobs/{job_id}/needs/artifacts/{artifact_id}",
     "people_only": false,
     "public": false,
     "scope": "fixed",

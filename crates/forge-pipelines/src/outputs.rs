@@ -127,7 +127,8 @@ pub struct Diagnosis {
 
 impl Pipelines {
     /// Whether the project has `pipeline` (and, with `job`, that job in it):
-    /// what the log (`CiLogRead`, with `job`) and diagnosis
+    /// what the log (`CiLogRead`) and artifact (`CiArtifactRead`, M4 C6)
+    /// routes, with `job`, and the diagnosis
     /// (`PipelineDiagnosisRead`) routes look up before they measure the
     /// default branch's tip — a bogus id never starts git. Metadata only;
     /// the output itself is still read after its decision. Errors:
@@ -138,12 +139,18 @@ impl Pipelines {
         pipeline: i64,
         job: Option<i64>,
     ) -> Result<bool, ForgeError> {
-        let action = if job.is_some() {
-            Action::CiLogRead
+        // A job's log or (M4 C6) its artifacts; a pipeline's diagnosis.
+        let allowed = if job.is_some() {
+            matches!(proof.action(), Action::CiLogRead | Action::CiArtifactRead)
         } else {
-            Action::PipelineDiagnosisRead
+            proof.action() == Action::PipelineDiagnosisRead
         };
-        require(proof.action(), action)?;
+        if !allowed {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "proof_action_mismatch")
+                .with_context("command_action", "output_exists")
+                .with_context("proof_action", proof.action().name()));
+        }
         db::output_exists(&self.db, *proof.id(), pipeline, job).await
     }
 

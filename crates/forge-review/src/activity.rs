@@ -97,6 +97,8 @@ fn fields_of(t: EventType) -> Option<Fields> {
         | EventType::CheckCompleted
         | EventType::WorkItemLinked
         | EventType::WorkItemUnlinked
+        | EventType::MergeRequestWorkItemsChanged
+        | EventType::MergeRequestRelinkRequested
         | EventType::WebhookDisabled => None,
     }
 }

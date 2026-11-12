@@ -22,7 +22,7 @@
   height: 1.5rem;
   border-radius: 50%;
   background: var(--gs-color-danger-text);
-  color: var(--gs-color-white);
+  color: var(--gs-color-on-status);
   font-weight: bold;
 }
 

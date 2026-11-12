@@ -183,11 +183,11 @@ mod tests {
         let removed = json!({
             "position": null, "iid": 3, "state": "removed", "method": "merge_commit",
             "head_sha": "ab", "isolate": null, "reason": "checks_failed",
-            "error_code": "FG-CI-0018",
+            "error_code": "FG-CI-0023",
         });
         assert_eq!(
             entry_line(&removed),
-            "!3 removed merge_commit ab reason:checks_failed FG-CI-0018"
+            "!3 removed merge_commit ab reason:checks_failed FG-CI-0023"
         );
     }
 

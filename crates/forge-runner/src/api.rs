@@ -36,6 +36,26 @@ impl<'de> Deserialize<'de> for JobToken {
     }
 }
 
+/// A secret released with a claim (M4 C6): the container's environment
+/// variable `name`. Never printed: `Debug` shows the name only, the value
+/// is wiped on drop.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+pub struct JobSecret {
+    pub name: String,
+    pub value: JobToken,
+    /// Mask it (and its common encodings) in the job's log.
+    pub masked: bool,
+}
+
+impl std::fmt::Debug for JobSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobSecret")
+            .field("name", &self.name)
+            .field("masked", &self.masked)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A claimed job: the answer of `POST /api/v1/runner/jobs/request`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClaimedJob {
@@ -54,6 +74,9 @@ pub struct ClaimedJob {
     pub secrets_allowed: bool,
     #[serde(default)]
     pub secret_names: Vec<String>,
+    /// The values of `secret_names` (M4 C6); empty for a job without.
+    #[serde(default)]
+    pub secrets: Vec<JobSecret>,
     pub job_token: JobToken,
 }
 
@@ -86,6 +109,33 @@ impl JobResult {
     }
 }
 
+/// One artifact of a job this job needs (M4 C6): what
+/// `GET …/needs/artifacts` answered.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct NeededArtifact {
+    pub id: i64,
+    /// The job that uploaded it.
+    pub job: String,
+    pub path: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+}
+
+#[derive(Deserialize)]
+struct NeededList {
+    artifacts: Vec<NeededArtifact>,
+}
+
+fn unsupported() -> ClientError {
+    ClientError::local(
+        forge_errors::ErrorCode::CliUsageInvalid,
+        "reason=artifacts_unsupported",
+    )
+}
+
+/// How long one artifact transfer may take.
+pub const ARTIFACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
+
 /// The runner's calls on forge.
 pub trait RunnerApi: Send + Sync {
     fn request_job(&self, wait_s: u64) -> Result<Option<ClaimedJob>, ClientError>;
@@ -98,6 +148,40 @@ pub trait RunnerApi: Send + Sync {
         result: JobResult,
         exit_code: Option<i32>,
     ) -> Result<(), ClientError>;
+    /// M4 C6: the artifacts of the jobs `job` needs, with the job's token.
+    fn needed_artifacts(
+        &self,
+        _job: i64,
+        _token: &JobToken,
+        _timeout: std::time::Duration,
+    ) -> Result<Vec<NeededArtifact>, ClientError> {
+        Err(unsupported())
+    }
+    /// M4 C6: one of them into `out` (at most `max` bytes); the bytes.
+    fn download_artifact(
+        &self,
+        _job: i64,
+        _token: &JobToken,
+        _artifact: i64,
+        _out: &mut dyn std::io::Write,
+        _max: u64,
+        _timeout: std::time::Duration,
+    ) -> Result<u64, ClientError> {
+        Err(unsupported())
+    }
+    /// M4 C6: upload the opened `file` (`len` bytes) as the job's artifact
+    /// `path`, within `timeout`.
+    fn upload_artifact(
+        &self,
+        _job: i64,
+        _token: &JobToken,
+        _path: &str,
+        _file: std::fs::File,
+        _len: u64,
+        _timeout: std::time::Duration,
+    ) -> Result<(), ClientError> {
+        Err(unsupported())
+    }
 }
 
 /// [`RunnerApi`] over HTTP with the runner's token.
@@ -166,6 +250,64 @@ impl RunnerApi for HttpApi {
         )
         .map(|_| ())
     }
+
+    fn needed_artifacts(
+        &self,
+        job: i64,
+        token: &JobToken,
+        timeout: std::time::Duration,
+    ) -> Result<Vec<NeededArtifact>, ClientError> {
+        let mut out = Vec::new();
+        self.client.download_to(
+            &job_path(job, "needs/artifacts"),
+            Some(token.expose()),
+            &mut out,
+            4 * 1024 * 1024,
+            timeout.min(ARTIFACT_TIMEOUT),
+        )?;
+        serde_json::from_slice::<NeededList>(&out)
+            .map(|l| l.artifacts)
+            .map_err(|_| malformed("needed_artifacts"))
+    }
+
+    fn download_artifact(
+        &self,
+        job: i64,
+        token: &JobToken,
+        artifact: i64,
+        out: &mut dyn std::io::Write,
+        max: u64,
+        timeout: std::time::Duration,
+    ) -> Result<u64, ClientError> {
+        self.client.download_to(
+            &job_path(job, &format!("needs/artifacts/{artifact}")),
+            Some(token.expose()),
+            out,
+            max,
+            timeout.min(ARTIFACT_TIMEOUT),
+        )
+    }
+
+    fn upload_artifact(
+        &self,
+        job: i64,
+        token: &JobToken,
+        path: &str,
+        file: std::fs::File,
+        len: u64,
+        timeout: std::time::Duration,
+    ) -> Result<(), ClientError> {
+        self.client
+            .upload_file(
+                &job_path(job, "artifacts"),
+                &[("path".to_owned(), path.to_owned())],
+                token.expose(),
+                file,
+                len,
+                timeout.min(ARTIFACT_TIMEOUT),
+            )
+            .map(|_| ())
+    }
 }
 
 #[cfg(test)]
@@ -182,13 +324,17 @@ mod tests {
             "timeout_s": 600, "tags": [], "pipeline_id": 3, "project_id": 2,
             "ref": "refs/heads/main", "sha": "b".repeat(40),
             "definition_hash": "c".repeat(64), "secrets_allowed": false,
-            "secret_names": [], "lease_until": "x",
+            "secret_names": ["DEPLOY_TOKEN"], "lease_until": "x",
+            "secrets": [{"name": "DEPLOY_TOKEN", "value": "s3cr3t-value", "masked": true}],
             "job_token": "fgj_0123_secret", "job_token_expires_at": "y"
         }});
         let claim: ClaimAnswer = serde_json::from_value(answer).expect("parses");
         let job = claim.job.expect("a job");
         assert_eq!(job.job_id, 7);
         assert_eq!(job.job_token.expose(), "fgj_0123_secret");
-        assert!(!format!("{job:?}").contains("fgj_0123_secret"));
+        assert_eq!(job.secrets[0].value.expose(), "s3cr3t-value");
+        let shown = format!("{job:?}");
+        assert!(!shown.contains("fgj_0123_secret"), "{shown}");
+        assert!(!shown.contains("s3cr3t"), "{shown}");
     }
 }

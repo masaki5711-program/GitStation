@@ -36,7 +36,9 @@ export function InlineError({
         ? t('login.expired')
         : failure.kind === 'network'
           ? t('error.network')
-          : t('error.unexpected');
+          : failure.kind === 'unavailable'
+            ? t('error.unavailable')
+            : t('error.unexpected');
   const requestId = failure.kind === 'network' ? null : failure.requestId;
   // Asking again does not change "you may not" or an ended session (the
   // page's own error shows the sign-in).

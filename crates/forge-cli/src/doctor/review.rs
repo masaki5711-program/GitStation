@@ -82,7 +82,7 @@ fn queue_line(h: &forge_db::review::merge_queue::QueueHealth) -> Check {
     )
 }
 
-/// `review.merge_queue` (M4 C8, FG-CI-0019, runbook merge-queue): no live
+/// `review.merge_queue` (M4 C8, FG-CI-0024, runbook merge-queue): no live
 /// batch past its deadline (the worker reaps it at its next step: a count
 /// means no worker runs), and no queue whose lease expired long ago.
 pub(super) async fn merge_queue_check(db: &Db) -> Check {

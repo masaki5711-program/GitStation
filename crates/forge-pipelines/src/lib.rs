@@ -218,6 +218,11 @@ pub struct Pipelines {
     db: Db,
     browse: Browser,
     marks: Arc<dyn MarkMeter>,
+    /// `ci.secret_keys_file` (M4 C6); `None`: not configured (no variable
+    /// can be set, a job that asks for secrets fails with FG-CI-0016).
+    secret_keys: Option<Arc<forge_core::ci_secret::CiSecretKeys>>,
+    /// Where the CI artifacts' files live (M4 C6, `forge serve`).
+    artifacts: Option<artifacts::ArtifactStore>,
 }
 
 impl std::fmt::Debug for Pipelines {
@@ -228,7 +233,27 @@ impl std::fmt::Debug for Pipelines {
 
 impl Pipelines {
     pub fn new(db: Db, browse: Browser, marks: Arc<dyn MarkMeter>) -> Self {
-        Self { db, browse, marks }
+        Self {
+            db,
+            browse,
+            marks,
+            secret_keys: None,
+            artifacts: None,
+        }
+    }
+
+    /// The CI artifacts' store under the storage root (M4 C6).
+    #[must_use]
+    pub fn with_artifacts(mut self, store: artifacts::ArtifactStore) -> Self {
+        self.artifacts = Some(store);
+        self
+    }
+
+    /// The keys of `ci.secret_keys_file` (M4 C6, `forge serve`).
+    #[must_use]
+    pub fn with_secret_keys(mut self, keys: Arc<forge_core::ci_secret::CiSecretKeys>) -> Self {
+        self.secret_keys = Some(keys);
+        self
     }
 
     /// Plan `request` and write the pipeline (module docs). Errors (nothing
@@ -716,6 +741,10 @@ fn failed(cause: ForgeError) -> ForgeError {
 
 // M4 C3: the runner API's commands.
 pub mod runners;
+// M4 C6: CI variables (secrets): manage, release with a claim, mask.
+pub mod secrets;
+// M4 C6: CI artifacts: upload, read on the marks, needs, expiry.
+pub mod artifacts;
 // M4 C5: the CI outputs (logs, diagnosis, fingerprints, ci/pipeline).
 pub mod fingerprint;
 pub mod outputs;

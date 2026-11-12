@@ -1,17 +1,23 @@
 // `/{project}/-/{word}/…` for a project that exists (ADR-0015 screen words):
-// the repository screens, settings and members. The project's name and a
-// small navigation frame every screen; each screen has its own h1. Any other
-// word is 404.
+// the repository screens, settings and members. The project's path (a
+// breadcrumb) frames every screen; each screen has its own h1. Any other
+// word is 404. On a wide screen the sidebar's project section is the
+// navigation between the screens (no second, identical bar above the page);
+// on a narrow screen, where the sidebar sits behind the header's menu
+// button, the screens stay one tap away in a bar above the page.
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
-import { call } from '../../api/client';
 import { useApi } from '../../api/context';
+import { projectQuery } from '../../api/namespaces';
+import { Breadcrumb } from '../../components/Breadcrumb';
 import { Loading } from '../../components/Loading';
 import { MovedNotice } from '../../components/MovedNotice';
+import { PrefetchLink } from '../../components/PrefetchLink';
 import { encodePath } from '../../features/repoUrls';
+import { useNarrowScreen } from '../../hooks/useNarrowScreen';
 import { useSession } from '../../session/session';
 import { rememberProject } from '../../hooks/recent';
 import { NotFound } from '../NotFound';
@@ -22,12 +28,9 @@ import { CommitsScreen } from './CommitsScreen';
 import { CompareScreen } from './CompareScreen';
 import { DocumentScreen } from './DocumentScreen';
 import { DocumentsScreen } from './DocumentsScreen';
-import { EditorScreen } from './editor/EditorScreen';
 import { SavedNotice } from './editor/SavedNotice';
 import { mayPush } from '../../api/fileCommits';
 import { parseId } from '../../api/pipelines';
-import { PipelineScreen } from './pipelines/PipelineScreen';
-import { PipelinesScreen } from './pipelines/PipelinesScreen';
 import { RefsScreen } from './RefsScreen';
 import { RepoError } from './common';
 import { TreeScreen } from './TreeScreen';
@@ -35,11 +38,16 @@ import { parseIid } from '../../api/mergeRequests';
 import { MergeRequestScreen } from './mr/MergeRequestScreen';
 import { MergeRequestsScreen } from './mr/MergeRequestsScreen';
 import { NewMergeRequestScreen } from './mr/NewMergeRequestScreen';
-import { DeliveriesScreen } from '../webhooks/DeliveriesScreen';
-import { WebhooksScreen } from '../webhooks/WebhooksScreen';
 import { parseHookId } from '../webhooks/common';
-import { MembersScreen } from '../settings/Members';
-import { ProjectSettings } from '../settings/ProjectSettings';
+import {
+  DeliveriesScreen,
+  EditorScreen,
+  MembersScreen,
+  PipelineScreen,
+  PipelinesScreen,
+  ProjectSettings,
+  WebhooksScreen,
+} from '../lazyScreens';
 import styles from './Repo.module.css';
 
 const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'edit', 'new'];
@@ -58,15 +66,10 @@ export function RepoViews({
   const { t } = useTranslation();
   const api = useApi();
   const isAdmin = useSession().user.is_admin;
+  const narrow = useNarrowScreen();
   const word = view[0] ?? '';
   const tail = view.slice(1);
-  const info = useQuery({
-    queryKey: ['project', projectId],
-    queryFn: ({ signal }) =>
-      call(() =>
-        api.GET('/api/v1/projects/{id}', { signal, params: { path: { id: projectId } } }),
-      ),
-  });
+  const info = useQuery(projectQuery(api, projectId));
   const known = info.data;
   useEffect(() => {
     if (known !== undefined) rememberProject({ path: known.path, name: known.display_name });
@@ -224,24 +227,27 @@ export function RepoViews({
     <>
       <MovedNotice />
       <SavedNotice project={project} />
-      <nav aria-label={t('repo.navLabel')} className={styles.projectNav}>
-        <Link to={base} className={styles.projectName}>
-          {info.data.display_name}
-        </Link>
-        <ul className={styles.navList}>
-          {items.map((item) => (
-            <li key={item.to}>
-              <Link
-                to={item.to}
-                className={styles.navLink}
-                {...(item.words.includes(word) ? { 'aria-current': 'page' as const } : {})}
-              >
-                {item.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      {!narrow && <Breadcrumb path={info.data.path} currentLast={false} />}
+      {narrow && (
+        <nav aria-label={t('repo.navLabel')} className={styles.projectNav}>
+          <Link to={base} className={styles.projectName}>
+            {info.data.display_name}
+          </Link>
+          <ul className={styles.navList}>
+            {items.map((item) => (
+              <li key={item.to}>
+                <PrefetchLink
+                  to={item.to}
+                  className={styles.navLink}
+                  {...(item.words.includes(word) ? { 'aria-current': 'page' as const } : {})}
+                >
+                  {item.label}
+                </PrefetchLink>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
       {screen}
     </>
   );

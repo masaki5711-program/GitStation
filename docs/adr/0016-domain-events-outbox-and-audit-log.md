@@ -1610,3 +1610,46 @@ forge-web の `tests/binding_routes.rs`。
 - 試験: `the_unread_count_counts_only_visible_items_and_caps_on_them`、ワーカーの `a_full_batch_runs_again_at_once`、web の
   `tests/unread-poll.test.tsx`（偽の時計: 60 秒・倍々・成功で戻る・401 で止まる・隠れたタブ）、焦点・再読み上げ・知らない種類・`aria-current`。
 - 後回し: メールの行（`forge.notifications`）の保持（推奨 30 日、利用者の確認待ち）。保持のタスクの 0.5 秒の待ちが停止の要求を待たない（LOW、他の保持のタスクと同じ）。
+
+## Amendment（2026-11-12、`feat/core-work-item-rebind-feed`: 結びつけの後の見つけ直しと、リンクの変更の合図）
+
+kanflow との通しの試験で見つかった 2 つの抜け（I1b / I1c の後）。
+
+1. **結び直しても既存の MR が見つけ直されなかった。** 解除は開いたリンクを `unbound` で終える（I1b）が、結び直し（同じ・別の kanflow の
+   プロジェクト）の後は、MR のタイトルの編集や push が起きるまでリンクが付かず、kanflow の開発状況は `work_items: []` だった。
+   - **決めたこと**: 作業項目を決める結びつけが **できたとき**（`bind_as_decided` で新しい結びつけ、`update_binding_decided` で共有から
+     作業項目を決めるものへ）、同じトランザクションでジョブ `work_items.relink`（`{project_id, binding_id}`、キー
+     `work_items_relink:<binding_id>`、5 回、300 秒）を入れる。初めての結びつけも同じ（結ぶ前からある MR が次のイベントまで待たない）。
+   - **ジョブは自分ではリンクを書かない。** 自動のリンクを書けるのは `work-item-sync` だけ（トリガー `merge_request_work_items_audited`
+     の `_derived`）。ジョブは MR ごとに **新しい種類のイベント `merge_request.relink_requested`**（admin の分類。連携の feed・Webhook・
+     通知には出ない内部の合図。キー `merge_request_relink_requested:<mr>:<binding>`）を 100 件ずつの変更（監査
+     `work_item.relink_requested`、プロジェクトの行、`actor_kind = system`）で書き、`work-item-sync` が `merge_request.*` と同じ処理
+     （同じ規則・上限 20、人の解除を尊重）でリンクを合わせる。イベントを MR ごとにしたのは、派生イベントの上限（根ごとに 100、§6）を
+     1 つの MR の範囲（付け 20 + 外し 20 + 合図 1）に収めるため。1 つの根から 500 の MR を処理すると上限を超える。
+   - **範囲**: 開いた MR（新しい順に最大 500。kanflow がまだ見ていそうなものを先に）と、**90 日以内にマージした MR**（新しい順に最大 500。マージの時刻は適用したマージの終了、
+     無ければ `updated_at`）。マージした MR も入れたのは、結び直しの後も kanflow のマージの履歴（開発状況の `merged`）が見えるようにするため。
+     90 日は feed の保持の既定と同じ。**クローズした MR は入れない**（kanflow の開発状況には古いクローズまで要らない。次の編集で付く）。
+     超えた分はログ `forge.work_items.relink_capped`（warn）。
+   - **少なくとも 1 回**: やり直したジョブは、もう書いたイベントのキーを読んで飛ばす。同時の 2 つ目（リースの取り直し）で変更が
+     `Deduped` になったら、足りない分が無くなるまで読み直して書く（10 回まで。超えたら `FG-DB-0002 reason=relink_contended` で
+     ジョブがやり直す）。マージした MR は `updated_at`（マージのジョブが適用と同じトランザクションで進め、戻らない）で先に絞る。結びつけが無くなっていれば何も書かない（`forge.work_items.relink_skipped`）。
+   - 試験（forge-db `feed::tests::relink`）: `rebinding_detects_open_and_recently_merged_merge_requests_again`（開いた・5 日前のマージは
+     付く、100 日前のマージ・クローズは付かない、feed と開発状況に出る、内部のイベントは feed に出ない、2 回目は何も書かない）、
+     `rebinding_to_another_kanflow_project_links_its_work_items`、`a_persons_unlink_survives_a_rebind`、`relink_is_bounded_per_binding`、
+     `relink_after_the_binding_is_gone_writes_nothing`、`a_resolving_binding_enqueues_one_relink_job`。
+2. **手のリンクが kanflow に届かなかった。** 手のリンク・解除は `work_item.linked` / `.unlinked`（連携の分類）を書いていたが、kanflow は
+   `merge_request.*` で MR を読み直し、`work_item.*` は読み飛ばす（K3）。ふだんの同期では分からず、全体の取り直しでしか分からなかった。
+   - **決めたこと**: 新しい種類 **`merge_request.work_items_changed`**（連携の分類、`merge_request.*` の許可リストに入る）。手のリンク・
+     解除は同じ変更で `work_item.*` に続けて 1 つ書く（キー `merge_request_work_items_changed:link:<link_id>:<linked|unlinked>`）。
+     上の見つけ直しでリンクが変わった MR には `work-item-sync` が派生イベントとして 1 つ書く（`…:seq:<元の seq>`）。`data` は
+     `merge_request_id`・`iid`・`reason`（`manual` / `relink`）・`added[]`・`removed[]`・`by`・`by_kind`。
+   - `work-item-sync` はこの種類ではリンクを変えず、名指した作業項目（**外した作業項目も**）と MR の開いたリンクを `event_work_items` に
+     記録する（その時点の結びつけの作業項目だけ）。外した作業項目も feed の `work_items` に出るので、kanflow はどの PBI から外れたか分かる。
+   - タイトルの編集・push での検出の変化には出さない（その合図は今までどおり `merge_request.updated` などで、根ごとの派生の数と
+     既存の feed の並びを変えない）。
+   - 既存の `work_item.*` はそのまま（spec-index の購読者などが使う）。
+   - 試験: `a_link_and_unlink_by_hand_reach_the_feed_as_work_items_changed`、forge-core `work_items_changed_names_the_added_and_removed_links`、
+     `relink_requested_is_admin_class`。
+3. 文書: `docs/api/integration-feed.md`（この種類の欄）、`docs/api/dev-status.md`（結び直しの直後）、Runbook `integrations`（診断の 8）。
+   kanflow 側（K3 `GitStationSource`）は、`merge_request.work_items_changed` を他の `merge_request.*` と同じく `data.iid` で読み直すので
+   変更なしで動く。PBI との対応を kanflow が GitStation のリンクから取るようにするのは kanflow 側の仕事（この変更の外）。

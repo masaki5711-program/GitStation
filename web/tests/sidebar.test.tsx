@@ -107,6 +107,51 @@ describe('sidebar', () => {
     );
   });
 
+  it('collapsed: a framed expand button with a tooltip, and the icons show their names as tooltips', async () => {
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch });
+    await screen.findByRole('heading', { name: 'ホーム', level: 1 });
+    const collapse = within(nav()).getByRole('button', { name: 'サイドバーを畳む' });
+    expect(collapse.getAttribute('title')).toBe('サイドバーを畳む（[ キー）');
+    fireEvent.click(collapse);
+    const expand = within(nav()).getByRole('button', { name: 'サイドバーを広げる' });
+    // The first control of the rail, framed (not a bare chevron), with a tooltip and its key.
+    expect(within(nav()).getAllByRole('button')[0]).toBe(expand);
+    expect(expand.className).toContain('expandButton');
+    expect(expand.getAttribute('title')).toBe('サイドバーを広げる（[ キー）');
+    expect(expand.getAttribute('aria-keyshortcuts')).toBe('[');
+    const links = within(nav()).getAllByRole('link');
+    expect(links.map((l) => l.getAttribute('title'))).toEqual([
+      'ホーム',
+      'プロジェクト',
+      'グループ',
+      'マージリクエスト',
+      'アクティビティ',
+    ]);
+    fireEvent.click(expand);
+    // Expanded, the names are on screen: no tooltip.
+    expect(within(nav()).getByRole('link', { name: 'ホーム' }).getAttribute('title')).toBeNull();
+  });
+
+  it('the [ key toggles the column, but not while typing or with a modifier', async () => {
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch });
+    await screen.findByRole('heading', { name: 'ホーム', level: 1 });
+    fireEvent.keyDown(document.body, { key: '[' });
+    expect(within(nav()).getByRole('button', { name: 'サイドバーを広げる' })).toBeTruthy();
+    expect(window.localStorage.getItem('gitstation.sidebar.collapsed')).toBe('1');
+    fireEvent.keyDown(document.body, { key: '[', ctrlKey: true });
+    expect(within(nav()).getByRole('button', { name: 'サイドバーを広げる' })).toBeTruthy();
+    const field = document.createElement('input');
+    document.body.append(field);
+    fireEvent.keyDown(field, { key: '[' });
+    expect(within(nav()).getByRole('button', { name: 'サイドバーを広げる' })).toBeTruthy();
+    field.remove();
+    fireEvent.keyDown(document.body, { key: '[' });
+    expect(within(nav()).getByRole('button', { name: 'サイドバーを畳む' })).toBeTruthy();
+    expect(window.localStorage.getItem('gitstation.sidebar.collapsed')).toBe('0');
+  });
+
   it('works when storage throws (expanded, still collapses for this view)', async () => {
     const throwing = {
       getItem: () => {
@@ -185,6 +230,25 @@ describe('sidebar on a narrow screen', () => {
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByRole('navigation', { name: 'マイワーク' })).toBeNull();
     expect(document.activeElement).toBe(button);
+  });
+
+  it('closed again with the menu button, the button stays in the header to reopen it', async () => {
+    stubNarrow(true);
+    const server = mockServer(routes());
+    await renderApp({ fetch: server.fetch });
+    await screen.findByRole('heading', { name: 'ホーム', level: 1 });
+    const button = screen.getByRole('button', { name: 'メニュー' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('navigation', { name: 'マイワーク' })).toBeNull();
+    expect(button.isConnected).toBe(true);
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: 'メニュー' })).toBe(button);
+    // The [ key does nothing on a narrow screen (the panel is the header's).
+    fireEvent.keyDown(document.body, { key: '[' });
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(button);
+    expect(nav()).toBeTruthy();
   });
 
   it('Esc is left alone when already handled or when the focus is elsewhere', async () => {

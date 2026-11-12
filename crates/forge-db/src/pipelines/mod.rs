@@ -528,7 +528,7 @@ fn record(change: PipelineChange, project: ProjectId) -> ChangeRecord {
     }
 }
 
-async fn decided_facts(
+pub(crate) async fn decided_facts(
     tx: &mut ChangeTx,
     project: ProjectId,
     caller: UserId,

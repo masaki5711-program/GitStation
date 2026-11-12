@@ -334,11 +334,12 @@ describe('navigation and languages', () => {
   it('the project navigation links the screen for a Maintainer', async () => {
     const server = mockServer(hookRoutes());
     await renderApp({ fetch: server.fetch, path: PATH, lang: 'en' });
-    const nav = await screen.findByRole('navigation', { name: 'Repository screens' });
-    expect(within(nav).getByRole('link', { name: 'Webhooks' }).getAttribute('aria-current')).toBe('page');
-    // The sidebar marks it too.
-    const side = screen.getByRole('navigation', { name: 'Project menu' });
-    expect(within(side).getByRole('link', { name: 'Webhooks' }).getAttribute('aria-current')).toBe('page');
+    // The sidebar is the project's navigation (no second bar above the page).
+    const side = await screen.findByRole('navigation', { name: 'Project menu' });
+    await waitFor(() => {
+      expect(within(side).getByRole('link', { name: 'Webhooks' }).getAttribute('aria-current')).toBe('page');
+    });
+    expect(screen.queryByRole('navigation', { name: 'Repository screens' })).toBeNull();
   });
 
   it('shows the link to an administrator without a role, not to a Reporter', async () => {
@@ -361,14 +362,17 @@ describe('navigation and languages', () => {
       });
     const admin = mockServer(asRole(null));
     const view = await renderApp({ fetch: admin.fetch, path: '/acme/forge-web/-/branches', lang: 'en' });
-    // In the page's navigation and in the sidebar.
-    const inPage = await screen.findByRole('navigation', { name: 'Repository screens' });
-    expect(within(inPage).getByRole('link', { name: 'Webhooks' })).toBeTruthy();
-    expect(screen.getAllByRole('link', { name: 'Webhooks' })).toHaveLength(2);
+    // In the sidebar, once (no second bar above the page).
+    const side = await screen.findByRole('navigation', { name: 'Project menu' });
+    expect(await within(side).findByRole('link', { name: 'Webhooks' })).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: 'Webhooks' })).toHaveLength(1);
     view.unmount();
     const reporter = mockServer(asRole('reporter'));
     await renderApp({ fetch: reporter.fetch, path: '/acme/forge-web/-/branches', lang: 'en' });
-    await screen.findByRole('navigation', { name: 'Repository screens' });
+    await screen.findByRole('heading', { level: 1 });
+    await within(await screen.findByRole('navigation', { name: 'Project menu' })).findByRole('link', {
+      name: 'Commits',
+    });
     expect(screen.queryByRole('link', { name: 'Webhooks' })).toBeNull();
   });
 

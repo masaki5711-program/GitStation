@@ -718,6 +718,37 @@ fn runner_routes(registry: Registry<AppState>) -> Registry<AppState> {
             r::complete,
         )
         .responds::<r::CompleteAnswer>(Verb::Post, r::COMPLETE)
+        // M4 C6: a job's artifacts, with the job's own token.
+        .route_with(
+            Verb::Put,
+            routes::ci_artifacts::UPLOAD,
+            Action::JobArtifactUpload,
+            "Upload one file of a job's artifacts (the raw bytes; ?path= the file's path in the work tree) with the job's own token fgj_..., while the job runs: 201 {id, path, size_bytes, sha256}; 413 FG-CI-0019 past 100 MiB per file or 512 MiB / 1000 files per attempt; 409 FG-CI-0004 once the job ended; 400 FG-WEB-0006 for a bad or repeated path",
+            routes::ci_artifacts::OF_UPLOAD,
+            routes::ci_artifacts::upload,
+        )
+        .queries(Verb::Put, routes::ci_artifacts::UPLOAD, routes::ci_artifacts::UPLOAD_QUERY)
+        .responds_created::<routes::ci_artifacts::UploadedArtifactBody>(
+            Verb::Put,
+            routes::ci_artifacts::UPLOAD,
+        )
+        .route_with(
+            Verb::Get,
+            routes::ci_artifacts::NEEDS,
+            Action::JobArtifactDownload,
+            "The artifacts of the jobs a running job needs (their current, succeeded attempt, same pipeline), with the job's own token fgj_...",
+            routes::ci_artifacts::OF_NEEDS,
+            routes::ci_artifacts::needs,
+        )
+        .responds::<routes::ci_artifacts::ArtifactList>(Verb::Get, routes::ci_artifacts::NEEDS)
+        .route_with(
+            Verb::Get,
+            routes::ci_artifacts::NEED_ONE,
+            Action::JobArtifactDownload,
+            "One artifact of a job's needs: its bytes (application/octet-stream), with the job's own token fgj_...; 404 FG-REPO-0005 for any other artifact",
+            routes::ci_artifacts::OF_NEEDS,
+            routes::ci_artifacts::need_one,
+        )
         // M4 C4 (ADR-0029 §3): the job's fetch of its pinned commit.
         .route_with(
             Verb::Get,
@@ -808,6 +839,53 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::diagnosis,
         )
         .responds::<p::DiagnosisBody>(Verb::Get, p::DIAGNOSIS)
+        // M4 C6: a job's artifacts, decided like its log.
+        .route_with(
+            Verb::Get,
+            p::ARTIFACTS,
+            Action::CiArtifactRead,
+            "A CI job's artifacts (every attempt's): path, size, sha256, attempt, keep, expiry (30 days unless kept for a deployment); 404 FG-REPO-0005 without such a pipeline or job; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers)",
+            p::OF_ARTIFACTS,
+            p::artifacts,
+        )
+        .responds::<routes::ci_artifacts::ArtifactList>(Verb::Get, p::ARTIFACTS)
+        .route_with(
+            Verb::Get,
+            p::ARTIFACT,
+            Action::CiArtifactRead,
+            "One CI artifact's bytes (application/octet-stream, attachment, X-Forge-Sha256); 404 FG-REPO-0005 without it (or expired); 403 FG-AUTH-0022 as for the list (project readers)",
+            p::OF_ARTIFACT,
+            p::artifact,
+        )
+        // M4 C6: a project's CI variables (secrets; ADR-0029 decision 8).
+        .route_with(
+            Verb::Get,
+            routes::ci_variables::LIST,
+            Action::CiVariableManage,
+            "A project's CI variables: name, protected_only, masked, value length, who set them and when; never a value (people only; Maintainer)",
+            routes::ci_variables::OF_LIST,
+            routes::ci_variables::list,
+        )
+        .responds::<routes::ci_variables::CiVariableList>(Verb::Get, routes::ci_variables::LIST)
+        .route_with_body(
+            Verb::Put,
+            routes::ci_variables::ONE,
+            Action::CiVariableManage,
+            "Set a CI variable ({\"value\", \"protected_only\"?, \"masked\"?}, both default true): 201 created or 200 replaced, the metadata only (the value is never answered again); 400 FG-WEB-0006 for a bad name or value (param and reason, never the value); 503 FG-CI-0016 without a usable ci.secret_keys_file. Values reach only jobs of push pipelines of protected branches (people only; Maintainer)",
+            routes::ci_variables::MAX_BODY,
+            routes::ci_variables::OF_ONE,
+            routes::ci_variables::put,
+        )
+        .responds::<routes::ci_variables::CiVariableBody>(Verb::Put, routes::ci_variables::ONE)
+        .route_with(
+            Verb::Delete,
+            routes::ci_variables::ONE,
+            Action::CiVariableManage,
+            "Delete a CI variable: 204; 404 FG-REPO-0005 without it (people only; Maintainer)",
+            routes::ci_variables::OF_ONE,
+            routes::ci_variables::delete,
+        )
+        .responds_no_content(Verb::Delete, routes::ci_variables::ONE)
 }
 
 /// The merge queue (M4 C8, ADR-0030): a target's queue, its emergency
@@ -2231,7 +2309,7 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Post,
             mr::MERGE_QUEUE,
             Action::MergeQueueEnqueue,
-            "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target branch's push role; a token needs merge_execute); everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0020 when already queued",
+            "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target branch's push role; a token needs merge_execute); everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0025 when already queued",
             mr::MERGE_QUEUE_MAX_BODY,
             mr::MergeRequestToQueue,
             mr::merge_queue_enqueue,
@@ -2241,7 +2319,7 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Delete,
             mr::MERGE_QUEUE,
             Action::MergeQueueDequeue,
-            "Take a merge request out of the merge queue (as adding it); 409 FG-CI-0020 when it is not queued",
+            "Take a merge request out of the merge queue (as adding it); 409 FG-CI-0025 when it is not queued",
             mr::MergeRequestToDequeue,
             mr::merge_queue_dequeue,
         )
@@ -2855,11 +2933,14 @@ async fn request_timeout(
     req: Request,
     next: Next,
 ) -> Response {
-    let limit = if is_git_rpc(&req) {
-        git_rpc_limit
-    } else {
-        request_limit
-    };
+    // M4 C6: a job's artifact upload also reads its whole body before it
+    // answers (its own idle bound and `UPLOAD_TIMEOUT`).
+    let limit =
+        if is_git_rpc(&req) || routes::ci_artifacts::is_upload(req.method(), req.uri().path()) {
+            git_rpc_limit
+        } else {
+            request_limit
+        };
     let request_id = req
         .extensions()
         .get::<RequestId>()

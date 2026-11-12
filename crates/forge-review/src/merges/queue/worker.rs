@@ -15,8 +15,8 @@
 //! - **testing**: an entry that left (dequeued, a new head, closed) or a
 //!   target that moved throws the batch away (the entries go back in
 //!   order); a pipeline still running waits, past the deadline the batch is
-//!   reaped (`FG-CI-0019`); red bisects (`batch_limit` halves; a red batch
-//!   of one removes its entry, `FG-CI-0018`); green lands unless paused.
+//!   reaped (`FG-CI-0024`); red bisects (`batch_limit` halves; a red batch
+//!   of one removes its entry, `FG-CI-0023`); green lands unless paused.
 //! - **landing** (a worker stopped mid-landing): settled by asking git.
 //!
 //! The landing holds the repository's merge lock (the normal merges' too)
@@ -51,7 +51,7 @@ pub struct QueueLimits {
     /// How long a claimed queue is the worker's (an expired lease is
     /// claimable again: a stopped worker's queue is taken over).
     pub lease: Duration,
-    /// How long a batch may test before it is reaped (`FG-CI-0019`).
+    /// How long a batch may test before it is reaped (`FG-CI-0024`).
     pub test_timeout: Duration,
     /// The next step of a queue that waits (a pipeline running, paused).
     pub poll: Duration,

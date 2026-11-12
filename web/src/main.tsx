@@ -7,6 +7,11 @@ import './styles/global.css';
 import { createApiClient } from './api/client';
 import { AppProviders, AppRoutes, createQueryClient } from './App';
 import { createI18n } from './i18n';
+import { applyTheme, storedTheme } from './theme';
+
+// Before anything renders (public/theme-init-*.js already did so before the
+// first paint; this also covers a page built without it, e.g. tests).
+applyTheme(storedTheme());
 
 async function start(): Promise<void> {
   const root = document.getElementById('app');
@@ -31,4 +36,8 @@ async function start(): Promise<void> {
   );
 }
 
-void start();
+start().catch((e: unknown) => {
+  // Nothing rendered (no #app, or a failure before the first render): the
+  // console is the only place left to say so.
+  console.error('gitstation: the app failed to start', e);
+});

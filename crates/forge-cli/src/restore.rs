@@ -258,6 +258,10 @@ pub fn repositories(
             return Ok(());
         };
         let target = storage.path_for(repo);
+        // No long-lived git of this process holds the old copy open, and
+        // nothing cached of it survives (forge serve and the worker are
+        // stopped for a restore: theirs are gone already).
+        forge_git::browse::release_repository(storage, repo);
         // Every directory of the restored repository is on disk (its entries
         // were synced file by file) before the rename makes it visible.
         sync_tree(&tmp).map_err(|e| io_failed("storage_io", "sync_dir", e))?;

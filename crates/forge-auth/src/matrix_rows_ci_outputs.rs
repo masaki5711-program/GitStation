@@ -237,6 +237,9 @@ macro_rules! ci_output_rows {
 const LOG: [Row; 42] = ci_output_rows!(A::CiLogRead);
 #[rustfmt::skip]
 const DIAGNOSIS: [Row; 42] = ci_output_rows!(A::PipelineDiagnosisRead);
+// M4 C6: a job's artifacts, decided as its log.
+#[rustfmt::skip]
+const ARTIFACT: [Row; 42] = ci_output_rows!(A::CiArtifactRead);
 
 /// Review C5 (LOW): the refusals of the non-person callers written out on
 /// a CI output itself, beside the generated ones (on a project): a runner,
@@ -262,6 +265,22 @@ const fn non_person_denies(a: A) -> [Row; 3] {
 
 const LOG_NON_PERSON: [Row; 3] = non_person_denies(A::CiLogRead);
 const DIAGNOSIS_NON_PERSON: [Row; 3] = non_person_denies(A::PipelineDiagnosisRead);
+const ARTIFACT_NON_PERSON: [Row; 3] = non_person_denies(A::CiArtifactRead);
+
+/// M4 C6 review (HIGH): an artifact of a job that was given secrets is a
+/// Maintainer's, people only, never an AI agent's (marks open).
+#[rustfmt::skip]
+const SECRET_ARTIFACT: [Row; 9] = [
+    row(A::CiArtifactRead, W::Maintainer, F::SecretJobArtifact, Allow),
+    row(A::CiArtifactRead, W::MaintainerTokenReadApi, F::SecretJobArtifact, Allow),
+    row(A::CiArtifactRead, W::Owner, F::SecretJobArtifact, Allow),
+    row(A::CiArtifactRead, W::Developer, F::SecretJobArtifact, deny(E::Forbidden)),
+    row(A::CiArtifactRead, W::Reporter, F::SecretJobArtifact, deny(E::Forbidden)),
+    row(A::CiArtifactRead, W::AgentMaintainerTokenApi, F::SecretJobArtifact, deny(E::RepositoryCopyWithheld)),
+    row(A::CiArtifactRead, W::ServiceAccountMaintainerTokenApi, F::SecretJobArtifact, deny(E::RepositoryCopyWithheld)),
+    row(A::CiArtifactRead, W::NonMember, F::SecretJobArtifact, deny(E::NotFound)),
+    row(A::CiArtifactRead, W::Anonymous, F::SecretJobArtifact, deny(E::Unauthenticated)),
+];
 
 /// Every row of the CI outputs (`matrix::ROWS` appends them).
 pub(crate) static CI_OUTPUT_ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new(|| {
@@ -270,6 +289,9 @@ pub(crate) static CI_OUTPUT_ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::Laz
         &DIAGNOSIS,
         &LOG_NON_PERSON,
         &DIAGNOSIS_NON_PERSON,
+        &ARTIFACT,
+        &ARTIFACT_NON_PERSON,
+        &SECRET_ARTIFACT,
     ]
     .concat()
 });

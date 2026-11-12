@@ -87,7 +87,9 @@ impl NotificationKind {
             | EventType::CodeownersEnforcementRestored
             | EventType::CheckCompleted
             | EventType::WorkItemLinked
-            | EventType::WorkItemUnlinked => None,
+            | EventType::WorkItemUnlinked
+            | EventType::MergeRequestWorkItemsChanged
+            | EventType::MergeRequestRelinkRequested => None,
             // M3 I2: the automatic disable of a webhook (maintainer class).
             // Not mailed yet: every notification kind here is about one
             // merge request and its author (`forge.notifications` keys on

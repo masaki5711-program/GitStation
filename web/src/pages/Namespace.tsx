@@ -9,10 +9,11 @@
 //   canonical path;
 // - 404 (unknown, or not visible: the API says the same for both) is the
 //   not-found screen.
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation } from 'react-router';
 
-import { ApiFailure, call } from '../api/client';
+import { ApiFailure } from '../api/client';
+import { resolveQuery } from '../api/namespaces';
 import { Loading } from '../components/Loading';
 import { useApi } from '../api/context';
 import { isViewWord, pathSegments } from '../features/paths';
@@ -22,8 +23,7 @@ import { GroupPage, UserPage } from './GroupPage';
 import { NotFound } from './NotFound';
 import { ProjectPage } from './ProjectPage';
 import { RepoViews } from './repo/RepoViews';
-import { Account } from './settings/Account';
-import { GroupViews } from './settings/GroupSettings';
+import { Account, GroupViews } from './lazyScreens';
 import { useSession } from '../session/session';
 
 const encode = (segments: string[]) => segments.map(encodeURIComponent).join('/');
@@ -42,21 +42,13 @@ export function NamespaceRoute() {
 
 function Resolved({ path, view }: { path: string; view: string[] | null }) {
   const api = useApi();
+  const queryClient = useQueryClient();
   const location = useLocation();
   const me = useSession().user.id;
   const prefix = view === null;
-  const resolution = useQuery({
-    queryKey: ['resolve', path, prefix],
-    queryFn: ({ signal }) =>
-      call(() =>
-        api.GET('/api/v1/namespaces/resolve', {
-          signal,
-          params: { query: { path, ...(prefix ? { prefix: 'true' } : {}) } },
-        }),
-      ),
-    // A path can move or be deleted: ask again on every visit.
-    staleTime: 0,
-  });
+  // Cached per path for a few minutes and shared by every screen of the
+  // project (api/namespaces.ts); a transfer or a deletion drops it.
+  const resolution = useQuery(resolveQuery(api, queryClient, path, prefix));
   // The sidebar follows the namespace this address is in — once the address
   // is the canonical one (a moved path or another spelling is redirected
   // first, and reported after the redirect).

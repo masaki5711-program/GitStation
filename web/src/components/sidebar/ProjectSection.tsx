@@ -6,8 +6,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 
-import { call } from '../../api/client';
 import { useApi } from '../../api/context';
+import { projectQuery } from '../../api/namespaces';
 import { encodePath } from '../../features/repoUrls';
 import { useSession } from '../../session/session';
 import type { SidebarScope } from '../sidebarScope';
@@ -24,11 +24,7 @@ export function ProjectSection({
   const api = useApi();
   const isAdmin = useSession().user.is_admin;
   // The same query (and key) as the project's pages: no second request.
-  const project = useQuery({
-    queryKey: ['project', scope.id],
-    queryFn: ({ signal }) =>
-      call(() => api.GET('/api/v1/projects/{id}', { signal, params: { path: { id: scope.id } } })),
-  });
+  const project = useQuery(projectQuery(api, scope.id));
   const base = `/${encodePath(scope.path)}`;
   const word = view[0] ?? null;
   const role = project.data?.role ?? null;

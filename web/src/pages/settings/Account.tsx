@@ -8,6 +8,7 @@ import { Link, useSearchParams } from 'react-router';
 
 import { call, callNoContent } from '../../api/client';
 import { useApi } from '../../api/context';
+import { forgetResolutions } from '../../api/namespaces';
 import type { components } from '../../api/schema.gen';
 import { fetchAllPages } from '../../api/pages';
 import type { Project } from '../../api/types';
@@ -219,6 +220,8 @@ function Trash() {
       call(() => api.POST('/api/v1/projects/{id}/restore', { params: { path: { id } } })),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
+      // The path names a project again.
+      forgetResolutions(queryClient);
       focusHeading('trash-title');
     },
     onError: refresh,

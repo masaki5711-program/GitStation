@@ -21,7 +21,7 @@
 ## Decision
 
 1. **ターゲットのブランチごとに 1 つの列**（`forge.merge_queues`、(project, target_branch) で一意、最初に入れたときに作る）。列には止めた印（`paused`）、今のバッチの上限（`batch_limit`、1〜4）、worker の貸し出し（`lease_owner`・`lease_until`）を持つ。
-2. **入れる = 「準備ができたらマージ」**（`POST …/merge-requests/{iid}/merge-queue`、`{sha, method?}`）。判定は **マージそのものと同じ**（Action `MergeQueueEnqueue` = `MergeRequestMerge` の規則: 人だけ、target の push の役割、トークンは `merge_execute`）。入れるときに `evaluate_merge()` を、`ci/pipeline` だけを「列が試す」とみなして行う（承認・下書き・衝突・議論・作業項目・外部の必須チェックはその時点で揃っていること。揃っていなければ FG-REVIEW-0007 と理由）。すでに列にある・MR が開いていないは **FG-CI-0020** MergeQueueEntryRefused（`reason=already_queued` など）、マージの試行が生きていれば FG-REVIEW-0011。コミットのメッセージは入れたときに凍結する（ADR-0024 の要求と同じ）。C9 の自動マージの主体はこの経路を自分の Action の行で通る（C9 で足す）。
+2. **入れる = 「準備ができたらマージ」**（`POST …/merge-requests/{iid}/merge-queue`、`{sha, method?}`）。判定は **マージそのものと同じ**（Action `MergeQueueEnqueue` = `MergeRequestMerge` の規則: 人だけ、target の push の役割、トークンは `merge_execute`）。入れるときに `evaluate_merge()` を、`ci/pipeline` だけを「列が試す」とみなして行う（承認・下書き・衝突・議論・作業項目・外部の必須チェックはその時点で揃っていること。揃っていなければ FG-REVIEW-0007 と理由）。すでに列にある・MR が開いていないは **FG-CI-0025** MergeQueueEntryRefused（`reason=already_queued` など）、マージの試行が生きていれば FG-REVIEW-0011。コミットのメッセージは入れたときに凍結する（ADR-0024 の要求と同じ）。C9 の自動マージの主体はこの経路を自分の Action の行で通る（C9 で足す）。
 3. **バッチと列車のコミット**: worker は列の先頭から最大 `batch_limit`（既定 4）件を取り、**今の target の先端の上に順に**マージした列車を作る。各 MR の段は普通のマージと同じ形（マージコミット: 親は前の段と head、作者・コミッターは入れた人。squash: 親は前の段、作者は MR の作者。メッセージは凍結したもの）。git がマージし（`merge-tree --write-tree` → `commit-tree`、契約 5）、forge は木を作らない。衝突する MR は列から外し（FG-REVIEW-0006 `reason=conflict`）、残りで作り直す。列車の先端を隠した ref **`refs/merge-queue/<queue_id>/train`** に向ける（バッチごとに上書き。`hidden_refs` の 3 つ目の接頭辞: 広告・want の確認・`deepen-not` から外し、push は既存の `ReservedRefNamespace` で断る）。
 4. **1 本で走るもの**（バッチに入れない、追い越しもしない — 順は保つ）:
    - diff（target との merge-base から head）が **マイグレーション**（`migrations` / `migrate` ディレクトリの SQL、`forge_core::risk::is_migration_path`、forge/risk の規則と同じ）に触れる MR。
@@ -35,15 +35,15 @@
    3. 1 件でも断られたら、その MR を理由とコードつきで外し、他の試行を `superseded`（`queue_rebuild`）にしてバッチを捨て、残りで作り直す（列車は変わるので試し直す）。
    4. 全件を `executing` にフェンスし、**`update-ref` の CAS 1 回**（target: 土台 → 列車の先端）。負けたら ref を読み直し、列車の先端なら記録へ、別の値なら「target が動いた」で作り直し。
    5. MR ごとに順に `finish_merge`（普通のマージと同じ tx2: `applied`、MR を `merged`、監査、イベント、push の記録は前の段からその段まで）。entry を `merged`、バッチを `landed`、`batch_limit` を 4 に戻す。元のブランチの削除は列では行わない（常に残す。M4 の後で決める）。
-7. **赤なら二分**: バッチが 2 件以上なら `batch_limit = ceil(n/2)` にして全件を列に戻す（順はそのまま）→ 次は前半だけで試す。前半が緑なら着地し、後半を次に試す。1 件のバッチが赤なら、その MR が原因: **FG-CI-0018** MergeQueueChecksFailed（info）で外す。これで「4 件中 1 件が悪い」は 3 回（4→2→1、後半はもう 1 回）、「全部悪い」は 4 件それぞれが単独で赤になって外れる。緑の着地で上限を 4 に戻す。
+7. **赤なら二分**: バッチが 2 件以上なら `batch_limit = ceil(n/2)` にして全件を列に戻す（順はそのまま）→ 次は前半だけで試す。前半が緑なら着地し、後半を次に試す。1 件のバッチが赤なら、その MR が原因: **FG-CI-0023** MergeQueueChecksFailed（info）で外す。これで「4 件中 1 件が悪い」は 3 回（4→2→1、後半はもう 1 回）、「全部悪い」は 4 件それぞれが単独で赤になって外れる。緑の着地で上限を 4 に戻す。
 8. **target が他から動いた**（列車を試している間の直接の push、普通のマージ、別の列）: 次に見たとき（またはロックの下の着地）に先端が土台と違えばバッチを捨て（`target_moved`）、全件を列に戻して今の先端で作り直す。試行の数は増やさない。
 9. **止める**（`POST …/merge-queue/pause`・`…/resume`、`{target}`）: 止めた列は新しいバッチを作らず、試し中のバッチも **着地しない**（緊急停止。再開した後に、先端が同じならそのまま着地する）。入れることはできる。止めるのは Developer 以上（Action `MergeQueuePause`）、再開は Maintainer 以上（`MergeQueueManage`）。どちらも人だけ、監査の行（`merge_queue.paused` / `.resumed`）。
 10. **外す**（`DELETE …/merge-requests/{iid}/merge-queue`）: マージできる人（Action `MergeQueueDequeue`、`MergeQueueEnqueue` と同じ規則）。試し中のバッチの MR を外すと、次に見たときにバッチを捨てて作り直す。監査の行（`merge_queue.dequeued`）。入れる・外すの監査は `merge_queue.enqueued` / `.dequeued`。worker が外すときは監査ではなくログ（`forge.merge_queue.entry_removed`、理由とコード）と entry の `reason` / `error_code`。
 11. **読む**（`GET …/merge-queue?target=`、`GET …/merge-requests/{iid}/merge-queue`）: `MergeQueueRead` = `RepoBrowse` と同じ（エージェントの相手も読める: メタデータだけ）。
 12. **状態は DB に**: `merge_queue_entries`（`queued` → `testing` → `merged` / `removed`、`testing` → `queued` に戻る）、`merge_queue_batches`（`testing` → `landing` → `landed`、`testing` → `failed` / `abandoned`、`landing` → `abandoned`）。列ごとに生きたバッチは 1 つ（部分一意索引）。MR ごとに生きた entry は 1 つ。
 13. **worker**: `forge serve` の中のタスク（マージの ref の書き込みは閲覧のキャッシュと同じプロセス、ADR-0024 R4 と同じ理由）が数秒ごとに `claim`: `next_run_at` の来た、貸し出しの切れた列を `FOR UPDATE SKIP LOCKED` で 1 つ取り、`lease_until` を書いて手放してから git を動かす。2 つの worker は同じ列を同時に持たない。1 回の手番は時間切れで囲む。
-14. **時間切れと詰まりの回収**: バッチには期限（既定 2 時間）。過ぎたら **FG-CI-0019** MergeQueueStalled（alert、runbook `merge-queue`）を 1 回ログに出してバッチを捨て、MR を列に戻して試行の数を 1 増やす。3 回目で外す（同じコード）。worker が着地の途中で落ちたら（バッチが `landing` のまま貸し出しが切れる）、次の worker がロックの下で git を見て決める: target が列車の先端なら残りを記録、土台のままなら試行を `superseded` にして作り直し、他の値なら作り直し。ADR-0024 の照合（`executing` を 630 秒後に git で決める）は列車の段も `new_sha` の子孫として `applied` にできる。
-15. **エラーコード**（計画 14 §4.3 の CI-next。C6 の CI-g・h に 0016・0017 を残した）: FG-CI-0018 MergeQueueChecksFailed（info）、FG-CI-0019 MergeQueueStalled（alert）、FG-CI-0020 MergeQueueEntryRefused（info）。外すときの他の理由は既存のコード（FG-REVIEW-0006 衝突、FG-REVIEW-0007 マージの条件、FG-REVIEW-0008 head の変化、FG-AUTH-0003 権限）。すべての失敗のログに `request_id`（バッチごとの要求 ID。entry は入れたときの要求 ID も持つ）と `error_code`。
+14. **時間切れと詰まりの回収**: バッチには期限（既定 2 時間）。過ぎたら **FG-CI-0024** MergeQueueStalled（alert、runbook `merge-queue`）を 1 回ログに出してバッチを捨て、MR を列に戻して試行の数を 1 増やす。3 回目で外す（同じコード）。worker が着地の途中で落ちたら（バッチが `landing` のまま貸し出しが切れる）、次の worker がロックの下で git を見て決める: target が列車の先端なら残りを記録、土台のままなら試行を `superseded` にして作り直し、他の値なら作り直し。ADR-0024 の照合（`executing` を 630 秒後に git で決める）は列車の段も `new_sha` の子孫として `applied` にできる。
+15. **エラーコード**（計画 14 §4.3 の CI-next。C6 が 0016〜0022 を使ったので 0023 から）: FG-CI-0023 MergeQueueChecksFailed（info）、FG-CI-0024 MergeQueueStalled（alert）、FG-CI-0025 MergeQueueEntryRefused（info）。外すときの他の理由は既存のコード（FG-REVIEW-0006 衝突、FG-REVIEW-0007 マージの条件、FG-REVIEW-0008 head の変化、FG-AUTH-0003 権限）。すべての失敗のログに `request_id`（バッチごとの要求 ID。entry は入れたときの要求 ID も持つ）と `error_code`。
 
 ## Alternatives Considered
 
@@ -81,6 +81,6 @@
 
 ### Risks
 - **worker が着地の途中で落ちる**: §14。ロックと CAS で target は 2 回動かない。
-- **パイプラインが終わらない**: 期限と FG-CI-0019（alert）。runbook `merge-queue`。
+- **パイプラインが終わらない**: 期限と FG-CI-0024（alert）。runbook `merge-queue`。
 - **セッションの時間切れで止まる**: 時間切れは許し、失効だけを断る（§6.2）。トークンは従来どおり失効・期限で断る。
 - **列車のコミットが gc で消える**: 列ごとの隠した ref が今の列車を指す。過去の列車は target に入ったか、捨てられて不要。

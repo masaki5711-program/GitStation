@@ -8,6 +8,7 @@ import { Link } from 'react-router';
 import { refParam, useCommits } from '../../api/repo';
 import type { CommitSummary, Rev } from '../../api/types';
 import { Loading } from '../../components/Loading';
+import { PrefetchLink } from '../../components/PrefetchLink';
 import controls from '../../components/controls.module.css';
 import { formatDateTime } from '../../features/labels';
 import { commitUrl, commitsUrl } from '../../features/repoUrls';
@@ -30,9 +31,9 @@ export function CommitList({
     <ol className={styles.commits} data-testid="commit-list" ref={listRef}>
       {commits.map((c) => (
         <li key={c.oid} className={styles.commit}>
-          <Link to={commitUrl(project, c.oid)} className={styles.subject}>
+          <PrefetchLink to={commitUrl(project, c.oid)} className={styles.subject}>
             {c.subject === '' ? t('commits.noSubject') : c.subject}
-          </Link>
+          </PrefetchLink>
           <span className={styles.hint}>
             {c.author_name} {'·'} {formatDateTime(c.authored_at, i18n.language)}
             {c.parents.length > 1 && (

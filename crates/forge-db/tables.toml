@@ -135,6 +135,15 @@ audit_id_column = "id"
 unaudited_columns = ["updated_at"]
 txn_audited_columns = []
 
+# ── M4 C6 (20261211200000, plan 14 §4.1, §9 #6): CI artifacts, uploaded by a
+# job with its own token, expired by the worker after 30 days (not `keep`),
+# deleted in the project purge. Derived: no person behind a write; metadata
+# only (the bytes are files under the storage root) ──
+[tables.ci_artifacts]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
 [tables.namespaces]
 guarded = false
 kind = "audited"
@@ -777,3 +786,29 @@ audit_id_column = "project_id"
 # The claim of the push that holds it (audited with the consumption).
 unaudited_columns = ["claimed_at", "claimed_request_id"]
 txn_audited_columns = []
+
+# ── M4 C6 (20261211100000, plan 14 §4.1): CI variables, set and deleted by a
+# Maintainer (people only), audited on the project (`ci_variable.created` /
+# `.updated` / `.deleted`; never the value). The value is sealed with a key of
+# `ci.secret_keys_file` (ADR-0013); the read pool never sees the ciphertext ──
+[tables.ci_variables]
+guarded = false
+kind = "audited"
+# Not ciphertext (ADR-0018).
+ro_columns = [
+    "id", "project_id", "name", "key_id", "value_bytes", "protected_only", "masked", "created_by",
+    "updated_by", "created_at", "updated_at",
+]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+# ── M4 C6 review (20261211300000): the sealed values released to a job
+# attempt, snapshotted at the claim (masking keeps the released value; the
+# artifacts of a job with secrets are restricted). Derived; no ciphertext for
+# the read pool ──
+[tables.ci_job_secret_snapshots]
+guarded = false
+kind = "derived"
+ro_columns = ["job_id", "attempt", "project_id", "name", "key_id", "masked", "created_at"]

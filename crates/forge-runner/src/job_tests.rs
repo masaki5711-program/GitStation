@@ -56,8 +56,30 @@ fn claim(job_id: i64, token: &str, def: &str) -> ClaimedJob {
         definition_hash: Some(hash(def)),
         secrets_allowed: false,
         secret_names: Vec::new(),
+        secrets: Vec::new(),
         job_token: JobToken::new(token.to_owned()),
     }
+}
+
+/// A definition whose job asks for one secret (M4 C6).
+fn secret_definition() -> String {
+    format!(
+        "version: 1\nstages: [deploy]\njobs:\n  build:\n    stage: deploy\n    image: {}\n    timeout: 10m\n    secrets: [DEPLOY_TOKEN]\n    rules:\n      merge_requests: false\n    script:\n      - ./deploy.sh\n",
+        image()
+    )
+}
+
+/// A claim of [`secret_definition`] with the value released.
+fn secret_claim(def: &str, value: &str) -> ClaimedJob {
+    let mut job = claim(7, "fgj_7_secret", def);
+    job.secrets_allowed = true;
+    job.secret_names = vec!["DEPLOY_TOKEN".to_owned()];
+    job.secrets = vec![crate::api::JobSecret {
+        name: "DEPLOY_TOKEN".to_owned(),
+        value: JobToken::new(value.to_owned()),
+        masked: true,
+    }];
+    job
 }
 
 /// How the fake container ends (`podman create`, then `podman start
@@ -100,6 +122,10 @@ struct Fake {
     pod_rm_fails: bool,
     /// What `podman logs` prints (`None`: the container does not exist).
     service_log: Option<Vec<u8>>,
+    /// What a script that exits 0 prints (`None`: a greeting).
+    job_out: Option<Vec<u8>>,
+    /// The job's env file as `podman create` found it (M4 C6).
+    env_seen: Mutex<Option<String>>,
 }
 
 /// Which Podman call of a job's services fails.
@@ -132,6 +158,8 @@ impl Fake {
             service_log: Some(
                 b"LOG: starting fgj_7_secret\nFATAL: data directory not writable\n".to_vec(),
             ),
+            job_out: None,
+            env_seen: Mutex::new(None),
         }
     }
 
@@ -276,12 +304,20 @@ impl ProcessRunner for Fake {
                     if !cmd.argv().iter().any(|a| a == "--rootfs") {
                         *self.work.lock().unwrap() = Some(work_mount(cmd));
                     }
+                    if let Some(file) = cmd
+                        .argv()
+                        .iter()
+                        .find_map(|a| a.strip_prefix("--env-file=").map(PathBuf::from))
+                    {
+                        *self.env_seen.lock().unwrap() =
+                            Some(std::fs::read_to_string(file).expect("env file"));
+                    }
                     ok(b"0123abcd\n".to_vec())
                 }
             },
             ("podman", "start") => match self.podman {
                 Podman::Exit(0) => {
-                    out(b"hello from the job\n");
+                    out(self.job_out.as_deref().unwrap_or(b"hello from the job\n"));
                     ok(Vec::new())
                 }
                 Podman::Exit(code) => Ran {
@@ -344,6 +380,16 @@ struct Forge {
     claims: Mutex<Vec<ClaimedJob>>,
     /// The forge cannot be reached: every claim fails as the client reports it.
     unreachable: AtomicBool,
+    /// M4 C6: the artifacts uploaded (path, bytes).
+    uploads: Mutex<Vec<(String, Vec<u8>)>>,
+    /// M4 C6: every upload fails as a lost lease.
+    upload_fails: AtomicBool,
+    /// M4 C6: the artifacts of the needs (id, path, bytes).
+    needed: Mutex<Vec<(i64, String, Vec<u8>)>>,
+    /// M4 C6 review: how long each upload takes.
+    upload_delay: Duration,
+    /// M4 C6 review: heartbeats received.
+    beats: std::sync::atomic::AtomicUsize,
 }
 
 impl RunnerApi for Forge {
@@ -357,6 +403,7 @@ impl RunnerApi for Forge {
         Ok(self.claims.lock().unwrap().pop())
     }
     fn heartbeat(&self, _: i64, _: i32) -> Result<Beat, ClientError> {
+        self.beats.fetch_add(1, Ordering::SeqCst);
         Ok(Beat::Running)
     }
     fn append_log(&self, _: i64, _: i32, _: i64, text: &str) -> Result<(), ClientError> {
@@ -374,6 +421,64 @@ impl RunnerApi for Forge {
             .lock()
             .unwrap()
             .push((job, result, exit_code));
+        Ok(())
+    }
+    fn needed_artifacts(
+        &self,
+        _: i64,
+        token: &JobToken,
+        _: Duration,
+    ) -> Result<Vec<crate::api::NeededArtifact>, ClientError> {
+        assert!(token.expose().starts_with("fgj_"), "the job's own token");
+        Ok(self
+            .needed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, path, bytes)| crate::api::NeededArtifact {
+                id: *id,
+                job: "build".to_owned(),
+                path: path.clone(),
+                size_bytes: i64::try_from(bytes.len()).unwrap(),
+                sha256: String::new(),
+            })
+            .collect())
+    }
+    fn download_artifact(
+        &self,
+        _: i64,
+        _: &JobToken,
+        artifact: i64,
+        out: &mut dyn std::io::Write,
+        _: u64,
+        _: Duration,
+    ) -> Result<u64, ClientError> {
+        let needed = self.needed.lock().unwrap();
+        let (_, _, bytes) = needed.iter().find(|(id, _, _)| *id == artifact).unwrap();
+        out.write_all(bytes).unwrap();
+        Ok(u64::try_from(bytes.len()).unwrap())
+    }
+    fn upload_artifact(
+        &self,
+        _: i64,
+        token: &JobToken,
+        path: &str,
+        mut file: std::fs::File,
+        _: u64,
+        _: Duration,
+    ) -> Result<(), ClientError> {
+        use std::io::Read as _;
+        assert!(token.expose().starts_with("fgj_"), "the job's own token");
+        if self.upload_fails.load(Ordering::SeqCst) {
+            return Err(ClientError::local(
+                ErrorCode::CliServerUnreachable,
+                "reason=connect",
+            ));
+        }
+        std::thread::sleep(self.upload_delay);
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        self.uploads.lock().unwrap().push((path.to_owned(), bytes));
         Ok(())
     }
 }
@@ -750,6 +855,7 @@ fn a_real_container_runs_without_network_and_is_removed() {
         project_id: 1,
         sha: SHA,
         pod: None,
+        env_file: None,
     });
     let created = SystemRunner
         .run(&create, Duration::from_secs(120), &|| false, &mut |_| {})
@@ -1367,6 +1473,7 @@ fn a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks() {
             project_id: 2,
             sha: SHA,
             pod: Some(pod),
+            env_file: None,
         }));
         if !ran.ok() {
             return Err(format!("job create: {ran:?}"));
@@ -1572,4 +1679,164 @@ fn an_unverified_isolation_stops_the_runner_before_any_claim() {
     assert!(has_context(&err, "reason", "probe_failed"), "{err:?}");
     assert_eq!(forge.claims.lock().unwrap().len(), 1, "nothing was claimed");
     assert_eq!(podman_order(&fake), ["rm", "create", "inspect", "rm"]);
+}
+
+/// M4 C6: a released secret reaches the job's container through an env
+/// file (never argv), the file is gone once Podman read it, and the value
+/// (and its base64) is masked in the job's log.
+#[test]
+fn a_jobs_secrets_reach_podman_in_an_env_file_and_are_masked_in_its_log() {
+    let value = "s3cr3t-deploy-value";
+    let def = secret_definition();
+    let b64 = forge_core::ci_secret::mask_forms(value)
+        .into_iter()
+        .find(|f| f.ends_with('='))
+        .expect("a padded base64 form");
+    let fake = Arc::new(Fake {
+        job_out: Some(format!("token={value}\nencoded={b64}\n").into_bytes()),
+        ..Fake::base(&def, Podman::Exit(0))
+    });
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &secret_claim(&def, value), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert_eq!(
+        fake.env_seen.lock().unwrap().as_deref(),
+        Some("DEPLOY_TOKEN=s3cr3t-deploy-value\n")
+    );
+    for c in fake.calls() {
+        assert!(
+            c.argv().iter().all(|a| !a.contains("s3cr3t")),
+            "a value reached argv: {c:?}"
+        );
+        assert!(c
+            .env
+            .iter()
+            .all(|(_, v)| !v.to_string_lossy().contains("s3cr3t")));
+    }
+    let create = fake
+        .by("podman", "create")
+        .into_iter()
+        .find(|c| c.argv().iter().any(|a| a.starts_with("--env-file=")))
+        .expect("the job's create names the env file");
+    let file = create
+        .argv()
+        .iter()
+        .find_map(|a| a.strip_prefix("--env-file=").map(PathBuf::from))
+        .expect("path");
+    assert!(!file.exists(), "the env file is removed after the create");
+    let log = forge.logs.lock().unwrap().concat();
+    assert!(!log.contains(value), "{log}");
+    assert!(!log.contains(&b64), "{log}");
+    assert!(log.contains("token=[masked]"), "{log}");
+}
+
+/// M4 C6: a claim whose secrets are not exactly the definition's names is
+/// refused before any container (a server that sent too few or others).
+#[test]
+fn a_claim_whose_secrets_differ_from_the_definition_runs_nothing() {
+    let def = secret_definition();
+    for job in [
+        {
+            let mut j = secret_claim(&def, "s3cr3t-deploy-value");
+            j.secrets.clear();
+            j
+        },
+        {
+            let mut j = secret_claim(&def, "s3cr3t-deploy-value");
+            j.secrets[0].name = "OTHER_TOKEN".to_owned();
+            j
+        },
+        secret_claim(&def, "two\nlines-value"),
+    ] {
+        let fake = Fake::new(&def, Podman::Exit(0));
+        let s = setup(&fake);
+        let forge = Forge::default();
+        let out = run(&s, &job, &forge);
+        assert_eq!(
+            out.error.expect("refused").code(),
+            ErrorCode::JobDefinitionMismatch
+        );
+        assert!(fake.by("podman", "create").is_empty(), "no container");
+        let log = forge.logs.lock().unwrap().concat();
+        assert!(!log.contains("s3cr3t"), "{log}");
+    }
+}
+
+/// A definition whose `build` job declares artifacts (M4 C6).
+fn artifact_definition() -> String {
+    definition("make").replace(
+        "    script:",
+        "    artifacts:\n      paths: [left-by-the-job, absent]\n    script:",
+    )
+}
+
+/// M4 C6: after a successful script the runner uploads the declared files
+/// with the job's own token and names a missing path in the log.
+#[test]
+fn a_successful_jobs_declared_artifacts_are_uploaded() {
+    let def = artifact_definition();
+    let fake = Fake::new(&def, Podman::Litter);
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert_eq!(
+        *forge.uploads.lock().unwrap(),
+        vec![("left-by-the-job".to_owned(), b"x".to_vec())]
+    );
+    let log = forge.logs.lock().unwrap().concat();
+    assert!(log.contains("artifact path not found: absent"), "{log}");
+}
+
+/// M4 C6: an upload that fails fails the job (FG-CI-0020): a later job
+/// must never run without what it needs.
+#[test]
+fn a_failed_artifact_upload_fails_the_job() {
+    let def = artifact_definition();
+    let fake = Fake::new(&def, Podman::Litter);
+    let s = setup(&fake);
+    let forge = Forge::default();
+    forge.upload_fails.store(true, Ordering::SeqCst);
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Failed);
+    assert_eq!(
+        out.error.expect("failed").code(),
+        ErrorCode::ArtifactTransferFailed
+    );
+}
+
+/// M4 C6 review: the lease's heartbeat goes on while the artifacts are
+/// uploaded (a long upload never loses the lease), and the upload happens
+/// after the container is removed.
+#[test]
+fn the_lease_heartbeat_runs_while_artifacts_upload() {
+    let def = artifact_definition();
+    let fake = Fake::new(&def, Podman::Litter);
+    let s = setup(&fake);
+    let forge = Arc::new(Forge {
+        upload_delay: Duration::from_millis(400),
+        ..Forge::default()
+    });
+    forge
+        .claims
+        .lock()
+        .unwrap()
+        .push(claim(7, "fgj_7_secret", &def));
+    let runner = Runner {
+        api: Arc::clone(&forge) as Arc<dyn RunnerApi>,
+        exec: s.exec,
+        heartbeat_every: Duration::from_millis(50),
+        shutdown: Arc::new(AtomicBool::new(false)),
+    };
+    let handled = runner.run_once(0).expect("claim");
+    assert!(matches!(handled, Handled::Ran { .. }));
+    assert_eq!(forge.uploads.lock().unwrap().len(), 1);
+    assert!(
+        forge.beats.load(Ordering::SeqCst) >= 3,
+        "heartbeats during the upload: {}",
+        forge.beats.load(Ordering::SeqCst)
+    );
+    // The container was removed (`podman rm`) before the job ended.
+    assert!(!fake.by("podman", "rm").is_empty());
 }

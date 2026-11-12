@@ -96,8 +96,8 @@ pub(crate) async fn live_entry_on(
 /// `viewer` (ADR-0030 §2): under the review locks the facts are read and
 /// `decide` runs (forge-review: the reconfirmed `authorize()` and
 /// `evaluate_merge()` with `ci/pipeline` left to the queue); then a live
-/// merge attempt is `FG-REVIEW-0011`, a live entry `FG-CI-0020
-/// reason=already_queued`, a merge request that is not open `FG-CI-0020
+/// merge attempt is `FG-REVIEW-0011`, a live entry `FG-CI-0025
+/// reason=already_queued`, a merge request that is not open `FG-CI-0025
 /// reason=not_open`; else the entry and the `merge_queue.enqueued` audit
 /// row are written. Returns the entry.
 pub async fn enqueue_mr_decided<P>(
@@ -220,7 +220,7 @@ pub struct QueueStep {
 /// Decide entry `entry` again for the person who enqueued it and write its
 /// merge attempt `prepared` with `step` (module docs). `ctx` is the
 /// batch's system context. Errors (nothing written): `decide`'s refusal,
-/// `FG-REVIEW-0011` (another live attempt), `FG-CI-0020
+/// `FG-REVIEW-0011` (another live attempt), `FG-CI-0025
 /// reason=not_testing` (the entry left the batch meanwhile), `FG-DB-*`.
 pub async fn queue_merge_mr_decided<P>(
     db: &Db,

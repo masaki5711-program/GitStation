@@ -67,7 +67,7 @@ pub struct QueueBatchBody {
     pub train_sha: String,
     #[schema(minimum = 1, maximum = 4)]
     pub size: i64,
-    /// UTC, RFC 3339: tested past it, the batch is reaped (FG-CI-0019).
+    /// UTC, RFC 3339: tested past it, the batch is reaped (FG-CI-0024).
     pub deadline_at: String,
     pub request_id: String,
     pub created_at: String,

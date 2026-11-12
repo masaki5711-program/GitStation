@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { I18nextProvider } from 'react-i18next';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ApiFailure, call, failureOf } from '../src/api/client';
+import { ApiFailure, call, failureOf, toFailure } from '../src/api/client';
 import { ErrorNotice } from '../src/components/ErrorNotice';
 import { createI18n } from '../src/i18n';
 import { fakeFetch, renderApp } from './render';
@@ -69,6 +69,58 @@ describe('home with a body that is not JSON', () => {
     expect(container.textContent).toContain('思いがけない応答がありました');
     expect(container.textContent).not.toContain('not json');
     expect(log).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a proxy answer while the server restarts (502/503/504)', () => {
+  const html = (status: number, headers: Record<string, string> = {}) =>
+    new Response('<html>Bad Gateway</html>', { status, headers: { 'content-type': 'text/html', ...headers } });
+
+  it.each([502, 503, 504])('%i without the error body is unavailable, keeping the request id', (status) => {
+    expect(toFailure(html(status, { 'x-request-id': 'req-proxy' }), '<html>Bad Gateway</html>')).toEqual({
+      kind: 'unavailable',
+      status,
+      requestId: 'req-proxy',
+    });
+    expect(toFailure(html(status), '<html>Bad Gateway</html>')).toEqual({ kind: 'unavailable', status, requestId: null });
+  });
+
+  it("a 503 in the server's own error contract stays the server's message", () => {
+    const body = { error_code: 'FG-X-0001', user_message: 'Busy', request_id: 'req-2' };
+    expect(toFailure(html(503), body)).toEqual({
+      kind: 'api',
+      status: 503,
+      userMessage: 'Busy',
+      requestId: 'req-2',
+    });
+  });
+
+  it('a 500 without the error body is still unexpected', () => {
+    expect(toFailure(html(500), 'oops').kind).toBe('unexpected');
+  });
+
+  it('ErrorNotice says the server is restarting and offers a retry', async () => {
+    const i18n = await createI18n('ja');
+    const retry = vi.fn();
+    render(
+      <I18nextProvider i18n={i18n}>
+        <ErrorNotice failure={{ kind: 'unavailable', status: 502, requestId: 'req-3' }} onRetry={retry} />
+      </I18nextProvider>,
+    );
+    expect(screen.getByRole('alert').textContent).toContain(
+      'サーバーが再起動中か混み合っています。少し待ってからもう一度お試しください。',
+    );
+    expect(screen.getByTestId('request-id').textContent).toBe('req-3');
+    fireEvent.click(screen.getByRole('button', { name: 'もう一度試す' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('the app shows it for a 502 page from the proxy, never the raw text', async () => {
+    const { fetch } = fakeFetch(() => html(502));
+    const { container } = await renderApp({ fetch });
+    await screen.findByRole('alert', {}, { timeout: 5000 });
+    expect(container.textContent).toContain('サーバーが再起動中か混み合っています');
+    expect(container.textContent).not.toContain('Bad Gateway');
   });
 });
 

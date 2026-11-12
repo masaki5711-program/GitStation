@@ -747,7 +747,9 @@ async fn hsts_is_sent_everywhere_but_git_when_configured() {
 /// headers; the callback's refusal still clears the state cookie.
 #[tokio::test]
 async fn failed_sign_in_navigations_are_a_page_without_the_error_code() {
+    // A real navigation always carries `Sec-Fetch-Site` with the mode.
     let fetch_metadata: &[(&str, &str)] = &[
+        ("sec-fetch-site", "same-origin"),
         ("sec-fetch-mode", "navigate"),
         ("sec-fetch-dest", "document"),
         ("accept-language", "en"),

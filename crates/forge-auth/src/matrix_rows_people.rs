@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 35] = [
+const GROUPS: [[Row; 2]; 36] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -113,6 +113,8 @@ const GROUPS: [[Row; 2]; 35] = [
     // person's); a delivery is decided for its owner, a person too.
     both!(A::WebhookManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     both!(A::WebhookRedeliver, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    // M4 C6: CI secrets are a Maintainer's (a person's).
+    both!(A::CiVariableManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     both!(A::WebhookDeliver, MAINTAINER.0, MAINTAINER.1, F::ProjectEvents {
         class: forge_core::VisibilityClass::Integration,
         project: crate::matrix_review::MrProject::Private,

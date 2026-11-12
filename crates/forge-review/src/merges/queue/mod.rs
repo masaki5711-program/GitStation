@@ -205,7 +205,7 @@ impl Review {
     /// target's protection as stored now and `evaluate_merge()` must find
     /// nothing but what the queue proves itself (`ci/pipeline`): FG-REVIEW-0007
     /// with every other reason. A live merge attempt is FG-REVIEW-0011, a
-    /// live entry FG-CI-0020. Returns the entry (`queued`).
+    /// live entry FG-CI-0025. Returns the entry (`queued`).
     pub async fn enqueue(
         &self,
         request: &ReviewRequest,
@@ -344,7 +344,7 @@ impl Review {
     }
 
     /// `DELETE …/merge-requests/{iid}/merge-queue` (`MergeQueueDequeue`):
-    /// the entry, `removed` (`reason=dequeued`); FG-CI-0020
+    /// the entry, `removed` (`reason=dequeued`); FG-CI-0025
     /// `reason=not_queued` without a live entry.
     pub async fn dequeue(
         &self,

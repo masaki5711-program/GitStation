@@ -6,10 +6,10 @@
 //!   `merge_execute`): `{"sha", "method"?}` → `201` the entry. Everything
 //!   a merge needs must hold now except `ci/pipeline`, which the queue
 //!   proves on its train (FG-REVIEW-0007 with the other reasons); a live
-//!   entry is `409 FG-CI-0020 reason=already_queued`, a live merge attempt
+//!   entry is `409 FG-CI-0025 reason=already_queued`, a live merge attempt
 //!   `409 FG-REVIEW-0011`.
 //! - `DELETE …/merge-queue` (`MergeQueueDequeue`): `200` the entry,
-//!   `removed`; `409 FG-CI-0020 reason=not_queued` without a live entry.
+//!   `removed`; `409 FG-CI-0025 reason=not_queued` without a live entry.
 //! - `GET …/merge-queue` (`MergeRequestRead`): the latest entry (`null`:
 //!   never queued) and its place among the live entries.
 
@@ -83,7 +83,7 @@ pub struct QueueEntryBody {
     /// `head_changed`, `stalled`, …).
     #[schema(required = true)]
     pub reason: Option<String>,
-    /// The code of a removal by the queue (FG-CI-0018, FG-CI-0019, …).
+    /// The code of a removal by the queue (FG-CI-0023, FG-CI-0024, …).
     #[schema(required = true)]
     pub error_code: Option<String>,
     #[schema(minimum = 1)]

@@ -9,10 +9,10 @@
   composes: primary from '../components/controls.module.css';
   min-height: 3rem;
   padding: var(--gs-space-2) var(--gs-space-6);
-  border: 1px solid var(--gs-brand-teal-strong);
+  border: 1px solid var(--gs-color-accent-strong);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-action);
-  color: var(--gs-color-white);
+  color: var(--gs-color-on-action);
   font: inherit;
   font-weight: bold;
   cursor: pointer;

@@ -9,6 +9,7 @@ import {
   REFS_FILLED,
   RESOLVE_GROUP,
   RESOLVE_PROJECT,
+  SESSION,
   apiError,
   askedPaths,
   mockServer,
@@ -52,6 +53,29 @@ describe('project top page', () => {
     const commands = screen.getByText(/git push -u origin main/);
     expect(commands.textContent).toContain(`git clone ${window.location.origin}/acme/forge-web.git`);
     expect(commands.textContent).toContain('cd forge-web');
+  });
+
+  it('an empty repository also says how to send an existing folder, with the token and certificate notes', async () => {
+    const server = mockServer(project(REFS_EMPTY));
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });
+    expect(await screen.findByRole('heading', { level: 3, name: '既存のフォルダから送る' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 3, name: '新しく始める' })).toBeTruthy();
+    const existing = screen.getByText(/git push -u gitstation main/);
+    expect(existing.textContent).toBe(
+      `cd <フォルダのパス>
+git remote add gitstation ${window.location.origin}/acme/forge-web.git
+git push -u gitstation main`,
+    );
+    // Why `gitstation`, not `origin`.
+    expect(screen.getByText(/origin は GitHub など別の送り先/)).toBeTruthy();
+    // One copy button per block.
+    expect(screen.getByRole('button', { name: '新しく始めるコマンドをコピー' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '既存のフォルダから送るコマンドをコピー' })).toBeTruthy();
+    // Sign-in is a personal access token: a link to the token settings.
+    expect(screen.getByRole('link', { name: 'アクセストークンを作る' }).getAttribute('href')).toBe(
+      `/${SESSION.user.username}/-/settings`,
+    );
+    expect(screen.getByText(/SEC_E_UNTRUSTED_ROOT/).textContent).toContain('管理者の案内');
   });
 
   it('copies the clone URL; says so when the clipboard is missing', async () => {
@@ -118,9 +142,9 @@ describe('URL rescue (ADR-0015, plan 10 §4.3)', () => {
     const first = server.to('GET', '/api/v1/namespaces/resolve')[0];
     expect(first?.query.get('path')).toBe('acme/forge-web/settings');
     expect(first?.query.get('prefix')).toBe('true');
-    expect(within(screen.getByRole('main')).getByRole('link', { name: 'Forge Web' }).getAttribute('href')).toBe(
-      '/acme/forge-web',
-    );
+    // The breadcrumb leads to the project.
+    const crumbs = within(screen.getByRole('main')).getByRole('navigation', { name: 'いまの場所' });
+    expect(within(crumbs).getByRole('link', { name: 'forge-web' }).getAttribute('href')).toBe('/acme/forge-web');
   });
 
   it('a remainder that is not a screen word is not found (no guessing)', async () => {

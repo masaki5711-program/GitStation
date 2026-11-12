@@ -1194,6 +1194,42 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &[],
         output: r#"{"type":"object","required":["path","event","branch","protected","jobs"],"properties":{"path":{"type":"string"},"event":{"enum":["push","merge_request"]},"branch":{"type":"string"},"protected":{"type":"boolean"},"jobs":{"type":"array","items":{"type":"object","required":["name","stage","wave","after","image","timeout_secs","tags","secrets","script_lines","services"],"properties":{"wave":{"type":"integer"},"after":{"type":"array","items":{"type":"string"}}}}}}}"#,
     },
+    // M4 C6 (ADR-0029 decision 8): a project's CI variables (secrets).
+    CommandSpec {
+        name: "ci variable list",
+        summary: "A project's CI variables, the secrets jobs name in secrets: of .forge-ci.yml: name, masked, protected, length, who set them and when; never a value (a Maintainer, a person).",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn ci variable list --project 7 --json"],
+        scopes: &["api"],
+        routes: &["GET /api/v1/projects/{id}/ci/variables"],
+        output: r#"{"type":"object","required":["variables"],"properties":{"variables":{"type":"array","items":{"type":"object","required":["name","protected_only","masked","value_bytes","created_by","updated_by","created_at","updated_at"]}}}}"#,
+    },
+    CommandSpec {
+        name: "ci variable set",
+        summary: "Set a CI variable (a Maintainer, a person). The value is read from standard input (one line, at most 4096 bytes; a trailing newline is dropped), never an argument, and never shown again. Masked in job logs unless --unmasked (a masked value is at least 8 bytes). Only jobs of push pipelines of protected branches ever get it. 400 FG-WEB-0006 for a bad name or value; 503 FG-CI-0016 when the server has no usable key.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("name", "positional", true, "The name, [A-Z][A-Z0-9_]* (not CI, PATH, HOME, HOSTNAME, FORGE_* or CI_*)."),
+            arg("--unmasked", "flag", false, "Do not mask the value in job logs."),
+        ],
+        examples: &["gstn ci variable set --project 7 DEPLOY_TOKEN < token.txt"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/ci/variables/{name}"],
+        output: r#"{"type":"object","required":["name","protected_only","masked","value_bytes","created_by","updated_by","created_at","updated_at"]}"#,
+    },
+    CommandSpec {
+        name: "ci variable delete",
+        summary: "Delete a CI variable (a Maintainer, a person; 404 FG-REPO-0005 without it). A job that still names it fails with FG-CI-0018. Needs --yes.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("name", "positional", true, "The name."),
+            arg("--yes", "flag", true, "Confirm."),
+        ],
+        examples: &["gstn ci variable delete --project 7 DEPLOY_TOKEN --yes"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/projects/{id}/ci/variables/{name}"],
+        output: r#"{"type":"null"}"#,
+    },
     CommandSpec {
         name: "context work-item",
         summary: "Show a kanflow work item's context in a project: its linked merge requests and the @req tests of its acceptance criteria, each with its source (M3 X5).",
@@ -1800,7 +1836,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     // ── M4 C8: the merge queue (ADR-0030, runbook merge-queue) ──
     CommandSpec {
         name: "queue add",
-        summary: "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target's push role; a token needs merge_execute). Everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0020 when already queued.",
+        summary: "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target's push role; a token needs merge_execute). Everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0025 when already queued.",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--iid", "option", true, "The merge request number."),
@@ -1814,7 +1850,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "queue remove",
-        summary: "Take a merge request out of the merge queue (as adding it). 409 FG-CI-0020 when it is not queued.",
+        summary: "Take a merge request out of the merge queue (as adding it). 409 FG-CI-0025 when it is not queued.",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--iid", "option", true, "The merge request number."),
@@ -1964,6 +2000,37 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis"],
         output: r#"{"type":"object","required":["pipeline_id","status","error_code","failures"]}"#,
+    },
+    CommandSpec {
+        name: "pipeline artifacts",
+        summary: "The artifacts of one CI job (M4 C6): path, size, sha256, attempt, expiry (30 days unless kept for a deployment). 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (as for pipeline log).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--pipeline", "option", true, "The pipeline id."),
+            arg("--job", "option", true, "The job id."),
+        ],
+        examples: &["gstn pipeline artifacts --project 7 --pipeline 42 --job 9 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts"],
+        output: r#"{"type":"object","required":["artifacts"],"properties":{"artifacts":{"type":"array","items":{"type":"object","required":["id","pipeline_id","job_id","job","attempt","path","size_bytes","sha256","keep","created_at","expires_at"]}}}}"#,
+    },
+    CommandSpec {
+        name: "pipeline artifact-download",
+        summary: "Download one CI artifact to a file (--output; never over an existing file) and check its sha256 (X-Forge-Sha256). 403 FG-AUTH-0022 as for pipeline artifacts.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--pipeline", "option", true, "The pipeline id."),
+            arg("--job", "option", true, "The job id."),
+            arg("id", "positional", true, "The artifact id (from pipeline artifacts)."),
+            arg("--output", "option", true, "The file to write (created new)."),
+        ],
+        examples: &["gstn pipeline artifact-download --project 7 --pipeline 42 --job 9 31 --output app.tar"],
+        scopes: &["read_api"],
+        routes: &[
+            "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts",
+            "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}",
+        ],
+        output: r#"{"type":"object","required":["id","output","size_bytes","sha256"]}"#,
     },
     CommandSpec {
         name: "api",

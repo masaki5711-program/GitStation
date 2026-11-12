@@ -46,6 +46,8 @@ export async function renderApp(options: {
   state?: unknown;
   /** Render under StrictMode, as main.tsx does (effects run twice). */
   strict?: boolean;
+  /** Keep the app's query stale time (createQueryClient) instead of 0. */
+  appStaleTime?: boolean;
 }) {
   const i18n = await createI18n(options.lang ?? 'ja');
   const api = createApiClient({
@@ -54,7 +56,12 @@ export async function renderApp(options: {
     ...(options.assign ? { assign: options.assign } : {}),
   });
   const queryClient = createQueryClient();
-  queryClient.setDefaultOptions({ queries: { retry: false } });
+  // No retries in tests. `appStaleTime` keeps the app's stale time (the
+  // cache tests); otherwise every mount reads again (staleTime 0).
+  queryClient.setDefaultOptions({
+    queries:
+      options.appStaleTime === true ? { ...queryClient.getDefaultOptions().queries, retry: false } : { retry: false },
+  });
   const entry =
     options.state === undefined
       ? (options.path ?? '/')
@@ -68,5 +75,5 @@ export async function renderApp(options: {
     </AppProviders>
   );
   const wrap = (node: ReactNode) => (options.strict === true ? <StrictMode>{node}</StrictMode> : node);
-  return { api, ...render(wrap(tree)) };
+  return { api, queryClient, ...render(wrap(tree)) };
 }

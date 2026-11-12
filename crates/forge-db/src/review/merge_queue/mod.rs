@@ -29,7 +29,7 @@ use crate::{query_error, read_query_error, Db};
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
 
-/// `FG-CI-0020 reason=<reason>` (ADR-0030 §2, §10): the queue's own state
+/// `FG-CI-0025 reason=<reason>` (ADR-0030 §2, §10): the queue's own state
 /// refuses the change; nothing was written.
 pub fn refused(reason: &'static str, mr: MergeRequestId) -> ForgeError {
     ForgeError::new(ErrorCode::MergeQueueEntryRefused)
@@ -286,7 +286,7 @@ pub enum PauseOutcome {
 
 /// Take merge request `iid` of `project` out of its queue for `viewer`
 /// (ADR-0030 §10): `decide` runs on the locked facts (forge-review
-/// reconfirms `authorize()`); no live entry is `FG-CI-0020
+/// reconfirms `authorize()`); no live entry is `FG-CI-0025
 /// reason=not_queued`; else the entry is `removed` (`reason=dequeued`)
 /// with one `merge_queue.dequeued` audit row. An entry being tested leaves
 /// its batch: the worker throws the batch away at its next step.
@@ -936,7 +936,7 @@ pub struct BatchEnd {
     pub removed: Vec<(i64, String, ErrorCode)>,
     /// The batch passed its deadline: every other entry gets one more reap,
     /// and an entry at [`forge_core::merge_queue::MAX_REAPS`] is removed
-    /// (`FG-CI-0019 reason=stalled`).
+    /// (`FG-CI-0024 reason=stalled`).
     pub reaped: bool,
     /// The queue's next batch bound (`None`: unchanged).
     pub batch_limit: Option<usize>,

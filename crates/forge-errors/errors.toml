@@ -173,7 +173,7 @@ user_message_ja = "リポジトリの保存先の読み書きに失敗しまし�
 user_message_en = "Reading or writing repository storage failed. Contact the administrator."
 user_message_id = "Gagal membaca atau menulis penyimpanan repositori. Hubungi administrator."
 cause = "A file-system operation on the storage root failed: permission denied, disk full, or an I/O error while creating or inspecting a repository directory."
-diagnosis = "The log event carries `operation` (`inspect`, `create_shard`, `create_temp`, `rename`, `cleanup`), `repo_id` when known, and the OS error in `source`. `reason=deadline` (with `operation`): the provisioning job's deadline ran out during that file-system step (the job retries); `operation=doctor_storage reason=check_timeout`: `forge doctor` `repositories.storage` did not finish its walk over the ready repositories in 60 s (`checked`, `missing`, `other` say how far it got) — a slow or hung storage volume. Check free space (`df -h <root>`), ownership and mode of the storage root, and the kernel log for I/O errors."
+diagnosis = "The log event carries `operation` (`inspect`, `create_shard`, `create_temp`, `rename`, `cleanup`), `repo_id` when known, and the OS error in `source`. `reason=files_in_use` (with `retried_after_s`; Windows os error 32 / 33): the purge's removal found a file or the directory of the repository held open by another process, waited `retried_after_s` (95 s: every idle long-lived `cat-file` process of `forge serve` is closed by then) and met it again — the purge logs it as FG-REPO-0020 and its next run resumes; find the holder with `handle.exe <repository path>` (Sysinternals) or Resource Monitor. `reason=deadline` (with `operation`): the provisioning job's deadline ran out during that file-system step (the job retries); `operation=doctor_storage reason=check_timeout`: `forge doctor` `repositories.storage` did not finish its walk over the ready repositories in 60 s (`checked`, `missing`, `other` say how far it got) — a slow or hung storage volume. Check free space (`df -h <root>`), ownership and mode of the storage root, and the kernel log for I/O errors."
 fix = "Free disk space, restore ownership of the storage root to the forge service user, or replace the failing volume."
 runbook = "repo-storage"
 test = "unreadable_or_unwritable_storage_is_storage_io_failed"
@@ -1145,6 +1145,20 @@ cause = "The `content` of a single-file commit (the simple editor) is byte for b
 diagnosis = "The log event carries `blob` (the unchanged blob id), `project_id`, `repo_id`, `route=single_file_commit`."
 fix = "Change the content before committing, or close the editor."
 test = "the_same_content_is_unchanged"
+
+# ── Browse read path: long-lived cat-file processes (2026-11-12) ──────────
+[[error]]
+code = "FG-GIT-0032"
+name = "GitBatchFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "リポジトリの読み取りで一時的な問題が発生しました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "A temporary problem occurred while reading the repository. Contact the administrator with the request ID."
+user_message_id = "Terjadi masalah sementara saat membaca repositori. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The browse API reads objects (trees, blobs, commit headers) through a long-lived `git cat-file --batch-command --buffer` process per repository (forge_git::batch: at most `BrowseLimits::batch_per_repo` (2) per repository, `batch_max_repos` (32) repositories, closed after `batch_idle` (60 s) unused). One exchange with such a process failed: it could not be started, it exited or closed its output in the middle of an answer (`reason=io`, with `source`), it answered out of protocol (`reason=protocol`: a header that does not name the requested object, a size that does not match, a missing trailing newline), or it did not answer within `batch_timeout` (2 s, never past the browse deadline; `reason=timeout`). The process is killed and never reused, and the same read is answered by the one-shot git command (`ls-tree`, `cat-file blob`, `cat-file --batch-check`) — the user gets the normal answer (or that command's own error); this code is never returned to a user."
+diagnosis = "One warn event `forge.git.batch.fallback` per failed exchange with `error_code`, `reason`, `op` (`info` / `contents`), `repo_id` and the request's `request_id` span. Isolated events: a git killed from outside or a slow disk. Many for one repository: run `git -C <path from forge admin repo-path> fsck --connectivity-only` (a corrupt object makes cat-file die) and compare with FG-GIT-0003 events of the fallback. Other reasons, each said once: `reason=unsupported` (event `forge.git.batch.unsupported`, with `git_bin`): the first process exited with git's usage status 129 — this git has no `--batch-command` (< 2.36, below forge's minimum 2.38: `git.bin` points at another git); the pool turned itself off and every read is a one-shot git until the restart. `reason=release_timeout` (event `forge.git.batch.release_timeout`, `repo_id`, `timeout_ms`): before a purge, a gc or a restore, a batch process of the repository in this process did not exit within 5 s; the step goes on and reports a file still in use itself. `reason=files_in_use` (event `forge.git.maintenance.files_in_use`, `step=gc`, `repo_id`, `retried`, git's `stderr`): gc could not delete an old pack because another process holds it (a `forge serve` batch process on a git without delete sharing); gc ran once more after 95 s when the job's time allowed (`retried`); the pack left behind is removed by the next gc. The debug event `forge.git.spawn` (target `forge_git::spawn`, `kind=batch`) counts the processes started."
+fix = "Nothing to do for isolated events (the read was answered by the fallback). For a corrupt repository follow runbook repo-maintenance (fsck → FG-GIT-0019). If the events persist, the long-lived processes can be turned off by setting `BrowseLimits::batch_per_repo` to 0 (every read is then a one-shot git, ~20–40 ms more per read on Windows)."
+test = "a_batch_process_that_dies_mid_answer_falls_back"
 
 # ── M3 O3: repository maintenance (gc / pack-refs / commit-graph / fsck) ─
 [[error]]
@@ -2200,7 +2214,7 @@ user_message_en = "This project is not bound to a project of an integration (kan
 user_message_id = "Proyek ini tidak terikat ke proyek integrasi (kanflow), sehingga item kerja tidak dapat ditautkan. Ikat proyek terlebih dahulu."
 cause = "`PUT` or `DELETE /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}` named a project without an integration binding (`forge.integration_bindings` has no row for it). `PBI-123` is numbered per kanflow project, so without the binding forge cannot tell which work item is meant (02 §2). Nothing was written. Detection (`work-item-sync`) links nothing in such a project either, without an error. M3 X5: `GET /api/v1/projects/{id}/context/work-item?ref=` (the context API) answers the same for a project without a binding: which kanflow project the reference belongs to is the binding's."
 diagnosis = "The log event carries `reason=project_not_bound` and `project_id`, with `action=WorkItemLink`. `GET /api/v1/projects/{id}/integration-bindings` (or `gstn integration-binding list --project <id>`) shows the project's binding. From the context API the event carries `route=context_work_item` instead (action ContextRead)."
-fix = "A Maintainer binds the project to its kanflow project (`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`, runbook integrations), then links again. Merge requests that existed before the binding are linked by detection at their next event (an edit, a push, a comment)."
+fix = "A Maintainer binds the project to its kanflow project (`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`, runbook integrations), then links again. Merge requests that existed before the binding are detected again by the `work_items.relink` job the binding enqueues (open ones and those merged in the last 90 days; closed ones at their next edit)."
 runbook = "integrations"
 test = "manual_link_on_an_unbound_project_is_int_0018"
 
@@ -2704,7 +2718,103 @@ runbook = "ci-runner"
 test = "configured_default_volumes_stop_the_runner_before_any_job"
 
 [[error]]
+code = "FG-CI-0016"
+name = "SecretKeyUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "CI のシークレットの鍵を使えません。シークレットの登録や、シークレットを使うジョブは止まっています。管理者に連絡してください。"
+user_message_en = "The CI secret key is unavailable. Saving secrets and jobs that use secrets are stopped. Contact the administrator."
+user_message_id = "Kunci rahasia CI tidak tersedia. Penyimpanan rahasia dan tugas yang memakai rahasia dihentikan. Hubungi administrator."
+cause = "M4 C6 (plan 14 §9 #2, ADR-0013, ADR-0029 amendment C6): CI variable values are stored sealed (AES-256-GCM, bound to their project and name) under a key of `ci.secret_keys_file` (`<key_id> <64 hex>` per line; the highest key_id seals, every listed key opens). forge could not use it: the file is not configured (`reason=not_configured`), cannot be read or parsed (`reason=keys_unreadable`, with the FG-SYS-0002 reason as `config_reason`), no longer lists the key a stored value was sealed with (`reason=key_missing`, `key_id`), or a stored value does not open (`reason=value_unreadable`: changed in the database, or sealed for another project or name). Where it happens: writing a variable (`PUT …/ci/variables/{name}`, 503, nothing written); a runner's claim of a job that asks for secrets (the job is failed with this code before the runner gets it — never run without its secrets); a log chunk of a job with masked secrets (refused, so no unmasked chunk is stored)."
+diagnosis = "`forge serve` logs `forge.ci.secret_key_unavailable` (error) with `error_code`, `request_id` and `context` `reason`, `key_id`, `project_id`, `job_id` / `pipeline_id` (never a value or a key). `forge doctor` `ci.secret_keys` checks the file (present, readable by forge only, parses, and every key_id in forge.ci_variables is listed). Read: SELECT key_id, count(*) FROM forge.ci_variables GROUP BY key_id; and the job: SELECT id, status, error_code FROM forge.ci_jobs WHERE id = <job_id>;"
+fix = "Follow runbook ci-secrets: restore the key file from the secret store (never generate a new key for values sealed with the old one), set `ci.secret_keys_file` and its permissions (0600, forge's user), restart `forge serve`, then retry the failed pipelines (gstn pipeline retry). A value sealed with a lost key cannot be recovered: set it again (gstn ci variable set)."
+runbook = "ci-secrets"
+test = "a_job_whose_secrets_cannot_be_opened_fails_with_secret_key_unavailable"
+
+[[error]]
+code = "FG-CI-0017"
+name = "SecretOnUnprotectedRef"
+http_status = 409
+severity = "info"
+user_message_ja = "保護されていないブランチ、またはマージリクエストのパイプラインのジョブがシークレットを求めました。シークレットは渡さず、ジョブは失敗にしました。"
+user_message_en = "A job of a pipeline on an unprotected branch or of a merge request asked for secrets. No secret was given and the job was failed."
+user_message_id = "Tugas dari pipeline pada cabang yang tidak dilindungi atau dari merge request meminta rahasia. Tidak ada rahasia yang diberikan dan tugas digagalkan."
+cause = "M4 C6 (ADR-0029 decision 8, obligation 5): secrets are released only to a pipeline whose `source` is `push` and whose `protected` was true when it was created (`StoredPipeline::secrets_allowed`). The plan already refuses such a job (FG-CI-0001 `secret_on_unprotected_ref`), so this is the server's second wall: a runner claimed a job that names secrets (`ci_jobs.secrets`) in a pipeline that may not have them (a merge request, a manual or scheduled run, an unprotected push — a row written by an older forge, or a defect). The job is failed in the claim's place, its token revoked, and no value is read or opened."
+diagnosis = "`forge serve` logs `forge.ci.secret_on_unprotected_ref` (info) with `error_code`, `request_id`, `job_id`, `pipeline_id`, `project_id`, `runner_id` and `secrets` (the names). Read: SELECT source, protected, ref FROM forge.ci_pipelines WHERE id = <pipeline_id>; SELECT name, secrets FROM forge.ci_jobs WHERE id = <job_id>;"
+fix = "Run jobs that need secrets only on protected branches: protect the branch (Maintainer), push there, and keep `merge_requests: false` on such jobs. Nothing to change on the server; report a pipeline that should have been refused at planning as a defect."
+runbook = "ci-secrets"
+test = "a_job_asking_for_secrets_on_an_unprotected_pipeline_fails_without_values"
+
+[[error]]
 code = "FG-CI-0018"
+name = "SecretNotDefined"
+http_status = 409
+severity = "info"
+user_message_ja = "ジョブが求めたシークレットがプロジェクトに登録されていません。ジョブは失敗にしました。"
+user_message_en = "A secret the job asked for is not defined in the project. The job was failed."
+user_message_id = "Rahasia yang diminta tugas tidak terdaftar di proyek. Tugas digagalkan."
+cause = "M4 C6: a job of a protected push pipeline names a secret (`secrets:` in `.forge-ci.yml`) that has no CI variable of that name in the project (never set, or deleted since). The job is failed in the claim's place rather than run without it (a script that silently gets an empty value could deploy or publish wrongly)."
+diagnosis = "`forge serve` logs `forge.ci.secret_not_defined` (info) with `error_code`, `request_id`, `job_id`, `pipeline_id`, `project_id` and `missing` (the names). `gstn ci variable list --project <id>` lists what is defined (names and flags only)."
+fix = "Set the variable (Maintainer: gstn ci variable set --project <id> <NAME>, the value on standard input) or remove the name from the job's `secrets:`, then retry the pipeline (gstn pipeline retry)."
+runbook = "ci-secrets"
+test = "a_job_asking_for_an_undefined_secret_fails"
+
+[[error]]
+code = "FG-CI-0019"
+name = "ArtifactTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "CI のジョブの成果物が上限を超えました。成果物は保存されず、ジョブは失敗にしました。"
+user_message_en = "The CI job's artifacts exceeded the limit. They were not stored and the job was failed."
+user_message_id = "Artefak tugas CI melampaui batas. Artefak tidak disimpan dan tugas digagalkan."
+cause = "M4 C6 (plan 14 §4.1): a job's artifacts (`artifacts: { paths }` in `.forge-ci.yml`) are bounded: 100 MiB per file, 512 MiB and 1000 files per job attempt. The runner counts before it sends (`reason=file_limit` / `job_limit`, nothing is sent and the job is failed); forge checks again while it stores (`PUT /api/v1/runner/jobs/{job_id}/artifacts`, 413, the partly written file is removed)."
+diagnosis = "The runner host (`journalctl -u forge-runner`) or `forge serve` logs the code with `job_id`, `reason`, `limit_bytes` / `limit_files`, and `path` for one file. Read: SELECT count(*), sum(size_bytes) FROM forge.ci_artifacts WHERE job_id = <job_id> AND attempt = <attempt>;"
+fix = "Declare fewer or smaller paths (compress outputs, upload only what later jobs or people need), then retry the pipeline (gstn pipeline retry). The limits are fixed."
+test = "an_artifact_past_the_limit_is_refused"
+
+[[error]]
+code = "FG-CI-0020"
+name = "ArtifactTransferFailed"
+http_status = 503
+severity = "warn"
+user_message_ja = "CI のジョブの成果物を送れない、または受け取れませんでした。ジョブは失敗にしました。"
+user_message_en = "The CI job's artifacts could not be sent or received. The job was failed."
+user_message_id = "Artefak tugas CI tidak dapat dikirim atau diterima. Tugas digagalkan."
+cause = "M4 C6: the runner moves artifacts with the job's own token — before the script it fetches the artifacts of the jobs it `needs` (`GET /api/v1/runner/jobs/{job_id}/needs/artifacts[/{id}]`) into the work tree, and after a successful script it uploads each file of its declared paths. One of these failed: the server answered an error (`server_code`, e.g. FG-CI-0004 when the job ended meanwhile, FG-REPO-0003 storage), the connection failed or timed out (`reason=send` / `receive`), the work tree could not be read (`reason=collect`), or a needed artifact could not be placed (`reason=path_invalid` / `path_exists` / `place`: a path is already in the checkout, or not a relative path). The job is reported failed so a later job never runs without what it needs."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (warn) with `error_code`, `request_id`, `job_id`, `attempt`, `pipeline_id`, `reason`, `path`, `server_code`; the job's log ends with the same code. On forge: `forge.ci.artifact_stored` per stored file; SELECT id, path, size_bytes FROM forge.ci_artifacts WHERE job_id = <job_id>; `forge doctor` `repositories.storage` for the storage root."
+fix = "Follow runbook ci-runner (Artifacts): fix the storage (free space under `<storage.root>/ci-artifacts`) or the network between the runner and forge, or move the conflicting path out of the repository, then retry the pipeline (gstn pipeline retry)."
+runbook = "ci-runner"
+test = "a_failed_artifact_upload_fails_the_job"
+
+[[error]]
+code = "FG-CI-0021"
+name = "SecretInArtifact"
+http_status = 422
+severity = "warn"
+user_message_ja = "シークレットを受け取ったジョブの成果物に、シークレットの値が含まれていました。その成果物は保存せず、ジョブは失敗にしました。"
+user_message_en = "An artifact of a job that received secrets contained a secret's value. The artifact was not stored and the job was failed."
+user_message_id = "Artefak dari tugas yang menerima rahasia berisi nilai rahasia. Artefak tidak disimpan dan tugas digagalkan."
+cause = "M4 C6 review (HIGH): a job that was given secrets (ci_jobs.secrets_released) uploaded an artifact whose bytes contain one of its masked values in a form forge masks (the value, base64 at any byte offset, URL-safe base64, hex, percent- or JSON-escaped; the snapshot taken at the claim). The upload is refused before anything is stored (`PUT /api/v1/runner/jobs/{job_id}/artifacts`, 422, the partly written file removed); the runner fails the job with FG-CI-0020 `server_code=FG-CI-0021`. A transformed value (encrypted, compressed, split) is not found: artifacts of such jobs are also readable only by Maintainers (people)."
+diagnosis = "`forge serve` logs it (warn) with `error_code`, `request_id`, `job_id`, `path` (never the value or which variable). Read: SELECT id, name, secrets, secrets_released FROM forge.ci_jobs WHERE id = <job_id>;"
+fix = "Follow runbook ci-secrets (Artifacts of jobs with secrets): do not write secrets into files under the declared artifact paths (no `env > out.txt`); write them under /tmp, which is not collected. If a value may have leaked elsewhere, rotate it."
+runbook = "ci-secrets"
+test = "an_artifact_holding_a_released_secret_is_refused"
+
+[[error]]
+code = "FG-CI-0022"
+name = "ArtifactQuotaExceeded"
+http_status = 413
+severity = "info"
+user_message_ja = "プロジェクトの CI の成果物が保存の上限に達しました。成果物は保存されず、ジョブは失敗にしました。"
+user_message_en = "The project's CI artifacts reached their storage quota. The artifact was not stored and the job was failed."
+user_message_id = "Artefak CI proyek mencapai kuota penyimpanan. Artefak tidak disimpan dan tugas digagalkan."
+cause = "M4 C6 review: the stored artifacts of one project (every job, until they expire after 30 days) may hold at most `ci.artifact_quota_bytes` (default 5 GiB). An upload that would pass it is refused (413), checked before the bytes are read and again, atomically, when the artifact is recorded."
+diagnosis = "The log event carries `project_id`, `stored_bytes`, `quota_bytes`. Read: SELECT count(*), sum(size_bytes), min(expires_at) FROM forge.ci_artifacts WHERE project_id = <id>;"
+fix = "Declare fewer or smaller artifact paths, or wait for older artifacts to expire; the operator may raise `ci.artifact_quota_bytes` (runbook ci-runner, Artifacts) and restart forge serve."
+test = "an_upload_past_the_project_quota_is_refused"
+
+[[error]]
+code = "FG-CI-0023"
 name = "MergeQueueChecksFailed"
 http_status = 409
 severity = "info"
@@ -2717,7 +2827,7 @@ fix = "Read the pipeline diagnosis of the train, fix the change (it may only fai
 test = "one_bad_entry_of_four_is_found_by_bisection"
 
 [[error]]
-code = "FG-CI-0019"
+code = "FG-CI-0024"
 name = "MergeQueueStalled"
 http_status = 503
 severity = "alert"
@@ -2731,7 +2841,7 @@ runbook = "merge-queue"
 test = "a_batch_past_its_deadline_is_reaped_and_requeued"
 
 [[error]]
-code = "FG-CI-0020"
+code = "FG-CI-0025"
 name = "MergeQueueEntryRefused"
 http_status = 409
 severity = "info"

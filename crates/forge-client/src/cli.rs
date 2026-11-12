@@ -1720,6 +1720,31 @@ pub enum PipelineCommand {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         pipeline: i64,
     },
+    /// A job's artifacts (M4 C6): path, size, sha256, expiry. Refused to an
+    /// AI agent's token as `log` is.
+    Artifacts {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        job: i64,
+    },
+    /// Download one artifact to a new file and check its sha256.
+    ArtifactDownload {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        job: i64,
+        /// The artifact id (from `pipeline artifacts`).
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The file to write (created new, never over an existing one).
+        #[arg(long, value_name = "FILE")]
+        output: std::path::PathBuf,
+    },
 }
 
 /// A job's attempt: 1..=100.
@@ -2066,6 +2091,47 @@ pub enum CiCommand {
         /// main,release/*). Without it no branch counts as protected.
         #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "A,B")]
         protected: Option<Vec<String>>,
+    },
+    /// A project's CI variables — the secrets jobs name in `secrets:`
+    /// (Maintainer; never a value is shown): list, set, delete.
+    #[command(disable_help_subcommand = true)]
+    Variable {
+        #[command(subcommand)]
+        command: CiVariableCommand,
+    },
+}
+
+/// `gstn ci variable` (M4 C6): a project's CI secrets on the server.
+#[derive(Subcommand, Debug)]
+pub enum CiVariableCommand {
+    /// The project's variables: name, flags, length, who set them (never
+    /// a value).
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Set a variable; the value is read from standard input (one line;
+    /// a trailing newline is dropped), never from an argument.
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The name, [A-Z][A-Z0-9_]* (not CI, PATH, HOME, HOSTNAME, FORGE_*
+        /// or CI_*).
+        #[arg(value_parser = parse_text)]
+        name: String,
+        /// Do not mask the value in job logs (default: masked).
+        #[arg(long)]
+        unmasked: bool,
+    },
+    /// Delete a variable.
+    Delete {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(value_parser = parse_text)]
+        name: String,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
     },
 }
 

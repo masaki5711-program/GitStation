@@ -513,9 +513,9 @@ describe('the document list', () => {
     expect(screen.getByText('2 confidential documents are not shown to an AI agent.')).toBeTruthy();
   });
 
-  it('the project navigation links to the documents', async () => {
+  it('the project navigation (the sidebar) links to the documents', async () => {
     await open(BASE);
-    const nav = await screen.findByRole('navigation', { name: 'Repository screens' });
+    const nav = await screen.findByRole('navigation', { name: 'Project menu' });
     const link = within(nav).getByRole('link', { name: 'Documents' });
     expect(link.getAttribute('aria-current')).toBe('page');
   });

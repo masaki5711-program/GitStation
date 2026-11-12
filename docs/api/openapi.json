@@ -525,6 +525,85 @@
         ],
         "type": "object"
       },
+      "ArtifactBody": {
+        "additionalProperties": false,
+        "description": "One artifact's metadata.",
+        "properties": {
+          "attempt": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "job": {
+            "description": "The job that uploaded it.",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "keep": {
+            "description": "Kept past the retention (a deployed version).",
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "pipeline_id",
+          "job_id",
+          "job",
+          "attempt",
+          "path",
+          "size_bytes",
+          "sha256",
+          "keep",
+          "created_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "ArtifactList": {
+        "additionalProperties": false,
+        "description": "A list of artifacts.",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifacts"
+        ],
+        "type": "object"
+      },
       "BindProject": {
         "additionalProperties": false,
         "description": "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`.",
@@ -1094,6 +1173,70 @@
         ],
         "type": "object"
       },
+      "CiVariableBody": {
+        "additionalProperties": false,
+        "description": "A variable's metadata (never its value).",
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "masked": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protected_only": {
+            "type": "boolean"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "value_bytes": {
+            "description": "The value's length in bytes.",
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "protected_only",
+          "masked",
+          "value_bytes",
+          "created_by",
+          "updated_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "CiVariableList": {
+        "additionalProperties": false,
+        "description": "`GET …/ci/variables`.",
+        "properties": {
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/CiVariableBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "variables"
+        ],
+        "type": "object"
+      },
       "ClaimAssertion": {
         "additionalProperties": false,
         "description": "`POST …/act-as/claim`.",
@@ -1260,9 +1403,16 @@
             "type": "string"
           },
           "secret_names": {
-            "description": "The secret names the job asks for (empty unless `secrets_allowed`;\nno value before C6).",
+            "description": "The secret names the job asks for (empty unless `secrets_allowed`).",
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "secrets": {
+            "description": "The values of those names (M4 C6): give each to the job's\ncontainer as an environment variable, and mask a `masked` one (and\nits common encodings) in the log before sending it. Shown once;\nnever logged. A job whose secrets may not or cannot be given is\nnever handed out (it is failed with FG-CI-0016 / 0017 / 0018).",
+            "items": {
+              "$ref": "#/components/schemas/ReleasedSecretBody"
             },
             "type": "array"
           },
@@ -1303,6 +1453,7 @@
           "definition_hash",
           "secrets_allowed",
           "secret_names",
+          "secrets",
           "lease_until",
           "job_token",
           "job_token_expires_at"
@@ -7213,6 +7364,34 @@
         ],
         "type": "object"
       },
+      "PutCiVariable": {
+        "additionalProperties": false,
+        "description": "`PUT …/ci/variables/{name}`.",
+        "properties": {
+          "masked": {
+            "description": "Mask it in job logs (default `true`).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "protected_only": {
+            "description": "Give it only to pipelines of protected branches (default `true`;\ntoday every value goes only to a push pipeline of a protected\nbranch, ADR-0029).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "The value: one line of 1..=4096 bytes, no control character, no\nwhite space at either end, not starting with a quote; at least 8\nbytes when masked. Never answered back.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "PutCodeownersEnforcement": {
         "additionalProperties": false,
         "description": "`PUT …/merge-settings/codeowners-enforcement`.",
@@ -7355,7 +7534,7 @@
             "type": "string"
           },
           "deadline_at": {
-            "description": "UTC, RFC 3339: tested past it, the batch is reaped (FG-CI-0019).",
+            "description": "UTC, RFC 3339: tested past it, the batch is reaped (FG-CI-0024).",
             "type": "string"
           },
           "request_id": {
@@ -7415,7 +7594,7 @@
             "type": "integer"
           },
           "error_code": {
-            "description": "The code of a removal by the queue (FG-CI-0018, FG-CI-0019, …).",
+            "description": "The code of a removal by the queue (FG-CI-0023, FG-CI-0024, …).",
             "type": [
               "string",
               "null"
@@ -7858,6 +8037,30 @@
         "required": [
           "path",
           "kind"
+        ],
+        "type": "object"
+      },
+      "ReleasedSecretBody": {
+        "additionalProperties": false,
+        "description": "One secret released with a claim (M4 C6).",
+        "properties": {
+          "masked": {
+            "description": "Mask it in the job's log.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "`[A-Z][A-Z0-9_]*`: the environment variable's name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value (one line, at most 4096 bytes).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "masked"
         ],
         "type": "object"
       },
@@ -10265,6 +10468,36 @@
           "outcome",
           "fields",
           "webhook"
+        ],
+        "type": "object"
+      },
+      "UploadedArtifactBody": {
+        "additionalProperties": false,
+        "description": "`201` of an upload.",
+        "properties": {
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "description": "Lower-case hex.",
+            "type": "string"
+          },
+          "size_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "size_bytes",
+          "sha256"
         ],
         "type": "object"
       },
@@ -14171,6 +14404,147 @@
         "x-forge-max-body-bytes": 16384
       }
     },
+    "/api/v1/projects/{id}/ci/variables": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_ci_variables",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CiVariableList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's CI variables: name, protected_only, masked, value length, who set them and when; never a value (people only; Maintainer)",
+        "x-forge-action": "CiVariableManage"
+      }
+    },
+    "/api/v1/projects/{id}/ci/variables/{name}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_ci_variables_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a CI variable: 204; 404 FG-REPO-0005 without it (people only; Maintainer)",
+        "x-forge-action": "CiVariableManage"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_ci_variables_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutCiVariable"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CiVariableBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set a CI variable ({\"value\", \"protected_only\"?, \"masked\"?}, both default true): 201 created or 200 replaced, the metadata only (the value is never answered again); 400 FG-WEB-0006 for a bad name or value (param and reason, never the value); 503 FG-CI-0016 without a usable ci.secret_keys_file. Values reach only jobs of push pipelines of protected branches (people only; Maintainer)",
+        "x-forge-action": "CiVariableManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
     "/api/v1/projects/{id}/commits/{sha}/checks": {
       "get": {
         "operationId": "get_api_v1_projects_id_commits_sha_checks",
@@ -16497,7 +16871,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Take a merge request out of the merge queue (as adding it); 409 FG-CI-0020 when it is not queued",
+        "summary": "Take a merge request out of the merge queue (as adding it); 409 FG-CI-0025 when it is not queued",
         "x-forge-action": "MergeQueueDequeue"
       },
       "get": {
@@ -16601,7 +16975,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target branch's push role; a token needs merge_execute); everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0020 when already queued",
+        "summary": "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target branch's push role; a token needs merge_execute); everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0025 when already queued",
         "x-forge-action": "MergeQueueEnqueue",
         "x-forge-max-body-bytes": 1024
       }
@@ -17538,6 +17912,128 @@
         },
         "summary": "A pipeline's deterministic diagnosis (plan 04 P-9): each failed job's fingerprint, error codes, masked excerpt with its log lines, occurrences and known fixes (a merge request whose pipeline later passed); pending while the worker has not fingerprinted it; 404 FG-REPO-0005 without such a pipeline; 403 FG-AUTH-0022 to an AI agent audience unless both marks are open (project readers)",
         "x-forge-action": "PipelineDiagnosisRead"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_artifacts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A CI job's artifacts (every attempt's): path, size, sha256, attempt, keep, expiry (30 days unless kept for a deployment); 404 FG-REPO-0005 without such a pipeline or job; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers)",
+        "x-forge-action": "CiArtifactRead"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_artifacts_artifact_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One CI artifact's bytes (application/octet-stream, attachment, X-Forge-Sha256); 404 FG-REPO-0005 without it (or expired); 403 FG-AUTH-0022 as for the list (project readers)",
+        "x-forge-action": "CiArtifactRead"
       }
     },
     "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log": {
@@ -19629,6 +20125,56 @@
         "x-forge-max-body-bytes": 4096
       }
     },
+    "/api/v1/runner/jobs/{job_id}/artifacts": {
+      "put": {
+        "operationId": "put_api_v1_runner_jobs_job_id_artifacts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The file's path relative to the job's work tree (no leading /, no . / .. / .git component, at most 1024 bytes)",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadedArtifactBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Upload one file of a job's artifacts (the raw bytes; ?path= the file's path in the work tree) with the job's own token fgj_..., while the job runs: 201 {id, path, size_bytes, sha256}; 413 FG-CI-0019 past 100 MiB per file or 512 MiB / 1000 files per attempt; 409 FG-CI-0004 once the job ended; 400 FG-WEB-0006 for a bad or repeated path",
+        "x-forge-action": "JobArtifactUpload"
+      }
+    },
     "/api/v1/runner/jobs/{job_id}/complete": {
       "post": {
         "operationId": "post_api_v1_runner_jobs_job_id_complete",
@@ -19783,6 +20329,88 @@
         "summary": "Append a log chunk to a job the runner holds ({\"attempt\", \"seq\", \"text\"}; append only, a resent seq is a no-op); 413 FG-CI-0006 past the job's limit; 409 FG-CI-0004 when the lease was lost (the holding runner only)",
         "x-forge-action": "RunnerLogAppend",
         "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/runner/jobs/{job_id}/needs/artifacts": {
+      "get": {
+        "operationId": "get_api_v1_runner_jobs_job_id_needs_artifacts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The artifacts of the jobs a running job needs (their current, succeeded attempt, same pipeline), with the job's own token fgj_...",
+        "x-forge-action": "JobArtifactDownload"
+      }
+    },
+    "/api/v1/runner/jobs/{job_id}/needs/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "get_api_v1_runner_jobs_job_id_needs_artifacts_artifact_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One artifact of a job's needs: its bytes (application/octet-stream), with the job's own token fgj_...; 404 FG-REPO-0005 for any other artifact",
+        "x-forge-action": "JobArtifactDownload"
       }
     },
     "/api/v1/runner/jobs/{job_id}/repo.git/git-upload-pack": {

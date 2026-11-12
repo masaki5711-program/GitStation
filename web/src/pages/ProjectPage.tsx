@@ -10,7 +10,8 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { ApiFailure, call } from '../api/client';
-import { refParam, useSpec, useTree } from '../api/repo';
+import { mergeRequestsQuery } from '../api/mergeRequests';
+import { commitsQuery, latestCommitQuery, refParam, useSpec, useTree } from '../api/repo';
 import {
   blobUrl,
   branchesUrl,
@@ -20,10 +21,12 @@ import {
   pullsUrl,
   tagsUrl,
 } from '../features/repoUrls';
+import { connectionIsSlow, settle, whenIdle } from '../features/prefetch';
 import { TreeListing } from './repo/TreeListing';
 import { shortOid } from './repo/common';
 import { Loading } from '../components/Loading';
 import { useApi } from '../api/context';
+import { projectQuery } from '../api/namespaces';
 import { Breadcrumb } from '../components/Breadcrumb';
 import controls from '../components/controls.module.css';
 import { CopyButton } from '../components/CopyButton';
@@ -32,6 +35,7 @@ import { InlineError } from '../components/InlineError';
 import { QueryError } from '../components/QueryError';
 import { formatDate, formatDateTime, formatRelative, roleLabel, visibilityLabel } from '../features/labels';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { useSession } from '../session/session';
 import { rememberProject } from '../hooks/recent';
 import styles from './Namespace.module.css';
 import { PageHeader } from '../ui/PageHeader';
@@ -77,16 +81,7 @@ function LatestCommit({ id, path, branch }: { id: number; path: string; branch: 
   const { t, i18n } = useTranslation();
   const api = useApi();
   const ref = `refs/heads/${branch}`;
-  const latest = useQuery({
-    queryKey: ['commits-latest', id, ref],
-    queryFn: ({ signal }) =>
-      call(() =>
-        api.GET('/api/v1/projects/{id}/repository/commits', {
-          signal,
-          params: { path: { id }, query: { ref, limit: 1 } },
-        }),
-      ),
-  });
+  const latest = useQuery(latestCommitQuery(api, id, ref));
   if (latest.isPending) return <Loading />;
   if (latest.isError) {
     return (
@@ -116,6 +111,46 @@ function LatestCommit({ id, path, branch }: { id: number; path: string; branch: 
           <code className={styles.number}>{sha}</code>
         </Link>
       </p>
+    </section>
+  );
+}
+
+/** An empty repository: how to send the first commit — from a new clone,
+ * or from a folder that is already a git repository (whose `origin` may
+ * point elsewhere, e.g. GitHub: so the remote is added as `gitstation`).
+ * Then the two things people trip on: the password is a personal access
+ * token, and an untrusted organization CA (the administrator explains it). */
+function EmptyRepository({ name, cloneUrl }: { name: string; cloneUrl: string }) {
+  const { t } = useTranslation();
+  const username = useSession().user.username;
+  const fresh = t('project.emptyCommands', { url: cloneUrl, name });
+  const existing = t('project.emptyExistingCommands', { url: cloneUrl });
+  return (
+    <section className={styles.card} aria-labelledby="repo-empty">
+      <h2 id="repo-empty">{t('project.emptyTitle')}</h2>
+      <div className={styles.emptyBlock}>
+        <h3>{t('project.emptyNewTitle')}</h3>
+        <p>{t('project.emptyBody')}</p>
+        <pre className={styles.pre}>
+          <code>{fresh}</code>
+        </pre>
+        <CopyButton text={fresh} label={t('project.copyNewCommands')} />
+      </div>
+      <div className={styles.emptyBlock}>
+        <h3>{t('project.emptyExistingTitle')}</h3>
+        <p>{t('project.emptyExistingBody')}</p>
+        <pre className={styles.pre}>
+          <code>{existing}</code>
+        </pre>
+        <CopyButton text={existing} label={t('project.copyExistingCommands')} />
+      </div>
+      <ul className={styles.emptyNotes}>
+        <li>
+          {t('project.emptyTokenNote')}{' '}
+          <Link to={`/${encodeURIComponent(username)}/-/settings`}>{t('project.emptyTokenLink')}</Link>
+        </li>
+        <li>{t('project.emptyCertificateNote')}</li>
+      </ul>
     </section>
   );
 }
@@ -155,18 +190,8 @@ function RepositoryState({
     );
   }
   const { default_branch: branch, refs: list } = refs.data;
-  const commands = t('project.emptyCommands', { url: cloneUrl, name });
   if (branch === null && list.length === 0) {
-    return (
-      <section className={styles.card} aria-labelledby="repo-empty">
-        <h2 id="repo-empty">{t('project.emptyTitle')}</h2>
-        <p>{t('project.emptyBody')}</p>
-        <pre className={styles.pre}>
-          <code>{commands}</code>
-        </pre>
-        <CopyButton text={commands} label={t('project.copyCommands')} />
-      </section>
-    );
+    return <EmptyRepository name={name} cloneUrl={cloneUrl} />;
   }
   if (branch === null) return null;
   return <LatestCommit id={id} path={path} branch={branch} />;
@@ -259,9 +284,25 @@ function ProjectInfo({ id, path, created, cloneUrl }: { id: number; path: string
   );
 }
 
+/** Once the page has drawn and the browser is idle: the screens one opens
+ * next from here — the history and the open merge requests — so their tab
+ * shows at once. (The README is already read by the file list below.) */
+function useIdlePrefetch(projectId: number, ref: string | null) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (ref === null || connectionIsSlow()) return undefined;
+    return whenIdle(() => {
+      void settle(queryClient.infiniteQuery(commitsQuery(api, projectId, ref, '')));
+      void settle(queryClient.query(mergeRequestsQuery(api, projectId, { state: 'open' })));
+    });
+  }, [api, queryClient, projectId, ref]);
+}
+
 /** The root of the default branch, with its README, under the summary. */
 function ProjectFiles({ projectId, project }: { projectId: number; project: string }) {
   const spec = useSpec(projectId, '');
+  useIdlePrefetch(projectId, spec.data === undefined ? null : refParam(spec.data.rev));
   if (spec.data === undefined) return null;
   return <TreeListing projectId={projectId} project={project} spec={spec.data} />;
 }
@@ -269,11 +310,7 @@ function ProjectFiles({ projectId, project }: { projectId: number; project: stri
 export function ProjectPage({ id }: { id: number }) {
   const { t } = useTranslation();
   const api = useApi();
-  const project = useQuery({
-    queryKey: ['project', id],
-    queryFn: ({ signal }) =>
-      call(() => api.GET('/api/v1/projects/{id}', { signal, params: { path: { id } } })),
-  });
+  const project = useQuery(projectQuery(api, id));
   const data = project.data;
   useDocumentTitle(data?.display_name ?? null);
   useEffect(() => {
