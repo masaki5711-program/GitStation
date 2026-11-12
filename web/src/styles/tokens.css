@@ -138,6 +138,8 @@
   --gs-status-min-height: 1.5rem; /* a status line's reserved height (no jump when it fills) */
   --gs-numeric: tabular-nums; /* counts and times: digits line up and do not jitter */
   --gs-log-max-height: 32rem; /* a log or excerpt box before it scrolls */
+  --gs-editor-min-height: 28rem; /* the simple editor and its preview, at least */
+  --gs-choice-indent: 1.75rem; /* a radio choice's help and fields, under its label text */
   --gs-accent-border-width: 4px; /* the coloured edge of a status line */
   --gs-accent-rule-width: 3px; /* the brand-teal rule on a page header or card */
   --gs-accent-rule-length: 2.5rem;

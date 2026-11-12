@@ -442,6 +442,8 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
 /// is the document API, `RepoBrowse`). `pipelines` is the CI screens (plan 14
 /// M4; their data is the pipeline API, project readers). `webhooks` is the
 /// webhook screens (M3 I2; their data is the webhook API, Maintainer).
+/// `edit` / `new` are the simple editor (E2; its data is the browse API and
+/// the single-file commit, `RepoPush`).
 pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Tree,
     RouteWord::Blob,
@@ -458,6 +460,8 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Documents,
     RouteWord::Pipelines,
     RouteWord::Webhooks,
+    RouteWord::Edit,
+    RouteWord::New,
 ];
 
 /// The words whose page is the SPA shell on a group (no merge request

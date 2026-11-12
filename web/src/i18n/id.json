@@ -263,7 +263,8 @@
     "symlink": "Tautan simbolis",
     "empty": "Folder ini kosong.",
     "downloadZip": "Unduh zip",
-    "downloadTar": "Unduh tar.gz"
+    "downloadTar": "Unduh tar.gz",
+    "newFile": "Berkas baru"
   },
   "readme": {
     "truncated": "README besar; hanya bagian awal yang ditampilkan."
@@ -287,7 +288,8 @@
     "lineLabel": "Baris {{n}}",
     "gotoLine": "Ke baris",
     "gotoGo": "Pergi",
-    "openDocument": "Buka sebagai dokumen"
+    "openDocument": "Buka sebagai dokumen",
+    "edit": "Edit"
   },
   "blame": {
     "title": "Penulis per baris",
@@ -1420,5 +1422,85 @@
     "cancelYes": "Ya, batalkan",
     "cancelNo": "Biarkan berjalan",
     "span": "{{from}} – {{to}}"
+  },
+  "editor": {
+    "newTitle": "Berkas baru",
+    "docTitle": "Edit {{name}}",
+    "subtitle": "Mengedit berkas di branch {{branch}}.",
+    "save": "Simpan perubahan",
+    "statusUnsaved": "Ada perubahan yang belum disimpan",
+    "statusUnchanged": "Belum ada perubahan",
+    "statusTooLarge": "Terlalu besar untuk disimpan",
+    "statusNeedContent": "Tulis isi agar dapat disimpan",
+    "statusEmpty": "Belum ada yang ditulis",
+    "editPane": "Edit",
+    "previewPane": "Pratinjau",
+    "tabsLabel": "Beralih antara edit dan pratinjau",
+    "contentLabel": "Isi {{path}}",
+    "previewEmpty": "Markdown yang Anda tulis muncul di sini dalam bentuk terformat.",
+    "pathLabel": "Path berkas",
+    "pathPlaceholder": "docs/spec.md",
+    "pathHelp": "Path dari akar repositori. Folder yang belum ada akan dibuat.",
+    "pathRequired": "Masukkan path berkas.",
+    "pathIsFolder": "Akhiri path dengan nama berkas (misalnya docs/spec.md).",
+    "counts": "{{lines}} baris · {{chars}} karakter",
+    "shortcutHint": "Ctrl+S untuk menyimpan",
+    "tooLarge": "Isinya lebih besar dari {{size}}, sehingga tidak dapat disimpan dari editor. Push dengan git.",
+    "notBranchTitle": "Hanya branch yang dapat diedit",
+    "notBranchBody": "Isi tag atau commit tidak dapat diubah. Pilih branch, lalu edit.",
+    "backToFile": "Kembali ke berkas",
+    "cannotEditTitle": "Berkas ini tidak dapat diedit di editor",
+    "cannotEditBinary": "Hanya berkas teks (UTF-8) yang dapat diedit. Ubah dengan git.",
+    "cannotEditLarge": "Editor menerima berkas hingga {{size}}. Ubah dengan git.",
+    "leaveTitle": "Ada perubahan yang belum disimpan",
+    "leaveBody": "Jika Anda keluar sekarang, suntingan Anda hilang.",
+    "leaveConfirm": "Buang dan keluar",
+    "dialog": {
+      "title": "Simpan perubahan",
+      "message": "Pesan commit",
+      "messageRequired": "Masukkan pesan commit.",
+      "defaultUpdate": "Perbarui {{path}}",
+      "defaultAdd": "Tambahkan {{path}}",
+      "addDescription": "Tambahkan deskripsi",
+      "description": "Deskripsi (opsional)",
+      "descriptionHelp": "Jelaskan alasan perubahan; peninjau akan melihatnya.",
+      "target": "Simpan ke",
+      "targetBranch": "Buat branch baru dan ajukan perubahan (merge request)",
+      "targetBranchHelp": "{{branch}} tetap seperti semula. Perubahan masuk setelah ditinjau.",
+      "branchName": "Nama branch baru",
+      "branchRequired": "Masukkan nama branch.",
+      "branchSame": "Gunakan nama selain branch asal.",
+      "targetDirect": "Commit langsung ke branch ini ({{branch}})",
+      "directHelp": "Perubahan langsung masuk ke {{branch}} tanpa tinjauan.",
+      "directForbidden": "Branch ini dilindungi dan tidak menerima commit langsung.",
+      "directRole": "Branch ini dilindungi; peran Anda tidak dapat commit langsung.",
+      "submitBranch": "Simpan dan buka merge request",
+      "submitDirect": "Commit",
+      "saving": "Menyimpan…",
+      "rulesLoading": "Memeriksa aturan branch…",
+      "rulesFailed": "Aturan branch tidak dapat diperiksa, sehingga Anda hanya dapat menyimpan ke branch baru."
+    },
+    "error": {
+      "title": "Perubahan tidak dapat disimpan",
+      "conflictTitle": "Orang lain sudah mengubahnya lebih dulu",
+      "conflictNext": "Suntingan Anda masih ada di layar. Salin, muat versi terbaru, lalu lakukan perubahan lagi.",
+      "conflictBranch": "Jika nama branch sudah dipakai, pilih nama lain dan simpan lagi.",
+      "copyMine": "Salin suntingan saya",
+      "openLatest": "Buka versi terbaru (tab baru)",
+      "reloadLatest": "Muat versi terbaru (suntingan Anda dibuang)",
+      "secretTitle": "Isinya tampak mengandung rahasia",
+      "secretNext": "Hapus kunci, token, dan kata sandi dari teks, lalu simpan lagi. Cabut rahasia yang mungkin bocor.",
+      "rateLimitTitle": "Terlalu sering menyimpan",
+      "rateLimitNext": "Tunggu sekitar satu menit, lalu simpan lagi. Suntingan Anda tetap ada.",
+      "reloadConfirm": "Suntingan Anda akan dibuang. Salin dulu, lalu muat ulang.",
+      "reloadDiscard": "Buang dan muat ulang"
+    },
+    "saved": {
+      "mr": "Perubahan disimpan dan merge request dibuka (branch {{branch}}).",
+      "branch": "Perubahan di-commit ke branch baru {{branch}}.",
+      "direct": "Perubahan di-commit ke {{branch}}.",
+      "mrFailed": "Merge request tidak dapat dibuka: {{message}}",
+      "openMr": "Buka merge request"
+    }
   }
 }

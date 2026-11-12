@@ -337,6 +337,34 @@
       }
     },
     {
+      "name": "route word edit",
+      "path": "/g/p/-/edit/main/docs/spec.md",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "edit",
+        "rest": [
+          "main",
+          "docs",
+          "spec.md"
+        ]
+      }
+    },
+    {
+      "name": "route word new",
+      "path": "/g/p/-/new/main",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "new",
+        "rest": [
+          "main"
+        ]
+      }
+    },
+    {
       "name": "route word webhooks",
       "path": "/g/p/-/webhooks/3/deliveries",
       "form": "both",

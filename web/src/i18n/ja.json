@@ -263,7 +263,8 @@
     "symlink": "シンボリックリンク",
     "empty": "このフォルダは空です。",
     "downloadZip": "zip でダウンロード",
-    "downloadTar": "tar.gz でダウンロード"
+    "downloadTar": "tar.gz でダウンロード",
+    "newFile": "新しいファイル"
   },
   "readme": {
     "truncated": "README が大きいため、先頭だけを表示しています。"
@@ -287,7 +288,8 @@
     "lineLabel": "{{n}} 行目",
     "gotoLine": "行へ移動",
     "gotoGo": "移動",
-    "openDocument": "文書として開く"
+    "openDocument": "文書として開く",
+    "edit": "編集"
   },
   "blame": {
     "title": "行ごとの履歴",
@@ -1420,5 +1422,85 @@
     "cancelYes": "取り消しを確定",
     "cancelNo": "やめる",
     "span": "{{from}} – {{to}}"
+  },
+  "editor": {
+    "newTitle": "新しいファイル",
+    "docTitle": "{{name}} を編集",
+    "subtitle": "ブランチ {{branch}} のファイルを編集しています。",
+    "save": "変更を保存",
+    "statusUnsaved": "未保存の変更あり",
+    "statusUnchanged": "まだ変更はありません",
+    "statusTooLarge": "内容が大きすぎるため保存できません",
+    "statusNeedContent": "内容を入力すると保存できます",
+    "statusEmpty": "まだ何も書いていません",
+    "editPane": "編集",
+    "previewPane": "プレビュー",
+    "tabsLabel": "編集とプレビューの切り替え",
+    "contentLabel": "{{path}} の内容",
+    "previewEmpty": "左に書いた Markdown が、ここに整形されて表示されます。",
+    "pathLabel": "ファイルのパス",
+    "pathPlaceholder": "docs/spec.md",
+    "pathHelp": "リポジトリの根からのパスです。途中のフォルダーは自動で作られます。",
+    "pathRequired": "ファイルのパスを入力してください。",
+    "pathIsFolder": "パスの最後にファイル名を入力してください（例: docs/spec.md）。",
+    "counts": "{{lines}} 行 · {{chars}} 文字",
+    "shortcutHint": "Ctrl+S で保存",
+    "tooLarge": "内容が {{size}} を超えているため、エディターからは保存できません。git で push してください。",
+    "notBranchTitle": "ブランチでだけ編集できます",
+    "notBranchBody": "タグやコミットの内容は変えられません。ブランチを選んでから編集してください。",
+    "backToFile": "ファイルに戻る",
+    "cannotEditTitle": "このファイルはエディターで編集できません",
+    "cannotEditBinary": "文字のファイル（UTF-8）だけを編集できます。git で変更してください。",
+    "cannotEditLarge": "エディターで編集できるのは {{size}} までのファイルです。git で変更してください。",
+    "leaveTitle": "保存していない変更があります",
+    "leaveBody": "このまま移動すると、編集した内容は失われます。",
+    "leaveConfirm": "変更を捨てて移動",
+    "dialog": {
+      "title": "変更を保存",
+      "message": "コミットメッセージ",
+      "messageRequired": "コミットメッセージを入力してください。",
+      "defaultUpdate": "{{path}} を更新",
+      "defaultAdd": "{{path}} を追加",
+      "addDescription": "説明を追加",
+      "description": "説明（任意）",
+      "descriptionHelp": "なぜ変えたのかを書くと、レビューする人に伝わります。",
+      "target": "保存先",
+      "targetBranch": "新しいブランチを作って変更を申請（MR）",
+      "targetBranchHelp": "{{branch}} はそのままです。レビューを経てから反映されます。",
+      "branchName": "新しいブランチの名前",
+      "branchRequired": "ブランチの名前を入力してください。",
+      "branchSame": "元のブランチと同じ名前は使えません。",
+      "targetDirect": "このブランチ（{{branch}}）に直接コミット",
+      "directHelp": "レビューを通さず、すぐに {{branch}} に反映されます。",
+      "directForbidden": "このブランチは保護されていて、直接コミットできません。",
+      "directRole": "このブランチは保護されていて、あなたの役割では直接コミットできません。",
+      "submitBranch": "保存して MR を作成",
+      "submitDirect": "コミットする",
+      "saving": "保存しています…",
+      "rulesLoading": "ブランチの規則を確認しています…",
+      "rulesFailed": "ブランチの規則を確認できなかったため、新しいブランチにだけ保存できます。"
+    },
+    "error": {
+      "title": "保存できませんでした",
+      "conflictTitle": "ほかの人の変更と重なりました",
+      "conflictNext": "あなたの編集はまだ画面に残っています。内容をコピーしてから最新の内容を読み込み、もう一度変更を加えてください。",
+      "conflictBranch": "ブランチの名前が既に使われている場合は、別の名前にしてもう一度保存してください。",
+      "copyMine": "自分の編集をコピー",
+      "openLatest": "最新の内容を開く（新しいタブ）",
+      "reloadLatest": "最新の内容を読み込み直す（今の編集は消えます）",
+      "secretTitle": "秘密情報らしい内容があるため保存できません",
+      "secretNext": "鍵・トークン・パスワードなどを本文から取り除いてから、もう一度保存してください。漏れた可能性がある秘密は失効させてください。",
+      "rateLimitTitle": "保存の回数が多すぎます",
+      "rateLimitNext": "1 分ほど待ってから、もう一度保存してください。編集した内容は残っています。",
+      "reloadConfirm": "今の編集は消えます。コピーしてから読み込み直してください。",
+      "reloadDiscard": "本当に破棄して読み込む"
+    },
+    "saved": {
+      "mr": "変更を保存し、マージリクエストを作成しました（ブランチ {{branch}}）。",
+      "branch": "新しいブランチ {{branch}} に変更をコミットしました。",
+      "direct": "{{branch}} に変更をコミットしました。",
+      "mrFailed": "マージリクエストは作成できませんでした: {{message}}",
+      "openMr": "マージリクエストを作る"
+    }
   }
 }

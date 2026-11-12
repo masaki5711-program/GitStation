@@ -22,6 +22,9 @@ import { CommitsScreen } from './CommitsScreen';
 import { CompareScreen } from './CompareScreen';
 import { DocumentScreen } from './DocumentScreen';
 import { DocumentsScreen } from './DocumentsScreen';
+import { EditorScreen } from './editor/EditorScreen';
+import { SavedNotice } from './editor/SavedNotice';
+import { mayPush } from '../../api/fileCommits';
 import { parseId } from '../../api/pipelines';
 import { PipelineScreen } from './pipelines/PipelineScreen';
 import { PipelinesScreen } from './pipelines/PipelinesScreen';
@@ -39,7 +42,7 @@ import { MembersScreen } from '../settings/Members';
 import { ProjectSettings } from '../settings/ProjectSettings';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'edit', 'new'];
 
 export function RepoViews({
   projectId,
@@ -93,13 +96,33 @@ export function RepoViews({
     );
   }
   const spec = tail.join('/');
+  // Editing is offered to Developers and above; the server decides again.
+  const role = info.data.role;
+  const canPush = mayPush(role, isAdmin);
   let screen;
   switch (word) {
     case 'tree':
-      screen = <TreeScreen projectId={projectId} project={project} spec={spec} />;
+      screen = <TreeScreen projectId={projectId} project={project} spec={spec} canPush={canPush} />;
       break;
     case 'blob':
-      screen = <BlobScreen projectId={projectId} project={project} spec={spec} />;
+      screen = <BlobScreen projectId={projectId} project={project} spec={spec} canPush={canPush} />;
+      break;
+    case 'edit':
+    case 'new':
+      screen =
+        tail.length === 0 ? (
+          <NotFound />
+        ) : (
+          <EditorScreen
+            key={`${word}/${spec}`}
+            projectId={projectId}
+            project={project}
+            spec={spec}
+            mode={word}
+            role={role}
+            isAdmin={isAdmin}
+          />
+        );
       break;
     case 'blame':
       screen = <BlameScreen projectId={projectId} project={project} spec={spec} />;
@@ -181,10 +204,9 @@ export function RepoViews({
 
   const base = `/${encodePath(project)}`;
   // Webhooks are for a Maintainer or above; the server decides again.
-  const role = info.data.role;
   const canManageHooks = role === 'maintainer' || role === 'owner' || isAdmin;
   const items = [
-    { words: ['tree', 'blob', 'blame'], to: `${base}/-/tree`, label: t('repo.files') },
+    { words: ['tree', 'blob', 'blame', 'edit', 'new'], to: `${base}/-/tree`, label: t('repo.files') },
     { words: ['commits', 'commit'], to: `${base}/-/commits`, label: t('repo.commits') },
     { words: ['branches'], to: `${base}/-/branches`, label: t('repo.branches') },
     { words: ['tags'], to: `${base}/-/tags`, label: t('repo.tags') },
@@ -201,6 +223,7 @@ export function RepoViews({
   return (
     <>
       <MovedNotice />
+      <SavedNotice project={project} />
       <nav aria-label={t('repo.navLabel')} className={styles.projectNav}>
         <Link to={base} className={styles.projectName}>
           {info.data.display_name}

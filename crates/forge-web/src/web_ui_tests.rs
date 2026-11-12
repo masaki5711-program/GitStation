@@ -141,6 +141,9 @@ const SHELL_PATHS: &[&str] = &[
     // The webhook screens (M3 I2): a reload was a 404.
     "/acme/x/-/webhooks",
     "/acme/x/-/webhooks/3/deliveries",
+    // The simple editor (E2): an existing file and a new one in a folder.
+    "/acme/x/-/edit/main/docs/spec.md",
+    "/acme/x/-/new/main/docs",
     // The act-as confirmation popup (U3): the same shell for everyone.
     "/-/confirm/projects/42/merge-requests/7",
     // The binding confirmation popup (X3).

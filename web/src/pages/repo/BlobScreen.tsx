@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, Navigate } from 'react-router';
 
 import { documentId } from '../../api/documents';
+import { MAX_CONTENT_BYTES } from '../../api/fileCommits';
 import { refParam, useBlob } from '../../api/repo';
 import type { Rev } from '../../api/types';
 import { Loading } from '../../components/Loading';
@@ -19,6 +20,7 @@ import {
   blameUrl,
   commitsUrl,
   documentUrl,
+  editUrl,
   isDownloadOnly,
   isImagePath,
   isMarkdownPath,
@@ -35,14 +37,19 @@ export function BlobScreen({
   projectId,
   project,
   spec,
+  canPush = false,
 }: {
   projectId: number;
   project: string;
   spec: string;
+  /** The person may push (Developer or above): offer the editor. */
+  canPush?: boolean;
 }) {
   return (
     <WithSpec projectId={projectId} project={project} spec={spec}>
-      {(s) => <Blob projectId={projectId} project={project} rev={s.rev} path={s.path} />}
+      {(s) => (
+        <Blob projectId={projectId} project={project} rev={s.rev} path={s.path} canPush={canPush} />
+      )}
     </WithSpec>
   );
 }
@@ -52,11 +59,13 @@ function Blob({
   project,
   rev,
   path,
+  canPush,
 }: {
   projectId: number;
   project: string;
   rev: Rev;
   path: string;
+  canPush: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const blob = useBlob(projectId, refParam(rev), path, path !== '');
@@ -82,11 +91,29 @@ function Blob({
   const text = file.content;
   const image = file.binary && isImagePath(path);
   const markdown = isMarkdownPath(path) && text !== null && file.type === 'blob';
+  // The simple editor takes UTF-8 text of a branch, whole and small enough.
+  const editable =
+    canPush &&
+    rev.type === 'branch' &&
+    file.type === 'blob' &&
+    !file.binary &&
+    text !== null &&
+    !file.truncated &&
+    file.size <= MAX_CONTENT_BYTES;
 
   return (
     <>
       <PathCrumbs project={project} rev={rev.name} path={path} />
-      <PageHeader title={baseName(path)} />
+      <PageHeader
+        title={baseName(path)}
+        actions={
+          editable ? (
+            <Link className={controls.primary} to={editUrl(project, rev.name, path)}>
+              {t('file.edit')}
+            </Link>
+          ) : undefined
+        }
+      />
       <p className={styles.meta}>
         <span>{formatBytes(file.size, i18n.language)}</span>
         <span>
