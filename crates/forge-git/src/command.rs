@@ -44,6 +44,10 @@ pub use crate::revision::Revision;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
+/// `CREATE_NO_WINDOW` (winbase.h): start a console program without a console window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Captured stderr is for logs only; keep a bounded tail.
 pub(crate) const MAX_STDERR_BYTES: usize = 64 * 1024;
 
@@ -404,6 +408,12 @@ impl GitCommand {
     pub(crate) fn build(&self, stream: bool) -> tokio::process::Command {
         let config = self.git.config();
         let mut cmd = tokio::process::Command::new(&config.bin);
+        // On Windows a console program started by a process without a
+        // console (forge serve / worker run detached) gets a new console
+        // window of its own: every git call flashed a terminal on the
+        // server's desktop. CREATE_NO_WINDOW starts it without one.
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
         cmd.env_clear();
         for key in PASSTHROUGH_ENV {
             if let Some(v) = std::env::var_os(key) {
