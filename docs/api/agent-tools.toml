@@ -832,6 +832,10 @@ reason = "Describes one command; no request."
 # ── an agent may; not a tool yet (add one when the Kanflow / AI-session list asks) ──
 
 [[deferred]]
+gstn = "browse commit-file"
+reason = "Write (the simple editor E1, decided like a push); agents push with git. A tool waits for the editor's own series."
+
+[[deferred]]
 gstn = "project list"
 reason = "Read; the project id comes from the session (Kanflow binding)."
 

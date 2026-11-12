@@ -1252,6 +1252,32 @@ pub enum BrowseCommand {
         #[arg(long, value_parser = parse_text)]
         path: String,
     },
+    /// Commit one text file read from standard input (the simple editor's
+    /// API, E1): on --create-branch (with a merge request unless
+    /// --no-merge-request) or directly on --branch.
+    CommitFile {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The branch the file was read from.
+        #[arg(long, value_parser = parse_text)]
+        branch: String,
+        /// The commit the file was read at (refused when the file changed since).
+        #[arg(long = "start-sha", value_parser = parse_oid)]
+        start_sha: String,
+        #[arg(long, value_parser = parse_text)]
+        path: String,
+        #[arg(long, value_parser = parse_description)]
+        message: String,
+        /// Commit on this new branch instead of --branch.
+        #[arg(long = "create-branch", value_parser = parse_text)]
+        create_branch: Option<String>,
+        /// With --create-branch: do not open a merge request.
+        #[arg(long = "no-merge-request")]
+        no_merge_request: bool,
+        /// The merge request's title (default: the message's first line).
+        #[arg(long, value_parser = parse_text)]
+        title: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

@@ -60,6 +60,21 @@
 //!    push-record-failed). If the repository cannot be read either, every
 //!    command is logged once with `FG-GIT-0012 reason=reconcile_failed`.
 //!
+//! **The one-time history import** (2026-11-12, ADR-0008 amendment
+//! "history import"): when the repository has no refs (the snapshot of
+//! step 4a') and an administrator left an open allowance
+//! (`forge_core::HistoryImports`), the push checks run in
+//! `ScanMode::HistoryImport` — a secret only in history does not refuse.
+//! Each such finding is logged once (`forge.git.push_history_finding`,
+//! warn, rule / path / commit / blob); when git applied refs of an accepted
+//! push, the allowance is used up and audited
+//! (`repository.history_imported`, one `repository.history_secret_imported`
+//! per finding), else `FG-GIT-0026` (alert). The push CLAIMS the allowance
+//! atomically before its receive-pack runs (review 2026-11-12: of two
+//! concurrent first pushes only one gets the relaxed scan); a push that
+//! applied no ref gives the claim back; a claim kept after refs landed is
+//! never re-armed. A failed claim is logged and the push is checked in full.
+//!
 //! A push through a `moved` tombstone never reaches this handler
 //! (`FG-REPO-0005 reason=tombstone_push`, the dispatcher).
 
@@ -77,7 +92,7 @@ use forge_core::{
     PushUpdateKind, PushedRef, Pusher, RefName, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError, Lang};
-use forge_git::push_hook::{HookOutcome, PushCheckPolicy, PushCheckRun, Verdict};
+use forge_git::push_hook::{display_path, HookOutcome, PushCheckPolicy, PushCheckRun, Verdict};
 use forge_git::push_introduced::RefSnapshot;
 use forge_git::push_scan::ScanLimits;
 use forge_git::receive_report::{refusal_report, ReportRewriter, RewriteTexts};
@@ -125,6 +140,8 @@ const WITHHELD_LOG_MAX: usize = 16 * 1024;
 const HOOK_DECLINED: &str = "pre-receive hook declined";
 /// The longest `User-Agent` kept for the record.
 const MAX_USER_AGENT: usize = 512;
+/// The bound of recording a history import (its change has its own 30 s).
+pub const HISTORY_IMPORT_RECORD_TIMEOUT: Duration = Duration::from_secs(35);
 
 /// `POST {path}.git/git-receive-pack`.
 pub async fn receive_pack(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
@@ -137,23 +154,26 @@ pub async fn receive_pack(state: AppState, request: Dispatched<ProjectCtx>) -> R
     }
 }
 
-/// What every log line of one push carries.
+/// What every log line of one push carries (also the simple editor's
+/// commit, `routes::file_commit`, which records like a push).
 #[derive(Debug, Clone)]
-struct PushLog {
-    request_id: RequestId,
-    project_id: ProjectId,
-    repo_id: i64,
-    lang: Lang,
+pub(crate) struct PushLog {
+    pub(crate) request_id: RequestId,
+    pub(crate) project_id: ProjectId,
+    pub(crate) repo_id: i64,
+    pub(crate) lang: Lang,
+    /// `receive_pack`, or `single_file_commit`.
+    pub(crate) route: &'static str,
 }
 
 impl PushLog {
     fn context(&self, err: ForgeError) -> ForgeError {
-        err.with_context("route", "receive_pack")
+        err.with_context("route", self.route)
             .with_context("project_id", self.project_id.get())
             .with_context("repo_id", self.repo_id)
     }
 
-    fn failure(&self, err: ForgeError) {
+    pub(crate) fn failure(&self, err: ForgeError) {
         telemetry::log_failure(&self.context(err), &self.request_id);
     }
 }
@@ -200,6 +220,7 @@ async fn receive_pack_inner(
         project_id,
         repo_id: repository.id.get(),
         lang: ctx.lang,
+        route: "receive_pack",
     };
     let limits = smart.limits;
     let started = Instant::now();
@@ -319,49 +340,68 @@ async fn receive_pack_inner(
         .await;
     let snapshot_ms = u64::try_from(snapshot_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    // 4b. The push checks (M3 X8): one run of the pre-receive hook.
-    let checks = match &smart.push_checks {
-        Some(checks) => Some(
-            smart.git.push_check_run(
-                &smart.storage,
-                &checks.exe,
-                &PushCheckPolicy {
-                    request_id: log.request_id.to_string(),
-                    lang: log.lang,
-                    repo_id: repository.id,
-                    limits: checks
-                        .limits
-                        .unwrap_or_else(|| ScanLimits::new(limits.push_max_blob_bytes)),
-                },
-            )?,
-        ),
-        None => None,
-    };
+    // 4b'. The one-time history import: an empty repository whose open
+    // allowance this push claimed (2026-11-12). Anything else is checked in
+    // full. From here every way out before the task owns the push gives the
+    // claim back.
+    let history_import = history_import(state, &smart, repository.id, &before, &log).await;
+    let launched = async {
+        // 4b. The push checks (M3 X8): one run of the pre-receive hook.
+        let checks = match &smart.push_checks {
+            Some(checks) => Some(
+                smart.git.push_check_run(
+                    &smart.storage,
+                    &checks.exe,
+                    &PushCheckPolicy {
+                        request_id: log.request_id.to_string(),
+                        lang: log.lang,
+                        repo_id: repository.id,
+                        limits: checks
+                            .limits
+                            .unwrap_or_else(|| ScanLimits::new(limits.push_max_blob_bytes)),
+                        history_import: history_import.is_some(),
+                    },
+                )?,
+            ),
+            None => None,
+        };
 
-    // 4. receive-pack gets the original bytes (`atomic` added above).
-    let mut cmd = smart.git.receive_pack(
-        &smart.storage,
-        repository.id,
-        Phase::Rpc,
-        protocol.as_deref(),
-        limits.push_max_bytes,
-    )?;
-    if deny_nff {
-        cmd = cmd.deny_non_fast_forwards();
+        // 4. receive-pack gets the original bytes (`atomic` added above).
+        let mut cmd = smart.git.receive_pack(
+            &smart.storage,
+            repository.id,
+            Phase::Rpc,
+            protocol.as_deref(),
+            limits.push_max_bytes,
+        )?;
+        if deny_nff {
+            cmd = cmd.deny_non_fast_forwards();
+        }
+        if let Some(run) = &checks {
+            cmd = cmd.with_push_checks(run);
+        }
+        let mut stream = cmd
+            .idle_timeout(limits.idle_timeout)
+            .timeout(limits.timeout)
+            .spawn_stream(&principal)
+            .await?;
+        let (Some(stdin), Some(stdout)) = (stream.take_stdin(), stream.take_stdout()) else {
+            return Err(
+                ForgeError::new(ErrorCode::Internal).with_context("reason", "stream_pipes_missing")
+            );
+        };
+        Ok::<_, ForgeError>((checks, stream, stdin, stdout))
     }
-    if let Some(run) = &checks {
-        cmd = cmd.with_push_checks(run);
-    }
-    let mut stream = cmd
-        .idle_timeout(limits.idle_timeout)
-        .timeout(limits.timeout)
-        .spawn_stream(&principal)
-        .await?;
+    .await;
     drop(slot);
-    let (Some(mut stdin), Some(stdout)) = (stream.take_stdin(), stream.take_stdout()) else {
-        return Err(
-            ForgeError::new(ErrorCode::Internal).with_context("reason", "stream_pipes_missing")
-        );
+    let (checks, stream, mut stdin, stdout) = match launched {
+        Ok(launched) => launched,
+        Err(err) => {
+            if let Some(imports) = &history_import {
+                release_claim(imports.as_ref(), repository.id, &log).await;
+            }
+            return Err(err);
+        }
     };
     let (answer_tx, answer_rx) = mpsc::channel(ANSWER_QUEUE);
     let (body_tx, body_rx) = oneshot::channel::<BodyEnd>();
@@ -398,6 +438,7 @@ async fn receive_pack_inner(
         snapshot_ms,
         checks,
         hook_declined: false,
+        history_import,
     };
     // Counted before the spawn: `wait_idle` never sees 0 in between.
     let guard = smart.push_tasks.start();
@@ -441,6 +482,91 @@ async fn receive_pack_inner(
         bytes_in: body.raw_bytes(),
     }); // ignore: Err = the task already ended (git exited), nothing to tell
     Ok(git_response(RECEIVE_RESULT, answer_body(answer_rx)))
+}
+
+/// The allowance store when this push is the one-time history import: push
+/// checks on, the repository without refs (a snapshot that failed is not
+/// empty), and this push CLAIMED the open allowance (atomic in the store:
+/// of concurrent pushes exactly one wins; review 2026-11-12). A failed
+/// claim is logged and answers `None` (the push is then checked in full).
+async fn history_import(
+    state: &AppState,
+    smart: &SmartHttp,
+    repo: forge_core::RepoId,
+    before: &Result<RefSnapshot, ForgeError>,
+    log: &PushLog,
+) -> Option<Arc<dyn forge_core::HistoryImports>> {
+    let imports = smart.history_imports.as_ref()?;
+    smart.push_checks.as_ref()?;
+    if !before.as_ref().is_ok_and(|s| s.refs == 0) {
+        return None;
+    }
+    let lookup = tokio::time::timeout(
+        state.lookup_timeout,
+        imports.claim_import(repo, &log.request_id),
+    )
+    .await;
+    match lookup {
+        Ok(Ok(true)) => {
+            tracing::info!(
+                target: "forge_web::git",
+                request_id = %log.request_id,
+                project_id = log.project_id.get(),
+                repo_id = log.repo_id,
+                "forge.git.history_import_armed"
+            );
+            Some(Arc::clone(imports))
+        }
+        Ok(Ok(false)) => None,
+        Ok(Err(err)) => {
+            log.failure(err.with_context("operation", "history_import_claim"));
+            None
+        }
+        Err(_) => {
+            log.failure(
+                ForgeError::new(ErrorCode::RequestTimeout)
+                    .with_context("operation", "history_import_claim")
+                    .with_context("timeout_ms", state.lookup_timeout.as_millis()),
+            );
+            None
+        }
+    }
+}
+
+/// Give back this push's claim of the history import (it applied no ref):
+/// the allowance is open again. A failure is logged (FG-GIT-0026
+/// `reason=release_failed`): the allowance then stays claimed, never
+/// re-armed (fail closed; an operator allows anew).
+async fn release_claim(
+    imports: &dyn forge_core::HistoryImports,
+    repo: forge_core::RepoId,
+    log: &PushLog,
+) {
+    let released = tokio::time::timeout(
+        HISTORY_IMPORT_RECORD_TIMEOUT,
+        imports.release_import(repo, &log.request_id),
+    )
+    .await;
+    let err = match released {
+        Ok(Ok(())) => {
+            tracing::info!(
+                target: "forge_web::git",
+                request_id = %log.request_id,
+                project_id = log.project_id.get(),
+                repo_id = log.repo_id,
+                "forge.git.history_import_released"
+            );
+            return;
+        }
+        Ok(Err(err)) => ForgeError::new(ErrorCode::HistoryImportRecordFailed)
+            .with_context("reason", "release_failed")
+            .with_context("cause_code", err.code().id())
+            .with_source(err),
+        Err(_) => ForgeError::new(ErrorCode::HistoryImportRecordFailed)
+            .with_context("reason", "release_failed")
+            .with_context("timeout_ms", HISTORY_IMPORT_RECORD_TIMEOUT.as_millis()),
+    };
+    log.failure(err);
 }
 
 /// Classify every command and decide it (see the module docs, step 2).
@@ -599,7 +725,7 @@ fn kind_name(kind: Option<RefUpdate>) -> String {
 }
 
 /// The `User-Agent` for the record (cut, at a character boundary).
-fn user_agent(request: &Dispatched<ProjectCtx>) -> Option<String> {
+pub(crate) fn user_agent<B>(request: &Dispatched<ProjectCtx, B>) -> Option<String> {
     let value = request.headers().get(USER_AGENT)?.to_str().ok()?;
     let mut cut = value.len().min(MAX_USER_AGENT);
     while !value.is_char_boundary(cut) {
@@ -687,6 +813,8 @@ struct Receiver {
     checks: Option<PushCheckRun>,
     /// git reported `pre-receive hook declined`.
     hook_declined: bool,
+    /// This push is the one-time history import (its allowance store).
+    history_import: Option<Arc<dyn forge_core::HistoryImports>>,
 }
 
 impl Receiver {
@@ -828,10 +956,8 @@ impl Receiver {
     /// hook: `FG-GIT-0023 reason=hook_not_run` (the refs were not checked);
     /// unknown refs and no result: `reason=hook_unknown` (the same alert,
     /// never hidden as "nothing applied").
-    fn push_checked(&mut self, applied: Option<usize>) {
-        let Some(run) = self.checks.take() else {
-            return;
-        };
+    fn push_checked(&mut self, applied: Option<usize>) -> Option<HookOutcome> {
+        let run = self.checks.take()?;
         let applied_text = applied.map_or_else(|| "unknown".to_owned(), |n| n.to_string());
         let fail = |reason: &'static str| {
             ForgeError::new(ErrorCode::PushCheckFailed)
@@ -839,8 +965,12 @@ impl Receiver {
                 .with_context("event", "forge.git.push_checked")
                 .with_context("applied", &applied_text)
         };
+        let mut checked = None;
         match (run.outcome(), applied) {
-            (Ok(Some(outcome)), _) => self.log_checked(&outcome, &applied_text),
+            (Ok(Some(outcome)), _) => {
+                self.log_checked(&outcome, &applied_text);
+                checked = Some(outcome);
+            }
             (Ok(None), None) => self.log.failure(fail("hook_unknown")),
             (Ok(None), Some(n)) if n > 0 => self.log.failure(fail("hook_not_run")),
             (Ok(None), Some(_)) if self.hook_declined => {
@@ -853,10 +983,83 @@ impl Receiver {
         if let Err(err) = run.remove() {
             self.log.failure(err);
         }
+        checked
+    }
+
+    /// An accepted history import whose refs git applied: use the
+    /// allowance up and audit its history findings (one change), else
+    /// `FG-GIT-0026` (the findings are in the log lines already).
+    async fn history_imported(&self, outcome: &HookOutcome) {
+        let Some(imports) = &self.history_import else {
+            return;
+        };
+        if outcome.verdict != Verdict::Accepted {
+            return;
+        }
+        let r = &outcome.report;
+        let used = forge_core::HistoryImportUse {
+            findings: r
+                .history
+                .iter()
+                .map(|f| forge_core::HistoryFinding {
+                    rule: f.kind.rule().to_owned(),
+                    blob: f.blob.clone(),     // clone: the record owns its copy
+                    path: f.path.clone(),     // clone: as above
+                    commit: f.commit.clone(), // clone: as above
+                })
+                .collect(),
+            total: r.total_history,
+        };
+        let recorded = tokio::time::timeout(
+            HISTORY_IMPORT_RECORD_TIMEOUT,
+            imports.record_import(&self.pusher, self.repository.id, &used),
+        )
+        .await;
+        let failed = |reason: &'static str| {
+            ForgeError::new(ErrorCode::HistoryImportRecordFailed)
+                .with_context("reason", reason)
+                .with_context("history_findings", r.total_history)
+        };
+        match recorded {
+            Ok(Ok(done)) => tracing::info!(
+                target: "forge_web::git",
+                request_id = %self.log.request_id,
+                project_id = self.log.project_id.get(),
+                repo_id = self.log.repo_id,
+                history_findings = r.total_history,
+                consumed = done == forge_core::HistoryImportRecorded::Consumed,
+                "forge.git.history_imported"
+            ),
+            Ok(Err(err)) => self.log.failure(
+                failed("record_failed")
+                    .with_context("cause_code", err.code().id())
+                    .with_source(err),
+            ),
+            Err(_) => self.log.failure(
+                failed("timeout")
+                    .with_context("timeout_ms", HISTORY_IMPORT_RECORD_TIMEOUT.as_millis()),
+            ),
+        }
     }
 
     fn log_checked(&self, outcome: &HookOutcome, applied: &str) {
         let r = &outcome.report;
+        // The history import (2026-11-12): every secret only in history,
+        // once, with its rule, path and commit (never the value).
+        for f in &r.history {
+            tracing::warn!(
+                target: "forge_web::git",
+                request_id = %self.log.request_id,
+                error_code = ErrorCode::PushSecretDetected.id(),
+                project_id = self.log.project_id.get(),
+                repo_id = self.log.repo_id,
+                rule = %f.kind.rule(),
+                path = %display_path(&f.path),
+                commit = %f.commit.as_deref().unwrap_or("-"),
+                blob = %f.blob,
+                "forge.git.push_history_finding"
+            );
+        }
         // Every waived finding, with its path (X8 review): a marker that
         // hides a real secret is found from the log, not only from review.
         for w in &r.waivers {
@@ -867,7 +1070,7 @@ impl Receiver {
                 repo_id = self.log.repo_id,
                 rule = %w.rule,
                 blob = %w.blob,
-                path = %w.path,
+                path = %display_path(&w.path),
                 "forge.git.push_check_waived"
             );
         }
@@ -900,7 +1103,7 @@ impl Receiver {
                         .with_context("findings", r.total_findings)
                         .with_context("rules", rules.join(","))
                         .with_context("first_rule", first.kind.rule())
-                        .with_context("first_path", &first.path)
+                        .with_context("first_path", display_path(&first.path))
                         .with_context("first_blob", &first.blob)
                         .with_context("first_commit", first.commit.as_deref().unwrap_or("-")),
                 ));
@@ -1067,9 +1270,16 @@ impl Receiver {
     /// Step 6, for the updates git applied (`source`: `report`, or the
     /// reconciliation's reason).
     async fn after_push(mut self, applied: Vec<(String, String, String)>, source: &'static str) {
-        self.push_checked(Some(applied.len()));
+        let checked = self.push_checked(Some(applied.len()));
         if applied.is_empty() {
+            // Nothing landed: the history import's claim is open again.
+            if let Some(imports) = &self.history_import {
+                release_claim(imports.as_ref(), self.repository.id, &self.log).await;
+            }
             return;
+        }
+        if let Some(outcome) = &checked {
+            self.history_imported(outcome).await;
         }
         let applied: Vec<&(String, String, String)> = applied.iter().collect();
         // First the minimal line (kinds from the zero sides, no commits):
@@ -1351,91 +1561,103 @@ impl Receiver {
     /// `record_push`, [`RECORD_ATTEMPTS`] within [`RECORD_BUDGET`];
     /// `FG-GIT-0012` when every attempt failed.
     async fn record(&self, record: &PushRecord, commits: &forge_core::PushedCommits) {
-        let deadline = Instant::now() + RECORD_BUDGET;
-        let unknown = forge_core::PushedCommits::unknown();
-        let mut attempts = 0;
-        let mut last = None;
-        while attempts < RECORD_ATTEMPTS {
-            if attempts > 0 {
-                let wait = RECORD_BACKOFF
-                    .get(attempts as usize - 1)
-                    .copied()
-                    .unwrap_or(Duration::from_secs(2));
-                // Before the final attempt the wait never eats its reserve.
-                let wait = if attempts + 1 >= RECORD_ATTEMPTS {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    wait.min(left.saturating_sub(RECORD_FINAL_RESERVE))
-                } else {
-                    wait
-                };
-                if Instant::now() + wait >= deadline {
-                    break;
-                }
-                tokio::time::sleep(wait).await;
-            }
-            attempts += 1;
-            let plan = attempt_plan(attempts, deadline.saturating_duration_since(Instant::now()));
-            if plan.timeout.is_zero() {
-                // No time left for a non-final attempt: straight to the final one.
-                continue;
-            }
-            let sent = if plan.with_commits { commits } else { &unknown };
-            let outcome = match tokio::time::timeout(
-                plan.timeout,
-                self.recorder
-                    .record_push_with_commits(&self.pusher, record, sent),
-            )
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
-                    .with_context("reason", "record_budget_exhausted")
-                    .with_context("timeout_ms", plan.timeout.as_millis())),
-            };
-            match outcome {
-                Ok(recorded) => {
-                    // Deduped: an earlier attempt committed after all (its
-                    // rows with it), nothing was dropped.
-                    let dropped = !plan.with_commits
-                        && !commits.commits.is_empty()
-                        && recorded == PushRecorded::Recorded;
-                    if dropped {
-                        // The audit row is kept; the listed commits are not.
-                        self.log.failure(
-                            ForgeError::new(ErrorCode::PushCommitsIncomplete)
-                                .with_context("reason", "record_fallback")
-                                .with_context("listed", 0)
-                                .with_context("dropped", commits.commits.len())
-                                .with_context("attempts", attempts)
-                                .with_context("phase", "push_record"),
-                        );
-                    }
-                    tracing::info!(
-                        target: "forge_web::git",
-                        request_id = %self.log.request_id,
-                        repo_id = self.log.repo_id,
-                        refs = record.updates.len(),
-                        attempts,
-                        deduped = recorded == PushRecorded::Deduped,
-                        push_commits_dropped = dropped,
-                        "forge.git.push_recorded"
-                    );
-                    return;
-                }
-                // A record the store refuses as invalid will not pass on a retry.
-                Err(err) if err.code() == ErrorCode::ChangeRejected => {
-                    last = Some(err);
-                    break;
-                }
-                Err(err) => last = Some(err),
-            }
-        }
-        let cause = last.unwrap_or_else(|| {
-            ForgeError::new(ErrorCode::DbQueryFailed)
-                .with_context("reason", "record_budget_exhausted")
-        });
-        self.log.failure(record.failed(cause, attempts));
+        record_applied(&*self.recorder, &self.pusher, record, commits, &self.log).await;
     }
+}
+
+/// `record_push` of an applied push, [`RECORD_ATTEMPTS`] within
+/// [`RECORD_BUDGET`] (the final attempt without the commits); `FG-GIT-0012`
+/// (logged once) when every attempt failed. receive-pack's task and the
+/// simple editor's commit (`routes::file_commit`) record through it.
+pub(crate) async fn record_applied(
+    recorder: &dyn forge_core::PushRecorder,
+    pusher: &Pusher,
+    record: &PushRecord,
+    commits: &forge_core::PushedCommits,
+    log: &PushLog,
+) {
+    let deadline = Instant::now() + RECORD_BUDGET;
+    let unknown = forge_core::PushedCommits::unknown();
+    let mut attempts = 0;
+    let mut last = None;
+    while attempts < RECORD_ATTEMPTS {
+        if attempts > 0 {
+            let wait = RECORD_BACKOFF
+                .get(attempts as usize - 1)
+                .copied()
+                .unwrap_or(Duration::from_secs(2));
+            // Before the final attempt the wait never eats its reserve.
+            let wait = if attempts + 1 >= RECORD_ATTEMPTS {
+                let left = deadline.saturating_duration_since(Instant::now());
+                wait.min(left.saturating_sub(RECORD_FINAL_RESERVE))
+            } else {
+                wait
+            };
+            if Instant::now() + wait >= deadline {
+                break;
+            }
+            tokio::time::sleep(wait).await;
+        }
+        attempts += 1;
+        let plan = attempt_plan(attempts, deadline.saturating_duration_since(Instant::now()));
+        if plan.timeout.is_zero() {
+            // No time left for a non-final attempt: straight to the final one.
+            continue;
+        }
+        let sent = if plan.with_commits { commits } else { &unknown };
+        let outcome = match tokio::time::timeout(
+            plan.timeout,
+            recorder.record_push_with_commits(pusher, record, sent),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
+                .with_context("reason", "record_budget_exhausted")
+                .with_context("timeout_ms", plan.timeout.as_millis())),
+        };
+        match outcome {
+            Ok(recorded) => {
+                // Deduped: an earlier attempt committed after all (its
+                // rows with it), nothing was dropped.
+                let dropped = !plan.with_commits
+                    && !commits.commits.is_empty()
+                    && recorded == PushRecorded::Recorded;
+                if dropped {
+                    // The audit row is kept; the listed commits are not.
+                    log.failure(
+                        ForgeError::new(ErrorCode::PushCommitsIncomplete)
+                            .with_context("reason", "record_fallback")
+                            .with_context("listed", 0)
+                            .with_context("dropped", commits.commits.len())
+                            .with_context("attempts", attempts)
+                            .with_context("phase", "push_record"),
+                    );
+                }
+                tracing::info!(
+                    target: "forge_web::git",
+                    request_id = %log.request_id,
+                    repo_id = log.repo_id,
+                    refs = record.updates.len(),
+                    attempts,
+                    deduped = recorded == PushRecorded::Deduped,
+                    push_commits_dropped = dropped,
+                    "forge.git.push_recorded"
+                );
+                return;
+            }
+            // A record the store refuses as invalid will not pass on a retry.
+            Err(err) if err.code() == ErrorCode::ChangeRejected => {
+                last = Some(err);
+                break;
+            }
+            Err(err) => last = Some(err),
+        }
+    }
+    let cause = last.unwrap_or_else(|| {
+        ForgeError::new(ErrorCode::DbQueryFailed).with_context("reason", "record_budget_exhausted")
+    });
+    log.failure(record.failed(cause, attempts));
 }
 
 /// One record attempt's plan (R5 review round 6): the final attempt sends

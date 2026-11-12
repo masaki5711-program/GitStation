@@ -98,6 +98,51 @@ impl World {
         plumb(&self.repo, &index, &args, None)
     }
 
+    /// A commit of `base_files` plus `extra` entries given as raw bytes
+    /// (path, blob content, mode): a non-UTF-8 name, a symlink (`120000`,
+    /// its content the target), a gitlink (`160000`, its content the
+    /// commit id, not stored). `update-index --index-info` reads the paths
+    /// from stdin, so no argument has to be valid Unicode.
+    fn commit_raw(&self, extra: &[(&[u8], &[u8], &str)], parent: Option<&str>) -> String {
+        let index = self
+            .scratch
+            .path()
+            .join(format!("index-{}", uuid::Uuid::new_v4()));
+        let mut info: Vec<u8> = Vec::new();
+        let base: Vec<(&[u8], &[u8], &str)> = base_files()
+            .into_iter()
+            .map(|(p, c)| (p.as_bytes(), c.as_bytes(), "100644"))
+            .collect();
+        for (path, content, mode) in base.iter().chain(extra.iter()) {
+            let object = if *mode == "160000" {
+                String::from_utf8(content.to_vec()).expect("commit id")
+            } else {
+                plumb(
+                    &self.repo,
+                    &index,
+                    &["hash-object", "-w", "--stdin"],
+                    Some(content),
+                )
+            };
+            info.extend_from_slice(format!("{mode} {object}\t").as_bytes());
+            info.extend_from_slice(path);
+            info.push(b'\n');
+        }
+        plumb(
+            &self.repo,
+            &index,
+            &["update-index", "--add", "--index-info"],
+            Some(&info),
+        );
+        let tree = plumb(&self.repo, &index, &["write-tree"], None);
+        let mut args = vec!["commit-tree", tree.as_str(), "-m", "synthetic"];
+        if let Some(parent) = parent {
+            args.push("-p");
+            args.push(parent);
+        }
+        plumb(&self.repo, &index, &args, None)
+    }
+
     fn branch(&self, name: &str, commit: &str) {
         let index = self.scratch.path().join("index-ref");
         plumb(
@@ -484,6 +529,130 @@ async fn a_secret_in_a_file_or_a_credential_file_is_a_stop_without_the_secret() 
         "{}",
         run.summary
     );
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_change_to_developer_pc_config_is_a_failure_with_risk_stop() {
+    let (w, base) = world_with_main().await;
+    let head = w.commit(
+        &with(&[
+            (
+                ".claude/hooks/pre-bash.js",
+                "process.exit(0);
+",
+            ),
+            (
+                ".mcp.json",
+                "{\"mcpServers\":{}}
+",
+            ),
+            (
+                "config/my.mcp.json",
+                "{}
+",
+            ),
+        ]),
+        Some(&base),
+    );
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("FG-REVIEW-0023"), "{}", run.summary);
+    assert!(run.summary.contains("agent_config"), "{}", run.summary);
+    assert!(
+        run.summary.contains(".claude/hooks/pre-bash.js"),
+        "{}",
+        run.summary
+    );
+    let flagged: Vec<&str> = run
+        .annotations
+        .iter()
+        .filter(|a| a.message.contains("agent_config"))
+        .map(|a| a.path.as_str())
+        .collect();
+    assert!(flagged.contains(&".mcp.json"), "{flagged:?}");
+    assert!(!flagged.contains(&"config/my.mcp.json"), "{flagged:?}");
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_non_utf8_name_does_not_hide_a_claude_hook() {
+    let (w, base) = world_with_main().await;
+    let head = w.commit_raw(
+        &[
+            (b"assets/\xff\xfe.bin", b"x\n", "100644"),
+            (b".claude/hooks/x.js", b"process.exit(0);\n", "100644"),
+        ],
+        Some(&base),
+    );
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("agent_config"), "{}", run.summary);
+    assert!(run.summary.contains("non_utf8_path"), "{}", run.summary);
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_symlink_into_claude_or_a_submodule_is_a_stop_and_a_plain_symlink_is_not() {
+    let (w, base) = world_with_main().await;
+    let into = w.commit_raw(
+        &[(
+            b"tools/settings.json",
+            b"../.claude/settings.json",
+            "120000",
+        )],
+        Some(&base),
+    );
+    let run = w.assess(&into).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("agent_config"), "{}", run.summary);
+    assert!(
+        run.summary.contains("tools/settings.json"),
+        "{}",
+        run.summary
+    );
+
+    let plain = w.commit_raw(&[(b"lib", b"vendor/lib", "120000")], Some(&base));
+    let run = w.assess(&plain).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Neutral),
+        "{}",
+        run.summary
+    );
+    assert!(!run.summary.contains("agent_config"), "{}", run.summary);
+
+    let sub = w.commit_raw(
+        &[(
+            b"vendor/tools",
+            b"1111111111111111111111111111111111111111",
+            "160000",
+        )],
+        Some(&base),
+    );
+    let run = w.assess(&sub).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("submodule_change"), "{}", run.summary);
     w.t.drop_now().await;
 }
 

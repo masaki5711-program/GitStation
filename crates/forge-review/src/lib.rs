@@ -436,6 +436,18 @@ impl Review {
         review::list(&self.db, project, state, before, limit).await
     }
 
+    /// The commit identity of `user` (the simple editor's commit, E1; the
+    /// merge's rule: display name, else the username; the e-mail, else
+    /// `<username>@users.noreply.invalid`). The caller decided the write.
+    /// `FG-REVIEW-0012` for an e-mail git cannot take, `FG-SYS-0001
+    /// reason=merge_identity_missing` without the account.
+    pub async fn commit_identity(
+        &self,
+        user: UserId,
+    ) -> Result<forge_git::commit::CommitIdentity, ForgeError> {
+        merges::account_commit_identity(&self.db, user).await
+    }
+
     /// Every version of merge request `mr`, oldest first (M3 R2; the
     /// caller decided `MergeRequestRead` on it).
     pub async fn versions(

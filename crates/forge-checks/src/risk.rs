@@ -31,8 +31,8 @@ use forge_core::checks::{
 use forge_core::namespace_resolver::ProjectAccessLoader;
 use forge_core::risk::{
     content_findings, content_kind, level, mass_deletion, path_findings, sort_findings,
-    ChangeStatus, ChangedFile, ContentKind, Finding, RiskLevel, MASS_DELETE_FILES,
-    MASS_DELETE_LINES, MAX_CHANGED_FILES,
+    symlink_findings, ChangeStatus, ChangedFile, ContentKind, Finding, RiskLevel,
+    MASS_DELETE_FILES, MASS_DELETE_LINES, MAX_CHANGED_FILES,
 };
 use forge_core::{CheckName, ObjectId, RefName, RepoId, RepositoryState, RequestId};
 use forge_db::change::{Actor, ChangeContext};
@@ -71,6 +71,9 @@ pub struct Limits {
     pub max_file_bytes: u64,
     /// Files counted in the target's tree for the mass-deletion share.
     pub max_tree_entries: usize,
+    /// Symbolic links whose target is read (an unread one is an
+    /// `agent_config` stop: it cannot be shown not to reach `.claude`).
+    pub max_symlinks: usize,
 }
 
 impl Default for Limits {
@@ -80,6 +83,7 @@ impl Default for Limits {
             max_content_files: 60,
             max_file_bytes: 256 * 1024,
             max_tree_entries: 200_000,
+            max_symlinks: 20,
         }
     }
 }
@@ -508,7 +512,7 @@ impl Risk {
             found.findings.push(rule("no_common_history")?);
             return Ok(found);
         };
-        let files = match self
+        let (files, non_utf8) = match self
             .git
             .risk_diff(
                 &self.storage,
@@ -520,20 +524,26 @@ impl Risk {
             )
             .await?
         {
-            RiskDiff::Complete(files) => files,
+            RiskDiff::Complete(files) => (files, false),
             RiskDiff::TooMany => {
                 found.findings.push(rule("too_many_changes")?);
                 return Ok(found);
             }
-            RiskDiff::NonUtf8 => {
-                found.findings.push(rule("non_utf8_path")?);
-                return Ok(found);
-            }
+            // Not assessed as a whole (never a `success`), but every path
+            // rule still runs on the lossily decoded paths: a non-UTF-8 name
+            // must not hide a `.claude/` hook beside it.
+            RiskDiff::NonUtf8(files) => (files, true),
         };
+        if non_utf8 {
+            found.findings.push(rule("non_utf8_path")?);
+        }
         found.files = files.len();
         for file in &files {
             found.findings.extend(path_findings(file));
         }
+        found
+            .findings
+            .extend(self.symlinks(repo, head, &files).await?);
         if let Some(f) = self.mass_deletion(repo, &base, &files).await? {
             found.findings.push(f);
         }
@@ -578,6 +588,59 @@ impl Risk {
             )
             .await?;
         Ok(mass_deletion(files, &totals))
+    }
+
+    /// The `agent_config` findings of the symbolic links added or changed:
+    /// each link's target (its blob) resolved against its directory. A link
+    /// whose target cannot be read — past [`Limits::max_symlinks`], a path
+    /// that was not UTF-8, no longer resolvable, or longer than a blob read
+    /// — fails closed: it cannot be shown not to reach `.claude`.
+    async fn symlinks(
+        &self,
+        repo: RepoId,
+        head: &ObjectId,
+        files: &[ChangedFile],
+    ) -> Result<Vec<Finding>, ForgeError> {
+        let links = files
+            .iter()
+            .filter(|f| f.new_mode == 0o120_000 && f.status != ChangeStatus::Deleted);
+        let mut found = Vec::new();
+        for (index, link) in links.enumerate() {
+            let unread = |reason: &'static str| -> Result<Finding, ForgeError> {
+                tracing::info!(
+                    target: "forge_checks",
+                    event = "forge.risk.symlink_unread",
+                    repo_id = repo.get(),
+                    head_sha = head.as_str(),
+                    reason,
+                    "a symbolic link's target was not read; it is held as agent configuration"
+                );
+                Ok(rule("agent_config")?.at(&link.path))
+            };
+            if index >= self.limits.max_symlinks {
+                found.push(unread("over_limit")?);
+                continue;
+            }
+            let Ok(path) = RepoPath::parse(&link.path) else {
+                found.push(unread("path_not_parsed")?);
+                continue;
+            };
+            if link.path.contains('\u{fffd}') {
+                found.push(unread("non_utf8_path")?);
+                continue;
+            }
+            match self.browse.blob(repo, head.as_str(), &path).await {
+                Ok(blob) if !blob.truncated => {
+                    found.extend(symlink_findings(&link.path, &blob.content));
+                }
+                Ok(_) => found.push(unread("target_too_long")?),
+                Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => {
+                    found.push(unread("not_resolved")?);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(found)
     }
 
     /// The findings in the text of the files that matter, and the note when

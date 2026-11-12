@@ -34,10 +34,23 @@
 //! a push in progress, the merge lock) is the job's. An operator command
 //! outside `authorize()` (ADR-0019 §8; the host operator is the trust
 //! root), in production an approved runbook step.
+//!
+//! `forge admin repo allow-import <repo_id> [--ttl-hours N]` (2026-11-12,
+//! ADR-0008 amendment "history import", runbook push-checks): allow the
+//! one-time history import into an **empty** repository — its first push
+//! that the push checks accept may carry secrets in old commits (each one
+//! audited; a secret in a pushed tip still refuses). The repository's refs
+//! are read with git first: any ref refuses (`FG-GIT-0025
+//! reason=repository_not_empty`, nothing written); then
+//! `forge_db::history_imports::allow` writes the allowance and its
+//! `repository.history_import_allowed` audit row (actor `system`, the CLI's
+//! label). An operator command outside `authorize()` (no HTTP route), in
+//! production an approved runbook step.
 
 use std::path::Path;
+use std::time::Duration;
 
-use forge_core::config::DatabaseConfig;
+use forge_core::config::{Config, DatabaseConfig};
 use forge_core::ids::{ProjectId, RepoId};
 use forge_core::{PushApplied, PushRecord, PushRecorded, PushReplay, RequestId};
 use forge_db::jobs::Enqueued;
@@ -46,6 +59,78 @@ use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::admin_token::{context, with_db};
+use crate::worker::provision::Storage;
+
+/// The bound of reading the repository's refs before an allowance.
+const REFS_TIMEOUT: Duration = Duration::from_secs(30);
+/// The TTL bounds of `allow-import` (hours).
+pub const MAX_IMPORT_TTL_HOURS: u64 = 168;
+
+pub fn allow_import(
+    cfg: &Config,
+    request_id: &RequestId,
+    repo_id: i64,
+    ttl_hours: u64,
+) -> Result<String, ForgeError> {
+    let storage = Storage::open(cfg.storage_root()?)?;
+    with_db(&cfg.database, async |db| {
+        allow_import_with(db, &storage, request_id, repo_id, ttl_hours).await
+    })
+}
+
+pub(crate) async fn allow_import_with(
+    db: &Db,
+    storage: &Storage,
+    request_id: &RequestId,
+    repo_id: i64,
+    ttl_hours: u64,
+) -> Result<String, ForgeError> {
+    let repo = RepoId::new(repo_id);
+    let refused = |reason: &'static str| {
+        ForgeError::new(ErrorCode::HistoryImportRefused)
+            .with_context("reason", reason)
+            .with_context("repo_id", repo_id)
+    };
+    if !(1..=MAX_IMPORT_TTL_HOURS).contains(&ttl_hours) {
+        return Err(refused("ttl_out_of_range").with_context("ttl_hours", ttl_hours));
+    }
+    // Known and ready first (a clear code), then its refs from git.
+    let target = repositories::provision_target(db, repo).await?;
+    if target.state != forge_core::RepositoryState::Ready {
+        return Err(refused("repository_not_ready").with_context("state", target.state.as_str()));
+    }
+    let snapshot = storage
+        .git
+        .ref_snapshot(&storage.root, repo, "forge-cli", REFS_TIMEOUT)
+        .await?;
+    if snapshot.refs > 0 {
+        return Err(refused("repository_not_empty").with_context("refs", snapshot.refs));
+    }
+    let allowed = forge_db::history_imports::allow(
+        db,
+        &context(request_id),
+        repo,
+        Duration::from_secs(ttl_hours * 3600),
+    )
+    .await?;
+    tracing::info!(
+        target: "forge_cli",
+        event = "forge.admin.repo.import_allowed",
+        request_id = %request_id,
+        repo_id,
+        project_id = allowed.project_id.get(),
+        ttl_hours,
+        expires_at = %allowed.expires_at,
+        replaced = allowed.replaced,
+        "history import allowed"
+    );
+    Ok(format!(
+        "repository {repo_id}: the one-time history import is allowed until {} \
+         (the first accepted push uses it; secrets in the pushed tips are still refused, \
+         secrets only in history are audited — rotate every real one)\n",
+        allowed.expires_at
+    ))
+}
 
 pub fn reprovision(
     cfg: &DatabaseConfig,

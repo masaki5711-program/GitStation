@@ -14,6 +14,13 @@
 //!   (an applied migration changed, a destructive statement), a leak of a
 //!   secret (a credential file by name), a data lifecycle job changed, a
 //!   rollback step in a deploy file. Nothing lowers it, in any merge mode.
+//!   Plus (W15 A2, plan 16 §9 item 1, ADR-0017 Amendment 2026-11-12) code
+//!   that runs on developers' PCs: `agent_config`, a change to `.claude/**`,
+//!   `CLAUDE.md` at any level, `.mcp.json` or `.gitstation/**` (names as a
+//!   developer's file system folds them), or a symlink resolving to one;
+//!   and `submodule_change`, a gitlink added or changed. They have no
+//!   exemption yet; the required `forge/agent-lock` check (plan 16 MR A7)
+//!   adds one for a change whose lock check is green.
 //! - `warn` — authentication / permission code, CI or deploy
 //!   configuration, a dependency manifest, a new migration, a symlink or a
 //!   submodule, an object dropped or a privilege changed in SQL. The merge
@@ -130,6 +137,16 @@ pub const RULES: &[Rule] = &[
         "data_lifecycle_job",
         RiskLevel::Stop,
         "a backup, restore or retention job is changed",
+    ),
+    rule(
+        "agent_config",
+        RiskLevel::Stop,
+        "a Claude Code configuration (.claude, CLAUDE.md, .mcp.json or .gitstation) changed; it runs on developers' PCs, so a person reviews it",
+    ),
+    rule(
+        "submodule_change",
+        RiskLevel::Stop,
+        "a submodule was added or changed; a recursive checkout brings in its files, Claude Code configuration among them, unreviewed",
     ),
     rule(
         "mass_deletion_lines",
@@ -531,6 +548,103 @@ fn is_lifecycle_job(path: &str) -> bool {
                 .any(|c| JOB_DIRS.contains(&c)))
 }
 
+/// A code point a developer's file system drops from a name (NTFS and
+/// APFS / HFS+ ignore the default-ignorable ones), and U+FFFD, which stands
+/// for a byte of a non-UTF-8 path that was decoded lossily: such a name
+/// could be anything there, so it is read without the unknown byte.
+fn ignorable(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x00AD
+            | 0x034F
+            | 0x061C
+            | 0x115F..=0x1160
+            | 0x17B4..=0x17B5
+            | 0x180B..=0x180F
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x206F
+            | 0x3164
+            | 0xFE00..=0xFE0F
+            | 0xFEFF
+            | 0xFFA0
+            | 0xFFF0..=0xFFF8
+            | 0xFFFD
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0000..=0xE0FFF
+    )
+}
+
+/// Whether one path component names `upper` (an upper-case ASCII name) on
+/// a developer's PC: ignorable code points removed, an NTFS stream suffix
+/// (`:` and what follows, `::$DATA`) dropped, trailing dots and spaces
+/// trimmed (Win32 drops them), then compared by Unicode upper case (NTFS
+/// folds `ſ` to `S` and `ı` to `I`; `ß` stays two letters and never matches).
+fn names(component: &str, upper: &str) -> bool {
+    on_disk_upper(component) == upper
+}
+
+/// One path component as a developer's file system reads it, upper-cased
+/// ([`names`]' rule: ignorable code points removed, an NTFS stream suffix
+/// dropped, trailing dots and spaces trimmed, Unicode upper case). The
+/// simple editor's path check (forge-git `file_commit`) compares it with
+/// `.GIT` and git's 8.3 short name `GIT~<n>`.
+pub fn on_disk_upper(component: &str) -> String {
+    let kept: String = component.chars().filter(|c| !ignorable(*c)).collect();
+    let stream_free = kept.split(':').next().unwrap_or("");
+    let trimmed = stream_free.trim_end_matches(['.', ' ']);
+    trimmed.chars().flat_map(char::to_uppercase).collect()
+}
+
+const AGENT_CONFIG_FILES: &[&str] = &["CLAUDE.MD", "CLAUDE.LOCAL.MD", ".MCP.JSON"];
+const AGENT_CONFIG_DIRS: &[&str] = &[".CLAUDE", ".GITSTATION"];
+
+/// Claude Code configuration, which runs (hooks, MCP servers) or steers an
+/// agent on every developer's PC that checks the repository out: anything
+/// under a `.claude` or `.gitstation` directory, a `CLAUDE.md` /
+/// `CLAUDE.local.md` at any level, a `.mcp.json` at any level. Whole
+/// components are compared, so `docs/.claude-notes.md` and `my.mcp.json`
+/// are not; each as the developer's file system reads it ([`names`]), so
+/// `.Claude/`, `.claude./` and `.cl<U+200B>aude/` are.
+fn is_agent_config(path: &str) -> bool {
+    let name = basename(path);
+    AGENT_CONFIG_FILES.iter().any(|n| names(name, n))
+        || components(path).any(|c| AGENT_CONFIG_DIRS.iter().any(|d| names(c, d)))
+}
+
+/// The findings of a symbolic link at `link` whose target (the blob's
+/// bytes) is `target`: `agent_config` when the target, resolved against
+/// the link's directory (`.` and `..` applied, `\` read as `/`), names
+/// Claude Code configuration — a link outside `.claude` that a hook or a
+/// setting reaches through. An absolute target is read as it is; `..` past
+/// the repository's root is dropped and the rest still read.
+pub fn symlink_findings(link: &str, target: &[u8]) -> Vec<Finding> {
+    let target = String::from_utf8_lossy(target).replace('\\', "/");
+    let absolute = target.starts_with('/') || target.get(1..2) == Some(":");
+    let mut resolved: Vec<&str> = if absolute {
+        Vec::new()
+    } else {
+        let mut dir: Vec<&str> = components(link).collect();
+        dir.pop();
+        dir
+    };
+    for part in components(&target) {
+        match part {
+            "." => {}
+            ".." => {
+                resolved.pop();
+            }
+            other => resolved.push(other),
+        }
+    }
+    if is_agent_config(&resolved.join("/")) {
+        vec![Finding::of("agent_config").at(link)]
+    } else {
+        Vec::new()
+    }
+}
+
 fn add(findings: &mut Vec<Finding>, id: &'static str, path: &str) {
     findings.push(Finding::of(id).at(path));
 }
@@ -555,6 +669,11 @@ pub fn path_findings(file: &ChangedFile) -> Vec<Finding> {
             }
         }
     }
+    // Neither docs nor tests are exempt: a CLAUDE.md is both a doc and a
+    // prompt, and a deletion or a rename out of `.claude` changes what runs.
+    if is_agent_config(path) || file.old_path.as_deref().is_some_and(is_agent_config) {
+        add(&mut found, "agent_config", path);
+    }
     let quiet = is_doc(path) || is_test(path);
     if present && !quiet && is_secret_file(path) {
         add(&mut found, "secret_file", path);
@@ -573,6 +692,11 @@ pub fn path_findings(file: &ChangedFile) -> Vec<Finding> {
     }
     if present && matches!(file.new_mode, 0o120_000 | 0o160_000) {
         add(&mut found, "special_entry", path);
+    }
+    // A recursive clone or `submodule update` checks the other repository
+    // out, its `.claude/` included, which this check never sees.
+    if present && file.new_mode == 0o160_000 {
+        add(&mut found, "submodule_change", path);
     }
     found
 }

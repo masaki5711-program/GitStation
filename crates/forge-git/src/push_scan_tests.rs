@@ -421,3 +421,70 @@ async fn a_size_check_that_cannot_finish_fails_closed() {
         "{err:?}"
     );
 }
+
+// ── 2026-11-12: the one-time history import (tip tree vs history) ───────
+
+/// A key added by an old commit and removed later: only in history. The
+/// import scan keeps it apart (with its commit and path); the full scan
+/// refuses it as before.
+#[tokio::test]
+async fn an_import_scan_keeps_a_history_only_secret_apart() {
+    let f = fixture().await;
+    let old = commit(&f.path, &[("deploy/id_rsa", &key_file())], None);
+    let tip = commit(&f.path, &[("README", b"clean now\n")], Some(&old));
+    let l = limits(1 << 20);
+    let full = f
+        .git
+        .scan_push(&f.path, None, std::slice::from_ref(&tip), &l)
+        .await
+        .expect("scan");
+    assert_eq!(full.total_findings, 1, "{full:?}");
+    assert!(full.history.is_empty());
+
+    let import = f
+        .git
+        .scan_push_with(
+            &f.path,
+            None,
+            std::slice::from_ref(&tip),
+            &l,
+            ScanMode::HistoryImport,
+        )
+        .await
+        .expect("scan");
+    assert!(import.findings.is_empty(), "{import:?}");
+    assert_eq!(import.total_findings, 0);
+    assert_eq!(import.total_history, 1);
+    let h = import.history.first().expect("history finding");
+    assert_eq!(h.kind.rule(), "private_key");
+    assert_eq!(h.path, "deploy/id_rsa");
+    assert_eq!(h.commit.as_deref(), Some(old.as_str()));
+}
+
+/// A key still in a pushed tip's tree refuses an import like any push,
+/// also when an older commit added it.
+#[tokio::test]
+async fn an_import_scan_still_refuses_a_secret_in_the_tip_tree() {
+    let f = fixture().await;
+    let old = commit(&f.path, &[("id_rsa", &key_file())], None);
+    let tip = commit(
+        &f.path,
+        &[("id_rsa", &key_file()), ("README", b"more\n")],
+        Some(&old),
+    );
+    let clean = commit(&f.path, &[("README", b"other\n")], None);
+    let report = f
+        .git
+        .scan_push_with(
+            &f.path,
+            None,
+            &[clean, tip],
+            &limits(1 << 20),
+            ScanMode::HistoryImport,
+        )
+        .await
+        .expect("scan");
+    assert_eq!(report.total_findings, 1, "{report:?}");
+    assert_eq!(report.findings[0].path, "id_rsa");
+    assert!(report.history.is_empty(), "{report:?}");
+}

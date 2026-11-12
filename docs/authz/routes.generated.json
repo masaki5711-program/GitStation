@@ -1323,6 +1323,15 @@
     "word": "fixed"
   },
   {
+    "action": "RepoPush",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/repository/commits/single-file",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/commits/{oid}",

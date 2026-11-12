@@ -28,8 +28,10 @@ pub enum RiskDiff {
     Complete(Vec<ChangedFile>),
     /// More entries than the cap (or more output than its byte cap).
     TooMany,
-    /// A changed path is not UTF-8.
-    NonUtf8,
+    /// A changed path is not UTF-8: every entry still, the paths decoded
+    /// lossily (U+FFFD for each bad byte), so the path rules run on all of
+    /// them (a `.claude/` hook beside a non-UTF-8 name is still seen).
+    NonUtf8(Vec<ChangedFile>),
 }
 
 fn unexpected(reason: &'static str) -> ForgeError {
@@ -63,11 +65,17 @@ pub(crate) fn parse_risk_diff(stdout: &[u8], max: usize) -> Result<RiskDiff, For
     pieces.pop(); // what follows the last NUL: empty for a complete output
     let mut files: Vec<ChangedFile> = Vec::new();
     let mut by_path: HashMap<String, usize> = HashMap::new();
+    let mut lossy = false;
+    let mut decode = |raw: &[u8]| -> String {
+        let text = String::from_utf8_lossy(raw);
+        if matches!(text, std::borrow::Cow::Owned(_)) {
+            lossy = true;
+        }
+        text.into_owned()
+    };
     let mut it = pieces.into_iter();
     while let Some(record) = it.next() {
-        let Ok(text) = std::str::from_utf8(record) else {
-            return Ok(RiskDiff::NonUtf8);
-        };
+        let text = decode(record);
         if let Some(header) = text.strip_prefix(':') {
             let mut fields = header.split(' ');
             let old_mode = mode(fields.next().unwrap_or(""))?;
@@ -81,20 +89,17 @@ pub(crate) fn parse_risk_diff(stdout: &[u8], max: usize) -> Result<RiskDiff, For
             } else {
                 (None, first)
             };
-            let Ok(path) = std::str::from_utf8(path_raw) else {
-                return Ok(RiskDiff::NonUtf8);
-            };
-            let old_path = match old_raw.map(std::str::from_utf8).transpose() {
-                Ok(p) => p,
-                Err(_) => return Ok(RiskDiff::NonUtf8),
-            };
+            let path = decode(path_raw);
+            let old_path = old_raw.map(&mut decode);
             if files.len() >= max {
                 return Ok(RiskDiff::TooMany);
             }
-            by_path.insert(path.to_owned(), files.len());
+            // Two non-UTF-8 names may decode alike: the counts then go to
+            // the later one (a count, never a path rule, is what is lost).
+            by_path.insert(path.clone(), files.len());
             files.push(ChangedFile {
-                path: path.to_owned(),
-                old_path: old_path.map(str::to_owned),
+                path,
+                old_path,
                 status,
                 old_mode,
                 new_mode,
@@ -110,10 +115,7 @@ pub(crate) fn parse_risk_diff(stdout: &[u8], max: usize) -> Result<RiskDiff, For
                 // A rename: the old path, then the new one.
                 let _old = it.next().ok_or_else(|| unexpected("numstat_rename"))?;
                 let new = it.next().ok_or_else(|| unexpected("numstat_rename"))?;
-                match std::str::from_utf8(new) {
-                    Ok(p) => p.to_owned(),
-                    Err(_) => return Ok(RiskDiff::NonUtf8),
-                }
+                decode(new)
             } else {
                 path.to_owned()
             };
@@ -125,6 +127,9 @@ pub(crate) fn parse_risk_diff(stdout: &[u8], max: usize) -> Result<RiskDiff, For
             file.added = added.parse::<u64>().ok();
             file.deleted = deleted.parse::<u64>().ok();
         }
+    }
+    if lossy {
+        return Ok(RiskDiff::NonUtf8(files));
     }
     Ok(RiskDiff::Complete(files))
 }
