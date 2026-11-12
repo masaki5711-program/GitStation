@@ -1731,6 +1731,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/repository/commits/single-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create or replace one text file (UTF-8, no NUL, at most 512 KiB) and commit it like a push: on a new branch (create_branch; by default a merge request into branch is opened) or directly on branch when the push rules allow it (protected-ref rules, direct-push ban, secret scan FG-GIT-0022); start_sha is the commit the file was read at: a file changed since is 409 FG-GIT-0027, never overwritten (Developer; a token needs write_repository) */
+        post: operations["post_api_v1_projects_id_repository_commits_single_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/repository/commits/{oid}": {
         parameters: {
             query?: never;
@@ -4599,6 +4616,12 @@ export interface components {
             title: string;
             updated_at: string;
         };
+        /** @description Why the merge request was not opened (the commit stands). */
+        MergeRequestNotOpened: {
+            error_code: string;
+            /** @description The user message in the request's language. */
+            message: string;
+        };
         /** @description One page of a project's merge requests, newest first. */
         MergeRequestPage: {
             merge_requests: components["schemas"]["MergeRequestBody"][];
@@ -5620,6 +5643,60 @@ export interface components {
         /** @description `PUT /api/v1/projects/{id}/visibility`. */
         SetVisibility: {
             visibility: components["schemas"]["VisibilityName"];
+        };
+        /** @description `POST …/repository/commits/single-file`. */
+        SingleFileCommit: {
+            /**
+             * @description The branch the editor read the file from: `main` or
+             *     `refs/heads/main`. It must exist.
+             */
+            branch: string;
+            /** @description The whole new content: UTF-8 text without NUL, at most 512 KiB. */
+            content: string;
+            /**
+             * @description Commit on this NEW branch (created from the branch's head) instead
+             *     of the branch itself.
+             */
+            create_branch?: string | null;
+            /** @description The commit message (not blank, at most 64 KiB). */
+            message: string;
+            /**
+             * @description With `create_branch`: open a merge request into `branch` (default
+             *     true). Without `create_branch` only `false` is accepted.
+             */
+            open_merge_request?: boolean | null;
+            /**
+             * @description The file's path from the repository root (`docs/spec.md`); created
+             *     when absent (with its directories).
+             */
+            path: string;
+            /**
+             * @description The commit the editor read the file at (40 / 64 hex). When the
+             *     branch moved since, the file must be unchanged there (else 409
+             *     FG-GIT-0027).
+             */
+            start_sha: string;
+            /**
+             * @description The merge request's title (default: the message's first line; 1..=255
+             *     characters).
+             */
+            title?: string | null;
+        };
+        /** @description The commit as written. */
+        SingleFileCommitBody: {
+            /** @description The file's new blob. */
+            blob_sha: string;
+            /** @description The branch the commit is on (without `refs/heads/`). */
+            branch: string;
+            /** @description Whether `branch` was created by this commit. */
+            branch_created: boolean;
+            /** @description The new commit. */
+            commit_sha: string;
+            merge_request?: null | components["schemas"]["MergeRequestBody"];
+            merge_request_error?: null | components["schemas"]["MergeRequestNotOpened"];
+            /** @description The commit it was built on (the branch's head). */
+            parent_sha: string;
+            path: string;
         };
         /** @description One requirement's change. */
         SpecChangeBody: {
@@ -11024,6 +11101,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CommitsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_repository_commits_single_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SingleFileCommit"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SingleFileCommitBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

@@ -27,7 +27,7 @@ import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import { SERVICE_ACCOUNT_SCOPES } from './scopes';
 import styles from './Settings.module.css';
-import { useLeaveGuard } from './Tokens';
+import { useLeaveGuard } from '../../hooks/useLeaveGuard';
 
 type Account = components['schemas']['ServiceAccountBody'];
 type TokenRow = components['schemas']['ServiceAccountTokenBody'];
