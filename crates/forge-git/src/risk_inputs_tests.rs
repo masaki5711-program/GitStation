@@ -261,11 +261,18 @@ fn the_parser_reads_renames_and_refuses_what_it_cannot_place() {
 
     let bad_status = b":100644 100644 1 2 X\0p\0";
     assert!(parse_risk_diff(bad_status, 10).is_err());
-    let non_utf8 = b":100644 100644 1 2 M\0\xff\xfe\0";
-    assert_eq!(
-        parse_risk_diff(non_utf8, 10).expect("parse"),
-        RiskDiff::NonUtf8
-    );
+    // A non-UTF-8 name keeps every entry (lossily decoded) for the rules.
+    let non_utf8 = b":100644 100644 1 2 M\0\xff\xfe\0\
+:100644 100644 1 2 A\0.claude/hooks/x.js\0\
+1\t0\t\xff\xfe\0\
+1\t0\t.claude/hooks/x.js\0";
+    let RiskDiff::NonUtf8(files) = parse_risk_diff(non_utf8, 10).expect("parse") else {
+        panic!("non-utf8");
+    };
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].path, "\u{fffd}\u{fffd}");
+    assert_eq!(files[0].added, Some(1));
+    assert_eq!(files[1].path, ".claude/hooks/x.js");
 }
 
 // ── tree totals ──

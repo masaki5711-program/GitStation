@@ -184,14 +184,23 @@ fn authentication_ci_deploy_and_dependency_files_are_warns() {
 }
 
 #[test]
-fn a_symlink_or_a_submodule_is_a_warn() {
-    for mode in [0o120_000, 0o160_000] {
-        let mut f = file("vendor/lib", ChangeStatus::Added);
-        f.new_mode = mode;
+fn a_symlink_is_a_warn_and_a_submodule_also_a_stop() {
+    let mut link = file("vendor/lib", ChangeStatus::Added);
+    link.new_mode = 0o120_000;
+    assert_eq!(
+        rules(&path_findings(&link)),
+        vec![("special_entry", RiskLevel::Warn)]
+    );
+    for status in [ChangeStatus::Added, ChangeStatus::Modified] {
+        let mut sub = file("vendor/lib", status);
+        sub.new_mode = 0o160_000;
         assert_eq!(
-            rules(&path_findings(&f)),
-            vec![("special_entry", RiskLevel::Warn)],
-            "{mode:o}"
+            rules(&path_findings(&sub)),
+            vec![
+                ("special_entry", RiskLevel::Warn),
+                ("submodule_change", RiskLevel::Stop)
+            ],
+            "{status:?}"
         );
     }
     let mut gone = file("vendor/lib", ChangeStatus::Deleted);
@@ -660,6 +669,89 @@ fn unrelated_json_not_flagged() {
                 .iter()
                 .any(|f| f.rule == "agent_config"),
             "{p}"
+        );
+    }
+}
+
+// ── W15 A2 security review: names a developer's file system folds ──
+
+#[test]
+fn names_that_ntfs_or_apfs_fold_onto_agent_config_are_flagged() {
+    for p in [
+        ".claude./settings.json",
+        ".claude /hooks/x",
+        "CLAUDE.md.",
+        "CLAUDE.md ",
+        ".mcp.json::$DATA",
+        ".claude:stream/x",
+        ".cl\u{200b}aude/x",
+        "\u{feff}.claude/x",
+        ".mcp\u{2060}.json",
+        "CLAUDE\u{200d}.md",
+        // Unicode case: NTFS upper-cases the long s and the dotless i.
+        ".mcp.j\u{17f}on",
+        ".gitstat\u{131}on/agent.lock.json",
+        // A lossy-decoded non-UTF-8 byte is ignored like the rest.
+        ".cla\u{fffd}ude/hooks/x.js",
+    ] {
+        assert!(
+            agent_config(&path_findings(&file(p, ChangeStatus::Modified))),
+            "{p:?}"
+        );
+    }
+    for p in [
+        ".claude-x/settings.json",
+        "x.claude/y",
+        "CLAUDE.mdx",
+        ".mcp.jsonl",
+        "a/\u{200b}/b.txt",
+    ] {
+        assert!(
+            !agent_config(&path_findings(&file(p, ChangeStatus::Modified))),
+            "{p:?}"
+        );
+    }
+}
+
+#[test]
+fn a_symlink_whose_target_resolves_to_agent_config_is_flagged() {
+    for (link, target) in [
+        ("tools/settings.json", "../.claude/settings.json"),
+        ("hooks", ".claude/hooks"),
+        ("a/b/c", "../../.mcp.json"),
+        ("a/link", "./sub/../../CLAUDE.md"),
+        ("x", "/home/dev/.claude"),
+        ("y", r"C:\Users\dev\.claude\hooks"),
+        // More `..` than the link is deep: what remains still names it.
+        ("z", "../../.claude/settings.json"),
+    ] {
+        let found = symlink_findings(link, target.as_bytes());
+        assert_eq!(
+            rules(&found),
+            vec![("agent_config", RiskLevel::Stop)],
+            "{link} -> {target}"
+        );
+        assert_eq!(found[0].path.as_deref(), Some(link));
+    }
+    for (link, target) in [
+        ("tools/x", "../src/main.rs"),
+        ("docs/notes", ".claude-notes.md"),
+        ("lib", "vendor/lib"),
+    ] {
+        assert!(
+            symlink_findings(link, target.as_bytes()).is_empty(),
+            "{link} -> {target}"
+        );
+    }
+}
+
+#[test]
+fn the_rules_the_a2_review_added_are_stops() {
+    for id in ["agent_config", "submodule_change"] {
+        assert_eq!(
+            Finding::for_rule(id).map(|f| f.level),
+            Some(RiskLevel::Stop),
+            "{id}"
         );
     }
 }
