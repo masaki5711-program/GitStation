@@ -237,6 +237,7 @@
     "copyFailed": "Tidak dapat menyalin. Pilih ID lalu salin sendiri",
     "network": "Tidak dapat terhubung ke server. Coba lagi sebentar lagi.",
     "unexpected": "Server memberikan jawaban yang tidak terduga. Coba lagi sebentar lagi.",
+    "unavailable": "Server sedang dimulai ulang atau sibuk. Tunggu sebentar lalu coba lagi.",
     "retry": "Coba lagi",
     "forbiddenTitle": "Anda tidak memiliki izin"
   },

@@ -12,6 +12,9 @@ export type Failure =
   /** An answer outside the error contract, or a failure in the client
    * itself (`status` null: no answer to speak of). */
   | { kind: 'unexpected'; status: number | null; requestId: string | null }
+  /** A 502/503/504 without the error contract's body: the reverse proxy
+   * answered while the server restarts or is overloaded. Worth a retry. */
+  | { kind: 'unavailable'; status: number; requestId: string | null }
   | { kind: 'network' };
 
 export class ApiFailure extends Error {
@@ -109,8 +112,13 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/** Statuses a reverse proxy answers with while the server restarts. */
+const UNAVAILABLE_STATUSES = new Set([502, 503, 504]);
+
 /** The server's error body `{ error_code, user_message, request_id }` into
- * what the UI shows; anything else is `unexpected` (never shown raw). */
+ * what the UI shows; a 502/503/504 without it is `unavailable` (the proxy
+ * answered for a restarting server); anything else is `unexpected` (never
+ * shown raw). */
 export function toFailure(response: Response, body: unknown): Failure {
   const headerId = response.headers.get(REQUEST_ID_HEADER);
   if (response.status === 401) {
@@ -129,6 +137,9 @@ export function toFailure(response: Response, body: unknown): Failure {
       userMessage: body.user_message,
       requestId: body.request_id,
     };
+  }
+  if (UNAVAILABLE_STATUSES.has(response.status)) {
+    return { kind: 'unavailable', status: response.status, requestId: headerId };
   }
   return { kind: 'unexpected', status: response.status, requestId: headerId };
 }
