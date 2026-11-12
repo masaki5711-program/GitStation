@@ -582,13 +582,19 @@ fn ignorable(c: char) -> bool {
 /// trimmed (Win32 drops them), then compared by Unicode upper case (NTFS
 /// folds `ſ` to `S` and `ı` to `I`; `ß` stays two letters and never matches).
 fn names(component: &str, upper: &str) -> bool {
+    on_disk_upper(component) == upper
+}
+
+/// One path component as a developer's file system reads it, upper-cased
+/// ([`names`]' rule: ignorable code points removed, an NTFS stream suffix
+/// dropped, trailing dots and spaces trimmed, Unicode upper case). The
+/// simple editor's path check (forge-git `file_commit`) compares it with
+/// `.GIT` and git's 8.3 short name `GIT~<n>`.
+pub fn on_disk_upper(component: &str) -> String {
     let kept: String = component.chars().filter(|c| !ignorable(*c)).collect();
     let stream_free = kept.split(':').next().unwrap_or("");
     let trimmed = stream_free.trim_end_matches(['.', ' ']);
-    trimmed
-        .chars()
-        .flat_map(char::to_uppercase)
-        .eq(upper.chars())
+    trimmed.chars().flat_map(char::to_uppercase).collect()
 }
 
 const AGENT_CONFIG_FILES: &[&str] = &["CLAUDE.MD", "CLAUDE.LOCAL.MD", ".MCP.JSON"];

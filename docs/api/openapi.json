@@ -5790,6 +5790,24 @@
         ],
         "type": "object"
       },
+      "MergeRequestNotOpened": {
+        "additionalProperties": false,
+        "description": "Why the merge request was not opened (the commit stands).",
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "message": {
+            "description": "The user message in the request's language.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "message"
+        ],
+        "type": "object"
+      },
       "MergeRequestPage": {
         "additionalProperties": false,
         "description": "One page of a project's merge requests, newest first.",
@@ -8349,6 +8367,121 @@
         },
         "required": [
           "visibility"
+        ],
+        "type": "object"
+      },
+      "SingleFileCommit": {
+        "additionalProperties": false,
+        "description": "`POST …/repository/commits/single-file`.",
+        "properties": {
+          "branch": {
+            "description": "The branch the editor read the file from: `main` or\n`refs/heads/main`. It must exist.",
+            "type": "string"
+          },
+          "content": {
+            "description": "The whole new content: UTF-8 text without NUL, at most 512 KiB.",
+            "type": "string"
+          },
+          "create_branch": {
+            "description": "Commit on this NEW branch (created from the branch's head) instead\nof the branch itself.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "The commit message (not blank, at most 64 KiB).",
+            "type": "string"
+          },
+          "open_merge_request": {
+            "description": "With `create_branch`: open a merge request into `branch` (default\ntrue). Without `create_branch` only `false` is accepted.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The file's path from the repository root (`docs/spec.md`); created\nwhen absent (with its directories).",
+            "type": "string"
+          },
+          "start_sha": {
+            "description": "The commit the editor read the file at (40 / 64 hex). When the\nbranch moved since, the file must be unchanged there (else 409\nFG-GIT-0027).",
+            "type": "string"
+          },
+          "title": {
+            "description": "The merge request's title (default: the message's first line; 1..=255\ncharacters).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "branch",
+          "start_sha",
+          "path",
+          "content",
+          "message"
+        ],
+        "type": "object"
+      },
+      "SingleFileCommitBody": {
+        "additionalProperties": false,
+        "description": "The commit as written.",
+        "properties": {
+          "blob_sha": {
+            "description": "The file's new blob.",
+            "type": "string"
+          },
+          "branch": {
+            "description": "The branch the commit is on (without `refs/heads/`).",
+            "type": "string"
+          },
+          "branch_created": {
+            "description": "Whether `branch` was created by this commit.",
+            "type": "boolean"
+          },
+          "commit_sha": {
+            "description": "The new commit.",
+            "type": "string"
+          },
+          "merge_request": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MergeRequestBody",
+                "description": "The merge request opened for the new branch (null when none was\nasked or it could not be opened)."
+              }
+            ]
+          },
+          "merge_request_error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MergeRequestNotOpened",
+                "description": "Set when the merge request was asked for and refused."
+              }
+            ]
+          },
+          "parent_sha": {
+            "description": "The commit it was built on (the branch's head).",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit_sha",
+          "parent_sha",
+          "branch",
+          "branch_created",
+          "path",
+          "blob_sha"
         ],
         "type": "object"
       },
@@ -17561,6 +17694,58 @@
         },
         "summary": "A page of a revision's history, newest first (keyset cursor; optionally one path)",
         "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/commits/single-file": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_repository_commits_single_file",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SingleFileCommit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SingleFileCommitBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create or replace one text file (UTF-8, no NUL, at most 512 KiB) and commit it like a push: on a new branch (create_branch; by default a merge request into branch is opened) or directly on branch when the push rules allow it (protected-ref rules, direct-push ban, secret scan FG-GIT-0022); start_sha is the commit the file was read at: a file changed since is 409 FG-GIT-0027, never overwritten (Developer; a token needs write_repository)",
+        "x-forge-action": "RepoPush",
+        "x-forge-max-body-bytes": 1048576
       }
     },
     "/api/v1/projects/{id}/repository/commits/{oid}": {

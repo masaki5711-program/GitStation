@@ -144,6 +144,8 @@ pub struct AppState {
     pub act_as_claim_limiter: Arc<routes::namespaces::CallerLimiter>,
     /// M3 X1: the spec references followed per caller (`FG-WEB-0010`).
     pub spec_refs_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// Simple editor E1: single-file commits per caller (review E1).
+    pub file_commit_limiter: Arc<routes::namespaces::CallerLimiter>,
     /// M3 X1: one budget for a whole spec-refs request (`FG-WEB-0002
     /// operation=spec_refs`).
     pub spec_refs_budget: Duration,
@@ -209,6 +211,7 @@ impl AppState {
             act_as_search_limiter: Arc::new(routes::integration_bindings::act_as_search_limiter()),
             act_as_claim_limiter: Arc::new(routes::act_as::claim_limiter()),
             spec_refs_limiter: Arc::new(routes::spec_refs::limiter()),
+            file_commit_limiter: Arc::new(routes::file_commit::limiter()),
             spec_refs_budget: routes::spec_refs::BUDGET,
             spec_index_limiter: Arc::new(routes::specs::limiter()),
             spec_index_in_flight: Arc::default(),
@@ -1571,6 +1574,22 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<b::BlobBody>(Verb::Get, b::BLOB)
         .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+        // Simple editor E1 (2026-11-12): one text file committed like a
+        // push (the project-level RepoPush here, the ref decided by
+        // authorize_ref_updates on the push's protection snapshot).
+        .route_with_body(
+            Verb::Post,
+            routes::file_commit::PATH,
+            Action::RepoPush,
+            "Create or replace one text file (UTF-8, no NUL, at most 512 KiB) and commit it like a push: on a new branch (create_branch; by default a merge request into branch is opened) or directly on branch when the push rules allow it (protected-ref rules, direct-push ban, secret scan FG-GIT-0022); start_sha is the commit the file was read at: a file changed since is 409 FG-GIT-0027, never overwritten (Developer; a token needs write_repository)",
+            routes::file_commit::MAX_BODY,
+            routes::file_commit::SingleFileOf,
+            routes::file_commit::commit,
+        )
+        .responds_created::<routes::file_commit::SingleFileCommitBody>(
+            Verb::Post,
+            routes::file_commit::PATH,
+        )
         // Plan 13 stage 3: the document view as JSON (the blob API's rule);
         // a confidential document is withheld from an AI agent (plan 06 D-5).
         .route_with(

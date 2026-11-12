@@ -33,6 +33,25 @@ use serde::de::DeserializeOwned;
 /// The largest cap a JSON body route may declare.
 pub const MAX_JSON_BODY_BYTES: usize = 64 * 1024;
 
+/// The cap of a route that carries a whole text file in its JSON body (the
+/// simple editor's commit, E1): the server's default `body_limit_bytes`.
+/// Only the routes in [`LARGE_BODY_ROUTES`] may declare more than
+/// [`MAX_JSON_BODY_BYTES`], and never more than this.
+pub const MAX_FILE_BODY_BYTES: usize = 1024 * 1024;
+
+/// The routes allowed a cap above [`MAX_JSON_BODY_BYTES`] (up to
+/// [`MAX_FILE_BODY_BYTES`]).
+pub const LARGE_BODY_ROUTES: &[&str] = &["/api/v1/projects/{id}/repository/commits/single-file"];
+
+/// The largest cap `path` may declare.
+pub fn max_body_cap(path: &str) -> usize {
+    if LARGE_BODY_ROUTES.contains(&path) {
+        MAX_FILE_BODY_BYTES
+    } else {
+        MAX_JSON_BODY_BYTES
+    }
+}
+
 /// A route's request body type: strict JSON (`deny_unknown_fields`) with an
 /// OpenAPI schema.
 pub trait RequestBody: DeserializeOwned + utoipa::ToSchema + Send + Sync + 'static {}

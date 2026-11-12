@@ -269,7 +269,7 @@ fn short(name: &RefName) -> String {
     name.branch().unwrap_or(name.as_str()).to_owned()
 }
 
-fn body_of(mr: &StoredMergeRequest) -> MergeRequestBody {
+pub(crate) fn body_of(mr: &StoredMergeRequest) -> MergeRequestBody {
     MergeRequestBody {
         project_id: mr.project_id.get(),
         iid: mr.iid,

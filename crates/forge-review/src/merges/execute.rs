@@ -684,18 +684,7 @@ impl Merger {
     /// The commit identity of `user` from the database (the e-mail falls
     /// back to `<username>@users.noreply.invalid` when the account has none).
     async fn identity(&self, user: forge_core::UserId) -> Result<CommitIdentity, ForgeError> {
-        let found = merges::account_identity(&self.db, user)
-            .await?
-            .ok_or_else(|| {
-                ForgeError::new(ErrorCode::Internal)
-                    .with_context("reason", "merge_identity_missing")
-                    .with_context("user_id", user.get())
-            })?;
-        let email = found
-            .email
-            .unwrap_or_else(|| format!("{}@users.noreply.invalid", found.username));
-        CommitIdentity::new(&found.display_name, &email, &found.username)
-            .map_err(|e| e.with_context("user_id", user.get()))
+        account_commit_identity(&self.db, user).await
     }
 
     /// Steps 6–9 from a prepared attempt with both proofs: the fence, the
@@ -1130,4 +1119,23 @@ fn log_completed(attempt: &StoredMerge, report: &MergeReport) {
 /// database, an invariant: 5xx).
 pub(super) fn is_refusal(e: &ForgeError) -> bool {
     e.code().http_status() < 500
+}
+
+/// The commit identity of `user` from the database (the e-mail falls back
+/// to `<username>@users.noreply.invalid` when the account has none): the
+/// merge's, and the simple editor's commit (`crate::Review::commit_identity`).
+pub(crate) async fn account_commit_identity(
+    db: &forge_db::Db,
+    user: forge_core::UserId,
+) -> Result<CommitIdentity, ForgeError> {
+    let found = merges::account_identity(db, user).await?.ok_or_else(|| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "merge_identity_missing")
+            .with_context("user_id", user.get())
+    })?;
+    let email = found
+        .email
+        .unwrap_or_else(|| format!("{}@users.noreply.invalid", found.username));
+    CommitIdentity::new(&found.display_name, &email, &found.username)
+        .map_err(|e| e.with_context("user_id", user.get()))
 }

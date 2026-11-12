@@ -28,6 +28,9 @@
 //!   (`update-ref --stdin` in one transaction, hooks pinned empty).
 //! - [`commit`] writes a merge's commit (`commit-tree`, the identity in the
 //!   environment, the message on stdin; M3 R4) and tells a locked ref.
+//! - [`file_commit`] writes one file as a commit on a parent without a
+//!   working tree (the simple editor E1: blob, temporary index, tree,
+//!   commit; the caller moves the ref like a push).
 //! - [`mergeability`] runs the trial merge of a merge request
 //!   (`merge-tree --write-tree`, M3 R2) and the `merge-base` questions
 //!   (exit 1 is an answer there, `GitCommand::output_accepting`).
@@ -43,6 +46,7 @@ pub mod browse;
 mod command;
 pub mod commit;
 mod config;
+pub mod file_commit;
 pub mod gzip;
 pub mod hidden_refs;
 pub mod maintenance;

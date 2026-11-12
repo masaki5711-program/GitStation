@@ -981,6 +981,24 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["ref","path","oid","size","binary","hunks","commits","truncated"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"oid":{"type":"string"},"size":{"type":"integer"},"binary":{"type":"boolean"},"hunks":{"type":"array","items":{"type":"object","required":["commit","start","orig_start","lines"]}},"commits":{"type":"array","items":{"type":"object","required":["oid","author_name","author_email","author_time","author_tz","summary","boundary","path"]}},"truncated":{"type":"boolean"}}}"#,
     },
     CommandSpec {
+        name: "browse commit-file",
+        summary: "Commit one text file read from standard input like a push (Developer): on --create-branch (a merge request into --branch unless --no-merge-request) or directly on --branch when the push rules allow it. 409 FG-GIT-0027 when the file changed since --start-sha (never overwritten); 403 FG-GIT-0017 / FG-GIT-0008 on a protected branch; 422 FG-GIT-0022 for a secret.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--branch", "option", true, "The branch the file was read from."),
+            arg("--start-sha", "option", true, "The commit the file was read at (40 or 64 hexadecimal digits)."),
+            arg("--path", "option", true, "The file's path from the repository root."),
+            arg("--message", "option", true, "The commit message."),
+            arg("--create-branch", "option", false, "Commit on this new branch instead."),
+            arg("--no-merge-request", "flag", false, "With --create-branch: open no merge request."),
+            arg("--title", "option", false, "The merge request's title (default: the message's first line)."),
+        ],
+        examples: &["gstn browse commit-file --project 7 --branch main --start-sha 0123456789abcdef0123456789abcdef01234567 --path docs/spec.md --message \"Update the spec\" --create-branch edit/spec < spec.md"],
+        scopes: &["write_repository", "api"],
+        routes: &["POST /api/v1/projects/{id}/repository/commits/single-file"],
+        output: r#"{"type":"object","required":["commit_sha","parent_sha","branch","branch_created","path","blob_sha","merge_request","merge_request_error"]}"#,
+    },
+    CommandSpec {
         name: "browse spec-refs",
         summary: "Show a revision's .forge/repo.yml and its spec references, each resolved with your permissions (unreadable ones are unavailable).",
         args: &[

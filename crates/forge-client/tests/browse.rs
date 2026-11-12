@@ -571,3 +571,74 @@ fn browse_spec_refs_shows_each_reference_and_the_file_problem() {
     );
     assert_eq!(j.json()["specs"][0]["project_id"], 8);
 }
+
+#[test]
+fn browse_commit_file_posts_the_content_from_stdin() {
+    let srv = Mock::start(|_| {
+        Resp::json(
+            201,
+            &format!(
+                r#"{{"commit_sha":"{C}","parent_sha":"{C}","branch":"edit/spec","branch_created":true,"path":"docs/spec.md","blob_sha":"{C}","merge_request":{{"iid":4}},"merge_request_error":null}}"#
+            ),
+        )
+    });
+    let sb = Sandbox::new();
+    let o = sb.run_env(
+        &srv.url,
+        &[
+            "browse",
+            "commit-file",
+            "--project",
+            "7",
+            "--branch",
+            "main",
+            "--start-sha",
+            C,
+            "--path",
+            "docs/spec.md",
+            "--message",
+            "Update the spec",
+            "--create-branch",
+            "edit/spec",
+        ],
+        "# Spec\n\nv2\n",
+        &[("GSTN_TOKEN", TOKEN)],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("request");
+    assert_eq!(r.method, "POST");
+    assert_eq!(
+        r.target,
+        "/api/v1/projects/7/repository/commits/single-file"
+    );
+    let body: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+    assert_eq!(
+        body,
+        json!({"branch": "main", "start_sha": C, "path": "docs/spec.md",
+               "content": "# Spec\n\nv2\n", "message": "Update the spec",
+               "create_branch": "edit/spec", "open_merge_request": true})
+    );
+    assert!(o.stdout.contains("merge request !4"), "{}", o.stdout);
+    // --no-merge-request needs --create-branch: refused before any request.
+    let bad = sb.run_env(
+        &srv.url,
+        &[
+            "browse",
+            "commit-file",
+            "--project",
+            "7",
+            "--branch",
+            "main",
+            "--start-sha",
+            C,
+            "--path",
+            "a.md",
+            "--message",
+            "m",
+            "--no-merge-request",
+        ],
+        "x",
+        &[("GSTN_TOKEN", TOKEN)],
+    );
+    assert_eq!(bad.code, 2, "{}", bad.stderr);
+}
