@@ -9,6 +9,7 @@ import {
   REFS_FILLED,
   RESOLVE_GROUP,
   RESOLVE_PROJECT,
+  SESSION,
   apiError,
   askedPaths,
   mockServer,
@@ -52,6 +53,29 @@ describe('project top page', () => {
     const commands = screen.getByText(/git push -u origin main/);
     expect(commands.textContent).toContain(`git clone ${window.location.origin}/acme/forge-web.git`);
     expect(commands.textContent).toContain('cd forge-web');
+  });
+
+  it('an empty repository also says how to send an existing folder, with the token and certificate notes', async () => {
+    const server = mockServer(project(REFS_EMPTY));
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });
+    expect(await screen.findByRole('heading', { level: 3, name: '既存のフォルダから送る' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 3, name: '新しく始める' })).toBeTruthy();
+    const existing = screen.getByText(/git push -u gitstation main/);
+    expect(existing.textContent).toBe(
+      `cd <フォルダのパス>
+git remote add gitstation ${window.location.origin}/acme/forge-web.git
+git push -u gitstation main`,
+    );
+    // Why `gitstation`, not `origin`.
+    expect(screen.getByText(/origin は GitHub など別の送り先/)).toBeTruthy();
+    // One copy button per block.
+    expect(screen.getByRole('button', { name: '新しく始めるコマンドをコピー' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '既存のフォルダから送るコマンドをコピー' })).toBeTruthy();
+    // Sign-in is a personal access token: a link to the token settings.
+    expect(screen.getByRole('link', { name: 'アクセストークンを作る' }).getAttribute('href')).toBe(
+      `/${SESSION.user.username}/-/settings`,
+    );
+    expect(screen.getByText(/SEC_E_UNTRUSTED_ROOT/).textContent).toContain('管理者の案内');
   });
 
   it('copies the clone URL; says so when the clipboard is missing', async () => {

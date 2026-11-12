@@ -101,6 +101,34 @@
   overflow-x: auto;
 }
 
+/* An empty repository: two ways to send the first commit, then notes. */
+.emptyBlock + .emptyBlock {
+  margin-top: var(--gs-space-6);
+  padding-top: var(--gs-space-4);
+  border-top: 1px solid var(--gs-color-border-subtle);
+}
+
+.emptyBlock h3 {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+}
+
+.emptyBlock p {
+  margin: 0 0 var(--gs-space-3);
+}
+
+.emptyNotes {
+  margin: var(--gs-space-6) 0 0;
+  padding: var(--gs-space-3) var(--gs-space-4) var(--gs-space-3) var(--gs-space-8);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-info-surface);
+  font-size: var(--gs-font-size-sm);
+}
+
+.emptyNotes li + li {
+  margin-top: var(--gs-space-2);
+}
+
 .links {
   display: flex;
   flex-wrap: wrap;

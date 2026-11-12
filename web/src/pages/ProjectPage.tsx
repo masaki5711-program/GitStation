@@ -32,6 +32,7 @@ import { InlineError } from '../components/InlineError';
 import { QueryError } from '../components/QueryError';
 import { formatDate, formatDateTime, formatRelative, roleLabel, visibilityLabel } from '../features/labels';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { useSession } from '../session/session';
 import { rememberProject } from '../hooks/recent';
 import styles from './Namespace.module.css';
 import { PageHeader } from '../ui/PageHeader';
@@ -120,6 +121,46 @@ function LatestCommit({ id, path, branch }: { id: number; path: string; branch: 
   );
 }
 
+/** An empty repository: how to send the first commit — from a new clone,
+ * or from a folder that is already a git repository (whose `origin` may
+ * point elsewhere, e.g. GitHub: so the remote is added as `gitstation`).
+ * Then the two things people trip on: the password is a personal access
+ * token, and an untrusted organization CA (the administrator explains it). */
+function EmptyRepository({ name, cloneUrl }: { name: string; cloneUrl: string }) {
+  const { t } = useTranslation();
+  const username = useSession().user.username;
+  const fresh = t('project.emptyCommands', { url: cloneUrl, name });
+  const existing = t('project.emptyExistingCommands', { url: cloneUrl });
+  return (
+    <section className={styles.card} aria-labelledby="repo-empty">
+      <h2 id="repo-empty">{t('project.emptyTitle')}</h2>
+      <div className={styles.emptyBlock}>
+        <h3>{t('project.emptyNewTitle')}</h3>
+        <p>{t('project.emptyBody')}</p>
+        <pre className={styles.pre}>
+          <code>{fresh}</code>
+        </pre>
+        <CopyButton text={fresh} label={t('project.copyNewCommands')} />
+      </div>
+      <div className={styles.emptyBlock}>
+        <h3>{t('project.emptyExistingTitle')}</h3>
+        <p>{t('project.emptyExistingBody')}</p>
+        <pre className={styles.pre}>
+          <code>{existing}</code>
+        </pre>
+        <CopyButton text={existing} label={t('project.copyExistingCommands')} />
+      </div>
+      <ul className={styles.emptyNotes}>
+        <li>
+          {t('project.emptyTokenNote')}{' '}
+          <Link to={`/${encodeURIComponent(username)}/-/settings`}>{t('project.emptyTokenLink')}</Link>
+        </li>
+        <li>{t('project.emptyCertificateNote')}</li>
+      </ul>
+    </section>
+  );
+}
+
 function RepositoryState({
   id,
   name,
@@ -155,18 +196,8 @@ function RepositoryState({
     );
   }
   const { default_branch: branch, refs: list } = refs.data;
-  const commands = t('project.emptyCommands', { url: cloneUrl, name });
   if (branch === null && list.length === 0) {
-    return (
-      <section className={styles.card} aria-labelledby="repo-empty">
-        <h2 id="repo-empty">{t('project.emptyTitle')}</h2>
-        <p>{t('project.emptyBody')}</p>
-        <pre className={styles.pre}>
-          <code>{commands}</code>
-        </pre>
-        <CopyButton text={commands} label={t('project.copyCommands')} />
-      </section>
-    );
+    return <EmptyRepository name={name} cloneUrl={cloneUrl} />;
   }
   if (branch === null) return null;
   return <LatestCommit id={id} path={path} branch={branch} />;
