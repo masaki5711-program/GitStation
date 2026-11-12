@@ -10,7 +10,7 @@ npm ci --ignore-scripts      # 依存の install スクリプトは実行しな�
 npm run lint                 # eslint（react/jsx-no-literals、Radix は src/ui/ だけ）
 npm run typecheck            # tsc --noEmit
 npm test                     # vitest（i18n のゲート、トークンのコントラスト、ブランドの複製、画面）
-npm run build                # dist/ と .br / .gz（scripts/compress.mjs が形も検査する）
+npm run build                # dist/ と .br / .gz（scripts/compress.mjs が形も検査する）、初回ロードの JS の予算（scripts/bundle-budget.mjs）
 npm run gen:api              # docs/api/openapi.json → src/api/schema.gen.ts（手で直さない。CI が差分を見る）
 npm run licenses             # 依存のライセンスの許可リスト
 npm run i18n:report          # id の欠けたキーの数（失敗にしない）
@@ -48,3 +48,38 @@ npm run dev                  # Vite。/api と /-/auth を FORGE_DEV_SERVER（�
 - 構文の色は `features/highlight.ts`（`lowlight` = highlight.js の木。クラスだけ、`style` 属性なし。言語は個別のチャンク、20 万文字を超えるファイルは色なし）。
 - 差分は `features/DiffView.tsx`。切り詰め・バイナリ・大きすぎ・UTF-8 でないものは文で言う。
 - `tests/repo-fixtures.ts` の合成データ（vitest）と `scripts/journey-repo.mjs`（Playwright のスタンドイン）は同じ形。
+
+## 速さ（目標: どの画面も 100 ms 以内）
+
+- **先読み**（`features/prefetch.ts`）: サイドバーの項目・プロジェクトのタブ・ファイル一覧の行・コミット一覧・MR 一覧のリンク
+  （`components/PrefetchLink.tsx`）に、ポインタが 50 ms 乗るか、フォーカスかタッチで、行き先の画面が最初に読むクエリを
+  同じキーで先に読む。1 つの行き先につき同時に 1 本だけ。Save-Data や 2G 回線では読まない。先読みの失敗は画面には出さず、
+  画面を開いたときにもう一度読む（失敗すれば `ErrorNotice` に `request_id`）。遅延チャンクの画面（設定・パイプライン・編集など）は
+  そのチャンクも先に読む。
+- **プロジェクトのトップ**: 描画のあと、ブラウザが暇なとき（`requestIdleCallback`）に既定ブランチの履歴の 1 ページ目と
+  開いている MR の一覧を読む（README はファイル一覧が読む）。
+- **キャッシュ**（`api/cachePolicy.ts`）: 完全なコミット ID で指したもの（そのコミットの木・ファイル・コミット、2 つの ID の
+  比較、MR の版の差分）は変わらないので `staleTime: Infinity`、閉じた後も 30 分持つ。ブランチ名・タグ名で指したものは
+  アプリ既定の 30 秒（それを過ぎたら、手元の値をすぐ見せつつ読み直す）。
+- **パスの解決**（`api/namespaces.ts`）: `GET /api/v1/namespaces/resolve` の答えはパスごとに 5 分持ち、同じプロジェクトの
+  タブの間で使い回す（`/{project}` と `/{project}/-/…` の 2 つの形も互いの答えを使う）。移動・改名（transfer）・削除・
+  復元の後は全部捨てる。
+- **分割**（`pages/lazyScreens.tsx`）: 設定・メンバー・Webhook・パイプライン・編集・代理承認のポップアップは別チャンク。
+  初回は `SkeletonList` を出す。Markdown と構文の言語は前から別チャンク。文言は ja だけ本体に入れ、en / id は選んだときに
+  読む別チャンク（`i18n/index.ts`。読めなければ起動を失敗させる）。本体は 910 kB → 645 kB（gzip 268 kB → 199 kB）。
+
+### 測りかた
+
+```bash
+npm run build                # 最後に scripts/bundle-budget.mjs が初回ロードの JS の大きさを出す（予算を超えると失敗）
+BUDGET_KB=600 node scripts/bundle-budget.mjs dist   # 予算を変えて確かめる
+```
+
+実際の画面の速さはブラウザで測る:
+
+1. Chrome の DevTools → Network（Disable cache は外す）→ プロジェクトを開く。
+2. サイドバーのタブにポインタを乗せる → `merge-requests` や `commits` の要求が**クリックの前に**出ることを確かめる。
+3. Performance パネルで記録しながらタブをクリック → クリックから画面の内容が描かれるまで（Interaction の長さ）が 100 ms 以内か見る。
+   同じプロジェクトのタブの間で `namespaces/resolve` が出ないこと、コミット ID のページへ戻ったとき要求が出ないことも見る。
+4. 遅い回線の確認は Network の Throttling（Slow 4G）。Save-Data の確認は DevTools の Network conditions では出せないので
+   `navigator.connection` を持つ Android の Chrome の「ライトモード」で。
