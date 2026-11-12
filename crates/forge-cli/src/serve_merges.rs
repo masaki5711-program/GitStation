@@ -164,6 +164,11 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobWorkspaceTooLarge
         | ErrorCode::ServiceStartFailed
         | ErrorCode::JobIsolationUnsafe
+        // M4 C8: the merge queue's own outcomes (its landing never runs
+        // the merge job).
+        | ErrorCode::MergeQueueChecksFailed
+        | ErrorCode::MergeQueueStalled
+        | ErrorCode::MergeQueueEntryRefused
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

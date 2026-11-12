@@ -20,7 +20,7 @@ use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::command::{Git, GitCommand};
-use crate::hidden_refs::{HIDDEN_REF_PREFIX, PIPELINE_REF_PREFIX};
+use crate::hidden_refs::{HIDDEN_REF_PREFIX, MERGE_QUEUE_REF_PREFIX, PIPELINE_REF_PREFIX};
 use crate::pkt_line;
 use crate::storage::StorageRoot;
 
@@ -123,6 +123,8 @@ pub const UPLOAD_PACK_CONFIG: &[(&str, &str)] = &[
     ("transfer.hideRefs", HIDDEN_REF_PREFIX),
     // M4 C4 (ADR-0029 §3): the CI pipeline refs, likewise.
     ("transfer.hideRefs", PIPELINE_REF_PREFIX),
+    // M4 C8 (ADR-0030 §3): the merge queue's train refs, likewise.
+    ("transfer.hideRefs", MERGE_QUEUE_REF_PREFIX),
 ];
 
 /// Fixed `-c` settings of receive-pack (push); `receive.maxInputSize` is
@@ -136,6 +138,8 @@ pub const RECEIVE_PACK_CONFIG: &[(&str, &str)] = &[
     ("transfer.hideRefs", HIDDEN_REF_PREFIX),
     // M4 C4: nor are the CI pipeline refs.
     ("transfer.hideRefs", PIPELINE_REF_PREFIX),
+    // M4 C8: nor the merge queue's train refs.
+    ("transfer.hideRefs", MERGE_QUEUE_REF_PREFIX),
     // M3 O3: a push deleting a packed ref waits out the maintenance's
     // pack-refs instead of failing after git's 1 s (`refs::PACKED_REFS_TIMEOUT_MS`).
     (

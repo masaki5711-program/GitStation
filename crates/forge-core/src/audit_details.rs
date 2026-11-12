@@ -9,6 +9,7 @@ use crate::history_import::HistoryImportChange;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::integration::IntegrationChange;
 use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
+use crate::merge_queue::MergeQueueChange;
 use crate::merge_request::{MergeRequestChange, MergeRequestVersionChange};
 use crate::mirror::PushMirrorChange;
 use crate::move_details::{MoveSummary, TombstoneKind};
@@ -407,6 +408,10 @@ pub enum AuditDetails {
     /// M4 C3: an administrator registered or changed a CI runner (resource
     /// the runner, no event). Shapes: [`RunnerChange::to_value`].
     Runner(RunnerChange),
+    /// M4 C8 (ADR-0030): a person added a merge request to a merge queue,
+    /// removed it, or paused / resumed a queue (resource the project, no
+    /// event). Shapes: [`MergeQueueChange::to_value`].
+    MergeQueue(MergeQueueChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -579,6 +584,7 @@ impl AuditDetails {
             Self::DocLintMigration(change) => change.action(),
             Self::Pipeline(change) => change.action(),
             Self::Runner(change) => change.action(),
+            Self::MergeQueue(change) => change.action(),
         }
     }
 
@@ -639,7 +645,8 @@ impl AuditDetails {
             | Self::HistoryImport(_)
             | Self::DocLintMigration(_)
             | Self::Pipeline(_)
-            | Self::Runner(_) => None,
+            | Self::Runner(_)
+            | Self::MergeQueue(_) => None,
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,
@@ -1063,6 +1070,7 @@ impl AuditDetails {
             Self::DocLintMigration(change) => change.to_value(),
             Self::Pipeline(change) => change.to_value(),
             Self::Runner(change) => change.to_value(),
+            Self::MergeQueue(change) => change.to_value(),
         }
     }
 
@@ -1147,7 +1155,8 @@ impl AuditDetails {
             | Self::HistoryImport(_)
             | Self::DocLintMigration(_)
             | Self::Pipeline(_)
-            | Self::Runner(_) => self.to_value(),
+            | Self::Runner(_)
+            | Self::MergeQueue(_) => self.to_value(),
         }
     }
 }

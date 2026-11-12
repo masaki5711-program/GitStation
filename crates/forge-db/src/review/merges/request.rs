@@ -58,7 +58,7 @@ pub struct NewMerge {
 }
 
 /// The live attempt of `mr`, locked (`None`: none).
-pub(super) async fn live_on(
+pub(in crate::review) async fn live_on(
     conn: &mut PgConnection,
     mr: MergeRequestId,
 ) -> Result<Option<StoredMerge>, ForgeError> {
@@ -76,7 +76,7 @@ pub(super) async fn live_on(
 
 /// The facts after [`facts`] (which locked the project, the merge request
 /// and the caller), for `credential` of the caller.
-pub(super) async fn gate(
+pub(in crate::review) async fn gate(
     tx: &mut ChangeTx,
     facts: MergeRequestFacts,
     viewer: UserId,

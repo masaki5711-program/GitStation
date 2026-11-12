@@ -24,6 +24,7 @@ pub mod integration;
 pub mod list_page;
 pub mod merge;
 pub mod merge_conditions;
+pub mod merge_queue;
 pub mod merge_request;
 pub mod merge_results;
 pub mod mirror;
