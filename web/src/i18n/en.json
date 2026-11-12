@@ -1370,7 +1370,8 @@
       "push": "push",
       "mergeRequest": "Merge request",
       "schedule": "Scheduled",
-      "manual": "Manual run"
+      "manual": "Manual run",
+      "mergeQueue": "Merge queue"
     },
     "by": {
       "system": "Automatic",
@@ -1520,5 +1521,43 @@
       "mrFailed": "The merge request could not be opened: {{message}}",
       "openMr": "Open a merge request"
     }
+  },
+  "mergeQueue": {
+    "mrLabel": "Merge queue",
+    "actionsLabel": "Merge queue actions",
+    "enqueue": "Add to merge queue",
+    "dequeue": "Remove from merge queue",
+    "enqueueHint": "Once queued, it is merged automatically when the pipeline passes together with the changes ahead of it.",
+    "openQueue": "View the queue",
+    "state": {
+      "queued": "Waiting at position {{position}} in the merge queue.",
+      "testing": "Being tested in the merge queue. It is merged if it passes.",
+      "merged": "Merged by the merge queue.",
+      "removed": "Left the merge queue ({{why}}). Fix it, then add it again."
+    },
+    "reason": {
+      "dequeued": "removed by a person",
+      "checks_failed": "the pipeline with only this change failed",
+      "conflict": "it conflicts with a change ahead of it",
+      "head_changed": "a new version was pushed",
+      "stalled": "the test did not finish in time",
+      "not_open": "the merge request was closed",
+      "other": "it no longer meets the merge conditions"
+    },
+    "title": "Merge queue ({{target}})",
+    "subtitle": "Queued changes are tested together and merged in order once they pass.",
+    "pause": "Pause the queue",
+    "resume": "Resume the queue",
+    "paused": "Paused: nothing is tested or merged. Press resume to continue.",
+    "running": "Running: up to {{limit}} changes are tested together.",
+    "batchTitle": "Batch being tested",
+    "batchLine": "Testing commit {{train}} with {{size}} changes.",
+    "openPipelines": "View pipelines",
+    "empty": "No change is queued.",
+    "emptyHint": "Press \"Add to merge queue\" on a merge request to queue it here.",
+    "listLabel": "Queued changes",
+    "recentTitle": "Recent results",
+    "mr": "!{{iid}}",
+    "alone": "(tested on its own)"
   }
 }

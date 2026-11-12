@@ -1370,7 +1370,8 @@
       "push": "push",
       "mergeRequest": "Merge request",
       "schedule": "Terjadwal",
-      "manual": "Manual"
+      "manual": "Manual",
+      "mergeQueue": "Antrean merge"
     },
     "by": {
       "system": "Otomatis",
@@ -1520,5 +1521,43 @@
       "mrFailed": "Merge request tidak dapat dibuka: {{message}}",
       "openMr": "Buka merge request"
     }
+  },
+  "mergeQueue": {
+    "mrLabel": "Antrean merge",
+    "actionsLabel": "Tindakan antrean merge",
+    "enqueue": "Masukkan ke antrean merge",
+    "dequeue": "Keluarkan dari antrean merge",
+    "enqueueHint": "Setelah masuk antrean, perubahan digabung otomatis saat pipeline lulus bersama perubahan di depannya.",
+    "openQueue": "Lihat antrean",
+    "state": {
+      "queued": "Menunggu di urutan ke-{{position}} antrean merge.",
+      "testing": "Sedang diuji di antrean merge. Akan digabung jika lulus.",
+      "merged": "Digabung oleh antrean merge.",
+      "removed": "Keluar dari antrean merge ({{why}}). Perbaiki, lalu masukkan lagi."
+    },
+    "reason": {
+      "dequeued": "dikeluarkan oleh seseorang",
+      "checks_failed": "pipeline dengan perubahan ini saja gagal",
+      "conflict": "berkonflik dengan perubahan di depannya",
+      "head_changed": "versi baru di-push",
+      "stalled": "pengujian tidak selesai tepat waktu",
+      "not_open": "merge request ditutup",
+      "other": "tidak lagi memenuhi syarat merge"
+    },
+    "title": "Antrean merge ({{target}})",
+    "subtitle": "Perubahan dalam antrean diuji bersama dan digabung berurutan setelah lulus.",
+    "pause": "Hentikan antrean",
+    "resume": "Lanjutkan antrean",
+    "paused": "Dihentikan: tidak ada yang diuji atau digabung. Tekan lanjutkan untuk meneruskan.",
+    "running": "Berjalan: hingga {{limit}} perubahan diuji bersama.",
+    "batchTitle": "Kelompok yang sedang diuji",
+    "batchLine": "Menguji commit {{train}} berisi {{size}} perubahan.",
+    "openPipelines": "Lihat pipeline",
+    "empty": "Tidak ada perubahan dalam antrean.",
+    "emptyHint": "Tekan \"Masukkan ke antrean merge\" pada merge request untuk mengantrekannya di sini.",
+    "listLabel": "Perubahan dalam antrean",
+    "recentTitle": "Hasil terbaru",
+    "mr": "!{{iid}}",
+    "alone": "(diuji sendiri)"
   }
 }
