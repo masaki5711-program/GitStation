@@ -19,6 +19,9 @@ pub(super) async fn seal_checks(db: &Db, cfg: &Config) -> [Check; 2] {
     let backlog = match seal::backlog(db).await {
         Ok(Some(b)) => match b.check() {
             Ok(()) => ok("audit.seal_backlog", &backlog_detail(&b)),
+            Err(_) if b.numbering_not_started() => {
+                warn("audit.seal_backlog", &not_started_detail(&b))
+            }
             Err(e) => fail("audit.seal_backlog", e),
         },
         Ok(None) => skip("audit.seal_backlog", "schema not migrated"),
@@ -52,6 +55,18 @@ fn backlog_detail(b: &seal::SealBacklog) -> String {
         sequencer::shown(b.unsealed_numbered),
         sequencer::shown(b.unsequenced),
         if b.audit_sequencing { "on" } else { "off" }
+    )
+}
+
+/// A fresh installation: rows wait for numbering that only the first seal
+/// sink comparison (C9) turns on. A warning, not `FG-DB-0015`, so the
+/// doctor of every M3 installation is not red forever (runbook
+/// audit-seal-backlog).
+fn not_started_detail(b: &seal::SealBacklog) -> String {
+    format!(
+        "audit numbering has not started yet ({} unnumbered rows waiting, nothing sealed): \
+         expected before the first seal sink comparison (C9) for up to 7 days, see runbook audit-seal-backlog",
+        sequencer::shown(b.unsequenced)
     )
 }
 
