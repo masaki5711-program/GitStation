@@ -10,7 +10,9 @@ use crate::{MergeRequestId, ProjectId};
 pub const MAX_BATCH: usize = 4;
 
 /// An entry reaped this many times (its batch passed the deadline) is
-/// removed (`FG-CI-0024`, ADR-0030 §14).
+/// removed (`FG-CI-0024`, ADR-0030 §14). The table's CHECK
+/// `merge_queue_entries_reaps` (`reaps BETWEEN 0 AND 3`, migration
+/// 20261213100000) holds the same number: change both together.
 pub const MAX_REAPS: i32 = 3;
 
 /// The batch bound after a red batch of `size` entries (ADR-0030 §7): the

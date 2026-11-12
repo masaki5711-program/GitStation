@@ -205,6 +205,17 @@ pub async fn request_merge_mr_decided<P>(
             return Err(in_progress(mr.id, Some(live.id), ACTION)
                 .with_context("state", live.state.as_str()));
         }
+        // M4 C8 review LOW: a merge request in its target's merge queue is
+        // merged by the queue (on a tested train), never by hand meanwhile.
+        let mr_id = mr.id;
+        let queued = tx
+            .step(|c| async move { super::queue::live_entry_on(c, mr_id).await })
+            .await?;
+        if let Some(entry) = queued {
+            return Err(crate::review::merge_queue::refused("already_queued", mr_id)
+                .with_context("entry_id", entry.id)
+                .with_context("action", ACTION));
+        }
         let message = new
             .message
             .clone() // clone: the step owns its message

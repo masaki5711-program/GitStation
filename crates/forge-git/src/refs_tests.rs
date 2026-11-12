@@ -440,3 +440,37 @@ async fn pipeline_refs_are_listed_by_id_and_deleted_in_one_transaction() {
     let left = f.git.pipeline_refs(&f.root, f.id, T).await.expect("list");
     assert_eq!(left.iter().map(|r| r.pipeline_id).collect::<Vec<_>>(), [4]);
 }
+
+/// M4 C8 review: the train refs are listed by queue id and deleted only
+/// at the listed commit.
+#[tokio::test]
+async fn merge_queue_train_refs_are_listed_and_deleted_at_their_commit() {
+    let f = fixture().await;
+    let main = commit(&f.path, "one
+", None);
+    for name in ["refs/merge-queue/3/train", "refs/merge-queue/12/train"] {
+        f.git
+            .update_refs(
+                &f.root,
+                f.id,
+                &[RefChange::Create {
+                    name: RefName::parse(name).expect("ref"),
+                    new: main.clone(), // clone: each change owns its id
+                }],
+                T,
+            )
+            .await
+            .expect("create");
+    }
+    let listed = f.git.merge_queue_refs(&f.root, f.id, T).await.expect("list");
+    assert_eq!(
+        listed.iter().map(|r| r.queue_id).collect::<Vec<_>>(),
+        [3, 12]
+    );
+    f.git
+        .delete_merge_queue_refs(&f.root, f.id, &listed[..1], T)
+        .await
+        .expect("delete");
+    let left = f.git.merge_queue_refs(&f.root, f.id, T).await.expect("list");
+    assert_eq!(left.iter().map(|r| r.queue_id).collect::<Vec<_>>(), [12]);
+}

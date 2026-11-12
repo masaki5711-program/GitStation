@@ -83,4 +83,24 @@
 - **worker が着地の途中で落ちる**: §14。ロックと CAS で target は 2 回動かない。
 - **パイプラインが終わらない**: 期限と FG-CI-0024（alert）。runbook `merge-queue`。
 - **セッションの時間切れで止まる**: 時間切れは許し、失効だけを断る（§6.2）。トークンは従来どおり失効・期限で断る。
-- **列車のコミットが gc で消える**: 列ごとの隠した ref が今の列車を指す。過去の列車は target に入ったか、捨てられて不要。
+- **列車のコミットが gc で消える**: 列ごとの隠した ref が、生きたバッチの列車を指す。バッチが終わる（着地・赤・捨てる）と、その列車を指したままなら CAS で消す。消せなかったもの（worker が落ちた等）は保守の掃除（`prune_merge_queue_refs`、`refs/pipelines/` と同じ形）が、生きたバッチの無い列の ref を消す。パイプラインのジョブは C4 のジョブの fetch の経路で `refs/pipelines/<id>/head` を作って取るので、作成の時点では列の ref が列車を守る。
+
+## C8 のレビューで決めたこと（2026-11-13、`database-reviewer`・`git-protocol-reviewer`）
+
+- **着地中のバッチの MR は外せない**: 試行（`merge_id`）を持つ entry、またはバッチが `landing` の entry の `DELETE …/merge-queue` は
+  FG-CI-0025 `reason=landing`。着地の途中で落ちた worker の後始末は、状態に関係なくバッチの全 entry を数える（target が列車まで動いて
+  いれば、外された印の entry でも記録する）。
+- **バッチを終わらせる側を状態で分ける**: `end_batch` は期待する状態（`from`）を取る。`testing` を終わらせるのは試験の見回り（赤・期限・
+  外れた・target が動いた）だけ、`landing` を終わらせるのはマージのロックの下の着地と後始末だけ。遅れた worker（貸し出しを取り直された
+  後の手番）が他の worker の CAS の後の `landing` を捨てることはない。
+- **止める印はロックの下で読み直す**: 着地はマージのロックを取った後、`landing` にする前に `paused` を読み直す。
+- **列車の鎖を確かめる**: 各 MR の段（前の段 → その段）を決めた後、最後の段が `train_sha` と一致しなければ試行を `superseded` にして
+  バッチを捨てる（FG-SYS-0001 `merge_queue_train_mismatch`）。
+- **保護ブランチの規則**: 着地の `update-ref` はフックを通らない（ADR-0024 の普通のマージと同じ）。代わりに MR ごとに `authorize(MergeRequestMerge)`
+  を target の保護（push の最低の役割）で決め直す（試験 `a_protected_target_refuses_a_landing_below_its_role`）。
+- **普通のマージとの関係**: キューにある MR の `POST …/merge` は FG-CI-0025 `reason=already_queued`（キューから外してからマージする）。
+  キューは元のブランチを消さない（`delete_source_branch = false` の試行。普通のマージで既定のまま消さないのと同じ）。
+- **ログ**: 外したことは 1 回だけ、コードつきで warn（`forge.merge_queue.entry_removed`、着地での拒否は `context` つき）。
+  `entry_merged` / `batch_landed` が行を動かせなかったときは FG-SYS-0001 で残す（MR は既にマージ済み）。
+- **マイグレーションのロック**: `ci_pipelines` の CHECK は `NOT VALID` で足して `VALIDATE` してから古いものを消し、一意の索引は新しいものを
+  作ってから古いものを消す（同じトランザクションの中で、重複を防ぐ索引が無い瞬間は無い）。表の大きさに比例するのは検証と索引の作成。

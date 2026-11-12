@@ -125,6 +125,7 @@ CREATE TABLE forge.merge_queue_entries (
     train_sha        text CONSTRAINT merge_queue_entries_train
         CHECK (train_sha ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'),
     merge_id         bigint REFERENCES forge.merge_request_merges (id),
+    -- 3 = forge_core::merge_queue::MAX_REAPS (the third reap removes it).
     reaps            integer NOT NULL DEFAULT 0 CONSTRAINT merge_queue_entries_reaps
         CHECK (reaps BETWEEN 0 AND 3),
     reason           text CONSTRAINT merge_queue_entries_reason
@@ -165,14 +166,21 @@ GRANT SELECT ON forge.merge_queues TO forge_ro;
 GRANT SELECT ON forge.merge_queue_batches TO forge_ro;
 GRANT SELECT ON forge.merge_queue_entries TO forge_ro;
 
--- The train's pipeline (ADR-0030 §5).
+-- The train's pipeline (ADR-0030 §5). Review MEDIUM: the new CHECK is
+-- added NOT VALID and validated (no ACCESS EXCLUSIVE scan beyond the
+-- validation's SHARE UPDATE EXCLUSIVE) before the old one goes, and the new
+-- unique index exists before the old one is dropped, so the dedupe is never
+-- without an index (the whole file is one transaction anyway).
+ALTER TABLE forge.ci_pipelines ADD CONSTRAINT ci_pipelines_source_c8
+    CHECK (source IN ('push', 'merge_request', 'schedule', 'manual', 'merge_queue')) NOT VALID;
+ALTER TABLE forge.ci_pipelines VALIDATE CONSTRAINT ci_pipelines_source_c8;
 ALTER TABLE forge.ci_pipelines DROP CONSTRAINT ci_pipelines_source;
-ALTER TABLE forge.ci_pipelines ADD CONSTRAINT ci_pipelines_source
-    CHECK (source IN ('push', 'merge_request', 'schedule', 'manual', 'merge_queue'));
-DROP INDEX forge.ci_pipelines_once;
-CREATE UNIQUE INDEX ci_pipelines_once ON forge.ci_pipelines
+ALTER TABLE forge.ci_pipelines RENAME CONSTRAINT ci_pipelines_source_c8 TO ci_pipelines_source;
+CREATE UNIQUE INDEX ci_pipelines_once_c8 ON forge.ci_pipelines
     (project_id, source, ref, sha, coalesce(merge_request_id, 0))
     WHERE source IN ('push', 'merge_request', 'merge_queue');
+DROP INDEX forge.ci_pipelines_once;
+ALTER INDEX forge.ci_pipelines_once_c8 RENAME TO ci_pipelines_once;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',

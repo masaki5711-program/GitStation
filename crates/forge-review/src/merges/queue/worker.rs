@@ -545,13 +545,13 @@ impl MergeQueue {
             .filter(|e| e.state == EntryState::Testing)
             .collect();
         if testing.len() != batch.size {
-            return self.abandon(batch, "entry_left", Vec::new()).await;
+            return self.abandon(batch, BatchState::Testing, "entry_left", Vec::new(), None, None).await;
         }
         let Some(first) = testing.first() else {
-            return self.abandon(batch, "entry_left", Vec::new()).await;
+            return self.abandon(batch, BatchState::Testing, "entry_left", Vec::new(), None, None).await;
         };
         let Some(repo) = self.repo_of(first).await? else {
-            return self.abandon(batch, "project_gone", Vec::new()).await;
+            return self.abandon(batch, BatchState::Testing, "project_gone", Vec::new(), None, None).await;
         };
         let mut gone = Vec::new();
         for entry in &testing {
@@ -572,11 +572,13 @@ impl MergeQueue {
             }
         }
         if !gone.is_empty() {
-            return self.abandon(batch, "entry_left", gone).await;
+            return self.abandon(batch, BatchState::Testing, "entry_left", gone, None, Some(repo)).await;
         }
         let tip = self.read_tip(repo, &claimed.queue.target_branch).await?;
         if tip.as_ref() != Some(&batch.base_sha) {
-            return self.abandon(batch, "target_moved", Vec::new()).await;
+            return self
+                .abandon(batch, BatchState::Testing, "target_moved", Vec::new(), None, Some(repo))
+                .await;
         }
         let verdict =
             db::train_pipeline(&self.merger.db, batch.project_id, &batch.train_sha).await?;
@@ -589,7 +591,7 @@ impl MergeQueue {
             None | Some((_, PipelineStatus::Pending)) | Some((_, PipelineStatus::Running)) => {
                 if batch.past_deadline {
                     return self
-                        .reap(batch, &testing, status.and_then(|(id, _)| id))
+                        .reap(batch, &testing, status.and_then(|(id, _)| id), repo)
                         .await;
                 }
                 Ok("waiting")
@@ -599,7 +601,7 @@ impl MergeQueue {
             | Some((id, PipelineStatus::Error))
             | Some((id, PipelineStatus::Canceled)) => {
                 let status = status.map_or(PipelineStatus::Failed, |(_, s)| s);
-                self.red(batch, &testing, id, status).await
+                self.red(batch, &testing, id, status, repo).await
             }
             Some((id, green @ (PipelineStatus::Succeeded | PipelineStatus::Skipped))) => {
                 let paused = db::queue_now(&self.merger.db, claimed.queue.id)
@@ -616,15 +618,22 @@ impl MergeQueue {
         }
     }
 
-    /// Throw the batch away without a verdict; `removed` leave the queue,
-    /// the rest go back in order.
+    /// Throw the batch away without a verdict, from `from` only (review
+    /// HIGH 2: a `landing` batch is ended only under the merge lock, by the
+    /// landing or the recovery); `removed` leave the queue (logged once, at
+    /// warn, with their code and `context`), the rest go back in order. With
+    /// `repo`, the train ref is deleted at the train.
     async fn abandon(
         &self,
         batch: &StoredBatch,
+        from: BatchState,
         reason: &'static str,
         removed: Vec<(i64, String, ErrorCode)>,
+        context: Option<(&StoredEntry, String)>,
+        repo: Option<RepoId>,
     ) -> Result<&'static str, ForgeError> {
         let end = BatchEnd {
+            from,
             state: BatchState::Abandoned,
             reason,
             error_code: None,
@@ -632,9 +641,18 @@ impl MergeQueue {
             reaped: false,
             batch_limit: None,
         };
-        if db::end_batch(&self.merger.db, batch.id, &end).await? {
+        if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+            return Ok("raced");
+        }
+        {
             for (entry, why, code) in &end.removed {
-                tracing::info!(
+                let (merge_request, detail) = match &context {
+                    Some((e, detail)) if e.id == *entry => {
+                        (Some(e.merge_request.get()), detail.as_str())
+                    }
+                    _ => (None, ""),
+                };
+                tracing::warn!(
                     target: "forge_review",
                     event = "forge.merge_queue.entry_removed",
                     error_code = code.id(),
@@ -642,7 +660,10 @@ impl MergeQueue {
                     queue_id = batch.queue_id,
                     batch_id = batch.id,
                     entry_id = entry,
+                    merge_request_id = merge_request,
                     reason = %why,
+                    context = detail,
+                    "a merge request left the merge queue"
                 );
             }
             tracing::info!(
@@ -655,7 +676,47 @@ impl MergeQueue {
                 train_sha = batch.train_sha.as_str(),
             );
         }
+        if let Some(repo) = repo {
+            self.retire_train(repo, batch).await;
+        }
         Ok("abandoned")
+    }
+
+    /// Delete `refs/merge-queue/<queue_id>/train` if it still points at
+    /// `batch`'s train (a batch that ended; review MEDIUM). A failure is
+    /// logged with its code: the maintenance sweep deletes it later.
+    async fn retire_train(&self, repo: RepoId, batch: &StoredBatch) {
+        let name = match forge_git::hidden_refs::merge_queue_train_ref(batch.queue_id) {
+            Ok(name) => name,
+            Err(e) => {
+                telemetry::log_failure(&e, &batch.request_id);
+                return;
+            }
+        };
+        let gone = [forge_git::MergeQueueRef {
+            queue_id: batch.queue_id,
+            name,
+            at: batch.train_sha.clone(), // clone: the deletion owns its id
+        }];
+        let deleted = self
+            .merger
+            .git
+            .delete_merge_queue_refs(&self.merger.storage, repo, &gone, self.merger.timeouts.update_ref)
+            .await;
+        if let Err(e) = deleted {
+            // Moved by the next train, or already gone: nothing to do; any
+            // other failure is the sweep's.
+            tracing::warn!(
+                target: "forge_review",
+                event = "forge.merge_queue.train_ref_kept",
+                error_code = e.code().id(),
+                request_id = %batch.request_id,
+                queue_id = batch.queue_id,
+                batch_id = batch.id,
+                train_sha = batch.train_sha.as_str(),
+                "the train ref was not deleted (the maintenance sweep deletes a stale one)"
+            );
+        }
     }
 
     async fn red(
@@ -664,6 +725,7 @@ impl MergeQueue {
         testing: &[StoredEntry],
         pipeline: Option<i64>,
         status: PipelineStatus,
+        repo: RepoId,
     ) -> Result<&'static str, ForgeError> {
         let alone = testing.len() == 1;
         let removed: Vec<(i64, String, ErrorCode)> = if alone {
@@ -682,6 +744,7 @@ impl MergeQueue {
         };
         let limit = bisected_limit(testing.len());
         let end = BatchEnd {
+            from: BatchState::Testing,
             state: BatchState::Failed,
             reason: "checks_failed",
             error_code: Some(ErrorCode::MergeQueueChecksFailed),
@@ -692,6 +755,7 @@ impl MergeQueue {
         if !db::end_batch(&self.merger.db, batch.id, &end).await? {
             return Ok("raced");
         }
+        self.retire_train(repo, batch).await;
         if alone {
             for entry in testing {
                 log_removed(
@@ -725,8 +789,10 @@ impl MergeQueue {
         batch: &StoredBatch,
         testing: &[StoredEntry],
         pipeline: Option<i64>,
+        repo: RepoId,
     ) -> Result<&'static str, ForgeError> {
         let end = BatchEnd {
+            from: BatchState::Testing,
             state: BatchState::Abandoned,
             reason: "timeout",
             error_code: Some(ErrorCode::MergeQueueStalled),
@@ -737,6 +803,7 @@ impl MergeQueue {
         if !db::end_batch(&self.merger.db, batch.id, &end).await? {
             return Ok("raced");
         }
+        self.retire_train(repo, batch).await;
         let entries: Vec<String> = testing.iter().map(|e| e.id.to_string()).collect();
         telemetry::log_failure(
             &ForgeError::new(ErrorCode::MergeQueueStalled)
@@ -793,9 +860,18 @@ impl MergeQueue {
         run: Option<CheckRun>,
     ) -> Result<&'static str, ForgeError> {
         let target = &claimed.queue.target_branch;
+        // Review MEDIUM: the emergency stop is read again under the lock.
+        if db::queue_now(&self.merger.db, claimed.queue.id)
+            .await?
+            .is_some_and(|q| q.paused)
+        {
+            return Ok("paused");
+        }
         let tip = self.read_tip(repo, target).await?;
         if tip.as_ref() != Some(&batch.base_sha) {
-            return self.abandon(batch, "target_moved", Vec::new()).await;
+            return self
+                .abandon(batch, BatchState::Testing, "target_moved", Vec::new(), None, Some(repo))
+                .await;
         }
         if !db::begin_landing(&self.merger.db, batch.id).await? {
             return Ok("raced");
@@ -825,24 +901,49 @@ impl MergeQueue {
                     self.end_attempts(&decided, "queue_rebuild").await;
                     if is_refusal(&refusal) {
                         let removed = vec![(entry.id, reason_of(&refusal), refusal.code())];
-                        log_refusal(entry, batch, &refusal);
-                        return self.abandon(batch, "entry_refused", removed).await;
+                        let detail = refusal_context(&refusal);
+                        return self
+                            .abandon(
+                                batch,
+                                BatchState::Landing,
+                                "entry_refused",
+                                removed,
+                                Some((entry, detail)),
+                                Some(repo),
+                            )
+                            .await;
                     }
-                    self.abandon(batch, "landing_failed", Vec::new()).await?;
+                    self.abandon(batch, BatchState::Landing, "landing_failed", Vec::new(), None, Some(repo))
+                        .await?;
                     return Err(refusal);
                 }
             }
+        }
+        // Review MEDIUM (git): the steps decided must chain to the tested
+        // train exactly, or the target would move to something else.
+        if prev != batch.train_sha {
+            self.end_attempts(&decided, "queue_rebuild").await;
+            self.abandon(batch, BatchState::Landing, "train_mismatch", Vec::new(), None, Some(repo))
+                .await?;
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "merge_queue_train_mismatch")
+                .with_context("queue_batch_id", batch.id)
+                .with_context("chained", prev.as_str().to_owned())
+                .with_context("train_sha", batch.train_sha.as_str().to_owned()));
         }
         // The fence: every attempt `executing` before the ref moves.
         for (_, attempt, _) in &decided {
             if !merges::fence_merge(&self.merger.db, attempt.id).await? {
                 self.end_attempts(&decided, "queue_rebuild").await;
-                return self.abandon(batch, "landing_raced", Vec::new()).await;
+                return self
+                    .abandon(batch, BatchState::Landing, "landing_raced", Vec::new(), None, Some(repo))
+                    .await;
             }
         }
         if let Err(e) = lock.alive().await {
             self.end_attempts(&decided, "queue_rebuild").await;
-            self.abandon(batch, "landing_failed", Vec::new()).await?;
+            self.abandon(batch, BatchState::Landing, "landing_failed", Vec::new(), None, Some(repo))
+                .await?;
             return Err(e);
         }
         let change = RefChange::Update {
@@ -867,7 +968,8 @@ impl MergeQueue {
                 } else {
                     "target_moved"
                 };
-                self.abandon(batch, reason, Vec::new()).await?;
+                self.abandon(batch, BatchState::Landing, reason, Vec::new(), None, Some(repo))
+                    .await?;
                 if reason == "target_moved" {
                     return Ok("abandoned");
                 }
@@ -879,7 +981,7 @@ impl MergeQueue {
                 .with_context("reason", "test_crash_after_cas")
                 .with_context("queue_batch_id", batch.id));
         }
-        self.record_all(lock, batch, &decided).await?;
+        self.record_all(lock, batch, &decided, repo).await?;
         Ok("landed")
     }
 
@@ -988,6 +1090,7 @@ impl MergeQueue {
         lock: &MergeLock,
         batch: &StoredBatch,
         decided: &[(StoredEntry, StoredMerge, Subject)],
+        repo: RepoId,
     ) -> Result<(), ForgeError> {
         for (entry, attempt, subject) in decided {
             let executing = StoredMerge {
@@ -995,7 +1098,19 @@ impl MergeQueue {
                 ..attempt.clone() // clone: the executing view of the same attempt
             };
             let report = self.merger.record(lock, &executing, subject, &[]).await?;
-            db::entry_merged(&self.merger.db, entry.id).await?;
+            if !db::entry_merged(&self.merger.db, entry.id).await? {
+                // Review MEDIUM: the merge is recorded (the merge request is
+                // merged) but the entry was not `testing` with its attempt —
+                // a broken invariant, logged with its code for a person.
+                telemetry::log_failure(
+                    &ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "merge_queue_entry_not_marked")
+                        .with_context("entry_id", entry.id)
+                        .with_context("merge_id", attempt.id)
+                        .with_context("queue_batch_id", batch.id),
+                    &batch.request_id,
+                );
+            }
             tracing::info!(
                 target: "forge_review",
                 event = "forge.merge_queue.entry_merged",
@@ -1009,7 +1124,15 @@ impl MergeQueue {
                 new_sha = report.new_sha.as_ref().map(ObjectId::as_str),
             );
         }
-        db::batch_landed(&self.merger.db, batch.id).await?;
+        if !db::batch_landed(&self.merger.db, batch.id).await? {
+            telemetry::log_failure(
+                &ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "merge_queue_batch_not_landing")
+                    .with_context("queue_batch_id", batch.id),
+                &batch.request_id,
+            );
+        }
+        self.retire_train(repo, batch).await;
         tracing::info!(
             target: "forge_review",
             event = "forge.merge_queue.batch_landed",
@@ -1033,10 +1156,14 @@ impl MergeQueue {
     ) -> Result<&'static str, ForgeError> {
         let entries = db::batch_entries(&self.merger.db, batch.id).await?;
         let Some(first) = entries.first() else {
-            return self.abandon(batch, "entry_left", Vec::new()).await;
+            return self
+                .abandon(batch, BatchState::Landing, "entry_left", Vec::new(), None, None)
+                .await;
         };
         let Some(repo) = self.repo_of(first).await? else {
-            return self.abandon(batch, "project_gone", Vec::new()).await;
+            return self
+                .abandon(batch, BatchState::Landing, "project_gone", Vec::new(), None, None)
+                .await;
         };
         let lock = match merges::try_lock_merges(&self.merger.db, repo).await? {
             Some(lock) => lock,
@@ -1060,7 +1187,9 @@ impl MergeQueue {
     ) -> Result<&'static str, ForgeError> {
         let tip = self.read_tip(repo, &claimed.queue.target_branch).await?;
         let mut attempts = Vec::new();
-        for entry in entries.iter().filter(|e| e.state == EntryState::Testing) {
+        // Review HIGH 1: every entry of the batch counts, whatever its state
+        // now — an attempt that moved the target is recorded.
+        for entry in entries {
             let attempt = match entry.merge_id {
                 Some(id) => merges::merge_attempt(&self.merger.db, id).await?,
                 None => None,
@@ -1095,7 +1224,8 @@ impl MergeQueue {
             } else {
                 "target_moved"
             };
-            self.abandon(batch, reason, Vec::new()).await?;
+            self.abandon(batch, BatchState::Landing, reason, Vec::new(), None, Some(repo))
+                .await?;
             return Ok("recovered");
         }
         self.merger.invalidate(repo);
@@ -1115,12 +1245,12 @@ impl MergeQueue {
                 });
             let Some(subject) = subject else { continue };
             if attempt.state == MergeState::Applied {
-                db::entry_merged(&self.merger.db, entry.id).await?;
+                let _marked = db::entry_merged(&self.merger.db, entry.id).await?;
                 continue;
             }
             decided.push((entry.clone(), attempt, subject)); // clone: the record needs it
         }
-        self.record_all(lock, batch, &decided).await?;
+        self.record_all(lock, batch, &decided, repo).await?;
         Ok("recovered")
     }
 }
@@ -1132,7 +1262,7 @@ fn log_removed(
     code: ErrorCode,
     request_id: &RequestId,
 ) {
-    tracing::info!(
+    tracing::warn!(
         target: "forge_review",
         event = "forge.merge_queue.entry_removed",
         error_code = code.id(),
@@ -1148,22 +1278,12 @@ fn log_removed(
     );
 }
 
-fn log_refusal(entry: &StoredEntry, batch: &StoredBatch, refusal: &ForgeError) {
-    let context: Vec<String> = refusal
+/// A refusal's context as one `key=value` line (the removal's log).
+fn refusal_context(refusal: &ForgeError) -> String {
+    refusal
         .context()
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
-        .collect();
-    tracing::info!(
-        target: "forge_review",
-        event = "forge.merge_queue.entry_removed",
-        error_code = refusal.code().id(),
-        request_id = %batch.request_id,
-        queue_id = batch.queue_id,
-        batch_id = batch.id,
-        entry_id = entry.id,
-        merge_request_id = entry.merge_request.get(),
-        reason = %reason_of(refusal),
-        context = %context.join(" "),
-    );
+        .collect::<Vec<_>>()
+        .join(" ")
 }

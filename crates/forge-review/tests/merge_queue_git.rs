@@ -502,9 +502,33 @@ async fn a_green_batch_of_four_lands_with_one_compare_and_swap() {
     )
     .await;
     assert_eq!(merged, 4);
-    // The train ref is hidden under refs/merge-queue/.
+    // Review MEDIUM (git): the train ref is deleted once the batch landed.
     let refs = plumb(&w.path, &["for-each-ref", "refs/merge-queue/"], None);
-    assert!(refs.contains("/train"), "{refs}");
+    assert!(refs.is_empty(), "{refs}");
+    // Like a direct merge without delete_source_branch: the sources stay.
+    for name in ["fa", "fb", "fc", "fd"] {
+        assert!(!w.tip(name).is_empty(), "{name} kept");
+    }
+}
+
+#[tokio::test]
+async fn a_testing_train_is_pinned_by_its_hidden_ref() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x
+")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    let built = w.worker("w1").tick().await.expect("tick").expect("built");
+    let batch = qdb::batch(&w.t.db, built.batch_id.expect("id"))
+        .await
+        .expect("read")
+        .expect("batch");
+    let queue = w.queue_id().await;
+    let at = plumb(
+        &w.path,
+        &["rev-parse", &format!("refs/merge-queue/{queue}/train")],
+        None,
+    );
+    assert_eq!(at, batch.train_sha.as_str());
 }
 
 #[tokio::test]
@@ -892,4 +916,116 @@ async fn the_queue_view_lists_entries_in_order() {
     assert_eq!(position, Some(3));
     assert!(view.batch.is_none());
     let _ = &w.owner;
+}
+
+/// Review HIGH 1 / HIGH 2: an entry whose batch is landing cannot be
+/// dequeued, a worker that only knows the batch as `testing` cannot end
+/// it, and the recovery records every entry the swap landed.
+#[tokio::test]
+async fn a_landing_batch_is_neither_dequeued_nor_ended_by_a_stale_worker() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x
+")]).await;
+    let b = w.mr("fb", &[("fb.txt", "x
+")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    w.enqueue(&b).await.expect("enqueue");
+    let dying = w.worker("dying").with_crash_after_cas();
+    let built = dying.tick().await.expect("tick").expect("built");
+    let queue = w.queue_id().await;
+    w.finish_pipeline(queue, &BTreeSet::new()).await;
+    dying.tick().await.expect_err("stops after the swap");
+    let batch_id = built.batch_id.expect("id");
+    // A person cannot take an entry out of a landing batch.
+    let proof = w
+        .mr_proof(&session(w.dev), Action::MergeQueueDequeue, &b)
+        .await
+        .expect("proof");
+    let refused = w
+        .review
+        .dequeue(&request("req-deq-landing"), &proof)
+        .await
+        .expect_err("landing");
+    assert_eq!(refused.code(), ErrorCode::MergeQueueEntryRefused);
+    assert!(refused
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "reason" && v == "landing"));
+    // A stale worker's poll (`testing`) cannot end it.
+    let stale = qdb::BatchEnd {
+        from: BatchState::Testing,
+        state: BatchState::Abandoned,
+        reason: "target_moved",
+        error_code: None,
+        removed: Vec::new(),
+        reaped: false,
+        batch_limit: None,
+    };
+    assert!(!qdb::end_batch(&w.t.db, batch_id, &stale).await.expect("end"));
+    // The recovery records both.
+    let recovered = w.worker("restarted").tick().await.expect("tick").expect("due");
+    assert_eq!(recovered.outcome, "recovered");
+    for mr in [&a, &b] {
+        assert_eq!(w.entry_of(mr).await.state, EntryState::Merged);
+        assert_eq!(w.state_of(mr).await, forge_core::MergeRequestState::Merged);
+    }
+}
+
+/// Review MEDIUM (git): the landing's update-ref runs without hooks, so the
+/// target's protection is decided again per entry: a target protected
+/// above the enqueuer's role after the enqueue refuses the landing.
+#[tokio::test]
+async fn a_protected_target_refuses_a_landing_below_its_role() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x
+")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    forge_db::protected_refs::create(
+        &w.t.db,
+        &system("req-protect"),
+        w.project,
+        &forge_core::RefPattern::parse("refs/heads/main").expect("pattern"),
+        Role::Maintainer,
+    )
+    .await
+    .expect("protect");
+    w.drive(&w.worker("w1"), &BTreeSet::new()).await;
+    let entry = w.entry_of(&a).await;
+    assert_eq!(entry.state, EntryState::Removed);
+    assert_eq!(entry.error_code.as_deref(), Some(ErrorCode::Forbidden.id()));
+    assert_eq!(w.tip("main"), w.base, "the target never moved");
+}
+
+/// Review LOW: a merge request in the queue is not merged by hand.
+#[tokio::test]
+async fn a_queued_merge_request_cannot_be_merged_by_hand() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x
+")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    let proof = w
+        .mr_proof(&session(w.dev), Action::MergeRequestMerge, &a)
+        .await
+        .expect("proof");
+    let refused = w
+        .review
+        .request_merge(
+            &request("req-merge-queued"),
+            CredentialRef::Session(w.session),
+            &proof,
+            ready(w.repo),
+            &forge_review::MergeAsk {
+                sha: oid(a.head_sha.as_deref().expect("head")),
+                method: None,
+                delete_source_branch: None,
+                message: None,
+            },
+        )
+        .await
+        .expect_err("queued");
+    assert_eq!(refused.code(), ErrorCode::MergeQueueEntryRefused);
+    assert!(refused
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "reason" && v == "already_queued"));
 }

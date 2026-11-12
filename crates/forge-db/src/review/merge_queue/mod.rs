@@ -310,6 +310,27 @@ pub async fn dequeue_mr_decided<P>(
         let Some(entry) = live else {
             return Err(refused("not_queued", mr_id));
         };
+        // Review HIGH 1: an entry whose batch is landing (its attempt may
+        // already have moved the target) is the landing's, never a person's.
+        let landing = match (entry.merge_id, entry.batch_id) {
+            (Some(_), _) => true,
+            (None, Some(batch)) => tx
+                .step(|c| async move {
+                    sqlx::query_scalar::<_, bool>(
+                        "SELECT state = 'landing' FROM forge.merge_queue_batches                          WHERE id = $1 FOR SHARE",
+                    )
+                    .bind(batch)
+                    .fetch_optional(c)
+                    .await
+                    .map_err(|e| query_error("merge_queue.dequeue_batch", e))
+                })
+                .await?
+                .unwrap_or(false),
+            (None, None) => false,
+        };
+        if landing {
+            return Err(refused("landing", mr_id).with_context("entry_id", entry.id));
+        }
         let entry_id = entry.id;
         let queue = entry.queue_id;
         tx.step(|c| async move {
@@ -928,6 +949,10 @@ pub async fn train_pipeline(
 /// How a batch ends without landing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchEnd {
+    /// The state the batch must be in (review HIGH 2: only the poll ends a
+    /// `testing` batch; only the landing and the recovery, under the merge
+    /// lock, end a `landing` one).
+    pub from: BatchState,
     /// `failed` or `abandoned`.
     pub state: BatchState,
     pub reason: &'static str,
@@ -942,13 +967,15 @@ pub struct BatchEnd {
     pub batch_limit: Option<usize>,
 }
 
-/// End live batch `batch` as `end` says (from `testing` or `landing`):
-/// its other `testing` entries go back to `queued` in their order (their
-/// merge attempt, if any, is the caller's to end first). `false`: the
-/// batch was not live any more.
+/// End live batch `batch` as `end` says, from `end.from` only: its other
+/// `testing` entries go back to `queued` in their order (their merge
+/// attempt, if any, is the caller's to end first). `false`: the batch was
+/// not in `end.from` any more (another worker moved it).
 pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, ForgeError> {
     const QUERY: &str = "merge_queue.end_batch";
-    if !matches!(end.state, BatchState::Failed | BatchState::Abandoned) {
+    if !matches!(end.state, BatchState::Failed | BatchState::Abandoned)
+        || !end.from.is_live()
+    {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "merge_queue_batch_end_not_final")
             .with_context("state", end.state.as_str()));
@@ -962,12 +989,13 @@ pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, Forg
         let queue: Option<i64> = sqlx::query_scalar(
             "UPDATE forge.merge_queue_batches SET state = $2, reason = $3, error_code = $4, \
              finished_at = now(), updated_at = now() \
-             WHERE id = $1 AND state IN ('testing', 'landing') RETURNING queue_id",
+             WHERE id = $1 AND state = $5 RETURNING queue_id",
         )
         .bind(batch)
         .bind(end.state.as_str())
         .bind(end.reason)
         .bind(end.error_code.map(|c| c.id()))
+        .bind(end.from.as_str())
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| query_error(QUERY, e))?;
@@ -1133,4 +1161,24 @@ pub async fn health(db: &Db, lease_grace: Duration) -> Result<QueueHealth, Forge
         orphaned_queues: row.2,
         orphaned_ids: row.3,
     })
+}
+
+/// Among `queues`, those with a live batch (`testing` / `landing`): the
+/// maintenance sweep keeps their train ref and deletes every other
+/// `refs/merge-queue/<id>/train` (review MEDIUM, ADR-0030 §3). Read pool.
+pub async fn queues_with_live_batch(db: &Db, queues: &[i64]) -> Result<Vec<i64>, ForgeError> {
+    const QUERY: &str = "merge_queue.live_queues";
+    if queues.is_empty() {
+        return Ok(Vec::new());
+    }
+    db.within(QUERY, async {
+        sqlx::query_scalar(
+            "SELECT DISTINCT queue_id FROM forge.merge_queue_batches              WHERE queue_id = ANY($1) AND state IN ('testing', 'landing') ORDER BY queue_id",
+        )
+        .bind(queues)
+        .fetch_all(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))
+    })
+    .await
 }
