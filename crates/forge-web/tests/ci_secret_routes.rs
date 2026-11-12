@@ -301,11 +301,21 @@ async fn a_maintainer_sets_lists_and_deletes_variables_and_never_reads_a_value()
         .await;
     assert_eq!(agent.code(), "FG-AUTH-0003", "{}", agent.json);
     let gone = w
-        .call("DELETE", &w.var_uri("DEPLOY_TOKEN"), Who::As(w.owner_token()), None)
+        .call(
+            "DELETE",
+            &w.var_uri("DEPLOY_TOKEN"),
+            Who::As(w.owner_token()),
+            None,
+        )
         .await;
     assert_eq!(gone.status, StatusCode::NO_CONTENT);
     let missing = w
-        .call("DELETE", &w.var_uri("DEPLOY_TOKEN"), Who::As(w.owner_token()), None)
+        .call(
+            "DELETE",
+            &w.var_uri("DEPLOY_TOKEN"),
+            Who::As(w.owner_token()),
+            None,
+        )
         .await;
     assert_eq!(missing.code(), "FG-REPO-0005");
     w.t.drop_now().await;
@@ -314,7 +324,10 @@ async fn a_maintainer_sets_lists_and_deletes_variables_and_never_reads_a_value()
 #[tokio::test]
 async fn a_protected_push_job_gets_its_values_and_its_log_is_masked() {
     let w = World::new(true).await;
-    assert_eq!(w.set("DEPLOY_TOKEN", VALUE).await.status, StatusCode::CREATED);
+    assert_eq!(
+        w.set("DEPLOY_TOKEN", VALUE).await.status,
+        StatusCode::CREATED
+    );
     let token = w.runner().await;
     w.seed('b', true, &["DEPLOY_TOKEN"]).await;
     let claimed = w.claim(&token).await;
@@ -337,12 +350,11 @@ async fn a_protected_push_job_gets_its_values_and_its_log_is_masked() {
         .await;
     assert_eq!(log.json, json!({"stored": true}), "{}", log.json);
     let mut su = w.t.superuser().await;
-    let body: String =
-        sqlx::query_scalar("SELECT body FROM forge.ci_log_chunks WHERE job_id = $1")
-            .bind(job_id)
-            .fetch_one(&mut su)
-            .await
-            .expect("chunk");
+    let body: String = sqlx::query_scalar("SELECT body FROM forge.ci_log_chunks WHERE job_id = $1")
+        .bind(job_id)
+        .fetch_one(&mut su)
+        .await
+        .expect("chunk");
     assert_eq!(body, "using [masked]\n");
     w.t.drop_now().await;
 }
@@ -350,7 +362,10 @@ async fn a_protected_push_job_gets_its_values_and_its_log_is_masked() {
 #[tokio::test]
 async fn a_job_asking_for_secrets_on_an_unprotected_pipeline_fails_without_values() {
     let w = World::new(true).await;
-    assert_eq!(w.set("DEPLOY_TOKEN", VALUE).await.status, StatusCode::CREATED);
+    assert_eq!(
+        w.set("DEPLOY_TOKEN", VALUE).await.status,
+        StatusCode::CREATED
+    );
     let token = w.runner().await;
     let pipeline = w.seed('b', false, &["DEPLOY_TOKEN"]).await;
     let claimed = w.claim(&token).await;
@@ -379,8 +394,14 @@ async fn a_job_asking_for_an_undefined_secret_fails() {
 async fn a_job_whose_secrets_cannot_be_opened_fails_with_secret_key_unavailable() {
     // The value is set with keys; forge then runs without them.
     let keyed = World::new(true).await;
-    assert_eq!(keyed.set("DEPLOY_TOKEN", VALUE).await.status, StatusCode::CREATED);
-    let w = World { keys: false, ..keyed };
+    assert_eq!(
+        keyed.set("DEPLOY_TOKEN", VALUE).await.status,
+        StatusCode::CREATED
+    );
+    let w = World {
+        keys: false,
+        ..keyed
+    };
     let refused = w.set("OTHER_TOKEN", VALUE).await;
     assert_eq!(refused.code(), "FG-CI-0016", "{}", refused.json);
     let token = w.runner().await;
