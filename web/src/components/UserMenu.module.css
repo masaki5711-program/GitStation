@@ -65,7 +65,7 @@
   composes: interactive from './controls.module.css';
   width: 100%;
   min-height: 2.5rem;
-  border: 1px solid var(--gs-brand-teal-strong);
+  border: 1px solid var(--gs-color-accent-strong);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-surface);
   color: var(--gs-color-link);
@@ -82,4 +82,64 @@
   composes: interactive from './controls.module.css';
   display: block;
   padding: var(--gs-space-2) 0;
+}
+
+/* テーマ: four radios, each with a small preview of its colours. */
+.themes {
+  margin: 0 0 var(--gs-space-3);
+  padding: var(--gs-space-2) 0 0;
+  border: none;
+  border-top: 1px solid var(--gs-color-border-subtle);
+}
+
+.themesLegend {
+  float: left; /* a legend inside the fieldset's padding, not on its border */
+  width: 100%;
+  padding: 0;
+  margin-bottom: var(--gs-space-1);
+  font-size: var(--gs-font-size-sm);
+  font-weight: var(--gs-font-weight-semibold);
+  color: var(--gs-color-text-muted);
+}
+
+.themeChoice {
+  composes: interactive from './controls.module.css';
+  clear: left;
+  display: flex;
+  align-items: center;
+  gap: var(--gs-space-2);
+  min-height: var(--gs-tap-target-sm);
+  padding: 0 var(--gs-space-2);
+  margin: 0 calc(-1 * var(--gs-space-2));
+  border-radius: var(--gs-radius-sm);
+}
+
+.themeChoice input {
+  margin: 0;
+  accent-color: var(--gs-color-accent-strong);
+}
+
+.swatch {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid var(--gs-color-border);
+  border-radius: 50%;
+}
+
+.swatch[data-swatch='system'] {
+  background: linear-gradient(135deg, var(--gs-swatch-white) 50%, var(--gs-swatch-dark) 50%);
+}
+
+.swatch[data-swatch='white'] {
+  background: var(--gs-swatch-white);
+}
+
+.swatch[data-swatch='navy'] {
+  background: var(--gs-swatch-navy);
+  box-shadow: inset 0 -0.3rem 0 var(--gs-brand-teal);
+}
+
+.swatch[data-swatch='dark'] {
+  background: var(--gs-swatch-dark);
 }

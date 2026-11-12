@@ -7,6 +7,11 @@ import './styles/global.css';
 import { createApiClient } from './api/client';
 import { AppProviders, AppRoutes, createQueryClient } from './App';
 import { createI18n } from './i18n';
+import { applyTheme, storedTheme } from './theme';
+
+// Before anything renders, so the first painted screen is already in the
+// chosen theme (src/theme.ts says why this cannot be an inline script).
+applyTheme(storedTheme());
 
 async function start(): Promise<void> {
   const root = document.getElementById('app');

@@ -21,6 +21,13 @@
     "account": "Pengaturan akun",
     "admin": "Administrasi"
   },
+  "theme": {
+    "legend": "Tema",
+    "system": "Ikuti sistem",
+    "white": "Putih",
+    "navy": "Biru tua",
+    "dark": "Gelap"
+  },
   "language": {
     "ja": "日本語",
     "en": "English",

@@ -21,6 +21,13 @@
     "account": "アカウントの設定",
     "admin": "管理"
   },
+  "theme": {
+    "legend": "テーマ",
+    "system": "システムに合わせる",
+    "white": "ホワイト",
+    "navy": "ネイビー",
+    "dark": "ダーク"
+  },
   "language": {
     "ja": "日本語",
     "en": "English",
