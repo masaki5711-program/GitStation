@@ -56,6 +56,32 @@ fn lines_of(v: &Value, key: &str) -> String {
 }
 
 /// A diagnosis: one block per failed job.
+/// A job's artifacts as lines: `31 target/app 1024 bytes sha256 ab… (attempt 1, until …)`.
+fn artifacts_text(out: &Value) -> String {
+    let lines: Vec<String> = out
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|a| {
+            format!(
+                "{} {} {} bytes sha256 {} (attempt {}, until {})",
+                text(a, "id"),
+                text(a, "path"),
+                text(a, "size_bytes"),
+                text(a, "sha256"),
+                text(a, "attempt"),
+                text(a, "expires_at")
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        "No artifact.".to_owned()
+    } else {
+        lines.join("\n")
+    }
+}
+
 fn diagnosis_text(d: &Value) -> String {
     let mut lines = vec![format!(
         "#{} {}{}",
@@ -260,6 +286,33 @@ pub fn pipeline(cli: &Cli, cmd: &PipelineCommand, env: EnvFn<'_>, io: &mut Io<'_
             let human = diagnosis_text(&out);
             emit(io, cli, out, &human)
         }
+        PipelineCommand::Artifacts {
+            project,
+            pipeline,
+            job,
+        } => {
+            let c = client(cli, env, io)?;
+            let path = format!(
+                "{}/{pipeline}/jobs/{job}/artifacts",
+                pipelines_path(*project)
+            );
+            let out = call(&c, Method::Get, &path, &[], None)?;
+            let human = artifacts_text(&out);
+            emit(io, cli, out, &human)
+        }
+        PipelineCommand::ArtifactDownload {
+            project,
+            pipeline,
+            job,
+            id,
+            output,
+        } => crate::pipeline_artifacts::download(
+            cli,
+            env,
+            io,
+            (*project, *pipeline, *job, *id),
+            output,
+        ),
         PipelineCommand::Run { project, git_ref } => {
             let c = client(cli, env, io)?;
             let body = json!({ "ref": git_ref });

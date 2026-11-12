@@ -182,6 +182,12 @@ pub(crate) enum Fixture {
         holder: crate::matrix_rows_ci::Holder,
         finished: bool,
     },
+    /// A CI job's own artifacts (M4 C6): the row's job (or another) of its
+    /// project (or another).
+    JobSelf {
+        other_project: bool,
+        other_job: bool,
+    },
     /// A ref update on a private project; `protected` = minimum push role.
     Ref {
         kind: RefKind,
@@ -795,6 +801,10 @@ impl Fixture {
             Fixture::RunnerJob { holder, finished } => {
                 crate::matrix_rows_ci::runner_job(holder, finished)
             }
+            Fixture::JobSelf {
+                other_project,
+                other_job,
+            } => crate::matrix_rows_ci::job_self(other_project, other_job),
             Fixture::Ref {
                 kind,
                 update,
@@ -1192,6 +1202,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_repo_copy::REPO_COPY_ROWS,
         crate::matrix_rows_ci::CI_ROWS,
         crate::matrix_rows_ci::RUNNER_ROWS.as_slice(),
+        crate::matrix_rows_ci::JOB_ARTIFACT_ROWS.as_slice(),
         &crate::matrix_rows_ci::generated_denies(),
     ]
     .concat()

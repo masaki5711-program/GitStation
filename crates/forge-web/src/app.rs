@@ -716,6 +716,37 @@ fn runner_routes(registry: Registry<AppState>) -> Registry<AppState> {
             r::complete,
         )
         .responds::<r::CompleteAnswer>(Verb::Post, r::COMPLETE)
+        // M4 C6: a job's artifacts, with the job's own token.
+        .route_with(
+            Verb::Put,
+            routes::ci_artifacts::UPLOAD,
+            Action::JobArtifactUpload,
+            "Upload one file of a job's artifacts (the raw bytes; ?path= the file's path in the work tree) with the job's own token fgj_..., while the job runs: 201 {id, path, size_bytes, sha256}; 413 FG-CI-0019 past 100 MiB per file or 512 MiB / 1000 files per attempt; 409 FG-CI-0004 once the job ended; 400 FG-WEB-0006 for a bad or repeated path",
+            routes::ci_artifacts::OF_UPLOAD,
+            routes::ci_artifacts::upload,
+        )
+        .queries(Verb::Put, routes::ci_artifacts::UPLOAD, routes::ci_artifacts::UPLOAD_QUERY)
+        .responds_created::<routes::ci_artifacts::UploadedArtifactBody>(
+            Verb::Put,
+            routes::ci_artifacts::UPLOAD,
+        )
+        .route_with(
+            Verb::Get,
+            routes::ci_artifacts::NEEDS,
+            Action::JobArtifactDownload,
+            "The artifacts of the jobs a running job needs (their current, succeeded attempt, same pipeline), with the job's own token fgj_...",
+            routes::ci_artifacts::OF_NEEDS,
+            routes::ci_artifacts::needs,
+        )
+        .responds::<routes::ci_artifacts::ArtifactList>(Verb::Get, routes::ci_artifacts::NEEDS)
+        .route_with(
+            Verb::Get,
+            routes::ci_artifacts::NEED_ONE,
+            Action::JobArtifactDownload,
+            "One artifact of a job's needs: its bytes (application/octet-stream), with the job's own token fgj_...; 404 FG-REPO-0005 for any other artifact",
+            routes::ci_artifacts::OF_NEEDS,
+            routes::ci_artifacts::need_one,
+        )
         // M4 C4 (ADR-0029 §3): the job's fetch of its pinned commit.
         .route_with(
             Verb::Get,
@@ -806,6 +837,24 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::diagnosis,
         )
         .responds::<p::DiagnosisBody>(Verb::Get, p::DIAGNOSIS)
+        // M4 C6: a job's artifacts, decided like its log.
+        .route_with(
+            Verb::Get,
+            p::ARTIFACTS,
+            Action::CiArtifactRead,
+            "A CI job's artifacts (every attempt's): path, size, sha256, attempt, keep, expiry (30 days unless kept for a deployment); 404 FG-REPO-0005 without such a pipeline or job; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers)",
+            p::OF_ARTIFACTS,
+            p::artifacts,
+        )
+        .responds::<routes::ci_artifacts::ArtifactList>(Verb::Get, p::ARTIFACTS)
+        .route_with(
+            Verb::Get,
+            p::ARTIFACT,
+            Action::CiArtifactRead,
+            "One CI artifact's bytes (application/octet-stream, attachment, X-Forge-Sha256); 404 FG-REPO-0005 without it (or expired); 403 FG-AUTH-0022 as for the list (project readers)",
+            p::OF_ARTIFACT,
+            p::artifact,
+        )
         // M4 C6: a project's CI variables (secrets; ADR-0029 decision 8).
         .route_with(
             Verb::Get,
@@ -2814,11 +2863,14 @@ async fn request_timeout(
     req: Request,
     next: Next,
 ) -> Response {
-    let limit = if is_git_rpc(&req) {
-        git_rpc_limit
-    } else {
-        request_limit
-    };
+    // M4 C6: a job's artifact upload also reads its whole body before it
+    // answers (its own idle bound and `UPLOAD_TIMEOUT`).
+    let limit =
+        if is_git_rpc(&req) || routes::ci_artifacts::is_upload(req.method(), req.uri().path()) {
+            git_rpc_limit
+        } else {
+            request_limit
+        };
     let request_id = req
         .extensions()
         .get::<RequestId>()

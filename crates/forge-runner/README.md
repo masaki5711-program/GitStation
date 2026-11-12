@@ -24,6 +24,9 @@ it (`forge-hosting/tests/dependency_direction.rs`).
 | definition | `.forge-ci.yml` at the SHA: sha256 = `definition_hash`, parses (`LintContext::pinned_by_server`), holds the job with the claimed image and timeout | FG-CI-0008 — no container starts |
 | container | `podman run --rm --network=none --pid=private --ipc=private --uts=private --cgroupns=private --env-host=false --http-proxy=false --init=false --shm-size=64m --read-only --cap-drop=all --security-opt=no-new-privileges … --entrypoint=/bin/sh -- <image@sha256> -eu /forge/script.sh`; the script is a read-only file, never argv | 125: FG-CI-0007; timeout: kill + rm, FG-CI-0010; other exit: `failed` with the code |
 | services (C5s) | a job with `services`: `podman pod create --name=forge-job-<job>-<attempt> --network=none --share=net --memory=<m> --memory-swap=<m>` (only the loopback network namespace is shared) (the pod as a whole within one job's memory; pids stay per container — Podman has no pod pids limit; the pause image is built locally, never pulled); each service `podman create --pod=… --name=…-svc-<name>` with the job's confinement and limits (plus its `user`, `tmpfs`, `env`), then `podman start` (detached); the job container joins the pod (`--pod=`, loopback only). The runner does not wait for readiness. A service image outside `image_registries`: FG-CI-0011 with `service` | FG-CI-0014 (`reason=pod_create` / `service_start`, `service`, `step`) |
+| secrets (C6) | the claim's `secrets` must be exactly the job's `secrets:` names, each value one line; written to `<work_dir>/job/secrets/job.env` (0700 / 0600, never mounted), passed as `podman create --env-file=…` and removed right after; masked values (and their base64 / percent encodings) replaced by `[masked]` in the log across chunk boundaries | FG-CI-0008 `secrets_mismatch` / `secret_invalid` — no container |
+| needs' artifacts (C6) | a job with `needs`: before the script, `GET …/needs/artifacts[/{id}]` with the job's token, each file placed new at its path under `work` (never through a link, never over a file) | FG-CI-0020 (`reason`, `server_code`) |
+| artifacts (C6) | after a script that exited 0: every regular file under `artifacts: { paths }` (links skipped and named, missing paths named), `PUT …/artifacts?path=` with the job's token | FG-CI-0019 over the bounds (nothing sent); FG-CI-0020 — the job fails |
 | failed job | the last 50 lines of each service's log (`podman logs --tail=50`) appended as `[service <name>] …`, masked like the job's output | unreadable: one line and `forge.runner.service_log_unread` (warn) |
 | always | `podman rm --force --ignore`, then `podman pod rm --force --ignore --time=0` for a job with services (retried once; still there: FG-CI-0007 `reason=pod_remove` and the runner stops like `workspace_dirty`), the job directory removed (through `podman unshare` when needed) | left over: FG-CI-0007 `workspace_dirty`, the runner stops |
 
@@ -44,7 +47,8 @@ SystemRunner}`, `workspace::Workspace`, `logsink::LogSink`.
 
 FG-CI-0007 ContainerStartFailed, FG-CI-0008 JobDefinitionMismatch, FG-CI-0009
 JobFetchFailed (warn), FG-CI-0010 JobTimedOut (info), FG-CI-0014
-ServiceStartFailed (warn), FG-CI-0015 JobIsolationUnsafe (alert) — runbook
+ServiceStartFailed (warn), FG-CI-0015 JobIsolationUnsafe (alert), FG-CI-0019
+ArtifactTooLarge (info), FG-CI-0020 ArtifactTransferFailed (warn) — runbook
 `ci-runner`.
 Configuration problems are FG-SYS-0002 (`config_key`, `reason`).
 

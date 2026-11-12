@@ -2744,3 +2744,30 @@ diagnosis = "`forge serve` logs `forge.ci.secret_not_defined` (info) with `error
 fix = "Set the variable (Maintainer: gstn ci variable set --project <id> <NAME>, the value on standard input) or remove the name from the job's `secrets:`, then retry the pipeline (gstn pipeline retry)."
 runbook = "ci-secrets"
 test = "a_job_asking_for_an_undefined_secret_fails"
+
+[[error]]
+code = "FG-CI-0019"
+name = "ArtifactTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "CI のジョブの成果物が上限を超えました。成果物は保存されず、ジョブは失敗にしました。"
+user_message_en = "The CI job's artifacts exceeded the limit. They were not stored and the job was failed."
+user_message_id = "Artefak tugas CI melampaui batas. Artefak tidak disimpan dan tugas digagalkan."
+cause = "M4 C6 (plan 14 §4.1): a job's artifacts (`artifacts: { paths }` in `.forge-ci.yml`) are bounded: 100 MiB per file, 512 MiB and 1000 files per job attempt. The runner counts before it sends (`reason=file_limit` / `job_limit`, nothing is sent and the job is failed); forge checks again while it stores (`PUT /api/v1/runner/jobs/{job_id}/artifacts`, 413, the partly written file is removed)."
+diagnosis = "The runner host (`journalctl -u forge-runner`) or `forge serve` logs the code with `job_id`, `reason`, `limit_bytes` / `limit_files`, and `path` for one file. Read: SELECT count(*), sum(size_bytes) FROM forge.ci_artifacts WHERE job_id = <job_id> AND attempt = <attempt>;"
+fix = "Declare fewer or smaller paths (compress outputs, upload only what later jobs or people need), then retry the pipeline (gstn pipeline retry). The limits are fixed."
+test = "an_artifact_past_the_limit_is_refused"
+
+[[error]]
+code = "FG-CI-0020"
+name = "ArtifactTransferFailed"
+http_status = 503
+severity = "warn"
+user_message_ja = "CI のジョブの成果物を送れない、または受け取れませんでした。ジョブは失敗にしました。"
+user_message_en = "The CI job's artifacts could not be sent or received. The job was failed."
+user_message_id = "Artefak tugas CI tidak dapat dikirim atau diterima. Tugas digagalkan."
+cause = "M4 C6: the runner moves artifacts with the job's own token — before the script it fetches the artifacts of the jobs it `needs` (`GET /api/v1/runner/jobs/{job_id}/needs/artifacts[/{id}]`) into the work tree, and after a successful script it uploads each file of its declared paths. One of these failed: the server answered an error (`server_code`, e.g. FG-CI-0004 when the job ended meanwhile, FG-REPO-0003 storage), the connection failed or timed out (`reason=send` / `receive`), the work tree could not be read (`reason=collect`), or a needed artifact could not be placed (`reason=path_invalid` / `path_exists` / `place`: a path is already in the checkout, or not a relative path). The job is reported failed so a later job never runs without what it needs."
+diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (warn) with `error_code`, `request_id`, `job_id`, `attempt`, `pipeline_id`, `reason`, `path`, `server_code`; the job's log ends with the same code. On forge: `forge.ci.artifact_stored` per stored file; SELECT id, path, size_bytes FROM forge.ci_artifacts WHERE job_id = <job_id>; `forge doctor` `repositories.storage` for the storage root."
+fix = "Follow runbook ci-runner (Artifacts): fix the storage (free space under `<storage.root>/ci-artifacts`) or the network between the runner and forge, or move the conflicting path out of the repository, then retry the pipeline (gstn pipeline retry)."
+runbook = "ci-runner"
+test = "a_failed_artifact_upload_fails_the_job"

@@ -553,6 +553,16 @@ async fn finish_steps(
         "projects.purge.finish.merge_settings",
     )
     .await?;
+    // M4 C6: the project's CI artifacts (derived rows; the files under
+    // `<storage.root>/ci-artifacts/<project_id>` go with the purge job's
+    // storage step).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_artifacts WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_artifacts",
+    )
+    .await?;
     // M4 C5: the job failures, then the fingerprints (they point at the
     // jobs and the merge requests).
     delete_rows(

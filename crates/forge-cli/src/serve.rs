@@ -171,6 +171,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                         smart_http.browse.clone(), // clone: as above
                     )),
                 );
+                // M4 C6: the artifact files under the storage root.
+                let pipelines = pipelines.with_artifacts(
+                    forge_pipelines::artifacts::ArtifactStore::new(smart_http.storage.path()),
+                );
                 match &ci_secret_keys {
                     Some(keys) => pipelines.with_secret_keys(Arc::clone(keys)),
                     None => pipelines,

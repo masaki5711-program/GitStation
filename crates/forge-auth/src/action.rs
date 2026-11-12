@@ -430,6 +430,11 @@ actions! {
     /// error codes and known fixes. Decided as `CiLogRead`
     /// (`route=ci_diagnosis`): the excerpts are log output.
     PipelineDiagnosisRead,
+    /// `GET …/pipelines/{pipeline_id}/jobs/{job_id}/artifacts[/{artifact_id}]`
+    /// (M4 C6, ADR-0029 decision 5): a job's artifacts. Decided as
+    /// `CiLogRead` (`route=ci_artifact`): an AI agent audience only when
+    /// both marks are `Open`; `read_api`.
+    CiArtifactRead,
     /// `POST /api/v1/projects/{id}/pipelines`: run a pipeline by hand on a
     /// branch's tip. Developer and above (agents and service accounts by
     /// their membership, plan 14 §4.2); `api`. A manual run is never
@@ -446,6 +451,15 @@ actions! {
     /// people only (a secret's owner answers for it; an agent never sets or
     /// sees one, ADR-0029 decision 8); `api`.
     CiVariableManage,
+    /// `PUT /api/v1/runner/jobs/{job_id}/artifacts?path=` (M4 C6): a job
+    /// uploads one file of its artifacts — its own token, its own job,
+    /// while it runs (`CiRule::Job`, `Resource::JobSelf`).
+    JobArtifactUpload,
+    /// `GET /api/v1/runner/jobs/{job_id}/needs/artifacts[/{artifact_id}]`
+    /// (M4 C6): a job reads the artifacts of the jobs it `needs` in its own
+    /// pipeline — its own token, its own job (`CiRule::Job`); which
+    /// artifacts are its needs' is the read's own scope.
+    JobArtifactDownload,
     // --- CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1) ---
     /// `POST /api/v1/admin/runners`: register a runner and show its token
     /// once. An administrator's web session, people only (a token is
@@ -657,6 +671,9 @@ impl Action {
             | Action::RunnerJobHeartbeat
             | Action::RunnerLogAppend
             | Action::RunnerJobComplete
+            // M4 C6: a job's own artifacts (`ci_rule`: the job's token only).
+            | Action::JobArtifactUpload
+            | Action::JobArtifactDownload
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -702,6 +719,7 @@ impl Action {
             | Action::PipelineRead
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::CiArtifactRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -870,6 +888,9 @@ impl Action {
             // M4 C5: nor are their outputs.
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::CiArtifactRead
+            | Action::JobArtifactUpload
+            | Action::JobArtifactDownload
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
@@ -909,6 +930,8 @@ impl Action {
             // A job's copy of its own project at its pinned SHA (§3), on
             // `Resource::PinnedCopy` only.
             Action::RepoRead => CiRule::Job,
+            // M4 C6: a job's own artifacts and its needs'.
+            Action::JobArtifactUpload | Action::JobArtifactDownload => CiRule::Job,
             // M4 C3: the runner API, on the instance (a claim) or on a job
             // leased to the runner (`Resource::RunnerJob`).
             Action::RunnerJobRequest
@@ -1001,6 +1024,7 @@ impl Action {
             | Action::PipelineRead
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::CiArtifactRead
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry

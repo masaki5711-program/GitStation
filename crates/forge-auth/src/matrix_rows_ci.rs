@@ -206,6 +206,85 @@ const ADMIN: [Row; 12] = [
 pub(crate) static RUNNER_ROWS: std::sync::LazyLock<Vec<Row>> =
     std::sync::LazyLock::new(|| [HEARTBEAT.as_slice(), &LOG, &COMPLETE, &ADMIN].concat());
 
+/// The job's own artifacts (M4 C6): a live job's token, its own job of its
+/// own project only; another job or project is the invisible project's
+/// 404; an ended job's token is unauthenticated; a runner, people and
+/// agents never.
+macro_rules! job_artifact_rows {
+    ($action:expr) => {
+        [
+            row($action, W::Job(J::Live), MINE, Allow),
+            row(
+                $action,
+                W::Job(J::Live),
+                F::JobSelf {
+                    other_project: false,
+                    other_job: true,
+                },
+                deny(E::NotFound),
+            ),
+            row(
+                $action,
+                W::Job(J::Live),
+                F::JobSelf {
+                    other_project: true,
+                    other_job: false,
+                },
+                deny(E::NotFound),
+            ),
+            row($action, W::Job(J::Revoked), MINE, deny(E::Unauthenticated)),
+            row($action, W::Job(J::Expired), MINE, deny(E::Unauthenticated)),
+            row($action, W::Runner, MINE, deny(E::Forbidden)),
+            row($action, W::Admin, MINE, deny(E::Forbidden)),
+            row($action, W::Developer, MINE, deny(E::Forbidden)),
+            row($action, W::AgentTokenApi, MINE, deny(E::Forbidden)),
+            row($action, W::ServiceAccountTokenApi, MINE, deny(E::Forbidden)),
+            row($action, W::Anonymous, MINE, deny(E::Unauthenticated)),
+        ]
+    };
+}
+
+/// The row's own job of its own project.
+const MINE: F = F::JobSelf {
+    other_project: false,
+    other_job: false,
+};
+
+#[rustfmt::skip]
+const UPLOAD: [Row; 11] = job_artifact_rows!(A::JobArtifactUpload);
+#[rustfmt::skip]
+const DOWNLOAD: [Row; 11] = job_artifact_rows!(A::JobArtifactDownload);
+
+/// A job's own-artifact rows (`matrix::ROWS` appends them); a job's
+/// pinned copy is not an artifact action (and the reverse).
+pub(crate) static JOB_ARTIFACT_ROWS: std::sync::LazyLock<Vec<Row>> =
+    std::sync::LazyLock::new(|| {
+        let crossed = [
+            row(A::RepoRead, W::Job(J::Live), MINE, deny(E::NotFound)),
+            row(
+                A::JobArtifactUpload,
+                W::Job(J::Live),
+                OWN,
+                deny(E::NotFound),
+            ),
+        ];
+        [UPLOAD.as_slice(), &DOWNLOAD, &crossed].concat()
+    });
+
+/// The job's own job (41) or another (42) of its project or another.
+#[cfg(test)]
+pub(crate) fn job_self(other_project: bool, other_job: bool) -> Resource {
+    crate::contexts::JobSelfCtx::new(
+        if other_job { 42 } else { 41 },
+        if other_project {
+            ProjectId::new(8)
+        } else {
+            JOB_PROJECT
+        },
+    )
+    .resource()
+}
+
 /// The runner of every runner row.
 #[cfg(test)]
 const RUNNER_ID: i64 = 3;

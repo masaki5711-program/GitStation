@@ -221,6 +221,8 @@ pub struct Pipelines {
     /// `ci.secret_keys_file` (M4 C6); `None`: not configured (no variable
     /// can be set, a job that asks for secrets fails with FG-CI-0016).
     secret_keys: Option<Arc<forge_core::ci_secret::CiSecretKeys>>,
+    /// Where the CI artifacts' files live (M4 C6, `forge serve`).
+    artifacts: Option<artifacts::ArtifactStore>,
 }
 
 impl std::fmt::Debug for Pipelines {
@@ -236,7 +238,15 @@ impl Pipelines {
             browse,
             marks,
             secret_keys: None,
+            artifacts: None,
         }
+    }
+
+    /// The CI artifacts' store under the storage root (M4 C6).
+    #[must_use]
+    pub fn with_artifacts(mut self, store: artifacts::ArtifactStore) -> Self {
+        self.artifacts = Some(store);
+        self
     }
 
     /// The keys of `ci.secret_keys_file` (M4 C6, `forge serve`).
@@ -731,6 +741,8 @@ fn failed(cause: ForgeError) -> ForgeError {
 pub mod runners;
 // M4 C6: CI variables (secrets): manage, release with a claim, mask.
 pub mod secrets;
+// M4 C6: CI artifacts: upload, read on the marks, needs, expiry.
+pub mod artifacts;
 // M4 C5: the CI outputs (logs, diagnosis, fingerprints, ci/pipeline).
 pub mod fingerprint;
 pub mod outputs;

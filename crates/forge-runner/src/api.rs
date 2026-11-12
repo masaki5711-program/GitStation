@@ -109,6 +109,33 @@ impl JobResult {
     }
 }
 
+/// One artifact of a job this job needs (M4 C6): what
+/// `GET …/needs/artifacts` answered.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct NeededArtifact {
+    pub id: i64,
+    /// The job that uploaded it.
+    pub job: String,
+    pub path: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+}
+
+#[derive(Deserialize)]
+struct NeededList {
+    artifacts: Vec<NeededArtifact>,
+}
+
+fn unsupported() -> ClientError {
+    ClientError::local(
+        forge_errors::ErrorCode::CliUsageInvalid,
+        "reason=artifacts_unsupported",
+    )
+}
+
+/// How long one artifact transfer may take.
+pub const ARTIFACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
+
 /// The runner's calls on forge.
 pub trait RunnerApi: Send + Sync {
     fn request_job(&self, wait_s: u64) -> Result<Option<ClaimedJob>, ClientError>;
@@ -121,6 +148,36 @@ pub trait RunnerApi: Send + Sync {
         result: JobResult,
         exit_code: Option<i32>,
     ) -> Result<(), ClientError>;
+    /// M4 C6: the artifacts of the jobs `job` needs, with the job's token.
+    fn needed_artifacts(
+        &self,
+        _job: i64,
+        _token: &JobToken,
+    ) -> Result<Vec<NeededArtifact>, ClientError> {
+        Err(unsupported())
+    }
+    /// M4 C6: one of them into `out` (at most `max` bytes); the bytes.
+    fn download_artifact(
+        &self,
+        _job: i64,
+        _token: &JobToken,
+        _artifact: i64,
+        _out: &mut dyn std::io::Write,
+        _max: u64,
+    ) -> Result<u64, ClientError> {
+        Err(unsupported())
+    }
+    /// M4 C6: upload `file` (`len` bytes) as the job's artifact `path`.
+    fn upload_artifact(
+        &self,
+        _job: i64,
+        _token: &JobToken,
+        _path: &str,
+        _file: &std::path::Path,
+        _len: u64,
+    ) -> Result<(), ClientError> {
+        Err(unsupported())
+    }
 }
 
 /// [`RunnerApi`] over HTTP with the runner's token.
@@ -188,6 +245,67 @@ impl RunnerApi for HttpApi {
             &json!({ "attempt": attempt, "result": result.as_str(), "exit_code": exit_code }),
         )
         .map(|_| ())
+    }
+
+    fn needed_artifacts(
+        &self,
+        job: i64,
+        token: &JobToken,
+    ) -> Result<Vec<NeededArtifact>, ClientError> {
+        let mut out = Vec::new();
+        self.client.download_to(
+            &job_path(job, "needs/artifacts"),
+            Some(token.expose()),
+            &mut out,
+            4 * 1024 * 1024,
+            ARTIFACT_TIMEOUT,
+        )?;
+        serde_json::from_slice::<NeededList>(&out)
+            .map(|l| l.artifacts)
+            .map_err(|_| malformed("needed_artifacts"))
+    }
+
+    fn download_artifact(
+        &self,
+        job: i64,
+        token: &JobToken,
+        artifact: i64,
+        out: &mut dyn std::io::Write,
+        max: u64,
+    ) -> Result<u64, ClientError> {
+        self.client.download_to(
+            &job_path(job, &format!("needs/artifacts/{artifact}")),
+            Some(token.expose()),
+            out,
+            max,
+            ARTIFACT_TIMEOUT,
+        )
+    }
+
+    fn upload_artifact(
+        &self,
+        job: i64,
+        token: &JobToken,
+        path: &str,
+        file: &std::path::Path,
+        len: u64,
+    ) -> Result<(), ClientError> {
+        let opened = std::fs::File::open(file).map_err(|_| {
+            ClientError::local(
+                forge_errors::ErrorCode::CliInputFailed,
+                "reason=artifact_unreadable",
+            )
+        })?;
+        self.client
+            .upload_file(
+                &job_path(job, "artifacts"),
+                &[("path".to_owned(), path.to_owned())],
+                token.expose(),
+                opened,
+                len,
+                ARTIFACT_TIMEOUT,
+            )
+            .map(|_| ())
     }
 }
 

@@ -380,6 +380,12 @@ struct Forge {
     claims: Mutex<Vec<ClaimedJob>>,
     /// The forge cannot be reached: every claim fails as the client reports it.
     unreachable: AtomicBool,
+    /// M4 C6: the artifacts uploaded (path, bytes).
+    uploads: Mutex<Vec<(String, Vec<u8>)>>,
+    /// M4 C6: every upload fails as a lost lease.
+    upload_fails: AtomicBool,
+    /// M4 C6: the artifacts of the needs (id, path, bytes).
+    needed: Mutex<Vec<(i64, String, Vec<u8>)>>,
 }
 
 impl RunnerApi for Forge {
@@ -410,6 +416,60 @@ impl RunnerApi for Forge {
             .lock()
             .unwrap()
             .push((job, result, exit_code));
+        Ok(())
+    }
+    fn needed_artifacts(
+        &self,
+        _: i64,
+        token: &JobToken,
+    ) -> Result<Vec<crate::api::NeededArtifact>, ClientError> {
+        assert!(token.expose().starts_with("fgj_"), "the job's own token");
+        Ok(self
+            .needed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, path, bytes)| crate::api::NeededArtifact {
+                id: *id,
+                job: "build".to_owned(),
+                path: path.clone(),
+                size_bytes: i64::try_from(bytes.len()).unwrap(),
+                sha256: String::new(),
+            })
+            .collect())
+    }
+    fn download_artifact(
+        &self,
+        _: i64,
+        _: &JobToken,
+        artifact: i64,
+        out: &mut dyn std::io::Write,
+        _: u64,
+    ) -> Result<u64, ClientError> {
+        let needed = self.needed.lock().unwrap();
+        let (_, _, bytes) = needed.iter().find(|(id, _, _)| *id == artifact).unwrap();
+        out.write_all(bytes).unwrap();
+        Ok(u64::try_from(bytes.len()).unwrap())
+    }
+    fn upload_artifact(
+        &self,
+        _: i64,
+        token: &JobToken,
+        path: &str,
+        file: &std::path::Path,
+        _: u64,
+    ) -> Result<(), ClientError> {
+        assert!(token.expose().starts_with("fgj_"), "the job's own token");
+        if self.upload_fails.load(Ordering::SeqCst) {
+            return Err(ClientError::local(
+                ErrorCode::CliServerUnreachable,
+                "reason=connect",
+            ));
+        }
+        self.uploads
+            .lock()
+            .unwrap()
+            .push((path.to_owned(), std::fs::read(file).unwrap()));
         Ok(())
     }
 }
@@ -1692,4 +1752,47 @@ fn a_claim_whose_secrets_differ_from_the_definition_runs_nothing() {
         let log = forge.logs.lock().unwrap().concat();
         assert!(!log.contains("s3cr3t"), "{log}");
     }
+}
+
+/// A definition whose `build` job declares artifacts (M4 C6).
+fn artifact_definition() -> String {
+    definition("make").replace(
+        "    script:",
+        "    artifacts:\n      paths: [left-by-the-job, absent]\n    script:",
+    )
+}
+
+/// M4 C6: after a successful script the runner uploads the declared files
+/// with the job's own token and names a missing path in the log.
+#[test]
+fn a_successful_jobs_declared_artifacts_are_uploaded() {
+    let def = artifact_definition();
+    let fake = Fake::new(&def, Podman::Litter);
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert_eq!(
+        *forge.uploads.lock().unwrap(),
+        vec![("left-by-the-job".to_owned(), b"x".to_vec())]
+    );
+    let log = forge.logs.lock().unwrap().concat();
+    assert!(log.contains("artifact path not found: absent"), "{log}");
+}
+
+/// M4 C6: an upload that fails fails the job (FG-CI-0020): a later job
+/// must never run without what it needs.
+#[test]
+fn a_failed_artifact_upload_fails_the_job() {
+    let def = artifact_definition();
+    let fake = Fake::new(&def, Podman::Litter);
+    let s = setup(&fake);
+    let forge = Forge::default();
+    forge.upload_fails.store(true, Ordering::SeqCst);
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Failed);
+    assert_eq!(
+        out.error.expect("failed").code(),
+        ErrorCode::ArtifactTransferFailed
+    );
 }

@@ -29,6 +29,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 keyring-core = "1"
 
 zeroize = "1"
+# M4 C6: the sha256 of a downloaded CI artifact.
+sha2.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true }

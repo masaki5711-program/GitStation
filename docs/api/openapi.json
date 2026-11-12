@@ -525,6 +525,85 @@
         ],
         "type": "object"
       },
+      "ArtifactBody": {
+        "additionalProperties": false,
+        "description": "One artifact's metadata.",
+        "properties": {
+          "attempt": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "job": {
+            "description": "The job that uploaded it.",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "keep": {
+            "description": "Kept past the retention (a deployed version).",
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "pipeline_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "pipeline_id",
+          "job_id",
+          "job",
+          "attempt",
+          "path",
+          "size_bytes",
+          "sha256",
+          "keep",
+          "created_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "ArtifactList": {
+        "additionalProperties": false,
+        "description": "A list of artifacts.",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifacts"
+        ],
+        "type": "object"
+      },
       "BindProject": {
         "additionalProperties": false,
         "description": "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`.",
@@ -10062,6 +10141,36 @@
         ],
         "type": "object"
       },
+      "UploadedArtifactBody": {
+        "additionalProperties": false,
+        "description": "`201` of an upload.",
+        "properties": {
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "description": "Lower-case hex.",
+            "type": "string"
+          },
+          "size_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "size_bytes",
+          "sha256"
+        ],
+        "type": "object"
+      },
       "UserActivityActorBody": {
         "additionalProperties": false,
         "description": "Who caused an event.",
@@ -17167,6 +17276,128 @@
         "x-forge-action": "PipelineDiagnosisRead"
       }
     },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_artifacts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A CI job's artifacts (every attempt's): path, size, sha256, attempt, keep, expiry (30 days unless kept for a deployment); 404 FG-REPO-0005 without such a pipeline or job; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers)",
+        "x-forge-action": "CiArtifactRead"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_artifacts_artifact_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One CI artifact's bytes (application/octet-stream, attachment, X-Forge-Sha256); 404 FG-REPO-0005 without it (or expired); 403 FG-AUTH-0022 as for the list (project readers)",
+        "x-forge-action": "CiArtifactRead"
+      }
+    },
     "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log": {
       "get": {
         "operationId": "get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_log",
@@ -19256,6 +19487,56 @@
         "x-forge-max-body-bytes": 4096
       }
     },
+    "/api/v1/runner/jobs/{job_id}/artifacts": {
+      "put": {
+        "operationId": "put_api_v1_runner_jobs_job_id_artifacts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The file's path relative to the job's work tree (no leading /, no . / .. / .git component, at most 1024 bytes)",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadedArtifactBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Upload one file of a job's artifacts (the raw bytes; ?path= the file's path in the work tree) with the job's own token fgj_..., while the job runs: 201 {id, path, size_bytes, sha256}; 413 FG-CI-0019 past 100 MiB per file or 512 MiB / 1000 files per attempt; 409 FG-CI-0004 once the job ended; 400 FG-WEB-0006 for a bad or repeated path",
+        "x-forge-action": "JobArtifactUpload"
+      }
+    },
     "/api/v1/runner/jobs/{job_id}/complete": {
       "post": {
         "operationId": "post_api_v1_runner_jobs_job_id_complete",
@@ -19410,6 +19691,88 @@
         "summary": "Append a log chunk to a job the runner holds ({\"attempt\", \"seq\", \"text\"}; append only, a resent seq is a no-op); 413 FG-CI-0006 past the job's limit; 409 FG-CI-0004 when the lease was lost (the holding runner only)",
         "x-forge-action": "RunnerLogAppend",
         "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/runner/jobs/{job_id}/needs/artifacts": {
+      "get": {
+        "operationId": "get_api_v1_runner_jobs_job_id_needs_artifacts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The artifacts of the jobs a running job needs (their current, succeeded attempt, same pipeline), with the job's own token fgj_...",
+        "x-forge-action": "JobArtifactDownload"
+      }
+    },
+    "/api/v1/runner/jobs/{job_id}/needs/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "get_api_v1_runner_jobs_job_id_needs_artifacts_artifact_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One artifact of a job's needs: its bytes (application/octet-stream), with the job's own token fgj_...; 404 FG-REPO-0005 for any other artifact",
+        "x-forge-action": "JobArtifactDownload"
       }
     },
     "/api/v1/runner/jobs/{job_id}/repo.git/git-upload-pack": {

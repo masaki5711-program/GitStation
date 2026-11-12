@@ -844,6 +844,14 @@ reason = "Describes one command; no request."
 # ── an agent may; not a tool yet (add one when the Kanflow / AI-session list asks) ──
 
 [[deferred]]
+gstn = "pipeline artifacts"
+reason = "M4 C6: a CI job's artifact list (decided on the marks like the log); a tool comes with the artifact diagnosis of P-9."
+
+[[deferred]]
+gstn = "pipeline artifact-download"
+reason = "M4 C6: writes a file on the agent's host; an MCP tool would need a byte channel gstn mcp does not have."
+
+[[deferred]]
 gstn = "browse commit-file"
 reason = "Write (the simple editor E1, decided like a push); agents push with git. A tool waits for the editor's own series."
 

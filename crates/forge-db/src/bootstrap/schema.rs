@@ -932,6 +932,8 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             "forge.ci_variables",
             [dml("forge_app"), ro("ci_variables")?].concat(),
         ),
+        // ── M4 C6: CI artifacts (20261211200000) ──
+        ("forge.ci_artifacts", operational()),
     ])
 }
 
@@ -1113,6 +1115,8 @@ const LATER_TABLES: &[&str] = &[
     "repository_history_imports",
     // ── M4 C6: CI variables (20261211100000) ──
     "ci_variables",
+    // ── M4 C6: CI artifacts (20261211200000) ──
+    "ci_artifacts",
 ];
 
 /// Every table the first migration creates.

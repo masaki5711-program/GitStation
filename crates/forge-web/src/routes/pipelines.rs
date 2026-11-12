@@ -62,6 +62,11 @@ pub const RETRY: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry";
 pub const LOG: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log";
 /// `GET` a pipeline's diagnosis (M4 C5).
 pub const DIAGNOSIS: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis";
+/// `GET` a job's artifacts (M4 C6).
+pub const ARTIFACTS: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts";
+/// `GET` one artifact's bytes (M4 C6).
+pub const ARTIFACT: &str =
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}";
 /// The body cap of a manual run (one branch name).
 pub const MAX_BODY: usize = 1024;
 /// The page size without `limit`.
@@ -379,6 +384,10 @@ enum Tail {
     Retry(i64),
     Log(i64, i64),
     Diagnosis(i64),
+    /// M4 C6: `…/jobs/{job_id}/artifacts`.
+    Artifacts(i64, i64),
+    /// M4 C6: `…/jobs/{job_id}/artifacts/{artifact_id}`.
+    Artifact(i64, i64, i64),
 }
 
 impl Tail {
@@ -390,6 +399,8 @@ impl Tail {
             Self::Retry(_) => 3,
             Self::Log(..) => 4,
             Self::Diagnosis(_) => 5,
+            Self::Artifacts(..) => 6,
+            Self::Artifact(..) => 7,
         }
     }
 
@@ -400,7 +411,9 @@ impl Tail {
             | Self::Cancel(id)
             | Self::Retry(id)
             | Self::Log(id, _)
-            | Self::Diagnosis(id) => Some(id),
+            | Self::Diagnosis(id)
+            | Self::Artifacts(id, _)
+            | Self::Artifact(id, _, _) => Some(id),
         }
     }
 }
@@ -426,13 +439,25 @@ fn ids(raw_path: &str) -> Result<(ProjectId, Tail), ForgeError> {
         "retry" => Tail::Retry(id),
         "diagnosis" => Tail::Diagnosis(id),
         other => {
-            let job = other
+            let (job, rest) = other
                 .strip_prefix("jobs/")
-                .and_then(|rest| rest.strip_suffix("/log"))
+                .and_then(|rest| rest.split_once('/'))
                 .ok_or_else(bad)?;
             let job = parse_positive_id(job)
                 .ok_or_else(|| param_invalid("job_id", "not_positive_decimal"))?;
-            Tail::Log(id, job)
+            match rest {
+                "log" => Tail::Log(id, job),
+                "artifacts" => Tail::Artifacts(id, job),
+                _ => {
+                    let artifact = rest
+                        .strip_prefix("artifacts/")
+                        .filter(|a| !a.contains('/'))
+                        .ok_or_else(bad)?;
+                    let artifact = parse_positive_id(artifact)
+                        .ok_or_else(|| param_invalid("artifact_id", "not_positive_decimal"))?;
+                    Tail::Artifact(id, job, artifact)
+                }
+            }
         }
     };
     Ok((project, tail))
@@ -455,6 +480,10 @@ pub const OF_RETRY: PipelinesOf = PipelinesOf { tail: 3 };
 pub const OF_LOG: PipelinesOf = PipelinesOf { tail: 4 };
 /// `GET …/diagnosis`.
 pub const OF_DIAGNOSIS: PipelinesOf = PipelinesOf { tail: 5 };
+/// `GET …/jobs/{job_id}/artifacts` (M4 C6).
+pub const OF_ARTIFACTS: PipelinesOf = PipelinesOf { tail: 6 };
+/// `GET …/jobs/{job_id}/artifacts/{artifact_id}` (M4 C6).
+pub const OF_ARTIFACT: PipelinesOf = PipelinesOf { tail: 7 };
 
 impl PipelinesOf {
     async fn lookup(
@@ -898,6 +927,111 @@ fn failure_body(project: ProjectId, pipeline: i64, f: StoredFailure) -> FailureB
             })
             .into_iter()
             .collect(),
+    }
+}
+
+/// `GET …/jobs/{job_id}/artifacts` → `200` (M4 C6, `CiArtifactRead`):
+/// decided like the log (FG-AUTH-0022 `route=ci_artifact` to an AI agent
+/// audience unless both marks are open).
+pub async fn artifacts(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let path = request.raw_path().to_owned();
+    let target = tip_target(&state, &request);
+    let declared_agent = declared_agent(&request);
+    let w = request.into_write();
+    let (target, refused) = match target {
+        TipTarget::Refused(e) => (TipTarget::Person, Some(e)),
+        t @ (TipTarget::Person | TipTarget::Unmeasurable(..) | TipTarget::Measure(..)) => (t, None),
+    };
+    let built = async {
+        if let Some(e) = refused {
+            return Err(e);
+        }
+        let (_, tail) = ids(&path)?;
+        let Tail::Artifacts(pipeline, job) = tail else {
+            return Err(not_found());
+        };
+        let _running = output_gate(&state, caller_of(&w.proof))?;
+        let exists = bounded(
+            &state,
+            "pipeline_job_artifacts",
+            pipelines(&state)?.output_exists(&w.proof, pipeline, Some(job)),
+        )
+        .await?;
+        if !exists {
+            return Err(ForgeError::new(ErrorCode::NotFound).with_context("resource", "job"));
+        }
+        let (tip_mark, measured) = tip_mark(&state, target).await;
+        let view = OutputView {
+            tip_mark,
+            declared_agent,
+        };
+        let rows = bounded(
+            &state,
+            "pipeline_job_artifacts",
+            pipelines(&state)?.artifacts(&w.proof, view, (pipeline, job)),
+        )
+        .await
+        .map_err(|e| ci_output_refusal(e, measured.as_ref()))?
+        .ok_or_else(|| ForgeError::new(ErrorCode::NotFound).with_context("resource", "job"))?;
+        json(crate::routes::ci_artifacts::ArtifactList {
+            artifacts: rows
+                .into_iter()
+                .map(crate::routes::ci_artifacts::artifact_body)
+                .collect(),
+        })
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
+/// `GET …/jobs/{job_id}/artifacts/{artifact_id}` → `200` the bytes (M4
+/// C6, `CiArtifactRead`), decided as [`artifacts`].
+pub async fn artifact(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let path = request.raw_path().to_owned();
+    let target = tip_target(&state, &request);
+    let declared_agent = declared_agent(&request);
+    let w = request.into_write();
+    let (target, refused) = match target {
+        TipTarget::Refused(e) => (TipTarget::Person, Some(e)),
+        t @ (TipTarget::Person | TipTarget::Unmeasurable(..) | TipTarget::Measure(..)) => (t, None),
+    };
+    let built = async {
+        if let Some(e) = refused {
+            return Err(e);
+        }
+        let (_, tail) = ids(&path)?;
+        let Tail::Artifact(pipeline, job, artifact) = tail else {
+            return Err(not_found());
+        };
+        let _running = output_gate(&state, caller_of(&w.proof))?;
+        let exists = bounded(
+            &state,
+            "pipeline_job_artifact",
+            pipelines(&state)?.output_exists(&w.proof, pipeline, Some(job)),
+        )
+        .await?;
+        if !exists {
+            return Err(ForgeError::new(ErrorCode::NotFound).with_context("resource", "job"));
+        }
+        let (tip_mark, measured) = tip_mark(&state, target).await;
+        let view = OutputView {
+            tip_mark,
+            declared_agent,
+        };
+        let found = bounded(
+            &state,
+            "pipeline_job_artifact",
+            pipelines(&state)?.artifact_file(&w.proof, view, (pipeline, job), artifact),
+        )
+        .await
+        .map_err(|e| ci_output_refusal(e, measured.as_ref()))?
+        .ok_or_else(crate::routes::ci_artifacts::not_found)?;
+        crate::routes::ci_artifacts::file_response(found).await
+    }
+    .await;
+    match built {
+        Ok(res) => res,
+        Err(e) => w.ctx.fail(e).into_response(),
     }
 }
 

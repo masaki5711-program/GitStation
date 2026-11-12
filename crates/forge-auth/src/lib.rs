@@ -92,13 +92,14 @@ pub use model::{
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
-    GroupTransferCtx, InstanceCtx, LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent,
-    LoadedProject, LoadedProtection, LoadedTarget, LoadedTombstone, LoadedTransferTarget,
-    LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx, PinnedCopyCtx, ProjectCtx,
-    ProjectEventsCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, RunnerJobCtx,
-    ServiceAccountCtx, ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx,
-    TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserActivityCtx,
-    UserMergeRequestsCtx, UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
+    GroupTransferCtx, InstanceCtx, JobSelfCtx, LoadedGroup, LoadedMembership, LoadedNamespace,
+    LoadedParent, LoadedProject, LoadedProtection, LoadedTarget, LoadedTombstone,
+    LoadedTransferTarget, LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx,
+    PinnedCopyCtx, ProjectCtx, ProjectEventsCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx,
+    ResourceCtx, RunnerJobCtx, ServiceAccountCtx, ServiceAccountTokenCtx,
+    ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx,
+    TombstoneCtx, TransferCtx, UnresolvedCtx, UserActivityCtx, UserMergeRequestsCtx,
+    UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 pub use repo_copy::authorize_repo_copy;

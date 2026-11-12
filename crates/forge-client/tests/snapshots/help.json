@@ -10135,6 +10135,129 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The pipeline id.",
+          "kind": "option",
+          "name": "--pipeline",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The job id.",
+          "kind": "option",
+          "name": "--job",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn pipeline artifacts --project 7 --pipeline 42 --job 9 --json"
+      ],
+      "name": "pipeline artifacts",
+      "output": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "required": [
+                "id",
+                "pipeline_id",
+                "job_id",
+                "job",
+                "attempt",
+                "path",
+                "size_bytes",
+                "sha256",
+                "keep",
+                "created_at",
+                "expires_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifacts"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The artifacts of one CI job (M4 C6): path, size, sha256, attempt, expiry (30 days unless kept for a deployment). 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (as for pipeline log)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The pipeline id.",
+          "kind": "option",
+          "name": "--pipeline",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The job id.",
+          "kind": "option",
+          "name": "--job",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The artifact id (from pipeline artifacts).",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The file to write (created new).",
+          "kind": "option",
+          "name": "--output",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn pipeline artifact-download --project 7 --pipeline 42 --job 9 31 --output app.tar"
+      ],
+      "name": "pipeline artifact-download",
+      "output": {
+        "required": [
+          "id",
+          "output",
+          "size_bytes",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts",
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Download one CI artifact to a file (--output; never over an existing file) and check its sha256 (X-Forge-Sha256). 403 FG-AUTH-0022 as for pipeline artifacts."
+    },
+    {
+      "args": [
+        {
           "description": "GET | POST | PUT | PATCH | DELETE",
           "kind": "positional",
           "name": "method",

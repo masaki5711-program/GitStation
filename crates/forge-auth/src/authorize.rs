@@ -1231,6 +1231,11 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             Action::RunnerJobHeartbeat | Action::RunnerLogAppend | Action::RunnerJobComplete,
             Resource::RunnerJob(_),
         ) => Err(refused("runner_only")),
+        // M4 C6: a job's own artifacts are its token's alone (the job arm,
+        // returned above).
+        (Action::JobArtifactUpload | Action::JobArtifactDownload, Resource::JobSelf(_)) => {
+            Err(refused("job_only"))
+        }
         // Registering and managing runners: a person, an administrator's
         // web session (a token was refused above as session-only).
         (Action::RunnerRegister | Action::RunnerManage, Resource::Instance) => {
@@ -1294,15 +1299,16 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         (Action::PipelineRead, Resource::Project(p)) => need(Role::Reporter, read_role(p)),
         // M4 C5 (ADR-0029 decision 5): a CI output is read like the
         // project (the route's proof)...
-        (Action::CiLogRead | Action::PipelineDiagnosisRead, Resource::Project(p)) => {
-            need(Role::Reporter, read_role(p))
-        }
+        (
+            Action::CiLogRead | Action::PipelineDiagnosisRead | Action::CiArtifactRead,
+            Resource::Project(p),
+        ) => need(Role::Reporter, read_role(p)),
         // ...then, with the marks (`authorize_ci_output`), an AI agent
         // audience only when both the pipeline's mark and the default
         // branch's tip are `Open`. The pipeline's mark first: it is what
         // the job saw. `Undecided`, `Unborn` and `NotMeasured` are closed.
         (
-            Action::CiLogRead | Action::PipelineDiagnosisRead,
+            Action::CiLogRead | Action::PipelineDiagnosisRead | Action::CiArtifactRead,
             Resource::CiOutput {
                 project,
                 pipeline_mark,
@@ -1320,6 +1326,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             };
             let route = if action == Action::CiLogRead {
                 "ci_log"
+            } else if action == Action::CiArtifactRead {
+                "ci_artifact"
             } else {
                 "ci_diagnosis"
             };
@@ -1459,6 +1467,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PipelineCancel
             | Action::PipelineRetry
             | Action::CiVariableManage
+            | Action::CiArtifactRead
+            | Action::JobArtifactUpload
+            | Action::JobArtifactDownload
             | Action::RunnerRegister
             | Action::RunnerManage
             | Action::RunnerJobRequest
@@ -1498,7 +1509,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::ProjectEvents { .. }
             | Resource::ActAsConfirm(_)
             | Resource::CiOutput { .. }
-            | Resource::RunnerJob(_),
+            | Resource::RunnerJob(_)
+            | Resource::JobSelf(_),
         ) => wrong_resource(),
     }
 }
@@ -1595,6 +1607,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         // decides visibility on its merge request; the job arm).
         | Resource::PinnedCopy(_)
         | Resource::RunnerJob(_)
+        | Resource::JobSelf(_)
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_) => None,
     }
@@ -1632,6 +1645,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::RepoCopy { .. }
         | Resource::PinnedCopy(_)
         | Resource::RunnerJob(_)
+        | Resource::JobSelf(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

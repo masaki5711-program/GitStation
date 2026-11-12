@@ -53,10 +53,16 @@ pub fn authorize_ci_output(
     declared_agent: bool,
 ) -> Result<CiOutputAllowed, ForgeError> {
     let action = proof.action();
-    if !matches!(action, Action::CiLogRead | Action::PipelineDiagnosisRead) {
+    if !matches!(
+        action,
+        Action::CiLogRead | Action::PipelineDiagnosisRead | Action::CiArtifactRead
+    ) {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "proof_action_mismatch")
-            .with_context("route_action", "CiLogRead|PipelineDiagnosisRead")
+            .with_context(
+                "route_action",
+                "CiLogRead|PipelineDiagnosisRead|CiArtifactRead",
+            )
             .with_context("proof_action", action.name()));
     }
     let project = *proof.id();

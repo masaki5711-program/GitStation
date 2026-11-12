@@ -65,6 +65,15 @@ C6: 変数は `forge.ci_variables`（`ci.secret_keys_file` の鍵で封じる、
 FG-CI-0018 登録の無い名前、FG-CI-0016 鍵）。ログの追記は `log_masks` で値とその符号化を `[masked]` にしてから保存する（鍵が使えなければ
 保存しない）。値をログに出さない。runbook `ci-secrets`。
 
+## 成果物（M4 C6、`artifacts`）
+
+ファイルは `<storage.root>/ci-artifacts/<project>/<id>`（名前は ID から）、行は `forge.ci_artifacts`（`forge_db::ci_artifacts`）。
+`begin_artifact`（`JobArtifactUpload`、ジョブ自身のトークン、`running` の間だけ）は `<job>-<nanos>-<n>.part` に新しく書き、大きさと sha256 を測り、
+上限（1 ファイル 100 MiB、1 回 512 MiB / 1000 ファイル、FG-CI-0019）を守り、行を書いてから ID の名前に移す（失敗はファイルと行を消す）。
+`needed_artifacts` / `needed_artifact_file`（`JobArtifactDownload`）は同じパイプラインの `needs` の今の試行の成功したものだけ。
+`artifacts` / `artifact_file`（`CiArtifactRead`）はログと同じく `authorize_ci_output` で判定してから行を読む。worker の
+`expire_artifacts`（30 日、`keep` は残す）と `ArtifactStore::remove_purged`（消えたプロジェクトのディレクトリ）。
+
 ## 見張りと保持
 
 - `forge doctor` の `ci.pipelines`: 24 時間以内の `error` のパイプライン、7 日以内に dead になった `ci.pipeline_create` のジョブで fail（FG-CI-0002、

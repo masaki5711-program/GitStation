@@ -151,6 +151,15 @@ fn service_failed(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::ServiceStartFailed).with_context("reason", reason)
 }
 
+/// `FG-CI-0020` for a failed transfer: the server's code when it answered
+/// one.
+fn transfer_failed(reason: &'static str, e: &forge_client::error::ClientError) -> ForgeError {
+    ForgeError::new(ErrorCode::ArtifactTransferFailed)
+        .with_context("reason", reason)
+        .with_context("server_code", e.code_id().to_owned())
+        .with_context("request_id", e.request_id().unwrap_or("").to_owned())
+}
+
 /// What the job's log is masked for: its token, and each masked secret in
 /// its common encodings (M4 C6, `forge_core::ci_secret::mask_forms`).
 fn log_masks(job: &ClaimedJob) -> Vec<String> {
@@ -263,7 +272,7 @@ impl Executor {
         );
         let name = container_name(job.job_id, job.attempt);
         let mut started = Started::default();
-        let ran = self.steps(job, &name, &mut started, stop, &mut sink);
+        let ran = self.steps(job, api, &name, &mut started, stop, &mut sink);
         // A failed job gets its services' log tails (not a stopped one: a
         // cancel or a shutdown has no failure to explain).
         let failed = matches!(ran, Ok(ScriptEnd::Exited(c)) if c != 0) || ran.is_err();
@@ -342,9 +351,11 @@ impl Executor {
         outcome
     }
 
+    #[allow(clippy::too_many_arguments)] // the attempt's state, passed in
     fn steps(
         &self,
         job: &ClaimedJob,
+        api: &dyn RunnerApi,
         name: &str,
         started: &mut Started,
         stop: &AtomicBool,
@@ -439,6 +450,11 @@ impl Executor {
         // M4 C6: the secrets — exactly the names the definition asks for,
         // each value one line — into an env file outside the mounts.
         check_secrets(job, spec.secrets())?;
+        // M4 C6: the artifacts of the jobs it needs, into the work tree
+        // (before the script; never over a file of the checkout).
+        if !spec.needs().is_empty() {
+            self.fetch_needed(api, job, &dirs.work, sink)?;
+        }
         let env_file = if job.secrets.is_empty() {
             None
         } else {
@@ -521,6 +537,10 @@ impl Executor {
                 .with_context("podman_stderr", ran.stderr_tail)),
             Exit::Code(code) => {
                 self.check_work_size()?;
+                // M4 C6: a successful script's declared artifacts.
+                if code == 0 && !spec.artifacts().is_empty() {
+                    self.upload_artifacts(api, job, &dirs.work, spec.artifacts(), sink)?;
+                }
                 Ok(ScriptEnd::Exited(code))
             }
             Exit::TimedOut => {
@@ -532,6 +552,88 @@ impl Executor {
                 Ok(ScriptEnd::Stopped)
             }
         }
+    }
+
+    /// The artifacts of the jobs `job` needs, each into its path under
+    /// `work` (`crate::artifacts::place`). `FG-CI-0020` when one cannot be
+    /// listed, fetched or placed (the job fails: it never runs without
+    /// what it needs).
+    fn fetch_needed(
+        &self,
+        api: &dyn RunnerApi,
+        job: &ClaimedJob,
+        work: &std::path::Path,
+        sink: &mut LogSink<'_>,
+    ) -> Result<(), ForgeError> {
+        let needed = api
+            .needed_artifacts(job.job_id, &job.job_token)
+            .map_err(|e| transfer_failed("receive", &e))?;
+        for a in &needed {
+            let target = crate::artifacts::place(work, &a.path)?;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .map_err(|e| {
+                    ForgeError::new(ErrorCode::ArtifactTransferFailed)
+                        .with_context("reason", "place")
+                        .with_source(e)
+                })?;
+            let max = u64::try_from(a.size_bytes).unwrap_or(0);
+            let got = api
+                .download_artifact(job.job_id, &job.job_token, a.id, &mut file, max)
+                .map_err(|e| transfer_failed("receive", &e).with_context("artifact_id", a.id))?;
+            if got != max {
+                return Err(ForgeError::new(ErrorCode::ArtifactTransferFailed)
+                    .with_context("reason", "size_mismatch")
+                    .with_context("artifact_id", a.id));
+            }
+        }
+        if !needed.is_empty() {
+            sink.line(&format!(
+                "fetched {} artifact(s) of the jobs this job needs",
+                needed.len()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Upload the regular files under the declared `paths` of `work`
+    /// (`crate::artifacts::collect`): links and missing paths are named in
+    /// the log, never sent. `FG-CI-0019` past a bound (nothing sent),
+    /// `FG-CI-0020` when one upload fails (the job fails).
+    fn upload_artifacts(
+        &self,
+        api: &dyn RunnerApi,
+        job: &ClaimedJob,
+        work: &std::path::Path,
+        paths: &[String],
+        sink: &mut LogSink<'_>,
+    ) -> Result<(), ForgeError> {
+        let found = crate::artifacts::collect(work, paths)?;
+        for missing in &found.missing {
+            sink.line(&format!("artifact path not found: {missing}"));
+        }
+        for skipped in &found.skipped {
+            sink.line(&format!(
+                "artifact path skipped (a link, outside the work tree, or not a file): {skipped}"
+            ));
+        }
+        for f in &found.files {
+            api.upload_artifact(job.job_id, &job.job_token, &f.path, &f.file, f.size)
+                .map_err(|e| {
+                    if e.code_id() == ErrorCode::ArtifactTooLarge.id() {
+                        ForgeError::new(ErrorCode::ArtifactTooLarge)
+                            .with_context("reason", "server_limit")
+                            .with_context("path", f.path.clone()) // clone: the error names it
+                    } else {
+                        transfer_failed("send", &e).with_context("path", f.path.clone())
+                        // clone: as above
+                    }
+                })?;
+        }
+        sink.line(&format!("uploaded {} artifact file(s)", found.files.len()));
+        Ok(())
     }
 
     /// The job's pod (`--network=none`) and each service in it, created and

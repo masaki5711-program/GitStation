@@ -210,11 +210,24 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - **受け入れたリスク**: 保護ブランチに push できる主体（エージェントを含む、保護の規則しだい）は、そのパイプラインのスクリプトで値を
   使える。保護ブランチへの push を人に限るのは保護の規則（ADR-0008）の運用。Runner のホストは値を見る（`podman inspect` の環境変数）。
 
+## Amendment 2026-11-12（計画 14 C6）— CI の成果物
+
+- **送る**: スクリプトが成功したジョブの `artifacts: { paths }` の通常のファイルを、Runner が **ジョブ自身のトークン**で 1 ファイルずつ送る
+  （`JobArtifactUpload`、`CiRule::Job`、新しい `Resource::JobSelf { project, job }`: トークンのジョブとプロジェクトがパスのものと同じときだけ。
+  他のジョブ・他のプロジェクトは見えないプロジェクトの 404、終わったジョブのトークンは FG-AUTH-0001）。リンクはたどらない。サーバーは
+  ジョブが `running` の間だけ受け、パスを `check_path` で確かめ、ファイル名は ID から付ける（パスはファイル名にしない）。
+- **後のジョブ**（`JobArtifactDownload`、同じ `JobSelf`）: 同じパイプラインの `needs` に挙げたジョブの、今の試行の、成功したものの成果物
+  だけ（どれがそうかは読み取りの範囲で決める）。Runner はチェックアウトの後・スクリプトの前に、既存のファイルの上に書かずに置く。
+- **人・エージェント**（`CiArtifactRead`）: 決定 5 のとおりログと同じ判定（`authorize_ci_output`、`route=ci_artifact`）。判定の前に行を
+  読まない。
+- **保持**: 30 日（計画 14 §9 の 6）。`keep`（デプロイした版、C11 で立てる）は消さない。worker の `ci_artifact_expiry`。
+- コード: FG-CI-0019 ArtifactTooLarge、FG-CI-0020 ArtifactTransferFailed（runbook `ci-runner` の「成果物」）。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。
 - C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
 - 2026-11-12: FG-CI-0015 JobIsolationUnsafe（新規、alert。runbook `ci-runner` の「ジョブの切り離し」）。
-- C6: FG-CI-0016 SecretKeyUnavailable（alert）、FG-CI-0017 SecretOnUnprotectedRef、FG-CI-0018 SecretNotDefined（info）、runbook `ci-secrets`（新規）。
+- C6: FG-CI-0016 SecretKeyUnavailable（alert）、FG-CI-0017 SecretOnUnprotectedRef、FG-CI-0018 SecretNotDefined（info）、runbook `ci-secrets`（新規）。FG-CI-0019 ArtifactTooLarge（info）、FG-CI-0020 ArtifactTransferFailed（warn、runbook `ci-runner`）。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

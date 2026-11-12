@@ -1657,6 +1657,31 @@ pub enum PipelineCommand {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         pipeline: i64,
     },
+    /// A job's artifacts (M4 C6): path, size, sha256, expiry. Refused to an
+    /// AI agent's token as `log` is.
+    Artifacts {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        job: i64,
+    },
+    /// Download one artifact to a new file and check its sha256.
+    ArtifactDownload {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        job: i64,
+        /// The artifact id (from `pipeline artifacts`).
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The file to write (created new, never over an existing one).
+        #[arg(long, value_name = "FILE")]
+        output: std::path::PathBuf,
+    },
 }
 
 /// A job's attempt: 1..=100.

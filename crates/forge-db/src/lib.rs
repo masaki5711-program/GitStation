@@ -154,6 +154,8 @@ pub mod ci_runners;
 pub mod ci_outputs;
 // M4 C6: CI variables (secrets).
 pub mod ci_variables;
+// M4 C6: CI artifacts (the rows; the files are forge-pipelines').
+pub mod ci_artifacts;
 // ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

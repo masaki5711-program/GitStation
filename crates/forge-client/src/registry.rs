@@ -1927,6 +1927,37 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["pipeline_id","status","error_code","failures"]}"#,
     },
     CommandSpec {
+        name: "pipeline artifacts",
+        summary: "The artifacts of one CI job (M4 C6): path, size, sha256, attempt, expiry (30 days unless kept for a deployment). 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (as for pipeline log).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--pipeline", "option", true, "The pipeline id."),
+            arg("--job", "option", true, "The job id."),
+        ],
+        examples: &["gstn pipeline artifacts --project 7 --pipeline 42 --job 9 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts"],
+        output: r#"{"type":"object","required":["artifacts"],"properties":{"artifacts":{"type":"array","items":{"type":"object","required":["id","pipeline_id","job_id","job","attempt","path","size_bytes","sha256","keep","created_at","expires_at"]}}}}"#,
+    },
+    CommandSpec {
+        name: "pipeline artifact-download",
+        summary: "Download one CI artifact to a file (--output; never over an existing file) and check its sha256 (X-Forge-Sha256). 403 FG-AUTH-0022 as for pipeline artifacts.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--pipeline", "option", true, "The pipeline id."),
+            arg("--job", "option", true, "The job id."),
+            arg("id", "positional", true, "The artifact id (from pipeline artifacts)."),
+            arg("--output", "option", true, "The file to write (created new)."),
+        ],
+        examples: &["gstn pipeline artifact-download --project 7 --pipeline 42 --job 9 31 --output app.tar"],
+        scopes: &["read_api"],
+        routes: &[
+            "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts",
+            "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}",
+        ],
+        output: r#"{"type":"object","required":["id","output","size_bytes","sha256"]}"#,
+    },
+    CommandSpec {
         name: "api",
         summary: "Call any REST API v1 route: gstn api <METHOD> <path>. GET/DELETE fields become the query, other methods send a JSON body.",
         args: &[
