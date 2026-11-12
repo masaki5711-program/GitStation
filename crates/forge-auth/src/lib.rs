@@ -62,6 +62,8 @@ mod matrix_rows_doc_lint;
 mod matrix_rows_pipelines;
 // M4 C5: CI outputs.
 mod matrix_rows_ci_outputs;
+// M4 C6: CI variables.
+mod matrix_rows_ci_variables;
 // ── M3 X1 ──
 mod matrix_rows_spec_refs;
 // Plan 06 D-5 safety net: whole copies of a repository by agents.

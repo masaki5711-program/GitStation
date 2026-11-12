@@ -64,6 +64,8 @@ pub mod pipelines;
 pub mod runners;
 // M4 C4: a CI job's fetch of its pinned commit.
 pub mod job_fetch;
+// M4 C6: a project's CI variables (secrets).
+pub mod ci_variables;
 // ── M3 I2: project webhooks (ADR-0016 §8) ──
 pub mod webhooks;
 // ── end M3 I2 ──

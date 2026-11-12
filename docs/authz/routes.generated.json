@@ -693,6 +693,33 @@
     "word": "fixed"
   },
   {
+    "action": "CiVariableManage",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/ci/variables",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CiVariableManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/ci/variables/{name}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CiVariableManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/ci/variables/{name}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "CheckRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/commits/{sha}/checks",

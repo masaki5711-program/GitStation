@@ -17,6 +17,9 @@ pub struct JobDirs {
     pub work: PathBuf,
     /// `script.sh`, mounted read-only at `/forge`.
     pub script: PathBuf,
+    /// The job's secrets as Podman's env file (M4 C6): owner only, never
+    /// mounted; read by `podman create` and removed right after it.
+    pub secrets: PathBuf,
 }
 
 /// The runner's work directory.
@@ -35,6 +38,7 @@ impl Workspace {
         JobDirs {
             work: base.join("work"),
             script: base.join("script"),
+            secrets: base.join("secrets"),
             base,
         }
     }
@@ -60,6 +64,38 @@ impl Workspace {
         std::fs::create_dir_all(&dirs.work)?;
         std::fs::create_dir_all(&dirs.script)?;
         Ok(dirs)
+    }
+
+    /// Write the job's secrets as Podman's env file (`NAME=value` per line;
+    /// the caller checked every name and value: one line each) in a
+    /// directory only the runner's user may read (Unix: 0700 / 0600).
+    pub fn write_env_file(dirs: &JobDirs, vars: &[(&str, &str)]) -> std::io::Result<PathBuf> {
+        use std::io::Write as _;
+        std::fs::create_dir_all(&dirs.secrets)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&dirs.secrets, std::fs::Permissions::from_mode(0o700))?;
+        }
+        let path = dirs.secrets.join("job.env");
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path)?;
+        let mut text = zeroize::Zeroizing::new(String::new());
+        for (name, value) in vars {
+            text.push_str(name);
+            text.push('=');
+            text.push_str(value);
+            text.push('\n');
+        }
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(path)
     }
 
     /// Write the job's script (the definition's lines, one per line).
@@ -116,5 +152,27 @@ mod tests {
         assert_eq!(std::fs::read_dir(&second.work).expect("read").count(), 0);
         ws.wipe().expect("wipe");
         ws.wipe().expect("a second wipe is fine");
+    }
+
+    #[test]
+    fn the_env_file_holds_one_line_per_secret_outside_the_mounts() {
+        let dir = tempfile::tempdir().expect("dir");
+        let ws = Workspace::new(dir.path().to_path_buf());
+        let dirs = ws.create().expect("create");
+        let path = Workspace::write_env_file(&dirs, &[("A_TOKEN", "v1-long"), ("B", "x=y")])
+            .expect("env file");
+        assert!(!path.starts_with(&dirs.work) && !path.starts_with(&dirs.script));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "A_TOKEN=v1-long\nB=x=y\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path).expect("meta").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        ws.wipe().expect("wipe");
+        assert!(ws.is_clean());
     }
 }

@@ -1094,6 +1094,70 @@
         ],
         "type": "object"
       },
+      "CiVariableBody": {
+        "additionalProperties": false,
+        "description": "A variable's metadata (never its value).",
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "masked": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "protected_only": {
+            "type": "boolean"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "value_bytes": {
+            "description": "The value's length in bytes.",
+            "format": "int32",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "protected_only",
+          "masked",
+          "value_bytes",
+          "created_by",
+          "updated_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "CiVariableList": {
+        "additionalProperties": false,
+        "description": "`GET …/ci/variables`.",
+        "properties": {
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/CiVariableBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "variables"
+        ],
+        "type": "object"
+      },
       "ClaimAssertion": {
         "additionalProperties": false,
         "description": "`POST …/act-as/claim`.",
@@ -1260,9 +1324,16 @@
             "type": "string"
           },
           "secret_names": {
-            "description": "The secret names the job asks for (empty unless `secrets_allowed`;\nno value before C6).",
+            "description": "The secret names the job asks for (empty unless `secrets_allowed`).",
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "secrets": {
+            "description": "The values of those names (M4 C6): give each to the job's\ncontainer as an environment variable, and mask a `masked` one (and\nits common encodings) in the log before sending it. Shown once;\nnever logged. A job whose secrets may not or cannot be given is\nnever handed out (it is failed with FG-CI-0016 / 0017 / 0018).",
+            "items": {
+              "$ref": "#/components/schemas/ReleasedSecretBody"
             },
             "type": "array"
           },
@@ -1303,6 +1374,7 @@
           "definition_hash",
           "secrets_allowed",
           "secret_names",
+          "secrets",
           "lease_until",
           "job_token",
           "job_token_expires_at"
@@ -7113,6 +7185,34 @@
         ],
         "type": "object"
       },
+      "PutCiVariable": {
+        "additionalProperties": false,
+        "description": "`PUT …/ci/variables/{name}`.",
+        "properties": {
+          "masked": {
+            "description": "Mask it in job logs (default `true`).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "protected_only": {
+            "description": "Give it only to pipelines of protected branches (default `true`;\ntoday every value goes only to a push pipeline of a protected\nbranch, ADR-0029).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "The value: one line of 1..=4096 bytes, no control character, no\nwhite space at either end, not starting with a quote; at least 8\nbytes when masked. Never answered back.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "PutCodeownersEnforcement": {
         "additionalProperties": false,
         "description": "`PUT …/merge-settings/codeowners-enforcement`.",
@@ -7528,6 +7628,30 @@
         "required": [
           "path",
           "kind"
+        ],
+        "type": "object"
+      },
+      "ReleasedSecretBody": {
+        "additionalProperties": false,
+        "description": "One secret released with a claim (M4 C6).",
+        "properties": {
+          "masked": {
+            "description": "Mask it in the job's log.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "`[A-Z][A-Z0-9_]*`: the environment variable's name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value (one line, at most 4096 bytes).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "masked"
         ],
         "type": "object"
       },
@@ -13838,6 +13962,147 @@
         },
         "summary": "Create or replace an approval rule (people only; Maintainer)",
         "x-forge-action": "ApprovalRuleManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/ci/variables": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_ci_variables",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CiVariableList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's CI variables: name, protected_only, masked, value length, who set them and when; never a value (people only; Maintainer)",
+        "x-forge-action": "CiVariableManage"
+      }
+    },
+    "/api/v1/projects/{id}/ci/variables/{name}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_ci_variables_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a CI variable: 204; 404 FG-REPO-0005 without it (people only; Maintainer)",
+        "x-forge-action": "CiVariableManage"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_ci_variables_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutCiVariable"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CiVariableBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set a CI variable ({\"value\", \"protected_only\"?, \"masked\"?}, both default true): 201 created or 200 replaced, the metadata only (the value is never answered again); 400 FG-WEB-0006 for a bad name or value (param and reason, never the value); 503 FG-CI-0016 without a usable ci.secret_keys_file. Values reach only jobs of push pipelines of protected branches (people only; Maintainer)",
+        "x-forge-action": "CiVariableManage",
         "x-forge-max-body-bytes": 16384
       }
     },

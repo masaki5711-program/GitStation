@@ -439,6 +439,13 @@ actions! {
     PipelineCancel,
     /// `POST …/pipelines/{pipeline_id}/retry`: Developer and above; `api`.
     PipelineRetry,
+    /// `GET /api/v1/projects/{id}/ci/variables`, `PUT|DELETE
+    /// …/ci/variables/{name}` (M4 C6, plan 14 §4.2): list a project's CI
+    /// variables (names and flags, never a value), set or delete one. A
+    /// value is never answered after it was written. Maintainer and above,
+    /// people only (a secret's owner answers for it; an agent never sets or
+    /// sees one, ADR-0029 decision 8); `api`.
+    CiVariableManage,
     // --- CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1) ---
     /// `POST /api/v1/admin/runners`: register a runner and show its token
     /// once. An administrator's web session, people only (a token is
@@ -608,6 +615,8 @@ impl Action {
                 | Action::DocLintMigrationManage
                 | Action::RunnerRegister
                 | Action::RunnerManage
+                // M4 C6: CI secrets are a person's.
+                | Action::CiVariableManage
         )
     }
 
@@ -736,6 +745,7 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::CiVariableManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
@@ -863,6 +873,8 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C6: nor are CI secrets.
+            | Action::CiVariableManage
             // M4 C3: runners are no act-as action.
             | Action::RunnerRegister
             | Action::RunnerManage
@@ -992,6 +1004,9 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C6: a job never reads or sets a secret through the API
+            // (ADR-0029 decision 8: they come with the claim).
+            | Action::CiVariableManage
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

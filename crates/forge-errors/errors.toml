@@ -2702,3 +2702,45 @@ diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (
 fix = "Follow runbook ci-runner (Job isolation): for `unexpected_config` find what edits the runner's directory or makes Podman ignore CONTAINERS_CONF (a wrapper script for `podman`, an old Podman), fix it and restart the runner (the containers.conf is rewritten); for `probe_failed` repair Podman as for FG-CI-0007 (rootless setup, storage) and restart; for `conf_unwritable` make `<work_dir>/runner` writable by the runner's user. Changes on the host need human approval."
 runbook = "ci-runner"
 test = "configured_default_volumes_stop_the_runner_before_any_job"
+
+[[error]]
+code = "FG-CI-0016"
+name = "SecretKeyUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "CI のシークレットの鍵を使えません。シークレットの登録や、シークレットを使うジョブは止まっています。管理者に連絡してください。"
+user_message_en = "The CI secret key is unavailable. Saving secrets and jobs that use secrets are stopped. Contact the administrator."
+user_message_id = "Kunci rahasia CI tidak tersedia. Penyimpanan rahasia dan tugas yang memakai rahasia dihentikan. Hubungi administrator."
+cause = "M4 C6 (plan 14 §9 #2, ADR-0013, ADR-0029 amendment C6): CI variable values are stored sealed (AES-256-GCM, bound to their project and name) under a key of `ci.secret_keys_file` (`<key_id> <64 hex>` per line; the highest key_id seals, every listed key opens). forge could not use it: the file is not configured (`reason=not_configured`), cannot be read or parsed (`reason=keys_unreadable`, with the FG-SYS-0002 reason as `config_reason`), no longer lists the key a stored value was sealed with (`reason=key_missing`, `key_id`), or a stored value does not open (`reason=value_unreadable`: changed in the database, or sealed for another project or name). Where it happens: writing a variable (`PUT …/ci/variables/{name}`, 503, nothing written); a runner's claim of a job that asks for secrets (the job is failed with this code before the runner gets it — never run without its secrets); a log chunk of a job with masked secrets (refused, so no unmasked chunk is stored)."
+diagnosis = "`forge serve` logs `forge.ci.secret_key_unavailable` (error) with `error_code`, `request_id` and `context` `reason`, `key_id`, `project_id`, `job_id` / `pipeline_id` (never a value or a key). `forge doctor` `ci.secret_keys` checks the file (present, readable by forge only, parses, and every key_id in forge.ci_variables is listed). Read: SELECT key_id, count(*) FROM forge.ci_variables GROUP BY key_id; and the job: SELECT id, status, error_code FROM forge.ci_jobs WHERE id = <job_id>;"
+fix = "Follow runbook ci-secrets: restore the key file from the secret store (never generate a new key for values sealed with the old one), set `ci.secret_keys_file` and its permissions (0600, forge's user), restart `forge serve`, then retry the failed pipelines (gstn pipeline retry). A value sealed with a lost key cannot be recovered: set it again (gstn ci variable set)."
+runbook = "ci-secrets"
+test = "a_job_whose_secrets_cannot_be_opened_fails_with_secret_key_unavailable"
+
+[[error]]
+code = "FG-CI-0017"
+name = "SecretOnUnprotectedRef"
+http_status = 409
+severity = "info"
+user_message_ja = "保護されていないブランチ、またはマージリクエストのパイプラインのジョブがシークレットを求めました。シークレットは渡さず、ジョブは失敗にしました。"
+user_message_en = "A job of a pipeline on an unprotected branch or of a merge request asked for secrets. No secret was given and the job was failed."
+user_message_id = "Tugas dari pipeline pada cabang yang tidak dilindungi atau dari merge request meminta rahasia. Tidak ada rahasia yang diberikan dan tugas digagalkan."
+cause = "M4 C6 (ADR-0029 decision 8, obligation 5): secrets are released only to a pipeline whose `source` is `push` and whose `protected` was true when it was created (`StoredPipeline::secrets_allowed`). The plan already refuses such a job (FG-CI-0001 `secret_on_unprotected_ref`), so this is the server's second wall: a runner claimed a job that names secrets (`ci_jobs.secrets`) in a pipeline that may not have them (a merge request, a manual or scheduled run, an unprotected push — a row written by an older forge, or a defect). The job is failed in the claim's place, its token revoked, and no value is read or opened."
+diagnosis = "`forge serve` logs `forge.ci.secret_on_unprotected_ref` (info) with `error_code`, `request_id`, `job_id`, `pipeline_id`, `project_id`, `runner_id` and `secrets` (the names). Read: SELECT source, protected, ref FROM forge.ci_pipelines WHERE id = <pipeline_id>; SELECT name, secrets FROM forge.ci_jobs WHERE id = <job_id>;"
+fix = "Run jobs that need secrets only on protected branches: protect the branch (Maintainer), push there, and keep `merge_requests: false` on such jobs. Nothing to change on the server; report a pipeline that should have been refused at planning as a defect."
+runbook = "ci-secrets"
+test = "a_job_asking_for_secrets_on_an_unprotected_pipeline_fails_without_values"
+
+[[error]]
+code = "FG-CI-0018"
+name = "SecretNotDefined"
+http_status = 409
+severity = "info"
+user_message_ja = "ジョブが求めたシークレットがプロジェクトに登録されていません。ジョブは失敗にしました。"
+user_message_en = "A secret the job asked for is not defined in the project. The job was failed."
+user_message_id = "Rahasia yang diminta tugas tidak terdaftar di proyek. Tugas digagalkan."
+cause = "M4 C6: a job of a protected push pipeline names a secret (`secrets:` in `.forge-ci.yml`) that has no CI variable of that name in the project (never set, or deleted since). The job is failed in the claim's place rather than run without it (a script that silently gets an empty value could deploy or publish wrongly)."
+diagnosis = "`forge serve` logs `forge.ci.secret_not_defined` (info) with `error_code`, `request_id`, `job_id`, `pipeline_id`, `project_id` and `missing` (the names). `gstn ci variable list --project <id>` lists what is defined (names and flags only)."
+fix = "Set the variable (Maintainer: gstn ci variable set --project <id> <NAME>, the value on standard input) or remove the name from the job's `secrets:`, then retry the pipeline (gstn pipeline retry)."
+runbook = "ci-secrets"
+test = "a_job_asking_for_an_undefined_secret_fails"

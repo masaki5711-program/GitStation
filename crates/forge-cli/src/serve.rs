@@ -88,6 +88,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // cannot be created, FG-SYS-0002 reason=missing on that route); a bad
     // file stops the start.
     let webhook_keys = cfg.webhook.secret_keys()?.map(Arc::new);
+    // M4 C6: the CI variables' keys (optional: without them no variable
+    // can be set and a job that asks for secrets fails with FG-CI-0016);
+    // a bad file stops the start.
+    let ci_secret_keys = cfg.ci.secret_keys()?.map(Arc::new);
     block_on(async {
         let smart_http = smart_http(storage, &cfg.git_http)?;
         forge_git::version::detect(&smart_http.git).await?;
@@ -159,13 +163,19 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             // M4 C2: CI pipelines; a manual run reads `.forge-ci.yml` and
             // measures the commit's confidential mark through the same
             // browse API (limits, caches).
-            .with_pipelines(forge_pipelines::Pipelines::new(
-                db.clone(),                // clone: the pool handle is shared
-                smart_http.browse.clone(), // clone: shares the ref cache
-                Arc::new(crate::ci_marks::ConfidentialMeter::new(
-                    smart_http.browse.clone(), // clone: as above
-                )),
-            ))
+            .with_pipelines({
+                let pipelines = forge_pipelines::Pipelines::new(
+                    db.clone(),                // clone: the pool handle is shared
+                    smart_http.browse.clone(), // clone: shares the ref cache
+                    Arc::new(crate::ci_marks::ConfidentialMeter::new(
+                        smart_http.browse.clone(), // clone: as above
+                    )),
+                );
+                match &ci_secret_keys {
+                    Some(keys) => pipelines.with_secret_keys(Arc::clone(keys)),
+                    None => pipelines,
+                }
+            })
             // M3 I1c: the integrations' event feed seals its cursors with
             // the same keys as the lists (another purpose, so neither opens
             // the other's).

@@ -1340,6 +1340,13 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             Action::PipelineCreate | Action::PipelineCancel | Action::PipelineRetry,
             Resource::Project(p),
         ) => need(Role::Developer, p.role),
+        // M4 C6 (plan 14 §4.2, ADR-0029 decision 8): a project's CI
+        // secrets are a Maintainer's, people only; no agent, service
+        // account, bot, act-as, runner or job ever sets or lists one.
+        (Action::CiVariableManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
 
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
@@ -1451,6 +1458,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::CiVariableManage
             | Action::RunnerRegister
             | Action::RunnerManage
             | Action::RunnerJobRequest

@@ -775,6 +775,22 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis",
         Coverage::Command("pipeline diagnosis"),
     ),
+    // M4 C6 (ADR-0029 decision 8): a project's CI variables.
+    (
+        "GET",
+        "/api/v1/projects/{id}/ci/variables",
+        Coverage::Command("ci variable list"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/ci/variables/{name}",
+        Coverage::Command("ci variable set"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/ci/variables/{name}",
+        Coverage::Command("ci variable delete"),
+    ),
     // M4 C3 (plan 14, ADR-0029): runners. The administration is an
     // administrator's web session; the runner API takes a runner's token
     // (forge-runner, C4), never a person's.

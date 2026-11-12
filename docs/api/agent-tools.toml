@@ -716,6 +716,18 @@ gstn = "integration dev-status-list"
 reason = "The integration account's own read; the server refuses an agent token."
 
 [[excluded]]
+gstn = "ci variable list"
+reason = "CI secrets are a Maintainer's (M4 C6, ADR-0029 decision 8): people_only; an agent never sees or sets one."
+
+[[excluded]]
+gstn = "ci variable set"
+reason = "Sets a CI secret: people_only (ADR-0029 decision 8)."
+
+[[excluded]]
+gstn = "ci variable delete"
+reason = "Removes a CI secret: people_only (ADR-0029 decision 8)."
+
+[[excluded]]
 gstn = "doc migration set"
 reason = "Changes a project's lint policy: people_only."
 

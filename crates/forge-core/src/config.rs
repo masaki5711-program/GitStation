@@ -17,6 +17,8 @@ use forge_errors::{ErrorCode, ForgeError};
 mod api;
 mod audit;
 mod auth;
+// M4 C6: `ci.*`.
+mod ci;
 mod database;
 // M3 I1c: `feed.*`.
 mod feed;
@@ -47,6 +49,7 @@ pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use auth::{AuthConfig, OidcConfig, OidcSigningAlg};
 pub use backup::{BackupConfig, BackupKey};
+pub use ci::CiConfig;
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
@@ -89,6 +92,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_MIRROR_",
     // M3 O1: `backup.*`.
     "FORGE_BACKUP_",
+    // M4 C6: `ci.*`.
+    "FORGE_CI_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -192,6 +197,8 @@ pub struct Config {
     pub mirror: MirrorConfig,
     /// `backup.*` (forge backup / restore, M3 O1).
     pub backup: BackupConfig,
+    /// `ci.*` (the CI variables' keys, M4 C6).
+    pub ci: CiConfig,
 }
 
 impl Config {
@@ -443,6 +450,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         webhook: WebhookConfig::load(get)?,
         mirror: MirrorConfig::load(get)?,
         backup: BackupConfig::load(get)?,
+        ci: CiConfig::load(get)?,
     }
     .validate_across()
 }

@@ -806,6 +806,35 @@ fn pipeline_routes(registry: Registry<AppState>) -> Registry<AppState> {
             p::diagnosis,
         )
         .responds::<p::DiagnosisBody>(Verb::Get, p::DIAGNOSIS)
+        // M4 C6: a project's CI variables (secrets; ADR-0029 decision 8).
+        .route_with(
+            Verb::Get,
+            routes::ci_variables::LIST,
+            Action::CiVariableManage,
+            "A project's CI variables: name, protected_only, masked, value length, who set them and when; never a value (people only; Maintainer)",
+            routes::ci_variables::OF_LIST,
+            routes::ci_variables::list,
+        )
+        .responds::<routes::ci_variables::CiVariableList>(Verb::Get, routes::ci_variables::LIST)
+        .route_with_body(
+            Verb::Put,
+            routes::ci_variables::ONE,
+            Action::CiVariableManage,
+            "Set a CI variable ({\"value\", \"protected_only\"?, \"masked\"?}, both default true): 201 created or 200 replaced, the metadata only (the value is never answered again); 400 FG-WEB-0006 for a bad name or value (param and reason, never the value); 503 FG-CI-0016 without a usable ci.secret_keys_file. Values reach only jobs of push pipelines of protected branches (people only; Maintainer)",
+            routes::ci_variables::MAX_BODY,
+            routes::ci_variables::OF_ONE,
+            routes::ci_variables::put,
+        )
+        .responds::<routes::ci_variables::CiVariableBody>(Verb::Put, routes::ci_variables::ONE)
+        .route_with(
+            Verb::Delete,
+            routes::ci_variables::ONE,
+            Action::CiVariableManage,
+            "Delete a CI variable: 204; 404 FG-REPO-0005 without it (people only; Maintainer)",
+            routes::ci_variables::OF_ONE,
+            routes::ci_variables::delete,
+        )
+        .responds_no_content(Verb::Delete, routes::ci_variables::ONE)
 }
 
 /// A project's document lint migration setting (plan 13 Q13, ADR-0026):

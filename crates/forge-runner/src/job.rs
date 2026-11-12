@@ -151,6 +151,42 @@ fn service_failed(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::ServiceStartFailed).with_context("reason", reason)
 }
 
+/// What the job's log is masked for: its token, and each masked secret in
+/// its common encodings (M4 C6, `forge_core::ci_secret::mask_forms`).
+fn log_masks(job: &ClaimedJob) -> Vec<String> {
+    let mut masks = vec![job.job_token.expose().to_owned()];
+    for s in job.secrets.iter().filter(|s| s.masked) {
+        masks.extend(forge_core::ci_secret::mask_forms(s.value.expose()));
+    }
+    masks
+}
+
+/// The claim's secrets against the definition at the pinned commit (M4
+/// C6): exactly the names the job asks for, each a valid name with a
+/// one-line value (Podman's env file has no quoting). `FG-CI-0008
+/// reason=secrets_mismatch` / `secret_invalid` otherwise (no value is
+/// named).
+fn check_secrets(job: &ClaimedJob, wanted: &[String]) -> Result<(), ForgeError> {
+    let mut given: Vec<&str> = job.secrets.iter().map(|s| s.name.as_str()).collect();
+    given.sort_unstable();
+    let mut asked: Vec<&str> = wanted.iter().map(String::as_str).collect();
+    asked.sort_unstable();
+    // Every name the job asks for exactly once, and nothing else (the
+    // server never hands out a job without what it asked for).
+    if given != asked {
+        return Err(mismatch("secrets_mismatch"));
+    }
+    for s in &job.secrets {
+        if forge_core::ci_secret::check_name(&s.name).is_some()
+            || forge_core::ci_secret::check_value(s.value.expose(), false).is_some()
+        {
+            return Err(mismatch("secret_invalid").with_context("name", s.name.clone()));
+            // clone: the error names it
+        }
+    }
+    Ok(())
+}
+
 /// `forge-job-<job>-<attempt>` (decimal numbers), as
 /// [`container_name`] builds it.
 fn is_job_container(name: &str) -> bool {
@@ -222,7 +258,7 @@ impl Executor {
             api,
             job.job_id,
             job.attempt,
-            vec![job.job_token.expose().to_owned()],
+            log_masks(job),
             Arc::clone(stop),
         );
         let name = container_name(job.job_id, job.attempt);
@@ -400,6 +436,22 @@ impl Executor {
         )?;
         Workspace::write_script(&dirs, spec.script())
             .map_err(|e| start_failed("workspace_unusable").with_source(e))?;
+        // M4 C6: the secrets — exactly the names the definition asks for,
+        // each value one line — into an env file outside the mounts.
+        check_secrets(job, spec.secrets())?;
+        let env_file = if job.secrets.is_empty() {
+            None
+        } else {
+            let vars: Vec<(&str, &str)> = job
+                .secrets
+                .iter()
+                .map(|s| (s.name.as_str(), s.value.expose()))
+                .collect();
+            Some(
+                Workspace::write_env_file(&dirs, &vars)
+                    .map_err(|e| start_failed("workspace_unusable").with_source(e))?,
+            )
+        };
         // One deadline for the whole container phase (review): the pulls
         // (part of each create), the services and the script share the
         // job's timeout.
@@ -426,13 +478,27 @@ impl Executor {
             project_id: job.project_id,
             sha: sha.as_str(),
             pod,
+            env_file: env_file.as_deref(),
         });
         sink.line(&format!("running {} in {name}", job.image));
         started.container = true;
         let limit = left(deadline).ok_or_else(|| timed_out(timeout_s))?;
-        let created = self
-            .run(&create, limit, stop, sink)
-            .map_err(|e| start_failed("spawn_failed").with_source(e))?;
+        let created = self.run(&create, limit, stop, sink);
+        // Podman has read the env file (or failed to): it goes now, not
+        // with the job directory at the end.
+        if let Some(file) = &env_file {
+            if let Err(e) = std::fs::remove_file(file) {
+                tracing::warn!(
+                    target: "forge_runner",
+                    event = "forge.runner.env_file_remove_failed",
+                    error_code = ErrorCode::ContainerStartFailed.id(),
+                    job_id = job.job_id,
+                    error = %e,
+                    "the job's env file stays until the job directory is removed"
+                );
+            }
+        }
+        let created = created.map_err(|e| start_failed("spawn_failed").with_source(e))?;
         match created.exit {
             Exit::Code(0) => {}
             Exit::Code(code) => {

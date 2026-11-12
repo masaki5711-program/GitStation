@@ -90,6 +90,7 @@
   { "action": "PipelineCreate", "allow": 6, "deny": 12, "public": false, "git_operation": false },
   { "action": "PipelineCancel", "allow": 6, "deny": 12, "public": false, "git_operation": false },
   { "action": "PipelineRetry", "allow": 6, "deny": 12, "public": false, "git_operation": false },
+  { "action": "CiVariableManage", "allow": 6, "deny": 18, "public": false, "git_operation": false },
   { "action": "RunnerRegister", "allow": 1, "deny": 10, "public": false, "git_operation": false },
   { "action": "RunnerManage", "allow": 1, "deny": 10, "public": false, "git_operation": false },
   { "action": "RunnerJobRequest", "allow": 1, "deny": 10, "public": false, "git_operation": false },

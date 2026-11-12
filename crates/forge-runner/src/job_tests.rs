@@ -56,8 +56,30 @@ fn claim(job_id: i64, token: &str, def: &str) -> ClaimedJob {
         definition_hash: Some(hash(def)),
         secrets_allowed: false,
         secret_names: Vec::new(),
+        secrets: Vec::new(),
         job_token: JobToken::new(token.to_owned()),
     }
+}
+
+/// A definition whose job asks for one secret (M4 C6).
+fn secret_definition() -> String {
+    format!(
+        "version: 1\nstages: [deploy]\njobs:\n  build:\n    stage: deploy\n    image: {}\n    timeout: 10m\n    secrets: [DEPLOY_TOKEN]\n    rules:\n      merge_requests: false\n    script:\n      - ./deploy.sh\n",
+        image()
+    )
+}
+
+/// A claim of [`secret_definition`] with the value released.
+fn secret_claim(def: &str, value: &str) -> ClaimedJob {
+    let mut job = claim(7, "fgj_7_secret", def);
+    job.secrets_allowed = true;
+    job.secret_names = vec!["DEPLOY_TOKEN".to_owned()];
+    job.secrets = vec![crate::api::JobSecret {
+        name: "DEPLOY_TOKEN".to_owned(),
+        value: JobToken::new(value.to_owned()),
+        masked: true,
+    }];
+    job
 }
 
 /// How the fake container ends (`podman create`, then `podman start
@@ -100,6 +122,10 @@ struct Fake {
     pod_rm_fails: bool,
     /// What `podman logs` prints (`None`: the container does not exist).
     service_log: Option<Vec<u8>>,
+    /// What a script that exits 0 prints (`None`: a greeting).
+    job_out: Option<Vec<u8>>,
+    /// The job's env file as `podman create` found it (M4 C6).
+    env_seen: Mutex<Option<String>>,
 }
 
 /// Which Podman call of a job's services fails.
@@ -132,6 +158,8 @@ impl Fake {
             service_log: Some(
                 b"LOG: starting fgj_7_secret\nFATAL: data directory not writable\n".to_vec(),
             ),
+            job_out: None,
+            env_seen: Mutex::new(None),
         }
     }
 
@@ -276,12 +304,20 @@ impl ProcessRunner for Fake {
                     if !cmd.argv().iter().any(|a| a == "--rootfs") {
                         *self.work.lock().unwrap() = Some(work_mount(cmd));
                     }
+                    if let Some(file) = cmd
+                        .argv()
+                        .iter()
+                        .find_map(|a| a.strip_prefix("--env-file=").map(PathBuf::from))
+                    {
+                        *self.env_seen.lock().unwrap() =
+                            Some(std::fs::read_to_string(file).expect("env file"));
+                    }
                     ok(b"0123abcd\n".to_vec())
                 }
             },
             ("podman", "start") => match self.podman {
                 Podman::Exit(0) => {
-                    out(b"hello from the job\n");
+                    out(self.job_out.as_deref().unwrap_or(b"hello from the job\n"));
                     ok(Vec::new())
                 }
                 Podman::Exit(code) => Ran {
@@ -750,6 +786,7 @@ fn a_real_container_runs_without_network_and_is_removed() {
         project_id: 1,
         sha: SHA,
         pod: None,
+        env_file: None,
     });
     let created = SystemRunner
         .run(&create, Duration::from_secs(120), &|| false, &mut |_| {})
@@ -1367,6 +1404,7 @@ fn a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks() {
             project_id: 2,
             sha: SHA,
             pod: Some(pod),
+            env_file: None,
         }));
         if !ran.ok() {
             return Err(format!("job create: {ran:?}"));
@@ -1572,4 +1610,86 @@ fn an_unverified_isolation_stops_the_runner_before_any_claim() {
     assert!(has_context(&err, "reason", "probe_failed"), "{err:?}");
     assert_eq!(forge.claims.lock().unwrap().len(), 1, "nothing was claimed");
     assert_eq!(podman_order(&fake), ["rm", "create", "inspect", "rm"]);
+}
+
+/// M4 C6: a released secret reaches the job's container through an env
+/// file (never argv), the file is gone once Podman read it, and the value
+/// (and its base64) is masked in the job's log.
+#[test]
+fn a_jobs_secrets_reach_podman_in_an_env_file_and_are_masked_in_its_log() {
+    let value = "s3cr3t-deploy-value";
+    let def = secret_definition();
+    let b64 = forge_core::ci_secret::mask_forms(value)
+        .into_iter()
+        .find(|f| f.ends_with('='))
+        .expect("a padded base64 form");
+    let fake = Arc::new(Fake {
+        job_out: Some(format!("token={value}\nencoded={b64}\n").into_bytes()),
+        ..Fake::base(&def, Podman::Exit(0))
+    });
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &secret_claim(&def, value), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert_eq!(
+        fake.env_seen.lock().unwrap().as_deref(),
+        Some("DEPLOY_TOKEN=s3cr3t-deploy-value\n")
+    );
+    for c in fake.calls() {
+        assert!(
+            c.argv().iter().all(|a| !a.contains("s3cr3t")),
+            "a value reached argv: {c:?}"
+        );
+        assert!(c
+            .env
+            .iter()
+            .all(|(_, v)| !v.to_string_lossy().contains("s3cr3t")));
+    }
+    let create = fake
+        .by("podman", "create")
+        .into_iter()
+        .find(|c| c.argv().iter().any(|a| a.starts_with("--env-file=")))
+        .expect("the job's create names the env file");
+    let file = create
+        .argv()
+        .iter()
+        .find_map(|a| a.strip_prefix("--env-file=").map(PathBuf::from))
+        .expect("path");
+    assert!(!file.exists(), "the env file is removed after the create");
+    let log = forge.logs.lock().unwrap().concat();
+    assert!(!log.contains(value), "{log}");
+    assert!(!log.contains(&b64), "{log}");
+    assert!(log.contains("token=[masked]"), "{log}");
+}
+
+/// M4 C6: a claim whose secrets are not exactly the definition's names is
+/// refused before any container (a server that sent too few or others).
+#[test]
+fn a_claim_whose_secrets_differ_from_the_definition_runs_nothing() {
+    let def = secret_definition();
+    for job in [
+        {
+            let mut j = secret_claim(&def, "s3cr3t-deploy-value");
+            j.secrets.clear();
+            j
+        },
+        {
+            let mut j = secret_claim(&def, "s3cr3t-deploy-value");
+            j.secrets[0].name = "OTHER_TOKEN".to_owned();
+            j
+        },
+        secret_claim(&def, "two\nlines-value"),
+    ] {
+        let fake = Fake::new(&def, Podman::Exit(0));
+        let s = setup(&fake);
+        let forge = Forge::default();
+        let out = run(&s, &job, &forge);
+        assert_eq!(
+            out.error.expect("refused").code(),
+            ErrorCode::JobDefinitionMismatch
+        );
+        assert!(fake.by("podman", "create").is_empty(), "no container");
+        let log = forge.logs.lock().unwrap().concat();
+        assert!(!log.contains("s3cr3t"), "{log}");
+    }
 }

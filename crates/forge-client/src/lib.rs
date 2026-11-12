@@ -52,6 +52,8 @@ pub mod mcp;
 pub mod store;
 // M3 I2: project webhooks.
 pub mod webhooks;
+// M4 C6: a project's CI variables (secrets).
+pub mod ci_variables;
 // M3 O2: the push mirror to GitLab.
 pub mod mirror;
 // M4 C2: CI pipelines.

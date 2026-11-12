@@ -36,6 +36,26 @@ impl<'de> Deserialize<'de> for JobToken {
     }
 }
 
+/// A secret released with a claim (M4 C6): the container's environment
+/// variable `name`. Never printed: `Debug` shows the name only, the value
+/// is wiped on drop.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+pub struct JobSecret {
+    pub name: String,
+    pub value: JobToken,
+    /// Mask it (and its common encodings) in the job's log.
+    pub masked: bool,
+}
+
+impl std::fmt::Debug for JobSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobSecret")
+            .field("name", &self.name)
+            .field("masked", &self.masked)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A claimed job: the answer of `POST /api/v1/runner/jobs/request`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClaimedJob {
@@ -54,6 +74,9 @@ pub struct ClaimedJob {
     pub secrets_allowed: bool,
     #[serde(default)]
     pub secret_names: Vec<String>,
+    /// The values of `secret_names` (M4 C6); empty for a job without.
+    #[serde(default)]
+    pub secrets: Vec<JobSecret>,
     pub job_token: JobToken,
 }
 
@@ -182,13 +205,17 @@ mod tests {
             "timeout_s": 600, "tags": [], "pipeline_id": 3, "project_id": 2,
             "ref": "refs/heads/main", "sha": "b".repeat(40),
             "definition_hash": "c".repeat(64), "secrets_allowed": false,
-            "secret_names": [], "lease_until": "x",
+            "secret_names": ["DEPLOY_TOKEN"], "lease_until": "x",
+            "secrets": [{"name": "DEPLOY_TOKEN", "value": "s3cr3t-value", "masked": true}],
             "job_token": "fgj_0123_secret", "job_token_expires_at": "y"
         }});
         let claim: ClaimAnswer = serde_json::from_value(answer).expect("parses");
         let job = claim.job.expect("a job");
         assert_eq!(job.job_id, 7);
         assert_eq!(job.job_token.expose(), "fgj_0123_secret");
-        assert!(!format!("{job:?}").contains("fgj_0123_secret"));
+        assert_eq!(job.secrets[0].value.expose(), "s3cr3t-value");
+        let shown = format!("{job:?}");
+        assert!(!shown.contains("fgj_0123_secret"), "{shown}");
+        assert!(!shown.contains("s3cr3t"), "{shown}");
     }
 }

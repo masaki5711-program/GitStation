@@ -1580,3 +1580,20 @@ fn webhook_settings_default_closed_and_are_checked() {
         assert_invalid(&e, &config_key, reason);
     }
 }
+
+/// M4 C6: `[ci]` — no key file by default; a set one is an absolute path;
+/// an unknown `FORGE_CI_*` variable is a typo.
+#[test]
+fn ci_secret_keys_file_is_optional_absolute_and_its_namespace_closed() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert!(cfg.ci.secret_keys_file.is_none());
+    assert!(cfg.ci.secret_keys().expect("none").is_none());
+    for (key, value, reason) in [
+        ("FORGE_CI_SECRET_KEYS_FILE", "relative/keys", "not_absolute"),
+        ("FORGE_CI_SECRET_KEYS_FILE", " ", "empty"),
+    ] {
+        let e = load(None, &env(&[(key, value)])).expect_err(key);
+        assert_invalid(&e, "ci.secret_keys_file", reason);
+    }
+    assert!(load(None, &env(&[("FORGE_CI_SECRET_KEYS", "/k")])).is_err());
+}

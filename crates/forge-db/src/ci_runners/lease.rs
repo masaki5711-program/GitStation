@@ -36,9 +36,11 @@
 //! transaction.
 //!
 //! **Secrets** ([`Claimed::secrets_allowed`]): decided by
-//! `StoredPipeline::secrets_allowed()` alone (ADR-0029 obligation 5). No
-//! secret value exists before C6; the claim hands out the names only when
-//! allowed, never otherwise.
+//! `StoredPipeline::secrets_allowed()` alone (ADR-0029 obligation 5). The
+//! claim names what the job asks for ([`Claimed::requested_secrets`]);
+//! forge-pipelines (M4 C6) reads and opens the values only when allowed,
+//! and otherwise fails the job at once ([`fail_claimed`], FG-CI-0017) —
+//! never a silent drop.
 
 use forge_core::ci_token::{CiToken, CiTokenKind};
 use forge_errors::{ErrorCode, ForgeError};
@@ -86,6 +88,9 @@ pub struct Claimed {
     pub secrets_allowed: bool,
     /// The secret names the job asks for, when allowed; empty otherwise.
     pub secret_names: Vec<String>,
+    /// The secret names the job asks for, allowed or not (M4 C6: a job
+    /// that asks while not allowed is failed, never run without them).
+    pub requested_secrets: Vec<String>,
     pub lease_until: String,
     pub token_expires_at: String,
     pub token: CiToken,
@@ -285,7 +290,12 @@ pub async fn claim(db: &Db, runner: i64) -> Result<Option<Claimed>, ForgeError> 
         image,
         timeout_s,
         tags,
-        secret_names: if secrets_allowed { secrets } else { Vec::new() },
+        secret_names: if secrets_allowed {
+            secrets.clone() // clone: also the requested names
+        } else {
+            Vec::new()
+        },
+        requested_secrets: secrets,
         secrets_allowed,
         pipeline,
         lease_until,
@@ -500,6 +510,31 @@ pub async fn complete(
     attempt: i32,
     result: JobResult,
 ) -> Result<Completed, ForgeError> {
+    finish(db, runner, job, attempt, result, None).await
+}
+
+/// Fail a job `runner` just claimed, before handing it out (M4 C6: its
+/// secrets may not or cannot be given — FG-CI-0016 / 0017 / 0018), with
+/// `code` as the job's `error_code`; otherwise as [`complete`] with
+/// `failed`.
+pub async fn fail_claimed(
+    db: &Db,
+    runner: i64,
+    job: i64,
+    attempt: i32,
+    code: ErrorCode,
+) -> Result<Completed, ForgeError> {
+    finish(db, runner, job, attempt, JobResult::Failed, Some(code.id())).await
+}
+
+async fn finish(
+    db: &Db,
+    runner: i64,
+    job: i64,
+    attempt: i32,
+    result: JobResult,
+    error_code: Option<&'static str>,
+) -> Result<Completed, ForgeError> {
     const QUERY: &str = "ci_runners.complete";
     db.within(QUERY, async {
         let mut tx = db
@@ -532,10 +567,12 @@ pub async fn complete(
         };
         sqlx::query(
             "UPDATE forge.ci_jobs SET status = $2, runner_id = NULL, lease_until = NULL, \
+               error_code = coalesce($3, error_code), \
                finished_at = coalesce(finished_at, now()), updated_at = now() WHERE id = $1",
         )
         .bind(job)
         .bind(status)
+        .bind(error_code.filter(|_| status != "canceled"))
         .execute(&mut *tx)
         .await
         .map_err(|e| query_error(QUERY, e))?;

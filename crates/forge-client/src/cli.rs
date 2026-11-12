@@ -2004,6 +2004,47 @@ pub enum CiCommand {
         #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "A,B")]
         protected: Option<Vec<String>>,
     },
+    /// A project's CI variables — the secrets jobs name in `secrets:`
+    /// (Maintainer; never a value is shown): list, set, delete.
+    #[command(disable_help_subcommand = true)]
+    Variable {
+        #[command(subcommand)]
+        command: CiVariableCommand,
+    },
+}
+
+/// `gstn ci variable` (M4 C6): a project's CI secrets on the server.
+#[derive(Subcommand, Debug)]
+pub enum CiVariableCommand {
+    /// The project's variables: name, flags, length, who set them (never
+    /// a value).
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Set a variable; the value is read from standard input (one line;
+    /// a trailing newline is dropped), never from an argument.
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The name, [A-Z][A-Z0-9_]* (not CI, PATH, HOME, HOSTNAME, FORGE_*
+        /// or CI_*).
+        #[arg(value_parser = parse_text)]
+        name: String,
+        /// Do not mask the value in job logs (default: masked).
+        #[arg(long)]
+        unmasked: bool,
+    },
+    /// Delete a variable.
+    Delete {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(value_parser = parse_text)]
+        name: String,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// The event of `gstn ci plan`.

@@ -607,6 +607,15 @@ async fn finish_steps(
         "projects.purge.finish.doc_lint_migrations",
     )
     .await?;
+    // M4 C6: the project's CI variables (audited on the project: the
+    // project.purged row covers them).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_variables WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_variables",
+    )
+    .await?;
     // 2026-11-12: the history import allowance references the repository.
     delete_rows(
         tx,

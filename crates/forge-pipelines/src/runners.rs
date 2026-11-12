@@ -18,6 +18,7 @@ use forge_db::ci_runners::{self as db, NewRunner, Registered, RunnerUpdate, Stor
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
+use crate::secrets::ReleasedSecret;
 use crate::{caller, change_context, require, ChangeRequest, Pipelines};
 
 pub use forge_db::ci_runners::lease::JobCopy;
@@ -32,6 +33,14 @@ pub use forge_db::ci_runners::{
     valid_name, NewRunner as RunnerRegistration, Registered as RegisteredRunner,
     RunnerUpdate as RunnerChangeRequest, StoredRunner as Runner, MAX_DESCRIPTION, MAX_TAGS,
 };
+
+/// A claimed job and the secrets released to it (M4 C6: empty unless the
+/// job asked for some and its pipeline may have them).
+#[derive(Debug)]
+pub struct ClaimGrant {
+    pub job: Claimed,
+    pub secrets: Vec<ReleasedSecret>,
+}
 
 /// The longest a claim waits for a job (well below the 30 s request
 /// timeout `forge serve` never goes under: test
@@ -139,19 +148,29 @@ impl Pipelines {
     }
 
     /// `POST /api/v1/runner/jobs/request` (`RunnerJobRequest`): claim a
-    /// job, waiting up to `wait` (at most [`LONG_POLL_MAX`]) for one.
-    /// `None`: nothing came (the runner asks again).
+    /// job, waiting up to `wait` (at most [`LONG_POLL_MAX`]) for one, with
+    /// the secrets it may have (M4 C6, `crate::secrets`). A job whose
+    /// secrets may not or cannot be released is failed with the code and
+    /// logged once here; the claim goes on with the next job. `None`:
+    /// nothing came (the runner asks again).
     pub async fn request_job(
         &self,
         request_id: &RequestId,
         proof: &Authorized<InstanceCtx>,
         wait: Duration,
-    ) -> Result<Option<Claimed>, ForgeError> {
+    ) -> Result<Option<ClaimGrant>, ForgeError> {
         require(proof.action(), Action::RunnerJobRequest)?;
         let runner = runner_of(proof.principal(), Action::RunnerJobRequest)?;
         let deadline = Instant::now() + wait.min(LONG_POLL_MAX);
         loop {
             if let Some(claimed) = lease::claim(&self.db, runner).await? {
+                let secrets = match self.release_secrets(&claimed).await {
+                    Ok(secrets) => secrets,
+                    Err(e) => {
+                        self.refuse_claimed(request_id, runner, &claimed, e).await?;
+                        continue;
+                    }
+                };
                 tracing::info!(
                     target: "forge_pipelines",
                     event = "forge.ci.job_claimed",
@@ -162,9 +181,13 @@ impl Pipelines {
                     pipeline_id = claimed.pipeline.id,
                     project_id = claimed.pipeline.project.get(),
                     secrets_allowed = claimed.secrets_allowed,
+                    secrets_released = secrets.len(),
                     "job claimed"
                 );
-                return Ok(Some(claimed));
+                return Ok(Some(ClaimGrant {
+                    job: claimed,
+                    secrets,
+                }));
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -185,7 +208,9 @@ impl Pipelines {
         lease::heartbeat(&self.db, runner, *proof.id(), attempt).await
     }
 
-    /// `POST …/jobs/{job_id}/log` (`RunnerLogAppend`).
+    /// `POST …/jobs/{job_id}/log` (`RunnerLogAppend`): the chunk is
+    /// stored with the job's masked secrets replaced (M4 C6,
+    /// [`Pipelines::log_masks`]; `FG-CI-0016` stores nothing).
     pub async fn append_log(
         &self,
         proof: &Authorized<RunnerJobCtx>,
@@ -195,7 +220,72 @@ impl Pipelines {
     ) -> Result<Appended, ForgeError> {
         require(proof.action(), Action::RunnerLogAppend)?;
         let runner = runner_of(proof.principal(), Action::RunnerLogAppend)?;
-        lease::append_log(&self.db, runner, *proof.id(), attempt, seq, body).await
+        let job = *proof.id();
+        let forms = self
+            .log_masks(job)
+            .await
+            .map_err(|e| e.with_context("job_id", job))?;
+        let masked = forge_core::ci_secret::mask(body, &forms);
+        lease::append_log(&self.db, runner, job, attempt, seq, &masked).await
+    }
+
+    /// Fail a claimed job whose secrets were refused (`e`: FG-CI-0016 /
+    /// 0017 / 0018) and log it once; another error (the database's) is
+    /// returned as it is.
+    async fn refuse_claimed(
+        &self,
+        request_id: &RequestId,
+        runner: i64,
+        claimed: &Claimed,
+        e: ForgeError,
+    ) -> Result<(), ForgeError> {
+        let code = e.code();
+        let event = if code == ErrorCode::SecretKeyUnavailable {
+            "forge.ci.secret_key_unavailable"
+        } else if code == ErrorCode::SecretOnUnprotectedRef {
+            "forge.ci.secret_on_unprotected_ref"
+        } else if code == ErrorCode::SecretNotDefined {
+            "forge.ci.secret_not_defined"
+        } else {
+            return Err(e);
+        };
+        lease::fail_claimed(&self.db, runner, claimed.job_id, claimed.attempt, code).await?;
+        let e = e
+            .with_context("job_id", claimed.job_id)
+            .with_context("pipeline_id", claimed.pipeline.id)
+            .with_context("project_id", claimed.pipeline.project.get())
+            .with_context("runner_id", runner);
+        let context = e
+            .context()
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        // FG-CI-0016 is the alert (error); 0017 / 0018 are the definition's (info).
+        if code == ErrorCode::SecretKeyUnavailable {
+            tracing::error!(
+                target: "forge_pipelines",
+                event,
+                request_id = %request_id,
+                error_code = code.id(),
+                job_id = claimed.job_id,
+                pipeline_id = claimed.pipeline.id,
+                context = %context,
+                "a job's secrets were not released; the job was failed"
+            );
+        } else {
+            tracing::info!(
+                target: "forge_pipelines",
+                event,
+                request_id = %request_id,
+                error_code = code.id(),
+                job_id = claimed.job_id,
+                pipeline_id = claimed.pipeline.id,
+                context = %context,
+                "a job's secrets were not released; the job was failed"
+            );
+        }
+        Ok(())
     }
 
     /// `POST …/jobs/{job_id}/complete` (`RunnerJobComplete`).

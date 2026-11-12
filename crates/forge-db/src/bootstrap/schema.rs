@@ -927,6 +927,11 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ("forge.merge_result_refs", operational()),
         // ── 2026-11-12: the history import allowance (20261210100000) ──
         ("forge.repository_history_imports", operational()),
+        // ── M4 C6: CI variables (20261211100000) ──
+        (
+            "forge.ci_variables",
+            [dml("forge_app"), ro("ci_variables")?].concat(),
+        ),
     ])
 }
 
@@ -1106,6 +1111,8 @@ const LATER_TABLES: &[&str] = &[
     "merge_result_refs",
     // ── 2026-11-12: the history import allowance (20261210100000) ──
     "repository_history_imports",
+    // ── M4 C6: CI variables (20261211100000) ──
+    "ci_variables",
 ];
 
 /// Every table the first migration creates.

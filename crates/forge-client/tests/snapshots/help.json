@@ -6535,6 +6535,140 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        }
+      ],
+      "examples": [
+        "gstn ci variable list --project 7 --json"
+      ],
+      "name": "ci variable list",
+      "output": {
+        "properties": {
+          "variables": {
+            "items": {
+              "required": [
+                "name",
+                "protected_only",
+                "masked",
+                "value_bytes",
+                "created_by",
+                "updated_by",
+                "created_at",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "variables"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/ci/variables"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "A project's CI variables, the secrets jobs name in secrets: of .forge-ci.yml: name, masked, protected, length, who set them and when; never a value (a Maintainer, a person)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The name, [A-Z][A-Z0-9_]* (not CI, PATH, HOME, HOSTNAME, FORGE_* or CI_*).",
+          "kind": "positional",
+          "name": "name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Do not mask the value in job logs.",
+          "kind": "flag",
+          "name": "--unmasked",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn ci variable set --project 7 DEPLOY_TOKEN < token.txt"
+      ],
+      "name": "ci variable set",
+      "output": {
+        "required": [
+          "name",
+          "protected_only",
+          "masked",
+          "value_bytes",
+          "created_by",
+          "updated_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/ci/variables/{name}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Set a CI variable (a Maintainer, a person). The value is read from standard input (one line, at most 4096 bytes; a trailing newline is dropped), never an argument, and never shown again. Masked in job logs unless --unmasked (a masked value is at least 8 bytes). Only jobs of push pipelines of protected branches ever get it. 400 FG-WEB-0006 for a bad name or value; 503 FG-CI-0016 when the server has no usable key."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The name.",
+          "kind": "positional",
+          "name": "name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn ci variable delete --project 7 DEPLOY_TOKEN --yes"
+      ],
+      "name": "ci variable delete",
+      "output": {
+        "type": "null"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/ci/variables/{name}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Delete a CI variable (a Maintainer, a person; 404 FG-REPO-0005 without it). A job that still names it fails with FG-CI-0018. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         },
         {
           "description": "The work item, canonical PBI-<n>.",

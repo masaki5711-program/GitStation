@@ -164,6 +164,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobWorkspaceTooLarge
         | ErrorCode::ServiceStartFailed
         | ErrorCode::JobIsolationUnsafe
+        // M4 C6: CI secrets and artifacts, never a merge's.
+        | ErrorCode::SecretKeyUnavailable
+        | ErrorCode::SecretOnUnprotectedRef
+        | ErrorCode::SecretNotDefined
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden
