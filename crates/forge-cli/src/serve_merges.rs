@@ -170,6 +170,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::SecretNotDefined
         | ErrorCode::ArtifactTooLarge
         | ErrorCode::ArtifactTransferFailed
+        | ErrorCode::SecretInArtifact
+        | ErrorCode::ArtifactQuotaExceeded
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

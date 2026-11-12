@@ -775,6 +775,10 @@ pub enum Resource {
         pipeline_mark: CopyMark,
         tip_mark: CopyMark,
         declared_agent: bool,
+        /// M4 C6 review: an artifact of a job that was given secrets —
+        /// readable by a project Maintainer who is a person only, never by
+        /// an AI agent audience (whatever the marks).
+        secret_job: bool,
     },
     /// An integration's event feed as its route loaded it
     /// (`IntegrationEventRead`, `IntegrationEventCursorRead`; M3 I1c).

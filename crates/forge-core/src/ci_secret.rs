@@ -15,13 +15,19 @@
 //!   ciphertext to its project and name: a value copied to another row does
 //!   not open (`FG-CI-0016 reason=value_unreadable`).
 //! - **In logs** ([`mask_forms`], [`mask`]): the value and its common
-//!   encodings (base64 standard and URL-safe, with and without padding;
-//!   base64 of the value with a trailing newline — `echo $X | base64`;
-//!   percent-encoding) are replaced by [`MASK`]. The runner masks before it
-//!   sends a chunk and forge masks again before it stores one. A value
-//!   inside a longer base64 text at an offset that is not a multiple of 3,
-//!   or transformed otherwise, is not found: masking is a safety net, not a
-//!   boundary (ADR-0029: the outputs inherit the repository's marks).
+//!   encodings are replaced by [`MASK`]: base64 standard and URL-safe
+//!   (padded and not, and the part of the encoding the value alone decides
+//!   at each of the three byte offsets — so `user:secret` encoded whole is
+//!   caught), base64 of the value with a trailing newline (`echo $X |
+//!   base64`), hex (lower and upper case), percent-encoding and JSON string
+//!   escaping. The runner masks before it sends a chunk and forge masks
+//!   again before it stores one; the same forms refuse an artifact of a job
+//!   that received the value (FG-CI-0021). **Limits**: a value transformed
+//!   otherwise (encrypted, compressed, reversed, split across lines, other
+//!   encodings, a base64 part shorter than 8 characters) is not found —
+//!   masking is a safety net, not a boundary (ADR-0029: the outputs inherit
+//!   the repository's marks; artifacts of jobs with secrets are
+//!   Maintainers' only).
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -330,11 +336,49 @@ pub fn mask_forms(value: &str) -> Vec<String> {
         STANDARD_NO_PAD.encode(&with_newline),
         percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC)
             .to_string(),
+        bytes.iter().map(|b| format!("{b:02x}")).collect(),
+        bytes.iter().map(|b| format!("{b:02X}")).collect(),
     ];
+    // JSON string escaping (without the quotes) when it differs.
+    if let Ok(json) = serde_json::to_string(value) {
+        let inner = json.trim_start_matches('"').trim_end_matches('"');
+        forms.push(inner.to_owned());
+    }
+    // The value inside a longer base64 text: at each byte offset, the
+    // characters only the value's bits decide.
+    for offset in 1..3usize {
+        let mut shifted = vec![0u8; offset];
+        shifted.extend_from_slice(bytes);
+        for encoded in [STANDARD.encode(&shifted), URL_SAFE.encode(&shifted)] {
+            forms.push(base64_core(&encoded, offset, bytes.len()));
+        }
+    }
+    for encoded in [STANDARD.encode(bytes), URL_SAFE.encode(bytes)] {
+        forms.push(base64_core(&encoded, 0, bytes.len()));
+    }
     forms.retain(|f| f.len() >= MIN_MASKED_BYTES);
     forms.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
     forms.dedup();
     forms
+}
+
+/// The characters of `encoded` (base64 of `offset` other bytes then a
+/// value of `len` bytes) that only the value's bits decide: from the first
+/// character starting at or after bit `8 * offset` to the last one ending
+/// at or before the value's last bit.
+fn base64_core(encoded: &str, offset: usize, len: usize) -> String {
+    let first = (8 * offset).div_ceil(6);
+    let end = (8 * (offset + len)) / 6;
+    encoded.get(first..end).unwrap_or("").to_owned()
+}
+
+/// Whether `bytes` holds any of `forms` (an artifact of a job that received
+/// secrets, FG-CI-0021).
+pub fn contains_any(bytes: &[u8], forms: &[String]) -> bool {
+    forms.iter().any(|f| {
+        let f = f.as_bytes();
+        !f.is_empty() && bytes.windows(f.len()).any(|w| w == f)
+    })
 }
 
 /// `text` with every one of `forms` replaced by [`MASK`] (the forms as
@@ -470,6 +514,32 @@ mod tests {
             assert_eq!(mask(&text, &forms), "before [masked] after", "{e}");
         }
         assert!(mask_forms("short").is_empty());
+        // Hex, JSON escaping and base64 at every byte offset (a value
+        // encoded with a prefix such as `user:`).
+        let quoted = "pa\"ss/word-12";
+        let quoted_forms = mask_forms(quoted);
+        for e in [
+            quoted
+                .bytes()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+            quoted
+                .bytes()
+                .map(|b| format!("{b:02X}"))
+                .collect::<String>(),
+            "pa\\\"ss/word-12".to_owned(),
+        ] {
+            assert!(contains_any(e.as_bytes(), &quoted_forms), "{e}");
+        }
+        for prefix in ["", "u:", "us:", "use:", "user:"] {
+            let blob = STANDARD.encode(format!("{prefix}{value}-and-more"));
+            assert!(
+                contains_any(blob.as_bytes(), &forms),
+                "base64 with prefix {prefix:?} not found"
+            );
+            let url = URL_SAFE_NO_PAD.encode(format!("{prefix}{value}"));
+            assert!(contains_any(url.as_bytes(), &forms), "{prefix:?}");
+        }
         assert_eq!(mask("nothing here", &forms), "nothing here");
     }
 }

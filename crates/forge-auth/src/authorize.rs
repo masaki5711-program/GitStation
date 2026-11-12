@@ -1314,9 +1314,32 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
                 pipeline_mark,
                 tip_mark,
                 declared_agent,
+                secret_job,
             },
         ) => {
             need(Role::Reporter, read_role(project))?;
+            // M4 C6 review (HIGH): a job that got secrets may have written
+            // them into its artifacts (`env > out.txt`; the upload scan
+            // catches the plain forms only): its artifacts are a
+            // Maintainer's, people only, and never an AI agent's.
+            if *secret_job {
+                if principal.is_agent_audience() || *declared_agent {
+                    return Err(deny(ErrorCode::RepositoryCopyWithheld)
+                        .with_context("route", "ci_artifact")
+                        .with_context("reason", "secret_job")
+                        .with_context("mark_of", "job")
+                        .with_context(
+                            "audience",
+                            if *declared_agent && !principal.is_agent_audience() {
+                                "header"
+                            } else {
+                                audience_of(principal)
+                            },
+                        ));
+                }
+                people_only()?;
+                need(Role::Maintainer, project.role)?;
+            }
             let audience = if principal.is_agent_audience() {
                 audience_of(principal)
             } else if *declared_agent {

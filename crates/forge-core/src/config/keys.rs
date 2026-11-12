@@ -272,6 +272,7 @@ pub const KEYS: &[Key] = &[
     text("webhook.ca_file", "FORGE_WEBHOOK_CA_FILE"),
     // M4 C6: the CI variables' keys (ADR-0013).
     text("ci.secret_keys_file", "FORGE_CI_SECRET_KEYS_FILE"),
+    number("ci.artifact_quota_bytes", "FORGE_CI_ARTIFACT_QUOTA_BYTES"),
     number(
         "webhook.delivery_retention_days",
         "FORGE_WEBHOOK_DELIVERY_RETENTION_DAYS",

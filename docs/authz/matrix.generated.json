@@ -87,7 +87,7 @@
   { "action": "PipelineRead", "allow": 7, "deny": 10, "public": false, "git_operation": false },
   { "action": "CiLogRead", "allow": 17, "deny": 31, "public": false, "git_operation": false },
   { "action": "PipelineDiagnosisRead", "allow": 17, "deny": 31, "public": false, "git_operation": false },
-  { "action": "CiArtifactRead", "allow": 17, "deny": 31, "public": false, "git_operation": false },
+  { "action": "CiArtifactRead", "allow": 20, "deny": 37, "public": false, "git_operation": false },
   { "action": "PipelineCreate", "allow": 6, "deny": 12, "public": false, "git_operation": false },
   { "action": "PipelineCancel", "allow": 6, "deny": 12, "public": false, "git_operation": false },
   { "action": "PipelineRetry", "allow": 6, "deny": 12, "public": false, "git_operation": false },

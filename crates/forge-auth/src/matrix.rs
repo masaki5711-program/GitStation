@@ -182,6 +182,9 @@ pub(crate) enum Fixture {
         holder: crate::matrix_rows_ci::Holder,
         finished: bool,
     },
+    /// An artifact of a job that was given secrets (M4 C6 review), of a
+    /// private project, both marks open.
+    SecretJobArtifact,
     /// A CI job's own artifacts (M4 C6): the row's job (or another) of its
     /// project (or another).
     JobSelf {
@@ -801,6 +804,13 @@ impl Fixture {
             Fixture::RunnerJob { holder, finished } => {
                 crate::matrix_rows_ci::runner_job(holder, finished)
             }
+            Fixture::SecretJobArtifact => Resource::CiOutput {
+                project: private,
+                pipeline_mark: crate::model::CopyMark::Open,
+                tip_mark: crate::model::CopyMark::Open,
+                declared_agent: false,
+                secret_job: true,
+            },
             Fixture::JobSelf {
                 other_project,
                 other_job,
@@ -1097,6 +1107,7 @@ impl Fixture {
                 pipeline_mark,
                 tip_mark,
                 declared_agent: declared,
+                secret_job: false,
             },
             Fixture::IntegrationFeed {
                 own,

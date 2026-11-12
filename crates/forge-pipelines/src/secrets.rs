@@ -15,6 +15,10 @@
 //!   does not define `FG-CI-0018`; a key that is not configured, missing or
 //!   does not open `FG-CI-0016`. Each fails the job in the claim's place
 //!   (`lease::fail_claimed`): a job never runs without what it asked for.
+//! - **Snapshot** (M4 C6 review): what a claim released is recorded with
+//!   the job (`forge.ci_job_secret_snapshots`, `ci_jobs.secrets_released`)
+//!   before the values leave forge; masking and the artifact scan use the
+//!   snapshot, so a value changed or deleted mid-job stays masked.
 //! - **Mask** ([`Pipelines::log_masks`]): before a log chunk is stored,
 //!   every masked value the job may have been given (and its common
 //!   encodings) is replaced by `[masked]`. A job with masked values whose
@@ -188,30 +192,54 @@ impl Pipelines {
                 .with_context("missing", missing.join(",")));
         }
         let keys = self.keys()?;
-        sealed
-            .into_iter()
+        let released = sealed
+            .iter()
             .map(|s| {
                 let value = keys
                     .open(project, &s.name, &s.sealed)
                     .map_err(|e| e.with_context("name", s.name.clone()))?; // clone: the error names it
                 Ok(ReleasedSecret {
-                    name: s.name,
+                    name: s.name.clone(), // clone: the snapshot keeps its row
                     value,
                     masked: s.masked,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, ForgeError>>()?;
+        // M4 C6 review: the snapshot of what this attempt gets (masking
+        // keeps it whatever happens to the variable) and the job's flag
+        // (its artifacts are scanned and restricted). Recorded before any
+        // value leaves forge.
+        let recorded = db::record_release(
+            &self.db,
+            (project, claimed.job_id, claimed.attempt),
+            &sealed,
+        )
+        .await?;
+        if !recorded {
+            return Err(ForgeError::new(ErrorCode::JobLeaseLost)
+                .with_context("reason", "ended_before_release")
+                .with_context("job_id", claimed.job_id));
+        }
+        Ok(released)
     }
 
     /// The forms `job`'s log is masked for before it is stored (module
     /// docs): empty when the job has no masked value. `FG-CI-0016` when it
     /// has one and the keys are not usable.
     pub async fn log_masks(&self, job: i64) -> Result<Vec<String>, ForgeError> {
-        let Some((project, sealed)) = db::masked_for_job(&self.db, job).await? else {
-            return Ok(Vec::new());
+        Ok(self.job_masks(job).await?.1)
+    }
+
+    /// Whether `job` was ever given secrets, and the forms of its masked
+    /// values (the claim's snapshots, M4 C6 review): what its log is masked
+    /// for and its artifacts are scanned for. `FG-CI-0016` when there are
+    /// values and the keys are not usable.
+    pub async fn job_masks(&self, job: i64) -> Result<(bool, Vec<String>), ForgeError> {
+        let Some((project, released, sealed)) = db::masked_for_job(&self.db, job).await? else {
+            return Ok((false, Vec::new()));
         };
         if sealed.is_empty() {
-            return Ok(Vec::new());
+            return Ok((released, Vec::new()));
         }
         let keys = self.keys()?;
         let mut forms = Vec::new();
@@ -223,6 +251,6 @@ impl Pipelines {
         }
         forms.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
         forms.dedup();
-        Ok(forms)
+        Ok((released, forms))
     }
 }

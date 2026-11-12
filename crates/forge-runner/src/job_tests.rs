@@ -386,6 +386,10 @@ struct Forge {
     upload_fails: AtomicBool,
     /// M4 C6: the artifacts of the needs (id, path, bytes).
     needed: Mutex<Vec<(i64, String, Vec<u8>)>>,
+    /// M4 C6 review: how long each upload takes.
+    upload_delay: Duration,
+    /// M4 C6 review: heartbeats received.
+    beats: std::sync::atomic::AtomicUsize,
 }
 
 impl RunnerApi for Forge {
@@ -399,6 +403,7 @@ impl RunnerApi for Forge {
         Ok(self.claims.lock().unwrap().pop())
     }
     fn heartbeat(&self, _: i64, _: i32) -> Result<Beat, ClientError> {
+        self.beats.fetch_add(1, Ordering::SeqCst);
         Ok(Beat::Running)
     }
     fn append_log(&self, _: i64, _: i32, _: i64, text: &str) -> Result<(), ClientError> {
@@ -422,6 +427,7 @@ impl RunnerApi for Forge {
         &self,
         _: i64,
         token: &JobToken,
+        _: Duration,
     ) -> Result<Vec<crate::api::NeededArtifact>, ClientError> {
         assert!(token.expose().starts_with("fgj_"), "the job's own token");
         Ok(self
@@ -445,6 +451,7 @@ impl RunnerApi for Forge {
         artifact: i64,
         out: &mut dyn std::io::Write,
         _: u64,
+        _: Duration,
     ) -> Result<u64, ClientError> {
         let needed = self.needed.lock().unwrap();
         let (_, _, bytes) = needed.iter().find(|(id, _, _)| *id == artifact).unwrap();
@@ -456,9 +463,11 @@ impl RunnerApi for Forge {
         _: i64,
         token: &JobToken,
         path: &str,
-        file: &std::path::Path,
+        mut file: std::fs::File,
         _: u64,
+        _: Duration,
     ) -> Result<(), ClientError> {
+        use std::io::Read as _;
         assert!(token.expose().starts_with("fgj_"), "the job's own token");
         if self.upload_fails.load(Ordering::SeqCst) {
             return Err(ClientError::local(
@@ -466,10 +475,10 @@ impl RunnerApi for Forge {
                 "reason=connect",
             ));
         }
-        self.uploads
-            .lock()
-            .unwrap()
-            .push((path.to_owned(), std::fs::read(file).unwrap()));
+        std::thread::sleep(self.upload_delay);
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        self.uploads.lock().unwrap().push((path.to_owned(), bytes));
         Ok(())
     }
 }
@@ -1795,4 +1804,39 @@ fn a_failed_artifact_upload_fails_the_job() {
         out.error.expect("failed").code(),
         ErrorCode::ArtifactTransferFailed
     );
+}
+
+/// M4 C6 review: the lease's heartbeat goes on while the artifacts are
+/// uploaded (a long upload never loses the lease), and the upload happens
+/// after the container is removed.
+#[test]
+fn the_lease_heartbeat_runs_while_artifacts_upload() {
+    let def = artifact_definition();
+    let fake = Fake::new(&def, Podman::Litter);
+    let s = setup(&fake);
+    let forge = Arc::new(Forge {
+        upload_delay: Duration::from_millis(400),
+        ..Forge::default()
+    });
+    forge
+        .claims
+        .lock()
+        .unwrap()
+        .push(claim(7, "fgj_7_secret", &def));
+    let runner = Runner {
+        api: Arc::clone(&forge) as Arc<dyn RunnerApi>,
+        exec: s.exec,
+        heartbeat_every: Duration::from_millis(50),
+        shutdown: Arc::new(AtomicBool::new(false)),
+    };
+    let handled = runner.run_once(0).expect("claim");
+    assert!(matches!(handled, Handled::Ran { .. }));
+    assert_eq!(forge.uploads.lock().unwrap().len(), 1);
+    assert!(
+        forge.beats.load(Ordering::SeqCst) >= 3,
+        "heartbeats during the upload: {}",
+        forge.beats.load(Ordering::SeqCst)
+    );
+    // The container was removed (`podman rm`) before the job ended.
+    assert!(!fake.by("podman", "rm").is_empty());
 }

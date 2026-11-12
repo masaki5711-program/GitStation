@@ -75,7 +75,7 @@ pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action, CiRule};
 pub use authorize::authorize;
-pub use ci_output::{authorize_ci_output, CiOutputAllowed};
+pub use ci_output::{authorize_ci_artifact, authorize_ci_output, CiOutputAllowed};
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
 pub use feed_ctx::{prove_visible, IntegrationFeedCtx, LoadedIntegrationFeed};
 pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};

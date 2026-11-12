@@ -206,7 +206,10 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
 - 保存先: `<storage.root>/ci-artifacts/<project_id>/<artifact_id>`（名前はサーバーが ID から付ける）、表 `forge.ci_artifacts`
   （大きさ・sha256・期限 30 日・`keep`）。worker のタスク `ci_artifact_expiry`（10 分ごと）が期限の過ぎたもの（`keep` 以外）のファイル、
   次に行を消し、消えたプロジェクトのディレクトリを消す（`forge.ci.artifacts_expired`、`forge.ci.artifacts_of_purged_project_removed`）。
-- 上限: 1 ファイル 100 MiB、1 回の実行で 512 MiB・1000 ファイル（FG-CI-0019、Runner は送る前に数え、サーバーも保存しながら確かめる）。
+- 上限: 1 ファイル 100 MiB、1 回の実行で 512 MiB・1000 ファイル（FG-CI-0019、Runner は送る前に数え、サーバーも保存しながら、
+  記録のときにもう一度ロックして確かめる）。プロジェクトの割り当て `ci.artifact_quota_bytes`（既定 5 GiB、FG-CI-0022）。
+  送受は 1 ジョブで 30 分まで（FG-CI-0020 `reason=deadline`）、成果物はコンテナを消した後に送る（`container_not_removed`）。
+  シークレットを受け取ったジョブの成果物は runbook `ci-secrets`（FG-CI-0021、Maintainer の人だけが読める）。
 - 読む: 人とエージェントは `GET /api/v1/projects/{id}/pipelines/{pid}/jobs/{jid}/artifacts[/{aid}]`（ログと同じく、AI には両方の印が
   `open` のときだけ。それ以外は FG-AUTH-0022 `route=ci_artifact`）、`gstn pipeline artifacts` / `artifact-download`。
 

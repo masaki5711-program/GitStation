@@ -20,7 +20,7 @@ use forge_core::{AuditDetails, ProjectId};
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, Settle};
-use crate::pipelines::{decided_facts, pipeline_of, PipelineRow, PIPELINE_COLUMNS};
+use crate::pipelines::decided_facts;
 use crate::projects::ProjectUpdateFacts;
 use crate::{query_error, read_query_error, Db};
 
@@ -277,48 +277,104 @@ pub async fn sealed_for(
         .collect())
 }
 
-/// What the log of `job` must be masked for: its project and the sealed
-/// masked values it may have been given — the names it asks for, only when
-/// its pipeline may release secrets (`source = 'push'` and protected,
-/// ADR-0029 obligation 5). `None` without such a job.
+/// Record what `sealed` released to attempt `attempt` of `job` (M4 C6
+/// review): the snapshot of each sealed value and `ci_jobs.secrets_released`,
+/// in one transaction, only while that attempt runs (`false` otherwise:
+/// nothing written).
+pub async fn record_release(
+    db: &Db,
+    (project, job, attempt): (ProjectId, i64, i32),
+    sealed: &[SealedVariable],
+) -> Result<bool, ForgeError> {
+    const QUERY: &str = "ci_variables.record_release";
+    db.within(QUERY, async {
+        let mut tx = db
+            .write_pool()
+            .begin()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        let marked = sqlx::query(
+            "UPDATE forge.ci_jobs SET secrets_released = true              WHERE id = $1 AND attempt = $2 AND status = 'running'",
+        )
+        .bind(job)
+        .bind(attempt)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?
+        .rows_affected();
+        if marked == 0 {
+            tx.rollback().await.map_err(|e| query_error(QUERY, e))?;
+            return Ok(false);
+        }
+        for v in sealed {
+            sqlx::query(
+                "INSERT INTO forge.ci_job_secret_snapshots (job_id, attempt, project_id, name,                    key_id, ciphertext, masked) VALUES ($1, $2, $3, $4, $5, $6, $7)                  ON CONFLICT (job_id, attempt, name) DO NOTHING",
+            )
+            .bind(job)
+            .bind(attempt)
+            .bind(project.get())
+            .bind(&v.name)
+            .bind(v.sealed.key_id)
+            .bind(&v.sealed.ciphertext)
+            .bind(v.masked)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        }
+        tx.commit().await.map_err(|e| query_error(QUERY, e))?;
+        Ok(true)
+    })
+    .await
+}
+
+/// What the log and the artifacts of `job` must be masked for (M4 C6
+/// review): its project, whether it was ever given secrets, and the masked
+/// values released to any of its attempts (the snapshots of the claim: a
+/// value changed or deleted since is still masked). `None` without such a
+/// job.
 pub async fn masked_for_job(
     db: &Db,
     job: i64,
-) -> Result<Option<(ProjectId, Vec<SealedVariable>)>, ForgeError> {
+) -> Result<Option<(ProjectId, bool, Vec<SealedVariable>)>, ForgeError> {
     const QUERY: &str = "ci_variables.masked_for_job";
-    let row: Option<(Vec<String>, PipelineRow)> = db
+    let row: Option<(i64, bool)> = db
         .within(QUERY, async {
-            let found: Option<(i64, Vec<String>)> =
-                sqlx::query_as("SELECT pipeline_id, secrets FROM forge.ci_jobs WHERE id = $1")
-                    .bind(job)
-                    .fetch_optional(db.write_pool())
-                    .await
-                    .map_err(|e| query_error(QUERY, e))?;
-            let Some((pipeline, names)) = found else {
-                return Ok(None);
-            };
-            let row: PipelineRow = sqlx::query_as(&format!(
-                "SELECT {PIPELINE_COLUMNS} FROM forge.ci_pipelines WHERE id = $1"
-            ))
-            .bind(pipeline)
-            .fetch_one(db.write_pool())
-            .await
-            .map_err(|e| query_error(QUERY, e))?;
-            Ok(Some((names, row)))
+            sqlx::query_as("SELECT project_id, secrets_released FROM forge.ci_jobs WHERE id = $1")
+                .bind(job)
+                .fetch_optional(db.write_pool())
+                .await
+                .map_err(|e| query_error(QUERY, e))
         })
         .await?;
-    let Some((names, row)) = row else {
+    let Some((project, released)) = row else {
         return Ok(None);
     };
-    let pipeline = pipeline_of(row)?;
-    let project = pipeline.project;
-    // ADR-0029 obligation 5: the stored pipeline's answer alone.
-    if !pipeline.secrets_allowed() || names.is_empty() {
-        return Ok(Some((project, Vec::new())));
+    let project = ProjectId::new(project);
+    if !released {
+        return Ok(Some((project, false, Vec::new())));
     }
-    let mut sealed = sealed_for(db, project, &names).await?;
-    sealed.retain(|v| v.masked);
-    Ok(Some((project, sealed)))
+    let rows: Vec<(String, i16, Vec<u8>)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT name, key_id, ciphertext FROM forge.ci_job_secret_snapshots                  WHERE job_id = $1 AND masked ORDER BY attempt, name",
+            )
+            .bind(job)
+            .fetch_all(db.write_pool())
+            .await
+            .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
+    Ok(Some((
+        project,
+        true,
+        rows.into_iter()
+            .map(|(name, key_id, ciphertext)| SealedVariable {
+                name,
+                sealed: SealedValue { key_id, ciphertext },
+                masked: true,
+            })
+            .collect(),
+    )))
 }
 
 /// How many stored values each key sealed, by key id (doctor

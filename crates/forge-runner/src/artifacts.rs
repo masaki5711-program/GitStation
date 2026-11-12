@@ -182,6 +182,35 @@ pub fn place(work: &Path, path: &str) -> Result<PathBuf, ForgeError> {
     Ok(target)
 }
 
+/// Open `file` for an upload (M4 C6 review) without following a link:
+/// it must still be a regular file, not a link, of the size `collect` saw,
+/// and (Unix) the opened handle must be that very file (device and inode
+/// compared, so a swap between the check and the open is caught). On
+/// Windows the check is the link-free metadata before and after the open;
+/// the work directory is the runner's own (no job runs any more).
+pub fn open_regular(file: &Path, size: u64) -> Result<std::fs::File, ForgeError> {
+    let refused = |reason: &'static str| {
+        ForgeError::new(ErrorCode::ArtifactTransferFailed).with_context("reason", reason)
+    };
+    let before = std::fs::symlink_metadata(file).map_err(unreadable)?;
+    if !before.file_type().is_file() || before.len() != size {
+        return Err(refused("file_changed"));
+    }
+    let opened = std::fs::File::open(file).map_err(unreadable)?;
+    let after = opened.metadata().map_err(unreadable)?;
+    if !after.is_file() || after.len() != size {
+        return Err(refused("file_changed"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if before.dev() != after.dev() || before.ino() != after.ino() {
+            return Err(refused("file_changed"));
+        }
+    }
+    Ok(opened)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)] // tests may fail loudly
@@ -225,6 +254,22 @@ mod tests {
         let got = collect(work, &["out".to_owned(), "linked".to_owned()]).expect("collect");
         assert!(got.files.is_empty(), "{got:?}");
         assert_eq!(got.skipped, ["out/link", "linked"]);
+    }
+
+    #[test]
+    fn an_upload_opens_only_the_regular_file_collect_saw() {
+        let dir = tempfile::tempdir().expect("dir");
+        let f = dir.path().join("a.txt");
+        std::fs::write(&f, b"abc").expect("write");
+        assert!(open_regular(&f, 3).is_ok());
+        // Changed since it was collected.
+        assert!(open_regular(&f, 4).is_err());
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(&f, &link).expect("link");
+            assert!(open_regular(&link, 3).is_err(), "a link is never opened");
+        }
     }
 
     #[test]

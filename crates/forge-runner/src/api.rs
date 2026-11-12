@@ -153,6 +153,7 @@ pub trait RunnerApi: Send + Sync {
         &self,
         _job: i64,
         _token: &JobToken,
+        _timeout: std::time::Duration,
     ) -> Result<Vec<NeededArtifact>, ClientError> {
         Err(unsupported())
     }
@@ -164,17 +165,20 @@ pub trait RunnerApi: Send + Sync {
         _artifact: i64,
         _out: &mut dyn std::io::Write,
         _max: u64,
+        _timeout: std::time::Duration,
     ) -> Result<u64, ClientError> {
         Err(unsupported())
     }
-    /// M4 C6: upload `file` (`len` bytes) as the job's artifact `path`.
+    /// M4 C6: upload the opened `file` (`len` bytes) as the job's artifact
+    /// `path`, within `timeout`.
     fn upload_artifact(
         &self,
         _job: i64,
         _token: &JobToken,
         _path: &str,
-        _file: &std::path::Path,
+        _file: std::fs::File,
         _len: u64,
+        _timeout: std::time::Duration,
     ) -> Result<(), ClientError> {
         Err(unsupported())
     }
@@ -251,6 +255,7 @@ impl RunnerApi for HttpApi {
         &self,
         job: i64,
         token: &JobToken,
+        timeout: std::time::Duration,
     ) -> Result<Vec<NeededArtifact>, ClientError> {
         let mut out = Vec::new();
         self.client.download_to(
@@ -258,7 +263,7 @@ impl RunnerApi for HttpApi {
             Some(token.expose()),
             &mut out,
             4 * 1024 * 1024,
-            ARTIFACT_TIMEOUT,
+            timeout.min(ARTIFACT_TIMEOUT),
         )?;
         serde_json::from_slice::<NeededList>(&out)
             .map(|l| l.artifacts)
@@ -272,13 +277,14 @@ impl RunnerApi for HttpApi {
         artifact: i64,
         out: &mut dyn std::io::Write,
         max: u64,
+        timeout: std::time::Duration,
     ) -> Result<u64, ClientError> {
         self.client.download_to(
             &job_path(job, &format!("needs/artifacts/{artifact}")),
             Some(token.expose()),
             out,
             max,
-            ARTIFACT_TIMEOUT,
+            timeout.min(ARTIFACT_TIMEOUT),
         )
     }
 
@@ -287,23 +293,18 @@ impl RunnerApi for HttpApi {
         job: i64,
         token: &JobToken,
         path: &str,
-        file: &std::path::Path,
+        file: std::fs::File,
         len: u64,
+        timeout: std::time::Duration,
     ) -> Result<(), ClientError> {
-        let opened = std::fs::File::open(file).map_err(|_| {
-            ClientError::local(
-                forge_errors::ErrorCode::CliInputFailed,
-                "reason=artifact_unreadable",
-            )
-        })?;
         self.client
             .upload_file(
                 &job_path(job, "artifacts"),
                 &[("path".to_owned(), path.to_owned())],
                 token.expose(),
-                opened,
+                file,
                 len,
-                ARTIFACT_TIMEOUT,
+                timeout.min(ARTIFACT_TIMEOUT),
             )
             .map(|_| ())
     }

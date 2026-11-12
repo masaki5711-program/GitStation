@@ -166,6 +166,9 @@ impl Pipelines {
             if let Some(claimed) = lease::claim(&self.db, runner).await? {
                 let secrets = match self.release_secrets(&claimed).await {
                     Ok(secrets) => secrets,
+                    // Cancelled between the claim and the release: nothing
+                    // was handed out; take the next job.
+                    Err(e) if e.code() == ErrorCode::JobLeaseLost => continue,
                     Err(e) => {
                         self.refuse_claimed(request_id, runner, &claimed, e).await?;
                         continue;

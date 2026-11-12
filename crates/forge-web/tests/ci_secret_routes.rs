@@ -22,6 +22,7 @@ use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
 use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::{Git, GitConfig, StorageRoot};
+use forge_pipelines::artifacts::ArtifactStore;
 use forge_pipelines::{CopyMark, MarkFuture, MarkMeter, Pipelines};
 use forge_web::{AppConfig, AppState, Lookups};
 use http_body_util::BodyExt;
@@ -136,14 +137,23 @@ impl World {
     }
 
     async fn call(&self, method: &str, uri: &str, who: Who, body: Option<Value>) -> Answer {
+        let raw = body.map(|b| (b.to_string().into_bytes(), "application/json"));
+        self.send(method, uri, who, raw).await
+    }
+
+    async fn send(
+        &self,
+        method: &str,
+        uri: &str,
+        who: Who,
+        body: Option<(Vec<u8>, &str)>,
+    ) -> Answer {
         let mut builder = Request::builder().method(method).uri(uri);
         if let Who::Bearer(token) = &who {
             builder = builder.header("authorization", format!("Bearer {token}"));
         }
         let mut req = match body {
-            Some(b) => builder
-                .header("content-type", "application/json")
-                .body(Body::from(b.to_string())),
+            Some((b, kind)) => builder.header("content-type", kind).body(Body::from(b)),
             None => builder.body(Body::empty()),
         }
         .expect("request");
@@ -173,7 +183,7 @@ impl World {
                 projects: Arc::new(self.t.db.clone()),
             },
         )
-        .with_pipelines(pipelines);
+        .with_pipelines(pipelines.with_artifacts(ArtifactStore::new(self.storage.path())));
         let res = forge_web::app(state, AppConfig::default())
             .expect("router")
             .oneshot(req)
@@ -340,6 +350,23 @@ async fn a_protected_push_job_gets_its_values_and_its_log_is_masked() {
     );
     let job_id = job["job_id"].as_i64().expect("job");
     let attempt = job["attempt"].as_i64().expect("attempt");
+    // The variable is replaced, then deleted, while the job runs: the
+    // released value stays masked (the claim's snapshot).
+    assert_eq!(
+        w.set("DEPLOY_TOKEN", "synthetic-other-value-02")
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let gone = w
+        .call(
+            "DELETE",
+            &w.var_uri("DEPLOY_TOKEN"),
+            Who::As(w.owner_token()),
+            None,
+        )
+        .await;
+    assert_eq!(gone.status, StatusCode::NO_CONTENT);
     let log = w
         .call(
             "POST",
@@ -433,5 +460,70 @@ async fn ci_variables_refuse_developers_and_service_accounts() {
         )
         .await;
     assert_eq!(refused.code(), "FG-AUTH-0003", "{}", refused.json);
+    w.t.drop_now().await;
+}
+
+/// M4 C6 review (HIGH): an artifact of a job that was given secrets is
+/// scanned for the released values (also base64 behind a prefix) and
+/// refused; a clean one is stored but readable only by a Maintainer who is
+/// a person — an agent's token is refused whatever the marks.
+#[tokio::test]
+async fn an_artifact_holding_a_released_secret_is_refused() {
+    let w = World::new(true).await;
+    assert_eq!(
+        w.set("DEPLOY_TOKEN", VALUE).await.status,
+        StatusCode::CREATED
+    );
+    let token = w.runner().await;
+    let pipeline = w.seed('b', true, &["DEPLOY_TOKEN"]).await;
+    let claimed = w.claim(&token).await;
+    let job_id = claimed.json["job"]["job_id"].as_i64().expect("job");
+    let job_token = claimed.json["job"]["job_token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let upload = |path: &str, bytes: Vec<u8>| {
+        let uri = format!("/api/v1/runner/jobs/{job_id}/artifacts?path={path}");
+        let who = Who::Bearer(job_token.clone());
+        let w = &w;
+        async move {
+            w.send("PUT", &uri, who, Some((bytes, "application/octet-stream")))
+                .await
+        }
+    };
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(format!("user:{VALUE}"));
+    for (path, bytes) in [
+        (
+            "env.txt",
+            format!("PATH=/bin\nDEPLOY_TOKEN={VALUE}\n").into_bytes(),
+        ),
+        (
+            "auth.txt",
+            format!("Authorization: Basic {b64}").into_bytes(),
+        ),
+    ] {
+        let refused = upload(path, bytes).await;
+        assert_eq!(
+            (refused.status, refused.code()),
+            (StatusCode::UNPROCESSABLE_ENTITY, "FG-CI-0021"),
+            "{path}: {}",
+            refused.json
+        );
+        assert!(!refused.json.to_string().contains(VALUE));
+    }
+    let clean = upload("report.txt", b"all tests passed".to_vec()).await;
+    assert_eq!(clean.status, StatusCode::CREATED, "{}", clean.json);
+    let base = format!(
+        "/api/v1/projects/{}/pipelines/{pipeline}/jobs/{job_id}/artifacts",
+        w.web.get()
+    );
+    let owner = w.call("GET", &base, Who::As(w.owner_token()), None).await;
+    assert_eq!(owner.status, StatusCode::OK, "{}", owner.json);
+    assert_eq!(owner.json["artifacts"].as_array().map(Vec::len), Some(1));
+    let agent = w
+        .call("GET", &base, Who::As(w.owner_token().as_agent(true)), None)
+        .await;
+    assert_eq!(agent.code(), "FG-AUTH-0022", "{}", agent.json);
     w.t.drop_now().await;
 }

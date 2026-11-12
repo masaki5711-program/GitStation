@@ -118,7 +118,15 @@ struct Started {
     /// `(service name, container name)` of each service container that may
     /// exist, in start order.
     services: Vec<(String, String)>,
+    /// M4 C6: the work tree and the declared artifact paths of a script
+    /// that exited 0 — uploaded only once the container (and its pod) is
+    /// confirmed removed.
+    upload: Option<(std::path::PathBuf, Vec<String>)>,
 }
+
+/// The longest all of one job's artifact transfers may take together (the
+/// downloads before the script, the uploads after it, each).
+pub const TRANSFER_DEADLINE: Duration = Duration::from_secs(1800);
 
 /// The most bytes of one service's log tail kept for the job log (the
 /// last ones).
@@ -149,6 +157,22 @@ fn start_failed(reason: &'static str) -> ForgeError {
 
 fn service_failed(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::ServiceStartFailed).with_context("reason", reason)
+}
+
+/// What is left of a job's transfer time: `FG-CI-0020` when it ran out
+/// (`reason=deadline`) or the job was stopped (`reason=stopped`: a cancel,
+/// a lost lease, a shutdown — checked between files).
+fn transfer_left(deadline: Instant, stop: &AtomicBool) -> Result<Duration, ForgeError> {
+    if stop.load(Ordering::SeqCst) {
+        return Err(
+            ForgeError::new(ErrorCode::ArtifactTransferFailed).with_context("reason", "stopped")
+        );
+    }
+    left(deadline).ok_or_else(|| {
+        ForgeError::new(ErrorCode::ArtifactTransferFailed)
+            .with_context("reason", "deadline")
+            .with_context("timeout_ms", TRANSFER_DEADLINE.as_millis())
+    })
 }
 
 /// `FG-CI-0020` for a failed transfer: the server's code when it answered
@@ -279,6 +303,7 @@ impl Executor {
         if failed && !started.services.is_empty() {
             self.append_service_logs(&started.services, &mut sink);
         }
+        let mut container_gone = true;
         if started.container {
             // `--rm` removes a container that ended; this removes one that
             // did not (killed, a lost `--rm`) — always, whatever happened.
@@ -289,6 +314,7 @@ impl Executor {
                 &mut |_| {},
             );
             if !removed.as_ref().is_ok_and(Ran::ok) {
+                container_gone = false;
                 tracing::warn!(
                     target: "forge_runner",
                     event = "forge.runner.container_remove_failed",
@@ -301,6 +327,21 @@ impl Executor {
             }
         }
         let pod_left = started.pod && !self.remove_pod(&request_id, job.job_id, &name);
+        // M4 C6 review: a successful script's artifacts, only once nothing
+        // of the job runs any more (no process can change a file while it
+        // is read and sent).
+        let ran = match (ran, started.upload.take()) {
+            (Ok(ScriptEnd::Exited(0)), Some((work, paths))) => {
+                if container_gone && !pod_left {
+                    self.upload_artifacts(api, job, &work, &paths, stop, &mut sink)
+                        .map(|()| ScriptEnd::Exited(0))
+                } else {
+                    Err(ForgeError::new(ErrorCode::ArtifactTransferFailed)
+                        .with_context("reason", "container_not_removed"))
+                }
+            }
+            (other, _) => other,
+        };
         let workspace_dirty = !self.clean_workspace(&request_id, job.job_id) || pod_left;
         let outcome = match ran {
             Ok(ScriptEnd::Exited(0)) => Outcome {
@@ -453,7 +494,7 @@ impl Executor {
         // M4 C6: the artifacts of the jobs it needs, into the work tree
         // (before the script; never over a file of the checkout).
         if !spec.needs().is_empty() {
-            self.fetch_needed(api, job, &dirs.work, sink)?;
+            self.fetch_needed(api, job, &dirs.work, stop, sink)?;
         }
         let env_file = if job.secrets.is_empty() {
             None
@@ -537,9 +578,11 @@ impl Executor {
                 .with_context("podman_stderr", ran.stderr_tail)),
             Exit::Code(code) => {
                 self.check_work_size()?;
-                // M4 C6: a successful script's declared artifacts.
+                // M4 C6: a successful script's declared artifacts, sent
+                // after the container is removed (`execute`).
                 if code == 0 && !spec.artifacts().is_empty() {
-                    self.upload_artifacts(api, job, &dirs.work, spec.artifacts(), sink)?;
+                    started.upload = Some((dirs.work.clone(), spec.artifacts().to_vec()));
+                    // clone: sent after the cleanup
                 }
                 Ok(ScriptEnd::Exited(code))
             }
@@ -563,12 +606,21 @@ impl Executor {
         api: &dyn RunnerApi,
         job: &ClaimedJob,
         work: &std::path::Path,
+        stop: &AtomicBool,
         sink: &mut LogSink<'_>,
     ) -> Result<(), ForgeError> {
+        let deadline = Instant::now() + TRANSFER_DEADLINE;
         let needed = api
-            .needed_artifacts(job.job_id, &job.job_token)
+            .needed_artifacts(job.job_id, &job.job_token, TRANSFER_DEADLINE)
             .map_err(|e| transfer_failed("receive", &e))?;
+        // The server refuses more (FG-CI-0019); never a short list here.
+        if i64::try_from(needed.len()).unwrap_or(i64::MAX) > forge_core::ci_artifact::MAX_JOB_FILES
+        {
+            return Err(ForgeError::new(ErrorCode::ArtifactTooLarge)
+                .with_context("reason", "too_many_needed_files"));
+        }
         for a in &needed {
+            let limit = transfer_left(deadline, stop)?;
             let target = crate::artifacts::place(work, &a.path)?;
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
@@ -581,7 +633,7 @@ impl Executor {
                 })?;
             let max = u64::try_from(a.size_bytes).unwrap_or(0);
             let got = api
-                .download_artifact(job.job_id, &job.job_token, a.id, &mut file, max)
+                .download_artifact(job.job_id, &job.job_token, a.id, &mut file, max, limit)
                 .map_err(|e| transfer_failed("receive", &e).with_context("artifact_id", a.id))?;
             if got != max {
                 return Err(ForgeError::new(ErrorCode::ArtifactTransferFailed)
@@ -608,8 +660,10 @@ impl Executor {
         job: &ClaimedJob,
         work: &std::path::Path,
         paths: &[String],
+        stop: &AtomicBool,
         sink: &mut LogSink<'_>,
     ) -> Result<(), ForgeError> {
+        let deadline = Instant::now() + TRANSFER_DEADLINE;
         let found = crate::artifacts::collect(work, paths)?;
         for missing in &found.missing {
             sink.line(&format!("artifact path not found: {missing}"));
@@ -620,7 +674,11 @@ impl Executor {
             ));
         }
         for f in &found.files {
-            api.upload_artifact(job.job_id, &job.job_token, &f.path, &f.file, f.size)
+            let limit = transfer_left(deadline, stop)?;
+            // Opened without following a link (and checked to be the file
+            // `collect` saw), so a file swapped for a link is never read.
+            let opened = crate::artifacts::open_regular(&f.file, f.size)?;
+            api.upload_artifact(job.job_id, &job.job_token, &f.path, opened, f.size, limit)
                 .map_err(|e| {
                     if e.code_id() == ErrorCode::ArtifactTooLarge.id() {
                         ForgeError::new(ErrorCode::ArtifactTooLarge)

@@ -2771,3 +2771,30 @@ diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (
 fix = "Follow runbook ci-runner (Artifacts): fix the storage (free space under `<storage.root>/ci-artifacts`) or the network between the runner and forge, or move the conflicting path out of the repository, then retry the pipeline (gstn pipeline retry)."
 runbook = "ci-runner"
 test = "a_failed_artifact_upload_fails_the_job"
+
+[[error]]
+code = "FG-CI-0021"
+name = "SecretInArtifact"
+http_status = 422
+severity = "warn"
+user_message_ja = "シークレットを受け取ったジョブの成果物に、シークレットの値が含まれていました。その成果物は保存せず、ジョブは失敗にしました。"
+user_message_en = "An artifact of a job that received secrets contained a secret's value. The artifact was not stored and the job was failed."
+user_message_id = "Artefak dari tugas yang menerima rahasia berisi nilai rahasia. Artefak tidak disimpan dan tugas digagalkan."
+cause = "M4 C6 review (HIGH): a job that was given secrets (ci_jobs.secrets_released) uploaded an artifact whose bytes contain one of its masked values in a form forge masks (the value, base64 at any byte offset, URL-safe base64, hex, percent- or JSON-escaped; the snapshot taken at the claim). The upload is refused before anything is stored (`PUT /api/v1/runner/jobs/{job_id}/artifacts`, 422, the partly written file removed); the runner fails the job with FG-CI-0020 `server_code=FG-CI-0021`. A transformed value (encrypted, compressed, split) is not found: artifacts of such jobs are also readable only by Maintainers (people)."
+diagnosis = "`forge serve` logs it (warn) with `error_code`, `request_id`, `job_id`, `path` (never the value or which variable). Read: SELECT id, name, secrets, secrets_released FROM forge.ci_jobs WHERE id = <job_id>;"
+fix = "Follow runbook ci-secrets (Artifacts of jobs with secrets): do not write secrets into files under the declared artifact paths (no `env > out.txt`); write them under /tmp, which is not collected. If a value may have leaked elsewhere, rotate it."
+runbook = "ci-secrets"
+test = "an_artifact_holding_a_released_secret_is_refused"
+
+[[error]]
+code = "FG-CI-0022"
+name = "ArtifactQuotaExceeded"
+http_status = 413
+severity = "info"
+user_message_ja = "プロジェクトの CI の成果物が保存の上限に達しました。成果物は保存されず、ジョブは失敗にしました。"
+user_message_en = "The project's CI artifacts reached their storage quota. The artifact was not stored and the job was failed."
+user_message_id = "Artefak CI proyek mencapai kuota penyimpanan. Artefak tidak disimpan dan tugas digagalkan."
+cause = "M4 C6 review: the stored artifacts of one project (every job, until they expire after 30 days) may hold at most `ci.artifact_quota_bytes` (default 5 GiB). An upload that would pass it is refused (413), checked before the bytes are read and again, atomically, when the artifact is recorded."
+diagnosis = "The log event carries `project_id`, `stored_bytes`, `quota_bytes`. Read: SELECT count(*), sum(size_bytes), min(expires_at) FROM forge.ci_artifacts WHERE project_id = <id>;"
+fix = "Declare fewer or smaller artifact paths, or wait for older artifacts to expire; the operator may raise `ci.artifact_quota_bytes` (runbook ci-runner, Artifacts) and restart forge serve."
+test = "an_upload_past_the_project_quota_is_refused"

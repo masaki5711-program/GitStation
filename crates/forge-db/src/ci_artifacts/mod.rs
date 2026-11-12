@@ -91,7 +91,7 @@ pub struct UploadTarget {
     pub pipeline_id: i64,
     pub job_id: i64,
     pub attempt: i32,
-    /// Bytes the attempt may still upload.
+    /// Bytes the attempt (and the project's quota) may still take.
     pub bytes_left: u64,
 }
 
@@ -101,100 +101,196 @@ fn refused(reason: &'static str, job: i64) -> ForgeError {
         .with_context("job_id", job)
 }
 
+/// The attempt's and the project's use.
+struct Use {
+    files: i64,
+    bytes: i64,
+    project_bytes: i64,
+}
+
+/// `FG-CI-0019` / `FG-CI-0022` when one more file of `size` bytes would
+/// pass a bound; the bytes still free after it otherwise.
+fn left_after(job: i64, project: i64, u: &Use, size: u64, quota: u64) -> Result<u64, ForgeError> {
+    let used = u64::try_from(u.bytes).unwrap_or(u64::MAX);
+    let project_used = u64::try_from(u.project_bytes).unwrap_or(u64::MAX);
+    if u.files >= MAX_JOB_FILES || used.saturating_add(size) > MAX_JOB_BYTES {
+        return Err(ForgeError::new(ErrorCode::ArtifactTooLarge)
+            .with_context("reason", "job_limit")
+            .with_context("job_id", job)
+            .with_context("files", u.files)
+            .with_context("stored_bytes", u.bytes)
+            .with_context("limit_bytes", MAX_JOB_BYTES));
+    }
+    if project_used.saturating_add(size) > quota {
+        return Err(ForgeError::new(ErrorCode::ArtifactQuotaExceeded)
+            .with_context("job_id", job)
+            .with_context("project_id", project)
+            .with_context("stored_bytes", u.project_bytes)
+            .with_context("quota_bytes", quota));
+    }
+    Ok((MAX_JOB_BYTES - used - size).min(quota - project_used - size))
+}
+
+/// The attempt's files and bytes, the project's bytes, and whether `path`
+/// is stored ($1 job, $2 attempt, $3 project, $4 path).
+const USE_SQL: &str = "SELECT \
+       (SELECT count(*) FROM forge.ci_artifacts a WHERE a.job_id = $1 AND a.attempt = $2), \
+       (SELECT coalesce(sum(size_bytes), 0)::bigint FROM forge.ci_artifacts a \
+          WHERE a.job_id = $1 AND a.attempt = $2), \
+       (SELECT coalesce(sum(size_bytes), 0)::bigint FROM forge.ci_artifacts a \
+          WHERE a.project_id = $3), \
+       EXISTS (SELECT 1 FROM forge.ci_artifacts a \
+          WHERE a.job_id = $1 AND a.attempt = $2 AND a.path = $4)";
+
 /// The running attempt of `job` that may upload `path` now: `None` when the
 /// job is not running (ended, not claimed: the token was revoked with it
 /// anyway). Errors: `FG-CI-0019` past the attempt's files or bytes,
-/// `FG-WEB-0006 reason=artifact_exists` for a path stored already.
+/// `FG-CI-0022` past the project's `quota`, `FG-WEB-0006
+/// reason=artifact_exists` for a path stored already. A first look: the
+/// bounds are checked again, atomically, by [`record`].
 pub async fn upload_target(
     db: &Db,
     job: i64,
     path: &str,
+    quota: u64,
 ) -> Result<Option<UploadTarget>, ForgeError> {
     const QUERY: &str = "ci_artifacts.upload_target";
-    let row: Option<(i64, i64, i32, i64, i64, bool)> = db
+    let row: Option<(i64, i64, i32)> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "SELECT j.project_id, j.pipeline_id, j.attempt, \
-                   (SELECT count(*) FROM forge.ci_artifacts a \
-                      WHERE a.job_id = j.id AND a.attempt = j.attempt), \
-                   (SELECT coalesce(sum(size_bytes), 0)::bigint FROM forge.ci_artifacts a \
-                      WHERE a.job_id = j.id AND a.attempt = j.attempt), \
-                   EXISTS (SELECT 1 FROM forge.ci_artifacts a \
-                      WHERE a.job_id = j.id AND a.attempt = j.attempt AND a.path = $2) \
-                 FROM forge.ci_jobs j WHERE j.id = $1 AND j.status = 'running'",
+                "SELECT project_id, pipeline_id, attempt FROM forge.ci_jobs \
+                 WHERE id = $1 AND status = 'running'",
             )
             .bind(job)
-            .bind(path)
             .fetch_optional(db.write_pool())
             .await
             .map_err(|e| query_error(QUERY, e))
         })
         .await?;
-    let Some((project, pipeline_id, attempt, files, bytes, exists)) = row else {
+    let Some((project, pipeline_id, attempt)) = row else {
         return Ok(None);
     };
+    let (files, bytes, project_bytes, exists): (i64, i64, i64, bool) = db
+        .within(QUERY, async {
+            sqlx::query_as(USE_SQL)
+                .bind(job)
+                .bind(attempt)
+                .bind(project)
+                .bind(path)
+                .fetch_one(db.write_pool())
+                .await
+                .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
     if exists {
         return Err(refused("artifact_exists", job));
     }
-    let used = u64::try_from(bytes).unwrap_or(u64::MAX);
-    if files >= MAX_JOB_FILES || used >= MAX_JOB_BYTES {
-        return Err(ForgeError::new(ErrorCode::ArtifactTooLarge)
-            .with_context("reason", "job_limit")
-            .with_context("job_id", job)
-            .with_context("files", files)
-            .with_context("stored_bytes", bytes)
-            .with_context("limit_bytes", MAX_JOB_BYTES));
-    }
+    let u = Use {
+        files,
+        bytes,
+        project_bytes,
+    };
+    let bytes_left = left_after(job, project, &u, 0, quota)?;
     Ok(Some(UploadTarget {
         project: ProjectId::new(project),
         pipeline_id,
         job_id: job,
         attempt,
-        bytes_left: MAX_JOB_BYTES - used,
+        bytes_left,
     }))
 }
 
 /// Record a stored file of `target` (its bytes are written, not yet in
-/// place); its id. The job must still run the same attempt and the path be
-/// new (`FG-CI-0004 reason=not_recorded` otherwise: the caller removes the
-/// file).
+/// place); its id. One transaction with the job row locked and the
+/// project's artifact lock held (M4 C6 review: parallel uploads cannot pass
+/// a bound together): the job must still run the same attempt
+/// (`FG-CI-0004 reason=not_recorded` otherwise), the path be new
+/// (`artifact_exists`), and the attempt's bounds (`FG-CI-0019`) and the
+/// project's `quota` (`FG-CI-0022`) hold with this file. The caller removes
+/// the file on any error.
 pub async fn record(
     db: &Db,
     target: &UploadTarget,
-    path: &str,
-    size: u64,
-    sha256: &[u8; 32],
+    (path, size, sha256): (&str, u64, &[u8; 32]),
+    quota: u64,
 ) -> Result<i64, ForgeError> {
     const QUERY: &str = "ci_artifacts.record";
-    let size = i64::try_from(size).map_err(|_| refused("artifact_too_large", target.job_id))?;
-    let id: Option<i64> = db
-        .within(QUERY, async {
-            sqlx::query_scalar(
-                "INSERT INTO forge.ci_artifacts (project_id, pipeline_id, job_id, attempt, \
-                   path, size_bytes, sha256, expires_at) \
-                 SELECT j.project_id, j.pipeline_id, j.id, j.attempt, $2, $3, $4, \
-                   now() + make_interval(days => $5) \
-                 FROM forge.ci_jobs j WHERE j.id = $1 AND j.attempt = $6 AND j.status = 'running' \
-                 ON CONFLICT (job_id, attempt, path) DO NOTHING RETURNING id",
-            )
-            .bind(target.job_id)
-            .bind(path)
-            .bind(size)
-            .bind(sha256.as_slice())
-            .bind(i32::try_from(RETENTION_DAYS).unwrap_or(30))
-            .bind(target.attempt)
-            .fetch_optional(db.write_pool())
+    let stored = i64::try_from(size).map_err(|_| refused("artifact_too_large", target.job_id))?;
+    let job = target.job_id;
+    let project = target.project.get();
+    db.within(QUERY, async {
+        let mut tx = db
+            .write_pool()
+            .begin()
             .await
-            .map_err(|e| query_error(QUERY, e))
-        })
-        .await?;
-    id.ok_or_else(|| {
-        ForgeError::new(ErrorCode::JobLeaseLost)
-            .with_context("reason", "not_recorded")
-            .with_context("job_id", target.job_id)
-            .with_context("attempt", target.attempt)
-            .with_context("operation", "artifact")
+            .map_err(|e| query_error(QUERY, e))?;
+        let running: Option<i32> = sqlx::query_scalar(
+            "SELECT attempt FROM forge.ci_jobs WHERE id = $1 AND attempt = $2 \
+               AND status = 'running' FOR UPDATE",
+        )
+        .bind(job)
+        .bind(target.attempt)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        if running.is_none() {
+            tx.rollback().await.map_err(|e| query_error(QUERY, e))?;
+            return Err(ForgeError::new(ErrorCode::JobLeaseLost)
+                .with_context("reason", "not_recorded")
+                .with_context("job_id", job)
+                .with_context("attempt", target.attempt)
+                .with_context("operation", "artifact"));
+        }
+        // The project's uploads are recorded one at a time (the quota).
+        sqlx::query(
+            "SELECT pg_advisory_xact_lock(hashtextextended('ci_artifacts:' || $1::text, 0))",
+        )
+        .bind(project)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let (files, bytes, project_bytes, exists): (i64, i64, i64, bool) = sqlx::query_as(USE_SQL)
+            .bind(job)
+            .bind(target.attempt)
+            .bind(project)
+            .bind(path)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        let u = Use {
+            files,
+            bytes,
+            project_bytes,
+        };
+        let checked = if exists {
+            Err(refused("artifact_exists", job))
+        } else {
+            left_after(job, project, &u, size, quota).map(drop)
+        };
+        if let Err(e) = checked {
+            tx.rollback().await.map_err(|e| query_error(QUERY, e))?;
+            return Err(e);
+        }
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO forge.ci_artifacts (project_id, pipeline_id, job_id, attempt, \
+               path, size_bytes, sha256, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(days => $8)) RETURNING id",
+        )
+        .bind(project)
+        .bind(target.pipeline_id)
+        .bind(job)
+        .bind(target.attempt)
+        .bind(path)
+        .bind(stored)
+        .bind(sha256.as_slice())
+        .bind(i32::try_from(RETENTION_DAYS).unwrap_or(30))
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        tx.commit().await.map_err(|e| query_error(QUERY, e))?;
+        Ok(id)
     })
+    .await
 }
 
 /// Remove the row `id` whose file could not be put in place.
@@ -217,6 +313,9 @@ pub struct ArtifactTarget {
     pub pipeline_id: i64,
     pub job_id: i64,
     pub copy_mark: CopyMark,
+    /// The job was given secrets (M4 C6 review): its artifacts are
+    /// Maintainers' (people) only.
+    pub secrets_released: bool,
 }
 
 async fn target_of(
@@ -225,10 +324,10 @@ async fn target_of(
     (pipeline, job): (i64, i64),
 ) -> Result<Option<ArtifactTarget>, ForgeError> {
     const QUERY: &str = "ci_artifacts.target";
-    let mark: Option<String> = db
+    let row: Option<(String, bool)> = db
         .within(QUERY, async {
-            sqlx::query_scalar(
-                "SELECT p.copy_mark FROM forge.ci_jobs j \
+            sqlx::query_as(
+                "SELECT p.copy_mark, j.secrets_released FROM forge.ci_jobs j \
                  JOIN forge.ci_pipelines p ON p.id = j.pipeline_id \
                  WHERE j.id = $1 AND j.pipeline_id = $2 AND p.project_id = $3",
             )
@@ -240,12 +339,13 @@ async fn target_of(
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    let Some(mark) = mark else {
+    let Some((mark, secrets_released)) = row else {
         return Ok(None);
     };
     Ok(Some(ArtifactTarget {
         pipeline_id: pipeline,
         job_id: job,
+        secrets_released,
         copy_mark: CopyMark::parse(&mark).ok_or_else(|| {
             ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "stored_mark_invalid")
@@ -319,26 +419,40 @@ pub async fn one_decided<P>(
 }
 
 /// What `job` (running) may read of the jobs it `needs`: their current
-/// attempt's artifacts, when they succeeded, in its own pipeline.
+/// attempt's artifacts, when they succeeded, in its own pipeline — and an
+/// artifact of a job that was given secrets only when that pipeline is a
+/// protected push (M4 C6 review; release already requires it, this says it
+/// again in the read). More than [`MAX_LISTED`] files is `FG-CI-0019
+/// reason=too_many_needed_files` (never a silently shortened list).
 pub async fn needs_of(db: &Db, job: i64) -> Result<Vec<StoredArtifact>, ForgeError> {
     const QUERY: &str = "ci_artifacts.needs_of";
-    let rows: Vec<ArtifactRow> = db
+    let mut rows: Vec<ArtifactRow> = db
         .within(QUERY, async {
             sqlx::query_as(&format!(
                 "SELECT {} FROM forge.ci_jobs me \
                  JOIN forge.ci_jobs j ON j.pipeline_id = me.pipeline_id \
                    AND j.name = ANY (me.needs) AND j.status = 'succeeded' \
                  JOIN forge.ci_artifacts a ON a.job_id = j.id AND a.attempt = j.attempt \
-                 WHERE me.id = $1 AND me.status = 'running' ORDER BY j.name, a.path LIMIT $2",
+                 JOIN forge.ci_pipelines p ON p.id = me.pipeline_id \
+                 WHERE me.id = $1 AND me.status = 'running' \
+                   AND (NOT j.secrets_released OR (p.source = 'push' AND p.protected)) \
+                 ORDER BY j.name, a.path LIMIT $2",
                 columns()
             ))
             .bind(job)
-            .bind(MAX_LISTED)
+            .bind(MAX_LISTED + 1)
             .fetch_all(db.write_pool())
             .await
             .map_err(|e| query_error(QUERY, e))
         })
         .await?;
+    if i64::try_from(rows.len()).unwrap_or(i64::MAX) > MAX_LISTED {
+        rows.clear();
+        return Err(ForgeError::new(ErrorCode::ArtifactTooLarge)
+            .with_context("reason", "too_many_needed_files")
+            .with_context("job_id", job)
+            .with_context("limit_files", MAX_LISTED));
+    }
     Ok(rows.into_iter().map(artifact_of).collect())
 }
 

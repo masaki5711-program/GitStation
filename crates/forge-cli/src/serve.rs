@@ -92,6 +92,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // can be set and a job that asks for secrets fails with FG-CI-0016);
     // a bad file stops the start.
     let ci_secret_keys = cfg.ci.secret_keys()?.map(Arc::new);
+    let artifact_quota = cfg.ci.artifact_quota_bytes;
     block_on(async {
         let smart_http = smart_http(storage, &cfg.git_http)?;
         forge_git::version::detect(&smart_http.git).await?;
@@ -173,7 +174,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 );
                 // M4 C6: the artifact files under the storage root.
                 let pipelines = pipelines.with_artifacts(
-                    forge_pipelines::artifacts::ArtifactStore::new(smart_http.storage.path()),
+                    forge_pipelines::artifacts::ArtifactStore::new(smart_http.storage.path())
+                        .with_quota(artifact_quota),
                 );
                 match &ci_secret_keys {
                     Some(keys) => pipelines.with_secret_keys(Arc::clone(keys)),

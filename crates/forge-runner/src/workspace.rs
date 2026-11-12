@@ -71,12 +71,17 @@ impl Workspace {
     /// directory only the runner's user may read (Unix: 0700 / 0600).
     pub fn write_env_file(dirs: &JobDirs, vars: &[(&str, &str)]) -> std::io::Result<PathBuf> {
         use std::io::Write as _;
-        std::fs::create_dir_all(&dirs.secrets)?;
+        // Created with its mode at once (never a moment group- or
+        // world-readable); on Windows the work directory's ACL protects
+        // it (runbook ci-runner: the runner's user only).
+        #[cfg_attr(not(unix), allow(unused_mut))] // the mode is Unix-only
+        let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&dirs.secrets, std::fs::Permissions::from_mode(0o700))?;
+            use std::os::unix::fs::DirBuilderExt as _;
+            builder.mode(0o700);
         }
+        builder.create(&dirs.secrets)?;
         let path = dirs.secrets.join("job.env");
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);

@@ -19,12 +19,21 @@
 //!   [`Pipelines::needed_artifact_file`], `JobArtifactDownload`): the job's
 //!   own token; only the current, succeeded attempt of a job it `needs` in
 //!   its own pipeline.
+//! - **Jobs that were given secrets** (M4 C6 review, HIGH): an upload of
+//!   such a job is scanned for the forms of its released masked values
+//!   (the claim's snapshot) while it arrives and refused with `FG-CI-0021`
+//!   when one is found; its artifacts are readable by a project Maintainer
+//!   who is a person only (never an AI agent), and given to a `needs`
+//!   consumer only in a protected push pipeline.
+//! - **Quota**: a project holds at most `ci.artifact_quota_bytes`
+//!   (`FG-CI-0022`); every bound is checked again when the row is recorded,
+//!   with the job row locked (parallel uploads cannot pass it together).
 //! - **Expiry** ([`expire_artifacts`], the worker): after 30 days, unless
 //!   `keep` (a deployed version, C11): the file first, then the row.
 
 use std::path::{Path, PathBuf};
 
-use forge_auth::{authorize_ci_output, Action, Authorized, JobSelfCtx, ProjectCtx};
+use forge_auth::{authorize_ci_artifact, Action, Authorized, JobSelfCtx, ProjectCtx};
 use forge_core::ci_artifact::{self, MAX_FILE_BYTES};
 use forge_core::RequestId;
 use forge_db::ci_artifacts::{self as db, StoredArtifact, UploadTarget};
@@ -47,6 +56,7 @@ pub const EXPIRY_BATCH: i64 = 200;
 #[derive(Debug, Clone)]
 pub struct ArtifactStore {
     root: PathBuf,
+    quota: u64,
 }
 
 fn storage_failed(operation: &'static str, e: std::io::Error) -> ForgeError {
@@ -60,7 +70,16 @@ impl ArtifactStore {
     pub fn new(storage_root: &Path) -> Self {
         Self {
             root: storage_root.join(DIR),
+            quota: forge_core::config::CiConfig::DEFAULT_ARTIFACT_QUOTA_BYTES,
         }
+    }
+
+    /// The most bytes one project's artifacts may hold
+    /// (`ci.artifact_quota_bytes`).
+    #[must_use]
+    pub fn with_quota(mut self, quota: u64) -> Self {
+        self.quota = quota;
+        self
     }
 
     fn dir(&self, project: i64) -> PathBuf {
@@ -133,6 +152,11 @@ pub struct ArtifactUpload {
     hasher: Sha256,
     size: u64,
     limit: u64,
+    /// The forms of the job's released masked values (empty: none).
+    forms: Vec<String>,
+    /// The last bytes seen (a form split across two writes).
+    tail: Vec<u8>,
+    quota: u64,
 }
 
 impl std::fmt::Debug for ArtifactUpload {
@@ -171,6 +195,18 @@ impl ArtifactUpload {
         if self.size.saturating_add(len) > self.limit {
             return Err(too_large(self.target.job_id, self.limit));
         }
+        if !self.forms.is_empty() {
+            let mut window = std::mem::take(&mut self.tail);
+            window.extend_from_slice(bytes);
+            if forge_core::ci_secret::contains_any(&window, &self.forms) {
+                return Err(ForgeError::new(ErrorCode::SecretInArtifact)
+                    .with_context("job_id", self.target.job_id)
+                    .with_context("path", self.path.clone())); // clone: the error names it
+            }
+            let keep = self.forms.iter().map(String::len).max().unwrap_or(1) - 1;
+            let from = window.len().saturating_sub(keep);
+            self.tail = window.split_off(from);
+        }
         self.file
             .write_all(bytes)
             .await
@@ -188,7 +224,13 @@ impl ArtifactUpload {
             return Err(storage_failed("artifact_sync", e));
         }
         let digest: [u8; 32] = self.hasher.finalize().into();
-        let id = match db::record(&pipelines.db, &self.target, &self.path, self.size, &digest).await
+        let id = match db::record(
+            &pipelines.db,
+            &self.target,
+            (&self.path, self.size, &digest),
+            self.quota,
+        )
+        .await
         {
             Ok(id) => id,
             Err(e) => {
@@ -286,14 +328,17 @@ impl Pipelines {
                 .with_context("param", "path")
                 .with_context("reason", reason));
         }
-        let target = db::upload_target(&self.db, job, path)
+        let store = self.store()?;
+        let target = db::upload_target(&self.db, job, path, store.quota)
             .await?
             .ok_or_else(|| {
                 ForgeError::new(ErrorCode::JobLeaseLost)
                     .with_context("job_id", job)
                     .with_context("operation", "artifact")
             })?;
-        let store = self.store()?;
+        // The claim's snapshot (M4 C6 review): `FG-CI-0016` when the job
+        // has masked values and the keys are not usable — nothing stored.
+        let (_released, forms) = self.job_masks(job).await?;
         let dir = store.dir(target.project.get());
         tokio::fs::create_dir_all(&dir)
             .await
@@ -314,6 +359,9 @@ impl Pipelines {
             file,
             hasher: Sha256::new(),
             size: 0,
+            forms,
+            tail: Vec::new(),
+            quota: store.quota,
         })
     }
 
@@ -387,11 +435,12 @@ fn decide(
     view: OutputView,
     target: &db::ArtifactTarget,
 ) -> Result<forge_auth::CiOutputAllowed, ForgeError> {
-    authorize_ci_output(
+    authorize_ci_artifact(
         proof,
         pipeline_mark(target.copy_mark),
         view.tip_mark,
         view.declared_agent,
+        target.secrets_released,
     )
     .map_err(|e| {
         e.with_context("pipeline_id", target.pipeline_id)

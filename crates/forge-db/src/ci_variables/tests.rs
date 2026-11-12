@@ -228,26 +228,71 @@ async fn a_project_holds_at_most_its_limit_of_variables() {
 }
 
 #[tokio::test]
-async fn a_jobs_masked_values_are_read_only_for_a_protected_push() {
+async fn a_jobs_masks_are_the_snapshot_of_its_claim_and_survive_a_change() {
     let w = world().await;
     w.put(&value("MASKED_ONE", 1, true)).await;
     w.put(&value("PLAIN_ONE", 2, false)).await;
-    let (_, protected_job) = w
-        .pipeline(true, Source::Push, &["MASKED_ONE", "PLAIN_ONE", "ABSENT"])
+    let (_, job) = w
+        .pipeline(true, Source::Push, &["MASKED_ONE", "PLAIN_ONE"])
         .await;
-    let (project, sealed) = masked_for_job(&w.t.db, protected_job)
+    // Before a release: nothing to mask, not released.
+    let (project, released, sealed) = masked_for_job(&w.t.db, job)
         .await
         .expect("read")
         .expect("job");
     assert_eq!(project, w.web.project_id);
-    let names: Vec<&str> = sealed.iter().map(|v| v.name.as_str()).collect();
-    assert_eq!(names, ["MASKED_ONE"]);
-    let (_, open_job) = w.pipeline(false, Source::Push, &["MASKED_ONE"]).await;
-    let (_, none) = masked_for_job(&w.t.db, open_job)
+    assert!(!released && sealed.is_empty());
+    let runner = register(
+        &w.t.db,
+        &ctx(Actor::User(w.alice), "req-reg-r1"),
+        &NewRunner {
+            name: "r1".to_owned(),
+            description: String::new(),
+            tags: Vec::new(),
+        },
+    )
+    .await
+    .expect("runner")
+    .runner
+    .id;
+    let claimed = lease::claim(&w.t.db, runner)
+        .await
+        .expect("claim")
+        .expect("job");
+    let released_now = sealed_for(&w.t.db, w.web.project_id, &claimed.requested_secrets)
+        .await
+        .expect("sealed");
+    assert!(record_release(
+        &w.t.db,
+        (w.web.project_id, job, claimed.attempt),
+        &released_now
+    )
+    .await
+    .expect("record"));
+    // The variable is replaced, then deleted: the claim's value stays masked.
+    w.put(&value("MASKED_ONE", 9, true)).await;
+    delete(
+        &w.t.db,
+        &ctx(Actor::User(w.alice), "req-ci-var-del"),
+        w.web.project_id,
+        "MASKED_ONE",
+    )
+    .await
+    .expect("delete");
+    let (_, released, sealed) = masked_for_job(&w.t.db, job)
         .await
         .expect("read")
         .expect("job");
-    assert!(none.is_empty(), "an unprotected push gets nothing to mask");
+    assert!(released);
+    let names: Vec<&str> = sealed.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, ["MASKED_ONE"], "masked only, from the snapshot");
+    assert_eq!(sealed[0].sealed.ciphertext, vec![1u8; 40]);
+    // A job that is not running records nothing.
+    assert!(
+        !record_release(&w.t.db, (w.web.project_id, 999_999, 1), &[])
+            .await
+            .expect("record")
+    );
     assert!(masked_for_job(&w.t.db, 999_999)
         .await
         .expect("read")

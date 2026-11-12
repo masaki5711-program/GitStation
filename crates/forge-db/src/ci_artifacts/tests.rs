@@ -15,6 +15,9 @@ use crate::projects::{self, CreatedProject, NewProject};
 use crate::test_support::*;
 use crate::users::{self, NewUser};
 
+/// The default project quota (5 GiB).
+const QUOTA: u64 = 5 * 1024 * 1024 * 1024;
+
 fn ctx(actor: Actor, request: &str) -> ChangeContext {
     ChangeContext::new(actor, RequestId::parse(request).expect("request id"))
 }
@@ -101,11 +104,11 @@ impl World {
     }
 
     async fn store(&self, job: i64, path: &str, size: u64) -> i64 {
-        let target = upload_target(&self.t.db, job, path)
+        let target = upload_target(&self.t.db, job, path, QUOTA)
             .await
             .expect("target")
             .expect("running");
-        record(&self.t.db, &target, path, size, &[7u8; 32])
+        record(&self.t.db, &target, (path, size, &[7u8; 32]), QUOTA)
             .await
             .expect("record")
     }
@@ -122,12 +125,12 @@ async fn an_upload_is_taken_only_while_the_job_runs_and_once_per_path() {
         .await
         .expect("claim")
         .expect("job");
-    assert!(upload_target(&w.t.db, 999_999, "x")
+    assert!(upload_target(&w.t.db, 999_999, "x", QUOTA)
         .await
         .expect("q")
         .is_none());
     let id = w.store(claimed.job_id, "out/app", 12).await;
-    let e = upload_target(&w.t.db, claimed.job_id, "out/app")
+    let e = upload_target(&w.t.db, claimed.job_id, "out/app", QUOTA)
         .await
         .expect_err("twice");
     assert_eq!(e.code(), ErrorCode::RequestInvalid);
@@ -141,7 +144,7 @@ async fn an_upload_is_taken_only_while_the_job_runs_and_once_per_path() {
     )
     .await
     .expect("complete");
-    assert!(upload_target(&w.t.db, claimed.job_id, "out/other")
+    assert!(upload_target(&w.t.db, claimed.job_id, "out/other", QUOTA)
         .await
         .expect("q")
         .is_none());
@@ -175,8 +178,9 @@ async fn an_artifact_past_the_limit_is_refused() {
         forge_core::ci_artifact::MAX_FILE_BYTES,
     )
     .await;
-    // Six files of 100 MiB: 600 MiB, past the attempt's 512 MiB.
-    for i in 0..5 {
+    // Five files of 100 MiB: 500 MiB; a sixth would pass the attempt's
+    // 512 MiB and is refused when it is recorded.
+    for i in 0..4 {
         w.store(
             claimed.job_id,
             &format!("big{i}"),
@@ -184,9 +188,23 @@ async fn an_artifact_past_the_limit_is_refused() {
         )
         .await;
     }
-    let e = upload_target(&w.t.db, claimed.job_id, "one-more")
+    let target = upload_target(&w.t.db, claimed.job_id, "one-more", QUOTA)
         .await
-        .expect_err("full");
+        .expect("12 MiB still free")
+        .expect("running");
+    assert_eq!(target.bytes_left, 12 * 1024 * 1024);
+    let e = record(
+        &w.t.db,
+        &target,
+        (
+            "one-more",
+            forge_core::ci_artifact::MAX_FILE_BYTES,
+            &[3u8; 32],
+        ),
+        QUOTA,
+    )
+    .await
+    .expect_err("past the attempt");
     assert_eq!(e.code(), ErrorCode::ArtifactTooLarge);
 }
 
@@ -285,4 +303,133 @@ async fn the_expiry_takes_old_rows_but_never_a_kept_one() {
     assert!(forget(&w.t.db, old).await.expect("forget"));
     assert!(!forget(&w.t.db, kept).await.expect("kept"));
     assert!(!forget(&w.t.db, fresh).await.expect("fresh"));
+}
+
+#[tokio::test]
+async fn an_upload_past_the_project_quota_is_refused() {
+    let w = world().await;
+    w.pipeline('a', CopyMark::Open, vec![job("build", &[])])
+        .await;
+    let runner = w.runner().await;
+    let claimed = lease::claim(&w.t.db, runner)
+        .await
+        .expect("claim")
+        .expect("job");
+    let quota = 1000;
+    let first = upload_target(&w.t.db, claimed.job_id, "a", quota)
+        .await
+        .expect("target")
+        .expect("running");
+    assert_eq!(first.bytes_left, 1000);
+    // Two uploads checked against the same free space: the record of the
+    // second sees the first and refuses (no parallel bypass).
+    let second = upload_target(&w.t.db, claimed.job_id, "b", quota)
+        .await
+        .expect("target")
+        .expect("running");
+    record(&w.t.db, &first, ("a", 600, &[1u8; 32]), quota)
+        .await
+        .expect("first fits");
+    let e = record(&w.t.db, &second, ("b", 600, &[2u8; 32]), quota)
+        .await
+        .expect_err("past the quota");
+    assert_eq!(e.code(), ErrorCode::ArtifactQuotaExceeded);
+    let e = upload_target(&w.t.db, claimed.job_id, "c", 500)
+        .await
+        .expect_err("already full");
+    assert_eq!(e.code(), ErrorCode::ArtifactQuotaExceeded);
+}
+
+#[tokio::test]
+async fn a_secret_jobs_artifacts_reach_needs_only_in_a_protected_push() {
+    let w = world().await;
+    let pipeline = w
+        .pipeline(
+            'a',
+            CopyMark::Open,
+            vec![job("build", &[]), job("test", &["build"])],
+        )
+        .await;
+    let runner = w.runner().await;
+    let build = lease::claim(&w.t.db, runner)
+        .await
+        .expect("claim")
+        .expect("build");
+    w.store(build.job_id, "out/app", 3).await;
+    // The build was given secrets (as the claim records it).
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.ci_jobs SET secrets_released = true WHERE id = {}",
+        build.job_id
+    ))
+    .await;
+    lease::complete(
+        &w.t.db,
+        runner,
+        build.job_id,
+        build.attempt,
+        lease::JobResult::Succeeded,
+    )
+    .await
+    .expect("done");
+    let test = lease::claim(&w.t.db, runner)
+        .await
+        .expect("claim")
+        .expect("test");
+    // An unprotected pipeline: not given to the consumer.
+    assert!(needs_of(&w.t.db, test.job_id).await.expect("q").is_empty());
+    // The target says so, for the read decision.
+    let (_, target) = list_decided(&w.t.db, w.web.project_id, (pipeline, build.job_id), |t| {
+        Ok::<_, ForgeError>(t.clone())
+    })
+    .await
+    .expect("list")
+    .expect("job");
+    assert!(target.secrets_released);
+    // In a protected push it is.
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.ci_pipelines SET protected = true WHERE id = {pipeline}"
+    ))
+    .await;
+    assert_eq!(needs_of(&w.t.db, test.job_id).await.expect("q").len(), 1);
+}
+
+#[tokio::test]
+async fn more_needed_files_than_the_bound_is_an_error_not_a_short_list() {
+    let w = world().await;
+    w.pipeline(
+        'a',
+        CopyMark::Open,
+        vec![job("build", &[]), job("test", &["build"])],
+    )
+    .await;
+    let runner = w.runner().await;
+    let build = lease::claim(&w.t.db, runner)
+        .await
+        .expect("claim")
+        .expect("build");
+    w.t.exec_superuser(&format!(
+        "INSERT INTO forge.ci_artifacts (project_id, pipeline_id, job_id, attempt, path, \
+           size_bytes, sha256, expires_at) \
+         SELECT project_id, pipeline_id, id, attempt, 'f' || g, 1, decode(repeat('00', 32), 'hex'), \
+           now() + interval '1 day' FROM forge.ci_jobs, generate_series(1, {}) g WHERE id = {}",
+        MAX_LISTED + 1,
+        build.job_id
+    ))
+    .await;
+    lease::complete(
+        &w.t.db,
+        runner,
+        build.job_id,
+        build.attempt,
+        lease::JobResult::Succeeded,
+    )
+    .await
+    .expect("done");
+    let test = lease::claim(&w.t.db, runner)
+        .await
+        .expect("claim")
+        .expect("test");
+    let e = needs_of(&w.t.db, test.job_id).await.expect_err("too many");
+    assert_eq!(e.code(), ErrorCode::ArtifactTooLarge);
+    assert!(e.to_string().contains("too_many_needed_files"), "{e}");
 }

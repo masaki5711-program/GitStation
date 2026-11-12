@@ -360,6 +360,13 @@ fn only_people_only_actions_refuse_by_account_kind() {
                             e.code() == ErrorCode::Forbidden
                                 && matches!(r.actor, crate::matrix::Actor::ActAs(_))
                         }
+                        // M4 C6 review: an artifact of a job that was
+                        // given secrets is refused to every AI agent
+                        // audience (a service account and a bot by kind).
+                        (AccountKind::ServiceAccount | AccountKind::Bot, "secret_job") => {
+                            e.code() == ErrorCode::RepositoryCopyWithheld
+                                && matches!(resource, crate::model::Resource::CiOutput { .. })
+                        }
                         // Plan 06 D-5 safety net: a whole copy of a
                         // repository whose default tip is not measured open
                         // is refused to every AI agent audience — a service

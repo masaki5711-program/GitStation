@@ -1,4 +1,4 @@
-# Runbook: ci-secrets（FG-CI-0016、FG-CI-0017、FG-CI-0018。関連: FG-SYS-0002、FG-WEB-0006、FG-CI-0008）
+# Runbook: ci-secrets（FG-CI-0016、FG-CI-0017、FG-CI-0018、FG-CI-0021。関連: FG-SYS-0002、FG-WEB-0006、FG-CI-0008）
 
 M4 C6（計画 14 §4.1・§9 の 2、ADR-0013、ADR-0029 の決定 8 と C6 の追記）の CI の変数（シークレット）が期待どおりに動かないとき。
 表 `forge.ci_variables`（値は `ci.secret_keys_file` の鍵で封じた暗号文だけ。監査はプロジェクトに `ci_variable.created` /
@@ -78,10 +78,28 @@ M4 C6（計画 14 §4.1・§9 の 2、ADR-0013、ADR-0029 の決定 8 と C6 の
 - シークレットを使うジョブをやり直し、ログの `forge.ci.job_claimed` の `secrets_released` が名前の数と同じで、ジョブのログに値が無い
   （`[masked]` になっている）。
 
+## シークレットを受け取ったジョブの成果物（FG-CI-0021）
+
+値を渡したジョブ（`forge.ci_jobs.secrets_released = true`）は、取得のときに渡した値の写し（`forge.ci_job_secret_snapshots`）を持つ。
+その成果物は:
+
+- 送られてくる間に、渡したマスクする値の形（値、base64 — 前に何かある場合も —、16 進、パーセント、JSON のエスケープ）を探し、
+  見つかれば保存しない（422 FG-CI-0021。ジョブは FG-CI-0020 `server_code=FG-CI-0021` で失敗）。値はログにも応答にも出さない。
+- 保存できたものも、読めるのはプロジェクトの Maintainer 以上の人だけ。AI（エージェントのトークン・サービスアカウント・
+  `Forge-Context-Audience: agent`）は FG-AUTH-0022 `reason=secret_job`。`needs` で受け取れるのは保護された push のパイプラインの中だけ。
+
+Diagnose: `SELECT id, name, secrets, secrets_released FROM forge.ci_jobs WHERE id = <job_id>;`、
+`SELECT name, attempt, masked, created_at FROM forge.ci_job_secret_snapshots WHERE job_id = <job_id>;`（暗号文は読まない）、
+`forge serve` のログの FG-CI-0021（`job_id`・`path`）。
+
+Mitigate: 成果物にするパスにシークレットを書かない（`env > out.txt` をしない。値は /tmp など成果物にしない場所で使う）。
+**加工した値（暗号化・圧縮）は見つからない**: それでも Maintainer しか読めないが、漏れた疑いがあれば値を発行元で失効させ、
+`gstn ci variable set` で入れ替える（ジョブの途中で変えても、そのジョブには取得のときの値の写しでマスクが続く）。
+
 ## 知っておくこと
 
-- `protected_only` は既定で真。今はこの値に関係なく、値は保護されたブランチへの push のパイプラインにしか渡らない（ADR-0029 の
-  義務 5 が優先。偽にしても届く範囲は広がらない）。後の ADR で広げるときに移行が要らないように列を残した。
+- `protected_only` は既定で真。値を渡すのは**常に**保護されたブランチへの push のパイプラインだけ（ADR-0029 の義務 5）。
+  偽にしても届く範囲は広がらない。後の ADR で広げるときに移行が要らないように列を残した。
 - ジョブのトークン（`fgj_…`）と同じく、値は Runner の取得の応答で 1 回だけ渡る（`no-store`）。Runner は値をジョブの
   ディレクトリの外のファイル（`<work_dir>/job/secrets/job.env`、0600）に書き、`podman create --env-file` に渡してすぐ消す。
   argv・ログ・`Debug` には出さない。
