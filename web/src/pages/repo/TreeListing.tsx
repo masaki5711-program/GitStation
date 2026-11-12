@@ -2,7 +2,6 @@
 // most 5000 entries and says so (`truncated`); an empty tree and a
 // submodule (a commit in another repository, not a link) are said in words.
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
 
 import { refParam, useBlob, useTree, type Spec } from '../../api/repo';
 import type { TreeEntry } from '../../api/types';
@@ -11,6 +10,7 @@ import { MarkdownView } from '../../features/MarkdownView';
 import { formatBytes } from '../../features/labels';
 import { blobUrl, isMarkdownPath, isReadmeName, parentPath, treeUrl } from '../../features/repoUrls';
 import { Loading } from '../../components/Loading';
+import { PrefetchLink } from '../../components/PrefetchLink';
 import { RepoError } from './common';
 import styles from './Repo.module.css';
 
@@ -65,7 +65,7 @@ export function TreeListing({
           {spec.path !== '' && (
             <tr>
               <th scope="row">
-                <Link to={treeUrl(project, name, parentPath(spec.path))}>{t('tree.parent')}</Link>
+                <PrefetchLink to={treeUrl(project, name, parentPath(spec.path))}>{t('tree.parent')}</PrefetchLink>
               </th>
               <td />
             </tr>
@@ -74,16 +74,16 @@ export function TreeListing({
             <tr key={entry.path}>
               <th scope="row" className={styles.entry}>
                 {entry.type === 'tree' ? (
-                  <Link to={treeUrl(project, name, entry.path)}>
+                  <PrefetchLink to={treeUrl(project, name, entry.path)}>
                     {entry.name}
                     {'/'}
-                  </Link>
+                  </PrefetchLink>
                 ) : entry.type === 'submodule' ? (
                   <span>
                     {entry.name} <span className={styles.badge}>{t('tree.submodule')}</span>
                   </span>
                 ) : (
-                  <Link to={blobUrl(project, name, entry.path)}>{entry.name}</Link>
+                  <PrefetchLink to={blobUrl(project, name, entry.path)}>{entry.name}</PrefetchLink>
                 )}
                 {entry.type === 'symlink' && (
                   <span className={styles.badge}>{t('tree.symlink')}</span>
@@ -120,7 +120,7 @@ function Readme({
   return (
     <section className={styles.readme} aria-labelledby="readme-title">
       <h2 id="readme-title" className={styles.sectionTitle}>
-        <Link to={blobUrl(project, spec.rev.name, path)}>{path.split('/').pop()}</Link>
+        <PrefetchLink to={blobUrl(project, spec.rev.name, path)}>{path.split('/').pop()}</PrefetchLink>
       </h2>
       {blob.isPending && <Loading />}
       {blob.isError && (

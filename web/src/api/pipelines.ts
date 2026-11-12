@@ -2,10 +2,10 @@
 // diagnosis, a job's log, cancel and retry. Keys start with
 // ['pipelines', projectId] so one invalidation reaches everything of a
 // project. Reads poll only while something is still moving.
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 
-import { call } from './client';
+import { call, type ApiClient } from './client';
 import { useApi } from './context';
 import type { components } from './schema.gen';
 
@@ -70,9 +70,8 @@ export function pipelineIdOfCheck(run: { name: string; summary: string }): numbe
   return parseId(m?.[1]);
 }
 
-export function usePipelines(project: number, before: number | undefined) {
-  const api = useApi();
-  return useQuery({
+export const pipelinesQuery = (api: ApiClient, project: number, before: number | undefined) =>
+  queryOptions({
     queryKey: pipelineKeys.list(project, before),
     queryFn: ({ signal }) =>
       call(() =>
@@ -84,6 +83,9 @@ export function usePipelines(project: number, before: number | undefined) {
     refetchInterval: (q) =>
       q.state.data?.pipelines.some((p) => isMoving(p.status)) === true ? LIST_POLL_MS : false,
   });
+
+export function usePipelines(project: number, before: number | undefined) {
+  return useQuery(pipelinesQuery(useApi(), project, before));
 }
 
 export function usePipeline(project: number, id: number) {

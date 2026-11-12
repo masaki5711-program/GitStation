@@ -36,4 +36,8 @@ async function start(): Promise<void> {
   );
 }
 
-void start();
+start().catch((e: unknown) => {
+  // Nothing rendered (no #app, or a failure before the first render): the
+  // console is the only place left to say so.
+  console.error('gitstation: the app failed to start', e);
+});

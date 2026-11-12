@@ -10,7 +10,8 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { ApiFailure, call } from '../api/client';
-import { refParam, useSpec, useTree } from '../api/repo';
+import { mergeRequestsQuery } from '../api/mergeRequests';
+import { commitsQuery, latestCommitQuery, refParam, useSpec, useTree } from '../api/repo';
 import {
   blobUrl,
   branchesUrl,
@@ -20,10 +21,12 @@ import {
   pullsUrl,
   tagsUrl,
 } from '../features/repoUrls';
+import { connectionIsSlow, settle, whenIdle } from '../features/prefetch';
 import { TreeListing } from './repo/TreeListing';
 import { shortOid } from './repo/common';
 import { Loading } from '../components/Loading';
 import { useApi } from '../api/context';
+import { projectQuery } from '../api/namespaces';
 import { Breadcrumb } from '../components/Breadcrumb';
 import controls from '../components/controls.module.css';
 import { CopyButton } from '../components/CopyButton';
@@ -78,16 +81,7 @@ function LatestCommit({ id, path, branch }: { id: number; path: string; branch: 
   const { t, i18n } = useTranslation();
   const api = useApi();
   const ref = `refs/heads/${branch}`;
-  const latest = useQuery({
-    queryKey: ['commits-latest', id, ref],
-    queryFn: ({ signal }) =>
-      call(() =>
-        api.GET('/api/v1/projects/{id}/repository/commits', {
-          signal,
-          params: { path: { id }, query: { ref, limit: 1 } },
-        }),
-      ),
-  });
+  const latest = useQuery(latestCommitQuery(api, id, ref));
   if (latest.isPending) return <Loading />;
   if (latest.isError) {
     return (
@@ -290,9 +284,25 @@ function ProjectInfo({ id, path, created, cloneUrl }: { id: number; path: string
   );
 }
 
+/** Once the page has drawn and the browser is idle: the screens one opens
+ * next from here — the history and the open merge requests — so their tab
+ * shows at once. (The README is already read by the file list below.) */
+function useIdlePrefetch(projectId: number, ref: string | null) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (ref === null || connectionIsSlow()) return undefined;
+    return whenIdle(() => {
+      void settle(queryClient.infiniteQuery(commitsQuery(api, projectId, ref, '')));
+      void settle(queryClient.query(mergeRequestsQuery(api, projectId, { state: 'open' })));
+    });
+  }, [api, queryClient, projectId, ref]);
+}
+
 /** The root of the default branch, with its README, under the summary. */
 function ProjectFiles({ projectId, project }: { projectId: number; project: string }) {
   const spec = useSpec(projectId, '');
+  useIdlePrefetch(projectId, spec.data === undefined ? null : refParam(spec.data.rev));
   if (spec.data === undefined) return null;
   return <TreeListing projectId={projectId} project={project} spec={spec.data} />;
 }
@@ -300,11 +310,7 @@ function ProjectFiles({ projectId, project }: { projectId: number; project: stri
 export function ProjectPage({ id }: { id: number }) {
   const { t } = useTranslation();
   const api = useApi();
-  const project = useQuery({
-    queryKey: ['project', id],
-    queryFn: ({ signal }) =>
-      call(() => api.GET('/api/v1/projects/{id}', { signal, params: { path: { id } } })),
-  });
+  const project = useQuery(projectQuery(api, id));
   const data = project.data;
   useDocumentTitle(data?.display_name ?? null);
   useEffect(() => {
