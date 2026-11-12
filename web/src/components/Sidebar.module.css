@@ -71,7 +71,7 @@
 .link[aria-current='page'],
 .link[aria-current='page']:hover:not(:disabled) {
   background: var(--gs-color-nav-active-surface);
-  box-shadow: inset var(--gs-accent-border-width) 0 0 var(--gs-brand-teal-strong);
+  box-shadow: inset var(--gs-accent-border-width) 0 0 var(--gs-color-accent-strong);
   color: var(--gs-color-link);
   font-weight: var(--gs-font-weight-semibold);
 }
@@ -105,8 +105,8 @@
   min-width: var(--gs-badge-size);
   padding: 0 var(--gs-space-1);
   border-radius: var(--gs-radius-pill);
-  background: var(--gs-brand-orange);
-  color: var(--gs-brand-navy);
+  background: var(--gs-color-attention);
+  color: var(--gs-color-on-attention);
   font-size: var(--gs-font-size-sm);
   font-weight: var(--gs-font-weight-bold);
   font-variant-numeric: var(--gs-numeric);

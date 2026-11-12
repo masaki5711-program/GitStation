@@ -35,8 +35,8 @@
   min-width: 1.25rem;
   padding: 0 var(--gs-space-1);
   border-radius: var(--gs-radius-md);
-  background: var(--gs-brand-orange);
-  color: var(--gs-brand-navy);
+  background: var(--gs-color-attention);
+  color: var(--gs-color-on-attention);
   font-size: var(--gs-font-size-sm);
   font-weight: 700;
   line-height: 1.25rem;

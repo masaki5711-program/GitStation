@@ -55,7 +55,7 @@
   min-height: var(--gs-tap-target);
   max-width: 100%;
   padding: var(--gs-space-2) var(--gs-space-4);
-  border: 1px solid var(--gs-brand-teal-strong);
+  border: 1px solid var(--gs-color-accent-strong);
   border-radius: var(--gs-radius-sm);
   font: inherit;
   font-weight: var(--gs-font-weight-medium);
@@ -73,7 +73,7 @@
 
 .primary {
   background: var(--gs-color-action);
-  color: var(--gs-color-white);
+  color: var(--gs-color-on-action);
 }
 
 .primary:hover:not(:disabled) {
@@ -84,7 +84,7 @@
   background: var(--gs-color-action-active);
 }
 
-/* A destructive action: red text on a red tint; pressed, white on red. */
+/* A destructive action: red text on a red tint; pressed, the reverse. */
 .danger {
   composes: button;
   border-color: var(--gs-color-danger-border);
@@ -100,7 +100,7 @@
 
 .danger:active:not(:disabled, [aria-disabled='true']) {
   background: var(--gs-color-danger-text);
-  color: var(--gs-color-white);
+  color: var(--gs-color-on-status);
 }
 
 .danger[aria-disabled='true']:hover,

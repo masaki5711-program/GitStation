@@ -25,7 +25,7 @@
 .heading {
   margin: 0 0 var(--gs-space-3);
   font-size: var(--gs-font-size-lg);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }
 
 .empty {
@@ -47,7 +47,7 @@
 .moved {
   padding: var(--gs-space-2) var(--gs-space-3);
   border: 1px solid var(--gs-color-border);
-  border-left: var(--gs-accent-rule-width) solid var(--gs-brand-orange);
+  border-left: var(--gs-accent-rule-width) solid var(--gs-color-attention);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-warning-surface);
   color: var(--gs-color-warning-text);
@@ -78,7 +78,7 @@
 .card h2 {
   margin: 0 0 var(--gs-space-3);
   font-size: var(--gs-font-size-lg);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }
 
 .clone {
@@ -139,7 +139,7 @@
 .info h2 {
   margin: 0 0 var(--gs-space-3);
   font-size: var(--gs-font-size-md);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }
 
 .facts {

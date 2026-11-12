@@ -61,5 +61,5 @@
   margin: 0;
   font-size: var(--gs-font-size-lg);
   font-weight: var(--gs-font-weight-semibold);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }

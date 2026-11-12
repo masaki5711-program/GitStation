@@ -90,7 +90,7 @@
 }
 
 .statusDone {
-  border-left-color: var(--gs-brand-teal-strong);
+  border-left-color: var(--gs-color-accent-strong);
 }
 
 .actions {
@@ -104,13 +104,13 @@
 .sectionTitle {
   margin: var(--gs-space-6) 0 var(--gs-space-3);
   font-size: var(--gs-font-size-lg);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }
 
 .stageTitle {
   margin: var(--gs-space-4) 0 var(--gs-space-1);
   font-size: var(--gs-font-size-md);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }
 
 .failure {
@@ -233,7 +233,7 @@
   margin: var(--gs-space-3) 0 0;
   padding: var(--gs-space-3);
   border: 1px solid var(--gs-color-border);
-  border-left: var(--gs-accent-border-width) solid var(--gs-brand-orange);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-attention);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-warning-surface);
   color: var(--gs-color-warning-text);

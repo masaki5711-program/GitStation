@@ -7,7 +7,7 @@
   margin: 0 0 var(--gs-space-3);
   font-size: var(--gs-font-size-lg);
   font-weight: var(--gs-font-weight-semibold);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }
 
 .hint {
@@ -48,11 +48,11 @@
   gap: var(--gs-space-2);
   min-height: var(--gs-card-min-height);
   padding: var(--gs-space-4);
-  border-top: var(--gs-accent-rule-width) solid var(--gs-brand-teal);
+  border-top: var(--gs-accent-rule-width) solid var(--gs-color-accent);
 }
 
 .card:hover {
-  border-top-color: var(--gs-brand-teal);
+  border-top-color: var(--gs-color-accent);
   background: var(--gs-color-hover-surface);
 }
 
@@ -61,7 +61,7 @@
    alone). */
 .cardWaiting,
 .cardWaiting:hover {
-  border-top-color: var(--gs-brand-orange);
+  border-top-color: var(--gs-color-attention);
   background: var(--gs-color-warning-surface);
 }
 
@@ -91,7 +91,7 @@
 
 .cardLabel {
   font-weight: var(--gs-font-weight-semibold);
-  color: var(--gs-brand-navy);
+  color: var(--gs-color-heading);
 }
 
 .cardCount {
