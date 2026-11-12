@@ -69,8 +69,11 @@
 //! warn, rule / path / commit / blob); when git applied refs of an accepted
 //! push, the allowance is used up and audited
 //! (`repository.history_imported`, one `repository.history_secret_imported`
-//! per finding), else `FG-GIT-0026` (alert). A failed lookup is logged and
-//! the push is checked in full.
+//! per finding), else `FG-GIT-0026` (alert). The push CLAIMS the allowance
+//! atomically before its receive-pack runs (review 2026-11-12: of two
+//! concurrent first pushes only one gets the relaxed scan); a push that
+//! applied no ref gives the claim back; a claim kept after refs landed is
+//! never re-armed. A failed claim is logged and the push is checked in full.
 //!
 //! A push through a `moved` tombstone never reaches this handler
 //! (`FG-REPO-0005 reason=tombstone_push`, the dispatcher).
@@ -89,7 +92,7 @@ use forge_core::{
     PushUpdateKind, PushedRef, Pusher, RefName, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError, Lang};
-use forge_git::push_hook::{HookOutcome, PushCheckPolicy, PushCheckRun, Verdict};
+use forge_git::push_hook::{display_path, HookOutcome, PushCheckPolicy, PushCheckRun, Verdict};
 use forge_git::push_introduced::RefSnapshot;
 use forge_git::push_scan::ScanLimits;
 use forge_git::receive_report::{refusal_report, ReportRewriter, RewriteTexts};
@@ -333,54 +336,68 @@ async fn receive_pack_inner(
         .await;
     let snapshot_ms = u64::try_from(snapshot_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    // 4b'. The one-time history import: an empty repository with an open
-    // allowance (2026-11-12). Anything else is checked in full.
+    // 4b'. The one-time history import: an empty repository whose open
+    // allowance this push claimed (2026-11-12). Anything else is checked in
+    // full. From here every way out before the task owns the push gives the
+    // claim back.
     let history_import = history_import(state, &smart, repository.id, &before, &log).await;
+    let launched = async {
+        // 4b. The push checks (M3 X8): one run of the pre-receive hook.
+        let checks = match &smart.push_checks {
+            Some(checks) => Some(
+                smart.git.push_check_run(
+                    &smart.storage,
+                    &checks.exe,
+                    &PushCheckPolicy {
+                        request_id: log.request_id.to_string(),
+                        lang: log.lang,
+                        repo_id: repository.id,
+                        limits: checks
+                            .limits
+                            .unwrap_or_else(|| ScanLimits::new(limits.push_max_blob_bytes)),
+                        history_import: history_import.is_some(),
+                    },
+                )?,
+            ),
+            None => None,
+        };
 
-    // 4b. The push checks (M3 X8): one run of the pre-receive hook.
-    let checks = match &smart.push_checks {
-        Some(checks) => Some(
-            smart.git.push_check_run(
-                &smart.storage,
-                &checks.exe,
-                &PushCheckPolicy {
-                    request_id: log.request_id.to_string(),
-                    lang: log.lang,
-                    repo_id: repository.id,
-                    limits: checks
-                        .limits
-                        .unwrap_or_else(|| ScanLimits::new(limits.push_max_blob_bytes)),
-                    history_import: history_import.is_some(),
-                },
-            )?,
-        ),
-        None => None,
-    };
-
-    // 4. receive-pack gets the original bytes (`atomic` added above).
-    let mut cmd = smart.git.receive_pack(
-        &smart.storage,
-        repository.id,
-        Phase::Rpc,
-        protocol.as_deref(),
-        limits.push_max_bytes,
-    )?;
-    if deny_nff {
-        cmd = cmd.deny_non_fast_forwards();
+        // 4. receive-pack gets the original bytes (`atomic` added above).
+        let mut cmd = smart.git.receive_pack(
+            &smart.storage,
+            repository.id,
+            Phase::Rpc,
+            protocol.as_deref(),
+            limits.push_max_bytes,
+        )?;
+        if deny_nff {
+            cmd = cmd.deny_non_fast_forwards();
+        }
+        if let Some(run) = &checks {
+            cmd = cmd.with_push_checks(run);
+        }
+        let mut stream = cmd
+            .idle_timeout(limits.idle_timeout)
+            .timeout(limits.timeout)
+            .spawn_stream(&principal)
+            .await?;
+        let (Some(stdin), Some(stdout)) = (stream.take_stdin(), stream.take_stdout()) else {
+            return Err(
+                ForgeError::new(ErrorCode::Internal).with_context("reason", "stream_pipes_missing")
+            );
+        };
+        Ok::<_, ForgeError>((checks, stream, stdin, stdout))
     }
-    if let Some(run) = &checks {
-        cmd = cmd.with_push_checks(run);
-    }
-    let mut stream = cmd
-        .idle_timeout(limits.idle_timeout)
-        .timeout(limits.timeout)
-        .spawn_stream(&principal)
-        .await?;
+    .await;
     drop(slot);
-    let (Some(mut stdin), Some(stdout)) = (stream.take_stdin(), stream.take_stdout()) else {
-        return Err(
-            ForgeError::new(ErrorCode::Internal).with_context("reason", "stream_pipes_missing")
-        );
+    let (checks, stream, mut stdin, stdout) = match launched {
+        Ok(launched) => launched,
+        Err(err) => {
+            if let Some(imports) = &history_import {
+                release_claim(imports.as_ref(), repository.id, &log).await;
+            }
+            return Err(err);
+        }
     };
     let (answer_tx, answer_rx) = mpsc::channel(ANSWER_QUEUE);
     let (body_tx, body_rx) = oneshot::channel::<BodyEnd>();
@@ -465,8 +482,9 @@ async fn receive_pack_inner(
 
 /// The allowance store when this push is the one-time history import: push
 /// checks on, the repository without refs (a snapshot that failed is not
-/// empty), an open allowance. A failed lookup is logged and answers `None`
-/// (the push is then checked in full).
+/// empty), and this push CLAIMED the open allowance (atomic in the store:
+/// of concurrent pushes exactly one wins; review 2026-11-12). A failed
+/// claim is logged and answers `None` (the push is then checked in full).
 async fn history_import(
     state: &AppState,
     smart: &SmartHttp,
@@ -479,7 +497,11 @@ async fn history_import(
     if !before.as_ref().is_ok_and(|s| s.refs == 0) {
         return None;
     }
-    let lookup = tokio::time::timeout(state.lookup_timeout, imports.import_allowed(repo)).await;
+    let lookup = tokio::time::timeout(
+        state.lookup_timeout,
+        imports.claim_import(repo, &log.request_id),
+    )
+    .await;
     match lookup {
         Ok(Ok(true)) => {
             tracing::info!(
@@ -493,18 +515,54 @@ async fn history_import(
         }
         Ok(Ok(false)) => None,
         Ok(Err(err)) => {
-            log.failure(err.with_context("operation", "history_import_lookup"));
+            log.failure(err.with_context("operation", "history_import_claim"));
             None
         }
         Err(_) => {
             log.failure(
                 ForgeError::new(ErrorCode::RequestTimeout)
-                    .with_context("operation", "history_import_lookup")
+                    .with_context("operation", "history_import_claim")
                     .with_context("timeout_ms", state.lookup_timeout.as_millis()),
             );
             None
         }
     }
+}
+
+/// Give back this push's claim of the history import (it applied no ref):
+/// the allowance is open again. A failure is logged (FG-GIT-0026
+/// `reason=release_failed`): the allowance then stays claimed, never
+/// re-armed (fail closed; an operator allows anew).
+async fn release_claim(
+    imports: &dyn forge_core::HistoryImports,
+    repo: forge_core::RepoId,
+    log: &PushLog,
+) {
+    let released = tokio::time::timeout(
+        HISTORY_IMPORT_RECORD_TIMEOUT,
+        imports.release_import(repo, &log.request_id),
+    )
+    .await;
+    let err = match released {
+        Ok(Ok(())) => {
+            tracing::info!(
+                target: "forge_web::git",
+                request_id = %log.request_id,
+                project_id = log.project_id.get(),
+                repo_id = log.repo_id,
+                "forge.git.history_import_released"
+            );
+            return;
+        }
+        Ok(Err(err)) => ForgeError::new(ErrorCode::HistoryImportRecordFailed)
+            .with_context("reason", "release_failed")
+            .with_context("cause_code", err.code().id())
+            .with_source(err),
+        Err(_) => ForgeError::new(ErrorCode::HistoryImportRecordFailed)
+            .with_context("reason", "release_failed")
+            .with_context("timeout_ms", HISTORY_IMPORT_RECORD_TIMEOUT.as_millis()),
+    };
+    log.failure(err);
 }
 
 /// Classify every command and decide it (see the module docs, step 2).
@@ -992,7 +1050,7 @@ impl Receiver {
                 project_id = self.log.project_id.get(),
                 repo_id = self.log.repo_id,
                 rule = %f.kind.rule(),
-                path = %f.path,
+                path = %display_path(&f.path),
                 commit = %f.commit.as_deref().unwrap_or("-"),
                 blob = %f.blob,
                 "forge.git.push_history_finding"
@@ -1008,7 +1066,7 @@ impl Receiver {
                 repo_id = self.log.repo_id,
                 rule = %w.rule,
                 blob = %w.blob,
-                path = %w.path,
+                path = %display_path(&w.path),
                 "forge.git.push_check_waived"
             );
         }
@@ -1041,7 +1099,7 @@ impl Receiver {
                         .with_context("findings", r.total_findings)
                         .with_context("rules", rules.join(","))
                         .with_context("first_rule", first.kind.rule())
-                        .with_context("first_path", &first.path)
+                        .with_context("first_path", display_path(&first.path))
                         .with_context("first_blob", &first.blob)
                         .with_context("first_commit", first.commit.as_deref().unwrap_or("-")),
                 ));
@@ -1210,6 +1268,10 @@ impl Receiver {
     async fn after_push(mut self, applied: Vec<(String, String, String)>, source: &'static str) {
         let checked = self.push_checked(Some(applied.len()));
         if applied.is_empty() {
+            // Nothing landed: the history import's claim is open again.
+            if let Some(imports) = &self.history_import {
+                release_claim(imports.as_ref(), self.repository.id, &self.log).await;
+            }
             return;
         }
         if let Some(outcome) = &checked {

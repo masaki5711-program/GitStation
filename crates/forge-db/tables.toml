@@ -756,5 +756,6 @@ kind = "audited"
 ro_columns = ["*"]
 audit_resource = "project"
 audit_id_column = "project_id"
-unaudited_columns = []
+# The claim of the push that holds it (audited with the consumption).
+unaudited_columns = ["claimed_at", "claimed_request_id"]
 txn_audited_columns = []

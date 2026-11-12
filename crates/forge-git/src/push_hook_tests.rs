@@ -329,3 +329,21 @@ async fn an_import_still_refuses_a_secret_in_the_tip() {
     assert_eq!(outcome.verdict, Verdict::Refused);
     assert!(outcome.report.history.is_empty());
 }
+
+#[test]
+fn a_long_path_is_cut_for_display() {
+    let long = "d/".repeat(100);
+    let shown = display_path(&long);
+    assert_eq!(shown.chars().count(), DISPLAY_PATH_CHARS + 1);
+    assert!(shown.ends_with('…'));
+    assert_eq!(display_path("short/path"), "short/path");
+    let f = Finding {
+        kind: FindingKind::Secret {
+            rule: "private_key".to_owned(),
+        },
+        blob: "a".repeat(40),
+        path: "é".repeat(300),
+        commit: None,
+    };
+    assert!(finding_line(&f, 1).chars().count() < 200);
+}

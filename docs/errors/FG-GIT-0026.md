@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-A push accepted under the one-time history import allowance (2026-11-12, ADR-0008 amendment "history import") was applied, but `forge serve` could not write its audit rows (`repository.history_imported` and one `repository.history_secret_imported` per finding only in history) nor mark the allowance used: the database failed or timed out (`cause_code`). The refs are updated; the allowance stays open until it expires, but it no longer applies because the repository is no longer empty.
+A push accepted under the one-time history import allowance (2026-11-12, ADR-0008 amendment "history import") was applied, but `forge serve` could not write its audit rows (`repository.history_imported` and one `repository.history_secret_imported` per finding only in history) nor mark the allowance used: the database failed or timed out (`cause_code`), `reason=record_failed` / `timeout`. The refs are updated; the allowance stays CLAIMED by that push, so it is never available again (an operator must allow anew, which the CLI refuses while the repository has refs). Also `reason=release_failed`: a push under the claim applied no ref but the claim could not be given back — the allowance stays claimed (closed) until an operator allows anew.
 
 ## 調べ方 (diagnosis)
 
@@ -24,4 +24,4 @@ One alert log line with `error_code=FG-GIT-0026`, `request_id`, `repo_id`, `hist
 
 ## 対処 (fix)
 
-Fix the database cause (`cause_code`'s runbook). The findings are in the log lines of the request id: record them in the incident record and make sure the importer rotates every real secret among them. Runbook push-checks, "history import".
+Fix the database cause (`cause_code`'s runbook). record_failed / timeout: check the audit gap (no `repository.history_imported` row for the request id; the row in `forge.repository_history_imports` has `claimed_request_id` = the request id and `consumed_at` NULL — closed, nothing to do to the allowance), copy the `forge.git.push_history_finding` lines of the request id into the incident record and make sure the importer rotates every real secret among them. release_failed: if the import is still wanted, allow it again (`forge admin repo allow-import`, an approved step). Runbook push-checks, "history import".

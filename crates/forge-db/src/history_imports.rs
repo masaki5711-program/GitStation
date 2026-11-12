@@ -7,10 +7,16 @@
 //!   row per repository, open until `expires_at`. The repository must be
 //!   `ready`; that it has no refs is the CLI's check (git, outside the
 //!   transaction). `repository.history_import_allowed`.
-//! - [`import_allowed`] — the push path, before the push checks: is an
-//!   allowance open (not used, not expired; the database's clock)?
-//! - [`record_import`] — the push path, after an accepted push under the
-//!   allowance: marks it used (if still open) and writes
+//! - [`import_allowed`] — is an allowance open (not claimed, not used, not
+//!   expired; the database's clock)? The CLI's and the tests' view.
+//! - [`claim_import`] — the push path, before its receive-pack runs: one
+//!   atomic `UPDATE … RETURNING` takes the open allowance for the push's
+//!   request id; of concurrent pushes exactly one gets `true` (review
+//!   2026-11-12, HIGH). [`release_import`] gives it back when the push
+//!   applied no ref. Claim and release write only the unaudited claim
+//!   columns: no audit row (the consumption is audited).
+//! - [`record_import`] — the push path, after an accepted push of the
+//!   claimer: marks it used and writes
 //!   `repository.history_imported` plus one
 //!   `repository.history_secret_imported` row per history finding (at most
 //!   [`MAX_AUDITED_FINDINGS`]), in one transaction, actor = the pusher.
@@ -22,7 +28,7 @@ use forge_core::history_import::{
 };
 use forge_core::ids::{ProjectId, RepoId};
 use forge_core::namespace_resolver::LookupFuture;
-use forge_core::{AuditDetails, Pusher};
+use forge_core::{AuditDetails, Pusher, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, Settle};
@@ -111,8 +117,8 @@ pub async fn allow(
                      VALUES ($1, $2, now() + make_interval(secs => $3)) \
                      ON CONFLICT (repository_id) DO UPDATE SET \
                      project_id = EXCLUDED.project_id, allowed_at = now(), \
-                     expires_at = EXCLUDED.expires_at, consumed_at = NULL, \
-                     consumed_request_id = NULL \
+                     expires_at = EXCLUDED.expires_at, claimed_at = NULL, \
+                     claimed_request_id = NULL, consumed_at = NULL, consumed_request_id = NULL \
                      RETURNING to_char(expires_at AT TIME ZONE 'UTC', \
                      'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), (xmax::text <> '0')",
                 )
@@ -149,13 +155,14 @@ pub async fn allow(
         .await
 }
 
-/// Whether `repo` has an open allowance (not used, `now() < expires_at`),
-/// read on the write pool (the push path decides on it).
+/// Whether `repo` has an open allowance (not claimed, not used,
+/// `now() < expires_at`), read on the write pool.
 pub async fn import_allowed(db: &Db, repo: RepoId) -> Result<bool, ForgeError> {
     db.within("history_imports.allowed", async {
         sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM forge.repository_history_imports \
-             WHERE repository_id = $1 AND consumed_at IS NULL AND expires_at > now())",
+             WHERE repository_id = $1 AND consumed_at IS NULL AND claimed_at IS NULL \
+             AND expires_at > now())",
         )
         .bind(repo.get())
         .fetch_one(db.write_pool())
@@ -165,7 +172,45 @@ pub async fn import_allowed(db: &Db, repo: RepoId) -> Result<bool, ForgeError> {
     .await
 }
 
-/// After an accepted push under the allowance (see the module docs).
+/// Claim `repo`'s open allowance for the push `request` (see the module
+/// docs): `true` when this call took it.
+pub async fn claim_import(db: &Db, repo: RepoId, request: &RequestId) -> Result<bool, ForgeError> {
+    db.within("history_imports.claim", async {
+        let claimed: Option<i64> = sqlx::query_scalar(
+            "UPDATE forge.repository_history_imports SET claimed_at = now(), \
+             claimed_request_id = $2 WHERE repository_id = $1 AND claimed_at IS NULL \
+             AND consumed_at IS NULL AND expires_at > now() RETURNING repository_id",
+        )
+        .bind(repo.get())
+        .bind(request.as_str())
+        .fetch_optional(db.write_pool())
+        .await
+        .map_err(|e| query_error("history_imports.claim", e))?;
+        Ok(claimed.is_some())
+    })
+    .await
+}
+
+/// Give back `request`'s claim (its push applied no ref). Nothing to give
+/// back is not an error (an operator allowed anew meanwhile).
+pub async fn release_import(db: &Db, repo: RepoId, request: &RequestId) -> Result<(), ForgeError> {
+    db.within("history_imports.release", async {
+        sqlx::query(
+            "UPDATE forge.repository_history_imports SET claimed_at = NULL, \
+             claimed_request_id = NULL WHERE repository_id = $1 AND claimed_request_id = $2 \
+             AND consumed_at IS NULL",
+        )
+        .bind(repo.get())
+        .bind(request.as_str())
+        .execute(db.write_pool())
+        .await
+        .map_err(|e| query_error("history_imports.release", e))?;
+        Ok(())
+    })
+    .await
+}
+
+/// After an accepted push of the claimer (see the module docs).
 /// `ctx.request_id` is the push's. Errors: `FG-REPO-0005
 /// resource=repository`, the change's own.
 pub async fn record_import(
@@ -187,14 +232,14 @@ pub async fn record_import(
             })
             .await?;
         let project = ProjectId::new(project.ok_or_else(|| not_found(repo))?);
-        // Used up even when it expired during the push: the push was
-        // decided while it was open.
+        // The claimer's only; used up even when it expired during the
+        // push (the push was decided while it was open).
         let consumed: Option<i64> = tx
             .step(|c| async move {
                 sqlx::query_scalar(
                     "UPDATE forge.repository_history_imports SET consumed_at = now(), \
                      consumed_request_id = $2 WHERE repository_id = $1 AND consumed_at IS NULL \
-                     RETURNING repository_id",
+                     AND claimed_request_id = $2 RETURNING repository_id",
                 )
                 .bind(repo.get())
                 .bind(request_id)
@@ -242,8 +287,12 @@ pub async fn record_import(
 
 /// The push path's view (`forge serve` injects the `Db`).
 impl forge_core::HistoryImports for Db {
-    fn import_allowed<'a>(&'a self, repo: RepoId) -> LookupFuture<'a, bool> {
-        Box::pin(import_allowed(self, repo))
+    fn claim_import<'a>(&'a self, repo: RepoId, request: &'a RequestId) -> LookupFuture<'a, bool> {
+        Box::pin(claim_import(self, repo, request))
+    }
+
+    fn release_import<'a>(&'a self, repo: RepoId, request: &'a RequestId) -> LookupFuture<'a, ()> {
+        Box::pin(release_import(self, repo, request))
     }
 
     fn record_import<'a>(

@@ -673,12 +673,24 @@ fn history_lines(stderr: &mut String, policy: &ReadPolicy, report: &ScanReport) 
     let _ = writeln!(stderr, "(request_id: {})", policy.request_id); // ignore: String
 }
 
+/// The most characters of a path shown to the pusher or logged (review
+/// 2026-11-12); the audit rows keep the scan's path (at most 256 bytes).
+pub const DISPLAY_PATH_CHARS: usize = 120;
+
+/// `path` cut to [`DISPLAY_PATH_CHARS`] characters (`…` marks the cut).
+pub fn display_path(path: &str) -> String {
+    match path.char_indices().nth(DISPLAY_PATH_CHARS) {
+        None => path.to_owned(),
+        Some((at, _)) => format!("{}…", path.get(..at).unwrap_or_default()),
+    }
+}
+
 /// One finding for the pusher: rule, path, commit — never content.
 pub fn finding_line(f: &Finding, limit: u64) -> String {
     let path = if f.path.is_empty() {
         format!("blob {}", short(&f.blob))
     } else {
-        f.path.clone() // clone: formatted below
+        display_path(&f.path)
     };
     let commit = f
         .commit

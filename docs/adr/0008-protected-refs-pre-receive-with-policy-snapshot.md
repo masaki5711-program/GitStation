@@ -238,3 +238,14 @@ X8 の秘密の検査は push が持ち込むオブジェクトを**すべて**�
   forge-cli `allow_import_refuses_a_repository_with_refs`、本物の git の e2e
   `a_history_import_accepts_an_old_key_once_and_audits_it`、`a_key_in_the_tip_is_refused_even_under_the_import_allowance`、
   `without_an_allowance_or_into_a_repository_with_refs_history_is_checked_in_full`、forge-web `a_history_import_that_cannot_be_recorded_is_fg_git_0026`。
+- **レビュー（2026-11-12、security / database）を受けて**:
+  - 確認と使い切りが原子的でなかった（HIGH）: 同時の 2 つの最初の push が両方とも緩い検査を受けられた。push は receive-pack の前に
+    `UPDATE … SET claimed_at, claimed_request_id WHERE claimed_at IS NULL AND consumed_at IS NULL AND expires_at > now() RETURNING` で許可を
+    **確保**し、確保できた 1 つだけが緩い検査を受ける。ref を反映しなかった push は確保を返し、反映した push は監査のトランザクションで
+    使い切る（確保した request_id だけ）。確保されたまま使い切られなかった許可（記録の失敗、serve の停止）は二度と開かない。確保の失敗は
+    全部を検査する。確保の列は監査しない列（`unaudited_columns`）で、監査の行は使い切りで書く。
+  - `project_id` をリポジトリの `project_id` に縛る（複合外部キー → `repositories (id, project_id)`、UNIQUE `repositories_id_project` を追加）。
+  - 「履歴にだけある」は先端から辿れて先端のツリーに無い blob。先端から辿れないパックのオブジェクトは X8 のとおり秘密の検査をしない。
+  - ログと利用者向けの行のパスは 120 文字で切る。先端のツリーの一覧は出力の上限で切れたら拒否（既知の制限、fail closed）。
+  - テスト: forge-db `concurrent_claims_have_exactly_one_winner`、`the_allowance_project_must_be_the_repository_project`、
+    forge-web `a_push_that_applied_nothing_releases_its_claim`。

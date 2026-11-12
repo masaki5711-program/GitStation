@@ -22,6 +22,7 @@ fn system(request: &str) -> ChangeContext {
 struct World {
     t: FreshDb,
     owner: forge_core::UserId,
+    namespace: forge_core::NamespaceId,
     app: CreatedProject,
 }
 
@@ -50,6 +51,7 @@ async fn world(ready: bool) -> World {
     World {
         t,
         owner: owner.user_id,
+        namespace: owner.namespace_id,
         app,
     }
 }
@@ -110,6 +112,10 @@ async fn an_allowance_is_open_until_used_once_with_its_audit_rows() {
         findings: vec![finding("old/id_rsa"), finding("old/key.pem")],
         total: 2,
     };
+    let request = RequestId::parse("req-push-1").expect("id");
+    assert!(claim_import(&w.t.db, repo, &request).await.expect("claim"));
+    // Claimed: no longer open, for anyone.
+    assert!(!import_allowed(&w.t.db, repo).await.expect("read"));
     let done =
         forge_core::HistoryImports::record_import(&w.t.db, &w.pusher("req-push-1"), repo, &used)
             .await
@@ -129,7 +135,7 @@ async fn an_allowance_is_open_until_used_once_with_its_audit_rows() {
     assert_eq!(secrets[0]["details"]["severity"], "warning");
     assert_eq!(secrets[0]["request_id"], "req-push-1");
 
-    // A second record finds nothing open: still audited, not consumed.
+    // A record by a push that holds no claim: still audited, not consumed.
     let again = record_import(
         &w.t.db,
         &system("req-push-2"),
@@ -201,4 +207,101 @@ async fn an_allowance_needs_a_ready_repository_and_a_bounded_ttl() {
     .expect_err("unknown");
     assert_eq!(err.code(), ErrorCode::NotFound);
     assert!(w.rows("repository.history_import_allowed").await.is_empty());
+}
+
+/// Review 2026-11-12 (HIGH): of concurrent claims exactly one wins; a
+/// released claim is open again, a claim kept (record failed after refs
+/// landed) never re-arms, and only a new allowance clears it.
+#[tokio::test]
+async fn concurrent_claims_have_exactly_one_winner() {
+    let w = world(true).await;
+    let repo = w.app.repository_id;
+    allow(
+        &w.t.db,
+        &system("req-allow-c"),
+        repo,
+        Duration::from_secs(3600),
+    )
+    .await
+    .expect("allowed");
+    let ids: Vec<RequestId> = (0..8)
+        .map(|i| RequestId::parse(&format!("req-claim-{i}")).expect("id"))
+        .collect();
+    let mut tasks = Vec::new();
+    for id in &ids {
+        let (db, id) = (w.t.db.clone(), id.clone()); // clone: each task owns its handle
+        tasks.push(tokio::spawn(
+            async move { claim_import(&db, repo, &id).await },
+        ));
+    }
+    let mut claims = Vec::new();
+    for task in tasks {
+        claims.push(task.await.expect("task"));
+    }
+    let won: Vec<&RequestId> = claims
+        .iter()
+        .zip(&ids)
+        .filter(|(c, _)| *c.as_ref().expect("claim"))
+        .map(|(_, id)| id)
+        .collect();
+    assert_eq!(won.len(), 1, "{claims:?}");
+    let winner = won[0];
+    // A loser's release changes nothing; the winner's reopens it.
+    let loser = ids.iter().find(|id| *id != winner).expect("a loser");
+    release_import(&w.t.db, repo, loser).await.expect("release");
+    assert!(!import_allowed(&w.t.db, repo).await.expect("read"));
+    release_import(&w.t.db, repo, winner)
+        .await
+        .expect("release");
+    assert!(import_allowed(&w.t.db, repo).await.expect("read"));
+    // A loser cannot consume it either.
+    assert!(claim_import(&w.t.db, repo, winner).await.expect("claim"));
+    let ctx = system(loser.as_str());
+    let done = record_import(&w.t.db, &ctx, repo, &HistoryImportUse::default())
+        .await
+        .expect("recorded");
+    assert_eq!(done, HistoryImportRecorded::AlreadyUsed);
+    // Claimed and never consumed (a record that failed): not open, and no
+    // second claim, until an operator allows anew.
+    assert!(!claim_import(&w.t.db, repo, loser).await.expect("claim"));
+    allow(
+        &w.t.db,
+        &system("req-allow-d"),
+        repo,
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("allowed");
+    assert!(claim_import(&w.t.db, repo, loser).await.expect("claim"));
+}
+
+/// Review 2026-11-12 (MEDIUM): the stored project is the repository's.
+#[tokio::test]
+async fn the_allowance_project_must_be_the_repository_project() {
+    let w = world(true).await;
+    let other = projects::create(
+        &w.t.db,
+        &system("req-project-other"),
+        &NewProject::new("other", w.namespace, "Other", w.owner),
+    )
+    .await
+    .expect("project");
+    let mut conn = w.t.superuser().await;
+    let err = sqlx::query(
+        "INSERT INTO forge.repository_history_imports (repository_id, project_id, expires_at) \
+         VALUES ($1, $2, now() + interval '1 hour')",
+    )
+    .bind(w.app.repository_id.get())
+    .bind(other.project_id.get())
+    .execute(&mut conn)
+    .await
+    .expect_err("another project");
+    let constraint = err
+        .as_database_error()
+        .and_then(|d| d.constraint())
+        .map(str::to_owned);
+    assert_eq!(
+        constraint.as_deref(),
+        Some("repository_history_imports_repository")
+    );
 }

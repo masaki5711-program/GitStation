@@ -22,6 +22,7 @@ use std::time::Duration;
 use crate::ids::{ProjectId, RepoId};
 use crate::namespace_resolver::LookupFuture;
 use crate::push::Pusher;
+use crate::request_id::RequestId;
 
 /// The allowance's default lifetime.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(24 * 3600);
@@ -56,8 +57,8 @@ pub struct HistoryImportUse {
 pub enum HistoryImportRecorded {
     /// The allowance was open and is used up now.
     Consumed,
-    /// No open allowance was left (another push used it meanwhile); the
-    /// audit rows are written all the same.
+    /// The claim was no longer this push's (an operator allowed anew
+    /// meanwhile); the audit rows are written all the same.
     AlreadyUsed,
 }
 
@@ -152,12 +153,23 @@ impl HistoryImportChange {
 
 /// The allowance as the push path sees it (forge-db implements it on `Db`;
 /// `forge serve` injects it into forge-web).
+///
+/// A push **claims** the allowance atomically before its receive-pack runs
+/// (review 2026-11-12: of two concurrent first pushes only one gets the
+/// relaxed scan). The claimer either uses it up ([`Self::record_import`],
+/// refs applied) or releases it ([`Self::release_import`], no ref applied).
+/// A claim that is neither (serve stopped, the record failed after refs
+/// landed) is never available again; an operator allows anew.
 pub trait HistoryImports: Send + Sync {
-    /// Whether `repo` has an open allowance (not used, not expired).
-    fn import_allowed<'a>(&'a self, repo: RepoId) -> LookupFuture<'a, bool>;
+    /// Claim `repo`'s open allowance (not claimed, not used, not expired)
+    /// for the push `request`: `true` for exactly one caller.
+    fn claim_import<'a>(&'a self, repo: RepoId, request: &'a RequestId) -> LookupFuture<'a, bool>;
 
-    /// After an accepted push into `repo` under the allowance: use it up
-    /// and write the audit rows, in one transaction.
+    /// Give back the claim of `request` (its push applied no ref).
+    fn release_import<'a>(&'a self, repo: RepoId, request: &'a RequestId) -> LookupFuture<'a, ()>;
+
+    /// After an accepted push of the claimer into `repo`: use it up and
+    /// write the audit rows, in one transaction.
     fn record_import<'a>(
         &'a self,
         pusher: &'a Pusher,

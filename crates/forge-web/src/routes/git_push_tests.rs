@@ -637,11 +637,19 @@ impl PushRecorder for DownRecorderForChecks {
 struct Imports {
     fail: bool,
     seen: Mutex<Vec<forge_core::HistoryImportUse>>,
+    released: AtomicU32,
 }
 
 impl forge_core::HistoryImports for Imports {
-    fn import_allowed<'a>(&'a self, _: RepoId) -> LookupFuture<'a, bool> {
+    fn claim_import<'a>(&'a self, _: RepoId, _: &'a RequestId) -> LookupFuture<'a, bool> {
         Box::pin(async { Ok(true) })
+    }
+
+    fn release_import<'a>(&'a self, _: RepoId, _: &'a RequestId) -> LookupFuture<'a, ()> {
+        Box::pin(async move {
+            self.released.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
     }
 
     fn record_import<'a>(
@@ -689,6 +697,7 @@ async fn an_accepted_import_is_recorded_and_its_findings_logged() {
     let imports = Arc::new(Imports {
         fail: false,
         seen: Mutex::new(Vec::new()),
+        released: AtomicU32::new(0),
     });
     r.history_import = Some(Arc::clone(&imports) as Arc<dyn forge_core::HistoryImports>);
     let outcome = accepted_import();
@@ -727,6 +736,7 @@ async fn a_history_import_that_cannot_be_recorded_is_fg_git_0026() {
     r.history_import = Some(Arc::new(Imports {
         fail: true,
         seen: Mutex::new(Vec::new()),
+        released: AtomicU32::new(0),
     }));
     let (buf, _guard) = capture();
     r.history_imported(&accepted_import()).await;
@@ -746,4 +756,29 @@ async fn a_history_import_that_cannot_be_recorded_is_fg_git_0026() {
     refused.verdict = Verdict::Refused;
     r.history_imported(&refused).await;
     assert!(buf.events().is_empty());
+}
+
+/// A push under the claim that applied no ref gives the claim back; one
+/// whose refs landed keeps it (used up, or never re-armed).
+#[tokio::test]
+async fn a_push_that_applied_nothing_releases_its_claim() {
+    let dir = tempfile::tempdir().expect("dir");
+    let imports = Arc::new(Imports {
+        fail: false,
+        seen: Mutex::new(Vec::new()),
+        released: AtomicU32::new(0),
+    });
+    let mut r = receiver(dir.path(), Arc::new(DownRecorderForChecks));
+    r.history_import = Some(Arc::clone(&imports) as Arc<dyn forge_core::HistoryImports>);
+    let (buf, _guard) = capture();
+    r.after_push(Vec::new(), "report").await;
+    assert_eq!(imports.released.load(Ordering::SeqCst), 1);
+    assert!(
+        buf.events()
+            .iter()
+            .any(|e| e["message"] == "forge.git.history_import_released"),
+        "{:?}",
+        buf.events()
+    );
+    assert!(imports.seen.lock().expect("lock").is_empty());
 }
