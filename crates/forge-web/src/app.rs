@@ -144,6 +144,8 @@ pub struct AppState {
     pub act_as_claim_limiter: Arc<routes::namespaces::CallerLimiter>,
     /// M3 X1: the spec references followed per caller (`FG-WEB-0010`).
     pub spec_refs_limiter: Arc<routes::namespaces::CallerLimiter>,
+    /// Simple editor E1: single-file commits per caller (review E1).
+    pub file_commit_limiter: Arc<routes::namespaces::CallerLimiter>,
     /// M3 X1: one budget for a whole spec-refs request (`FG-WEB-0002
     /// operation=spec_refs`).
     pub spec_refs_budget: Duration,
@@ -209,6 +211,7 @@ impl AppState {
             act_as_search_limiter: Arc::new(routes::integration_bindings::act_as_search_limiter()),
             act_as_claim_limiter: Arc::new(routes::act_as::claim_limiter()),
             spec_refs_limiter: Arc::new(routes::spec_refs::limiter()),
+            file_commit_limiter: Arc::new(routes::file_commit::limiter()),
             spec_refs_budget: routes::spec_refs::BUDGET,
             spec_index_limiter: Arc::new(routes::specs::limiter()),
             spec_index_in_flight: Arc::default(),

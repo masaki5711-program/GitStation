@@ -5,8 +5,13 @@
 //! checkout and never a tree computed by forge.
 //!
 //! - [`FilePath::parse`]: the path rules (`FG-GIT-0028`, `rule`): relative,
-//!   `/`-separated, no empty / `.` / `..` segment, no `.git` segment in any
-//!   case, no `\`, no control character, at most 4096 bytes.
+//!   `/`-separated, no empty / `.` / `..` segment, no `\`, no control
+//!   character, at most 4096 bytes, and no segment that a developer's file
+//!   system reads as `.git` (NTFS / HFS+: trailing dots and spaces, a
+//!   `:` stream suffix and default-ignorable code points dropped, any case,
+//!   git's 8.3 short name `git~<n>`). git checks again: the index commands
+//!   run with `core.protectNTFS` and `core.protectHFS`, and a path git
+//!   refuses is `FG-GIT-0028 rule=refused_by_git`, never a 500.
 //! - [`check_content`]: at most [`MAX_FILE_BYTES`] (or the caller's lower
 //!   limit, `FG-GIT-0029`), no NUL (`FG-GIT-0030`).
 //! - [`Git::file_entry`]: what the tree of a commit holds at the path —
@@ -22,17 +27,22 @@
 //!   `<git home>/file-commits/<uuid>.index` (`GIT_INDEX_FILE`; removed on
 //!   every way out): `read-tree --end-of-options <parent>`, `update-index
 //!   --add --index-info` (the entry on stdin, never in argv), `write-tree`,
-//!   then [`Git::commit_tree`] with the parent and the identities.
+//!   then [`Git::commit_tree`] with the parent and the identities. Index
+//!   files left by a killed server are swept on each call (older than
+//!   [`STALE_INDEX_AGE`]).
 //!
 //! - [`Git::commit_one_file`]: the whole commit for the editor route — the
 //!   head read, the "no silent overwrite" check against the start commit,
 //!   the writes above and ONE compare-and-swap `update-ref`, retried when a
-//!   concurrent push wins. The caller decides the ref update like a push
-//!   before calling, and records the push after.
+//!   concurrent push wins, all within one overall deadline
+//!   ([`COMMIT_DEADLINE`]; the swap itself is never cut short, so its
+//!   outcome is always known). The start commit must be an ancestor of the
+//!   head. The caller decides the ref update like a push before calling,
+//!   and records the push after.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use forge_core::{ObjectId, RefName, RepoId};
 use forge_errors::{ErrorCode, ForgeError};
@@ -54,6 +64,10 @@ pub const MAX_PATH_BYTES: usize = 4096;
 const LS_TREE_OUTPUT_BYTES: usize = 64 * 1024;
 /// The temporary indexes' directory under the git home.
 const INDEX_DIR: &str = "file-commits";
+/// An index file older than this was left by a killed server: swept.
+pub const STALE_INDEX_AGE: Duration = Duration::from_secs(3600);
+/// The bound of one whole [`Git::commit_one_file`] (every attempt).
+pub const COMMIT_DEADLINE: Duration = Duration::from_secs(20);
 
 fn path_invalid(rule: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::FileCommitPathInvalid).with_context("rule", rule)
@@ -89,7 +103,17 @@ impl FilePath {
             if segment == "." || segment == ".." {
                 return Err(path_invalid("dot_segment"));
             }
-            if segment.eq_ignore_ascii_case(".git") {
+            // As NTFS / HFS+ read the name (review E1): `.git.`, `.git::$DATA`,
+            // `.g<U+200B>it`, `.GIT ` and git's 8.3 short name `git~1` are
+            // all git's own directory on a developer's PC.
+            let disk = forge_core::risk::on_disk_upper(segment);
+            if disk.is_empty() {
+                return Err(path_invalid("dot_segment"));
+            }
+            let short_name = disk
+                .strip_prefix("GIT~")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+            if disk == ".GIT" || short_name {
                 return Err(path_invalid("dot_git"));
             }
         }
@@ -218,6 +242,48 @@ impl Drop for TempIndex {
             }
         }
     }
+}
+
+/// Remove the index files (and their locks) in `dir` older than `max_age`
+/// (a server killed mid-commit leaves one). Logged once when any was
+/// removed; a failure to read or remove is logged, never fatal. The number
+/// removed.
+pub(crate) fn sweep_stale_indexes(dir: &Path, max_age: Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0; // not created yet: nothing to sweep
+    };
+    let now = SystemTime::now();
+    let (mut removed, mut failed) = (0usize, 0usize);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.ends_with(".index") || name.ends_with(".index.lock")) {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age > max_age);
+        if !old {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(_) => failed += 1,
+        }
+    }
+    if removed > 0 || failed > 0 {
+        tracing::info!(
+            target: "forge_git",
+            event = "forge.git.file_commit_index_swept",
+            removed,
+            failed,
+            "stale temporary indexes of the simple editor were removed"
+        );
+    }
+    removed
 }
 
 impl Git {
@@ -371,10 +437,14 @@ impl Git {
                 .with_context("operation", "file_commit_index_dir")
                 .with_source(e)
         })?;
+        sweep_stale_indexes(&dir, STALE_INDEX_AGE);
         let index = TempIndex(dir.join(format!("{}.index", uuid::Uuid::new_v4())));
         let index_env = OsString::from(index.0.as_os_str());
         let with_index = |sub: &'static str| {
             self.command(sub)
+                // git refuses `.git` look-alikes of NTFS and HFS+ itself too.
+                .config_override("core.protectNTFS", "true")
+                .config_override("core.protectHFS", "true")
                 .env("GIT_INDEX_FILE", index_env.clone()) // clone: each command owns its environment
                 .repo(&repo)
                 .timeout(timeout)
@@ -397,11 +467,36 @@ impl Git {
             .stdin(line.into_bytes())
             .output()
             .await
-            .map_err(fail)?;
+            .map_err(|e| {
+                // The entry was checked: git refusing it is the path's fault
+                // (a 4xx), the cause kept for the log.
+                if e.code() == ErrorCode::GitProcessFailed {
+                    path_invalid("refused_by_git")
+                        .with_context("repo_id", id.get())
+                        .with_source(e)
+                } else {
+                    fail(e)
+                }
+            })?;
         let out = with_index("write-tree").output().await.map_err(fail)?;
         let tree = ObjectId::parse(String::from_utf8_lossy(&out.stdout).trim())
             .map_err(|_| unexpected("write-tree"))?;
         drop(index);
+        // git skips a path it refuses ("Ignoring path …") and still exits 0:
+        // the tree must hold exactly the entry, or the commit would be empty.
+        let written = self
+            .ls_tree(&repo, &tree, commit.path.as_str(), false, timeout)
+            .await
+            .map_err(fail)?;
+        let held = written.iter().any(|e| {
+            e.name == commit.path.as_str()
+                && e.kind == "blob"
+                && e.mode == commit.mode.as_str()
+                && e.oid == commit.blob.as_str()
+        });
+        if !held {
+            return Err(path_invalid("refused_by_git").with_context("repo_id", id.get()));
+        }
         self.commit_tree(
             storage,
             id,
@@ -415,6 +510,45 @@ impl Git {
             timeout,
         )
         .await
+    }
+}
+
+impl Git {
+    /// Whether another ref takes `name`'s place in git's ref namespace: a
+    /// ref at one of its parent paths (`refs/heads/edit` for
+    /// `refs/heads/edit/x`), or refs below it (`refs/heads/edit/x/y`).
+    /// `name` itself existing is not this (that is `branch_exists`).
+    pub async fn ref_name_taken(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        name: &RefName,
+        timeout: Duration,
+    ) -> Result<bool, ForgeError> {
+        let below = self.read_refs(storage, id, name, timeout).await?;
+        if below.keys().any(|r| r != name) {
+            return Ok(true);
+        }
+        let full = name.as_str();
+        // `refs/heads/a/b/c` -> `refs/heads/a`, `refs/heads/a/b`.
+        let base = full
+            .match_indices('/')
+            .nth(1)
+            .map_or(full.len(), |(i, _)| i);
+        for (i, _) in full.match_indices('/').filter(|(i, _)| *i > base) {
+            let Some(parent) = full.get(..i) else {
+                continue;
+            };
+            let parent = RefName::parse(parent)?;
+            if self
+                .read_ref(storage, id, &parent, timeout)
+                .await?
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -449,6 +583,35 @@ pub struct OneFileCommitted {
     pub attempts: u32,
 }
 
+/// The overall deadline of one commit: the time left, or `FG-GIT-0002
+/// operation=single_file_commit` once it passed.
+struct Deadline {
+    end: tokio::time::Instant,
+    total: Duration,
+}
+
+impl Deadline {
+    fn new(total: Duration) -> Self {
+        Self {
+            end: tokio::time::Instant::now() + total,
+            total,
+        }
+    }
+
+    /// `step` bounded by the time left.
+    fn bound(&self, step: Duration) -> Result<Duration, ForgeError> {
+        let left = self
+            .end
+            .saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return Err(ForgeError::new(ErrorCode::GitTimeout)
+                .with_context("operation", "single_file_commit")
+                .with_context("timeout_ms", self.total.as_millis()));
+        }
+        Ok(step.min(left))
+    }
+}
+
 fn conflict(reason: &'static str, start: &ObjectId, head: Option<&ObjectId>) -> ForgeError {
     ForgeError::new(ErrorCode::FileCommitConflict)
         .with_context("reason", reason)
@@ -464,23 +627,40 @@ impl Git {
     /// read again and the build retried ([`ATTEMPTS`] in all, then
     /// `FG-GIT-0027 reason=ref_moved`); an existing new branch is
     /// `reason=branch_exists`. A missing `branch` is `FG-REPO-0023
-    /// reason=ref_not_found`. `ref_written` runs after every `update-ref`
-    /// (whatever its outcome: the caller drops its ref caches). The caller
-    /// decided the ref update like a push before calling.
+    /// reason=ref_not_found`; a start that is not an ancestor of the head
+    /// `FG-GIT-0027 reason=start_not_ancestor`. `ref_written` runs after
+    /// every `update-ref` (whatever its outcome: the caller drops its ref
+    /// caches). Each git step has `timeout`, and all of them `total`
+    /// (`FG-GIT-0002 operation=single_file_commit` past it) — except the
+    /// swap and the read that tells its outcome, which always get `timeout`
+    /// once started. The caller decided the ref update like a push before
+    /// calling.
     pub async fn commit_one_file(
         &self,
         storage: &StorageRoot,
         id: RepoId,
         one: &OneFile<'_>,
-        timeout: Duration,
+        (timeout, total): (Duration, Duration),
         ref_written: &(dyn Fn() + Send + Sync),
     ) -> Result<OneFileCommitted, ForgeError> {
-        let blob = self.write_blob(storage, id, one.content, timeout).await?;
+        let deadline = Deadline::new(total);
+        // A new branch whose name a ref's directory or file takes (`edit/x`
+        // while `edit` exists, or the reverse): the user's naming, a 409.
+        if one.create
+            && self
+                .ref_name_taken(storage, id, one.target, deadline.bound(timeout)?)
+                .await?
+        {
+            return Err(conflict("branch_name_conflict", one.start, None));
+        }
+        let blob = self
+            .write_blob(storage, id, one.content, deadline.bound(timeout)?)
+            .await?;
         let mut attempts = 0;
         loop {
             attempts += 1;
             let head = self
-                .read_ref(storage, id, one.branch, timeout)
+                .read_ref(storage, id, one.branch, deadline.bound(timeout)?)
                 .await?
                 .ok_or_else(|| {
                     ForgeError::new(ErrorCode::RepositoryPathNotResolved)
@@ -488,15 +668,24 @@ impl Git {
                         .with_context("param", "branch")
                 })?;
             let at_head = self
-                .file_entry(storage, id, &head, one.path, timeout)
+                .file_entry(storage, id, &head, one.path, deadline.bound(timeout)?)
                 .await?;
             if head != *one.start {
-                if !self.commit_exists(storage, id, one.start, timeout).await? {
+                if !self
+                    .commit_exists(storage, id, one.start, deadline.bound(timeout)?)
+                    .await?
+                {
                     return Err(conflict("start_unknown", one.start, Some(&head)));
+                }
+                if !self
+                    .is_ancestor(storage, id, one.start, &head, deadline.bound(timeout)?)
+                    .await?
+                {
+                    return Err(conflict("start_not_ancestor", one.start, Some(&head)));
                 }
                 // A path that was something else at the start changed too.
                 let at_start = self
-                    .file_entry(storage, id, one.start, one.path, timeout)
+                    .file_entry(storage, id, one.start, one.path, deadline.bound(timeout)?)
                     .await
                     .map_err(|e| {
                         if e.code() == ErrorCode::FileCommitPathInvalid {
@@ -527,9 +716,11 @@ impl Git {
                         author: one.author,
                         committer: one.author,
                     },
-                    timeout,
+                    deadline.bound(timeout)?,
                 )
                 .await?;
+            // Not started past the deadline; once started, never cut short.
+            deadline.bound(timeout)?;
             let change = if one.create {
                 RefChange::Create {
                     name: one.target.clone(), // clone: the change owns its name
@@ -564,6 +755,15 @@ impl Git {
             }
             if one.create && now.is_some() {
                 return Err(conflict("branch_exists", one.start, now.as_ref())
+                    .with_context("cause_code", cause.code().id()));
+            }
+            // A conflicting ref created meanwhile (the check above raced).
+            if one.create
+                && self
+                    .ref_name_taken(storage, id, one.target, timeout)
+                    .await?
+            {
+                return Err(conflict("branch_name_conflict", one.start, None)
                     .with_context("cause_code", cause.code().id()));
             }
             let lost = !one.create && now.as_ref() != Some(&head);

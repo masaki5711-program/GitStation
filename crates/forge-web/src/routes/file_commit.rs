@@ -58,7 +58,7 @@ use forge_core::{
     PushedRef, Pusher, RefName, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::file_commit::{check_content, FilePath, OneFile};
+use forge_git::file_commit::{check_content, FilePath, OneFile, COMMIT_DEADLINE};
 use forge_git::secret_scan::{self, SecretScan};
 use forge_review::{NewFields, Review, ReviewRequest};
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,15 @@ pub const MAX_CONTENT_BYTES: usize = 512 * 1024;
 pub const MAX_MESSAGE_BYTES: usize = forge_git::commit::MAX_MESSAGE_BYTES;
 /// The route name in the log.
 const ROUTE: &str = "single_file_commit";
+/// Commits per caller per [`LIMIT_WINDOW`] (`FG-WEB-0010`, review E1): an
+/// editor saves by hand; a script writing in a loop is told to use git.
+pub const LIMIT: u32 = 30;
+pub const LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The per-caller limiter of this route.
+pub fn limiter() -> crate::routes::namespaces::CallerLimiter {
+    crate::routes::namespaces::CallerLimiter::new(ROUTE, LIMIT, LIMIT_WINDOW)
+}
 
 /// `POST …/repository/commits/single-file`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -213,6 +222,14 @@ fn check(input: &SingleFileCommit, blob_limit: u64) -> Result<Checked, ForgeErro
     if input.message.len() > MAX_MESSAGE_BYTES {
         return Err(param_invalid("message", "too_long"));
     }
+    // Review E1: lines and tabs only (no NUL, no escape sequences).
+    if input
+        .message
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err(param_invalid("message", "control"));
+    }
     let (target, created) = match &input.create_branch {
         Some(raw) => {
             let new = branch(raw, "create_branch")?;
@@ -243,6 +260,9 @@ fn check(input: &SingleFileCommit, blob_limit: u64) -> Result<Checked, ForgeErro
     };
     if open_mr && (title.trim().is_empty() || title.chars().count() > 255) {
         return Err(param_invalid("title", "length"));
+    }
+    if title.chars().any(char::is_control) {
+        return Err(param_invalid("title", "control"));
     }
     let path = FilePath::parse(&input.path)?;
     let limit = usize::try_from(blob_limit)
@@ -321,6 +341,12 @@ async fn commit_inner(
             ForgeError::new(ErrorCode::Internal).with_context("reason", "git_route_without_user")
         );
     };
+    if let Err(retry) = state
+        .file_commit_limiter
+        .check(user, std::time::Instant::now())
+    {
+        return Err(state.file_commit_limiter.refused(retry));
+    }
     let Some(project_row) = request.project().cloned() else {
         return Err(
             ForgeError::new(ErrorCode::Internal).with_context("reason", "proof_without_project")
@@ -387,7 +413,7 @@ async fn commit_inner(
                 message: &input.message,
                 author: &author,
             },
-            PUSH_CHECK_TIMEOUT,
+            (PUSH_CHECK_TIMEOUT, COMMIT_DEADLINE),
             // Every update-ref outcome may have changed the ref.
             &move || browse.invalidate(repo),
         )

@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-`POST /api/v1/projects/{id}/repository/commits/single-file` (the simple editor) never overwrites a change it did not see. `reason=file_changed`: the branch moved since `start_sha` (the commit the editor read the file at) and the file at the branch's head is not the file at `start_sha` (changed, added or deleted by someone else). A branch that moved only by other files is fine: the commit is built on the new head. `reason=start_unknown`: `start_sha` is not a commit of the repository (a typo, or history rewritten and pruned). `reason=branch_exists`: `create_branch` names a branch that exists already (the editor never moves an existing branch it was asked to create). `reason=ref_moved`: the branch kept moving while the commit was written — three compare-and-swap `update-ref` attempts lost to concurrent pushes. Nothing was changed: no ref moved (the written objects are unreachable and `gc` prunes them).
+`POST /api/v1/projects/{id}/repository/commits/single-file` (the simple editor) never overwrites a change it did not see. `reason=file_changed`: the branch moved since `start_sha` (the commit the editor read the file at) and the file at the branch's head is not the file at `start_sha` (changed, added or deleted by someone else). A branch that moved only by other files is fine: the commit is built on the new head. `reason=start_unknown`: `start_sha` is not a commit of the repository (a typo, or history rewritten and pruned). `reason=start_not_ancestor`: `start_sha` is a commit but not an ancestor of the branch's head (the editor read another line of history, e.g. the branch was force-pushed since). `reason=branch_exists`: `create_branch` names a branch that exists already (the editor never moves an existing branch it was asked to create). `reason=branch_name_conflict`: another ref takes the new branch's place in git's ref namespace — a branch at one of its parent paths (`edit` for `edit/x`) or branches below it (`edit/x/y` for `edit/x`); git cannot hold both. `reason=ref_moved`: the branch kept moving while the commit was written — three compare-and-swap `update-ref` attempts lost to concurrent pushes. Nothing was changed: no ref moved (the written objects are unreachable and `gc` prunes them).
 
 ## 調べ方 (diagnosis)
 
@@ -24,4 +24,4 @@ The log event carries `reason`, `start_sha`, `head_sha` (the branch's tip when r
 
 ## 対処 (fix)
 
-Reload the file in the editor (it reads the branch's latest head), apply the change again and commit. For `branch_exists` choose another new branch name, or commit directly to that branch with its head as `start_sha`.
+Reload the file in the editor (it reads the branch's latest head), apply the change again and commit. For `branch_exists` choose another new branch name, or commit directly to that branch with its head as `start_sha`; for `branch_name_conflict` choose a name that is neither a parent nor a child path of an existing branch.

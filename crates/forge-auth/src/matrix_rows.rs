@@ -177,6 +177,12 @@ pub(crate) const BASE_ROWS: &[Row] = &[
     row(A::RepoPush, W::DevTokenWriteRepository, r(BR, U::Create, None), Allow),
     row(A::RepoPush, W::DevTokenReadRepository, r(BR, U::Create, None), deny(E::InsufficientScope)),
     row(A::RepoPush, W::Reporter, r(BR, U::Create, None), deny(E::Forbidden)),
+    row(A::RepoPush, W::Maintainer, r(BR, U::Create, None), Allow),
+    row(A::RepoPush, W::Owner, r(BR, U::Create, None), Allow),
+    row(A::RepoPush, W::Admin, r(BR, U::Create, None), Allow),
+    row(A::RepoPush, W::AgentTokenWriteRepository, r(BR, U::Create, None), Allow),
+    row(A::RepoPush, W::ServiceAccountTokenApi, r(BR, U::Create, None), deny(E::InsufficientScope)),
+    row(A::RepoPush, W::BotTokenApi, r(BR, U::Create, None), deny(E::InsufficientScope)),
     // reserved namespaces (refs/merge-requests, refs/replace, …): nobody
     row(A::RepoPush, W::Owner, r(RES, U::Create, None), deny(E::ReservedRefNamespace)),
     row(A::RepoPush, W::Admin, r(RES, U::Create, None), deny(E::ReservedRefNamespace)),

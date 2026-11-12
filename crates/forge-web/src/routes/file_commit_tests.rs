@@ -72,6 +72,30 @@ fn bad_fields_are_param_invalid() {
             "oid",
         ),
         (Box::new(|i| i.message = " \n".into()), "message", "blank"),
+        // Review E1: only lines and tabs; the title is one line.
+        (
+            Box::new(|i| i.message = "a\0b".into()),
+            "message",
+            "control",
+        ),
+        (
+            Box::new(|i| i.message = "red \u{1b}[31m".into()),
+            "message",
+            "control",
+        ),
+        (
+            Box::new(|i| i.message = "line\r\nnext".into()),
+            "message",
+            "control",
+        ),
+        (
+            Box::new(|i| {
+                i.create_branch = Some("edit/x".into());
+                i.title = Some("a\nb".into());
+            }),
+            "title",
+            "control",
+        ),
         (
             Box::new(|i| i.message = "m".repeat(MAX_MESSAGE_BYTES + 1)),
             "message",
@@ -133,4 +157,18 @@ fn a_secret_is_refused_and_a_waived_one_passes() {
     assert_eq!(e.code(), ErrorCode::PushSecretDetected);
     scan(&format!("# forge:allow-secret\n{key}"), &path, &log).expect("waived");
     scan("# Spec\n", &path, &log).expect("clean");
+}
+
+/// Review E1 (LOW): the route has its own per-caller limit (FG-WEB-0010).
+#[test]
+fn commits_are_limited_per_caller() {
+    let l = limiter();
+    let now = std::time::Instant::now();
+    let (dave, olga) = (UserId::new(7), UserId::new(8));
+    for _ in 0..LIMIT {
+        l.check(dave, now).expect("within the limit");
+    }
+    let retry = l.check(dave, now).expect_err("over the limit");
+    assert_eq!(l.refused(retry).code(), ErrorCode::RateLimited);
+    l.check(olga, now).expect("another caller");
 }
