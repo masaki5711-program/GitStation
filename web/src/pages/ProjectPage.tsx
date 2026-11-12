@@ -34,6 +34,7 @@ import { formatDate, formatDateTime, formatRelative, roleLabel, visibilityLabel 
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { rememberProject } from '../hooks/recent';
 import styles from './Namespace.module.css';
+import { PageHeader } from '../ui/PageHeader';
 
 /** A new project's repository is created by a worker job (FG-REPO-0016
  * answers 503 until it is there, normally within seconds): keep asking for
@@ -297,12 +298,13 @@ export function ProjectPage({ id }: { id: number }) {
     <>
       <Breadcrumb path={p.path} />
       <MovedNotice />
-      <h1 className={styles.title}>{p.display_name}</h1>
-      <p className={styles.meta}>
-        <span className={controls.badge}>{visibilityLabel(t, p.visibility)}</span>
-        {role !== null && <span className={controls.badge}>{role}</span>}
-      </p>
-      {p.description !== '' && <p>{p.description}</p>}
+      <PageHeader title={p.display_name}>
+        <p className={styles.meta}>
+          <span className={controls.badge}>{visibilityLabel(t, p.visibility)}</span>
+          {role !== null && <span className={controls.badge}>{role}</span>}
+        </p>
+        {p.description !== '' && <p className={styles.description}>{p.description}</p>}
+      </PageHeader>
 
       <div className={styles.projectGrid}>
         <div className={styles.projectMain}>

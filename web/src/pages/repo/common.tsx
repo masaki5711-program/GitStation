@@ -14,6 +14,7 @@ import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { treeUrl } from '../../features/repoUrls';
 import styles from './Repo.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 /** A failed read in a repository screen. 404 means the ref or path does not
  * exist (the project itself is visible, or we would not be here): say so with
@@ -30,7 +31,7 @@ export function EmptyRepository({ project }: { project: string }) {
   const { t } = useTranslation();
   return (
     <section aria-labelledby="repo-empty-title">
-      <h1 id="repo-empty-title">{t('project.emptyTitle')}</h1>
+      <PageHeader title={t('project.emptyTitle')} titleId="repo-empty-title" />
       <p>{t('repo.emptyBody')}</p>
       <p>
         <Link to={`/${project.split('/').map(encodeURIComponent).join('/')}`}>

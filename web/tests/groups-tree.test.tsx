@@ -195,6 +195,7 @@ describe('/-/groups tree', () => {
     );
     await renderApp({ fetch: server.fetch, path: '/-/groups' });
     expect((await screen.findByRole('alert')).textContent).toContain('グループを読めませんでした。');
+    expect(screen.getByTestId('request-id').textContent).toBe('req-g-2');
     fireEvent.click(screen.getByRole('button', { name: 'もう一度試す' }));
     expect(await screen.findByRole('link', { name: 'Acme Plant' })).toBeTruthy();
   });

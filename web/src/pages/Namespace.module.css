@@ -1,30 +1,21 @@
-.top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--gs-space-4);
-  margin-bottom: var(--gs-space-6);
-}
-
-.title {
-  margin: 0 0 var(--gs-space-2);
-  font-size: var(--gs-font-size-xl);
-  color: var(--gs-brand-navy);
-  overflow-wrap: anywhere;
-}
-
+/* The page head is ui/PageHeader; these are the facts under its title. */
 .meta {
   display: flex;
   flex-wrap: wrap;
   gap: var(--gs-space-2);
-  margin: 0 0 var(--gs-space-3);
+  margin: var(--gs-space-3) 0 0;
 }
 
-.actions {
+.description {
+  margin: var(--gs-space-2) 0 0;
+  overflow-wrap: anywhere;
+}
+
+.headLinks {
   display: flex;
   flex-wrap: wrap;
   gap: var(--gs-space-3);
+  margin: var(--gs-space-2) 0 0;
 }
 
 .block {
@@ -56,7 +47,7 @@
 .moved {
   padding: var(--gs-space-2) var(--gs-space-3);
   border: 1px solid var(--gs-color-border);
-  border-left: 4px solid var(--gs-brand-orange);
+  border-left: var(--gs-accent-rule-width) solid var(--gs-brand-orange);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-warning-surface);
   color: var(--gs-color-warning-text);
@@ -79,11 +70,9 @@
 }
 
 .card {
+  composes: card from '../ui/surfaces.module.css';
   margin-bottom: var(--gs-space-6);
   padding: var(--gs-space-4);
-  border: 1px solid var(--gs-color-border);
-  border-radius: var(--gs-radius-md);
-  background: var(--gs-color-surface);
 }
 
 .card h2 {

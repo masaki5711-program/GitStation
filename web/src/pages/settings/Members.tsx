@@ -18,6 +18,7 @@ import { formatDate, roleLabel } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 type Member = components['schemas']['MemberBody'];
 type RoleName = components['schemas']['RoleName'];
@@ -115,7 +116,7 @@ export function MembersScreen({ scope }: { scope: Scope }) {
 
   return (
     <>
-      <h1 className={styles.title}>{t('members.title')}</h1>
+      <PageHeader title={t('members.title')} />
       <Section id="members-list-title" title={t('members.current')}>
         {list.isPending && <Loading />}
         {list.isError && (

@@ -2,15 +2,18 @@
   max-width: 32rem;
   margin: var(--gs-space-8) auto;
   padding: var(--gs-space-6);
-  border: 1px solid var(--gs-color-border);
-  border-top: 4px solid var(--gs-brand-teal);
+  border: 1px solid var(--gs-color-border-subtle);
+  border-top: var(--gs-accent-rule-width) solid var(--gs-brand-teal);
   border-radius: var(--gs-radius-md);
   background: var(--gs-color-surface);
+  box-shadow: var(--gs-shadow-2);
 }
 
 .title {
   margin: 0 0 var(--gs-space-3);
-  font-size: var(--gs-font-size-xl);
+  font-size: var(--gs-font-size-2xl);
+  font-weight: var(--gs-font-weight-semibold);
+  line-height: var(--gs-line-height-tight);
   color: var(--gs-brand-navy);
 }
 

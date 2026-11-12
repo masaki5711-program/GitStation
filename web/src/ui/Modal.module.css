@@ -4,7 +4,7 @@
   padding: 0;
   border: 1px solid var(--gs-color-border);
   border-radius: var(--gs-radius-md);
-  background: var(--gs-color-surface-raised);
+  background: var(--gs-color-surface);
   color: var(--gs-color-text);
   box-shadow: var(--gs-shadow-3);
 }

@@ -1,5 +1,5 @@
 /* The skeleton of a list while it loads (tokens only): grey bars in a card,
-   about the shape of the rows to come, so the page does not jump. The sheen
+   in the shape of the rows to come, so the page does not jump. The sheen
    stops under reduced motion (here and in global.css). */
 .list {
   composes: card from '../ui/surfaces.module.css';
@@ -8,20 +8,27 @@
 
 .row {
   display: flex;
-  flex-direction: column;
-  gap: var(--gs-space-2);
-  padding: var(--gs-space-4);
+  align-items: center;
+  gap: var(--gs-space-4);
+  padding: var(--gs-space-3) var(--gs-space-4);
   border-top: 1px solid var(--gs-color-border-subtle);
 }
 
-.row:first-of-type {
+.row:first-child {
   border-top: none;
 }
 
+.lines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  min-width: 0;
+}
+
 .line,
-.lineShort {
+.action {
   display: block;
-  height: var(--gs-space-3);
   border-radius: var(--gs-radius-sm);
   background: linear-gradient(
     90deg,
@@ -33,12 +40,28 @@
   animation: sheen var(--gs-duration-loop) linear infinite;
 }
 
+/* A line of text: about one line's height. */
 .line {
-  width: 60%;
+  height: var(--gs-space-4);
 }
 
-.lineShort {
-  width: 35%;
+.long {
+  width: 70%;
+}
+
+.medium {
+  width: 50%;
+}
+
+.short {
+  width: 30%;
+}
+
+/* A button on the row's right (Inbox: mark as read). */
+.action {
+  flex: none;
+  width: calc(var(--gs-tap-target) * 2.5);
+  height: var(--gs-tap-target);
 }
 
 @keyframes sheen {
@@ -53,7 +76,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .line,
-  .lineShort {
+  .action {
     animation: none;
   }
 }

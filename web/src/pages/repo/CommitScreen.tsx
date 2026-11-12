@@ -13,6 +13,7 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { NotFound } from '../NotFound';
 import { RepoError, shortOid } from './common';
 import styles from './Repo.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 const OID = /^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$/;
 
@@ -48,7 +49,7 @@ export function CommitScreen({
     c.committed_at === c.authored_at;
   return (
     <>
-      <h1 className={styles.title}>{c.subject === '' ? t('commits.noSubject') : c.subject}</h1>
+      <PageHeader title={c.subject === '' ? t('commits.noSubject') : c.subject} />
       <div className={styles.scroll} role="region" aria-label={t('commit.messageLabel')} tabIndex={0}>
         <pre className={styles.message}>{message}</pre>
       </div>

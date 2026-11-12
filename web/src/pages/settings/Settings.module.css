@@ -14,13 +14,6 @@
   color: var(--gs-color-danger-text);
 }
 
-.title {
-  margin: 0 0 var(--gs-space-3);
-  font-size: var(--gs-font-size-xl);
-  color: var(--gs-brand-navy);
-  overflow-wrap: anywhere;
-}
-
 .tabs {
   display: flex;
   flex-wrap: wrap;

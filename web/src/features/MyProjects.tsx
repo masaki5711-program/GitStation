@@ -33,7 +33,7 @@ export function MyProjects({
   const [filter, setFilter] = useState('');
   const mine = useQuery(projectsQuery(api, scope));
 
-  if (mine.isPending) return <SkeletonList />;
+  if (mine.isPending) return <SkeletonList row={{ lines: ['medium'] }} />;
   if (mine.isError) {
     return (
       <QueryError

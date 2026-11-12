@@ -40,6 +40,7 @@ export function EmptyState({
   hints = [],
   action,
   compact = false,
+  live = false,
 }: {
   icon: EmptyIcon;
   /** Why the list is empty, in one line. */
@@ -48,6 +49,8 @@ export function EmptyState({
   /** The one next step (a button or a link). */
   action?: ReactNode;
   compact?: boolean;
+  /** The reason is announced (it replaces a list the person just changed, e.g. a filter). */
+  live?: boolean;
 }) {
   return (
     <div className={compact ? styles.compact : styles.root}>
@@ -67,7 +70,9 @@ export function EmptyState({
           {PATHS[icon]}
         </svg>
       </span>
-      <p className={styles.reason}>{reason}</p>
+      <p className={styles.reason} {...(live ? { role: 'status' } : {})}>
+        {reason}
+      </p>
       {hints.map((h) => (
         <p key={h} className={styles.hint}>
           {h}

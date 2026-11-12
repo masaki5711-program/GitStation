@@ -29,6 +29,7 @@ import {
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { PathCrumbs, RepoError, shortOid, WithSpec } from './common';
 import styles from './Repo.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 export function BlobScreen({
   projectId,
@@ -85,7 +86,7 @@ function Blob({
   return (
     <>
       <PathCrumbs project={project} rev={rev.name} path={path} />
-      <h1 className={styles.title}>{baseName(path)}</h1>
+      <PageHeader title={baseName(path)} />
       <p className={styles.meta}>
         <span>{formatBytes(file.size, i18n.language)}</span>
         <span>

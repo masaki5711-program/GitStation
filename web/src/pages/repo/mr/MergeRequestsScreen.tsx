@@ -15,6 +15,7 @@ import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
 import repo from '../Repo.module.css';
 import styles from './Mr.module.css';
+import { PageHeader } from '../../../ui/PageHeader';
 
 const STATES: readonly MrState[] = ['open', 'merged', 'closed', 'all'];
 
@@ -39,12 +40,14 @@ export function MergeRequestsScreen({ projectId, project }: { projectId: number;
 
   return (
     <>
-      <div className={repo.toolbar}>
-        <h1 className={repo.title}>{title}</h1>
-        <Link to={newPullUrl(project)} className={controls.primary}>
-          {t('mr.list.new')}
-        </Link>
-      </div>
+      <PageHeader
+        title={title}
+        actions={
+          <Link to={newPullUrl(project)} className={controls.primary}>
+            {t('mr.list.new')}
+          </Link>
+        }
+      />
       <nav aria-label={t('mr.list.filterLabel')} className={styles.filter}>
         <ul className={styles.filterList}>
           {STATES.map((s) => (

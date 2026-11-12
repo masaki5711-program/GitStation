@@ -21,6 +21,7 @@ import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
 import repo from '../Repo.module.css';
 import styles from './Mr.module.css';
+import { PageHeader } from '../../../ui/PageHeader';
 
 const TITLE_MAX = 255;
 /** Characters as the server counts them (Unicode scalar values). */
@@ -65,7 +66,7 @@ export function NewMergeRequestScreen({
   }
   return (
     <>
-      <h1 className={repo.title}>{title}</h1>
+      <PageHeader title={title} />
       {body}
     </>
   );

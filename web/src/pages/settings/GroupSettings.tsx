@@ -17,6 +17,7 @@ import { Section } from './common';
 import { GeneralForm, MoveForm } from './Forms';
 import { MembersScreen } from './Members';
 import styles from './Settings.module.css';
+import { PageHeader } from '../../ui/PageHeader';
 
 export function GroupViews({ groupId, word }: { groupId: number; word: 'settings' | 'members' }) {
   const { t } = useTranslation();
@@ -68,7 +69,7 @@ export function GroupViews({ groupId, word }: { groupId: number; word: 'settings
         <MembersScreen scope={{ kind: 'group', id: groupId }} />
       ) : (
         <>
-          <h1 className={styles.title}>{t('settings.title')}</h1>
+          <PageHeader title={t('settings.title')} />
           <Section id="general-title" title={t('settings.general')}>
             <GeneralForm
               displayName={g.display_name}

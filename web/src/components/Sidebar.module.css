@@ -28,14 +28,14 @@
   border-bottom: 1px solid var(--gs-color-border);
 }
 
+/* A section label: small, semibold and muted (no uppercase: Japanese has
+   none, so size and weight carry it). */
 .heading {
   margin: var(--gs-space-4) var(--gs-space-3) var(--gs-space-2);
   color: var(--gs-color-text-muted);
-  font-size: var(--gs-font-size-xs);
+  font-size: var(--gs-font-size-sm);
   font-weight: var(--gs-font-weight-semibold);
   line-height: var(--gs-line-height-tight);
-  letter-spacing: var(--gs-letter-spacing-label);
-  text-transform: uppercase;
 }
 
 .heading:first-child {

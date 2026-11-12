@@ -56,13 +56,12 @@
   background: var(--gs-color-hover-surface);
 }
 
-/* Waits on me and not 0: orange is kept for "a person must act" - a
-   stronger border, an orange top rule and a tinted surface (the number says
-   it too: not colour alone). */
+/* Waits on me and not 0: orange is kept for "a person must act" - an
+   orange top rule and a tinted surface (the number says it too: not colour
+   alone). */
 .cardWaiting,
 .cardWaiting:hover {
-  border: 2px solid var(--gs-color-warning-text);
-  border-top: var(--gs-accent-border-width) solid var(--gs-brand-orange);
+  border-top-color: var(--gs-brand-orange);
   background: var(--gs-color-warning-surface);
 }
 
@@ -87,7 +86,7 @@
 
 .cardLink:focus-visible::after {
   outline: var(--gs-focus-ring);
-  outline-offset: 2px;
+  outline-offset: var(--gs-focus-offset);
 }
 
 .cardLabel {

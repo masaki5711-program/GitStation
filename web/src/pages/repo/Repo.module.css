@@ -36,13 +36,7 @@
   text-decoration: none;
 }
 
-.title {
-  margin: 0 0 var(--gs-space-3);
-  font-size: var(--gs-font-size-xl);
-  color: var(--gs-brand-navy);
-  overflow-wrap: anywhere;
-}
-
+/* A small note after a page title (ui/PageHeader), e.g. "blame". */
 .titleNote {
   font-size: var(--gs-font-size-md);
   font-weight: normal;
@@ -126,7 +120,7 @@
   margin: 0 0 var(--gs-space-3);
   padding: var(--gs-space-2) var(--gs-space-3);
   border: 1px solid var(--gs-color-border);
-  border-left: 4px solid var(--gs-brand-orange);
+  border-left: var(--gs-accent-rule-width) solid var(--gs-brand-orange);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-warning-surface);
   color: var(--gs-color-warning-text);

@@ -15,7 +15,7 @@
 }
 
 .filter button[aria-pressed='true'] {
-  border-width: 2px;
+  border-width: var(--gs-border-width-strong);
   background: var(--gs-color-active-surface);
   font-weight: var(--gs-font-weight-bold);
 }

@@ -34,9 +34,11 @@ a {
   color: var(--gs-color-link);
 }
 
+/* Also a heading focused by script after a navigation (tabIndex -1):
+   browsers match :focus-visible there when the move followed the keyboard. */
 :focus-visible {
   outline: var(--gs-focus-ring);
-  outline-offset: 2px;
+  outline-offset: var(--gs-focus-offset);
 }
 
 /* The type scale: headings are tight and semibold; a page's own class may

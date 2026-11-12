@@ -183,7 +183,7 @@ export function Inbox() {
         )}
       </div>
       {markAll.isError && <Denied error={markAll.error} />}
-      {list.isPending && <SkeletonList />}
+      {list.isPending && <SkeletonList row={{ lines: ['long', 'medium', 'short'], action: true }} />}
       {list.isError && (
         <QueryError
           error={list.error}
@@ -193,7 +193,7 @@ export function Inbox() {
         />
       )}
       {list.isSuccess && items.length === 0 && !list.hasNextPage && (
-        <EmptyState icon="inbox" reason={unread ? t('inbox.emptyUnread') : t('inbox.empty')} />
+        <EmptyState icon="inbox" reason={unread ? t('inbox.emptyUnread') : t('inbox.empty')} live />
       )}
       {items.length > 0 && (
         <ul ref={listRef} className={styles.list} aria-label={unread ? t('inbox.unreadOnly') : t('inbox.all')}>
