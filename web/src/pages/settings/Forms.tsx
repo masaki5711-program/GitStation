@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router';
 import { call } from '../../api/client';
 import { useApi } from '../../api/context';
 import { groupsQuery } from '../../api/lists';
+import { forgetResolutions } from '../../api/namespaces';
 import type { components } from '../../api/schema.gen';
 import { SelectField, TextField } from '../../components/Field';
 import controls from '../../components/controls.module.css';
@@ -144,6 +145,8 @@ export function MoveForm({
           ),
     onSuccess: async (result: Moved) => {
       await queryClient.invalidateQueries();
+      // The old path is now a tombstone: no cached meaning of a path stands.
+      forgetResolutions(queryClient);
       void navigate(`/${result.path}/-/settings`, {
         replace: true,
         state: { movedFrom: result.old_path },

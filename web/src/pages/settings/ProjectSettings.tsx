@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router';
 
 import { call, callNoContent } from '../../api/client';
 import { useApi } from '../../api/context';
+import { forgetResolutions, projectQuery } from '../../api/namespaces';
 import type { Project, Visibility } from '../../api/types';
 import { SelectField, RadioField, TextField } from '../../components/Field';
 import { Loading } from '../../components/Loading';
@@ -34,11 +35,7 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
   const { t } = useTranslation();
   const api = useApi();
   const queryClient = useQueryClient();
-  const project = useQuery({
-    queryKey: ['project', projectId],
-    queryFn: ({ signal }) =>
-      call(() => api.GET('/api/v1/projects/{id}', { signal, params: { path: { id: projectId } } })),
-  });
+  const project = useQuery(projectQuery(api, projectId));
   useDocumentTitle(t('settings.title'));
   // Edit controls of the merge sections come from these flags only (U2).
   const viewer = useMergeViewer(projectId);
@@ -398,6 +395,8 @@ function DeleteProject({ project }: { project: Project }) {
       // projects waiting for deletion.
       queryClient.setQueryData(['deletion', project.id], deletion);
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
+      // The path no longer names a project (until a restore).
+      forgetResolutions(queryClient);
       confirm.close();
       void navigate(`/${session.user.username}/-/settings?tab=trash`);
     },
