@@ -13,11 +13,6 @@
   }
 }
 
-/* Beside the sidebar the page starts at its edge instead of floating centred. */
-.main.besideNav {
-  margin-left: 0;
-}
-
 .main {
   flex: 1;
   min-width: 0;

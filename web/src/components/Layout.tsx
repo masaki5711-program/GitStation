@@ -139,7 +139,7 @@ export function Layout({ bare = false }: { bare?: boolean }) {
         {!bare && <Header {...(nav ? { nav } : {})} />}
         <div className={styles.frame}>
           {withNav && <Sidebar id={navId} narrow={narrow} open={navOpen} onNavigate={closeNav} />}
-          <main id="main" tabIndex={-1} ref={main} className={withNav ? `${styles.main ?? ''} ${styles.besideNav ?? ''}` : styles.main}>
+          <main id="main" tabIndex={-1} ref={main} className={styles.main}>
             <ErrorBoundary key={location.pathname}>{content}</ErrorBoundary>
           </main>
         </div>
