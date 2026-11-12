@@ -118,6 +118,10 @@ impl Browser {
             .saturating_add(1);
         let dir = self.storage.existing(repo)?;
         let _slot = self.claim(repo)?;
+        let size = entry.blob_size()?;
+        if let Some(data) = self.fast_blob(repo, &dir, &entry.oid, size, deadline).await {
+            return Ok(SmallFile::Found(data));
+        }
         let (out, truncated) = self
             .git
             .command("cat-file")
@@ -175,6 +179,16 @@ impl Browser {
         let size = entry.blob_size()?;
         let dir = self.storage.existing(repo)?;
         let _slot = self.claim(repo)?;
+        if size <= self.limits.max_blob_bytes as u64 {
+            if let Some(content) = self.fast_blob(repo, &dir, &entry.oid, size, deadline).await {
+                return Ok(Blob {
+                    entry,
+                    size,
+                    content,
+                    truncated: false,
+                });
+            }
+        }
         let (out, truncated) = self
             .git
             .command("cat-file")
@@ -213,6 +227,13 @@ impl Browser {
             .repo(&dir);
         if size <= self.limits.raw_inline_max_bytes {
             let _slot = self.claim(repo)?;
+            if let Some(data) = self.fast_blob(repo, &dir, &entry.oid, size, deadline).await {
+                return Ok(RawBlob {
+                    size,
+                    oid: entry.oid,
+                    body: RawBody::Bytes(data),
+                });
+            }
             let cap = usize::try_from(size).unwrap_or(usize::MAX);
             let (out, truncated) = cmd
                 .timeout(deadline.left()?)

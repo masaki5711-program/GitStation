@@ -562,6 +562,7 @@ impl GitCommand {
                 .with_context("git_bin", config.bin.display())
                 .with_source(e)
         })?;
+        crate::metrics::spawned(self.subcommand, "captured");
         // Dropped with this future (a cancelled job), the tree is killed
         // (`Drop for ProcessTree`); released once git exited by itself.
         let tree = if self.supervise_tree {

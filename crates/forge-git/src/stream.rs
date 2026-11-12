@@ -421,6 +421,7 @@ impl GitCommand {
                 .with_context("git_bin", config.bin.display())
                 .with_source(e)
         })?;
+        crate::metrics::spawned(self.subcommand, "stream");
         let tree = match ProcessTree::attach(&child) {
             Ok(tree) => tree,
             Err(e) => {

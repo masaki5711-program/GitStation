@@ -121,7 +121,9 @@ impl World {
                     image: format!("registry.internal/rust@sha256:{}", "a".repeat(64)),
                     timeout_s: 600,
                     tags: Vec::new(),
-                    secrets: vec!["DEPLOY_KEY".to_owned()],
+                    // M4 C6: a job naming secrets on an unprotected push is failed
+                    // at the claim (ci_secret_routes.rs); this one names none.
+                    secrets: Vec::new(),
                 }]),
             },
         )

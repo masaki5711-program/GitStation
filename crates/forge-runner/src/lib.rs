@@ -11,6 +11,8 @@
 //! server crate, and nothing depends on this crate.
 
 pub mod api;
+// M4 C6: a job's artifacts (collect, place).
+pub mod artifacts;
 pub mod config;
 pub mod git;
 pub mod isolation;

@@ -110,6 +110,68 @@ fn encode_component(raw: &str) -> String {
     percent_encoding::utf8_percent_encode(raw, QUERY_COMPONENT).to_string()
 }
 
+/// Read an answer: a 2xx body as JSON (empty: null), any other status as
+/// the API v1 error body.
+fn answer(res: reqwest::blocking::Response) -> Result<ApiResponse> {
+    let status = res.status().as_u16();
+    let header_id = res
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let mut bytes = Vec::new();
+    res.take(MAX_BODY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| {
+            ClientError::local(
+                ErrorCode::CliServerUnreachable,
+                format!(
+                    "reason={}",
+                    if e.kind() == std::io::ErrorKind::TimedOut {
+                        "timeout"
+                    } else {
+                        "other"
+                    }
+                ),
+            )
+        })?;
+    if bytes.len() as u64 > MAX_BODY_BYTES {
+        return Err(invalid(status, "body_too_large"));
+    }
+    let parsed: std::result::Result<Value, _> = if bytes.is_empty() {
+        Ok(Value::Null)
+    } else {
+        serde_json::from_slice(&bytes)
+    };
+    if (200..300).contains(&status) {
+        let body = parsed.map_err(|_| invalid(status, "not_json"))?;
+        return Ok(ApiResponse {
+            status,
+            body,
+            request_id: header_id,
+            bytes: bytes.len(),
+        });
+    }
+    if (300..400).contains(&status) {
+        return Err(invalid(status, "unexpected_redirect"));
+    }
+    // An error: the API v1 error body, or something else (a proxy page).
+    let v = parsed.map_err(|_| invalid(status, "error_body_not_json"))?;
+    let code = v.get("error_code").and_then(Value::as_str);
+    let msg = v.get("user_message").and_then(Value::as_str);
+    match (code, msg) {
+        (Some(code), Some(msg)) => {
+            let rid = v
+                .get("request_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or(header_id);
+            Err(ClientError::from_server(status, code, msg, rid.as_deref()))
+        }
+        _ => Err(invalid(status, "error_body_unrecognized")),
+    }
+}
+
 impl ApiClient {
     pub fn new(cfg: &Config, token: Option<Token>) -> Result<Self> {
         let mut b = reqwest::blocking::Client::builder()
@@ -218,64 +280,77 @@ impl ApiClient {
         if let Some(b) = body {
             req = req.json(b);
         }
+        answer(req.send().map_err(unreachable)?)
+    }
+
+    /// `PUT` the bytes of `file` (`len` bytes) to `path` with `bearer` as the
+    /// token (M4 C6: a CI job's artifact, with the job's own token, not
+    /// this client's). The answer is read as [`ApiClient::request`]'s; the
+    /// whole call may take `timeout`.
+    pub fn upload_file(
+        &self,
+        path: &str,
+        query: &[(String, String)],
+        bearer: &str,
+        file: std::fs::File,
+        len: u64,
+        timeout: std::time::Duration,
+    ) -> Result<ApiResponse> {
+        let url = self.url_for(path, query)?;
+        let req = self
+            .http
+            .put(url)
+            .timeout(timeout)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .bearer_auth(bearer)
+            .body(reqwest::blocking::Body::sized(file, len));
+        answer(req.send().map_err(unreachable)?)
+    }
+
+    /// `GET` `path` with `bearer` as the token and copy the body (at most
+    /// `max` bytes) into `out`; the bytes copied. An error answer is read as
+    /// [`ApiClient::request`]'s.
+    pub fn download_to(
+        &self,
+        path: &str,
+        bearer: Option<&str>,
+        out: &mut dyn std::io::Write,
+        max: u64,
+        timeout: std::time::Duration,
+    ) -> Result<u64> {
+        let url = self.url_for(path, &[])?;
+        let mut req = self.http.get(url).timeout(timeout);
+        match (bearer, &self.token) {
+            (Some(b), _) => req = req.bearer_auth(b),
+            (None, Some(t)) => req = req.bearer_auth(t.expose()),
+            (None, None) => {}
+        }
+        for (name, value) in &self.headers {
+            req = req.header(*name, *value);
+        }
         let res = req.send().map_err(unreachable)?;
         let status = res.status().as_u16();
-        let header_id = res
-            .headers()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let mut bytes = Vec::new();
-        res.take(MAX_BODY_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| {
-                ClientError::local(
-                    ErrorCode::CliServerUnreachable,
-                    format!(
-                        "reason={}",
-                        if e.kind() == std::io::ErrorKind::TimedOut {
-                            "timeout"
-                        } else {
-                            "other"
-                        }
-                    ),
-                )
-            })?;
-        if bytes.len() as u64 > MAX_BODY_BYTES {
+        if !(200..300).contains(&status) {
+            return answer(res).map(|_| 0);
+        }
+        let copied = std::io::copy(&mut res.take(max + 1), out).map_err(|e| {
+            ClientError::local(
+                ErrorCode::CliServerUnreachable,
+                format!(
+                    "reason={}",
+                    if e.kind() == std::io::ErrorKind::TimedOut {
+                        "timeout"
+                    } else {
+                        "download"
+                    }
+                ),
+            )
+        })?;
+        if copied > max {
             return Err(invalid(status, "body_too_large"));
         }
-        let parsed: std::result::Result<Value, _> = if bytes.is_empty() {
-            Ok(Value::Null)
-        } else {
-            serde_json::from_slice(&bytes)
-        };
-        if (200..300).contains(&status) {
-            let body = parsed.map_err(|_| invalid(status, "not_json"))?;
-            return Ok(ApiResponse {
-                status,
-                body,
-                request_id: header_id,
-                bytes: bytes.len(),
-            });
-        }
-        if (300..400).contains(&status) {
-            return Err(invalid(status, "unexpected_redirect"));
-        }
-        // An error: the API v1 error body, or something else (a proxy page).
-        let v = parsed.map_err(|_| invalid(status, "error_body_not_json"))?;
-        let code = v.get("error_code").and_then(Value::as_str);
-        let msg = v.get("user_message").and_then(Value::as_str);
-        match (code, msg) {
-            (Some(code), Some(msg)) => {
-                let rid = v
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or(header_id);
-                Err(ClientError::from_server(status, code, msg, rid.as_deref()))
-            }
-            _ => Err(invalid(status, "error_body_unrecognized")),
-        }
+        Ok(copied)
     }
 
     /// GET every page of a list route and merge the items. The result has the

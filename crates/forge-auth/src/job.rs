@@ -77,7 +77,7 @@ pub(crate) fn decide(
     }
     let decided = match principal.credential() {
         Credential::Runner(c) => runner(c, action, rule, resource),
-        Credential::Job(c) => job(c, rule, resource),
+        Credential::Job(c) => job(c, action, rule, resource),
         // `authorize()` calls this for the CI credentials only.
         Credential::Session | Credential::Token(_) | Credential::ActAs(_) => {
             Err(ForgeError::new(ErrorCode::Internal).with_context("reason", "not_a_ci_principal"))
@@ -137,7 +137,12 @@ fn runner(
 }
 
 /// A job: its own project at its pinned SHA, while the token is live.
-fn job(credential: &JobCredential, rule: CiRule, resource: &Resource) -> Result<(), ForgeError> {
+fn job(
+    credential: &JobCredential,
+    action: Action,
+    rule: CiRule,
+    resource: &Resource,
+) -> Result<(), ForgeError> {
     let refusal = |e: ForgeError| {
         e.with_context("credential", "job")
             .with_context("job_id", credential.job_id)
@@ -160,11 +165,30 @@ fn job(credential: &JobCredential, rule: CiRule, resource: &Resource) -> Result<
     };
     match resource {
         Resource::PinnedCopy(copy) => {
+            if action != Action::RepoRead {
+                return Err(not_found("job_resource_mismatch"));
+            }
             if copy.project() != credential.project {
                 return Err(not_found("job_other_project"));
             }
             if *copy.sha() != credential.sha {
                 return Err(not_found("job_sha_mismatch"));
+            }
+            Ok(())
+        }
+        // M4 C6: its own artifacts and its needs' — its own job only.
+        Resource::JobSelf(target) => {
+            if !matches!(
+                action,
+                Action::JobArtifactUpload | Action::JobArtifactDownload
+            ) {
+                return Err(not_found("job_resource_mismatch"));
+            }
+            if target.project() != credential.project {
+                return Err(not_found("job_other_project"));
+            }
+            if target.job() != credential.job_id {
+                return Err(not_found("job_other_job"));
             }
             Ok(())
         }

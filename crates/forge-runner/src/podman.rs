@@ -50,7 +50,10 @@
 //!   mappings and `auto` fails nested, so it is not set. The runner checks
 //!   what a container really gets before every claim
 //!   ([`PodmanPlan::isolation_probe`], FG-CI-0015).
-//! - The job's token is never in the container's environment.
+//! - The job's token is never in the container's environment. Its
+//!   secrets (M4 C6) are, as variables read from an env file
+//!   (`--env-file=<work_dir>/job/secrets/job.env`, owner only, never
+//!   mounted, removed after the create): never in argv.
 //! - A timeout or a cancel: `podman kill`; then always `podman rm
 //!   --force` (the container is removed whatever happened).
 //!
@@ -195,6 +198,9 @@ pub struct Container<'a> {
     /// The job's pod when it has services: the container joins it (and
     /// its `--network=none` namespace) instead of getting its own.
     pub pod: Option<&'a str>,
+    /// The job's secrets as an env file (M4 C6, `--env-file`): the values
+    /// never reach argv, and the file is never mounted.
+    pub env_file: Option<&'a Path>,
 }
 
 /// What one service container runs (plan 14 C5s): the image's own
@@ -282,7 +288,8 @@ impl PodmanPlan {
             Some(pod) => cmd.arg(format!("--pod={pod}")),
             None => cmd.arg("--network=none"),
         };
-        self.confined(cmd)
+        let cmd = self
+            .confined(cmd)
             .arg(work)
             .arg(script)
             .arg("--workdir=/workspace")
@@ -290,8 +297,16 @@ impl PodmanPlan {
             .arg(format!("--env=FORGE_JOB_ID={}", c.job_id))
             .arg(format!("--env=FORGE_PIPELINE_ID={}", c.pipeline_id))
             .arg(format!("--env=FORGE_PROJECT_ID={}", c.project_id))
-            .arg(format!("--env=FORGE_COMMIT_SHA={}", c.sha))
-            .arg("--entrypoint=/bin/sh")
+            .arg(format!("--env=FORGE_COMMIT_SHA={}", c.sha));
+        let cmd = match c.env_file {
+            Some(file) => {
+                let mut arg = std::ffi::OsString::from("--env-file=");
+                arg.push(file);
+                cmd.arg(arg)
+            }
+            None => cmd,
+        };
+        cmd.arg("--entrypoint=/bin/sh")
             .arg("--")
             .arg(c.image)
             .arg("-eu")
@@ -601,6 +616,7 @@ mod tests {
             project_id: 2,
             sha: &"b".repeat(40),
             pod: None,
+            env_file: None,
         });
         let argv = cmd.argv();
         for flag in [
@@ -646,6 +662,7 @@ mod tests {
                 project_id: 2,
                 sha: &"b".repeat(40),
                 pod: None,
+                env_file: None,
             })
             .argv();
         let dash = argv.iter().position(|a| a == "--").expect("--");
@@ -736,6 +753,7 @@ mod tests {
                 project_id: 2,
                 sha: &"b".repeat(40),
                 pod: Some("forge-job-7-1"),
+                env_file: None,
             })
             .argv();
         assert!(job.iter().any(|a| a == "--pod=forge-job-7-1"), "{job:?}");
@@ -791,6 +809,7 @@ mod tests {
             project_id: 2,
             sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             pod,
+            env_file: None,
         }
     }
 

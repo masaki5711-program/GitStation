@@ -113,6 +113,8 @@ mod check_run_retention;
 mod ci_leases;
 // M4 C5: the ci/pipeline check and the failure fingerprints.
 mod ci_outputs;
+// M4 C6: CI artifacts past their 30 days.
+mod ci_artifacts;
 mod in_app_retention;
 // ── end check run retention ──
 // ── M2 MR6: the session purge ──
@@ -251,6 +253,8 @@ enum Task {
     /// The `ci/pipeline` checks written and the failed jobs fingerprinted
     /// (`ci_outputs`, M4 C5).
     CiOutputs,
+    /// CI artifacts past their 30 days removed (`ci_artifacts`, M4 C6).
+    CiArtifactExpiry,
     /// Dead `check.spec_drift` jobs answered with `error` (`spec_drift_sweep`, M3 X2).
     SpecDriftSweep,
     /// Dead `check.risk` jobs answered with `error` (`risk_sweep`, M3 X7).
@@ -385,6 +389,8 @@ fn tasks_with(
     }
     // ── M3 O3: only with the storage (not in the loop tests) ──
     if let Some(m) = maintenance {
+        // M4 C6: the artifact files live under the storage root.
+        tasks.push(Task::CiArtifactExpiry);
         tasks.push(Task::MaintenanceRunner);
         tasks.push(Task::MaintenanceSchedule);
         // ── M3 O2: the lag sweep always, the runner with the credentials ──
@@ -525,6 +531,7 @@ impl Task {
             Self::ActAsSweep => act_as_sweep::NAME,
             Self::CiLeaseReaper => ci_leases::NAME,
             Self::CiOutputs => ci_outputs::NAME,
+            Self::CiArtifactExpiry => ci_artifacts::NAME,
             Self::SpecDriftSweep => spec_drift_sweep::NAME,
             Self::RiskSweep => risk_sweep::NAME,
             Self::SpecIndexSweep => spec_index_sweep::NAME,
@@ -562,6 +569,7 @@ impl Task {
             Self::ActAsSweep => act_as_sweep::PERIOD,
             Self::CiLeaseReaper => ci_leases::PERIOD,
             Self::CiOutputs => ci_outputs::PERIOD,
+            Self::CiArtifactExpiry => ci_artifacts::PERIOD,
             Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
             Self::RiskSweep => risk_sweep::PERIOD,
             Self::SpecIndexSweep => spec_index_sweep::PERIOD,
@@ -628,6 +636,13 @@ impl Task {
             Self::ActAsSweep => act_as_sweep::run_act_as_sweep(db).await,
             Self::CiLeaseReaper => ci_leases::run_ci_lease_reaper(db).await,
             Self::CiOutputs => ci_outputs::run_ci_outputs(db).await,
+            Self::CiArtifactExpiry => match shared.storage.as_ref() {
+                Some(storage) => {
+                    let store = forge_pipelines::artifacts::ArtifactStore::new(storage.root.path());
+                    ci_artifacts::run_ci_artifact_expiry(db, &store).await
+                }
+                None => Err(self.unconfigured()),
+            },
             Self::InAppRetention => in_app_retention::run_in_app_retention(db).await,
             Self::MaintenanceRunner => match shared.maintenance.as_ref() {
                 Some(m) => {

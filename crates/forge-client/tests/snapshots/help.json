@@ -6535,6 +6535,140 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        }
+      ],
+      "examples": [
+        "gstn ci variable list --project 7 --json"
+      ],
+      "name": "ci variable list",
+      "output": {
+        "properties": {
+          "variables": {
+            "items": {
+              "required": [
+                "name",
+                "protected_only",
+                "masked",
+                "value_bytes",
+                "created_by",
+                "updated_by",
+                "created_at",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "variables"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/ci/variables"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "A project's CI variables, the secrets jobs name in secrets: of .forge-ci.yml: name, masked, protected, length, who set them and when; never a value (a Maintainer, a person)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The name, [A-Z][A-Z0-9_]* (not CI, PATH, HOME, HOSTNAME, FORGE_* or CI_*).",
+          "kind": "positional",
+          "name": "name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Do not mask the value in job logs.",
+          "kind": "flag",
+          "name": "--unmasked",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn ci variable set --project 7 DEPLOY_TOKEN < token.txt"
+      ],
+      "name": "ci variable set",
+      "output": {
+        "required": [
+          "name",
+          "protected_only",
+          "masked",
+          "value_bytes",
+          "created_by",
+          "updated_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/ci/variables/{name}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Set a CI variable (a Maintainer, a person). The value is read from standard input (one line, at most 4096 bytes; a trailing newline is dropped), never an argument, and never shown again. Masked in job logs unless --unmasked (a masked value is at least 8 bytes). Only jobs of push pipelines of protected branches ever get it. 400 FG-WEB-0006 for a bad name or value; 503 FG-CI-0016 when the server has no usable key."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The name.",
+          "kind": "positional",
+          "name": "name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn ci variable delete --project 7 DEPLOY_TOKEN --yes"
+      ],
+      "name": "ci variable delete",
+      "output": {
+        "type": "null"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/ci/variables/{name}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Delete a CI variable (a Maintainer, a person; 404 FG-REPO-0005 without it). A job that still names it fails with FG-CI-0018. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         },
         {
           "description": "The work item, canonical PBI-<n>.",
@@ -9997,6 +10131,129 @@
         "read_api"
       ],
       "summary": "Why a pipeline failed, deterministically (plan 04 P-9): each failed job's fingerprint, error codes, masked excerpt and its log lines, how often it failed in the project, and known fixes (a merge request whose pipeline later passed). A job not fingerprinted yet is `pending`. 403 FG-AUTH-0022 as for `pipeline log`."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The pipeline id.",
+          "kind": "option",
+          "name": "--pipeline",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The job id.",
+          "kind": "option",
+          "name": "--job",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn pipeline artifacts --project 7 --pipeline 42 --job 9 --json"
+      ],
+      "name": "pipeline artifacts",
+      "output": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "required": [
+                "id",
+                "pipeline_id",
+                "job_id",
+                "job",
+                "attempt",
+                "path",
+                "size_bytes",
+                "sha256",
+                "keep",
+                "created_at",
+                "expires_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifacts"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The artifacts of one CI job (M4 C6): path, size, sha256, attempt, expiry (30 days unless kept for a deployment). 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (as for pipeline log)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The pipeline id.",
+          "kind": "option",
+          "name": "--pipeline",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The job id.",
+          "kind": "option",
+          "name": "--job",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The artifact id (from pipeline artifacts).",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The file to write (created new).",
+          "kind": "option",
+          "name": "--output",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn pipeline artifact-download --project 7 --pipeline 42 --job 9 31 --output app.tar"
+      ],
+      "name": "pipeline artifact-download",
+      "output": {
+        "required": [
+          "id",
+          "output",
+          "size_bytes",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts",
+        "GET /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Download one CI artifact to a file (--output; never over an existing file) and check its sha256 (X-Forge-Sha256). 403 FG-AUTH-0022 as for pipeline artifacts."
     },
     {
       "args": [

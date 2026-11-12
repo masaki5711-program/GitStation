@@ -206,6 +206,13 @@ impl Runner {
     /// error: a host problem).
     pub fn run_forever(&self) -> Result<(), ForgeError> {
         let shutdown = self.shutdown.as_ref();
+        // M4 C6 review: nothing of a previous run (a crash) survives — the
+        // job directory, its `secrets/` env file included.
+        self.exec.workspace.wipe().map_err(|e| {
+            ForgeError::new(ErrorCode::ContainerStartFailed)
+                .with_context("reason", "workspace_dirty")
+                .with_source(e)
+        })?;
         while !shutdown.load(Ordering::SeqCst) {
             // Before every claim (ADR-0029 amendment 2026-11-12): what
             // Podman makes of a job's container now, not only at start.
