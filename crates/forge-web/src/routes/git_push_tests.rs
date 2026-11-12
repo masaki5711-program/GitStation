@@ -93,6 +93,7 @@ fn receiver(dir: &std::path::Path, recorder: Arc<dyn PushRecorder>) -> Receiver 
             project_id: ProjectId::new(3),
             repo_id: 9,
             lang: Lang::En,
+            route: "receive_pack",
         },
         commands: Vec::new(),
         rewriter: ReportRewriter::new(false, BTreeSet::new(), RewriteTexts::default()),

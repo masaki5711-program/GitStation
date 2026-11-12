@@ -291,6 +291,12 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PushSecretDetected
         | ErrorCode::PushCheckFailed
         | ErrorCode::PushCheckIncomplete
+        // E1: the simple editor's commit is a request, never a merge.
+        | ErrorCode::FileCommitConflict
+        | ErrorCode::FileCommitPathInvalid
+        | ErrorCode::FileCommitTooLarge
+        | ErrorCode::FileCommitNotText
+        | ErrorCode::FileCommitUnchanged
         // M3 N1: the mail job's own code never reaches a merge.
         | ErrorCode::SmtpUnavailable => false,
     }

@@ -1248,6 +1248,9 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         "routes/context.rs",
         // Plan 13 stage 3: the browse API only (resolve_ref, the tree read).
         "routes/documents.rs",
+        // Simple editor E1: forge-git's file_commit / refs API only (the
+        // commit, the compare-and-swap), decided like a push.
+        "routes/file_commit.rs",
         "git_stream.rs",
     ];
     let mut used_in = Vec::new();

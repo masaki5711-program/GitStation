@@ -56,6 +56,7 @@ pub use evaluate::{
     blocked, evaluate_merge, stored_mergeable, BlockReason, CheckConclusion, CheckRun, CheckStatus,
     MergeClearance, MergeFacts, Mergeable, RequiredCheck,
 };
+pub(crate) use execute::account_commit_identity;
 pub use execute::{MergeReport, RECONCILE_BATCH};
 pub use forge_db::review::merges::{CredentialRef, StoredMerge};
 pub use reconcile::ReconcileReport;

@@ -1079,6 +1079,73 @@ fix = "Push to a feature branch, open a merge request and merge it. A Maintainer
 runbook = "merge-blocked"
 test = "a_direct_push_to_a_branch_with_the_ban_is_refused"
 
+# ── Simple editor E1: one file committed from the web (2026-11-12) ────────
+# (FG-GIT-0025 / 0026 are the history import's, on its own branch.)
+[[error]]
+code = "FG-GIT-0027"
+name = "FileCommitConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "編集を始めた後に、ほかの人がこのファイルかブランチを変更しました。最新の内容を開き直して、変更をもう一度加えてください。"
+user_message_en = "Someone changed this file or branch after you started editing. Open the latest version and make your change again."
+user_message_id = "Seseorang mengubah file atau branch ini setelah Anda mulai mengedit. Buka versi terbaru dan lakukan perubahan Anda lagi."
+cause = "`POST /api/v1/projects/{id}/repository/commits/single-file` (the simple editor) never overwrites a change it did not see. `reason=file_changed`: the branch moved since `start_sha` (the commit the editor read the file at) and the file at the branch's head is not the file at `start_sha` (changed, added or deleted by someone else). A branch that moved only by other files is fine: the commit is built on the new head. `reason=start_unknown`: `start_sha` is not a commit of the repository (a typo, or history rewritten and pruned). `reason=branch_exists`: `create_branch` names a branch that exists already (the editor never moves an existing branch it was asked to create). `reason=ref_moved`: the branch kept moving while the commit was written — three compare-and-swap `update-ref` attempts lost to concurrent pushes. Nothing was changed: no ref moved (the written objects are unreachable and `gc` prunes them)."
+diagnosis = "The log event carries `reason`, `start_sha`, `head_sha` (the branch's tip when refused), `attempts` (ref_moved), `project_id`, `repo_id`, `route=single_file_commit`. Compare the file at both commits (read-only): `git -C <repo> diff <start_sha> <head_sha> -- <path>`."
+fix = "Reload the file in the editor (it reads the branch's latest head), apply the change again and commit. For `branch_exists` choose another new branch name, or commit directly to that branch with its head as `start_sha`."
+test = "a_file_changed_since_the_start_is_a_conflict"
+
+[[error]]
+code = "FG-GIT-0028"
+name = "FileCommitPathInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "このファイルのパスには保存できません。パスを確認してください（`..`、`.git`、先頭の `/` は使えません）。"
+user_message_en = "The file cannot be saved at this path. Check the path (`..`, `.git` and a leading `/` are not allowed)."
+user_message_id = "File tidak dapat disimpan di path ini. Periksa path-nya (`..`, `.git`, dan `/` di awal tidak diizinkan)."
+cause = "The `path` of a single-file commit (the simple editor) is not a path the editor may write. Rules of the text (`rule`): `empty`, `absolute` (starts with `/`), `backslash` (a `\\`: never a separator in git), `empty_segment` (`//` or a trailing `/`), `dot_segment` (`.` or `..`), `dot_git` (a segment `.git` in any case: git's own directory), `control` (a control character, NUL included), `too_long` (more than 4096 bytes). Rules of the tree at the branch's head (`rule`): `path_is_directory` (a directory is there), `parent_is_file` (a parent segment is a file), `not_regular_file` (a symbolic link or a submodule is there: the editor writes regular files only). Nothing was written."
+diagnosis = "The log event carries `rule`, `project_id`, `repo_id`, `route=single_file_commit` (never the path itself). Read the tree at the branch's head (read-only): `git -C <repo> ls-tree <branch> -- <dir>`."
+fix = "Choose a relative path of a regular file, for example `docs/spec.md`."
+test = "every_path_rule_has_its_reason"
+
+[[error]]
+code = "FG-GIT-0029"
+name = "FileCommitTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "ファイルが大きすぎるため、エディターでは保存できません。git で push してください。"
+user_message_en = "The file is too large to be saved from the editor. Push it with git instead."
+user_message_id = "File terlalu besar untuk disimpan dari editor. Push dengan git sebagai gantinya."
+cause = "The `content` of a single-file commit (the simple editor) is larger than the editor's limit: 512 KiB (`forge_web::routes::file_commit::MAX_CONTENT_BYTES`, so the JSON-escaped content fits the route's 1 MiB body cap; never above `forge_git::file_commit::MAX_FILE_BYTES`, 1 MiB, the size the push's secret scan reads whole), or the server's push blob limit (`git.http.push_max_blob_bytes`) when that is smaller. Nothing was written."
+diagnosis = "The log event carries `bytes` (the content's size), `limit`, `project_id`, `repo_id`, `route=single_file_commit`. A request body over the route's cap (1 MiB, or the server's `body_limit_bytes` when smaller) is FG-WEB-0009 instead, refused by the body reader before this check."
+fix = "Edit large files locally and push them with git (the push's own size limit applies)."
+test = "content_over_the_limit_is_too_large"
+
+[[error]]
+code = "FG-GIT-0030"
+name = "FileCommitNotText"
+http_status = 422
+severity = "info"
+user_message_ja = "ファイルにテキストでない内容（NUL 文字）が含まれているため、エディターでは保存できません。"
+user_message_en = "The file contains non-text content (a NUL character), so it cannot be saved from the editor."
+user_message_id = "File berisi konten non-teks (karakter NUL), sehingga tidak dapat disimpan dari editor."
+cause = "The `content` of a single-file commit (the simple editor) holds a NUL character (`\\u0000` in the JSON): git and the browse API treat such a file as binary. The editor writes UTF-8 text only (the JSON body is UTF-8 by construction). Nothing was written."
+diagnosis = "The log event carries `reason=nul`, `project_id`, `repo_id`, `route=single_file_commit`."
+fix = "Remove the NUL characters, or push the binary file with git."
+test = "content_with_a_nul_is_not_text"
+
+[[error]]
+code = "FG-GIT-0031"
+name = "FileCommitUnchanged"
+http_status = 422
+severity = "info"
+user_message_ja = "ファイルの内容が変わっていないため、コミットしませんでした。"
+user_message_en = "The file's content did not change, so nothing was committed."
+user_message_id = "Isi file tidak berubah, sehingga tidak ada yang di-commit."
+cause = "The `content` of a single-file commit (the simple editor) is byte for byte the file at the branch's head (same blob, same mode): the commit would change nothing. No commit, no branch and no merge request were made."
+diagnosis = "The log event carries `blob` (the unchanged blob id), `project_id`, `repo_id`, `route=single_file_commit`."
+fix = "Change the content before committing, or close the editor."
+test = "the_same_content_is_unchanged"
+
 # ── M3 O3: repository maintenance (gc / pack-refs / commit-graph / fsck) ─
 [[error]]
 code = "FG-GIT-0018"

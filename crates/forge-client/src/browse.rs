@@ -12,7 +12,13 @@ use crate::cli::{BrowseCommand, Cli};
 use crate::error::Result;
 use crate::hosting::{call, client, list_human, text};
 use crate::http::Method;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::io::Read as _;
+
+use crate::app::usage;
+
+/// The most content `browse commit-file` sends (the server's limit).
+const COMMIT_FILE_MAX_BYTES: u64 = 512 * 1024;
 
 /// File text for a terminal: kept whole with its newlines and tabs, every
 /// other control character (escape sequences, `\r`) and the bidi
@@ -385,6 +391,75 @@ pub fn browse(cli: &Cli, cmd: &BrowseCommand, env: EnvFn<'_>, io: &mut Io<'_>) -
             let body = call(&c, Method::Get, &repository(*project, "blame"), &q, None)?;
             let human = blame_human(&body);
             emit(io, cli, body, &human)
+        }
+        BrowseCommand::CommitFile {
+            project,
+            branch,
+            start_sha,
+            path,
+            message,
+            create_branch,
+            no_merge_request,
+            title,
+        } => {
+            if *no_merge_request && create_branch.is_none() {
+                return Err(usage("no_merge_request_needs_create_branch"));
+            }
+            if io.stdin_tty {
+                return Err(usage(
+                    "stdin_is_a_terminal (pipe the content: gstn browse commit-file ... < file.md)",
+                ));
+            }
+            let mut content = String::new();
+            io.stdin
+                .take(COMMIT_FILE_MAX_BYTES + 1)
+                .read_to_string(&mut content)
+                .map_err(|_| usage("stdin_not_utf8_text"))?;
+            if content.len() as u64 > COMMIT_FILE_MAX_BYTES {
+                return Err(usage("content_too_large (at most 512 KiB)"));
+            }
+            let mut body = json!({
+                "branch": branch,
+                "start_sha": start_sha,
+                "path": path,
+                "content": content,
+                "message": message,
+            });
+            if let Some(new) = create_branch {
+                body["create_branch"] = json!(new);
+                body["open_merge_request"] = json!(!*no_merge_request);
+            }
+            if let Some(t) = title {
+                body["title"] = json!(t);
+            }
+            let c = client(cli, env, io)?;
+            let out = call(
+                &c,
+                Method::Post,
+                &repository(*project, "commits/single-file"),
+                &[],
+                Some(&body),
+            )?;
+            let mut human = format!(
+                "committed {} on {}",
+                text(&out, "commit_sha"),
+                text(&out, "branch")
+            );
+            if let Some(iid) = out
+                .get("merge_request")
+                .and_then(|m| m.get("iid"))
+                .and_then(Value::as_i64)
+            {
+                human.push_str(&format!("\nmerge request !{iid}"));
+            }
+            if let Some(code) = out
+                .get("merge_request_error")
+                .and_then(|e| e.get("error_code"))
+                .and_then(Value::as_str)
+            {
+                human.push_str(&format!("\nmerge request not opened: {code}"));
+            }
+            emit(io, cli, out, &human)
         }
         BrowseCommand::File { project, rev, path } => {
             let c = client(cli, env, io)?;

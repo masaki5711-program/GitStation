@@ -594,6 +594,21 @@ fn body_routes_that_do_not_fit_are_a_startup_error() {
         problems(body_route(Verb::Patch, Action::UserSelfRead, 64 * 1024)),
         ""
     );
+    // E1: only the listed file route may take more, and at most 1 MiB.
+    let file_route = |cap| {
+        Registry::new().route_with_body(
+            Verb::Post,
+            crate::body::LARGE_BODY_ROUTES[0],
+            Action::UserSelfRead,
+            "x",
+            cap,
+            NoBodyLoad,
+            change,
+        )
+    };
+    assert_eq!(problems(file_route(crate::body::MAX_FILE_BODY_BYTES)), "");
+    assert!(problems(file_route(crate::body::MAX_FILE_BODY_BYTES + 1))
+        .contains("body_limit_out_of_range"));
 
     let admin = Principal::authenticated(
         UserId::new(1),
@@ -664,7 +679,7 @@ fn the_product_openapi_is_strict_and_deterministic() {
     }
     for def in registry.defs() {
         if let Some((_, cap)) = def.request {
-            assert!(cap <= crate::body::MAX_JSON_BODY_BYTES, "{}", def.path);
+            assert!(cap <= crate::body::max_body_cap(def.path), "{}", def.path);
         }
     }
     let user = &doc["paths"]["/api/v1/user"]["get"];

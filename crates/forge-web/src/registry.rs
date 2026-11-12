@@ -77,7 +77,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{json, Map, Value};
 use utoipa::openapi::{RefOr, Schema};
 
-use crate::body::{RequestBody, MAX_JSON_BODY_BYTES};
+use crate::body::{max_body_cap, RequestBody};
 use crate::context::Ctx;
 
 /// HTTP methods the routes use. `Head` is registered explicitly for the
@@ -866,7 +866,7 @@ impl<S: DispatchState> Registry<S> {
             Some("body_route_needs_an_unsafe_verb")
         } else if action.is_public() {
             Some("body_route_must_authenticate")
-        } else if max_body_bytes == 0 || max_body_bytes > MAX_JSON_BODY_BYTES {
+        } else if max_body_bytes == 0 || max_body_bytes > max_body_cap(path) {
             Some("body_limit_out_of_range")
         } else {
             None

@@ -5026,6 +5026,91 @@
           "required": true
         },
         {
+          "description": "The branch the file was read from.",
+          "kind": "option",
+          "name": "--branch",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The commit the file was read at (40 or 64 hexadecimal digits).",
+          "kind": "option",
+          "name": "--start-sha",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The file's path from the repository root.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The commit message.",
+          "kind": "option",
+          "name": "--message",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Commit on this new branch instead.",
+          "kind": "option",
+          "name": "--create-branch",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "With --create-branch: open no merge request.",
+          "kind": "flag",
+          "name": "--no-merge-request",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The merge request's title (default: the message's first line).",
+          "kind": "option",
+          "name": "--title",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse commit-file --project 7 --branch main --start-sha 0123456789abcdef0123456789abcdef01234567 --path docs/spec.md --message \"Update the spec\" --create-branch edit/spec < spec.md"
+      ],
+      "name": "browse commit-file",
+      "output": {
+        "required": [
+          "commit_sha",
+          "parent_sha",
+          "branch",
+          "branch_created",
+          "path",
+          "blob_sha",
+          "merge_request",
+          "merge_request_error"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/repository/commits/single-file"
+      ],
+      "scopes": [
+        "write_repository",
+        "api"
+      ],
+      "summary": "Commit one text file read from standard input like a push (Developer): on --create-branch (a merge request into --branch unless --no-merge-request) or directly on --branch when the push rules allow it. 409 FG-GIT-0027 when the file changed since --start-sha (never overwritten); 403 FG-GIT-0017 / FG-GIT-0008 on a protected branch; 422 FG-GIT-0022 for a secret."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
           "description": "A full commit id, a branch or a tag (default: the default branch).",
           "kind": "option",
           "name": "--ref",

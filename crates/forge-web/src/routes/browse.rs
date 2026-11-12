@@ -409,9 +409,9 @@ pub(crate) struct Target {
 impl Target {
     /// Also for a merge request route (M3 R2): any context whose loader
     /// read the project row (its id is the proof's project).
-    pub(crate) fn of<R: forge_auth::ResourceCtx>(
+    pub(crate) fn of<R: forge_auth::ResourceCtx, B>(
         state: &AppState,
-        request: &Dispatched<R>,
+        request: &Dispatched<R, B>,
     ) -> Result<Self, ForgeError> {
         let Some(smart) = state.smart_http.as_ref() else {
             return Err(ForgeError::new(ErrorCode::Internal)

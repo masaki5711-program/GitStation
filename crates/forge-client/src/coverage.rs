@@ -369,6 +369,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/repository/commits/{oid}",
         Coverage::Command("browse commit"),
     ),
+    // Simple editor E1: one file committed like a push.
+    (
+        "POST",
+        "/api/v1/projects/{id}/repository/commits/single-file",
+        Coverage::Command("browse commit-file"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/repository/compare",

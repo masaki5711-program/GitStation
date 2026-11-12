@@ -1571,6 +1571,22 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<b::BlobBody>(Verb::Get, b::BLOB)
         .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+        // Simple editor E1 (2026-11-12): one text file committed like a
+        // push (the project-level RepoPush here, the ref decided by
+        // authorize_ref_updates on the push's protection snapshot).
+        .route_with_body(
+            Verb::Post,
+            routes::file_commit::PATH,
+            Action::RepoPush,
+            "Create or replace one text file (UTF-8, no NUL, at most 512 KiB) and commit it like a push: on a new branch (create_branch; by default a merge request into branch is opened) or directly on branch when the push rules allow it (protected-ref rules, direct-push ban, secret scan FG-GIT-0022); start_sha is the commit the file was read at: a file changed since is 409 FG-GIT-0027, never overwritten (Developer; a token needs write_repository)",
+            routes::file_commit::MAX_BODY,
+            routes::file_commit::SingleFileOf,
+            routes::file_commit::commit,
+        )
+        .responds_created::<routes::file_commit::SingleFileCommitBody>(
+            Verb::Post,
+            routes::file_commit::PATH,
+        )
         // Plan 13 stage 3: the document view as JSON (the blob API's rule);
         // a confidential document is withheld from an AI agent (plan 06 D-5).
         .route_with(

@@ -137,23 +137,26 @@ pub async fn receive_pack(state: AppState, request: Dispatched<ProjectCtx>) -> R
     }
 }
 
-/// What every log line of one push carries.
+/// What every log line of one push carries (also the simple editor's
+/// commit, `routes::file_commit`, which records like a push).
 #[derive(Debug, Clone)]
-struct PushLog {
-    request_id: RequestId,
-    project_id: ProjectId,
-    repo_id: i64,
-    lang: Lang,
+pub(crate) struct PushLog {
+    pub(crate) request_id: RequestId,
+    pub(crate) project_id: ProjectId,
+    pub(crate) repo_id: i64,
+    pub(crate) lang: Lang,
+    /// `receive_pack`, or `single_file_commit`.
+    pub(crate) route: &'static str,
 }
 
 impl PushLog {
     fn context(&self, err: ForgeError) -> ForgeError {
-        err.with_context("route", "receive_pack")
+        err.with_context("route", self.route)
             .with_context("project_id", self.project_id.get())
             .with_context("repo_id", self.repo_id)
     }
 
-    fn failure(&self, err: ForgeError) {
+    pub(crate) fn failure(&self, err: ForgeError) {
         telemetry::log_failure(&self.context(err), &self.request_id);
     }
 }
@@ -200,6 +203,7 @@ async fn receive_pack_inner(
         project_id,
         repo_id: repository.id.get(),
         lang: ctx.lang,
+        route: "receive_pack",
     };
     let limits = smart.limits;
     let started = Instant::now();
@@ -599,7 +603,7 @@ fn kind_name(kind: Option<RefUpdate>) -> String {
 }
 
 /// The `User-Agent` for the record (cut, at a character boundary).
-fn user_agent(request: &Dispatched<ProjectCtx>) -> Option<String> {
+pub(crate) fn user_agent<B>(request: &Dispatched<ProjectCtx, B>) -> Option<String> {
     let value = request.headers().get(USER_AGENT)?.to_str().ok()?;
     let mut cut = value.len().min(MAX_USER_AGENT);
     while !value.is_char_boundary(cut) {
@@ -1351,91 +1355,103 @@ impl Receiver {
     /// `record_push`, [`RECORD_ATTEMPTS`] within [`RECORD_BUDGET`];
     /// `FG-GIT-0012` when every attempt failed.
     async fn record(&self, record: &PushRecord, commits: &forge_core::PushedCommits) {
-        let deadline = Instant::now() + RECORD_BUDGET;
-        let unknown = forge_core::PushedCommits::unknown();
-        let mut attempts = 0;
-        let mut last = None;
-        while attempts < RECORD_ATTEMPTS {
-            if attempts > 0 {
-                let wait = RECORD_BACKOFF
-                    .get(attempts as usize - 1)
-                    .copied()
-                    .unwrap_or(Duration::from_secs(2));
-                // Before the final attempt the wait never eats its reserve.
-                let wait = if attempts + 1 >= RECORD_ATTEMPTS {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    wait.min(left.saturating_sub(RECORD_FINAL_RESERVE))
-                } else {
-                    wait
-                };
-                if Instant::now() + wait >= deadline {
-                    break;
-                }
-                tokio::time::sleep(wait).await;
-            }
-            attempts += 1;
-            let plan = attempt_plan(attempts, deadline.saturating_duration_since(Instant::now()));
-            if plan.timeout.is_zero() {
-                // No time left for a non-final attempt: straight to the final one.
-                continue;
-            }
-            let sent = if plan.with_commits { commits } else { &unknown };
-            let outcome = match tokio::time::timeout(
-                plan.timeout,
-                self.recorder
-                    .record_push_with_commits(&self.pusher, record, sent),
-            )
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
-                    .with_context("reason", "record_budget_exhausted")
-                    .with_context("timeout_ms", plan.timeout.as_millis())),
-            };
-            match outcome {
-                Ok(recorded) => {
-                    // Deduped: an earlier attempt committed after all (its
-                    // rows with it), nothing was dropped.
-                    let dropped = !plan.with_commits
-                        && !commits.commits.is_empty()
-                        && recorded == PushRecorded::Recorded;
-                    if dropped {
-                        // The audit row is kept; the listed commits are not.
-                        self.log.failure(
-                            ForgeError::new(ErrorCode::PushCommitsIncomplete)
-                                .with_context("reason", "record_fallback")
-                                .with_context("listed", 0)
-                                .with_context("dropped", commits.commits.len())
-                                .with_context("attempts", attempts)
-                                .with_context("phase", "push_record"),
-                        );
-                    }
-                    tracing::info!(
-                        target: "forge_web::git",
-                        request_id = %self.log.request_id,
-                        repo_id = self.log.repo_id,
-                        refs = record.updates.len(),
-                        attempts,
-                        deduped = recorded == PushRecorded::Deduped,
-                        push_commits_dropped = dropped,
-                        "forge.git.push_recorded"
-                    );
-                    return;
-                }
-                // A record the store refuses as invalid will not pass on a retry.
-                Err(err) if err.code() == ErrorCode::ChangeRejected => {
-                    last = Some(err);
-                    break;
-                }
-                Err(err) => last = Some(err),
-            }
-        }
-        let cause = last.unwrap_or_else(|| {
-            ForgeError::new(ErrorCode::DbQueryFailed)
-                .with_context("reason", "record_budget_exhausted")
-        });
-        self.log.failure(record.failed(cause, attempts));
+        record_applied(&*self.recorder, &self.pusher, record, commits, &self.log).await;
     }
+}
+
+/// `record_push` of an applied push, [`RECORD_ATTEMPTS`] within
+/// [`RECORD_BUDGET`] (the final attempt without the commits); `FG-GIT-0012`
+/// (logged once) when every attempt failed. receive-pack's task and the
+/// simple editor's commit (`routes::file_commit`) record through it.
+pub(crate) async fn record_applied(
+    recorder: &dyn forge_core::PushRecorder,
+    pusher: &Pusher,
+    record: &PushRecord,
+    commits: &forge_core::PushedCommits,
+    log: &PushLog,
+) {
+    let deadline = Instant::now() + RECORD_BUDGET;
+    let unknown = forge_core::PushedCommits::unknown();
+    let mut attempts = 0;
+    let mut last = None;
+    while attempts < RECORD_ATTEMPTS {
+        if attempts > 0 {
+            let wait = RECORD_BACKOFF
+                .get(attempts as usize - 1)
+                .copied()
+                .unwrap_or(Duration::from_secs(2));
+            // Before the final attempt the wait never eats its reserve.
+            let wait = if attempts + 1 >= RECORD_ATTEMPTS {
+                let left = deadline.saturating_duration_since(Instant::now());
+                wait.min(left.saturating_sub(RECORD_FINAL_RESERVE))
+            } else {
+                wait
+            };
+            if Instant::now() + wait >= deadline {
+                break;
+            }
+            tokio::time::sleep(wait).await;
+        }
+        attempts += 1;
+        let plan = attempt_plan(attempts, deadline.saturating_duration_since(Instant::now()));
+        if plan.timeout.is_zero() {
+            // No time left for a non-final attempt: straight to the final one.
+            continue;
+        }
+        let sent = if plan.with_commits { commits } else { &unknown };
+        let outcome = match tokio::time::timeout(
+            plan.timeout,
+            recorder.record_push_with_commits(pusher, record, sent),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
+                .with_context("reason", "record_budget_exhausted")
+                .with_context("timeout_ms", plan.timeout.as_millis())),
+        };
+        match outcome {
+            Ok(recorded) => {
+                // Deduped: an earlier attempt committed after all (its
+                // rows with it), nothing was dropped.
+                let dropped = !plan.with_commits
+                    && !commits.commits.is_empty()
+                    && recorded == PushRecorded::Recorded;
+                if dropped {
+                    // The audit row is kept; the listed commits are not.
+                    log.failure(
+                        ForgeError::new(ErrorCode::PushCommitsIncomplete)
+                            .with_context("reason", "record_fallback")
+                            .with_context("listed", 0)
+                            .with_context("dropped", commits.commits.len())
+                            .with_context("attempts", attempts)
+                            .with_context("phase", "push_record"),
+                    );
+                }
+                tracing::info!(
+                    target: "forge_web::git",
+                    request_id = %log.request_id,
+                    repo_id = log.repo_id,
+                    refs = record.updates.len(),
+                    attempts,
+                    deduped = recorded == PushRecorded::Deduped,
+                    push_commits_dropped = dropped,
+                    "forge.git.push_recorded"
+                );
+                return;
+            }
+            // A record the store refuses as invalid will not pass on a retry.
+            Err(err) if err.code() == ErrorCode::ChangeRejected => {
+                last = Some(err);
+                break;
+            }
+            Err(err) => last = Some(err),
+        }
+    }
+    let cause = last.unwrap_or_else(|| {
+        ForgeError::new(ErrorCode::DbQueryFailed).with_context("reason", "record_budget_exhausted")
+    });
+    log.failure(record.failed(cause, attempts));
 }
 
 /// One record attempt's plan (R5 review round 6): the final attempt sends

@@ -172,6 +172,11 @@ pub(crate) const BASE_ROWS: &[Row] = &[
     row(A::RepoPush, W::DevTokenReadRepository, r(BR, U::FastForward, None), deny(E::InsufficientScope)),
     row(A::RepoPush, W::DevTokenApi, r(BR, U::FastForward, None), deny(E::InsufficientScope)),
     row(A::RepoPush, W::DevTokenWriteRepository, r(BR, U::FastForward, None), Allow),
+    // Simple editor E1 (POST …/repository/commits/single-file): the new
+    // branch it creates is decided like a pushed create.
+    row(A::RepoPush, W::DevTokenWriteRepository, r(BR, U::Create, None), Allow),
+    row(A::RepoPush, W::DevTokenReadRepository, r(BR, U::Create, None), deny(E::InsufficientScope)),
+    row(A::RepoPush, W::Reporter, r(BR, U::Create, None), deny(E::Forbidden)),
     // reserved namespaces (refs/merge-requests, refs/replace, …): nobody
     row(A::RepoPush, W::Owner, r(RES, U::Create, None), deny(E::ReservedRefNamespace)),
     row(A::RepoPush, W::Admin, r(RES, U::Create, None), deny(E::ReservedRefNamespace)),
