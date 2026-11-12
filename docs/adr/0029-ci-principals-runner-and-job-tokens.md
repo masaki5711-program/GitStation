@@ -184,10 +184,37 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
   4 回呼ぶ（約 1 秒）。
 - runbook `ci-runner`（「ジョブの切り離し」）、FG-CI-0015 JobIsolationUnsafe（新規、alert）。
 
+## Amendment 2026-11-12（計画 14 C6）— CI の変数（シークレット）
+
+- **保存**: 表 `forge.ci_variables`（プロジェクトごと、名前は `[A-Z][A-Z0-9_]*`、`CI`・`PATH`・`HOME`・`HOSTNAME`・`FORGE_*`・`CI_*` は Runner が
+  自分で設定するので断る）。値は ADR-0013 の秘密のファイル `ci.secret_keys_file`（`<key_id> <64 桁の 16 進>`、いちばん大きい `key_id` で封じ、
+  並んだ鍵はすべて開ける）の鍵で AES-256-GCM で封じ、関連データで (プロジェクト, 名前) に結びつける（別の行に写した暗号文は開かない）。
+  読み取り用の接続は暗号文を読めない。監査はプロジェクトに `ci_variable.created` / `.updated` / `.deleted`（値も暗号文も入れない）。
+- **管理**: `CiVariableManage`（Maintainer 以上、**人だけ**。エージェント・サービスアカウント・ボット・代理・Runner・Job は断る）。
+  `GET|PUT|DELETE /api/v1/projects/{id}/ci/variables[/{name}]`、`gstn ci variable list|set|delete`（値は標準入力からだけ）。
+  **値はどのルートも書いた後に返さない**。書き込みはロックしたプロジェクトで判定をやり直す。
+- **渡す**（決定 8 と義務 5）: Runner の取得のときだけ、`StoredPipeline::secrets_allowed()`（`source = push` かつ作成のときに保護）の
+  パイプラインのジョブに、そのジョブが `secrets:` に挙げた名前だけ。渡せないジョブは **Runner に渡さずにその場で失敗にする**
+  （黙って外さない）: 許されないパイプライン FG-CI-0017、登録の無い名前 FG-CI-0018、鍵が無い・消えた・開かない FG-CI-0016（alert）。
+  `protected_only`（既定で真）は今は範囲を広げない（偽でも義務 5 が優先）。後で広げるときに移行が要らないように列だけ置いた。
+- **Runner**: 名前の集合が固定した SHA の `.forge-ci.yml` のそのジョブの `secrets:` と一致し、値が 1 行であることを確かめ（違えば
+  FG-CI-0008 `secrets_mismatch` / `secret_invalid`、コンテナは作らない）、`<work_dir>/job/secrets/job.env`（0700 / 0600、どこにも
+  マウントしない）に書いて `podman create --env-file` に渡し、create の直後に消す。値は argv・Podman の呼び出しの環境・ログに出さない。
+  サービスのコンテナには渡さない（C5s のとおり）。
+- **マスク**: `masked`（既定で真、8 バイト以上）の値とその一般的な符号化（base64 の標準・URL 安全・パディングの有無、末尾の改行付きの
+  base64、パーセント符号化）を `[masked]` にする。Runner は送る前に（書き込みの境目・チャンクの境目にまたがっても見つかるように、
+  いちばん長い形 − 1 バイトを手元に残す）、サーバーは保存の前に（そのジョブの値を開いて、チャンクごと）。鍵が使えずマスクできないときは
+  チャンクを保存しない（FG-CI-0016）。値を加工した出力（他の符号化、ずれた base64）は見つからない: マスクは安全網で、境界は決定 5
+  （出力は印を継ぐ）。
+- **doctor** `ci.secret_keys`（鍵のファイルの有無・権限・形、保存された値の `key_id` がすべてファイルにあるか）、runbook `ci-secrets`。
+- **受け入れたリスク**: 保護ブランチに push できる主体（エージェントを含む、保護の規則しだい）は、そのパイプラインのスクリプトで値を
+  使える。保護ブランチへの push を人に限るのは保護の規則（ADR-0008）の運用。Runner のホストは値を見る（`podman inspect` の環境変数）。
+
 ## Error codes and runbooks affected
 
 - 既存のコードを使う: FG-AUTH-0001・0003・0022（0022 は文面の改訂、C5）。新しいコードは CI-next（JobLeaseLost、C3 で登録）。
 - C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
 - 2026-11-12: FG-CI-0015 JobIsolationUnsafe（新規、alert。runbook `ci-runner` の「ジョブの切り離し」）。
+- C6: FG-CI-0016 SecretKeyUnavailable（alert）、FG-CI-0017 SecretOnUnprotectedRef、FG-CI-0018 SecretNotDefined（info）、runbook `ci-secrets`（新規）。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

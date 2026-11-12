@@ -52,12 +52,18 @@ M4 C7: MR のパイプラインは head ではなく **マージ結果**（`refs
 `resource_type = 'project'`、行為者はユーザーまたはサービスアカウント（エージェントのトークンはその人 + `credential_id` と実効スコープ）。
 push・MR のマージ結果から作られたパイプラインは人の操作ではないので行を書かない（元の push / MR の監査が既にある）。
 
-## シークレット（後の MR への約束）
+## シークレット（M4 C6、`secrets`）
 
 `ci_pipelines.protected` は **保護されたブランチへの push** のときだけ真（表の CHECK `ci_pipelines_protected` が push 以外の真を拒む）。
 ジョブにシークレットを渡してよいかは `forge_db::pipelines::StoredPipeline::secrets_allowed()`（`source == push && protected`）**だけ** で決める
 （ADR-0029「後の MR の義務」5）。実行の時点の保護の設定から判定し直さない。再実行は 2 つの列を変えないので答えも変わらない。
 試験: `only_a_protected_push_may_release_secrets`（forge-db）、`only_a_push_to_a_protected_branch_is_recorded_as_protected`（ここ）。
+
+C6: 変数は `forge.ci_variables`（`ci.secret_keys_file` の鍵で封じる、ADR-0013）。`Pipelines::variables` / `set_variable` / `delete_variable`
+（`CiVariableManage`、Maintainer、人だけ、ロックしたプロジェクトで判定し直す）。Runner の取得（`request_job`）は `release_secrets` で値を開き
+`ClaimGrant { job, secrets }` で返す。渡せないジョブは `lease::fail_claimed` でその場で失敗にする（FG-CI-0017 許されないパイプライン、
+FG-CI-0018 登録の無い名前、FG-CI-0016 鍵）。ログの追記は `log_masks` で値とその符号化を `[masked]` にしてから保存する（鍵が使えなければ
+保存しない）。値をログに出さない。runbook `ci-secrets`。
 
 ## 見張りと保持
 
@@ -107,7 +113,7 @@ push・MR のマージ結果から作られたパイプラインは人の操作�
   `routes::job_fetch`）と `forge-runner`（別のクレート）。スクリプトは Runner が `definition_hash` の `.forge-ci.yml` から読む。
 - C5（済み）: CI の出力の読み取りを `copy_mark` と先端の印で判定する（`undecided` はエージェントに閉じる）。上の「CI の出力」。
 - C12: 手動・定期の実行の保護（今は保護されない扱い）。
-- C3 / C6: シークレットは `secrets_allowed()` だけで判定する（上）。C11: 再実行されたデプロイのジョブも人の `DeployApprove` を待つ。
+- C3 / C6（済み）: シークレットは `secrets_allowed()` だけで判定する（上）。C11: 再実行されたデプロイのジョブも人の `DeployApprove` を待つ。
 - C5b: 90 日より古いパイプライン・ジョブ・ログ・失敗の行を消すジョブ（C5 から分けた）。
 
 ## 依存の向き
