@@ -62,6 +62,8 @@ mod matrix_rows_doc_lint;
 mod matrix_rows_pipelines;
 // M4 C5: CI outputs.
 mod matrix_rows_ci_outputs;
+// M4 C6: CI variables.
+mod matrix_rows_ci_variables;
 // ── M3 X1 ──
 mod matrix_rows_spec_refs;
 // Plan 06 D-5 safety net: whole copies of a repository by agents.
@@ -73,7 +75,7 @@ pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action, CiRule};
 pub use authorize::authorize;
-pub use ci_output::{authorize_ci_output, CiOutputAllowed};
+pub use ci_output::{authorize_ci_artifact, authorize_ci_output, CiOutputAllowed};
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
 pub use feed_ctx::{prove_visible, IntegrationFeedCtx, LoadedIntegrationFeed};
 pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
@@ -90,13 +92,14 @@ pub use model::{
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
-    GroupTransferCtx, InstanceCtx, LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent,
-    LoadedProject, LoadedProtection, LoadedTarget, LoadedTombstone, LoadedTransferTarget,
-    LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx, PinnedCopyCtx, ProjectCtx,
-    ProjectEventsCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, RunnerJobCtx,
-    ServiceAccountCtx, ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx,
-    TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserActivityCtx,
-    UserMergeRequestsCtx, UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
+    GroupTransferCtx, InstanceCtx, JobSelfCtx, LoadedGroup, LoadedMembership, LoadedNamespace,
+    LoadedParent, LoadedProject, LoadedProtection, LoadedTarget, LoadedTombstone,
+    LoadedTransferTarget, LoadedUserNamespace, NotificationPreferencesCtx, ParentCtx,
+    PinnedCopyCtx, ProjectCtx, ProjectEventsCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx,
+    ResourceCtx, RunnerJobCtx, ServiceAccountCtx, ServiceAccountTokenCtx,
+    ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx,
+    TombstoneCtx, TransferCtx, UnresolvedCtx, UserActivityCtx, UserMergeRequestsCtx,
+    UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 pub use repo_copy::authorize_repo_copy;

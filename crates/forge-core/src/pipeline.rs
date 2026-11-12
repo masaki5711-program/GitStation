@@ -127,9 +127,90 @@ impl RunnerChange {
     }
 }
 
+/// A Maintainer's change to a CI variable (M4 C6): audited on the project
+/// (`resource_type = project`), no event. Never the value or its
+/// ciphertext: the name, the flags and the key the value was sealed with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiVariableChange {
+    /// `ci_variable.created` / `ci_variable.updated`: a value was set.
+    Set {
+        project: ProjectId,
+        name: String,
+        created: bool,
+        protected_only: bool,
+        masked: bool,
+        key_id: i16,
+    },
+    /// `ci_variable.deleted`.
+    Deleted { project: ProjectId, name: String },
+}
+
+impl CiVariableChange {
+    pub fn action(&self) -> &'static str {
+        match self {
+            Self::Set { created: true, .. } => "ci_variable.created",
+            Self::Set { created: false, .. } => "ci_variable.updated",
+            Self::Deleted { .. } => "ci_variable.deleted",
+        }
+    }
+
+    pub fn project(&self) -> ProjectId {
+        match self {
+            Self::Set { project, .. } | Self::Deleted { project, .. } => *project,
+        }
+    }
+
+    pub fn to_value(&self) -> serde_json::Value {
+        match self {
+            Self::Set {
+                project,
+                name,
+                protected_only,
+                masked,
+                key_id,
+                ..
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "name": name,
+                "protected_only": protected_only,
+                "masked": masked,
+                "key_id": key_id,
+            }),
+            Self::Deleted { project, name } => serde_json::json!({
+                "project_id": project.get(),
+                "name": name,
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_variable_change_never_carries_a_value() {
+        let set = CiVariableChange::Set {
+            project: ProjectId::new(7),
+            name: "TOKEN".to_owned(),
+            created: true,
+            protected_only: true,
+            masked: true,
+            key_id: 2,
+        };
+        assert_eq!(set.action(), "ci_variable.created");
+        assert_eq!(
+            set.to_value(),
+            serde_json::json!({"project_id": 7, "name": "TOKEN", "protected_only": true,
+                "masked": true, "key_id": 2})
+        );
+        let deleted = CiVariableChange::Deleted {
+            project: ProjectId::new(7),
+            name: "TOKEN".to_owned(),
+        };
+        assert_eq!(deleted.action(), "ci_variable.deleted");
+        assert_eq!(deleted.project(), ProjectId::new(7));
+    }
 
     #[test]
     fn each_change_names_its_action_and_shape() {

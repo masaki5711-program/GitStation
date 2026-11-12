@@ -927,6 +927,22 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ("forge.merge_result_refs", operational()),
         // ── 2026-11-12: the history import allowance (20261210100000) ──
         ("forge.repository_history_imports", operational()),
+        // ── M4 C6: CI variables (20261211100000) ──
+        (
+            "forge.ci_variables",
+            [dml("forge_app"), ro("ci_variables")?].concat(),
+        ),
+        // ── M4 C6: CI artifacts (20261211200000) ──
+        ("forge.ci_artifacts", operational()),
+        // ── M4 C6 review: released secrets per job attempt (20261211300000) ──
+        (
+            "forge.ci_job_secret_snapshots",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                ro("ci_job_secret_snapshots")?,
+            ]
+            .concat(),
+        ),
     ])
 }
 
@@ -1106,6 +1122,12 @@ const LATER_TABLES: &[&str] = &[
     "merge_result_refs",
     // ── 2026-11-12: the history import allowance (20261210100000) ──
     "repository_history_imports",
+    // ── M4 C6: CI variables (20261211100000) ──
+    "ci_variables",
+    // ── M4 C6: CI artifacts (20261211200000) ──
+    "ci_artifacts",
+    // ── M4 C6 review (20261211300000) ──
+    "ci_job_secret_snapshots",
 ];
 
 /// Every table the first migration creates.

@@ -585,6 +585,10 @@ pub enum Resource {
     /// [`crate::RunnerJobCtx`] from one loaded row; every other principal
     /// is refused.
     RunnerJob(RunnerJob),
+    /// A CI job's own artifacts (M4 C6): the job a job token's route names
+    /// and that job's project. Only the job arm reads it: the token's job
+    /// and project must be these. Built by [`crate::JobSelfCtx`] only.
+    JobSelf(JobSelf),
     /// One ref update in a push. The kind is derived from `name` inside
     /// `authorize()` (callers cannot mislabel a reserved ref); `update` must
     /// come from the ancestry check of old and new object ids; `protection`
@@ -771,6 +775,10 @@ pub enum Resource {
         pipeline_mark: CopyMark,
         tip_mark: CopyMark,
         declared_agent: bool,
+        /// M4 C6 review: an artifact of a job that was given secrets —
+        /// readable by a project Maintainer who is a person only, never by
+        /// an AI agent audience (whatever the marks).
+        secret_job: bool,
     },
     /// An integration's event feed as its route loaded it
     /// (`IntegrationEventRead`, `IntegrationEventCursorRead`; M3 I1c).
@@ -836,6 +844,27 @@ impl RunnerJob {
     /// The job has ended (succeeded, failed, cancelled).
     pub fn finished(&self) -> bool {
         self.finished
+    }
+}
+
+/// See [`Resource::JobSelf`]. Private fields, a crate-only constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobSelf {
+    project: ProjectId,
+    job: i64,
+}
+
+impl JobSelf {
+    pub(crate) fn new(project: ProjectId, job: i64) -> Self {
+        Self { project, job }
+    }
+
+    pub fn project(&self) -> ProjectId {
+        self.project
+    }
+
+    pub fn job(&self) -> i64 {
+        self.job
     }
 }
 

@@ -1,4 +1,4 @@
-# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014、FG-CI-0015。関連: FG-CI-0006、FG-AUTH-0001 / 0003、FG-REPO-0005）
+# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014、FG-CI-0015、FG-CI-0020。関連: FG-CI-0006、FG-CI-0019、FG-AUTH-0001 / 0003、FG-REPO-0005）
 
 M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブの取得の long-poll、心拍とリース、ログ、完了、リースの回収）が
 期待どおりに動かないとき。表 `forge.ci_runners`・`forge.ci_job_tokens`・`forge.ci_log_chunks`・`forge.ci_jobs`（`runner_id`・`lease_until`・
@@ -195,6 +195,36 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
 `FORGE_RUNNER_TEST_PG_IMAGE=<postgres:16 のミラー@sha256:…>` も付ける（`a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks`）。
 
 **試験環境**では、Runner を Docker の上のコンテナとして動かせる（`ops/runner/README.md`。本番では使わない: seccomp を外し、ジョブごとのメモリとプロセス数の上限が効かず、外側のコンテナの上限だけになる）。
+
+## 成果物（M4 C6、FG-CI-0019 / FG-CI-0020）
+
+ジョブが `.forge-ci.yml` の `artifacts: { paths: [...] }` で宣言したファイルは、スクリプトが成功した後に Runner が **ジョブ自身のトークン**
+（`fgj_…`）で 1 ファイルずつ `PUT /api/v1/runner/jobs/{job_id}/artifacts?path=` に送る。シンボリックリンクはたどらず送らない（ログに
+`artifact path skipped`）、無いパスはログに `artifact path not found`。`needs` のあるジョブは、スクリプトの前に必要なジョブの成果物を
+`GET …/needs/artifacts[/{id}]` で受け取り、作業ツリーのそのパスに置く（既にあるファイルの上には書かない）。
+
+- 保存先: `<storage.root>/ci-artifacts/<project_id>/<artifact_id>`（名前はサーバーが ID から付ける）、表 `forge.ci_artifacts`
+  （大きさ・sha256・期限 30 日・`keep`）。worker のタスク `ci_artifact_expiry`（10 分ごと）が期限の過ぎたもの（`keep` 以外）のファイル、
+  次に行を消し、消えたプロジェクトのディレクトリを消す（`forge.ci.artifacts_expired`、`forge.ci.artifacts_of_purged_project_removed`）。
+- 上限: 1 ファイル 100 MiB、1 回の実行で 512 MiB・1000 ファイル（FG-CI-0019、Runner は送る前に数え、サーバーも保存しながら、
+  記録のときにもう一度ロックして確かめる）。プロジェクトの割り当て `ci.artifact_quota_bytes`（既定 5 GiB、FG-CI-0022）。
+  送受は 1 ジョブで 30 分まで（FG-CI-0020 `reason=deadline`）、成果物はコンテナを消した後に送る（`container_not_removed`）。
+  シークレットを受け取ったジョブの成果物は runbook `ci-secrets`（FG-CI-0021、Maintainer の人だけが読める）。
+- 読む: 人とエージェントは `GET /api/v1/projects/{id}/pipelines/{pid}/jobs/{jid}/artifacts[/{aid}]`（ログと同じく、AI には両方の印が
+  `open` のときだけ。それ以外は FG-AUTH-0022 `route=ci_artifact`）、`gstn pipeline artifacts` / `artifact-download`。
+
+Diagnose（読み取りのみ）:
+
+1. ジョブのログの最後の行と Runner のホストのログの FG-CI-0020 の `reason`（`send` / `receive` / `collect` / `place` /
+   `path_exists` / `path_invalid` / `size_mismatch`）と `server_code`。`server_code=FG-CI-0004` は送る前にジョブが終わった
+   （取り消し・リースの喪失）、`FG-REPO-0003` はサーバーの保存先の失敗。
+2. `SELECT id, attempt, path, size_bytes, expires_at, keep FROM forge.ci_artifacts WHERE job_id = <job_id> ORDER BY id;`
+3. サーバーの保存先: `df -h <storage.root>`、`ls <storage.root>/ci-artifacts/<project_id> | wc -l`。`*.part` は途中で失敗した送信
+   （`forge.ci.artifact_remove_failed` が出たときだけ残る）。
+
+Mitigate（承認のあと）: 保存先の空きを作る（期限の過ぎた成果物は `ci_artifact_expiry` が消す。`keep` の行はデプロイした版なので消さない）、
+Runner と forge の間のネットワークを直す、リポジトリのファイルと同じパスを成果物にしない。その後パイプラインをやり直す
+（`gstn pipeline retry`）。
 
 ## Mitigate（変更は人の承認のあと）
 

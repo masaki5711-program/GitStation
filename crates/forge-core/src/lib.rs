@@ -61,6 +61,10 @@ pub mod telemetry;
 pub mod token;
 // M4 C3: the runner's and the job's tokens (ADR-0029 §1).
 pub mod ci_token;
+// M4 C6: CI variables (secrets) and their masking (ADR-0029 C6).
+pub mod ci_secret;
+// M4 C6: CI artifacts (paths, limits, retention).
+pub mod ci_artifact;
 pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;

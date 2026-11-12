@@ -553,6 +553,25 @@ async fn finish_steps(
         "projects.purge.finish.merge_settings",
     )
     .await?;
+    // M4 C6 review: the secrets released to the project's jobs (they
+    // point at the jobs).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_job_secret_snapshots WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_job_secret_snapshots",
+    )
+    .await?;
+    // M4 C6: the project's CI artifacts (derived rows; the files under
+    // `<storage.root>/ci-artifacts/<project_id>` go with the purge job's
+    // storage step).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_artifacts WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_artifacts",
+    )
+    .await?;
     // M4 C5: the job failures, then the fingerprints (they point at the
     // jobs and the merge requests).
     delete_rows(
@@ -605,6 +624,15 @@ async fn finish_steps(
         "DELETE FROM forge.doc_lint_migrations WHERE project_id = $1",
         project.get(),
         "projects.purge.finish.doc_lint_migrations",
+    )
+    .await?;
+    // M4 C6: the project's CI variables (audited on the project: the
+    // project.purged row covers them).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_variables WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_variables",
     )
     .await?;
     // 2026-11-12: the history import allowance references the repository.

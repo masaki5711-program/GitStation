@@ -430,6 +430,11 @@ actions! {
     /// error codes and known fixes. Decided as `CiLogRead`
     /// (`route=ci_diagnosis`): the excerpts are log output.
     PipelineDiagnosisRead,
+    /// `GET …/pipelines/{pipeline_id}/jobs/{job_id}/artifacts[/{artifact_id}]`
+    /// (M4 C6, ADR-0029 decision 5): a job's artifacts. Decided as
+    /// `CiLogRead` (`route=ci_artifact`): an AI agent audience only when
+    /// both marks are `Open`; `read_api`.
+    CiArtifactRead,
     /// `POST /api/v1/projects/{id}/pipelines`: run a pipeline by hand on a
     /// branch's tip. Developer and above (agents and service accounts by
     /// their membership, plan 14 §4.2); `api`. A manual run is never
@@ -439,6 +444,22 @@ actions! {
     PipelineCancel,
     /// `POST …/pipelines/{pipeline_id}/retry`: Developer and above; `api`.
     PipelineRetry,
+    /// `GET /api/v1/projects/{id}/ci/variables`, `PUT|DELETE
+    /// …/ci/variables/{name}` (M4 C6, plan 14 §4.2): list a project's CI
+    /// variables (names and flags, never a value), set or delete one. A
+    /// value is never answered after it was written. Maintainer and above,
+    /// people only (a secret's owner answers for it; an agent never sets or
+    /// sees one, ADR-0029 decision 8); `api`.
+    CiVariableManage,
+    /// `PUT /api/v1/runner/jobs/{job_id}/artifacts?path=` (M4 C6): a job
+    /// uploads one file of its artifacts — its own token, its own job,
+    /// while it runs (`CiRule::Job`, `Resource::JobSelf`).
+    JobArtifactUpload,
+    /// `GET /api/v1/runner/jobs/{job_id}/needs/artifacts[/{artifact_id}]`
+    /// (M4 C6): a job reads the artifacts of the jobs it `needs` in its own
+    /// pipeline — its own token, its own job (`CiRule::Job`); which
+    /// artifacts are its needs' is the read's own scope.
+    JobArtifactDownload,
     // --- CI runners (M4 C3, plan 14 §4.2, ADR-0029 §1) ---
     /// `POST /api/v1/admin/runners`: register a runner and show its token
     /// once. An administrator's web session, people only (a token is
@@ -608,6 +629,8 @@ impl Action {
                 | Action::DocLintMigrationManage
                 | Action::RunnerRegister
                 | Action::RunnerManage
+                // M4 C6: CI secrets are a person's.
+                | Action::CiVariableManage
         )
     }
 
@@ -648,6 +671,9 @@ impl Action {
             | Action::RunnerJobHeartbeat
             | Action::RunnerLogAppend
             | Action::RunnerJobComplete
+            // M4 C6: a job's own artifacts (`ci_rule`: the job's token only).
+            | Action::JobArtifactUpload
+            | Action::JobArtifactDownload
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -693,6 +719,7 @@ impl Action {
             | Action::PipelineRead
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::CiArtifactRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -736,6 +763,7 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::CiVariableManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
@@ -860,9 +888,14 @@ impl Action {
             // M4 C5: nor are their outputs.
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::CiArtifactRead
+            | Action::JobArtifactUpload
+            | Action::JobArtifactDownload
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C6: nor are CI secrets.
+            | Action::CiVariableManage
             // M4 C3: runners are no act-as action.
             | Action::RunnerRegister
             | Action::RunnerManage
@@ -897,6 +930,8 @@ impl Action {
             // A job's copy of its own project at its pinned SHA (§3), on
             // `Resource::PinnedCopy` only.
             Action::RepoRead => CiRule::Job,
+            // M4 C6: a job's own artifacts and its needs'.
+            Action::JobArtifactUpload | Action::JobArtifactDownload => CiRule::Job,
             // M4 C3: the runner API, on the instance (a claim) or on a job
             // leased to the runner (`Resource::RunnerJob`).
             Action::RunnerJobRequest
@@ -989,9 +1024,13 @@ impl Action {
             | Action::PipelineRead
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::CiArtifactRead
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C6: a job never reads or sets a secret through the API
+            // (ADR-0029 decision 8: they come with the claim).
+            | Action::CiVariableManage
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

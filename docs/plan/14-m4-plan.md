@@ -201,6 +201,21 @@ Runner はポッド `forge-job-<job>-<attempt>`（`--network=none`、Podman で�
 `[service <名前>]` 付きでジョブのログに足す（同じマスク）。本物の Podman（試験用の Runner のコンテナの中）で、ポッドの中の PostgreSQL 16 に
 ジョブが 127.0.0.1 で届き、DNS も外への接続も無く、ポッドもコンテナも残らないことを確かめた。詳細は ADR-0029 の追記（2026-11-11）。
 
+**C6a の注記（2026-11-12、シークレット）**: 表 `ci_variables`（マイグレーション `20261211100000`、プロジェクトに監査
+`ci_variable.created` / `.updated` / `.deleted`、値は `ci.secret_keys_file` の鍵で封じる。読み取り用の接続は暗号文を読めない）、Action
+`CiVariableManage`（Maintainer 以上、人だけ）、ルート `GET|PUT|DELETE /api/v1/projects/{id}/ci/variables[/{name}]`、`gstn ci variable
+list|set|delete`（値は標準入力から）。Runner の取得は `secrets_allowed()` のときだけ値を `secrets` で渡し、渡せないジョブは Runner に渡さずに
+失敗にする（FG-CI-0016 鍵・0017 許されないパイプライン・0018 登録の無い名前）。Runner は名前を定義と照合し、`--env-file`（ジョブの
+ディレクトリの外、0600、create の直後に消す）で渡し、値と符号化をログでマスクする（チャンクの境目にまたがっても）。サーバーも保存の前に
+マスクする。doctor `ci.secret_keys`、runbook `ci-secrets`、ADR-0029 の追記。`protected_only` は今は範囲を広げない（義務 5 が優先）。
+
+**C6b の注記（2026-11-12、成果物）**: 表 `ci_artifacts`（マイグレーション `20261211200000`、派生）、ファイルは
+`<storage.root>/ci-artifacts/<project>/<id>`。Action `JobArtifactUpload` / `JobArtifactDownload`（ジョブ自身のトークン、`Resource::JobSelf`）と
+`CiArtifactRead`（ログと同じ印の判定）。ルート `PUT /api/v1/runner/jobs/{job_id}/artifacts?path=`、`GET …/needs/artifacts[/{id}]`、
+`GET /api/v1/projects/{id}/pipelines/{pid}/jobs/{jid}/artifacts[/{aid}]`、`gstn pipeline artifacts` / `artifact-download`（sha256 を確かめる）。
+上限は 1 ファイル 100 MiB・1 回 512 MiB / 1000 ファイル（FG-CI-0019）、送受の失敗は FG-CI-0020（ジョブは失敗）。worker の `ci_artifact_expiry`
+（30 日、`keep` は残す、消えたプロジェクトのディレクトリも消す）。`keep` を立てるのは C11。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。

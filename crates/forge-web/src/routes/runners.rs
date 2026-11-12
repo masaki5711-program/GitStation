@@ -43,7 +43,7 @@ use forge_auth::{InstanceCtx, RunnerJobCtx};
 use forge_core::{parse_positive_id, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_pipelines::runners::{
-    self as runners, ClaimedJob, JobHeartbeat, LogAppended, Runner, RunnerChangeRequest,
+    self as runners, ClaimGrant, JobHeartbeat, LogAppended, Runner, RunnerChangeRequest,
     RunnerJobResult, RunnerRegistration,
 };
 use forge_pipelines::{ChangeRequest, Pipelines};
@@ -178,15 +178,41 @@ pub struct ClaimedJobBody {
     /// Only a push to a branch protected when the pipeline was created
     /// (ADR-0029): the only jobs that may ever be given secrets.
     pub secrets_allowed: bool,
-    /// The secret names the job asks for (empty unless `secrets_allowed`;
-    /// no value before C6).
+    /// The secret names the job asks for (empty unless `secrets_allowed`).
     pub secret_names: Vec<String>,
+    /// The values of those names (M4 C6): give each to the job's
+    /// container as an environment variable, and mask a `masked` one (and
+    /// its common encodings) in the log before sending it. Shown once;
+    /// never logged. A job whose secrets may not or cannot be given is
+    /// never handed out (it is failed with FG-CI-0016 / 0017 / 0018).
+    pub secrets: Vec<ReleasedSecretBody>,
     /// The lease ends then unless a heartbeat extends it.
     pub lease_until: String,
     /// The job's token `fgj_…`: one project, this commit, this attempt;
     /// revoked when the job ends. Shown once.
     pub job_token: String,
     pub job_token_expires_at: String,
+}
+
+/// One secret released with a claim (M4 C6).
+#[derive(Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReleasedSecretBody {
+    /// `[A-Z][A-Z0-9_]*`: the environment variable's name.
+    pub name: String,
+    /// The value (one line, at most 4096 bytes).
+    pub value: String,
+    /// Mask it in the job's log.
+    pub masked: bool,
+}
+
+impl std::fmt::Debug for ReleasedSecretBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReleasedSecretBody")
+            .field("name", &self.name)
+            .field("masked", &self.masked)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The answer of a claim.
@@ -468,7 +494,8 @@ pub async fn update(
     respond(&w.ctx, StatusCode::OK, built)
 }
 
-fn claimed_body(c: ClaimedJob) -> ClaimedJobBody {
+fn claimed_body(grant: ClaimGrant) -> ClaimedJobBody {
+    let ClaimGrant { job: c, secrets } = grant;
     ClaimedJobBody {
         job_id: c.job_id,
         attempt: c.attempt,
@@ -484,6 +511,14 @@ fn claimed_body(c: ClaimedJob) -> ClaimedJobBody {
         definition_hash: c.pipeline.definition_hash,
         secrets_allowed: c.secrets_allowed,
         secret_names: c.secret_names,
+        secrets: secrets
+            .into_iter()
+            .map(|s| ReleasedSecretBody {
+                name: s.name,
+                value: s.value.expose().to_owned(),
+                masked: s.masked,
+            })
+            .collect(),
         lease_until: c.lease_until,
         job_token: c.token.reveal(),
         job_token_expires_at: c.token_expires_at,
