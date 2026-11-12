@@ -263,7 +263,8 @@
     "symlink": "Symbolic link",
     "empty": "This folder is empty.",
     "downloadZip": "Download zip",
-    "downloadTar": "Download tar.gz"
+    "downloadTar": "Download tar.gz",
+    "newFile": "New file"
   },
   "readme": {
     "truncated": "The README is large; only its beginning is shown."
@@ -287,7 +288,8 @@
     "lineLabel": "Line {{n}}",
     "gotoLine": "Go to line",
     "gotoGo": "Go",
-    "openDocument": "Open as a document"
+    "openDocument": "Open as a document",
+    "edit": "Edit"
   },
   "blame": {
     "title": "Blame",
@@ -1420,5 +1422,79 @@
     "cancelYes": "Cancel it",
     "cancelNo": "Keep running",
     "span": "{{from}} – {{to}}"
+  },
+  "editor": {
+    "newTitle": "New file",
+    "docTitle": "Edit {{name}}",
+    "subtitle": "Editing a file on the branch {{branch}}.",
+    "save": "Save changes",
+    "statusUnsaved": "Unsaved changes",
+    "statusSaved": "Saved",
+    "statusEmpty": "Nothing written yet",
+    "editPane": "Edit",
+    "previewPane": "Preview",
+    "tabsLabel": "Switch between edit and preview",
+    "contentLabel": "Content of {{path}}",
+    "previewEmpty": "The Markdown you write appears here, formatted.",
+    "pathLabel": "File path",
+    "pathPlaceholder": "docs/spec.md",
+    "pathHelp": "The path from the repository root. Missing folders are created.",
+    "pathRequired": "Enter the file path.",
+    "pathIsFolder": "End the path with a file name (for example docs/spec.md).",
+    "counts": "{{lines}} lines · {{chars}} characters",
+    "shortcutHint": "Ctrl+S to save",
+    "tooLarge": "The content is larger than {{size}}, so it cannot be saved from the editor. Push it with git.",
+    "notBranchTitle": "Only a branch can be edited",
+    "notBranchBody": "The content of a tag or a commit cannot change. Choose a branch, then edit.",
+    "backToFile": "Back to the file",
+    "cannotEditTitle": "This file cannot be edited in the editor",
+    "cannotEditBinary": "Only text files (UTF-8) can be edited. Change it with git.",
+    "cannotEditLarge": "The editor takes files up to {{size}}. Change it with git.",
+    "leaveTitle": "You have unsaved changes",
+    "leaveBody": "If you leave now, your edits are lost.",
+    "leaveConfirm": "Discard and leave",
+    "dialog": {
+      "title": "Save changes",
+      "message": "Commit message",
+      "messageRequired": "Enter a commit message.",
+      "defaultUpdate": "Update {{path}}",
+      "defaultAdd": "Add {{path}}",
+      "addDescription": "Add a description",
+      "description": "Description (optional)",
+      "descriptionHelp": "Say why you changed it; reviewers will see it.",
+      "target": "Save to",
+      "targetBranch": "Create a new branch and propose the change (merge request)",
+      "targetBranchHelp": "{{branch}} stays as it is. The change lands after review.",
+      "branchName": "New branch name",
+      "branchRequired": "Enter a branch name.",
+      "branchSame": "Use a name other than the original branch.",
+      "targetDirect": "Commit directly to this branch ({{branch}})",
+      "directHelp": "The change lands on {{branch}} at once, without review.",
+      "directForbidden": "This branch is protected and takes no direct commits.",
+      "directRole": "This branch is protected; your role cannot commit to it directly.",
+      "submitBranch": "Save and open a merge request",
+      "submitDirect": "Commit",
+      "saving": "Saving…"
+    },
+    "error": {
+      "title": "The changes could not be saved",
+      "conflictTitle": "Someone else changed this first",
+      "conflictNext": "Your edits are still on the screen. Copy them, load the latest version, and make your change again.",
+      "conflictBranch": "If the branch name is already taken, choose another name and save again.",
+      "copyMine": "Copy my edits",
+      "openLatest": "Open the latest version (new tab)",
+      "reloadLatest": "Load the latest version (discards your edits)",
+      "secretTitle": "The content looks like it contains a secret",
+      "secretNext": "Remove keys, tokens and passwords from the text, then save again. Revoke any secret that may have leaked.",
+      "rateLimitTitle": "Too many saves",
+      "rateLimitNext": "Wait about a minute, then save again. Your edits are kept."
+    },
+    "saved": {
+      "mr": "Your change was saved and a merge request was opened (branch {{branch}}).",
+      "branch": "Your change was committed to the new branch {{branch}}.",
+      "direct": "Your change was committed to {{branch}}.",
+      "mrFailed": "The merge request could not be opened: {{message}}",
+      "openMr": "Open a merge request"
+    }
   }
 }

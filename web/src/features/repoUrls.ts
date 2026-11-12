@@ -18,6 +18,14 @@ export const treeUrl = (project: string, ref: string, path = '') =>
 export const blobUrl = (project: string, ref: string, path: string) =>
   withPath(`${base(project)}/-/blob/${encodePath(ref)}`, path);
 
+/** The simple editor on a file of a branch (`/-/edit/{ref}/{path}`). */
+export const editUrl = (project: string, ref: string, path: string) =>
+  withPath(`${base(project)}/-/edit/${encodePath(ref)}`, path);
+
+/** The simple editor for a new file in a folder of a branch (`/-/new/{ref}[/{dir}]`). */
+export const newFileUrl = (project: string, ref: string, dir = '') =>
+  withPath(`${base(project)}/-/new/${encodePath(ref)}`, dir);
+
 export const blameUrl = (project: string, ref: string, path: string) =>
   withPath(`${base(project)}/-/blame/${encodePath(ref)}`, path);
 
