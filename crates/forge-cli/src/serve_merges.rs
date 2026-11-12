@@ -297,6 +297,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::FileCommitTooLarge
         | ErrorCode::FileCommitNotText
         | ErrorCode::FileCommitUnchanged
+        // 2026-11-12: the history import is the operator CLI's and a push's.
+        | ErrorCode::HistoryImportRefused
+        | ErrorCode::HistoryImportRecordFailed
         // M3 N1: the mail job's own code never reaches a merge.
         | ErrorCode::SmtpUnavailable => false,
     }

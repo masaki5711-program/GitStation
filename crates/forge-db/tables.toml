@@ -746,3 +746,16 @@ ro_columns = [
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── 2026-11-12 (20261210100000, ADR-0008 amendment "history import"): the
+# one-time history import allowance of an empty repository, set by the
+# operator CLI and used up by the first accepted push; audited on the project ──
+[tables.repository_history_imports]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+# The claim of the push that holds it (audited with the consumption).
+unaudited_columns = ["claimed_at", "claimed_request_id"]
+txn_audited_columns = []

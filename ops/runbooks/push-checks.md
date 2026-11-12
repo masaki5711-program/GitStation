@@ -1,4 +1,4 @@
-# Runbook: push-checks（FG-GIT-0021 / 0022 / 0023 / 0024。関連: FG-GIT-0001、runbook secret-removal、smart-http）
+# Runbook: push-checks（FG-GIT-0021 / 0022 / 0023 / 0024 / 0025 / 0026。関連: FG-GIT-0001、runbook secret-removal、smart-http）
 
 push の検査（M3 X8、ADR-0008 の追記 X8）は、receive-pack の **pre-receive フック**で、push が持ち込む新しいオブジェクト
 （新しい先端から辿れて、push の前にどの ref からも辿れなかったもの）だけを、git の隔離（quarantine）の中で調べる。
@@ -67,7 +67,7 @@ git の終了後、serve が `result` を読んでログに 1 行出し、run �
    戻し: 元の値に戻して再起動する。`git.http.push_max_bytes`（パック全体の上限）は別の設定。
 2. FG-GIT-0022: 本物なら**先に失効**（runbook secret-removal の Mitigate 1）。それから利用者が履歴から取り除いて push し直す。
    合成のテストデータ（誤検知）なら、ファイルのどこか（コメント行）に `forge:allow-secret` を書いてもらう（MR のレビューで見える。push の行の `allowed` に数えられる）。
-   管理者が検査を飛ばす操作はない（計画にない。必要になったら ADR で決める）。
+   管理者が検査を飛ばす操作はない。例外は**空のリポジトリへの 1 回限りの履歴の取り込み**だけ（下の「履歴の取り込み」。先端は検査する）。
 3. FG-GIT-0023（フックの中、push できない）:
    - スクリプトが違う・余計なファイルがある: `[MUTATING — needs approval]` `mv <storage root>/push-hooks <storage root>/push-hooks.bad-<date>`。
      次の push で forge が作り直す。戻し: 元の名前に戻す（ただし違うスクリプトでは push は拒否され続ける）。
@@ -87,6 +87,54 @@ git の終了後、serve が `result` を読んでログに 1 行出し、run �
    見つかったら FG-GIT-0021 / 0022 と同じに扱う（すでに ref から届くので、取り除くには runbook secret-removal）。
 5. 残った run のディレクトリ（`<storage root>/push-checks/<nonce>`、push が終わっても残ったもの）は、push が動いていないときに
    `[MUTATING — needs approval]` 消してよい（中身は policy と result だけで、秘密は無い。戻し: 不要）。
+
+## 履歴の取り込み（history import、2026-11-12）
+
+既存のプロジェクトを**履歴ごと**持ち込むとき、古いコミットに鍵（合成・本物）が残っていると FG-GIT-0022 で push 全体が拒否される。
+インスタンスの管理者は、**空の**リポジトリにだけ、1 回限りの取り込みを許可できる（ADR-0008 の追記「履歴の取り込み」）。
+
+- 許可する: `[MUTATING — needs approval]` `forge admin repo allow-import <repo_id> [--ttl-hours 24]`（1〜168 時間。`repo_id` は
+  `forge admin repo-path` と同じ id）。ref が 1 つでもあれば拒否（FG-GIT-0025 `repository_not_empty`、何も書かない）。`provisioning` も拒否
+  （`repository_not_ready`）。監査ログに `repository.history_import_allowed`（期限 `expires_at`）。戻し: 期限まで待つ（使われなければ自然に切れる）。
+- 許可の間の**最初の push**（リポジトリに ref が無いとき）は、receive-pack を動かす前に許可を**原子的に確保（claim）**する
+  （`claimed_request_id` = その push の request_id）。同時に来た別の push は確保できず、全部を検査される。ref が 1 つも反映されなかった
+  push は確保を返す（`forge.git.history_import_released`）。ref が反映された push の確保は、使い切りの記録（consumed）に変わる。
+  確保の読み書きに失敗した push は全部を検査する（厳しい側）。
+- 確保された push の中身:
+  - push した各 ref の**先端のツリー**は今まで通り検査し、秘密があれば FG-GIT-0022 で拒否する（許可は残る）。
+  - **履歴にだけある**秘密（どの先端のツリーにも無い blob）は拒否しない。利用者には `remote: FG-GIT-0022 warning: …` と 1 件ずつの
+    ファイル・コミット・規則（値は出さない）。serve のログに 1 件ずつ `forge.git.push_history_finding`（warn、`request_id`、`rule`、`path`、
+    `commit`、`blob`）。
+  - ref が反映されると許可は使い切られ、監査ログに `repository.history_imported`（`history_findings`、`consumed`）と、見つかったもの 1 件ごとに
+    `repository.history_secret_imported`（`severity=warning`、`rule`、`path`、`commit`、`blob`）が残る（最大 500 件。数はすべて数える）。
+  - 2 回目以降の push は今まで通り全部を検査する。許可の期限が切れていれば、空のリポジトリでも全部を検査する。
+  - 「履歴にだけある」とは、push した先端から辿れる blob のうち、どの先端のツリーにも無いもの。パックに入っていても先端から辿れない
+    オブジェクトは秘密の検査をしない（X8 からの仕様。大きさだけ調べる）。
+  - 既知の制限: 先端のツリーの一覧は出力の上限（64 MiB）までを一度に読む。巨大なツリーで読み切れなければ push は拒否される
+    （FG-GIT-0023 `git_failed`、`detail=tip_tree_truncated`。fail closed）。その場合は履歴を分けて取り込むか、ADR で上限を見直す。
+  - ログと利用者向けの行のパスは 120 文字で切る（監査の行は検査のパスのまま、最大 256 バイト）。
+- **取り込んだ側の責任**: 履歴に残った秘密が本物なら、**取り込んだ人（依頼した部署）が失効・交換する**。GitStation は履歴から消さない
+  （消すなら runbook secret-removal）。管理者は `repository.history_secret_imported` の一覧を依頼者に渡し、失効の完了を確かめてから
+  クローズする。
+- 調べる（読み取りのみ）:
+
+  ```sql
+  SELECT repository_id, allowed_at, expires_at, consumed_at, consumed_request_id
+    FROM forge.repository_history_imports WHERE repository_id = <repo_id>;
+  SELECT created_at, request_id, details FROM forge.audit_log
+   WHERE action LIKE 'repository.history_%' AND resource_id = <project_id> ORDER BY id;
+  ```
+
+- FG-GIT-0026（alert）:
+  - `reason=record_failed` / `timeout`: 取り込みの push は反映されたが、監査の行と使用済みを書けなかった（DB の障害。`cause_code`）。
+    1. **許可が閉じていることを確かめる**（読み取りのみ）: 上の SQL で `claimed_request_id` がその request_id、`consumed_at` が NULL。確保されたままの
+       許可は二度と使えない（ref を消して空に戻しても再利用されない）。開いていたら（`claimed_at` が NULL）エスカレーション。
+    2. **監査の欠けを確かめる**: その request_id の `repository.history_imported` が無い。同じ `request_id` の `forge.git.push_history_finding`
+       の行（rule・path・commit・blob）をインシデントの記録に写し、依頼者に失効を求める。
+    3. DB の原因は `cause_code` の runbook で直す。
+  - `reason=release_failed`: ref が反映されなかった push の確保を返せなかった。許可は閉じたまま（安全側）。取り込みをまだ行うなら
+    `[MUTATING — needs approval]` もう一度 `forge admin repo allow-import`。
+- serve が push の途中で止まった場合も、確保は残り許可は閉じる。必要なら許可し直す（リポジトリが空のときだけ通る）。
 
 ## Windows の注意
 

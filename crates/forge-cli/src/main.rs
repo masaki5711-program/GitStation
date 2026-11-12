@@ -402,6 +402,17 @@ enum RepoCommand {
         repo_id: i64,
     },
     // ── end M3 O3 ──
+    /// Allow the one-time history import into an EMPTY repository
+    /// (2026-11-12, runbook push-checks "history import"): its first
+    /// accepted push may carry secrets in old commits (audited, never in
+    /// the tip). Refused when the repository has refs (FG-GIT-0025).
+    AllowImport {
+        /// The repository id (`forge admin repo-path` names its directory).
+        repo_id: i64,
+        /// How long the allowance stays open (1 to 168 hours).
+        #[arg(long, default_value_t = 24)]
+        ttl_hours: u64,
+    },
 }
 // ── end D4 MR3b ──
 
@@ -541,7 +552,8 @@ fn main() -> ExitCode {
                     command:
                         RepoCommand::Reprovision { .. }
                         | RepoCommand::RecordPush { .. }
-                        | RepoCommand::Maintain { .. },
+                        | RepoCommand::Maintain { .. }
+                        | RepoCommand::AllowImport { .. },
                 }
                 | AdminCommand::Project {
                     command: ProjectCommand::Purge { now: true, .. } | ProjectCommand::Move { .. },
@@ -745,6 +757,14 @@ fn main() -> ExitCode {
                     command: RepoCommand::Maintain { repo_id },
                 },
         } => config().and_then(|cfg| admin_repo::maintain(&cfg.database, &request_id, repo_id)),
+        Command::Admin {
+            command:
+                AdminCommand::Repo {
+                    command: RepoCommand::AllowImport { repo_id, ttl_hours },
+                },
+        } => {
+            config().and_then(|cfg| admin_repo::allow_import(&cfg, &request_id, repo_id, ttl_hours))
+        }
         Command::Admin {
             command:
                 AdminCommand::Project {
@@ -1052,6 +1072,30 @@ mod tests {
             }
         ));
         assert!(parse(&["admin", "repo", "maintain"]).is_err());
+        // 2026-11-12: the one-time history import (24 hours by default).
+        let cli = parse(&["admin", "repo", "allow-import", "5"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::Repo {
+                    command: RepoCommand::AllowImport {
+                        repo_id: 5,
+                        ttl_hours: 24
+                    }
+                }
+            }
+        ));
+        let cli =
+            parse(&["admin", "repo", "allow-import", "5", "--ttl-hours", "2"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::Repo {
+                    command: RepoCommand::AllowImport { ttl_hours: 2, .. }
+                }
+            }
+        ));
+        assert!(parse(&["admin", "repo", "allow-import"]).is_err());
         // The read-only repo-path command is unchanged.
         assert!(parse(&["admin", "repo-path", "42"]).is_ok());
     }

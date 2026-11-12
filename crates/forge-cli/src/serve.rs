@@ -95,7 +95,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         forge_db::check_schema(&db, &MIGRATOR).await?;
         // Pushes load their protection snapshot from, and are recorded in,
         // the database (forge-web reads both through forge-core traits).
-        let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
+        let smart_http = smart_http
+            .with_push(Arc::new(db.clone()), Arc::new(db.clone()))
+            // 2026-11-12: the one-time history import allowance (operator CLI).
+            .with_history_imports(Arc::new(db.clone())); // clone: the pool handle is shared
         let push_tasks = smart_http.push_tasks();
         // M3 R4 (ADR-0024 §4.2): the merge job runs here, next to the browse
         // cache its ref writes invalidate (`serve_merges`).

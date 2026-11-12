@@ -322,3 +322,87 @@ async fn maintain_enqueues_one_job_for_a_ready_repository() {
     assert_eq!(jobs.len(), 1, "{jobs:?}");
     t.drop_now().await;
 }
+
+// ── 2026-11-12: allow-import ──
+
+/// `git --git-dir <repo> <args>` with a synthetic identity; its stdout.
+fn plumb(repo: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(repo)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "forge-test")
+        .env("GIT_AUTHOR_EMAIL", "forge-test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "forge-test")
+        .env("GIT_COMMITTER_EMAIL", "forge-test@example.invalid")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("git");
+    assert!(out.status.success(), "git {args:?}");
+    String::from_utf8(out.stdout)
+        .expect("utf-8")
+        .trim()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn allow_import_refuses_a_repository_with_refs() {
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = storage();
+    let p = project(&t, "imp").await;
+    let repo = p.repository_id;
+    // Still provisioning: refused, nothing written.
+    let err = allow_import_with(&t.db, &storage, &rid("req-cli-imp-0"), repo.get(), 24)
+        .await
+        .expect_err("provisioning");
+    assert_reason(
+        &err,
+        ErrorCode::HistoryImportRefused,
+        "repository_not_ready",
+    );
+    // The worker provisions it (an empty bare repository, ready).
+    let mut runner = JobRunner::new(t.db.clone(), WorkerId::generate()); // clone: pool handles
+    let handler = ProvisionHandler::new(&t.db, storage.clone()).expect("handler");
+    runner.register(Arc::new(handler)).expect("register");
+    let ran = runner.run_once().await.expect("claim").expect("a job");
+    assert!(matches!(ran, Ran::Succeeded(_)), "{ran:?}");
+    for ttl in [0, MAX_IMPORT_TTL_HOURS + 1] {
+        let err = allow_import_with(&t.db, &storage, &rid("req-cli-imp-1"), repo.get(), ttl)
+            .await
+            .expect_err("ttl");
+        assert_reason(&err, ErrorCode::HistoryImportRefused, "ttl_out_of_range");
+    }
+    assert!(!forge_db::history_imports::import_allowed(&t.db, repo)
+        .await
+        .expect("read"));
+    // Empty: allowed.
+    let out = allow_import_with(&t.db, &storage, &rid("req-cli-imp-2"), repo.get(), 2)
+        .await
+        .expect("allowed");
+    assert!(out.contains("allowed until"), "{out}");
+    assert!(forge_db::history_imports::import_allowed(&t.db, repo)
+        .await
+        .expect("read"));
+    // One ref: refused.
+    let bare = storage.root.existing(repo).expect("bare");
+    let bare = bare.as_path();
+    let tree = plumb(bare, &["mktree"]);
+    let commit = plumb(bare, &["commit-tree", &tree, "-m", "synthetic"]);
+    plumb(bare, &["update-ref", "refs/heads/main", &commit]);
+    let err = allow_import_with(&t.db, &storage, &rid("req-cli-imp-3"), repo.get(), 2)
+        .await
+        .expect_err("not empty");
+    assert_reason(
+        &err,
+        ErrorCode::HistoryImportRefused,
+        "repository_not_empty",
+    );
+    let rows = t
+        .json_rows(
+            "SELECT request_id FROM forge.audit_log \
+             WHERE action = 'repository.history_import_allowed' ORDER BY id",
+        )
+        .await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    t.drop_now().await;
+}
