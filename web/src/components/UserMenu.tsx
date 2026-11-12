@@ -103,26 +103,28 @@ export function UserMenu({ session }: { session: Session }) {
             </li>
           )}
         </ul>
-        <fieldset className={styles.themes}>
-          <legend className={styles.themesLegend}>{t('theme.legend')}</legend>
-          {(Object.keys(themeLabels) as Theme[]).map((value) => (
-            <label key={value} className={styles.themeChoice}>
-              <input
-                type="radio"
-                name={themeName}
-                value={value}
-                checked={theme === value}
-                onChange={() => {
-                  setTheme(value);
-                  chooseTheme(value);
-                }}
-              />
-              <span aria-hidden="true" className={styles.swatch} data-swatch={value} />
-              {themeLabels[value]}
-            </label>
-          ))}
-        </fieldset>
-        <form method="post" action="/-/auth/logout">
+        <div className={styles.section}>
+          <fieldset className={styles.themes}>
+            <legend className={styles.themesLegend}>{t('theme.legend')}</legend>
+            {(Object.keys(themeLabels) as Theme[]).map((value) => (
+              <label key={value} className={styles.themeChoice}>
+                <input
+                  type="radio"
+                  name={themeName}
+                  value={value}
+                  checked={theme === value}
+                  onChange={() => {
+                    setTheme(value);
+                    chooseTheme(value);
+                  }}
+                />
+                <span aria-hidden="true" className={styles.swatch} data-swatch={value} />
+                {themeLabels[value]}
+              </label>
+            ))}
+          </fieldset>
+        </div>
+        <form method="post" action="/-/auth/logout" className={styles.section}>
           <input type="hidden" name="csrf" value={session.csrf_token} />
           <button type="submit" className={styles.logout}>
             {t('header.logout')}

@@ -1,9 +1,10 @@
 // The colour theme (user menu → テーマ). tokens.css holds every value; this
 // only sets <html data-theme> and remembers the choice in this browser
 // (not a secret; storage may be disabled, so every access is guarded).
-// main.tsx applies the stored choice before the first render; the CSP
-// forbids an inline script in the shell, so the empty shell may paint once
-// in the system theme before the bundle runs (no content is on it yet).
+// public/theme-init-<hash>.js (a classic script in <head>; the CSP forbids
+// an inline one) applies the stored choice before the first paint, and
+// main.tsx again before the first render; keep the key and names equal
+// (tests/theme-init.test.ts).
 
 export const THEMES = ['system', 'white', 'navy', 'dark'] as const;
 export type Theme = (typeof THEMES)[number];

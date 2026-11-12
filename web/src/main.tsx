@@ -9,8 +9,8 @@ import { AppProviders, AppRoutes, createQueryClient } from './App';
 import { createI18n } from './i18n';
 import { applyTheme, storedTheme } from './theme';
 
-// Before anything renders, so the first painted screen is already in the
-// chosen theme (src/theme.ts says why this cannot be an inline script).
+// Before anything renders (public/theme-init-*.js already did so before the
+// first paint; this also covers a page built without it, e.g. tests).
 applyTheme(storedTheme());
 
 async function start(): Promise<void> {

@@ -43,6 +43,7 @@
   top: calc(100% + var(--gs-space-2));
   z-index: 10;
   min-width: 14rem;
+  max-width: calc(100vw - 2 * var(--gs-space-4));
   padding: var(--gs-space-3) var(--gs-space-4);
   border: 1px solid var(--gs-color-border);
   border-radius: var(--gs-radius-md);
@@ -56,9 +57,13 @@
 }
 
 .who {
-  margin: 0 0 var(--gs-space-3);
+  margin: 0 0 var(--gs-space-2);
   font-size: var(--gs-font-size-sm);
   color: var(--gs-color-text-muted);
+}
+
+.section .logout {
+  margin-bottom: var(--gs-space-1);
 }
 
 .logout {
@@ -73,7 +78,7 @@
 }
 
 .links {
-  margin: 0 0 var(--gs-space-3);
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -84,27 +89,32 @@
   padding: var(--gs-space-2) 0;
 }
 
-/* テーマ: four radios, each with a small preview of its colours. */
-.themes {
-  margin: 0 0 var(--gs-space-3);
-  padding: var(--gs-space-2) 0 0;
-  border: none;
+/* The menu's parts below the links (テーマ, sign out): each its own block,
+   divided by a rule that runs to the panel's edges. */
+.section {
+  margin: var(--gs-space-3) calc(-1 * var(--gs-space-4)) 0;
+  padding: var(--gs-space-3) var(--gs-space-4) 0;
   border-top: 1px solid var(--gs-color-border-subtle);
 }
 
-.themesLegend {
-  float: left; /* a legend inside the fieldset's padding, not on its border */
-  width: 100%;
+/* テーマ: four radios, each with a small preview of its colours. */
+.themes {
+  margin: 0;
   padding: 0;
-  margin-bottom: var(--gs-space-1);
+  border: none;
+  min-width: 0;
+}
+
+.themesLegend {
+  padding: 0;
+  margin-bottom: var(--gs-space-2);
   font-size: var(--gs-font-size-sm);
   font-weight: var(--gs-font-weight-semibold);
-  color: var(--gs-color-text-muted);
+  color: var(--gs-color-heading);
 }
 
 .themeChoice {
   composes: interactive from './controls.module.css';
-  clear: left;
   display: flex;
   align-items: center;
   gap: var(--gs-space-2);
@@ -112,9 +122,11 @@
   padding: 0 var(--gs-space-2);
   margin: 0 calc(-1 * var(--gs-space-2));
   border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-sm);
 }
 
 .themeChoice input {
+  flex: none;
   margin: 0;
   accent-color: var(--gs-color-accent-strong);
 }
@@ -137,9 +149,23 @@
 
 .swatch[data-swatch='navy'] {
   background: var(--gs-swatch-navy);
-  box-shadow: inset 0 -0.3rem 0 var(--gs-brand-teal);
+  box-shadow: inset 0 -0.3rem 0 var(--gs-color-accent);
 }
 
 .swatch[data-swatch='dark'] {
   background: var(--gs-swatch-dark);
+}
+
+/* A narrow screen: the header wraps and the menu button may sit at the
+   left, so the panel spans the screen under it instead of hanging off an
+   edge (top: auto keeps it just below the button). */
+@media (max-width: 40rem) {
+  .panel {
+    position: fixed;
+    top: auto;
+    left: var(--gs-space-4);
+    right: var(--gs-space-4);
+    max-width: none;
+    margin-top: var(--gs-space-2);
+  }
 }
