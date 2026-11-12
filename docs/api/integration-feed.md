@@ -25,7 +25,8 @@ golden）は `docs/api/integration-feed.example.json`。forge-web のテスト `
 - エージェントのトークン（`reason=agent_token`）・`Forge-Act-As` の付いた要求（`reason=act_as_refused`、代理での読み取りは常に不可）・
   無効にした連携（`reason=integration_disabled`）: `FG-AUTH-0003`（403）。無効のサービスアカウント: `FG-AUTH-0004`。
 - 見えるイベント: 結びつけたプロジェクトのうち、サービスアカウントが **Reporter 以上のメンバー**で、削除待ちでないもの、の
-  **連携の分類**（ADR-0016 §5: `merge_request.*`、`repository.pushed`、`project.created` など、`check.completed`、`work_item.*`）の
+  **連携の分類**（ADR-0016 §5: `merge_request.*`（`merge_request.work_items_changed` を含む。`merge_request.relink_requested` は除く）、
+  `repository.pushed`、`project.created` など、`check.completed`、`work_item.*`）の
   イベントを、連携の `event_types` で狭めたもの。判定は読むたびに `authorize()` で行う（`prove_visible`）。
 - **決して出ないもの**: `project_id` のないイベント（インスタンス全体）、`member.*`・`protected_ref.*`・`project.visibility_changed`
   （maintainer の分類）、`token.*` など（admin の分類）。結びつけを解除したプロジェクトは、**解除の前のイベントも後のイベントも**出ない。
@@ -60,6 +61,31 @@ golden）は `docs/api/integration-feed.example.json`。forge-web のテスト `
 | `has_more` | `next_cursor` の後に見えるイベントが残っているときだけ `true` |
 
 `username`・`display_name` は読み取りの時点のもの。
+
+## `merge_request.work_items_changed`（作業項目のリンクが変わった）
+
+ADR-0016 Amendment 2026-11-12。MR と作業項目のリンクが **手で**（人・エージェント・サービスアカウント・ボットの
+`PUT` / `DELETE /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}`、`gstn mr link-work-item` など）、または
+**結びつけの後の見つけ直し**で付いた・外れたとき、MR ごとに 1 つ出る。`merge_request.*` の 1 つなので、`event_types` が
+`merge_request.*` の連携にも届く。kanflow はほかの `merge_request.*` と同じく `data.iid` の MR を読み直せばよい。
+
+| `data` の欄 | 内容 |
+|---|---|
+| `merge_request_id`・`iid` | その MR |
+| `reason` | `manual`（手）または `relink`（結びつけの後の見つけ直し） |
+| `added[]` | 付いたリンク: `link_id`、`work_item_id`、`work_item`（`provider`・`project_id`・`ref`）、`source`（`manual` / `auto`） |
+| `removed[]` | 外れたリンク: 同じ欄と `unlink_source`（`manual` / `auto`） |
+| `by`・`by_kind` | 手のときの利用者の id と種類（`human` / `agent` / `service_account` / `bot`）。見つけ直しは `null`（`actor.kind = system`） |
+
+- `events[].work_items` には、付いた作業項目に加えて **外した作業項目**と、その MR の今のリンクが入る（その連携の作業項目だけ）。
+- 手のリンク・解除では、同じ変更の `work_item.linked` / `work_item.unlinked` の直後に来る。
+- **結びつけたとき**（初めて・解除の後の結び直し・別の kanflow のプロジェクトへ・共有の結びつけを作業項目を決めるものに変えたとき）、
+  そのプロジェクトの **開いた MR**（最大 500）と **90 日以内にマージした MR**（最大 500）の参照を見つけ直し、リンクが変わった MR ごとに
+  `reason=relink` のイベントが出る。結び直しは見える範囲を変えるので、kanflow は先に 410 `visible_set_changed` を受け取り、開発状況 API を
+  読み直す。その時点でまだ見つけ直しが終わっていなくても、その後のこのイベントで分かる。クローズした MR と 90 日より前のマージは
+  見つけ直さない。人が解除した作業項目は付かない。
+- タイトルの編集・push で付いた・外れたリンクには出ない（その合図は今までどおり `merge_request.updated` などで、`work_items` に今のリンクが入る）。
+- 見つけ直しの内部のイベント `merge_request.relink_requested` は admin の分類で、連携の feed には **出ない**。
 
 ## `GET /api/v1/integrations/{id}/events/cursor`
 

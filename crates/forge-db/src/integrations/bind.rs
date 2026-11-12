@@ -32,6 +32,7 @@ use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, 
 use crate::projects::{
     direct_role_for_update, evented_record, lock_access, locked_access_facts, member_candidate,
 };
+use crate::work_items::{relink_job, RelinkRequest};
 use crate::{query_error, Db};
 use sqlx::postgres::PgConnection;
 
@@ -315,6 +316,24 @@ fn conflict(
         .with_context("bound_integration_id", bound.get())
 }
 
+/// A binding that resolves work items was made (bind, re-bind, or a
+/// shared binding became the resolving one): the project's existing merge
+/// requests are detected again by the `work_items.relink` job (ADR-0016
+/// Amendment 2026-11-12), enqueued in this change so it exists only if the
+/// binding does.
+async fn enqueue_relink(
+    tx: &mut ChangeTx,
+    ctx: &ChangeContext,
+    project: ProjectId,
+    binding: i64,
+) -> Result<(), ForgeError> {
+    let job = relink_job(
+        &RelinkRequest { project, binding },
+        ctx.request_id.clone(), // clone: the job keeps its origin request
+    )?;
+    tx.enqueue_job(&job).await.map(drop)
+}
+
 /// Bind `project` to `external_project_id` of `integration` as a binding
 /// that resolves work items (the project route's bind, M3 I1a): [`bind_as_decided`]
 /// without an assertion.
@@ -507,6 +526,9 @@ pub async fn bind_as_decided<P>(
             user: account,
             role: Role::Reporter,
         };
+        if resolves {
+            enqueue_relink(&mut tx, ctx, project, id).await?;
+        }
         let used = consumed(&mut tx, act_as, &request).await?;
         let record = binding_record(&[details], project, granted.then_some(&added), used)?;
         Ok(Settle::Commit(
@@ -614,6 +636,7 @@ pub async fn update_binding_decided<P>(
             external_project_id: row.external.clone(), // clone: the answer keeps it too
             resolves_work_items: true,
         });
+        enqueue_relink(&mut tx, ctx, project, binding).await?;
         let used = consumed(&mut tx, act_as, &request).await?;
         let record = binding_record(&[details], project, None, used)?;
         Ok(Settle::Commit(

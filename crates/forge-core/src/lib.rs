@@ -139,8 +139,8 @@ pub use webhook::{
     DisableReason, WebhookChange, WebhookDeliverySet, WebhookField, WebhookMaterial,
 };
 pub use work_item::{
-    find_refs, LinkActorKind, LinkSource, LinkTarget, UnlinkSource, WorkItem, WorkItemChange,
-    WorkItemRef,
+    find_refs, LinkActorKind, LinkSource, LinkTarget, LinksChangedReason, UnlinkSource, WorkItem,
+    WorkItemChange, WorkItemRef, WorkItemsChanged, WORK_ITEMS_CHANGED_DEDUP,
 };
 
 #[cfg(test)]

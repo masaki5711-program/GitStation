@@ -2031,3 +2031,7 @@ async fn the_page_budget_cuts_before_the_check_runs() {
     snap.close().await;
     w.t.drop_now().await;
 }
+
+// ADR-0016 Amendment 2026-11-12: re-detection after a binding and the
+// `merge_request.work_items_changed` signal.
+mod relink;

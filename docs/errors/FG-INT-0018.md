@@ -24,4 +24,4 @@ The log event carries `reason=project_not_bound` and `project_id`, with `action=
 
 ## 対処 (fix)
 
-A Maintainer binds the project to its kanflow project (`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`, runbook integrations), then links again. Merge requests that existed before the binding are linked by detection at their next event (an edit, a push, a comment).
+A Maintainer binds the project to its kanflow project (`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`, runbook integrations), then links again. Merge requests that existed before the binding are detected again by the `work_items.relink` job the binding enqueues (open ones and those merged in the last 90 days; closed ones at their next edit).

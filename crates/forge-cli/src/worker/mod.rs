@@ -127,6 +127,8 @@ mod subscribers;
 pub(crate) mod webhooks;
 // ── end M3 I2 ──
 mod supervise;
+// ADR-0016 Amendment 2026-11-12: `work_items.relink`.
+mod work_items;
 
 use notify_lane::{NotifyLane, NotifyTask};
 use provision::Storage;

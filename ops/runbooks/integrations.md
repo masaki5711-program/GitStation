@@ -26,7 +26,23 @@
   - データベースが裏付ける: 人のリンク・解除には同じトランザクションの `work_item.*` の監査の行、自動のリンクには `work-item-sync` の前進が要る
     （トリガー `merge_request_work_items_audited`。違反は `FG-DB-0013` の `reason=work_item_link_unaudited` / `derived_work_item_link`、
     制約名 `merge_request_work_items_audited` / `_derived`。監査の行はその作業項目を名指す必要がある）。
-  - 結ばれていないプロジェクトでは何も見つけない（手でのリンクは `FG-INT-0018`）。結ぶ前からある MR は、次のイベント（編集・push・コメント）でリンクされる。
+  - 結ばれていないプロジェクトでは何も見つけない（手でのリンクは `FG-INT-0018`）。
+  - **結びつけたとき（初めて・解除の後の結び直し・別の kanflow のプロジェクトへの結び直し・共有の結びつけを作業項目を決める結びつけに変えたとき）**、
+    そのプロジェクトの既存の MR の参照を見つけ直す（ADR-0016 Amendment 2026-11-12）。結びつけの変更と同じトランザクションで
+    ジョブ `work_items.relink`（`forge.jobs`、キー `work_items_relink:<結びつけの id>`）が入り、`forge worker` が実行する:
+    **開いた MR**（新しい順に最大 500）と **90 日以内にマージした MR**（新しい順に最大 500。マージの時刻は適用したマージの終了、無ければ
+    MR の `updated_at`）ごとに内部のイベント `merge_request.relink_requested`（admin の分類。連携の feed・Webhook には出ない）を 100 件ずつの
+    変更で書き（監査 `work_item.relink_requested`、プロジェクトの行、`actor_kind = system`）、`work-item-sync` がふだんと同じ規則・上限で
+    リンクを付ける。**クローズした MR・90 日より前にマージした MR は見つけ直さない**（次の編集で付く）。上限で切ったときはログ
+    `forge.work_items.relink_capped`（warn）。**人が解除した作業項目は結び直しても付かない**（`unlink_source = manual` の行が最後）。
+    ジョブはやり直しても、もう書いた MR を飛ばす（イベントのキー `merge_request_relink_requested:<mr>:<結びつけ>`）。
+    実行のときに結びつけが無くなっていれば何も書かない（ログ `forge.work_items.relink_skipped reason=binding_gone`）。
+  - **リンクが変わったことの合図**: 手でのリンク・解除と、上の見つけ直しで付いた・外れたリンクは、MR ごとに 1 つの
+    `merge_request.work_items_changed`（連携の分類、`merge_request.*` に入る）になる。`data` は `reason`（`manual` / `relink`）、
+    `added[]`・`removed[]`（`link_id`・`work_item_id`・`work_item`・`source` / `unlink_source`）、`by`・`by_kind`。イベントの作業項目
+    （feed の `work_items`）には外した作業項目も入る。kanflow は `merge_request.*` で MR を読み直すので、ふだんの同期で手のリンクも分かる
+    （`work_item.*` は kanflow が読み飛ばす）。タイトルの編集で付いた・外れたリンクは、今までどおり `merge_request.updated` などが合図
+    （`work_items_changed` は出ない）。
   - 自動のリンクは MR あたり 20 まで（超えた分はログ `forge.work_items.detected_capped`）、手のリンクは 50 まで（`FG-INT-0019`）、
     1 つのイベントの作業項目は 100 まで（`forge.work_items.event_items_capped`）。
 
@@ -42,6 +58,7 @@
 - 手でのリンクが `FG-INT-0018`（409、WorkItemProjectNotBound）で断られた: そのプロジェクトは連携に結ばれていない。
 - 手でのリンクが `FG-INT-0019`（409、WorkItemLinkLimitReached）で断られた: その MR の手のリンクが 50 に達した。
 - 「MR が kanflow の PBI に出ない」「リンクが付かない・外れない」という問い合わせ。
+- 「結び直したのに、開いている MR が kanflow の PBI に出ない」（`dev-status` の `work_items: []`）という問い合わせ。
 
 ## Impact
 
@@ -124,7 +141,24 @@
     WHERE e.project_id = <project_id> ORDER BY e.seq DESC LIMIT 20;
    ```
 
-8. `FG-INT-0018` のログ: `reason=project_not_bound`、`project_id`。`FG-INT-0019` のログ: `reason=manual_link_limit`、`limit=50`、`project_id`、
+8. 結び直しの後にリンクが戻らないとき: 見つけ直しのジョブと、そのイベント・監査を見る（読み取りのみ）。
+
+   ```sql
+   SELECT id, state, attempts, last_error_code, payload, created_at FROM forge.jobs
+    WHERE kind = 'work_items.relink' AND payload->>'project_id' = '<project_id>' ORDER BY id DESC LIMIT 5;
+   SELECT count(*) FROM forge.events
+    WHERE event_type = 'merge_request.relink_requested' AND project_id = <project_id>;
+   SELECT seq, payload->>'iid' AS iid, payload->>'reason' AS reason, payload->'added' AS added
+     FROM forge.events WHERE event_type = 'merge_request.work_items_changed' AND project_id = <project_id>
+    ORDER BY seq DESC LIMIT 20;
+   ```
+
+   ジョブが `dead` なら `last_error_code` の Runbook（多くは `FG-DB-0002` / `FG-DB-0006`）。`queued` のままなら `forge worker` が動いているか
+   （`forge doctor` の `jobs.*`）。イベントがあって `work_items_changed` が無いなら、`work-item-sync` が止まっていないか（`subscribers.lag`）、
+   その MR を人が解除していないか（7 の SQL）。対象は開いた MR と 90 日以内のマージだけで、クローズした MR は付かない（仕様）。
+   ジョブを入れ直す手段（CLI）はまだ無い。急ぐときは、その MR のタイトルを編集すれば次のイベントでリンクされる。
+
+9. `FG-INT-0018` のログ: `reason=project_not_bound`、`project_id`。`FG-INT-0019` のログ: `reason=manual_link_limit`、`limit=50`、`project_id`、
    `merge_request_id`。人のリンクと解除の監査は `work_item.linked` / `work_item.unlinked`（プロジェクトの行、`actor_kind = user`）。
    自動のリンクは派生イベント（`actor_kind = system`、`caused_by_seq` が元の MR のイベント）で、監査の行は無い。
 

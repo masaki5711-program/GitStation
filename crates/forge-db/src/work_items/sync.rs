@@ -26,6 +26,14 @@
 //!   listed branch names reference (bound projects only) and with the open
 //!   links of the open merge requests from those branches. A cut list
 //!   (`refs_truncated`) records what it lists.
+//! - `merge_request.relink_requested` (ADR-0016 Amendment 2026-11-12: the
+//!   `work_items.relink` job after a binding) — handled like any
+//!   `merge_request.*` event, and when it changed the links, one derived
+//!   `merge_request.work_items_changed` (`reason=relink`) names what was
+//!   added and removed (deduplicated by `…:seq:<source seq>`).
+//! - `merge_request.work_items_changed` — recorded with the work items it
+//!   names (an unlinked one too) and the merge request's open links; it
+//!   changes no link itself.
 //! - `work_item.linked` / `.unlinked` — recorded with their work item.
 //! - Every other type concerns no work item.
 //!
@@ -38,8 +46,8 @@ use std::collections::HashSet;
 
 use forge_core::ids::{MergeRequestId, ProjectId};
 use forge_core::{
-    find_refs, DedupKey, DedupPart, EventType, LinkSource, UnlinkSource, WorkItemChange,
-    WorkItemRef,
+    find_refs, DedupKey, DedupPart, EventType, LinkSource, LinksChangedReason, UnlinkSource,
+    WorkItem, WorkItemChange, WorkItemRef, WorkItemsChanged, WORK_ITEMS_CHANGED_DEDUP,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -50,6 +58,12 @@ use super::{
 use crate::change::DomainEvent;
 use crate::query_error;
 use crate::subscribers::{DerivedTx, HandleFuture, Ordering, SourceEvent, Subscriber};
+
+/// The links one sync made (link id, work item, source) and ended.
+type LinkChanges = (
+    Vec<(i64, WorkItem, LinkSource)>,
+    Vec<(i64, WorkItem, UnlinkSource)>,
+);
 
 /// The subscriber's name (its row in forge.event_subscribers).
 pub const WORK_ITEM_SYNC: &str = "work-item-sync";
@@ -142,9 +156,12 @@ fn link_event(change: &WorkItemChange) -> Result<DomainEvent, ForgeError> {
 }
 
 impl WorkItemSync {
+    /// `relink`: the source event is `merge_request.relink_requested`, whose
+    /// link changes are published as one `merge_request.work_items_changed`.
     async fn on_merge_request(
         event: &SourceEvent,
         tx: &mut DerivedTx<'_>,
+        relink: bool,
     ) -> Result<(), ForgeError> {
         let project = project_of(event)?;
         let id = MergeRequestId::new(positive(event, "merge_request_id")?);
@@ -174,7 +191,7 @@ impl WorkItemSync {
         let Some(bound) = binding_of(tx.conn(), project).await? else {
             return Ok(());
         };
-        Self::sync_links(
+        let (added, removed) = Self::sync_links(
             event,
             tx,
             (project, id, iid),
@@ -183,6 +200,30 @@ impl WorkItemSync {
             &source_branch,
         )
         .await?;
+        let changed = WorkItemsChanged {
+            project,
+            merge_request: id,
+            iid,
+            reason: LinksChangedReason::Relink,
+            added,
+            removed,
+            by: None,
+        };
+        if relink && !changed.is_empty() {
+            tx.emit(DomainEvent {
+                event_type: changed.event_type(),
+                schema_version: 1,
+                aggregate_type: "merge_request",
+                aggregate_id: id.get(),
+                project_id: Some(project),
+                payload: changed.to_value(),
+                dedup_key: Some(DedupKey::new(
+                    WORK_ITEMS_CHANGED_DEDUP,
+                    &[DedupPart::Word("seq"), DedupPart::Id(event.seq)],
+                )?),
+            })
+            .await?;
+        }
         let items: Vec<i64> = open_links(tx.conn(), id)
             .await?
             .into_iter()
@@ -194,7 +235,7 @@ impl WorkItemSync {
     }
 
     /// Bring the merge request's auto links in line with its title and
-    /// source branch (module docs).
+    /// source branch (module docs). Answers the links it made and ended.
     async fn sync_links(
         event: &SourceEvent,
         tx: &mut DerivedTx<'_>,
@@ -202,7 +243,7 @@ impl WorkItemSync {
         bound: &BoundTo,
         title: &str,
         source_branch: &str,
-    ) -> Result<(), ForgeError> {
+    ) -> Result<LinkChanges, ForgeError> {
         let branch = source_branch
             .strip_prefix(BRANCH_PREFIX)
             .unwrap_or(source_branch);
@@ -238,6 +279,8 @@ impl WorkItemSync {
         .await
         .map_err(|e| query_error("work_items.sync.unlinked_by_people", e))?;
         let wanted_ids: HashSet<i64> = wanted.iter().map(|w| w.id).collect();
+        let mut added: Vec<(i64, WorkItem, LinkSource)> = Vec::new();
+        let mut removed: Vec<(i64, WorkItem, UnlinkSource)> = Vec::new();
         for link in &open {
             if link.source == LinkSource::Auto && !wanted_ids.contains(&link.work_item.id) {
                 let ended = sqlx::query(
@@ -259,6 +302,8 @@ impl WorkItemSync {
                         by: None,
                     };
                     tx.emit(link_event(&change)?).await?;
+                    // clone: the change event owns one
+                    removed.push((link.link, link.work_item.clone(), UnlinkSource::Auto));
                 }
             }
         }
@@ -278,6 +323,7 @@ impl WorkItemSync {
             .fetch_one(tx.conn())
             .await
             .map_err(|e| query_error("work_items.sync.link", e))?;
+            added.push((link, item.clone(), LinkSource::Auto)); // clone: the change event owns one
             let change = WorkItemChange::Linked {
                 project,
                 merge_request: id,
@@ -290,7 +336,59 @@ impl WorkItemSync {
             };
             tx.emit(link_event(&change)?).await?;
         }
-        Ok(())
+        Ok((added, removed))
+    }
+
+    /// `merge_request.work_items_changed`: recorded with the current
+    /// binding's work items it names (also one it removed) and the merge
+    /// request's open links. No link changes here.
+    async fn on_work_items_changed(
+        event: &SourceEvent,
+        tx: &mut DerivedTx<'_>,
+    ) -> Result<(), ForgeError> {
+        let project = project_of(event)?;
+        lock_project(tx, project).await?;
+        let id = MergeRequestId::new(positive(event, "merge_request_id")?);
+        let mut named: Vec<i64> = Vec::new();
+        for field in ["added", "removed"] {
+            let entries = event
+                .payload
+                .get(field)
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| bad_payload(event, field))?;
+            for entry in entries {
+                let item = entry
+                    .get("work_item_id")
+                    .and_then(serde_json::Value::as_i64)
+                    .filter(|id| *id > 0)
+                    .ok_or_else(|| bad_payload(event, "work_item_id"))?;
+                named.push(item);
+            }
+        }
+        let Some(bound) = binding_of(tx.conn(), project).await? else {
+            return Ok(());
+        };
+        let owned: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM forge.work_items WHERE id = ANY($1) \
+             AND integration_id = $2 AND external_project_id = $3",
+        )
+        .bind(&named)
+        .bind(bound.integration.get())
+        .bind(&bound.external_project_id)
+        .fetch_all(tx.conn())
+        .await
+        .map_err(|e| query_error("work_items.sync.changed_owner", e))?;
+        // Named first (in the event's order), then the other open links.
+        let mut items: Vec<i64> = named.into_iter().filter(|i| owned.contains(i)).collect();
+        items.extend(
+            open_links(tx.conn(), id)
+                .await?
+                .into_iter()
+                .filter(|l| bound.owns(&l.work_item))
+                .map(|l| l.work_item.id),
+        );
+        let items = bounded_items(event, items);
+        record_event_items(tx.conn(), event.seq, &items).await
     }
 
     async fn on_push(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
@@ -422,7 +520,15 @@ impl Subscriber for WorkItemSync {
                 | EventType::MergeRequestMerged
                 | EventType::MergeRequestSourceBranchDeleted
                 | EventType::MergeRequestApproved
-                | EventType::MergeRequestUnapproved => Self::on_merge_request(event, tx).await,
+                | EventType::MergeRequestUnapproved => {
+                    Self::on_merge_request(event, tx, false).await
+                }
+                EventType::MergeRequestRelinkRequested => {
+                    Self::on_merge_request(event, tx, true).await
+                }
+                EventType::MergeRequestWorkItemsChanged => {
+                    Self::on_work_items_changed(event, tx).await
+                }
                 EventType::RepositoryPushed => Self::on_push(event, tx).await,
                 EventType::WorkItemLinked | EventType::WorkItemUnlinked => {
                     Self::on_link(event, tx).await

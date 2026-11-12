@@ -20,11 +20,15 @@
 //! work item again; an agent's, a service account's or a bot's does not.
 //! An unlink may name the work item by id (a link to an earlier binding's
 //! item); the limit counts the current binding's links only.
+//!
+//! ADR-0016 Amendment 2026-11-12: each link or unlink also publishes one
+//! `merge_request.work_items_changed` (`reason=manual`, the link added or
+//! removed): kanflow follows `merge_request.*`, not `work_item.*`.
 
 use forge_core::ids::{ProjectId, UserId};
 use forge_core::{
     AuditDetails, DedupKey, DedupPart, LinkActorKind, LinkSource, LinkTarget, UnlinkSource,
-    WorkItemChange, WorkItemRef,
+    WorkItemChange, WorkItemRef, WORK_ITEMS_CHANGED_DEDUP,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -67,6 +71,10 @@ fn record(change: WorkItemChange) -> Result<ChangeRecord, ForgeError> {
     let project = change.project();
     let merge_request = change.merge_request();
     let dedup_key = DedupKey::new(change.dedup_prefix(), &[DedupPart::Id(change.link())])?;
+    // ADR-0016 Amendment 2026-11-12: the `merge_request.*` signal of the
+    // change, so an integration that follows merge requests (kanflow) reads
+    // this one again; `work-item-sync` records its work item.
+    let changed = changed_event(&change)?;
     let details = AuditDetails::WorkItem(change);
     let event_type = details.event_type().ok_or_else(|| {
         ForgeError::new(ErrorCode::Internal)
@@ -85,15 +93,45 @@ fn record(change: WorkItemChange) -> Result<ChangeRecord, ForgeError> {
             details: value.clone(), // clone: the same JSON is the event payload
         },
         affected: Vec::new(),
-        events: vec![DomainEvent {
-            event_type,
-            schema_version: 1,
-            aggregate_type: "merge_request",
-            aggregate_id: merge_request.get(),
-            project_id: Some(project),
-            payload: value,
-            dedup_key: Some(dedup_key),
-        }],
+        events: vec![
+            DomainEvent {
+                event_type,
+                schema_version: 1,
+                aggregate_type: "merge_request",
+                aggregate_id: merge_request.get(),
+                project_id: Some(project),
+                payload: value,
+                dedup_key: Some(dedup_key),
+            },
+            changed,
+        ],
+    })
+}
+
+/// The `merge_request.work_items_changed` of a link change by hand,
+/// deduplicated by `merge_request_work_items_changed:link:<id>:<linked|unlinked>`
+/// (each link row is made once and ends once).
+fn changed_event(change: &WorkItemChange) -> Result<DomainEvent, ForgeError> {
+    let changed = change.to_changed();
+    let verb = match change {
+        WorkItemChange::Linked { .. } => "linked",
+        WorkItemChange::Unlinked { .. } => "unlinked",
+    };
+    Ok(DomainEvent {
+        event_type: changed.event_type(),
+        schema_version: 1,
+        aggregate_type: "merge_request",
+        aggregate_id: changed.merge_request.get(),
+        project_id: Some(changed.project),
+        payload: changed.to_value(),
+        dedup_key: Some(DedupKey::new(
+            WORK_ITEMS_CHANGED_DEDUP,
+            &[
+                DedupPart::Word("link"),
+                DedupPart::Id(change.link()),
+                DedupPart::Word(verb),
+            ],
+        )?),
     })
 }
 
