@@ -746,7 +746,8 @@ async fn merge_request_people_disclose_the_employee_number_only_with_the_scope()
             &olga_numbered,
         ),
     ] {
-        let listed = call(r(), "GET", &list, who.clone(), None).await;
+        // The list shows open ones by default: every state here.
+        let listed = call(r(), "GET", &format!("{list}?state=all"), who.clone(), None).await;
         assert_eq!(listed.status, StatusCode::OK, "{label}: {}", listed.json);
         let rows = &listed.json["merge_requests"];
         let row = |iid: i64| {

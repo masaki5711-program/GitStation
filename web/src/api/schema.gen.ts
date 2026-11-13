@@ -4884,8 +4884,11 @@ export interface components {
         };
         /** @description One merge request as the API shows it. */
         MergeRequestBody: {
-            /** @description The author's names (read with the merge request). */
-            author: components["schemas"]["UserNameBody"];
+            /**
+             * @description The author (read with the merge request); `employee_number` only on
+             *     the list and the detail, for a token holding `user_employee_number`.
+             */
+            author: components["schemas"]["MergeRequestPersonBody"];
             /** Format: int64 */
             author_id: number;
             closed_at?: string | null;
@@ -4905,6 +4908,7 @@ export interface components {
              * @description The project's own number of it.
              */
             iid: number;
+            merged_by: null | components["schemas"]["MergeRequestPersonBody"];
             /** Format: int64 */
             project_id: number;
             /** @description The branch name without `refs/heads/`. */
@@ -4929,6 +4933,22 @@ export interface components {
              * @description Pass as `before` for the next page; `null` on the last page.
              */
             next_before?: number | null;
+        };
+        /**
+         * @description A person a merge request names, in the development status's shape
+         *     (`docs/api/dev-status.md`): no employee number without the caller's
+         *     `user_employee_number` scope (a browser session never sees one).
+         */
+        MergeRequestPersonBody: {
+            display_name: string;
+            /**
+             * @description Only for a token holding `user_employee_number` (absent otherwise,
+             *     and for a person without one).
+             */
+            employee_number?: string | null;
+            /** Format: int64 */
+            id: number;
+            username: string;
         };
         /** @description `GET …/status` (the stable contract, `schema_version` 1). */
         MergeRequestStatusBody: {
