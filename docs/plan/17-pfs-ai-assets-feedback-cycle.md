@@ -1,7 +1,7 @@
 # 17 PFS の中央 AI の資産を GitStation で回す — フィードバックサイクルの設計と運用
 
 - 作成: 2026-11-13（`planner` 相当。GitStation は `main` 9ce2a9af、PFS は読み取りだけで確かめた）
-- 状態: 案。§8 の既定で進める。PFS 側の項目（§7.2）は PFS の仕様の確定を待つ。
+- 状態: **決定**（2026-11-13、利用者「この計画で進めて」）。§8 の 5 つの問いは既定どおり決定。PFS 側の項目（§7.2）は PFS の仕様の確定を待つ。
 - 依頼: 「これを使った最も合理的なフィードバックサイクルの設計と運用を検討してください」。前提として、PFS の AI 資産は GitStation で運用すると利用者が決めた。
 
 ## 0. 目標（1 文）と前提の点検
@@ -46,6 +46,14 @@
 | **プロジェクトの設定 `ai_assets.enabled`（採用）** | DB のプロジェクトの設定（既定 `false`）。変えられるのは `native_role` で Maintainer 以上の人だけ（エージェント・ボット・サービスアカウントは不可）、監査に残す。`true` にするのは `pfs-ai/assets` だけ |
 
 `false` のプロジェクトでは、§1.7 の規則 `ai_case_raw_data`・`ai_asset`、P17-3 の lint、`forge/ai-eval` の判定は **呼ばれもしない**（判定の入口で設定を見て、何も出さない）。
+
+**属性の規則**:
+
+- `ai_assets.enabled` は **実質リポジトリの属性**（1 プロジェクト = 1 リポジトリ）。
+- 新しいリポジトリの種類（kind）にしない。kind は作成のときに決まって変えられず、ADR-0023 でその意味の大半を取り下げたため。設定なら後から付け外しでき、監査に残る。
+- 切り替えられるのは **`native_role` で Maintainer 以上の人の Web のセッションだけ**。監査の行を同じトランザクションで書く。
+- **エージェント・ボット（`pfs-ai-bot` を含む）・サービスアカウント・自動マージの主体は決して切り替えられない**。権限の表に deny の行を置く（P17-3 の MR）。
+- `false` に戻すと止まるのは lint・規則・`forge/ai-eval`・リリースの作成だけ。履歴・過去のリリース・署名・デプロイの記録は残り、PFS のローダーは既存のリリースを確かめ続けられる。
 
 ## 1. サイクルの全体
 
@@ -335,7 +343,7 @@ GitStation の権限の形（ADR-0010、`authorize()` の 1 か所、権限の�
 | P17-0 [root] | `chore/harness-p17-ai-asset-area` | 領域 `AIASSET`、`ci-runner-security-reviewer` に GPU とモデル置き場の観点と eval | eval `gpu-service-gets-network`、`model-store-writable` | `harness-optimizer` | 今すぐ |
 | P17-1 | `feat/ci-runner-gpu-model-store` | Runner のホストの設定で、タグ `gpu-eval` の Runner だけが **サービスのコンテナ** に GPU（CDI）とモデル置き場（読み取りだけ、ダイジェストの確かめ）を渡す。`.forge-ci.yml` からは要求するだけで、パスは書けない。**タグ `gpu-eval` を要求したジョブだけがこの Runner に割り当てられ**、タグの無いジョブの割り当て・コンテナの設定は今と同じ | `untagged_job_never_assigned_to_gpu_runner`、`gpu_denied_on_untagged_runner`、`model_store_mounted_read_only`、`job_container_has_no_gpu`、`pod_still_network_none` | `ci-runner-security-reviewer`、`rust-reviewer` | P17-0 の後（C5s は済み） |
 | P17-2 | `feat/ci-ai-eval-check` | worker が成果物 `eval-report.json`（スキーマ固定）を読み、基準と比べて `forge/ai-eval` を書く（揺らぎの多数決、回帰、許す差、`error` の扱い）。MR に比較表。`forge/ai-eval` は HTTP から予約。`eval-report.json` を宣言したパイプラインだけで動く。ADR-0033 | `no_ai_eval_check_without_declared_report`、`regression_when_stable_case_drops`、`flaky_case_not_counted`、`missing_report_is_error_not_success`、`job_cannot_write_ai_eval` | `rust-reviewer`、`silent-failure-hunter` | P17-0 の後 |
-| P17-3 | `feat/core-ai-asset-lint` | 資産の lint（スキルの frontmatter、プレイブック ↔ スキル ↔ 許可リスト ↔ プロファイル、ケースの形と `provenance`、`latest` の拒否、リリースに `thresholds/` を入れない）を純粋な層に（forge-doc の doctype にするかは ADR-0033 で決める）。`gstn ai-asset lint`。`forge/risk` に `ai_case_raw_data`（`stop`）と `ai_asset`（`warn`）。プロジェクトの設定 `ai_assets.enabled`（既定 `false`、Maintainer 以上の人だけ、監査）を足し、lint と 2 つの規則は `true` のときだけ動く | `rules_silent_when_ai_assets_disabled`（`evals/`・`skills/` を持つ普通のリポジトリで何も出ない）、`ai_assets_setting_denied_for_bot`、`case_with_absolute_timestamp_stops`、`model_latest_rejected`、`playbook_unknown_skill_rejected`、`confidential_case_rejected` | `rust-reviewer`、`security-reviewer` | P17-0 の後 |
+| P17-3 | `feat/core-ai-asset-lint` | 資産の lint（スキルの frontmatter、プレイブック ↔ スキル ↔ 許可リスト ↔ プロファイル、ケースの形と `provenance`、`latest` の拒否、リリースに `thresholds/` を入れない）を純粋な層に（forge-doc の doctype にするかは ADR-0033 で決める）。`gstn ai-asset lint`。`forge/risk` に `ai_case_raw_data`（`stop`）と `ai_asset`（`warn`）。プロジェクトの設定 `ai_assets.enabled`（既定 `false`、Maintainer 以上の人だけ、監査）を足し、lint と 2 つの規則は `true` のときだけ動く | `rules_silent_when_ai_assets_disabled`（`evals/`・`skills/` を持つ普通のリポジトリで何も出ない）、`ai_assets_setting_denied_for_bot`、`ai_assets_setting_denied_for_agent_service_account_and_auto_merge`、`ai_assets_setting_denied_for_token_session`、`disable_keeps_past_releases`、`case_with_absolute_timestamp_stops`、`model_latest_rejected`、`playbook_unknown_skill_rejected`、`confidential_case_rejected` | `rust-reviewer`、`security-reviewer` | P17-0 の後 |
 | P17-4 [pfs-ai/assets] | `chore/ops-pfs-ai-assets-bootstrap` | グループとリポジトリ、保護ブランチ・保護パス・CODEOWNERS、`.forge-ci.yml`、`pe-*.md` 7 本と合成の安全のケースを移す | lint が緑、安全のケースが現行で緑 | `security-reviewer` | P17-1〜3 と PFS-0 の後 |
 | P17-5 | `feat/auth-pfs-ai-bot` | `pfs-ai-bot` の行（ボットのアカウント、`pfs-ai` グループの所属だけ、`improve/*` だけ、下書きだけ）。足りない deny の行 | `bot_denied_outside_pfs_ai_group`、`bot_cannot_mark_ready`、`bot_cannot_touch_protected_path`、`bot_branch_outside_improve_denied` | `authz-matrix-auditor`、`security-reviewer` | C9 の後 |
 | P17-6 | `feat/ci-ai-eval-nightly` | C12 の定期で夜間の全ケース、基準の候補の MR（人が承認） | `nightly_opens_one_baseline_mr` | `rust-reviewer` | C12 の後 |
@@ -347,6 +355,8 @@ GitStation の権限の形（ADR-0010、`authorize()` の 1 か所、権限の�
 M4E は使わない。計画 16 の A10（教訓の注入）とは別の道（こちらは製品の AI 資産、A10 は開発者の `.claude/`）。
 
 ### 7.2 PFS（**PFS の仕様の確定を待つ**。PFS-0 だけは未決「評価ベンチ」の答えなので先に始めてよい）
+
+PFS の仕様の変更は **PFS のリポジトリで別の段として行う**（この計画では書き換えない）。対象の節: マスター仕様 Part V §16-4（再現性と版の刻印）・§17.1（`te_ai_judgment_log` の列、PFS-1）・§17.4（戻り経路とケースの書き出し、PFS-3）・§18.2（モデルの昇格、§6）・§20（メタループと評価ベンチ、PFS-0）、分冊 36 §5.5〜5.6（スキルの正本の移転と資産レジストリの登録、PFS-5・8）・§6.4（改善要求と GitStation の MR、`applied_ref`、PFS-4）、`apps/iotpf-ai-service/references/decisions.md`（領域 model、PFS-0・6）。
 
 | # | 中身 | 依存 |
 |---|---|---|
@@ -382,13 +392,13 @@ P17-0 → (P17-1 ‖ P17-2 ‖ P17-3 ‖ PFS-0) → P17-4 → P17-8      … 段
 | 揺らぎで MR が赤くなり続ける | 多数決、不安定の一覧、許す差を 4 週で決め直す |
 | GPU の取り合い | Runner `gpu-eval` を分け、同時 1。本番の AI ノードではベンチを動かさない |
 
-**聞くこと（既定で進める）**
+**決定（2026-11-13、利用者の決定「この計画で進めて」。5 つとも既定どおり）**
 
-1. 評価用の GPU: この開発サーバーの GPU を `gpu-eval` の Runner にしてよいか。**既定: はい**（Kanflow の Ollama とは時間で分け、夜間に全ケース）。
-2. 自動の戻し: 本番（全体）でも、直前に承認された版へは人の承認なしに戻してよいか（CLAUDE.md 契約 7 の「承認済みの runbook の手順」として）。**既定: はい**。
-3. スキルの正本: `pe-*.md` を GitStation に移し、PFS のリポジトリ（社内 GitLab）からは参照だけにするか。**既定: 移す**（GitLab への鏡は不要）。
-4. スキルの数値の変更に製造の技術者の承認を必須にするか。**既定: 必須**（frontmatter の `reviewer`）。
-5. 周期: 週 1 回のリリース（水曜）。**既定: はい**。
+1. 評価用の GPU: この開発サーバーの GPU を `gpu-eval` の Runner にしてよいか。**決定: はい**（Kanflow の Ollama とは時間で分け、夜間に全ケース）。
+2. 自動の戻し: 本番（全体）でも、直前に承認された版へは人の承認なしに戻してよいか（CLAUDE.md 契約 7 の「承認済みの runbook の手順」として）。**決定: はい**。
+3. スキルの正本: `pe-*.md` を GitStation に移し、PFS のリポジトリ（社内 GitLab）からは参照だけにするか。**決定: 移す**（GitLab への鏡は不要）。
+4. スキルの数値の変更に製造の技術者の承認を必須にするか。**決定: 必須**（frontmatter の `reviewer`）。
+5. 周期: 週 1 回のリリース（水曜）。**決定: はい**。
 
 ## 9. 既存の機能への影響
 
