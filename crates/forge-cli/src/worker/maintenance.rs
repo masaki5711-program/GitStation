@@ -472,7 +472,10 @@ impl Inner {
         if let Err(e) = self.prune_pipeline_refs(repo, deadline, request_id).await {
             return failed(e, ok);
         }
-        if let Err(e) = self.prune_merge_queue_refs(repo, deadline, request_id).await {
+        if let Err(e) = self
+            .prune_merge_queue_refs(repo, deadline, request_id)
+            .await
+        {
             return failed(e, ok);
         }
         let skipped_step = match self.pack_refs(repo, deadline, request_id).await {

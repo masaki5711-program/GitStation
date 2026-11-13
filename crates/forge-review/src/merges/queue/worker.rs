@@ -545,13 +545,40 @@ impl MergeQueue {
             .filter(|e| e.state == EntryState::Testing)
             .collect();
         if testing.len() != batch.size {
-            return self.abandon(batch, BatchState::Testing, "entry_left", Vec::new(), None, None).await;
+            return self
+                .abandon(
+                    batch,
+                    BatchState::Testing,
+                    "entry_left",
+                    Vec::new(),
+                    None,
+                    None,
+                )
+                .await;
         }
         let Some(first) = testing.first() else {
-            return self.abandon(batch, BatchState::Testing, "entry_left", Vec::new(), None, None).await;
+            return self
+                .abandon(
+                    batch,
+                    BatchState::Testing,
+                    "entry_left",
+                    Vec::new(),
+                    None,
+                    None,
+                )
+                .await;
         };
         let Some(repo) = self.repo_of(first).await? else {
-            return self.abandon(batch, BatchState::Testing, "project_gone", Vec::new(), None, None).await;
+            return self
+                .abandon(
+                    batch,
+                    BatchState::Testing,
+                    "project_gone",
+                    Vec::new(),
+                    None,
+                    None,
+                )
+                .await;
         };
         let mut gone = Vec::new();
         for entry in &testing {
@@ -572,12 +599,28 @@ impl MergeQueue {
             }
         }
         if !gone.is_empty() {
-            return self.abandon(batch, BatchState::Testing, "entry_left", gone, None, Some(repo)).await;
+            return self
+                .abandon(
+                    batch,
+                    BatchState::Testing,
+                    "entry_left",
+                    gone,
+                    None,
+                    Some(repo),
+                )
+                .await;
         }
         let tip = self.read_tip(repo, &claimed.queue.target_branch).await?;
         if tip.as_ref() != Some(&batch.base_sha) {
             return self
-                .abandon(batch, BatchState::Testing, "target_moved", Vec::new(), None, Some(repo))
+                .abandon(
+                    batch,
+                    BatchState::Testing,
+                    "target_moved",
+                    Vec::new(),
+                    None,
+                    Some(repo),
+                )
                 .await;
         }
         let verdict =
@@ -701,7 +744,12 @@ impl MergeQueue {
         let deleted = self
             .merger
             .git
-            .delete_merge_queue_refs(&self.merger.storage, repo, &gone, self.merger.timeouts.update_ref)
+            .delete_merge_queue_refs(
+                &self.merger.storage,
+                repo,
+                &gone,
+                self.merger.timeouts.update_ref,
+            )
             .await;
         if let Err(e) = deleted {
             // Moved by the next train, or already gone: nothing to do; any
@@ -870,7 +918,14 @@ impl MergeQueue {
         let tip = self.read_tip(repo, target).await?;
         if tip.as_ref() != Some(&batch.base_sha) {
             return self
-                .abandon(batch, BatchState::Testing, "target_moved", Vec::new(), None, Some(repo))
+                .abandon(
+                    batch,
+                    BatchState::Testing,
+                    "target_moved",
+                    Vec::new(),
+                    None,
+                    Some(repo),
+                )
                 .await;
         }
         if !db::begin_landing(&self.merger.db, batch.id).await? {
@@ -913,8 +968,15 @@ impl MergeQueue {
                             )
                             .await;
                     }
-                    self.abandon(batch, BatchState::Landing, "landing_failed", Vec::new(), None, Some(repo))
-                        .await?;
+                    self.abandon(
+                        batch,
+                        BatchState::Landing,
+                        "landing_failed",
+                        Vec::new(),
+                        None,
+                        Some(repo),
+                    )
+                    .await?;
                     return Err(refusal);
                 }
             }
@@ -923,8 +985,15 @@ impl MergeQueue {
         // train exactly, or the target would move to something else.
         if prev != batch.train_sha {
             self.end_attempts(&decided, "queue_rebuild").await;
-            self.abandon(batch, BatchState::Landing, "train_mismatch", Vec::new(), None, Some(repo))
-                .await?;
+            self.abandon(
+                batch,
+                BatchState::Landing,
+                "train_mismatch",
+                Vec::new(),
+                None,
+                Some(repo),
+            )
+            .await?;
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "merge_queue_train_mismatch")
                 .with_context("queue_batch_id", batch.id)
@@ -936,14 +1005,28 @@ impl MergeQueue {
             if !merges::fence_merge(&self.merger.db, attempt.id).await? {
                 self.end_attempts(&decided, "queue_rebuild").await;
                 return self
-                    .abandon(batch, BatchState::Landing, "landing_raced", Vec::new(), None, Some(repo))
+                    .abandon(
+                        batch,
+                        BatchState::Landing,
+                        "landing_raced",
+                        Vec::new(),
+                        None,
+                        Some(repo),
+                    )
                     .await;
             }
         }
         if let Err(e) = lock.alive().await {
             self.end_attempts(&decided, "queue_rebuild").await;
-            self.abandon(batch, BatchState::Landing, "landing_failed", Vec::new(), None, Some(repo))
-                .await?;
+            self.abandon(
+                batch,
+                BatchState::Landing,
+                "landing_failed",
+                Vec::new(),
+                None,
+                Some(repo),
+            )
+            .await?;
             return Err(e);
         }
         let change = RefChange::Update {
@@ -968,8 +1051,15 @@ impl MergeQueue {
                 } else {
                     "target_moved"
                 };
-                self.abandon(batch, BatchState::Landing, reason, Vec::new(), None, Some(repo))
-                    .await?;
+                self.abandon(
+                    batch,
+                    BatchState::Landing,
+                    reason,
+                    Vec::new(),
+                    None,
+                    Some(repo),
+                )
+                .await?;
                 if reason == "target_moved" {
                     return Ok("abandoned");
                 }
@@ -1157,12 +1247,26 @@ impl MergeQueue {
         let entries = db::batch_entries(&self.merger.db, batch.id).await?;
         let Some(first) = entries.first() else {
             return self
-                .abandon(batch, BatchState::Landing, "entry_left", Vec::new(), None, None)
+                .abandon(
+                    batch,
+                    BatchState::Landing,
+                    "entry_left",
+                    Vec::new(),
+                    None,
+                    None,
+                )
                 .await;
         };
         let Some(repo) = self.repo_of(first).await? else {
             return self
-                .abandon(batch, BatchState::Landing, "project_gone", Vec::new(), None, None)
+                .abandon(
+                    batch,
+                    BatchState::Landing,
+                    "project_gone",
+                    Vec::new(),
+                    None,
+                    None,
+                )
                 .await;
         };
         let lock = match merges::try_lock_merges(&self.merger.db, repo).await? {
@@ -1224,8 +1328,15 @@ impl MergeQueue {
             } else {
                 "target_moved"
             };
-            self.abandon(batch, BatchState::Landing, reason, Vec::new(), None, Some(repo))
-                .await?;
+            self.abandon(
+                batch,
+                BatchState::Landing,
+                reason,
+                Vec::new(),
+                None,
+                Some(repo),
+            )
+            .await?;
             return Ok("recovered");
         }
         self.merger.invalidate(repo);

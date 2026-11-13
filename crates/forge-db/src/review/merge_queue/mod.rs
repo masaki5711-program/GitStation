@@ -973,9 +973,7 @@ pub struct BatchEnd {
 /// not in `end.from` any more (another worker moved it).
 pub async fn end_batch(db: &Db, batch: i64, end: &BatchEnd) -> Result<bool, ForgeError> {
     const QUERY: &str = "merge_queue.end_batch";
-    if !matches!(end.state, BatchState::Failed | BatchState::Abandoned)
-        || !end.from.is_live()
-    {
+    if !matches!(end.state, BatchState::Failed | BatchState::Abandoned) || !end.from.is_live() {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "merge_queue_batch_end_not_final")
             .with_context("state", end.state.as_str()));

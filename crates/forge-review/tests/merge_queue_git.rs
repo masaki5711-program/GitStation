@@ -514,8 +514,15 @@ async fn a_green_batch_of_four_lands_with_one_compare_and_swap() {
 #[tokio::test]
 async fn a_testing_train_is_pinned_by_its_hidden_ref() {
     let mut w = world().await;
-    let a = w.mr("fa", &[("fa.txt", "x
-")]).await;
+    let a = w
+        .mr(
+            "fa",
+            &[(
+                "fa.txt", "x
+",
+            )],
+        )
+        .await;
     w.enqueue(&a).await.expect("enqueue");
     let built = w.worker("w1").tick().await.expect("tick").expect("built");
     let batch = qdb::batch(&w.t.db, built.batch_id.expect("id"))
@@ -924,10 +931,24 @@ async fn the_queue_view_lists_entries_in_order() {
 #[tokio::test]
 async fn a_landing_batch_is_neither_dequeued_nor_ended_by_a_stale_worker() {
     let mut w = world().await;
-    let a = w.mr("fa", &[("fa.txt", "x
-")]).await;
-    let b = w.mr("fb", &[("fb.txt", "x
-")]).await;
+    let a = w
+        .mr(
+            "fa",
+            &[(
+                "fa.txt", "x
+",
+            )],
+        )
+        .await;
+    let b = w
+        .mr(
+            "fb",
+            &[(
+                "fb.txt", "x
+",
+            )],
+        )
+        .await;
     w.enqueue(&a).await.expect("enqueue");
     w.enqueue(&b).await.expect("enqueue");
     let dying = w.worker("dying").with_crash_after_cas();
@@ -961,9 +982,16 @@ async fn a_landing_batch_is_neither_dequeued_nor_ended_by_a_stale_worker() {
         reaped: false,
         batch_limit: None,
     };
-    assert!(!qdb::end_batch(&w.t.db, batch_id, &stale).await.expect("end"));
+    assert!(!qdb::end_batch(&w.t.db, batch_id, &stale)
+        .await
+        .expect("end"));
     // The recovery records both.
-    let recovered = w.worker("restarted").tick().await.expect("tick").expect("due");
+    let recovered = w
+        .worker("restarted")
+        .tick()
+        .await
+        .expect("tick")
+        .expect("due");
     assert_eq!(recovered.outcome, "recovered");
     for mr in [&a, &b] {
         assert_eq!(w.entry_of(mr).await.state, EntryState::Merged);
@@ -977,8 +1005,15 @@ async fn a_landing_batch_is_neither_dequeued_nor_ended_by_a_stale_worker() {
 #[tokio::test]
 async fn a_protected_target_refuses_a_landing_below_its_role() {
     let mut w = world().await;
-    let a = w.mr("fa", &[("fa.txt", "x
-")]).await;
+    let a = w
+        .mr(
+            "fa",
+            &[(
+                "fa.txt", "x
+",
+            )],
+        )
+        .await;
     w.enqueue(&a).await.expect("enqueue");
     forge_db::protected_refs::create(
         &w.t.db,
@@ -1000,8 +1035,15 @@ async fn a_protected_target_refuses_a_landing_below_its_role() {
 #[tokio::test]
 async fn a_queued_merge_request_cannot_be_merged_by_hand() {
     let mut w = world().await;
-    let a = w.mr("fa", &[("fa.txt", "x
-")]).await;
+    let a = w
+        .mr(
+            "fa",
+            &[(
+                "fa.txt", "x
+",
+            )],
+        )
+        .await;
     w.enqueue(&a).await.expect("enqueue");
     let proof = w
         .mr_proof(&session(w.dev), Action::MergeRequestMerge, &a)
