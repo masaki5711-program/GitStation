@@ -36,6 +36,16 @@
 - **GitStation は「資産の正本・確認・評価の実行・署名・配布」を持ち、PFS は「判断・記録・フィードバック・ベンチの中身（推論のコード）」を持つ**。評価ベンチの採点のコードは PFS の `iotpf-ai-service` と同じものでなければ意味がない。GitStation は GPU の Runner と結果の判定・報告だけを作る。
 - **しきい値・データの不足・道具の不足・新しい指標は AI 資産の変更ではない**。このサイクルでは扱いを分け（§1.3）、リポジトリには「提案」しか入れない。
 - エッジの配布（M4E）は数千台向けで、AI ノードは数台。**配布は C11（承認付きの SSH デプロイ）を使い、M4E は使わない**。
+- **GitStation 側の変更はすべて選んだリポジトリだけに効く（オプトイン）**。ほかのリポジトリの動きは何も変えない（§9）。
+
+### 0.4 オプトインの印 — プロジェクトの設定 `ai_assets.enabled`
+
+| 案 | 判断 |
+|---|---|
+| リポジトリの中の印のファイル `.gitstation/ai-assets.toml` | `.gitstation/**` を変える MR は既に `forge/risk` の `agent_config`（`stop`）に当たる（ADR-0017 Amendment 2026-11-12）。また MR 1 本で誰でも規則を外せてしまう |
+| **プロジェクトの設定 `ai_assets.enabled`（採用）** | DB のプロジェクトの設定（既定 `false`）。変えられるのは `native_role` で Maintainer 以上の人だけ（エージェント・ボット・サービスアカウントは不可）、監査に残す。`true` にするのは `pfs-ai/assets` だけ |
+
+`false` のプロジェクトでは、§1.7 の規則 `ai_case_raw_data`・`ai_asset`、P17-3 の lint、`forge/ai-eval` の判定は **呼ばれもしない**（判定の入口で設定を見て、何も出さない）。
 
 ## 1. サイクルの全体
 
@@ -144,6 +154,7 @@ AI 資産でない出口でも、**再現ケースは作る**（⑥）。道具�
 5. ベンチが動かなかった・GPU が無い・基準が無い → **`error`**（成功にしない。§5.4）。
 
 ジョブはチェックを書けない（ADR-0029 #8）。ジョブは成果物 `eval-report.json` を残し、**forge の worker が読んで基準と比べ `forge/ai-eval` を書く**（`ci/pipeline` と同じ形）。
+**`forge/ai-eval` を出すのは、`.forge-ci.yml` のジョブが成果物 `eval-report.json` を宣言しているパイプラインだけ**。宣言の無いパイプライン（ほぼすべてのリポジトリ）にはチェックの行そのものが現れず、必須のチェックにもならない。宣言があるのに成果物が無いときだけ `error`。
 
 ### 1.7 確認と承認（⑩⑪）
 
@@ -158,6 +169,7 @@ AI 資産でない出口でも、**再現ケースは作る**（⑥）。道具�
 | 生データらしい内容を含むケース | `forge/risk` の `stop`（既存の 3 つ目の分類「機密の流出」に規則 `ai_case_raw_data` を足す） | 流出は戻せない |
 
 **新しい `stop` の分類は足さない**（4 つのままにする）。「人が必ず見る」は保護パスと CODEOWNERS で足り、`forge/risk` の規則 `ai_asset` は `warn`（MR と Kanflow に「AI 資産の変更」と出すだけ）。
+**`ai_case_raw_data` と `ai_asset` は `ai_assets.enabled = true` のプロジェクトだけで動く**（§0.4）。普通の開発・仕様のリポジトリにある `evals/` や `skills/` という名前のディレクトリには当たらない。
 
 ### 1.8 リリース（⑫）
 
@@ -229,7 +241,7 @@ GitStation の権限の形（ADR-0010、`authorize()` の 1 か所、権限の�
 | PFS の editor | `pfs-ai` の Developer | ブランチ・MR・準備完了・スキルとケースの編集 | 保護パスの承認、リリース・デプロイの承認 |
 | PFS の approver | `pfs-ai` の Maintainer | 保護パスの承認、基準の承認、リリースの切り出し、`DeployApprove`（影・カナリア・全体） | 自分の MR の承認（自己承認の禁止） |
 | スキルの reviewer（製造の技術者） | Reporter + CODEOWNERS の個人 | 自分の分野のスキルの承認（Web の画面だけで済む） | 編集・マージ |
-| `pfs-ai-bot`（PFS の連携のサービスアカウント） | エージェントの相手 | `improve/*` のブランチ作成と push、**下書きの MR** の作成、MR へのコメント | 準備完了・承認・マージ・保護パス・リリース・デプロイ・ほかのリポジトリ |
+| `pfs-ai-bot`（PFS の連携の **ボットのアカウント**。所属は `pfs-ai` グループだけ） | エージェントの相手。グループの外のプロジェクトは見えない（404） | `improve/*` のブランチ作成と push、**下書きの MR** の作成、MR へのコメント | 準備完了・承認・マージ・保護パス・リリース・デプロイ・ほかのリポジトリ |
 | CI の Job（`gpu-eval`） | ADR-0029 の Job | 自分の SHA の複製、成果物の保存 | チェックの報告、push、ほかの全部 |
 | forge の worker | system | `forge/ai-eval` の書き込み、署名 | — |
 | PFS のローダー（AI ノード） | 読み取りだけのトークン | 承認されたリリースの取得、公開鍵の取得 | 書き込みすべて |
@@ -321,11 +333,11 @@ GitStation の権限の形（ADR-0010、`authorize()` の 1 か所、権限の�
 | # | ブランチ | 中身 | 先に書くテスト（例） | 評価役 | 着手 |
 |---|---|---|---|---|---|
 | P17-0 [root] | `chore/harness-p17-ai-asset-area` | 領域 `AIASSET`、`ci-runner-security-reviewer` に GPU とモデル置き場の観点と eval | eval `gpu-service-gets-network`、`model-store-writable` | `harness-optimizer` | 今すぐ |
-| P17-1 | `feat/ci-runner-gpu-model-store` | Runner のホストの設定で、タグ `gpu-eval` の Runner だけが **サービスのコンテナ** に GPU（CDI）とモデル置き場（読み取りだけ、ダイジェストの確かめ）を渡す。`.forge-ci.yml` からは要求するだけで、パスは書けない | `gpu_denied_on_untagged_runner`、`model_store_mounted_read_only`、`job_container_has_no_gpu`、`pod_still_network_none` | `ci-runner-security-reviewer`、`rust-reviewer` | P17-0 の後（C5s は済み） |
-| P17-2 | `feat/ci-ai-eval-check` | worker が成果物 `eval-report.json`（スキーマ固定）を読み、基準と比べて `forge/ai-eval` を書く（揺らぎの多数決、回帰、許す差、`error` の扱い）。MR に比較表。`forge/ai-eval` は HTTP から予約。ADR-0033 | `regression_when_stable_case_drops`、`flaky_case_not_counted`、`missing_report_is_error_not_success`、`job_cannot_write_ai_eval` | `rust-reviewer`、`silent-failure-hunter` | P17-0 の後 |
-| P17-3 | `feat/core-ai-asset-lint` | 資産の lint（スキルの frontmatter、プレイブック ↔ スキル ↔ 許可リスト ↔ プロファイル、ケースの形と `provenance`、`latest` の拒否、リリースに `thresholds/` を入れない）を純粋な層に（forge-doc の doctype にするかは ADR-0033 で決める）。`gstn ai-asset lint`。`forge/risk` に `ai_case_raw_data`（`stop`）と `ai_asset`（`warn`） | `case_with_absolute_timestamp_stops`、`model_latest_rejected`、`playbook_unknown_skill_rejected`、`confidential_case_rejected` | `rust-reviewer`、`security-reviewer` | P17-0 の後 |
+| P17-1 | `feat/ci-runner-gpu-model-store` | Runner のホストの設定で、タグ `gpu-eval` の Runner だけが **サービスのコンテナ** に GPU（CDI）とモデル置き場（読み取りだけ、ダイジェストの確かめ）を渡す。`.forge-ci.yml` からは要求するだけで、パスは書けない。**タグ `gpu-eval` を要求したジョブだけがこの Runner に割り当てられ**、タグの無いジョブの割り当て・コンテナの設定は今と同じ | `untagged_job_never_assigned_to_gpu_runner`、`gpu_denied_on_untagged_runner`、`model_store_mounted_read_only`、`job_container_has_no_gpu`、`pod_still_network_none` | `ci-runner-security-reviewer`、`rust-reviewer` | P17-0 の後（C5s は済み） |
+| P17-2 | `feat/ci-ai-eval-check` | worker が成果物 `eval-report.json`（スキーマ固定）を読み、基準と比べて `forge/ai-eval` を書く（揺らぎの多数決、回帰、許す差、`error` の扱い）。MR に比較表。`forge/ai-eval` は HTTP から予約。`eval-report.json` を宣言したパイプラインだけで動く。ADR-0033 | `no_ai_eval_check_without_declared_report`、`regression_when_stable_case_drops`、`flaky_case_not_counted`、`missing_report_is_error_not_success`、`job_cannot_write_ai_eval` | `rust-reviewer`、`silent-failure-hunter` | P17-0 の後 |
+| P17-3 | `feat/core-ai-asset-lint` | 資産の lint（スキルの frontmatter、プレイブック ↔ スキル ↔ 許可リスト ↔ プロファイル、ケースの形と `provenance`、`latest` の拒否、リリースに `thresholds/` を入れない）を純粋な層に（forge-doc の doctype にするかは ADR-0033 で決める）。`gstn ai-asset lint`。`forge/risk` に `ai_case_raw_data`（`stop`）と `ai_asset`（`warn`）。プロジェクトの設定 `ai_assets.enabled`（既定 `false`、Maintainer 以上の人だけ、監査）を足し、lint と 2 つの規則は `true` のときだけ動く | `rules_silent_when_ai_assets_disabled`（`evals/`・`skills/` を持つ普通のリポジトリで何も出ない）、`ai_assets_setting_denied_for_bot`、`case_with_absolute_timestamp_stops`、`model_latest_rejected`、`playbook_unknown_skill_rejected`、`confidential_case_rejected` | `rust-reviewer`、`security-reviewer` | P17-0 の後 |
 | P17-4 [pfs-ai/assets] | `chore/ops-pfs-ai-assets-bootstrap` | グループとリポジトリ、保護ブランチ・保護パス・CODEOWNERS、`.forge-ci.yml`、`pe-*.md` 7 本と合成の安全のケースを移す | lint が緑、安全のケースが現行で緑 | `security-reviewer` | P17-1〜3 と PFS-0 の後 |
-| P17-5 | `feat/auth-pfs-ai-bot` | `pfs-ai-bot` の行（`improve/*` だけ、下書きだけ）。足りない deny の行 | `bot_cannot_mark_ready`、`bot_cannot_touch_protected_path`、`bot_branch_outside_improve_denied` | `authz-matrix-auditor`、`security-reviewer` | C9 の後 |
+| P17-5 | `feat/auth-pfs-ai-bot` | `pfs-ai-bot` の行（ボットのアカウント、`pfs-ai` グループの所属だけ、`improve/*` だけ、下書きだけ）。足りない deny の行 | `bot_denied_outside_pfs_ai_group`、`bot_cannot_mark_ready`、`bot_cannot_touch_protected_path`、`bot_branch_outside_improve_denied` | `authz-matrix-auditor`、`security-reviewer` | C9 の後 |
 | P17-6 | `feat/ci-ai-eval-nightly` | C12 の定期で夜間の全ケース、基準の候補の MR（人が承認） | `nightly_opens_one_baseline_mr` | `rust-reviewer` | C12 の後 |
 | P17-7 | `feat/deploy-pfs-ai-bundle` | 種類 `pfs-ai-bundle` のリリース（タグ → マニフェスト → A1 の署名）、C11 の環境 3 つ、直前の承認済みへの戻し、`gstn ai-asset release` | `bundle_signed_only_when_bench_green`、`moved_tag_has_no_effect`、`prod_approve_denied_for_bot`、`rollback_targets_last_approved` | `deploy-safety-reviewer`、`security-reviewer` | A1・A5・C11 の後 |
 | P17-8 | `docs/ops-pfs-ai-runbooks` | §5.3 の runbook、doctor `ai_eval.runner`・`ai_eval.baseline_age` | — | `error-contract-auditor` | P17-2 と同時 |
@@ -377,3 +389,26 @@ P17-0 → (P17-1 ‖ P17-2 ‖ P17-3 ‖ PFS-0) → P17-4 → P17-8      … 段
 3. スキルの正本: `pe-*.md` を GitStation に移し、PFS のリポジトリ（社内 GitLab）からは参照だけにするか。**既定: 移す**（GitLab への鏡は不要）。
 4. スキルの数値の変更に製造の技術者の承認を必須にするか。**既定: 必須**（frontmatter の `reviewer`）。
 5. 周期: 週 1 回のリリース（水曜）。**既定: はい**。
+
+## 9. 既存の機能への影響
+
+**この計画は、`ai_assets.enabled = true` にしたプロジェクト（`pfs-ai/assets`）の外の動きを何も変えない。**
+
+| 既存の機能 | 変わるか | 理由 |
+|---|---|---|
+| システム開発の MR・承認・CODEOWNERS・保護パス | 変わらない | 既存の仕組みを `pfs-ai/assets` の設定として使うだけ |
+| CI（`.forge-ci.yml`、`ci/pipeline`、Runner の割り当て、ジョブのコンテナ） | 変わらない | `gpu-eval` は要求したジョブだけ。`forge/ai-eval` は `eval-report.json` を宣言したパイプラインだけ |
+| 自動マージ（既定 `full`）と `stop` の分類 | 変わらない。**`stop` の分類は 4 つのまま** | `ai_case_raw_data` は 3 つ目（流出）の中の規則で、オプトインのプロジェクトだけ。`ai_asset` は `warn` |
+| デプロイ（C11、prod は人の承認、凍結、戻し） | 変わらない | 環境 3 つを `pfs-ai/assets` に足すだけ |
+| 仕様・文書のリポジトリ（doctype、`forge/doc-lint`、`forge/spec-lint`、`forge/spec-trace`、`forge/spec-drift`） | 変わらない | AI 資産の lint は別の入口で、オプトインのときだけ呼ぶ |
+| 既存の API・`gstn` のコマンド | 変わらない | 足すのは `gstn ai-asset …` と新しいルートだけ（どれも権限の表に行） |
+| 権限の表の既存の行 | 変わらない | 行を足すだけ（`pfs-ai-bot`、設定の変更、リリース） |
+
+**ほかのプロジェクトでも使える汎用の部品**（PFS 専用にしない）:
+
+| 部品 | 使い道 |
+|---|---|
+| GPU の Runner のタグとモデル置き場（P17-1） | ほかの社内アプリの LLM・ML の評価や推論の試験 |
+| 評価のチェックの報告者（P17-2、`eval-report.json` の形と基準との比較） | プロンプトやモデルを持つどのリポジトリでも、宣言すれば使える |
+| 署名付きリリースの種類（P17-7、A1 の鍵と要約） | 種類を足せば、設定やモデルの束を署名して配る用途に使える |
+| グループに閉じたボットのアカウント（P17-5、下書きの MR だけ） | 外のシステムから改善の下書きを出す連携の型 |
