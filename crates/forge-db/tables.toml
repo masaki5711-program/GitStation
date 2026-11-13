@@ -167,6 +167,8 @@ txn_audited_columns = []
 # ── end D1 ──
 
 # ── D2: groups and their members (ADR-0010, ADR-0016 §1) ──
+# Plan 15 MR2: visibility (private / internal) is audited like the other
+# columns (20261214101500 re-creates the trigger).
 [tables.groups]
 guarded = false
 kind = "audited"
