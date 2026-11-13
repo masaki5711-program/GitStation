@@ -6013,8 +6013,8 @@
         "description": "One merge request as the API shows it.",
         "properties": {
           "author": {
-            "$ref": "#/components/schemas/UserNameBody",
-            "description": "The author's names (read with the merge request)."
+            "$ref": "#/components/schemas/MergeRequestPersonBody",
+            "description": "The author (read with the merge request); `employee_number` only on\nthe list and the detail, for a token holding `user_employee_number`."
           },
           "author_id": {
             "format": "int64",
@@ -6057,6 +6057,17 @@
             "minimum": 1,
             "type": "integer"
           },
+          "merged_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MergeRequestPersonBody",
+                "description": "Who merged it (the applied merge's requester); `null` unless merged."
+              }
+            ]
+          },
           "project_id": {
             "format": "int64",
             "minimum": 1,
@@ -6091,6 +6102,7 @@
           "target_branch",
           "author_id",
           "author",
+          "merged_by",
           "created_at",
           "updated_at"
         ],
@@ -6135,6 +6147,36 @@
         },
         "required": [
           "merge_requests"
+        ],
+        "type": "object"
+      },
+      "MergeRequestPersonBody": {
+        "additionalProperties": false,
+        "description": "A person a merge request names, in the development status's shape\n(`docs/api/dev-status.md`): no employee number without the caller's\n`user_employee_number` scope (a browser session never sees one).",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "employee_number": {
+            "description": "Only for a token holding `user_employee_number` (absent otherwise,\nand for a person without one).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
         ],
         "type": "object"
       },

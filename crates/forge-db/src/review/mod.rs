@@ -189,12 +189,30 @@ pub struct StoredMergeRequest {
     pub updated_at: String,
     pub closed_at: Option<String>,
     pub closed_by: Option<UserId>,
+    /// Who requested the applied merge (the newest applied attempt); `None`
+    /// unless the state is `merged` (or no attempt was recorded).
+    pub merged_by: Option<UserId>,
+    /// The merger's names, read with the row like the author's.
+    pub merged_by_name: Option<UserName>,
+}
+
+/// The requester of the row's newest applied merge attempt, only while the
+/// row is `merged`: a scalar sub-select, valid in `RETURNING` too.
+macro_rules! merger {
+    () => {
+        "(SELECT g.requested_by FROM forge.merge_request_merges g \
+         WHERE g.merge_request_id = merge_requests.id AND g.state = 'applied' \
+         AND merge_requests.state = 'merged' \
+         ORDER BY g.finished_at DESC NULLS LAST, g.id DESC LIMIT 1)"
+    };
 }
 
 /// The columns of [`StoredMergeRequest`], in the order of [`Row`]; the
 /// author's names are the sub-selects of [`user_name_columns`] (spelled
-/// out so this stays a constant), valid in `RETURNING` too.
-pub(crate) const COLUMNS: &str = "id, project_id, iid, title, description, author_id, \
+/// out so this stays a constant), valid in `RETURNING` too; the merger and
+/// its names are sub-selects of [`merger!`] (one statement, no N+1).
+pub(crate) const COLUMNS: &str = concat!(
+    "id, project_id, iid, title, description, author_id, \
      (SELECT u.username FROM forge.users u WHERE u.id = merge_requests.author_id) \
      AS author_username, \
      (SELECT u.display_name FROM forge.users u WHERE u.id = merge_requests.author_id) \
@@ -203,7 +221,14 @@ pub(crate) const COLUMNS: &str = "id, project_id, iid, title, description, autho
      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
      to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at, \
      to_char(closed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS closed_at, \
-     closed_by";
+     closed_by, ",
+    merger!(),
+    " AS merged_by, (SELECT u.username FROM forge.users u WHERE u.id = ",
+    merger!(),
+    ") AS merged_by_username, (SELECT u.display_name FROM forge.users u WHERE u.id = ",
+    merger!(),
+    ") AS merged_by_display_name"
+);
 
 /// One row as read with [`COLUMNS`].
 #[derive(sqlx::FromRow)]
@@ -226,6 +251,9 @@ pub(crate) struct Row {
     updated_at: String,
     closed_at: Option<String>,
     closed_by: Option<i64>,
+    merged_by: Option<i64>,
+    merged_by_username: Option<String>,
+    merged_by_display_name: Option<String>,
 }
 
 /// `FG-SYS-0001 reason=<reason>` for a stored value this build cannot read
@@ -270,6 +298,17 @@ impl Row {
             updated_at: self.updated_at,
             closed_at: self.closed_at,
             closed_by: self.closed_by.map(UserId::new),
+            merged_by: self.merged_by.map(UserId::new),
+            merged_by_name: match self.merged_by {
+                None => None,
+                Some(_) => Some(user_name(
+                    self.merged_by_username,
+                    self.merged_by_display_name,
+                    "stored_merger_missing",
+                    "merge_request_id",
+                    id,
+                )?),
+            },
         })
     }
 }
