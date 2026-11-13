@@ -85,10 +85,10 @@ pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
     AssertionFacts, AssertionSubject, BindingSubject, CodeownersToggle, CopyMark, Credential,
     IntegrationFeedView, JobCredential, JobTokenState, MembershipChange, MembershipScope,
-    MergeRequestEdit, MergeRequestState, NamespaceView, PinnedCopy, Principal, ProjectView,
-    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob,
-    Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView,
-    Visibility,
+    MergeRequestEdit, MergeRequestState, NamespaceView, PersonalDisclosure, PinnedCopy, Principal,
+    ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential,
+    RunnerJob, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
+    ViaView, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,

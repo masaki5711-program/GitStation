@@ -34,7 +34,7 @@
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use forge_auth::{MergeRequestCtx, ProjectCtx};
+use forge_auth::{MergeRequestCtx, Principal, ProjectCtx};
 use forge_core::{
     parse_positive_id, MergeRequestState, ProjectId, ProjectRepository, RefName, UserId,
 };
@@ -224,6 +224,33 @@ impl From<UserName> for UserNameBody {
     }
 }
 
+/// A person a merge request names, in the development status's shape
+/// (`docs/api/dev-status.md`): no employee number without the caller's
+/// `user_employee_number` scope (a browser session never sees one).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MergeRequestPersonBody {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    pub username: String,
+    pub display_name: String,
+    /// Only for a token holding `user_employee_number` (absent otherwise,
+    /// and for a person without one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub employee_number: Option<String>,
+}
+
+impl MergeRequestPersonBody {
+    fn of(id: UserId, name: &UserName) -> Self {
+        Self {
+            id: id.get(),
+            username: name.username.clone(), // clone: the row is borrowed
+            display_name: name.display_name.clone(),
+            employee_number: None,
+        }
+    }
+}
+
 // Built only by `body_of`; its doc comment is the schema description.
 /// One merge request as the API shows it.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -244,8 +271,12 @@ pub struct MergeRequestBody {
     pub target_branch: String,
     #[schema(minimum = 1)]
     pub author_id: i64,
-    /// The author's names (read with the merge request).
-    pub author: UserNameBody,
+    /// The author (read with the merge request); `employee_number` only on
+    /// the list and the detail, for a token holding `user_employee_number`.
+    pub author: MergeRequestPersonBody,
+    /// Who merged it (the applied merge's requester); `null` unless merged.
+    #[schema(required = true)]
+    pub merged_by: Option<MergeRequestPersonBody>,
     /// The head commit of the latest version (`null` until versions are
     /// recorded).
     pub head_sha: Option<String>,
@@ -280,13 +311,40 @@ pub(crate) fn body_of(mr: &StoredMergeRequest) -> MergeRequestBody {
         source_branch: short(&mr.source_branch),
         target_branch: short(&mr.target_branch),
         author_id: mr.author.get(),
-        author: mr.author_name.clone().into(), // clone: the row is borrowed
+        author: MergeRequestPersonBody::of(mr.author, &mr.author_name),
+        merged_by: mr
+            .merged_by
+            .zip(mr.merged_by_name.as_ref())
+            .map(|(id, name)| MergeRequestPersonBody::of(id, name)),
         head_sha: mr.head_sha.clone(),
         created_at: mr.created_at.clone(),
         updated_at: mr.updated_at.clone(),
         closed_at: mr.closed_at.clone(),
         closed_by: mr.closed_by.map(UserId::get),
     }
+}
+
+/// The people of `rows` (authors and mergers), for
+/// [`Review::employee_numbers`].
+fn people(rows: &[StoredMergeRequest]) -> Vec<UserId> {
+    rows.iter()
+        .flat_map(|mr| [Some(mr.author), mr.merged_by])
+        .flatten()
+        .collect()
+}
+
+/// `body` with the employee numbers the caller may see (an empty map: none).
+fn with_numbers(
+    mut body: MergeRequestBody,
+    numbers: &std::collections::BTreeMap<UserId, String>,
+) -> MergeRequestBody {
+    for person in [Some(&mut body.author), body.merged_by.as_mut()]
+        .into_iter()
+        .flatten()
+    {
+        person.employee_number = numbers.get(&UserId::new(person.id)).cloned();
+    }
+    body
 }
 
 /// The review commands; `FG-SYS-0001 reason=review_unconfigured` when the
@@ -351,7 +409,12 @@ fn repository<B>(
 
 /// The merge request read for `GET …/{iid}` (the loader read it before
 /// the decision; the answer is read again, after it).
-async fn written(state: &AppState, project: ProjectId, iid: i64) -> Result<Value, ForgeError> {
+async fn written(
+    state: &AppState,
+    caller: &Principal,
+    project: ProjectId,
+    iid: i64,
+) -> Result<Value, ForgeError> {
     let stored = bounded(
         state,
         "merge_request_load",
@@ -363,7 +426,13 @@ async fn written(state: &AppState, project: ProjectId, iid: i64) -> Result<Value
             .with_context("reason", "written_merge_request_missing")
             .with_context("iid", iid)
     })?;
-    json(body_of(&stored))
+    let numbers = bounded(
+        state,
+        "merge_request_people",
+        review(state)?.employee_numbers(caller, &people(std::slice::from_ref(&stored))),
+    )
+    .await?;
+    json(with_numbers(body_of(&stored), &numbers))
 }
 
 /// `state`, `limit` and `before`, strictly: `FG-WEB-0006
@@ -417,6 +486,7 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
     // Owned before the first await: the request (its body) is not `Sync`.
     let query = page_query(request.raw_query());
     let id = *request.proof().id();
+    let caller = request.principal().clone(); // clone: owned across the awaits
     let built = async {
         let (wanted, limit, before) = query?;
         let rows = bounded(
@@ -430,8 +500,17 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
         } else {
             None
         };
+        let numbers = bounded(
+            &state,
+            "merge_request_people",
+            review(&state)?.employee_numbers(&caller, &people(&rows)),
+        )
+        .await?;
         json(MergeRequestPage {
-            merge_requests: rows.iter().map(body_of).collect(),
+            merge_requests: rows
+                .iter()
+                .map(|mr| with_numbers(body_of(mr), &numbers))
+                .collect(),
             next_before,
         })
     }
@@ -442,11 +521,12 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
 /// `GET …/merge-requests/{iid}` → `200` the merge request as decided on.
 pub async fn view(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
     let (project, iid) = *request.proof().id();
+    let caller = request.principal().clone(); // clone: owned across the awaits
     let built = async {
         let iid = iid.ok_or_else(|| {
             ForgeError::new(ErrorCode::Internal).with_context("reason", "proof_without_iid")
         })?;
-        written(&state, project, iid).await
+        written(&state, &caller, project, iid).await
     }
     .await;
     respond(request.ctx(), StatusCode::OK, built)
