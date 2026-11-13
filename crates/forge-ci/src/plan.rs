@@ -4,7 +4,9 @@
 //!
 //! A job waits for every selected job of the previous stage that has any
 //! (the stage barrier; earlier stages follow transitively) and for its
-//! `needs` (which may be in its own stage). Its `wave` is 0 without
+//! `needs` (which may be in its own stage). A manual job (`when: manual`,
+//! plan 14 C12) waits like any other but is never waited for: it is left
+//! out of the barrier, and the lint refuses `needs` on one. Its `wave` is 0 without
 //! prerequisites, else one more than its latest prerequisite's; jobs of one
 //! wave may run in parallel. The plan lists the jobs by (wave, stage, name).
 
@@ -88,6 +90,8 @@ pub struct PlannedJob {
     pub script_lines: usize,
     /// The names of its services, in file order.
     pub services: Vec<String>,
+    /// `when: manual`: a person starts it (plan 14 C12).
+    pub manual: bool,
 }
 
 fn selected(job: &Job, trigger: &Trigger) -> bool {
@@ -132,9 +136,9 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
         problems.sort();
         return Err(problems);
     }
-    // Selected jobs per stage index.
+    // Selected jobs per stage index (a manual job holds up no stage).
     let mut by_stage: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
-    for job in chosen.values() {
+    for job in chosen.values().filter(|j| !j.manual) {
         by_stage
             .entry(job.stage_index)
             .or_default()
@@ -195,6 +199,7 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
             secrets: job.secrets.clone(),
             script_lines: job.script.len(),
             services: job.services.iter().map(|s| s.name.clone()).collect(),
+            manual: job.manual,
         })
         .collect();
     let stage_of: BTreeMap<&str, usize> = chosen

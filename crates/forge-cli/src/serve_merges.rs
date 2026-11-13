@@ -173,6 +173,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::ArtifactTransferFailed
         | ErrorCode::SecretInArtifact
         | ErrorCode::ArtifactQuotaExceeded
+        // M4 C12: pipeline schedules, never a merge's.
+        | ErrorCode::ScheduleOwnerNotAllowed
+        | ErrorCode::ScheduleLimitReached
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

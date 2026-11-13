@@ -240,6 +240,24 @@ pub fn pipeline(cli: &Cli, cmd: &PipelineCommand, env: EnvFn<'_>, io: &mut Io<'_
             let human = pipeline_text(&out);
             emit(io, cli, out, &human)
         }
+        PipelineCommand::Play {
+            project,
+            pipeline,
+            job,
+        } => {
+            let c = client(cli, env, io)?;
+            let path = format!("{}/{pipeline}/jobs/{job}/play", pipelines_path(*project));
+            let out = call(&c, Method::Post, &path, &[], None)?;
+            let human = format!(
+                "Started job {job}
+{}",
+                pipeline_text(&out)
+            );
+            emit(io, cli, out, &human)
+        }
+        PipelineCommand::Schedule { command } => {
+            crate::pipeline_schedules::schedule(cli, command, env, io)
+        }
         PipelineCommand::Cancel { project, pipeline } => {
             let c = client(cli, env, io)?;
             let path = format!("{}/{pipeline}/cancel", pipelines_path(*project));

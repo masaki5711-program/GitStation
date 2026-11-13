@@ -1378,6 +1378,12 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             people_only()?;
             need(Role::Maintainer, p.role)
         }
+        // M4 C12 (ADR-0029 Amendment 2026-11-13): a schedule is a standing
+        // delegation of its owner's rights — a Maintainer's, people only.
+        (Action::PipelineScheduleManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
 
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
@@ -1490,6 +1496,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PipelineCancel
             | Action::PipelineRetry
             | Action::CiVariableManage
+            | Action::PipelineScheduleManage
             | Action::CiArtifactRead
             | Action::JobArtifactUpload
             | Action::JobArtifactDownload

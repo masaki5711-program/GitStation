@@ -30,6 +30,52 @@ pub enum PipelineChange {
         sha: String,
         status: String,
     },
+    /// `pipeline.job_played` (M4 C12): a person started a `when: manual`
+    /// job.
+    JobPlayed {
+        project: ProjectId,
+        pipeline: i64,
+        job: i64,
+        name: String,
+    },
+    /// `pipeline_schedule.created` / `.updated` (M4 C12): a Maintainer
+    /// saved a schedule and became its owner (the person whose rights it
+    /// runs with).
+    ScheduleSaved {
+        project: ProjectId,
+        schedule: i64,
+        created: bool,
+        git_ref: String,
+        cron: String,
+        utc_offset_minutes: i32,
+        active: bool,
+        owner: i64,
+    },
+    /// `pipeline_schedule.deleted` (M4 C12).
+    ScheduleDeleted { project: ProjectId, schedule: i64 },
+    /// `pipeline.scheduled` (M4 C12): the worker (actor `system`) started a
+    /// schedule's pipeline after deciding `PipelineCreate` for its owner.
+    Scheduled {
+        project: ProjectId,
+        pipeline: i64,
+        schedule: i64,
+        owner: i64,
+        git_ref: String,
+        sha: String,
+        status: String,
+    },
+    /// `spec.released` (M4 C12, plan 04 §6 `spec-publish`): a version of
+    /// the repository's specification was published (actor `system`; the
+    /// pusher of the tag is `released_by`). Also the event's payload.
+    SpecReleased {
+        project: ProjectId,
+        repository: i64,
+        tag: String,
+        version: String,
+        sha: String,
+        released_by: Option<i64>,
+        default_branch: String,
+    },
 }
 
 impl PipelineChange {
@@ -38,6 +84,26 @@ impl PipelineChange {
             Self::Canceled { .. } => "pipeline.canceled",
             Self::Retried { .. } => "pipeline.retried",
             Self::RunManual { .. } => "pipeline.run_manual",
+            Self::JobPlayed { .. } => "pipeline.job_played",
+            Self::ScheduleSaved { created: true, .. } => "pipeline_schedule.created",
+            Self::ScheduleSaved { created: false, .. } => "pipeline_schedule.updated",
+            Self::ScheduleDeleted { .. } => "pipeline_schedule.deleted",
+            Self::Scheduled { .. } => "pipeline.scheduled",
+            Self::SpecReleased { .. } => "spec.released",
+        }
+    }
+
+    /// The event the change publishes (M4 C12: only a release).
+    pub fn event_type(&self) -> Option<crate::EventType> {
+        match self {
+            Self::SpecReleased { .. } => Some(crate::EventType::SpecReleased),
+            Self::Canceled { .. }
+            | Self::Retried { .. }
+            | Self::RunManual { .. }
+            | Self::JobPlayed { .. }
+            | Self::ScheduleSaved { .. }
+            | Self::ScheduleDeleted { .. }
+            | Self::Scheduled { .. } => None,
         }
     }
 
@@ -69,6 +135,73 @@ impl PipelineChange {
                 "ref": git_ref,
                 "sha": sha,
                 "status": status,
+            }),
+            Self::JobPlayed {
+                project,
+                pipeline,
+                job,
+                name,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "pipeline_id": pipeline,
+                "job_id": job,
+                "name": name,
+            }),
+            Self::ScheduleSaved {
+                project,
+                schedule,
+                git_ref,
+                cron,
+                utc_offset_minutes,
+                active,
+                owner,
+                ..
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "schedule_id": schedule,
+                "ref": git_ref,
+                "cron": cron,
+                "utc_offset_minutes": utc_offset_minutes,
+                "active": active,
+                "owner_id": owner,
+            }),
+            Self::ScheduleDeleted { project, schedule } => serde_json::json!({
+                "project_id": project.get(),
+                "schedule_id": schedule,
+            }),
+            Self::Scheduled {
+                project,
+                pipeline,
+                schedule,
+                owner,
+                git_ref,
+                sha,
+                status,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "pipeline_id": pipeline,
+                "schedule_id": schedule,
+                "owner_id": owner,
+                "ref": git_ref,
+                "sha": sha,
+                "status": status,
+            }),
+            Self::SpecReleased {
+                project,
+                repository,
+                tag,
+                version,
+                sha,
+                released_by,
+                default_branch,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "repository_id": repository,
+                "tag": tag,
+                "version": version,
+                "sha": sha,
+                "released_by": released_by,
+                "default_branch": default_branch,
             }),
         }
     }
@@ -240,6 +373,46 @@ mod tests {
         };
         assert_eq!(m.action(), "pipeline.run_manual");
         assert_eq!(m.to_value()["ref"], "refs/heads/main");
+        let played = PipelineChange::JobPlayed {
+            project: p,
+            pipeline: 4,
+            job: 9,
+            name: "deploy".to_owned(),
+        };
+        assert_eq!(played.action(), "pipeline.job_played");
+        assert_eq!(
+            played.to_value(),
+            serde_json::json!({"project_id": 7, "pipeline_id": 4, "job_id": 9, "name": "deploy"})
+        );
+        let saved = |created| PipelineChange::ScheduleSaved {
+            project: p,
+            schedule: 2,
+            created,
+            git_ref: "refs/heads/main".to_owned(),
+            cron: "0 2 * * *".to_owned(),
+            utc_offset_minutes: 540,
+            active: true,
+            owner: 11,
+        };
+        assert_eq!(saved(true).action(), "pipeline_schedule.created");
+        assert_eq!(saved(false).action(), "pipeline_schedule.updated");
+        assert_eq!(saved(true).to_value()["owner_id"], 11);
+        let deleted = PipelineChange::ScheduleDeleted {
+            project: p,
+            schedule: 2,
+        };
+        assert_eq!(deleted.action(), "pipeline_schedule.deleted");
+        let fired = PipelineChange::Scheduled {
+            project: p,
+            pipeline: 5,
+            schedule: 2,
+            owner: 11,
+            git_ref: "refs/heads/main".to_owned(),
+            sha: "c".repeat(40),
+            status: "pending".to_owned(),
+        };
+        assert_eq!(fired.action(), "pipeline.scheduled");
+        assert_eq!(fired.to_value()["schedule_id"], 2);
     }
 
     #[test]

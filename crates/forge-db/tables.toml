@@ -794,3 +794,20 @@ txn_audited_columns = []
 guarded = false
 kind = "derived"
 ro_columns = ["job_id", "attempt", "project_id", "name", "key_id", "masked", "created_at"]
+
+# ── M4 C12 (20261215100000, plan 14 §5 C12): scheduled pipelines, created,
+# changed and deleted by a Maintainer (people only), audited on the project
+# (`pipeline_schedule.created` / `.updated` / `.deleted`). The worker writes
+# only when it is due next and what its last run did (unaudited; a run that
+# starts a pipeline is audited as `pipeline.scheduled`) ──
+[tables.ci_pipeline_schedules]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = [
+    "updated_at", "next_run_at", "last_run_at", "last_pipeline_id", "last_outcome",
+    "last_error_code",
+]
+txn_audited_columns = []

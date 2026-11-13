@@ -1172,6 +1172,42 @@
   {
     "action": "PipelineRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/pipeline-schedules",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineScheduleManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/pipeline-schedules",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineScheduleManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/pipeline-schedules/{schedule_id}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineScheduleManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/pipeline-schedules/{schedule_id}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/pipelines",
     "people_only": false,
     "public": false,
@@ -1236,6 +1272,15 @@
     "action": "CiLogRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PipelineCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play",
     "people_only": false,
     "public": false,
     "scope": "fixed",

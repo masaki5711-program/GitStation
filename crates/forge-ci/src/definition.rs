@@ -105,6 +105,9 @@ pub struct Job {
     pub(crate) artifacts: Vec<String>,
     /// Sidecar containers sharing the job's loopback (ADR-0029 amendment).
     pub(crate) services: Vec<Service>,
+    /// `when: manual` (plan 14 C12): the job waits for a person to start
+    /// it; nothing else waits for it.
+    pub(crate) manual: bool,
 }
 
 /// A sidecar container of a job (plan 14 C5s): it runs in the job's pod,
@@ -185,6 +188,10 @@ impl Job {
     /// In file order.
     pub fn services(&self) -> &[Service] {
         &self.services
+    }
+    /// `when: manual`: started by a person, never on its own (plan 14 C12).
+    pub fn manual(&self) -> bool {
+        self.manual
     }
 }
 
@@ -394,6 +401,7 @@ fn read_job(
     let mut rules = Rules::default();
     let mut artifacts = Vec::new();
     let mut services = Vec::new();
+    let mut manual = false;
     for f in &fields {
         let (line, value) = (f.line, f.value);
         match f.key {
@@ -460,6 +468,15 @@ fn read_job(
             }
             "artifacts" => artifacts = read_artifacts(value, line, problems),
             "services" => services = read_services(value, line, name, problems),
+            "when" => {
+                if let Some(s) = one_text(value, line, "when", problems) {
+                    match s.as_str() {
+                        "on_success" => manual = false,
+                        "manual" => manual = true,
+                        _ => problems.push(Problem::about(line, "when_invalid", s)),
+                    }
+                }
+            }
             other => problems.push(Problem::about(line, "key_unknown", other)),
         }
     }
@@ -507,6 +524,7 @@ fn read_job(
         rules,
         artifacts,
         services,
+        manual,
     })
 }
 

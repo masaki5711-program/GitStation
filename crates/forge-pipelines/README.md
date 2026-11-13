@@ -121,9 +121,29 @@ FG-CI-0018 登録の無い名前、FG-CI-0016 鍵）。ログの追記は `log_m
 - C4（済み）: ジョブの fetch の Smart HTTP（`refs/pipelines/<id>/head`、`Pipelines::job_copy` が判定の材料を 1 文で読む。ルートは forge-web の
   `routes::job_fetch`）と `forge-runner`（別のクレート）。スクリプトは Runner が `definition_hash` の `.forge-ci.yml` から読む。
 - C5（済み）: CI の出力の読み取りを `copy_mark` と先端の印で判定する（`undecided` はエージェントに閉じる）。上の「CI の出力」。
-- C12: 手動・定期の実行の保護（今は保護されない扱い）。
+- C12（済み）: 手動のジョブ・定期の実行・仕様の公開（下の「手動のジョブと定期の実行（M4 C12）」）。手動・定期は保護されないまま。
 - C3 / C6（済み）: シークレットは `secrets_allowed()` だけで判定する（上）。C11: 再実行されたデプロイのジョブも人の `DeployApprove` を待つ。
 - C5b: 90 日より古いパイプライン・ジョブ・ログ・失敗の行を消すジョブ（C5 から分けた）。
+
+## 手動のジョブと定期の実行（M4 C12）
+
+- **手動のジョブ**（`manual`、`when: manual`）: `manual` の状態で作り、`Pipelines::play_job`（`PipelineCreate`）で `pending` にする。
+  終わったパイプラインは `running` に戻る。監査 `pipeline.job_played`。何も待たない（forge-ci）ので、`settle_pipeline` は待っている手動の
+  ジョブを数えない。手動のジョブだけのパイプラインは `skipped`。409 FG-CI-0003 `operation=play`（`not_manual` / `pipeline_state` / `needs_not_succeeded`）。
+- **定期**（`schedules`）: `Pipelines::schedules`（`PipelineRead`）、`create_schedule` / `update_schedule` / `delete_schedule`
+  （`PipelineScheduleManage`: Maintainer 以上、人だけ。保存した人が持ち主）。`ScheduleDraft::check` が FG-WEB-0006（`param`・`reason`）を決める。
+  worker のタスク `ci_schedules` が `forge_db::ci_schedules::claim_due` で期限の来たものを取り、ジョブ `ci.schedule_fire` が `fire_schedule`:
+  ブランチの先端を `prepare`（push と同じ計画、`source = schedule`、保護されない）し、`fire_schedule_decided` のトランザクションの中で
+  `owner_decision`（持ち主を Web のセッションの人として `PipelineCreate` を `prove`）。拒否は FG-CI-0026（warn、`forge.ci.schedule_refused`）と
+  定期の行の `last_outcome = refused`。ADR-0029 Amendment 2026-11-13。
+- **仕様の公開**（`spec_publish`、計画 04 §6）: 版の形のタグを作る push ごとのジョブ `spec.publish` で、タグのコミットが既定のブランチの
+  上にあり（`merge-base --is-ancestor`）、自身の仕様のディレクトリ（`.forge/repo.yml` の `path:`、既定 `spec`）を持つときだけ、
+  `forge_db::spec_releases::record_release` がイベント `spec.released` を 1 回書く。
+
+| コード | いつ |
+|---|---|
+| FG-CI-0026 ScheduleOwnerNotAllowed | 定期の持ち主が今は `PipelineCreate` を許されない（warn、runbook `ci-pipelines`） |
+| FG-CI-0027 ScheduleLimitReached | 1 プロジェクト 20 件を超える作成（409） |
 
 ## 依存の向き
 

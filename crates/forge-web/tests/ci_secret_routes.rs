@@ -128,6 +128,7 @@ impl World {
                     timeout_s: 600,
                     tags: Vec::new(),
                     secrets: secrets.iter().map(|s| (*s).to_owned()).collect(),
+                    manual: false,
                 }]),
             },
         )

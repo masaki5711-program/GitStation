@@ -88,6 +88,21 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // M4 C12: pipeline schedules.
+            AuditedTable {
+                name: "ci_pipeline_schedules".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: s(&[
+                    "updated_at",
+                    "next_run_at",
+                    "last_run_at",
+                    "last_pipeline_id",
+                    "last_outcome",
+                    "last_error_code",
+                ]),
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "ci_runners".into(),
                 audit_resource: AuditResource::Literal("ci_runner".into()),

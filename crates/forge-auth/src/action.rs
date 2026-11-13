@@ -451,6 +451,15 @@ actions! {
     /// people only (a secret's owner answers for it; an agent never sets or
     /// sees one, ADR-0029 decision 8); `api`.
     CiVariableManage,
+    /// `POST /api/v1/projects/{id}/pipeline-schedules`, `PUT|DELETE
+    /// …/pipeline-schedules/{schedule_id}` (M4 C12): create, change or
+    /// delete a timed pipeline. Whoever saves one becomes its owner and the
+    /// schedule runs with the owner's rights as they are at each run
+    /// (ADR-0029 Amendment 2026-11-13). Maintainer and above, people only
+    /// (a standing delegation is a person's decision; an agent's token, a
+    /// service account and a bot are refused); `api`. Listing them is
+    /// `PipelineRead`.
+    PipelineScheduleManage,
     /// `PUT /api/v1/runner/jobs/{job_id}/artifacts?path=` (M4 C6): a job
     /// uploads one file of its artifacts — its own token, its own job,
     /// while it runs (`CiRule::Job`, `Resource::JobSelf`).
@@ -631,6 +640,8 @@ impl Action {
                 | Action::RunnerManage
                 // M4 C6: CI secrets are a person's.
                 | Action::CiVariableManage
+                // M4 C12: a schedule runs with its owner's rights.
+                | Action::PipelineScheduleManage
         )
     }
 
@@ -764,6 +775,7 @@ impl Action {
             | Action::PipelineCancel
             | Action::PipelineRetry
             | Action::CiVariableManage
+            | Action::PipelineScheduleManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
@@ -896,6 +908,8 @@ impl Action {
             | Action::PipelineRetry
             // M4 C6: nor are CI secrets.
             | Action::CiVariableManage
+            // M4 C12: nor are pipeline schedules.
+            | Action::PipelineScheduleManage
             // M4 C3: runners are no act-as action.
             | Action::RunnerRegister
             | Action::RunnerManage
@@ -1031,6 +1045,8 @@ impl Action {
             // M4 C6: a job never reads or sets a secret through the API
             // (ADR-0029 decision 8: they come with the claim).
             | Action::CiVariableManage
+            // M4 C12: nor a schedule.
+            | Action::PipelineScheduleManage
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

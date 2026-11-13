@@ -154,6 +154,10 @@ pub mod ci_runners;
 pub mod ci_outputs;
 // M4 C6: CI variables (secrets).
 pub mod ci_variables;
+// M4 C12: pipeline schedules.
+pub mod ci_schedules;
+// M4 C12: specification releases (plan 04 §6 spec-publish).
+pub mod spec_releases;
 // M4 C6: CI artifacts (the rows; the files are forge-pipelines').
 pub mod ci_artifacts;
 // ── end M3 O1 ──

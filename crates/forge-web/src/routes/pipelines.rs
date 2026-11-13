@@ -14,6 +14,11 @@
 //! - `POST …/pipelines/{pipeline_id}/cancel` (`PipelineCancel`) and
 //!   `…/retry` (`PipelineRetry`): `200` the pipeline after the change;
 //!   `409 FG-CI-0003` for a state that cannot change.
+//! - `POST …/pipelines/{pipeline_id}/jobs/{job_id}/play` (`PipelineCreate`,
+//!   M4 C12): start a `when: manual` job → `200` the pipeline; `404
+//!   FG-REPO-0005` (`resource=pipeline|job`), `409 FG-CI-0003
+//!   operation=play` (`reason`: `not_manual`, `pipeline_state`,
+//!   `needs_not_succeeded`).
 //!
 //! - `GET …/pipelines/{pipeline_id}/jobs/{job_id}/log?attempt=&from=`
 //!   (`CiLogRead`, M4 C5): one page of a job attempt's log (whole chunks
@@ -62,6 +67,8 @@ pub const RETRY: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry";
 pub const LOG: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log";
 /// `GET` a pipeline's diagnosis (M4 C5).
 pub const DIAGNOSIS: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis";
+/// `POST` start a manual job (M4 C12).
+pub const PLAY: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play";
 /// `GET` a job's artifacts (M4 C6).
 pub const ARTIFACTS: &str = "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts";
 /// `GET` one artifact's bytes (M4 C6).
@@ -143,8 +150,12 @@ pub struct PipelineJobBody {
     pub tags: Vec<String>,
     /// The secret names (never a value).
     pub secrets: Vec<String>,
-    /// `created`, `pending`, `running`, `succeeded`, `failed`, `canceled`.
+    /// `created`, `pending`, `running`, `succeeded`, `failed`,
+    /// `canceled`, `manual` (waits for a person: `…/play`).
     pub status: String,
+    /// `when: manual` in `.forge-ci.yml` (M4 C12): started by a person;
+    /// stays `true` after it was started.
+    pub manual: bool,
     pub attempt: i32,
     #[schema(required = true)]
     pub error_code: Option<String>,
@@ -323,6 +334,7 @@ fn job_body(j: StoredJob) -> PipelineJobBody {
         tags: j.tags,
         secrets: j.secrets,
         status: j.status.as_str().to_owned(),
+        manual: j.manual,
         attempt: j.attempt,
         error_code: j.error_code,
         created_at: j.created_at,
@@ -388,6 +400,8 @@ enum Tail {
     Artifacts(i64, i64),
     /// M4 C6: `…/jobs/{job_id}/artifacts/{artifact_id}`.
     Artifact(i64, i64, i64),
+    /// M4 C12: `…/jobs/{job_id}/play`.
+    Play(i64, i64),
 }
 
 impl Tail {
@@ -401,6 +415,7 @@ impl Tail {
             Self::Diagnosis(_) => 5,
             Self::Artifacts(..) => 6,
             Self::Artifact(..) => 7,
+            Self::Play(..) => 8,
         }
     }
 
@@ -413,7 +428,8 @@ impl Tail {
             | Self::Log(id, _)
             | Self::Diagnosis(id)
             | Self::Artifacts(id, _)
-            | Self::Artifact(id, _, _) => Some(id),
+            | Self::Artifact(id, _, _)
+            | Self::Play(id, _) => Some(id),
         }
     }
 }
@@ -448,6 +464,7 @@ fn ids(raw_path: &str) -> Result<(ProjectId, Tail), ForgeError> {
             match rest {
                 "log" => Tail::Log(id, job),
                 "artifacts" => Tail::Artifacts(id, job),
+                "play" => Tail::Play(id, job),
                 _ => {
                     let artifact = rest
                         .strip_prefix("artifacts/")
@@ -484,6 +501,8 @@ pub const OF_DIAGNOSIS: PipelinesOf = PipelinesOf { tail: 5 };
 pub const OF_ARTIFACTS: PipelinesOf = PipelinesOf { tail: 6 };
 /// `GET …/jobs/{job_id}/artifacts/{artifact_id}` (M4 C6).
 pub const OF_ARTIFACT: PipelinesOf = PipelinesOf { tail: 7 };
+/// `POST …/jobs/{job_id}/play` (M4 C12).
+pub const OF_PLAY: PipelinesOf = PipelinesOf { tail: 8 };
 
 impl PipelinesOf {
     async fn lookup(
@@ -1120,6 +1139,23 @@ pub async fn retry(state: AppState, request: Dispatched<ProjectCtx>) -> Response
     respond(&w.ctx, StatusCode::OK, built)
 }
 
+/// `POST …/pipelines/{pipeline_id}/jobs/{job_id}/play` → `200` (M4 C12).
+pub async fn play(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let path = request.raw_path().to_owned();
+    let w = request.into_write();
+    let built = async {
+        let Tail::Play(pipeline, job) = ids(&path)?.1 else {
+            return Err(param_invalid("job_id", "not_positive_decimal"));
+        };
+        let done = pipelines(&state)?
+            .play_job(&change_request(&w), &w.proof, pipeline, job)
+            .await?;
+        json(detail_body(done))
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
 /// `POST …/pipelines` → `201`.
 pub async fn run(state: AppState, request: Dispatched<ProjectCtx, NewPipelineRun>) -> Response {
     let w = request.into_write();
@@ -1201,6 +1237,10 @@ mod unit {
         assert_eq!(
             ids("/api/v1/projects/7/pipelines/3/diagnosis").expect("diagnosis"),
             (ProjectId::new(7), Tail::Diagnosis(3))
+        );
+        assert_eq!(
+            ids("/api/v1/projects/7/pipelines/3/jobs/9/play").expect("play"),
+            (ProjectId::new(7), Tail::Play(3, 9))
         );
         for bad in [
             "/api/v1/projects/0/pipelines",

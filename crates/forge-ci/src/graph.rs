@@ -1,5 +1,5 @@
-//! The checks across jobs: `needs` (unknown, duplicate, later stage, cycle)
-//! and secrets on refs that may be unprotected.
+//! The checks across jobs: `needs` (unknown, duplicate, later stage, cycle,
+//! a manual job) and secrets on refs that may be unprotected.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -19,6 +19,11 @@ pub(crate) fn lint(def: &Definition, ctx: &LintContext, problems: &mut Vec<Probl
                 None => problems.push(Problem::about(job.line, "needs_unknown", need.as_str())),
                 Some(target) if target.stage_index > job.stage_index => {
                     problems.push(Problem::about(job.line, "needs_later_stage", need.as_str()));
+                }
+                // Plan 14 C12: a manual job may never run, so nothing may
+                // wait for it (a job that did would wait forever).
+                Some(target) if target.manual => {
+                    problems.push(Problem::about(job.line, "needs_manual_job", need.as_str()));
                 }
                 Some(_) => {}
             }

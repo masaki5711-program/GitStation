@@ -917,6 +917,7 @@ async fn a_maintenance_run_deletes_finished_pipelines_refs() {
                 timeout_s: 600,
                 tags: Vec::new(),
                 secrets: Vec::new(),
+                manual: false,
             }]),
         },
     )

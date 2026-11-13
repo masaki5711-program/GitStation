@@ -65,6 +65,7 @@ fn job(name: &str, needs: &[&str], tags: &[&str], secrets: &[&str]) -> NewCiJob 
         timeout_s: 600,
         tags: tags.iter().map(|n| (*n).to_owned()).collect(),
         secrets: secrets.iter().map(|n| (*n).to_owned()).collect(),
+        manual: false,
     }
 }
 

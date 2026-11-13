@@ -98,6 +98,9 @@ impl NotificationKind {
             // webhook and notification screens); until then FG-INT-0011 and
             // doctor `webhook.deliveries` report it.
             EventType::WebhookDisabled => None,
+            // M4 C12: a published specification version goes to the
+            // integrations (Kanflow), not to a person's inbox.
+            EventType::SpecReleased => None,
         }
     }
 }

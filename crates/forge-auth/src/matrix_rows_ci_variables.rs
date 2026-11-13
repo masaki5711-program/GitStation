@@ -13,8 +13,12 @@ use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Fixture as F, Row};
 
 const fn row(actor: W, fixture: F, expect: Expect) -> Row {
+    on(A::CiVariableManage, actor, fixture, expect)
+}
+
+const fn on(action: A, actor: W, fixture: F, expect: Expect) -> Row {
     Row {
-        action: A::CiVariableManage,
+        action,
         actor,
         fixture,
         expect,
@@ -49,4 +53,28 @@ pub(crate) const CI_VARIABLE_ROWS: &[Row] = &[
     row(W::AdminTokenApi, F::PrivateProject, deny(E::NotFound)),
     row(W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
     row(W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+];
+
+/// M4 C12: pipeline schedules — the same shape (Maintainer, people only,
+/// `api`): a schedule runs with its owner's rights, so only a person may
+/// become an owner. The service account and bot twins are in
+/// `matrix_rows_people.rs`; runner, job and act-as denies are generated.
+#[rustfmt::skip]
+pub(crate) const SCHEDULE_ROWS: &[Row] = &[
+    on(A::PipelineScheduleManage, W::Maintainer, F::PrivateProject, Allow),
+    on(A::PipelineScheduleManage, W::MaintainerTokenApi, F::PrivateProject, Allow),
+    on(A::PipelineScheduleManage, W::Owner, F::PrivateProject, Allow),
+    on(A::PipelineScheduleManage, W::Admin, F::PrivateProject, Allow),
+    on(A::PipelineScheduleManage, W::Maintainer, F::InternalProject, Allow),
+    on(A::PipelineScheduleManage, W::Developer, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelineScheduleManage, W::DevTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelineScheduleManage, W::Reporter, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelineScheduleManage, W::NonMember, F::InternalProject, deny(E::Forbidden)),
+    on(A::PipelineScheduleManage, W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    on(A::PipelineScheduleManage, W::Maintainer, F::DeletedProject, deny(E::PendingDeletion)),
+    on(A::PipelineScheduleManage, W::MaintainerTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
+    on(A::PipelineScheduleManage, W::AgentMaintainerTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelineScheduleManage, W::AgentOwnerTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelineScheduleManage, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
+    on(A::PipelineScheduleManage, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
 ];
