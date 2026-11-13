@@ -147,7 +147,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
     // The worker seals the audit log: no keys, no start (ADR-0018 §4).
     let keys = Arc::new(cfg.audit.require_seal_keys()?);
     // No storage, no start: provisioning would only fail (D4 MR3b).
-    let storage = Storage::open(cfg.storage_root()?)?;
+    let storage = Storage::from_config(cfg)?;
     // M3 O1: no job or webhook runs before `forge restore finish`.
     crate::restore::refuse_if_pending(storage.root.path())?;
     // M3 O3: the prune grace against the merge window, before anything runs.

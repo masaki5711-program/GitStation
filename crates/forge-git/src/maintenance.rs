@@ -17,12 +17,20 @@
 //!    gc's own prune removes them — directory and files — once they are
 //!    older than the prune grace (verified on git 2.53,
 //!    `a_stale_quarantine_with_files_is_pruned_after_the_grace`).
-//! 2. [`Git::gc_objects`] — `git -c gc.packRefs=false -c
+//! 2. [`Git::gc_objects`] — `git <memory caps> -c gc.packRefs=false -c
 //!    gc.writeCommitGraph=false -c repack.writeBitmaps=true -c
-//!    pack.writeBitmapHashCache=true -c core.hooksPath=<empty> gc --cruft
-//!    --prune=<grace>.seconds.ago --quiet`: one pack with bitmaps,
-//!    unreachable objects in a cruft pack until they are older than the
-//!    grace. Refs are NOT packed here (pack-refs takes the ref locks, so it
+//!    pack.writeBitmapHashCache=true -c pack.writeBitmapLookupTable=true
+//!    -c core.hooksPath=<empty> gc --cruft --prune=<grace>.seconds.ago
+//!    --quiet`: one pack with a reachability bitmap (and its lookup table,
+//!    git ≥ 2.38: a fetch loads only the bitmaps it needs), unreachable
+//!    objects in a cruft pack until they are older than the grace.
+//!    upload-pack serves a clone or fetch from that bitmap: no object walk,
+//!    the stored deltas reused. No multi-pack-index: gc leaves one pack of
+//!    reachable objects (plus the cruft pack, which is never bitmapped), and
+//!    the few packs pushes add before the next run are small; a MIDX bitmap
+//!    would only pay off for repositories pushed to heavily between runs.
+//!    The memory caps (`git.pack.*`, `config::PACK_HEAVY_SUBCOMMANDS`) bound
+//!    repack's delta search. Refs are NOT packed here (pack-refs takes the ref locks, so it
 //!    is its own step under the merge lock), and the commit-graph is
 //!    written by its own step (so each is bounded and reported alone). A gc
 //!    already running (git's own `gc.pid` check: same host, live pid, at
@@ -313,7 +321,8 @@ impl Git {
             .config_override("gc.packRefs", "false")
             .config_override("gc.writeCommitGraph", "false")
             .config_override("repack.writeBitmaps", "true")
-            .config_override("pack.writeBitmapHashCache", "true");
+            .config_override("pack.writeBitmapHashCache", "true")
+            .config_override("pack.writeBitmapLookupTable", "true");
         Ok(self
             .with_empty_hooks(cmd)?
             .arg("--cruft")

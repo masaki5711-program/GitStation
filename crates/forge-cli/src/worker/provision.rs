@@ -70,10 +70,25 @@ impl Storage {
     /// The configured root (checked: a real directory) and git from `PATH`
     /// with HOME pinned to the storage root, which only forge writes
     /// (ADR-0009 Amendment D4 MR3b): no user or shared git config applies.
+    /// Tests: the built-in `git.pack.*` caps.
+    #[cfg(test)]
     pub(crate) fn open(root: &std::path::Path) -> Result<Self, ForgeError> {
+        Self::open_with(root, forge_core::config::GitPackConfig::DEFAULT)
+    }
+
+    /// The configured root with the configured `git.pack.*` memory caps.
+    pub(crate) fn from_config(cfg: &forge_core::config::Config) -> Result<Self, ForgeError> {
+        Self::open_with(cfg.storage_root()?, cfg.git_pack)
+    }
+
+    fn open_with(
+        root: &std::path::Path,
+        pack: forge_core::config::GitPackConfig,
+    ) -> Result<Self, ForgeError> {
         let root = StorageRoot::open(root)?;
         let mut cfg = GitConfig::new("git", root.path());
         cfg.timeout_total = GIT_TIMEOUT;
+        cfg.pack = pack;
         Ok(Self {
             git: Git::new(cfg),
             root,

@@ -23,6 +23,8 @@ mod database;
 // M3 I1c: `feed.*`.
 mod feed;
 mod git_http;
+// `git.pack.*`: the memory caps of pack-heavy git.
+mod git_pack;
 mod hosting;
 mod keys;
 mod maintenance;
@@ -53,6 +55,7 @@ pub use ci::CiConfig;
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
+pub use git_pack::GitPackConfig;
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
@@ -177,6 +180,9 @@ pub struct Config {
     pub audit: AuditConfig,
     /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
     pub git_http: GitHttpConfig,
+    /// `git.pack.*` (the memory caps of pack-heavy git: delta window,
+    /// threads, base cache, pack mappings).
+    pub git_pack: GitPackConfig,
     /// `hosting.*` (the deletion grace period, D5 MR3; the purge period, D5 MR4).
     pub hosting: HostingConfig,
     /// `review.*` (the mergeability fan-out cap, M3 R2).
@@ -436,6 +442,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         )?,
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
+        git_pack: GitPackConfig::load(get)?,
         hosting: HostingConfig::load(get)?,
         review: ReviewConfig::load(get)?,
         feed: FeedConfig::load(get)?,

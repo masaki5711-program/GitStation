@@ -162,6 +162,24 @@ pub const KEYS: &[Key] = &[
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",
     ),
+    // The memory caps of pack-heavy git (`config/git_pack.rs`).
+    number(
+        "git.pack.window_memory_mib",
+        "FORGE_GIT_PACK_WINDOW_MEMORY_MIB",
+    ),
+    number("git.pack.threads", "FORGE_GIT_PACK_THREADS"),
+    number(
+        "git.pack.delta_base_cache_mib",
+        "FORGE_GIT_PACK_DELTA_BASE_CACHE_MIB",
+    ),
+    number(
+        "git.pack.packed_git_limit_mib",
+        "FORGE_GIT_PACK_PACKED_GIT_LIMIT_MIB",
+    ),
+    number(
+        "git.pack.packed_git_window_mib",
+        "FORGE_GIT_PACK_PACKED_GIT_WINDOW_MIB",
+    ),
     // D5 MR3: how long a deleted project can be restored.
     number(
         "hosting.deletion_grace_days",
