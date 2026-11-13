@@ -216,6 +216,19 @@ list|set|delete`（値は標準入力から）。Runner の取得は `secrets_al
 上限は 1 ファイル 100 MiB・1 回 512 MiB / 1000 ファイル（FG-CI-0019）、送受の失敗は FG-CI-0020（ジョブは失敗）。worker の `ci_artifact_expiry`
 （30 日、`keep` は残す、消えたプロジェクトのディレクトリも消す）。`keep` を立てるのは C11。
 
+**C12 の注記（2026-11-13、定期・手動・仕様の公開）**: ブランチ `feat/ci-schedules-manual`。
+**手動のジョブ**: `.forge-ci.yml` の `when: manual`（lint の `when_invalid`・`needs_manual_job`、ステージの壁から外す）。表 `ci_jobs.manual` と状態
+`manual`（マイグレーション `20261215100000`）。何も待たないので、パイプラインは他のジョブで終わり、手動のジョブだけなら `skipped`。ルート
+`POST …/pipelines/{pid}/jobs/{jid}/play`（`PipelineCreate`、監査 `pipeline.job_played`、FG-CI-0003 `operation=play`）。
+**定期**: 表 `ci_pipeline_schedules`（監査あり、1 プロジェクト 20 件まで: FG-CI-0027）、Action `PipelineScheduleManage`（Maintainer 以上、人だけ）、
+ルート `GET|POST …/pipeline-schedules`・`PUT|DELETE …/{schedule_id}`。5 つの欄の cron を固定の UTC オフセットで（`forge_core::ci_schedule`、5 分より頻繁は不可）。
+worker のタスク `ci_schedules`（30 秒）が期限の来たものを取り、ジョブ `ci.schedule_fire` が**持ち主の今の権利**で `PipelineCreate` を判定してから
+`source = schedule` のパイプラインを書く（`pipeline.scheduled`、行為者 `system`）。拒否は FG-CI-0026（warn、runbook `ci-pipelines`）。
+手動・定期のパイプラインは保護されない（シークレットは渡らない）。ADR-0029 Amendment 2026-11-13。
+**仕様の公開**（04 §6 `spec-publish`）: 版の形のタグを作る push で `ci-pipelines` 購読者がジョブ `spec.publish` を積み、タグのコミットが既定のブランチの
+上にあり自身の仕様のディレクトリを持つとき、イベント `spec.released`（連携の分類、`docs/api/integration-feed.md`）を 1 回出す。
+**分けたもの**: `gstn pipeline play` / `schedule …`（C12b、それまでは `gstn api`）、`spec.released` の未決定の項目の数（07 W12 のゲートと一緒に）。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。
