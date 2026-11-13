@@ -115,6 +115,8 @@ mod ci_leases;
 mod ci_outputs;
 // M4 C6: CI artifacts past their 30 days.
 mod ci_artifacts;
+// M4 C11: deployments over SSH.
+pub(crate) mod deploy;
 mod in_app_retention;
 // ── end check run retention ──
 // ── M2 MR6: the session purge ──
@@ -147,7 +149,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
     // The worker seals the audit log: no keys, no start (ADR-0018 §4).
     let keys = Arc::new(cfg.audit.require_seal_keys()?);
     // No storage, no start: provisioning would only fail (D4 MR3b).
-    let storage = Storage::open(cfg.storage_root()?)?;
+    let storage = Storage::from_config(cfg)?;
     // M3 O1: no job or webhook runs before `forge restore finish`.
     crate::restore::refuse_if_pending(storage.root.path())?;
     // M3 O3: the prune grace against the merge window, before anything runs.
@@ -199,7 +201,11 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
                 Some((&cfg.maintenance, &cfg.mirror)),
                 notify.as_ref(),
             ),
-            webhook,
+            // M4 C11: deployments only with the deploy key.
+            (
+                webhook,
+                deploy::DeployLane::from_config(&cfg.deploy, deploy::target_policy(cfg)),
+            ),
             stopped,
         )
         .await;
@@ -255,6 +261,8 @@ enum Task {
     CiOutputs,
     /// CI artifacts past their 30 days removed (`ci_artifacts`, M4 C6).
     CiArtifactExpiry,
+    /// Deployments over SSH (`deploy`, M4 C11), with `deploy.ssh_key_file`.
+    DeployRunner,
     /// Dead `check.spec_drift` jobs answered with `error` (`spec_drift_sweep`, M3 X2).
     SpecDriftSweep,
     /// Dead `check.risk` jobs answered with `error` (`risk_sweep`, M3 X7).
@@ -511,6 +519,8 @@ struct Shared {
     check_run_retention_days: u32,
     /// The webhook lane (M3 I2).
     webhook: WebhookLane,
+    /// The deployment lane (M4 C11); `None` without `deploy.ssh_key_file`.
+    deploy: Option<deploy::DeployLane>,
 }
 
 impl Task {
@@ -532,6 +542,7 @@ impl Task {
             Self::CiLeaseReaper => ci_leases::NAME,
             Self::CiOutputs => ci_outputs::NAME,
             Self::CiArtifactExpiry => ci_artifacts::NAME,
+            Self::DeployRunner => deploy::NAME,
             Self::SpecDriftSweep => spec_drift_sweep::NAME,
             Self::RiskSweep => risk_sweep::NAME,
             Self::SpecIndexSweep => spec_index_sweep::NAME,
@@ -570,6 +581,7 @@ impl Task {
             Self::CiLeaseReaper => ci_leases::PERIOD,
             Self::CiOutputs => ci_outputs::PERIOD,
             Self::CiArtifactExpiry => ci_artifacts::PERIOD,
+            Self::DeployRunner => deploy::PERIOD,
             Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
             Self::RiskSweep => risk_sweep::PERIOD,
             Self::SpecIndexSweep => spec_index_sweep::PERIOD,
@@ -644,6 +656,10 @@ impl Task {
                 None => Err(self.unconfigured()),
             },
             Self::InAppRetention => in_app_retention::run_in_app_retention(db).await,
+            Self::DeployRunner => match shared.deploy.as_ref() {
+                Some(lane) => deploy::run_deploy(db, lane).await,
+                None => Err(self.unconfigured()),
+            },
             Self::MaintenanceRunner => match shared.maintenance.as_ref() {
                 Some(m) => {
                     let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver
@@ -752,7 +768,7 @@ pub(crate) async fn run(
         storage,
         purge,
         (review, None, None),
-        WebhookLane::default(),
+        (WebhookLane::default(), None),
         shutdown,
     )
     .await
@@ -770,7 +786,8 @@ pub(crate) async fn run_full(
         Option<(&MaintenanceConfig, &MirrorConfig)>,
         Option<&NotifyLane>,
     ),
-    webhook: WebhookLane,
+    // The webhook lane (M3 I2) and the deployment lane (M4 C11).
+    (webhook, deploy): (WebhookLane, Option<deploy::DeployLane>),
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
@@ -804,6 +821,7 @@ pub(crate) async fn run_full(
             notify,
             review.check_run_retention_days,
             webhook,
+            deploy,
         ),
         shutdown,
     )
@@ -834,6 +852,7 @@ pub(crate) async fn run_with_notify(
             Some(notify),
             ReviewConfig::DEFAULT_CHECK_RUN_RETENTION_DAYS,
             WebhookLane::default(),
+            None,
         ),
         shutdown,
     )
@@ -864,11 +883,25 @@ pub(crate) async fn run_with(
             None,
             ReviewConfig::DEFAULT_CHECK_RUN_RETENTION_DAYS,
             WebhookLane::default(),
+            None,
         ),
         shutdown,
     )
     .await
 }
+
+/// What [`run_all`] runs besides the core tasks: the purge, the
+/// repositories, the maintenance, notification, webhook and deployment
+/// lanes, and `review.check_run_retention_days`.
+type Lanes = (
+    Option<PurgeTask>,
+    Option<Storage>,
+    Option<MaintenanceTask>,
+    Option<NotifyTask>,
+    u32,
+    WebhookLane,
+    Option<deploy::DeployLane>,
+);
 
 async fn run_all(
     db: &Db,
@@ -879,14 +912,7 @@ async fn run_all(
     // The purge (D5 MR4), the repositories (M3 R2 sweep) and the
     // maintenance lane (M3 O3), the notification lane (M3 N1) and the webhook
     // lane (M3 I2), when given; and `review.check_run_retention_days`.
-    (purge, storage, maintenance, notify, check_run_retention_days, webhook): (
-        Option<PurgeTask>,
-        Option<Storage>,
-        Option<MaintenanceTask>,
-        Option<NotifyTask>,
-        u32,
-        WebhookLane,
-    ),
+    (purge, storage, maintenance, notify, check_run_retention_days, webhook, deploy): Lanes,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     tracing::info!(
@@ -925,17 +951,24 @@ async fn run_all(
         notify,
         check_run_retention_days,
         webhook,
+        deploy,
     };
-    let runners = tasks_with(
+    let mut tasks = tasks_with(
         &shared.registry,
         shared.purge.as_ref(),
         shared.maintenance.as_ref(),
         shared.notify.as_ref(),
         &shared.webhook,
-    )
-    .into_iter()
-    .map(|task| task.runner(&shared))
-    .collect();
+    );
+    // M4 C11: the deployment lane only with the deploy key.
+    match &shared.deploy {
+        Some(_) => tasks.push(Task::DeployRunner),
+        None => tracing::info!(
+            reason = "deploy.ssh_key_file not configured",
+            "forge.worker.deploy_lane_off"
+        ),
+    }
+    let runners = tasks.into_iter().map(|task| task.runner(&shared)).collect();
     supervise(runners, MAX_BACKOFF, shutdown).await
 }
 

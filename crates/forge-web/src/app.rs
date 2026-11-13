@@ -82,6 +82,9 @@ pub struct AppState {
     /// CI pipelines (M4 C2; `forge serve` always sets them; without them
     /// those routes answer `FG-SYS-0001 reason=pipelines_unconfigured`).
     pub pipelines: Option<Arc<forge_pipelines::Pipelines>>,
+    /// Deployments (M4 C11; `forge serve` always sets them; without them
+    /// those routes answer `FG-SYS-0001 reason=deploy_unconfigured`).
+    pub deploy: Option<Arc<forge_deploy::Deploy>>,
     /// The integrations' event feed (M3 I1c, ADR-0016 §7; `forge serve`
     /// always sets it; without it the feed routes answer `FG-SYS-0001
     /// reason=feed_unconfigured`).
@@ -192,6 +195,7 @@ impl AppState {
             checks: None,
             doc_lint_migrations: None,
             pipelines: None,
+            deploy: None,
             feed: None,
             webhooks: None,
             push_mirrors: None,
@@ -319,6 +323,13 @@ impl AppState {
     #[must_use]
     pub fn with_pipelines(mut self, pipelines: forge_pipelines::Pipelines) -> Self {
         self.pipelines = Some(Arc::new(pipelines));
+        self
+    }
+
+    /// Deployments (M4 C11).
+    #[must_use]
+    pub fn with_deploy(mut self, deploy: forge_deploy::Deploy) -> Self {
+        self.deploy = Some(Arc::new(deploy));
         self
     }
 
@@ -586,19 +597,19 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    user_activity_routes(user_merge_request_routes(runner_routes(pipeline_routes(
-        auto_merge_routes(merge_queue_routes(doc_lint_routes(binding_routes(
-            act_as_routes(mirror_routes(webhook_routes(notification_routes(
-                check_routes(dev_status_routes(feed_routes(integration_routes(
-                    service_account_routes(account_routes(history_routes(browse_routes(
-                        git_routes(shell_routes(merge_request_routes(member_routes(
-                            move_routes(hosting_routes(fixed)),
+    auto_merge_routes(deploy_routes(user_activity_routes(
+        user_merge_request_routes(runner_routes(pipeline_routes(merge_queue_routes(
+            doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
+                webhook_routes(notification_routes(check_routes(dev_status_routes(
+                    feed_routes(integration_routes(service_account_routes(account_routes(
+                        history_routes(browse_routes(git_routes(shell_routes(
+                            merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
                         )))),
                     )))),
                 )))),
             )))),
         )))),
-    ))))
+    )))
 }
 
 /// Auto-merge (M4 C9, ADR-0017 Amendment 2026-11-13): a project's
@@ -829,6 +840,70 @@ fn runner_routes(registry: Registry<AppState>) -> Registry<AppState> {
             routes::job_fetch::COPY_UPLOAD_PACK,
             routes::job_fetch::upload_pack,
         )
+}
+
+/// Deployments (M4 C11, plan 14 §4.2, ADR-0031): environments, targets,
+/// requests and approvals.
+fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::deploy as d;
+    registry
+        .route_with(
+            Verb::Get,
+            d::ENVIRONMENTS,
+            Action::DeployRead,
+            "A project's deployment environments (dev, stg, prod) with their approval rule, approval window, freeze windows (and whether one is in force now), automatic rollback and deployment, and their targets with the pinned host key fingerprint; never a key (project readers)",
+            d::OF_PROJECT,
+            d::environments,
+        )
+        .responds::<d::EnvironmentList>(Verb::Get, d::ENVIRONMENTS)
+        .route_with_body(
+            Verb::Put,
+            d::ENVIRONMENT,
+            Action::DeployEnvironmentManage,
+            "Create or change a deployment environment ({\"requires_approval\", \"auto_rollback\", \"approval_ttl_minutes\"?, \"auto_deploy_ref\"?, \"freeze_windows\"?}): 201 created or 200 changed; prod always requires an approval and never rolls back or deploys by itself (400 FG-WEB-0006); audited (people only; Maintainer)",
+            d::MAX_BODY,
+            d::OF_PROJECT,
+            d::put_environment,
+        )
+        .responds::<d::EnvironmentBody>(Verb::Put, d::ENVIRONMENT)
+        .route_with_body(
+            Verb::Put,
+            d::TARGET,
+            Action::DeployTargetManage,
+            "Register or change a deployment target ({\"host\", \"port\"?, \"user\", \"host_key_type\", \"host_key\", \"script\", \"enabled\"?}): the host key is pinned (StrictHostKeyChecking=yes against it alone) and only the named script runs on the host; 404 FG-REPO-0005 without the environment; audited (people only; administrators)",
+            d::MAX_BODY,
+            d::OF_PROJECT,
+            d::put_target,
+        )
+        .responds::<d::TargetBody>(Verb::Put, d::TARGET)
+        .route_with(
+            Verb::Get,
+            d::DEPLOYMENTS,
+            Action::DeployRead,
+            "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers)",
+            d::OF_PROJECT,
+            d::deployments,
+        )
+        .responds::<d::DeploymentList>(Verb::Get, d::DEPLOYMENTS)
+        .route_with_body(
+            Verb::Post,
+            d::DEPLOYMENTS,
+            Action::DeployCreate,
+            "Request a deployment ({\"environment\": \"stg\", \"sha\"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer)",
+            d::MAX_BODY,
+            d::OF_PROJECT,
+            d::request,
+        )
+        .responds_created::<d::DeploymentBody>(Verb::Post, d::DEPLOYMENTS)
+        .route_with(
+            Verb::Post,
+            d::APPROVE,
+            Action::DeployApprove,
+            "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
+            d::OF_APPROVAL,
+            d::approve,
+        )
+        .responds::<d::DeploymentBody>(Verb::Post, d::APPROVE)
 }
 
 /// A project's CI pipelines (M4 C2, plan 14 §4.2): read (metadata only),

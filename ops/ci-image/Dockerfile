@@ -51,11 +51,13 @@ LABEL org.opencontainers.image.title="gitstation-ci-rust" \
       io.gitstation.nextest.version="${NEXTEST_VERSION}"
 
 # git: forge-git and the tests shell out to it (>= 2.38, ADR-0006; bookworm
-# has 2.39). hostname: forge-core's instance id tests.
+# has 2.39; checked below: gc --cruft, pack.writeBitmapLookupTable).
+# hostname: forge-core's instance id tests.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git hostname \
     && rm -rf /var/lib/apt/lists/* \
-    && git --version
+    && git --version \
+    && git --version | awk '{ split($3, v, "."); if (v[1] < 2 || (v[1] == 2 && v[2] < 38)) { print "git >= 2.38 required, found " $3; exit 1 } }'
 
 # The toolchain of rust-toolchain.toml, with its components, as the default:
 # rustup must never need the network inside a job.

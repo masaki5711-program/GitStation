@@ -3,6 +3,58 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub use forge_core::config::GitPackConfig;
+
+/// The subcommands that read or write packs in bulk and get the memory caps
+/// of [`GitConfig::pack`] as `-c` (first, so a command's own `-c` of the same
+/// key wins): Smart HTTP's `upload-pack` (→ `pack-objects`) and
+/// `receive-pack` (→ `index-pack`), maintenance's `gc` (→ `repack` →
+/// `pack-objects`), the push mirror's `push` (→ `pack-objects`), and
+/// `cat-file`, whose `--batch-command` readers are long-lived
+/// (`batch.rs`: up to `batch_per_repo × batch_max_repos` at once). `-c`
+/// reaches git's child processes too (`GIT_CONFIG_PARAMETERS`).
+///
+/// The same caps for every caller, on purpose: fewer threads and a smaller
+/// window only cost time when pack-objects searches deltas (measured with
+/// `ops/bench/git-pack-memory.py`: gc +4 %, a clone of an unmaintained
+/// repository +10 % for pack-objects, +3 % end to end), and the callers
+/// that may search have budgets far above that — maintenance's gc
+/// `maintenance.step_timeout_secs` (1800 s default), the push mirror
+/// `mirror.push_timeout_secs` (300 s default, up to 1500 s; it reuses the
+/// gc'd pack's deltas), Smart HTTP `git.http.timeout_ms` (1 h). A host
+/// with spare memory raises `git.pack.threads` for all of them.
+pub(crate) const PACK_HEAVY_SUBCOMMANDS: &[&str] = &[
+    "upload-pack",
+    "receive-pack",
+    "pack-objects",
+    "index-pack",
+    "repack",
+    "gc",
+    "push",
+    "fetch",
+    "cat-file",
+];
+
+/// The `-c` pairs of the memory caps, in this order (argv tests pin it).
+pub(crate) fn pack_cap_overrides(pack: &GitPackConfig) -> [(&'static str, String); 5] {
+    [
+        ("pack.windowMemory", format!("{}m", pack.window_memory_mib)),
+        ("pack.threads", pack.threads.to_string()),
+        (
+            "core.deltaBaseCacheLimit",
+            format!("{}m", pack.delta_base_cache_mib),
+        ),
+        (
+            "core.packedGitLimit",
+            format!("{}m", pack.packed_git_limit_mib),
+        ),
+        (
+            "core.packedGitWindowSize",
+            format!("{}m", pack.packed_git_window_mib),
+        ),
+    ]
+}
+
 /// How git is run. Loaded from configuration in `forge serve` / `worker`.
 #[derive(Debug, Clone)]
 pub struct GitConfig {
@@ -16,7 +68,9 @@ pub struct GitConfig {
     pub timeout_total: Duration,
     /// How long to wait for a free subprocess slot (captured or streaming).
     pub acquire_timeout: Duration,
-    /// Maximum concurrent captured git subprocesses.
+    /// Maximum concurrent captured git subprocesses (short calls: rev-list,
+    /// diff, merge-tree, …; each a few MiB to tens of MiB, the pack-heavy
+    /// ones bounded by [`Self::pack`]). Memory budget: see [`Self::pack`].
     pub max_concurrency: usize,
     /// Maximum captured stdout per invocation.
     pub max_output_bytes: usize,
@@ -31,6 +85,18 @@ pub struct GitConfig {
     pub stream_idle_timeout: Duration,
     /// Upper bound for one stream.
     pub stream_timeout_total: Duration,
+    /// The memory caps of the pack-heavy subcommands
+    /// ([`PACK_HEAVY_SUBCOMMANDS`], `git.pack.*`).
+    ///
+    /// Memory budget of git under one `forge serve` (sizing:
+    /// `ops/runbooks/memory-sizing.md`): at most `max_streams` clones /
+    /// fetches / pushes at once, each one `pack-objects` (or `index-pack`)
+    /// using about `objects × ~200 B + threads × window_memory +
+    /// delta_base_cache + mapped pack ≤ packed_git_limit`; plus at most
+    /// `max_concurrency` short captured calls (each a few MiB to tens of
+    /// MiB) and the browse `cat-file` readers (`batch_per_repo ×
+    /// batch_max_repos`, each ≤ `delta_base_cache` + its mapped packs).
+    pub pack: GitPackConfig,
 }
 
 impl GitConfig {
@@ -46,6 +112,7 @@ impl GitConfig {
             max_streams_per_principal: 4,
             stream_idle_timeout: Duration::from_secs(60),
             stream_timeout_total: Duration::from_secs(3600),
+            pack: GitPackConfig::DEFAULT,
         }
     }
 

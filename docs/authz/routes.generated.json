@@ -810,6 +810,60 @@
     "word": "fixed"
   },
   {
+    "action": "DeployRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/deploy/environments",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployEnvironmentManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/deploy/environments/{tier}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployTargetManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/deployments",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/deployments",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DeployApprove",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/deployments/{deployment_id}/approve",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/doc-lint/migration",

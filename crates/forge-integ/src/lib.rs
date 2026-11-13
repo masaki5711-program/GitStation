@@ -40,9 +40,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_auth::{
-    prove_visible, Action, Authorized, Credential, IntegrationFeedCtx, LoadedIntegrationFeed, Scope,
-};
+use forge_auth::{prove_visible, Action, Authorized, IntegrationFeedCtx, LoadedIntegrationFeed};
 use forge_core::{telemetry, CursorKeys, FeedPosition, IntegrationId, RequestId, UserId};
 use forge_db::feed::{self as db_feed, FeedEvent, FeedRead, FeedSnapshot, FeedState};
 use forge_db::Db;
@@ -472,25 +470,12 @@ impl Feed {
 }
 
 /// Whether the feed's token may see e-mail addresses (`user_email`) and
-/// employee numbers (`user_employee_number`) — the one rule for every
-/// person the feed and the development status name.
+/// employee numbers (`user_employee_number`): forge-auth's one rule
+/// ([`forge_auth::Principal::personal_disclosure`]), shared with the merge
+/// request API.
 fn personal_scopes(proof: &Authorized<IntegrationFeedCtx>) -> (bool, bool) {
-    let scopes: &[Scope] = match proof.principal().credential() {
-        Credential::Token(scopes) => scopes,
-        // The feed's principal always holds a token (a service account
-        // never has a session); a session sees nothing personal.
-        Credential::Session => &[],
-        // Refused on the feed (ADR-0025 §4); nothing personal.
-        Credential::ActAs(_) => &[],
-        // Refused on the feed (ADR-0029 §8); nothing personal.
-        Credential::Runner(_) | Credential::Job(_) => &[],
-        // Never on the feed (M4 C9: it reads nothing).
-        Credential::AutoMerge => &[],
-    };
-    (
-        scopes.contains(&Scope::UserEmail),
-        scopes.contains(&Scope::UserEmployeeNumber),
-    )
+    let d = proof.principal().personal_disclosure();
+    (d.email, d.employee_number)
 }
 
 /// The lag of a read whose oldest unread event is older than half the

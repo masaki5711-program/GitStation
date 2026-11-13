@@ -304,7 +304,7 @@ async fn merge_request_body_carries_author_name() {
     let r = || router(&t.db);
     let list = format!("/api/v1/projects/{p}/merge-requests");
     let one = format!("{list}/1");
-    let author = json!({"username": "dave.k", "display_name": "Dave Kowalski"});
+    let author = json!({"id": dave.get(), "username": "dave.k", "display_name": "Dave Kowalski"});
 
     let opened = call(
         r(),
@@ -317,6 +317,7 @@ async fn merge_request_body_carries_author_name() {
     assert_eq!(opened.status, StatusCode::CREATED, "{}", opened.json);
     assert_eq!(opened.json["author"], author);
     assert_eq!(opened.json["author_id"], dave.get(), "the id stays");
+    assert!(opened.json["merged_by"].is_null(), "{}", opened.json);
     let read = call(r(), "GET", &one, session(olga), None).await;
     assert_eq!(read.json["author"], author, "{}", read.json);
     let listed = call(r(), "GET", &list, session(olga), None).await;
@@ -633,5 +634,142 @@ async fn branch_input_scopes_and_draft_rights_are_enforced_through_the_routes() 
     )
     .await;
     assert_eq!(denied(&a), (StatusCode::BAD_REQUEST, "FG-WEB-0006"));
+    t.drop_now().await;
+}
+
+async fn numbered(t: &FreshDb, name: &str, display: &str, number: &str) -> UserId {
+    let mut new = NewUser::human(name, display, &format!("{name}@example.test"));
+    new.employee_number = Some(number.to_owned());
+    users::create(&t.db, &ctx(&format!("req-user-{name}")), &new)
+        .await
+        .expect("user")
+        .user_id
+}
+
+/// The merge's end state (the merge job needs git; the answer reads only
+/// the rows): merge request `iid` of `project` `merged`, its applied
+/// attempt requested by `by`.
+async fn mark_merged_by(t: &FreshDb, project: forge_core::ProjectId, iid: i64, by: UserId) {
+    let mr = forge_db::review::get(&t.db, project, iid)
+        .await
+        .expect("read")
+        .expect("merge request")
+        .id
+        .get();
+    let p = project.get();
+    let sha = "c".repeat(40);
+    t.commit_audited(
+        ("project", p),
+        &[
+            format!(
+                "UPDATE forge.merge_requests SET state = 'merged', revision = revision + 1 \
+                 WHERE id = {mr}"
+            ),
+            format!(
+                "INSERT INTO forge.merge_request_merges (merge_request_id, project_id, method, \
+                 requested_by, credential_kind, credential_id, request_id, head_sha, \
+                 target_branch, delete_source_branch) VALUES ({mr}, {p}, 'merge_commit', {}, \
+                 'session', 1, 'req-merge', '{sha}', 'refs/heads/main', false)",
+                by.get()
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'prepared', \
+                 expected_old = '{sha}', new_sha = '{sha}' WHERE merge_request_id = {mr}"
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'executing', \
+                 executing_at = now() WHERE merge_request_id = {mr}"
+            ),
+            format!(
+                "UPDATE forge.merge_request_merges SET state = 'applied', \
+                 finished_at = now() WHERE merge_request_id = {mr}"
+            ),
+        ],
+    )
+    .await;
+}
+
+/// Kanflow reads newly opened merge requests from the list and the detail:
+/// `author` and `merged_by` (`null` unless merged) have the dev-status
+/// shape `{id, username, display_name, employee_number}`. The employee
+/// number is disclosed exactly like the feed and the dev status: only to a
+/// token holding `user_employee_number` — never to a browser session, nor
+/// to a token without that scope (`api` and `admin` do not satisfy it).
+#[tokio::test]
+async fn merge_request_people_disclose_the_employee_number_only_with_the_scope() {
+    let t = FreshDb::migrated().await;
+    let olga = numbered(&t, "olga", "Olga Owner", "E-2001").await;
+    let dave = numbered(&t, "dave", "Dave Dev", "E-2002").await;
+    let web = web(&t, olga, &[(dave, Role::Developer)]).await;
+    let p = web.project_id.get();
+    let r = || router(&t.db);
+    let list = format!("/api/v1/projects/{p}/merge-requests");
+    for source in ["feature", "fix"] {
+        let opened = call(
+            r(),
+            "POST",
+            &list,
+            session(dave),
+            Some(json!({"title": source, "source_branch": source, "target_branch": "main"})),
+        )
+        .await;
+        assert_eq!(opened.status, StatusCode::CREATED, "{}", opened.json);
+    }
+    // iid 1 stays open; iid 2 is merged by olga.
+    mark_merged_by(&t, web.project_id, 2, olga).await;
+    let dave_plain = json!({"id": dave.get(), "username": "dave", "display_name": "Dave Dev"});
+    let olga_plain = json!({"id": olga.get(), "username": "olga", "display_name": "Olga Owner"});
+    let mut dave_numbered = dave_plain.clone();
+    dave_numbered["employee_number"] = json!("E-2002");
+    let mut olga_numbered = olga_plain.clone();
+    olga_numbered["employee_number"] = json!("E-2001");
+
+    let scoped = token(olga, &[Scope::ReadApi, Scope::UserEmployeeNumber], false);
+    for (who, label, dave_want, olga_want) in [
+        (session(olga), "session", &dave_plain, &olga_plain),
+        (
+            token(olga, &[Scope::ReadApi], false),
+            "read_api",
+            &dave_plain,
+            &olga_plain,
+        ),
+        (
+            token(olga, &[Scope::Api, Scope::Admin], false),
+            "api+admin",
+            &dave_plain,
+            &olga_plain,
+        ),
+        (
+            scoped,
+            "user_employee_number",
+            &dave_numbered,
+            &olga_numbered,
+        ),
+    ] {
+        // The list shows open ones by default: every state here.
+        let listed = call(r(), "GET", &format!("{list}?state=all"), who.clone(), None).await;
+        assert_eq!(listed.status, StatusCode::OK, "{label}: {}", listed.json);
+        let rows = &listed.json["merge_requests"];
+        let row = |iid: i64| {
+            rows.as_array()
+                .and_then(|a| a.iter().find(|m| m["iid"] == iid))
+                .cloned()
+                .unwrap_or_else(|| panic!("{label}: no iid {iid} in {rows}"))
+        };
+        assert_eq!(&row(1)["author"], dave_want, "{label} list open");
+        assert!(row(1)["merged_by"].is_null(), "{label} list open");
+        assert_eq!(&row(2)["author"], dave_want, "{label} list merged");
+        assert_eq!(&row(2)["merged_by"], olga_want, "{label} list merged");
+        for (iid, merged_by) in [(1, &Value::Null), (2, olga_want)] {
+            let one = call(r(), "GET", &format!("{list}/{iid}"), who.clone(), None).await;
+            assert_eq!(one.status, StatusCode::OK, "{label}: {}", one.json);
+            assert_eq!(&one.json["author"], dave_want, "{label} detail {iid}");
+            assert_eq!(&one.json["merged_by"], merged_by, "{label} detail {iid}");
+            assert!(
+                one.json["author"].get("email").is_none(),
+                "{label}: never the e-mail"
+            );
+        }
+    }
     t.drop_now().await;
 }

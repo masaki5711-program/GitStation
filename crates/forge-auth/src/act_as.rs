@@ -183,6 +183,7 @@ fn decide_rule(
             | Resource::RunnerJob(_)
             | Resource::JobSelf(_)
             | Resource::AutoMerge(_)
+            | Resource::Deployment(_)
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
             | Resource::GroupTransfer { .. }
@@ -228,6 +229,7 @@ fn decide_rule(
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
+        | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -376,6 +378,7 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
+        | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -468,6 +471,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
+        | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

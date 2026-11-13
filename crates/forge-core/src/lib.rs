@@ -10,6 +10,8 @@ pub mod checks;
 pub mod config;
 pub mod cursor;
 pub mod dedup_key;
+// M4 C11: deployments (tiers, states, target checks, audit details).
+pub mod deploy;
 pub mod discussion;
 pub mod doc_lint_migration;
 // M4 C2: a person's change to a CI pipeline (audit details).

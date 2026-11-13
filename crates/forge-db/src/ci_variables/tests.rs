@@ -55,7 +55,7 @@ async fn put(
     project: forge_core::ProjectId,
     v: &NewValue,
 ) -> Result<(StoredVariable, bool), forge_errors::ForgeError> {
-    put_decided(
+    put_variable_decided(
         db,
         &ctx(Actor::User(user), "req-ci-var"),
         project,
@@ -71,7 +71,7 @@ async fn delete(
     project: forge_core::ProjectId,
     name: &str,
 ) -> Result<bool, forge_errors::ForgeError> {
-    delete_decided(db, c, project, name, |_| Ok(())).await
+    delete_variable_decided(db, c, project, name, |_| Ok(())).await
 }
 
 fn value(name: &str, byte: u8, masked: bool) -> NewValue {

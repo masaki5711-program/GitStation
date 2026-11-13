@@ -20,9 +20,13 @@ mod auth;
 // M4 C6: `ci.*`.
 mod ci;
 mod database;
+// M4 C11: `deploy.*`.
+mod deploy;
 // M3 I1c: `feed.*`.
 mod feed;
 mod git_http;
+// `git.pack.*`: the memory caps of pack-heavy git.
+mod git_pack;
 mod hosting;
 mod keys;
 mod maintenance;
@@ -51,8 +55,10 @@ pub use auth::{AuthConfig, OidcConfig, OidcSigningAlg};
 pub use backup::{BackupConfig, BackupKey};
 pub use ci::CiConfig;
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
+pub use deploy::{DeployConfig, SSH_KEY_FILE_KEY as DEPLOY_SSH_KEY_FILE_KEY};
 pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
+pub use git_pack::GitPackConfig;
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
@@ -94,6 +100,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_BACKUP_",
     // M4 C6: `ci.*`.
     "FORGE_CI_",
+    // M4 C11: `deploy.*`.
+    "FORGE_DEPLOY_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -177,6 +185,9 @@ pub struct Config {
     pub audit: AuditConfig,
     /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
     pub git_http: GitHttpConfig,
+    /// `git.pack.*` (the memory caps of pack-heavy git: delta window,
+    /// threads, base cache, pack mappings).
+    pub git_pack: GitPackConfig,
     /// `hosting.*` (the deletion grace period, D5 MR3; the purge period, D5 MR4).
     pub hosting: HostingConfig,
     /// `review.*` (the mergeability fan-out cap, M3 R2).
@@ -199,6 +210,8 @@ pub struct Config {
     pub backup: BackupConfig,
     /// `ci.*` (the CI variables' keys, M4 C6).
     pub ci: CiConfig,
+    /// `deploy.*` (deployments over SSH, M4 C11).
+    pub deploy: DeployConfig,
 }
 
 impl Config {
@@ -436,6 +449,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         )?,
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
+        git_pack: GitPackConfig::load(get)?,
         hosting: HostingConfig::load(get)?,
         review: ReviewConfig::load(get)?,
         feed: FeedConfig::load(get)?,
@@ -451,6 +465,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         mirror: MirrorConfig::load(get)?,
         backup: BackupConfig::load(get)?,
         ci: CiConfig::load(get)?,
+        deploy: DeployConfig::load(get)?,
     }
     .validate_across()
 }

@@ -488,6 +488,36 @@ actions! {
     /// people only (a secret's owner answers for it; an agent never sets or
     /// sees one, ADR-0029 decision 8); `api`.
     CiVariableManage,
+    // --- deployments (M4 C11, plan 14 §4.2, ADR-0031) ---
+    /// `GET /api/v1/projects/{id}/deploy/environments`, `GET
+    /// …/deployments`: a project's environments, targets (with their
+    /// pinned fingerprints, never a key) and deployments. As `RepoBrowse`
+    /// (Reporter, or any signed-in person on an internal project);
+    /// `read_api`.
+    DeployRead,
+    /// `PUT …/deploy/environments/{tier}`: create or change an
+    /// environment (approval rule, approval window, freeze windows,
+    /// automatic rollback and deployment). Maintainer and above, people
+    /// only; `api`.
+    DeployEnvironmentManage,
+    /// `PUT …/deploy/environments/{tier}/targets/{name}`: register or
+    /// change a target (host, port, user, pinned host key, script name).
+    /// Administrators only, people only (a target is a host forge's key
+    /// can log in to); a token needs the `admin` scope.
+    DeployTargetManage,
+    /// `POST …/deployments`: request a deployment of a commit to an
+    /// environment. Developer and above (agents and service accounts by
+    /// their membership: a request deploys nothing where an approval is
+    /// required); `api`.
+    DeployCreate,
+    /// `POST …/deployments/{deployment_id}/approve` (`Resource::Deployment`):
+    /// people only, Maintainer and above, never the requester nor the
+    /// people behind the SHA — merge request authors, pushers, the commit
+    /// author and committer (`FG-DEPLOY-0009`); a web session only on
+    /// every tier (a token is `FG-AUTH-0002 reason=session_required`). An
+    /// agent, a service account (the auto-merge principal included), a
+    /// bot, an act-as request, a runner and a job never approve.
+    DeployApprove,
     /// `PUT /api/v1/runner/jobs/{job_id}/artifacts?path=` (M4 C6): a job
     /// uploads one file of its artifacts — its own token, its own job,
     /// while it runs (`CiRule::Job`, `Resource::JobSelf`).
@@ -617,6 +647,8 @@ impl Action {
                 | Action::RunnerManage
                 // M4 C9: the auto-merge mode is the Owner's choice in a session.
                 | Action::AutoMergeSettingsManage
+                // M4 C11 review: an approval is a person's in the browser.
+                | Action::DeployApprove
         )
     }
 
@@ -679,6 +711,10 @@ impl Action {
                 | Action::AutoMergeSettingsManage
                 | Action::AutoMergeStopToggle
                 | Action::AutoMergeInstanceStopToggle
+                // M4 C11: deploy configuration and approval are a person's.
+                | Action::DeployEnvironmentManage
+                | Action::DeployTargetManage
+                | Action::DeployApprove
         )
     }
 
@@ -723,6 +759,8 @@ impl Action {
             // M4 C6: a job's own artifacts (`ci_rule`: the job's token only).
             | Action::JobArtifactUpload
             | Action::JobArtifactDownload
+            // M4 C11 review: session only.
+            | Action::DeployApprove
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -770,6 +808,7 @@ impl Action {
             | Action::PipelineDiagnosisRead
             | Action::MergeQueueRead
             | Action::CiArtifactRead
+            | Action::DeployRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -818,6 +857,9 @@ impl Action {
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
             | Action::CiVariableManage
+            | Action::DeployEnvironmentManage
+            | Action::DeployTargetManage
+            | Action::DeployCreate
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge
@@ -963,6 +1005,12 @@ impl Action {
             | Action::AutoMergeInstanceStopToggle
             // M4 C6: nor are CI secrets.
             | Action::CiVariableManage
+            // M4 C11: nor are deployments (an approval is a person's own).
+            | Action::DeployRead
+            | Action::DeployEnvironmentManage
+            | Action::DeployTargetManage
+            | Action::DeployCreate
+            | Action::DeployApprove
             // M4 C3: runners are no act-as action.
             | Action::RunnerRegister
             | Action::RunnerManage
@@ -1108,6 +1156,13 @@ impl Action {
             // M4 C6: a job never reads or sets a secret through the API
             // (ADR-0029 decision 8: they come with the claim).
             | Action::CiVariableManage
+            // M4 C11: a job never reads, requests or approves a deployment
+            // (ADR-0029 obligation 6: a retried job is no approval).
+            | Action::DeployRead
+            | Action::DeployEnvironmentManage
+            | Action::DeployTargetManage
+            | Action::DeployCreate
+            | Action::DeployApprove
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead
