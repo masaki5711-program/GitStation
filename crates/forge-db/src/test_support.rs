@@ -543,6 +543,24 @@ impl FreshDb {
             .unwrap_or_else(|e| panic!("{sql}: {e}"));
     }
 
+    /// `statements` in one superuser transaction (committed at the end), for
+    /// fixtures whose rows must commit together — e.g. events with their
+    /// audit row, where the txn-audited trigger fires at COMMIT. Callers
+    /// outside forge-db never write `BEGIN` themselves
+    /// (`validate-db-write-boundary`).
+    pub async fn exec_superuser_tx(&self, statements: &[String]) {
+        use sqlx::Connection;
+        let mut conn = self.superuser().await;
+        let mut tx = conn.begin().await.expect("begin");
+        for sql in statements {
+            sqlx::raw_sql(sql)
+                .execute(&mut *tx)
+                .await
+                .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        }
+        tx.commit().await.expect("commit");
+    }
+
     pub async fn superuser(&self) -> PgConnection {
         superuser(&self.name).await
     }
