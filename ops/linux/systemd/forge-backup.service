@@ -1,0 +1,69 @@
+# /etc/systemd/system/forge-backup.service — one `forge backup` run
+# (pgBackRest for the database, then every repository into a new encrypted
+# generation in backup.dir). Started by forge-backup.timer.
+# Runbook: backup-restore (FG-SYS-0008).
+#
+# pgBackRest access (choose one, runbook backup-restore "設定"):
+#  - PostgreSQL in a container: backup.pgbackrest_bin is a docker/podman
+#    exec wrapper; forge must reach the runtime's socket (root-equivalent:
+#    an approved decision).
+#  - PostgreSQL on the host, pgBackRest as postgres through sudo: sudo needs
+#    new privileges, so add a drop-in (`systemctl edit forge-backup`) with
+#      [Service]
+#      NoNewPrivileges=no
+#      RestrictSUIDSGID=no
+#      CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE
+#    and a sudoers rule limited to `/usr/bin/pgbackrest --stanza=forge *`.
+[Unit]
+Description=GitStation backup (forge backup)
+Documentation=file:///opt/gitstation/current/share/runbooks/backup-restore.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=forge
+Group=forge
+UMask=0077
+WorkingDirectory=/var/lib/forge
+Environment=HOME=/var/lib/forge
+Environment=LANG=C.UTF-8
+ExecStart=/opt/gitstation/current/bin/forge --config /etc/forge/forge.toml backup
+# backup.db_timeout_secs + backup.repo_timeout_secs (defaults 1 h each).
+TimeoutStartSec=2h
+# Less important than serving: yield CPU and disk to forge-serve and PFS.
+Nice=10
+IOSchedulingClass=idle
+
+# PLACEHOLDER values.
+MemoryHigh=512M
+MemoryMax=1G
+TasksMax=256
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+# storage.root and the state copies (read), backup.dir (write). PLACEHOLDER
+# path: keep it equal to backup.dir in /etc/forge/forge.toml. The `-`
+# lets a missing backup.dir reach forge, which reports it (FG-SYS-0008).
+ReadWritePaths=/var/lib/forge -/srv/forge-backup
+InaccessiblePaths=-/etc/forge/secrets-privileged -/run/forge-admin -/etc/forge/forgectl.env
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM

@@ -17,3 +17,6 @@
 
 # Runner test environment: token and local config (ops/runner/README.md)
 /ops/runner/.local/
+
+# Linux release tarballs (ops/linux/build-release.sh)
+/dist/

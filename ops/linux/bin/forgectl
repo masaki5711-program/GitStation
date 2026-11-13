@@ -1,0 +1,140 @@
+#!/bin/bash
+# forgectl — run an operator `forge` command on the production server.
+#
+#   sudo forgectl doctor
+#   sudo forgectl db status --check
+#   sudo forgectl db migrate                       # + the forge_migrator login
+#   sudo forgectl admin token issue --user alice ...
+#   sudo forgectl restore finish --generation ...  # + the forge_maint login
+#
+# What it does (runbook linux-install, ADR-0018):
+#   - runs `forge --config /etc/forge/forge.toml <args>` as the service user
+#     `forge` (repositories stay owned by forge; git never sees a foreign
+#     owner), with a clean environment and USER=<the sudo user> so the audit
+#     row names the operator;
+#   - for `db migrate`, `restore finish` and `admin events new-epoch` only:
+#     copies the privileged password (root:root 0600 under
+#     /etc/forge/secrets-privileged/) into a fresh private directory under
+#     /run/forge-admin/ for the duration of the command, and passes its path
+#     and the login's URL (/etc/forge/forgectl.env) through the environment.
+#     forge-serve / forge-worker / forge-backup have
+#     InaccessiblePaths=/run/forge-admin and /etc/forge/secrets-privileged,
+#     so the server processes never see those credentials.
+#
+# Must run as root. Exit status: forge's, or 2 for a forgectl usage/setup
+# error (nothing was run).
+set -euo pipefail
+
+FORGE_BIN="${FORGECTL_FORGE_BIN:-/opt/gitstation/current/bin/forge}"
+CONFIG="${FORGECTL_CONFIG:-/etc/forge/forge.toml}"
+ENV_FILE="${FORGECTL_ENV_FILE:-/etc/forge/forgectl.env}"
+PRIV_DIR="${FORGECTL_PRIVILEGED_DIR:-/etc/forge/secrets-privileged}"
+RUN_BASE="${FORGECTL_RUN_DIR:-/run/forge-admin}"
+SERVICE_USER="${FORGECTL_USER:-forge}"
+SERVICE_HOME="${FORGECTL_HOME:-/var/lib/forge}"
+
+die() {
+  printf 'forgectl: %s\n' "$*" >&2
+  exit 2
+}
+
+[ "$#" -gt 0 ] || die "usage: forgectl <forge subcommand> [args...]  (see: forgectl --help)"
+[ "$(id -u)" -eq 0 ] || die "run as root (sudo forgectl ...)"
+[ -x "$FORGE_BIN" ] || die "forge binary not found or not executable: $FORGE_BIN"
+[ -r "$CONFIG" ] || die "configuration not readable: $CONFIG"
+id -u "$SERVICE_USER" >/dev/null 2>&1 || die "service user missing: $SERVICE_USER (systemd-sysusers)"
+command -v runuser >/dev/null 2>&1 || die "runuser (util-linux) not found"
+
+# Which privileged login the command needs (detected from the words, so an
+# operator cannot forget it; an unneeded login is simply not staged).
+need_migrate=0
+need_maint=0
+words=" $* "
+case "$words" in
+  *" db migrate "*) need_migrate=1 ;;
+esac
+case "$words" in
+  *" restore finish "* | *" events new-epoch "*) need_maint=1 ;;
+esac
+
+# The URLs of the privileged logins: KEY=VALUE, two known keys only.
+migrate_url=""
+maint_url=""
+if [ "$need_migrate" -eq 1 ] || [ "$need_maint" -eq 1 ]; then
+  [ -f "$ENV_FILE" ] || die "missing $ENV_FILE (copy ops/linux/etc/forgectl.env.example)"
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in
+      '' | '#'*) continue ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      FORGE_DATABASE_MIGRATE_URL) migrate_url="$value" ;;
+      FORGE_DATABASE_MAINT_URL) maint_url="$value" ;;
+      *) die "$ENV_FILE: unknown key '$key' (allowed: FORGE_DATABASE_MIGRATE_URL, FORGE_DATABASE_MAINT_URL)" ;;
+    esac
+  done <"$ENV_FILE"
+fi
+
+# The person for the audit row: the sudo user, or the login name behind a
+# root shell (`sudo -i` then `forgectl`), else root.
+operator="${SUDO_USER:-}"
+if [ -z "$operator" ] || [ "$operator" = "root" ]; then
+  operator="$(logname 2>/dev/null || true)"
+fi
+operator="${operator:-root}"
+envs=(
+  "PATH=/usr/local/bin:/usr/bin:/bin"
+  "LANG=C.UTF-8"
+  "HOME=$SERVICE_HOME"
+  "USER=$operator"
+  "LOGNAME=$operator"
+)
+if [ -n "${RUST_LOG:-}" ]; then
+  envs+=("RUST_LOG=$RUST_LOG")
+fi
+
+stage=""
+# shellcheck disable=SC2329 # invoked by the EXIT trap
+cleanup() {
+  if [ -n "$stage" ]; then
+    rm -rf -- "$stage"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# Copy one privileged secret into the private run directory (created on the
+# first call, in this shell so the EXIT trap removes it). Sets $staged.
+staged=""
+stage_secret() { # <source file> <name>
+  local src="$1" name="$2"
+  [ -f "$src" ] || die "missing privileged secret: $src"
+  if [ -z "$stage" ]; then
+    [ -d "$RUN_BASE" ] || die "missing $RUN_BASE (systemd-tmpfiles --create /etc/tmpfiles.d/forge.conf)"
+    stage="$(mktemp -d "$RUN_BASE/run.XXXXXXXX")"
+    chown "$SERVICE_USER:$SERVICE_USER" "$stage"
+    chmod 0700 "$stage"
+  fi
+  install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0600 "$src" "$stage/$name"
+  staged="$stage/$name"
+}
+
+if [ "$need_migrate" -eq 1 ]; then
+  [ -n "$migrate_url" ] || die "$ENV_FILE: FORGE_DATABASE_MIGRATE_URL is not set"
+  stage_secret "$PRIV_DIR/db-migrate.pw" db-migrate.pw
+  envs+=("FORGE_DATABASE_MIGRATE_URL=$migrate_url" "FORGE_DATABASE_MIGRATE_PASSWORD_FILE=$staged")
+fi
+if [ "$need_maint" -eq 1 ]; then
+  [ -n "$maint_url" ] || die "$ENV_FILE: FORGE_DATABASE_MAINT_URL is not set"
+  stage_secret "$PRIV_DIR/db-maint.pw" db-maint.pw
+  envs+=("FORGE_DATABASE_MAINT_URL=$maint_url" "FORGE_DATABASE_MAINT_PASSWORD_FILE=$staged")
+fi
+
+# Not exec: the trap must remove the staged copy after forge exits.
+status=0
+runuser -u "$SERVICE_USER" -- /usr/bin/env -i "${envs[@]}" \
+  "$FORGE_BIN" --config "$CONFIG" "$@" || status=$?
+exit "$status"

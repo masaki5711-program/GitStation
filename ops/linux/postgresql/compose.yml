@@ -1,0 +1,65 @@
+# GitStation's own PostgreSQL 16 instance in a container (option A of
+# ops/linux/postgresql/README.md), for a host that runs PFS with
+# Docker or Podman. Same image as PFS / development (PG 16 + TimescaleDB
+# 2.28.1; forge does not use the extension).
+#
+#   install -d -m 0700 -o root -g root /etc/forge/pg
+#   openssl rand -hex 24 > /etc/forge/pg/superuser.pw && chmod 0644 /etc/forge/pg/superuser.pw
+#   (0644 so the container's postgres user can read the bind-mounted file;
+#    the 0700 root directory keeps every host account out)
+#   docker compose -f /opt/gitstation/current/share/postgresql/compose.yml up -d --wait
+#   (podman: `podman compose …` or `podman-compose …`)
+#
+# Then the bootstrap (runbook db-bootstrap) through
+#   docker compose … exec -T postgres psql -U postgres -v ON_ERROR_STOP=1 …
+#
+# pgBackRest runs inside this container in production (runbook
+# backup-restore "PostgreSQL がコンテナのとき"); add it to a derived image
+# before enabling archive_mode below (archive_command fails without it and
+# WAL then accumulates).
+name: gitstation-pg
+services:
+  postgres:
+    image: timescale/timescaledb:2.28.1-pg16   # PLACEHOLDER: pin the digest the PFS team uses
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - max_connections=40
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - log_min_duration_statement=1000
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg-superuser
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets:
+      - pg-superuser
+    ports:
+      # Loopback only; PLACEHOLDER port (not PFS's 5432).
+      - "127.0.0.1:55433:5432"
+    shm_size: 256mb
+    mem_limit: 1g                    # PLACEHOLDER
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - gitstation-pg:/var/lib/postgresql/data
+secrets:
+  pg-superuser:
+    file: /etc/forge/pg/superuser.pw
+volumes:
+  gitstation-pg:

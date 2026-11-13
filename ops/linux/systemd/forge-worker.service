@@ -1,0 +1,65 @@
+# /etc/systemd/system/forge-worker.service — GitStation background tasks
+# (repository provisioning, outbox sequencer, audit seals, jobs, purge,
+# repository maintenance, state copies). Without it new projects get no
+# repository. Runbooks: linux-install, linux-upgrade, job-queue-backlog.
+[Unit]
+Description=GitStation worker (forge worker)
+Documentation=file:///opt/gitstation/current/share/runbooks/linux-install.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=forge
+Group=forge
+UMask=0027
+WorkingDirectory=/var/lib/forge
+Environment=HOME=/var/lib/forge
+Environment=LANG=C.UTF-8
+ExecStart=/opt/gitstation/current/bin/forge --config /etc/forge/forge.toml worker
+
+# A running job gets 10 s after SIGTERM; git children (maintenance) are
+# left to forge (KillMode=mixed).
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5s
+
+# PLACEHOLDER values (git gc / repack of a large repository runs here).
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=512
+LimitNOFILE=65536
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+# /var/lib/forge holds storage.root and backup.state_copy_dir. If either is
+# moved to another mount, add it here (drop-in).
+ReadWritePaths=/var/lib/forge
+InaccessiblePaths=-/etc/forge/secrets-privileged -/run/forge-admin -/etc/forge/forgectl.env
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

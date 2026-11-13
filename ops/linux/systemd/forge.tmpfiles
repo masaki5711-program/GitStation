@@ -1,0 +1,18 @@
+# /etc/tmpfiles.d/forge.conf — GitStation directories and their modes.
+# Apply: systemd-tmpfiles --create /etc/tmpfiles.d/forge.conf
+# (also runs at every boot). `d` creates a missing directory and fixes the
+# mode/owner of an existing one; it never deletes content.
+#
+# Type Path                              Mode User  Group Age
+d      /etc/forge                         0750 root  forge -
+d      /etc/forge/ca                      0755 root  root  -
+d      /etc/forge/secrets                 0700 forge forge -
+d      /etc/forge/secrets-privileged      0700 root  root  -
+d      /var/lib/forge                     0750 forge forge -
+d      /var/lib/forge/repositories        0750 forge forge -
+d      /var/lib/forge/state-copy          0700 forge forge -
+# backup.dir — PLACEHOLDER: a different disk, mounted before this runs.
+d      /srv/forge-backup                  0700 forge forge -
+# forgectl's private run directories (removed after each command).
+# 0711: forge may enter its own run.XXXXXXXX directory, nobody may list.
+d      /run/forge-admin                   0711 root  root  -
