@@ -83,6 +83,11 @@ lookup table 付き）を書く。保守済みのリポジトリの clone / fetc
 差分を探し直すので、遅く、メモリも使う。**保守が止まっていないこと**（`forge doctor` の `repositories.maintenance`）が、
 メモリと速さの両方に効く。
 
+git は **2.38 以上**が前提（`gc --cruft`、`pack.writeBitmapLookupTable`。CI イメージはビルド時に確かめる）。
+2.38 未満の git のサーバーに復元すると、lookup table は黙って書かれず（bitmap 全体を読むので fetch が少し遅い）、
+2.37 未満では保守の gc（`--cruft`）が `FG-GIT-0018` で失敗し続け、bitmap が作り直されない。そのとき clone / fetch は
+動くが、オブジェクトをたどって送るものを決めるので遅く、メモリも使う。復元先の `git --version` を先に確かめる。
+
 ### PostgreSQL
 
 値と理由は `ops/linux/postgresql/README.md`（`forge-postgresql.conf`）に合わせる。要点:

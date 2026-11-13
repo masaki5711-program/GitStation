@@ -46,6 +46,10 @@ use forge_git::{Git, GitConfig, Provisioned, StorageRoot};
 
 /// The longest single git invocation of the handler; each one also gets at
 /// most the time left of the run's storage deadline ([`Deadlines`]).
+/// Provisioning never packs (`init`, `config`, `rev-parse` only), so the
+/// `git.pack.*` caps do not touch it. The pack-heavy users of this git
+/// (maintenance's gc, the push mirror, backup / restore) clone it and set
+/// their own, longer timeouts per call (`GitCommand::timeout`).
 pub(crate) const GIT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Kept from the job's timeout for COMMIT, which `mark_ready` bounds on
 /// its own (10 s) and which the job's timeout must not cut.

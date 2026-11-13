@@ -13,6 +13,16 @@ pub use forge_core::config::GitPackConfig;
 /// `cat-file`, whose `--batch-command` readers are long-lived
 /// (`batch.rs`: up to `batch_per_repo × batch_max_repos` at once). `-c`
 /// reaches git's child processes too (`GIT_CONFIG_PARAMETERS`).
+///
+/// The same caps for every caller, on purpose: fewer threads and a smaller
+/// window only cost time when pack-objects searches deltas (measured with
+/// `ops/bench/git-pack-memory.py`: gc +4 %, a clone of an unmaintained
+/// repository +10 % for pack-objects, +3 % end to end), and the callers
+/// that may search have budgets far above that — maintenance's gc
+/// `maintenance.step_timeout_secs` (1800 s default), the push mirror
+/// `mirror.push_timeout_secs` (300 s default, up to 1500 s; it reuses the
+/// gc'd pack's deltas), Smart HTTP `git.http.timeout_ms` (1 h). A host
+/// with spare memory raises `git.pack.threads` for all of them.
 pub(crate) const PACK_HEAVY_SUBCOMMANDS: &[&str] = &[
     "upload-pack",
     "receive-pack",
