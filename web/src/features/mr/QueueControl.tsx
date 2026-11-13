@@ -5,6 +5,7 @@
 // queue merges for the person who asked once a pipeline on it (with what is
 // ahead of it) passes. The server decides every press again; a refusal shows
 // its user_message and request id (never the code).
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
@@ -31,13 +32,20 @@ export function QueueSection({
 }) {
   const status = useMergeStatus(projectId, iid);
   const viewed = useViewedHead();
+  const data = status.data;
+  // Offered only when nothing but what the queue proves itself blocks the
+  // merge (the merge result's `ci/pipeline`); the server decides again.
+  const queueable =
+    data !== undefined &&
+    data.viewer.can_merge &&
+    data.reasons.every((r) => queueProves(r.reason, r.detail));
   return (
     <QueueControl
       projectId={projectId}
       project={project}
       iid={iid}
       open={open}
-      canMerge={status.data?.viewer.can_merge === true}
+      canMerge={queueable}
       viewedHead={viewed.known ? viewed.head : null}
     />
   );
@@ -94,7 +102,7 @@ export function QueueControl({
               className={controls.button}
               aria-disabled={busy ? 'true' : undefined}
               onClick={() => {
-                if (busy || viewedHead === null) return;
+                if (busy) return;
                 dequeue.reset();
                 enqueue.mutate(viewedHead);
               }}
@@ -134,8 +142,20 @@ export function QueueControl({
   );
 }
 
+/** A blocking reason the queue's own train pipeline settles: a missing,
+ * stale or still running `ci/pipeline` of the merge result. */
+export function queueProves(reason: string, detail: string | null): boolean {
+  const ciPipeline = detail?.split(' ').includes('name=ci/pipeline') === true;
+  return (
+    ciPipeline &&
+    (reason === 'required_check_missing' ||
+      reason === 'required_check_stale' ||
+      reason === 'required_check_not_successful')
+  );
+}
+
 /** One line: where the entry is, or why it left and what to do next. */
-export function entryLine(t: (key: string, opts?: Record<string, unknown>) => string, e: QueueEntry): string {
+export function entryLine(t: TFunction, e: QueueEntry): string {
   switch (e.state) {
     case 'queued':
       return t('mergeQueue.state.queued', { position: e.position ?? 1 });
@@ -149,7 +169,7 @@ export function entryLine(t: (key: string, opts?: Record<string, unknown>) => st
 }
 
 /** The reason a queue removed an entry, in words (the code is never shown). */
-export function reasonLabel(t: (key: string) => string, reason: string | null): string {
+export function reasonLabel(t: TFunction, reason: string | null): string {
   switch (reason) {
     case 'dequeued':
       return t('mergeQueue.reason.dequeued');
