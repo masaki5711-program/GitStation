@@ -52,6 +52,7 @@ const job = (over: Record<string, unknown> = {}) => ({
   tags: [],
   secrets: [],
   status: 'succeeded',
+  manual: false,
   attempt: 1,
   error_code: null,
   created_at: '2026-11-10T00:00:00Z',

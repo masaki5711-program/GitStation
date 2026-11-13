@@ -147,6 +147,8 @@ export const pipelinesUrl = (project: string, query?: { before?: number }) =>
     ? `${base(project)}/-/pipelines`
     : `${base(project)}/-/pipelines?before=${String(query.before)}`;
 
+/** The pipeline schedules (M4 C12). */
+export const pipelineSchedulesUrl = (project: string) => `${base(project)}/-/pipelines/schedules`;
 /** One pipeline; `job`: the job whose log is open. */
 export const pipelineUrl = (project: string, id: number, job?: number) =>
   `${base(project)}/-/pipelines/${String(id)}${job === undefined ? '' : `?job=${String(job)}`}`;

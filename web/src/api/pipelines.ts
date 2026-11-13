@@ -195,3 +195,25 @@ export const useCancelPipeline = (project: number, id: number) =>
   usePipelineAction(project, id, 'cancel');
 export const useRetryPipeline = (project: number, id: number) =>
   usePipelineAction(project, id, 'retry');
+
+/** A job waiting for a person (`when: manual`, M4 C12): the "run" button
+ * starts it (`…/jobs/{job_id}/play`, Developer or above). */
+export const isWaitingManual = (job: { status: string }) => job.status === 'manual';
+
+/** Start a manual job; the answer is the pipeline after the change. */
+export function usePlayJob(project: number, id: number) {
+  const api = useApi();
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (job: number) =>
+      call(() =>
+        api.POST('/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play', {
+          params: { path: { id: project, pipeline_id: id, job_id: job } },
+        }),
+      ),
+    onSuccess: (pipeline) => {
+      client.setQueryData(pipelineKeys.one(project, id), pipeline);
+      void client.invalidateQueries({ queryKey: pipelineKeys.all(project) });
+    },
+  });
+}

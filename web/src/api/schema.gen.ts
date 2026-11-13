@@ -829,6 +829,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/ci/variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's CI variables: name, protected_only, masked, value length, who set them and when; never a value (people only; Maintainer) */
+        get: operations["get_api_v1_projects_id_ci_variables"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/ci/variables/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set a CI variable ({"value", "protected_only"?, "masked"?}, both default true): 201 created or 200 replaced, the metadata only (the value is never answered again); 400 FG-WEB-0006 for a bad name or value (param and reason, never the value); 503 FG-CI-0016 without a usable ci.secret_keys_file. Values reach only jobs of push pipelines of protected branches (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_ci_variables_name"];
+        post?: never;
+        /** Delete a CI variable: 204; 404 FG-REPO-0005 without it (people only; Maintainer) */
+        delete: operations["delete_api_v1_projects_id_ci_variables_name"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/commits/{sha}/checks": {
         parameters: {
             query?: never;
@@ -1487,6 +1522,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/pipeline-schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's pipeline schedules (at most 20): branch, cron and UTC offset, active, owner (whose rights it runs with), next time, last run and its outcome (project readers) */
+        get: operations["get_api_v1_projects_id_pipeline_schedules"];
+        put?: never;
+        /** Create a pipeline schedule ({"description", "ref", "cron", "utc_offset_minutes", "active"?}): 201; the caller becomes its owner and it runs with the owner's rights at each run, never with secrets; 400 FG-WEB-0006 (param, reason) for a bad value; 409 FG-CI-0027 past 20 per project (people only; Maintainer) */
+        post: operations["post_api_v1_projects_id_pipeline_schedules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipeline-schedules/{schedule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner; 404 FG-REPO-0005 without it (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_pipeline_schedules_schedule_id"];
+        post?: never;
+        /** Delete a pipeline schedule: 204; 404 FG-REPO-0005 without it (people only; Maintainer) */
+        delete: operations["delete_api_v1_projects_id_pipeline_schedules_schedule_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/pipelines": {
         parameters: {
             query?: never;
@@ -1556,6 +1627,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A CI job's artifacts (every attempt's): path, size, sha256, attempt, keep, expiry (30 days unless kept for a deployment); 404 FG-REPO-0005 without such a pipeline or job; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers) */
+        get: operations["get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_artifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One CI artifact's bytes (application/octet-stream, attachment, X-Forge-Sha256); 404 FG-REPO-0005 without it (or expired); 403 FG-AUTH-0022 as for the list (project readers) */
+        get: operations["get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_artifacts_artifact_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/log": {
         parameters: {
             query?: never;
@@ -1567,6 +1672,23 @@ export interface paths {
         get: operations["get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_log"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a `when: manual` job: 200 the pipeline (the job pending for a runner, a finished pipeline running again); 404 FG-REPO-0005 without the pipeline or job; 409 FG-CI-0003 operation=play when the job is not waiting for a person (not_manual), the pipeline is cancelled, invalid or error (pipeline_state), or a job it needs has not succeeded (needs_not_succeeded). Secrets reach it only as its pipeline allows (Developer) */
+        post: operations["post_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_play"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2108,6 +2230,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runner/jobs/{job_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upload one file of a job's artifacts (the raw bytes; ?path= the file's path in the work tree) with the job's own token fgj_..., while the job runs: 201 {id, path, size_bytes, sha256}; 413 FG-CI-0019 past 100 MiB per file or 512 MiB / 1000 files per attempt; 409 FG-CI-0004 once the job ended; 400 FG-WEB-0006 for a bad or repeated path */
+        put: operations["put_api_v1_runner_jobs_job_id_artifacts"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runner/jobs/{job_id}/complete": {
         parameters: {
             query?: never;
@@ -2153,6 +2292,40 @@ export interface paths {
         put?: never;
         /** Append a log chunk to a job the runner holds ({"attempt", "seq", "text"}; append only, a resent seq is a no-op); 413 FG-CI-0006 past the job's limit; 409 FG-CI-0004 when the lease was lost (the holding runner only) */
         post: operations["post_api_v1_runner_jobs_job_id_log"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/{job_id}/needs/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The artifacts of the jobs a running job needs (their current, succeeded attempt, same pipeline), with the job's own token fgj_... */
+        get: operations["get_api_v1_runner_jobs_job_id_needs_artifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/{job_id}/needs/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One artifact of a job's needs: its bytes (application/octet-stream), with the job's own token fgj_...; 404 FG-REPO-0005 for any other artifact */
+        get: operations["get_api_v1_runner_jobs_job_id_needs_artifacts_artifact_id"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2693,6 +2866,31 @@ export interface components {
             /** @description What a rule write names the user by. */
             username: string;
         };
+        /** @description One artifact's metadata. */
+        ArtifactBody: {
+            /** Format: int32 */
+            attempt: number;
+            created_at: string;
+            expires_at: string;
+            /** Format: int64 */
+            id: number;
+            /** @description The job that uploaded it. */
+            job: string;
+            /** Format: int64 */
+            job_id: number;
+            /** @description Kept past the retention (a deployed version). */
+            keep: boolean;
+            path: string;
+            /** Format: int64 */
+            pipeline_id: number;
+            sha256: string;
+            /** Format: int64 */
+            size_bytes: number;
+        };
+        /** @description A list of artifacts. */
+        ArtifactList: {
+            artifacts: components["schemas"]["ArtifactBody"][];
+        };
         /** @description `PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`. */
         BindProject: {
             /**
@@ -2896,6 +3094,27 @@ export interface components {
             /** Format: int32 */
             schema_version: number;
         };
+        /** @description A variable's metadata (never its value). */
+        CiVariableBody: {
+            created_at: string;
+            /** Format: int64 */
+            created_by: number;
+            masked: boolean;
+            name: string;
+            protected_only: boolean;
+            updated_at: string;
+            /** Format: int64 */
+            updated_by: number;
+            /**
+             * Format: int32
+             * @description The value's length in bytes.
+             */
+            value_bytes: number;
+        };
+        /** @description `GET …/ci/variables`. */
+        CiVariableList: {
+            variables: components["schemas"]["CiVariableBody"][];
+        };
         /** @description `POST …/act-as/claim`. */
         ClaimAssertion: {
             /** @description The state the integration put into the confirmation's URL. */
@@ -2971,11 +3190,16 @@ export interface components {
             project_id: number;
             /** @description `refs/heads/…`. */
             ref: string;
-            /**
-             * @description The secret names the job asks for (empty unless `secrets_allowed`;
-             *     no value before C6).
-             */
+            /** @description The secret names the job asks for (empty unless `secrets_allowed`). */
             secret_names: string[];
+            /**
+             * @description The values of those names (M4 C6): give each to the job's
+             *     container as an environment variable, and mask a `masked` one (and
+             *     its common encodings) in the log before sending it. Shown once;
+             *     never logged. A job whose secrets may not or cannot be given is
+             *     never handed out (it is failed with FG-CI-0016 / 0017 / 0018).
+             */
+            secrets: components["schemas"]["ReleasedSecretBody"][];
             /**
              * @description Only a push to a branch protected when the pipeline was created
              *     (ADR-0029): the only jobs that may ever be given secrets.
@@ -3627,6 +3851,8 @@ export interface components {
         /** @description One merge request linked to the work item. */
         DevStatusMergeRequestBody: {
             approvals: null | components["schemas"]["DevStatusApprovalsBody"];
+            /** @description Who opened it. */
+            author: components["schemas"]["DevStatusPersonBody"];
             /**
              * @description Every check run reported on the head (empty: none — never success).
              *     `null`: the integration's `event_types` do not admit
@@ -3650,6 +3876,7 @@ export interface components {
             link: components["schemas"]["DevStatusLinkBody"];
             /** @description When it was merged (`null` otherwise). */
             merged_at: string | null;
+            merged_by: null | components["schemas"]["DevStatusPersonBody"];
             project: components["schemas"]["DevStatusProjectBody"];
             /** @description Without `refs/heads/`. */
             source_branch: string;
@@ -3685,6 +3912,26 @@ export interface components {
             schema_version: number;
             /** @description In id order. */
             work_items: components["schemas"]["DevStatusWorkItemBody"][];
+        };
+        /**
+         * @description A person a merge request names (no employee number without the
+         *     token's `user_employee_number` scope).
+         */
+        DevStatusPersonBody: {
+            /**
+             * @description The current display name, as the merge request API's
+             *     `author.display_name` (`null`: the account is gone).
+             */
+            display_name: string | null;
+            /**
+             * @description Only with the `user_employee_number` scope (absent otherwise, and
+             *     for a person without one).
+             */
+            employee_number?: string | null;
+            /** Format: int64 */
+            id: number;
+            /** @description The current username (`null`: the account is gone). */
+            username: string | null;
         };
         /** @description The project of a merge request. */
         DevStatusProjectBody: {
@@ -4914,6 +5161,11 @@ export interface components {
             /** Format: int64 */
             id: number;
             image: string;
+            /**
+             * @description `when: manual` in `.forge-ci.yml` (M4 C12): started by a person;
+             *     stays `true` after it was started.
+             */
+            manual: boolean;
             name: string;
             /** @description The jobs it waits for. */
             needs: string[];
@@ -4921,7 +5173,10 @@ export interface components {
             secrets: string[];
             stage: string;
             started_at: string | null;
-            /** @description `created`, `pending`, `running`, `succeeded`, `failed`, `canceled`. */
+            /**
+             * @description `created`, `pending`, `running`, `succeeded`, `failed`,
+             *     `canceled`, `manual` (waits for a person: `…/play`).
+             */
             status: string;
             tags: string[];
             /** Format: int32 */
@@ -4951,6 +5206,64 @@ export interface components {
             /** @description The stable reason (crates/forge-ci/README.md). */
             reason: string;
             subject: string | null;
+        };
+        /** @description A schedule. */
+        PipelineScheduleBody: {
+            active: boolean;
+            created_at: string;
+            cron: string;
+            description: string;
+            /** Format: int64 */
+            id: number;
+            last_error_code: string | null;
+            /**
+             * @description What its last run did: `created` (`last_pipeline_id`),
+             *     `no_definition`, `ref_missing`, `refused` (FG-CI-0026: the owner may
+             *     not run pipelines now), `failed` (`last_error_code`).
+             */
+            last_outcome: string | null;
+            /** Format: int64 */
+            last_pipeline_id: number | null;
+            /** @description The due time of its last run. */
+            last_run_at: string | null;
+            /** @description When it runs next (RFC 3339, UTC); `null` when inactive. */
+            next_run_at: string | null;
+            /**
+             * Format: int64
+             * @description The person whose rights it runs with (whoever last saved it).
+             */
+            owner_id: number;
+            /** Format: int64 */
+            project_id: number;
+            /** @description `refs/heads/…`. */
+            ref: string;
+            updated_at: string;
+            /** Format: int32 */
+            utc_offset_minutes: number;
+        };
+        /** @description `POST …/pipeline-schedules`, `PUT …/{schedule_id}`. */
+        PipelineScheduleInput: {
+            /** @description Default `true`; `false` never runs. */
+            active?: boolean | null;
+            /**
+             * @description Five-field cron (`minute hour day-of-month month day-of-week`), at
+             *     most once every 5 minutes.
+             */
+            cron: string;
+            /** @description What it is for (1..=255 bytes, one line). */
+            description: string;
+            /** @description The branch: `main` or `refs/heads/main`. */
+            ref: string;
+            /**
+             * Format: int32
+             * @description The fixed UTC offset the rule is read at, in minutes (540 = JST,
+             *     420 = WIB); a quarter hour within −720..=840.
+             */
+            utc_offset_minutes: number;
+        };
+        /** @description `GET …/pipeline-schedules`. */
+        PipelineScheduleList: {
+            schedules: components["schemas"]["PipelineScheduleBody"][];
         };
         /**
          * @description Where an inline discussion sits: a line of one side of one version's
@@ -5159,6 +5472,23 @@ export interface components {
             /** @description Usernames who may approve for the rule. */
             users?: string[];
         };
+        /** @description `PUT …/ci/variables/{name}`. */
+        PutCiVariable: {
+            /** @description Mask it in job logs (default `true`). */
+            masked?: boolean | null;
+            /**
+             * @description Give it only to pipelines of protected branches (default `true`;
+             *     today every value goes only to a push pipeline of a protected
+             *     branch, ADR-0029).
+             */
+            protected_only?: boolean | null;
+            /**
+             * @description The value: one line of 1..=4096 bytes, no control character, no
+             *     white space at either end, not starting with a quote; at least 8
+             *     bytes when masked. Never answered back.
+             */
+            value: string;
+        };
         /** @description `PUT …/merge-settings/codeowners-enforcement`. */
         PutCodeownersEnforcement: {
             /**
@@ -5340,6 +5670,15 @@ export interface components {
             kind: string;
             /** @description The path that can be used again. */
             path: string;
+        };
+        /** @description One secret released with a claim (M4 C6). */
+        ReleasedSecretBody: {
+            /** @description Mask it in the job's log. */
+            masked: boolean;
+            /** @description `[A-Z][A-Z0-9_]*`: the environment variable's name. */
+            name: string;
+            /** @description The value (one line, at most 4096 bytes). */
+            value: string;
         };
         /** @description `POST /api/v1/users/{id}/rename`. */
         RenameUser: {
@@ -6195,6 +6534,16 @@ export interface components {
             /** @description `updated`, or `unchanged` (nothing was written). */
             outcome: string;
             webhook: components["schemas"]["WebhookBody"];
+        };
+        /** @description `201` of an upload. */
+        UploadedArtifactBody: {
+            /** Format: int64 */
+            id: number;
+            path: string;
+            /** @description Lower-case hex. */
+            sha256: string;
+            /** Format: int64 */
+            size_bytes: number;
         };
         /** @description Who caused an event. */
         UserActivityActorBody: {
@@ -8730,6 +9079,103 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_ci_variables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CiVariableList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_ci_variables_name: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutCiVariable"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CiVariableBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_ci_variables_name: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_commits_sha_checks: {
         parameters: {
             query?: never;
@@ -10439,6 +10885,138 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_pipeline_schedules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineScheduleList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_pipeline_schedules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineScheduleInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineScheduleBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_pipeline_schedules_schedule_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                schedule_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineScheduleInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineScheduleBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_pipeline_schedules_schedule_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                schedule_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_pipelines: {
         parameters: {
             query?: {
@@ -10608,6 +11186,64 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_artifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                job_id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_artifacts_artifact_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: number;
+                id: number;
+                job_id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_log: {
         parameters: {
             query?: {
@@ -10633,6 +11269,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobLogPage"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_play: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                job_id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -11959,6 +12628,40 @@ export interface operations {
             };
         };
     };
+    put_api_v1_runner_jobs_job_id_artifacts: {
+        parameters: {
+            query?: {
+                /** @description The file's path relative to the job's work tree (no leading /, no . / .. / .git component, at most 1024 bytes) */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadedArtifactBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_api_v1_runner_jobs_job_id_complete: {
         parameters: {
             query?: never;
@@ -12053,6 +12756,60 @@ export interface operations {
                     "application/json": components["schemas"]["LogAnswer"];
                 };
             };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_runner_jobs_job_id_needs_artifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_runner_jobs_job_id_needs_artifacts_artifact_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: number;
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {

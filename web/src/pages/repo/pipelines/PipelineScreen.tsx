@@ -202,7 +202,14 @@ function PipelineView({
         {jobs.length === 0 ? (
           <p className={styles.hint}>{t('pipelines.jobs.none')}</p>
         ) : (
-          <Stages jobs={jobs} project={project} pipelineId={p.id} openJob={openJob?.id ?? null} />
+          <Stages
+            jobs={jobs}
+            project={project}
+            projectId={projectId}
+            pipelineId={p.id}
+            openJob={openJob?.id ?? null}
+            operate={operate}
+          />
         )}
       </section>
 
@@ -228,6 +235,8 @@ function StatusLine({
 }) {
   const { t } = useTranslation();
   const failedJob = jobs.find((j) => j.status === 'failed');
+  // M4 C12: a manual job waiting for a person, named in its own line.
+  const waiting = jobs.find((j) => j.status === 'manual');
   const tone =
     p.status === 'failed' || p.status === 'invalid' || p.status === 'error'
       ? styles.statusFailed
@@ -239,6 +248,13 @@ function StatusLine({
   return (
     <div className={`${styles.statusLine ?? ''} ${tone ?? ''}`} data-testid="pipeline-status-line">
       <p>{statusSentence(t, p, failedJob?.name ?? null, operate)}</p>
+      {waiting !== undefined && (
+        <p data-testid="pipeline-manual-line">
+          {operate
+            ? t('pipelines.line.manualOperate', { job: waiting.name })
+            : t('pipelines.line.manualAsk', { job: waiting.name })}
+        </p>
+      )}
       {failedJob !== undefined && (
         <p>
           <Link to={pipelineUrl(project, p.id, failedJob.id)}>

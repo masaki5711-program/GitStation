@@ -46,6 +46,7 @@ import {
   PipelineScreen,
   PipelinesScreen,
   ProjectSettings,
+  SchedulesScreen,
   WebhooksScreen,
 } from '../lazyScreens';
 import styles from './Repo.module.css';
@@ -82,9 +83,10 @@ export function RepoViews({
   const mrTab =
     tail.length === 1 ? 'overview' : tail.length === 2 && tail[1] === 'changes' ? 'changes' : null;
   if (word === 'pull' && (iid === null || mrTab === null)) return <NotFound />;
-  // `/-/pipelines[/{id}]`: the same rule for a pipeline id.
+  // `/-/pipelines[/{id}|/schedules]`: the same rule for a pipeline id.
+  const schedules = word === 'pipelines' && tail.length === 1 && tail[0] === 'schedules';
   const pipelineId = word === 'pipelines' && tail.length === 1 ? parseId(tail[0]) : null;
-  if (word === 'pipelines' && tail.length > 0 && (tail.length > 1 || pipelineId === null)) {
+  if (word === 'pipelines' && tail.length > 0 && !schedules && (tail.length > 1 || pipelineId === null)) {
     return <NotFound />;
   }
   if (info.isPending) return <Loading />;
@@ -173,12 +175,13 @@ export function RepoViews({
         );
       break;
     case 'pipelines':
-      screen =
-        pipelineId === null ? (
-          <PipelinesScreen projectId={projectId} project={project} />
-        ) : (
-          <PipelineScreen key={pipelineId} projectId={projectId} project={project} id={pipelineId} />
-        );
+      screen = schedules ? (
+        <SchedulesScreen projectId={projectId} project={project} />
+      ) : pipelineId === null ? (
+        <PipelinesScreen projectId={projectId} project={project} />
+      ) : (
+        <PipelineScreen key={pipelineId} projectId={projectId} project={project} id={pipelineId} />
+      );
       break;
     case 'settings':
       screen = <ProjectSettings projectId={projectId} />;

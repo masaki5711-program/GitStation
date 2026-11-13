@@ -1,10 +1,13 @@
 // A pipeline's jobs as a simple list per stage, stages in the order their
 // first job runs (wave, then id); each job's status, attempt, needs, time
-// taken (the moments in its title) and a link to its log.
+// taken (the moments in its title) and a link to its log. A manual job
+// waiting for a person (M4 C12) has a "run" button for a role that may.
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
-import type { PipelineJob } from '../../../api/pipelines';
+import { isWaitingManual, usePlayJob, type PipelineJob } from '../../../api/pipelines';
+import { QueryError } from '../../../components/QueryError';
+import controls from '../../../components/controls.module.css';
 import { formatDuration, formatSpan } from '../../../features/pipelineLabels';
 import { pipelineUrl } from '../../../features/repoUrls';
 import { PipelineBadge } from './PipelineBadge';
@@ -24,17 +27,24 @@ export function groupByStage(jobs: readonly PipelineJob[]): { stage: string; job
 export function Stages({
   jobs,
   project,
+  projectId,
   pipelineId,
   openJob,
+  operate,
 }: {
   jobs: PipelineJob[];
   project: string;
+  projectId: number;
   pipelineId: number;
   openJob: number | null;
+  /** The caller may start a manual job (Developer or above). */
+  operate: boolean;
 }) {
   const { t, i18n } = useTranslation();
+  const play = usePlayJob(projectId, pipelineId);
   return (
     <>
+      {play.isError && <QueryError error={play.error} />}
       {groupByStage(jobs).map((g) => (
         <div key={g.stage}>
           <h3 className={styles.stageTitle}>{t('pipelines.jobs.stage', { stage: g.stage })}</h3>
@@ -48,6 +58,22 @@ export function Stages({
                     <code>{j.name}</code>
                   </span>
                   <span className={styles.meta}>
+                    {operate && isWaitingManual(j) && (
+                      <button
+                        type="button"
+                        className={`${controls.primary ?? ''} ${controls.small ?? ''} ${styles.play ?? ''}`}
+                        aria-label={t('pipelines.jobs.playOf', { job: j.name })}
+                        aria-disabled={play.isPending ? 'true' : undefined}
+                        onClick={() => {
+                          if (!play.isPending) play.mutate(j.id);
+                        }}
+                      >
+                        {play.isPending && play.variables === j.id
+                          ? t('pipelines.jobs.playing')
+                          : t('pipelines.jobs.play')}
+                      </button>
+                    )}
+                    {j.manual && !isWaitingManual(j) && <span>{t('pipelines.jobs.manual')}</span>}
                     {j.attempt > 1 && <span>{t('pipelines.jobs.attempt', { attempt: j.attempt })}</span>}
                     {j.needs.length > 0 && (
                       <span>{t('pipelines.jobs.needs', { needs: j.needs.join(', ') })}</span>
