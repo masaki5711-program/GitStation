@@ -592,6 +592,78 @@ async fn binding_refusals_and_a_removal_acting_for_the_person() {
     w.t.drop_now().await;
 }
 
+/// A bind and a change answer with the binding as the list shows it: the
+/// repository's full path, never `null` for a live repository (a kanflow
+/// e2e saw `repositoryPath: null` in the act-as bind response).
+#[tokio::test]
+async fn bind_and_change_responses_carry_the_repository_path() {
+    let w = world().await;
+    // Acting for the person, with her assertion.
+    let (assertion, _) = w
+        .confirmed(
+            w.spec,
+            set(
+                w.integration,
+                "KF-P",
+                false,
+                "kanflow-state-path-0123456789abcd",
+            ),
+        )
+        .await;
+    let (status, acted) = w
+        .bind_as_olga(
+            Some(&assertion),
+            json!({
+                "kanflow_project_id": "KF-P",
+                "repository_id": w.spec,
+                "settings": {"resolves_work_items": false},
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{acted}");
+    assert_eq!(
+        acted["binding"]["repository_path"], "olga/spec-zeva",
+        "{acted}"
+    );
+    // The person herself: a bind, then a change of its setting.
+    let (status, bound) = send(
+        w.router.clone(),
+        "POST",
+        &format!("/api/v1/integrations/{}/bindings", w.integration),
+        Who::Person(session_of(w.olga), None),
+        Some(json!({
+            "kanflow_project_id": "KF-Q",
+            "repository_id": w.web,
+            "settings": {"resolves_work_items": false},
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bound}");
+    assert_eq!(bound["outcome"], "bound");
+    assert_eq!(bound["binding"]["repository_path"], "olga/web", "{bound}");
+    let binding_id = bound["binding"]["binding_id"].as_i64().expect("id");
+    let (status, changed) = send(
+        w.router.clone(),
+        "PATCH",
+        &format!(
+            "/api/v1/integrations/{}/bindings/{binding_id}",
+            w.integration
+        ),
+        Who::Person(session_of(w.olga), None),
+        Some(json!({"settings": {"resolves_work_items": true}})),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["outcome"], "updated");
+    assert_eq!(
+        changed["binding"]["repository_path"], "olga/web",
+        "{changed}"
+    );
+    w.t.drop_now().await;
+}
+
 /// Review (security MEDIUM / LOW b): a search acting for a person is
 /// audited (person, integration, q) and limited per integration; the
 /// service account on its own never searches; an unknown person counts

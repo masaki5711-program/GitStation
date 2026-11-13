@@ -59,7 +59,8 @@ use serde_json::Value;
 use crate::app::AppState;
 use crate::body::{param_invalid, request_invalid};
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, QueryParam};
-use crate::routes::protected_refs::{found, project_of};
+use crate::routes::projects;
+use crate::routes::protected_refs::{found, project_record_of};
 use crate::routes::write::{absent, bounded, hosting, json, no_store, write_request};
 
 /// `GET` the repositories the caller may bind.
@@ -540,21 +541,24 @@ impl BodyLoader<AppState, NewRepositoryBinding> for NewBindingOf {
                     .with_context("rule", "not_positive"));
             }
             let project = ProjectId::new(body.repository_id);
-            let Some(loaded) = project_of(state, project, viewer).await? else {
+            let Some(record) = project_record_of(state, project, viewer).await? else {
                 return Ok(absent());
             };
-            let ctx = IntegrationBindingCtx::new(loaded, integration);
+            let ctx = IntegrationBindingCtx::new(projects::loaded(&record), integration);
             let resolves = body.settings.as_ref().is_none_or(|s| s.resolves_work_items);
-            Ok(found(if acting(parts) {
-                ctx.acting(BindingSubject {
-                    integration,
-                    project,
-                    external_project_id: body.kanflow_project_id.clone(), // clone: the subject owns it
-                    resolves_work_items: Some(resolves),
-                })
-            } else {
-                ctx
-            }))
+            Ok(with_record(
+                if acting(parts) {
+                    ctx.acting(BindingSubject {
+                        integration,
+                        project,
+                        external_project_id: body.kanflow_project_id.clone(), // clone: the subject owns it
+                        resolves_work_items: Some(resolves),
+                    })
+                } else {
+                    ctx
+                },
+                record,
+            ))
         })
     }
 }
@@ -581,20 +585,24 @@ async fn binding_lookup(
     else {
         return Ok(absent());
     };
-    let Some(loaded) = project_of(state, stored.project, viewer).await? else {
+    let Some(record) = project_record_of(state, stored.project, viewer).await? else {
         return Ok(absent());
     };
-    let ctx = IntegrationBindingCtx::new(loaded, integration).with_binding(binding);
-    Ok(found(if acting(parts) {
-        ctx.acting(BindingSubject {
-            integration,
-            project: stored.project,
-            external_project_id: stored.external_project_id,
-            resolves_work_items: resolves,
-        })
-    } else {
-        ctx
-    }))
+    let ctx =
+        IntegrationBindingCtx::new(projects::loaded(&record), integration).with_binding(binding);
+    Ok(with_record(
+        if acting(parts) {
+            ctx.acting(BindingSubject {
+                integration,
+                project: stored.project,
+                external_project_id: stored.external_project_id,
+                resolves_work_items: resolves,
+            })
+        } else {
+            ctx
+        },
+        record,
+    ))
 }
 
 impl Loader<AppState> for BindingOf {
@@ -627,6 +635,23 @@ impl BodyLoader<AppState, ChangeRepositoryBinding> for BindingOf {
     }
 }
 
+/// A binding route's context with the repository's row, so the answer
+/// carries its path as the list does (no second read).
+fn with_record<R>(ctx: R, record: forge_core::ProjectRecord) -> Lookup<R> {
+    Lookup::Found {
+        ctx,
+        canonical: None,
+        tombstone: None,
+        project: Some(record),
+        group: None,
+    }
+}
+
+/// The full path of the repository the loader read.
+fn repository_path<B>(request: &Dispatched<IntegrationBindingCtx, B>) -> Option<String> {
+    request.project().map(|r| r.path.full_path())
+}
+
 fn respond(ctx: &crate::Ctx, built: Result<Value, ForgeError>) -> Response {
     match built {
         Ok(body) => no_store(StatusCode::OK, body),
@@ -639,6 +664,7 @@ pub async fn bind(
     state: AppState,
     request: Dispatched<IntegrationBindingCtx, NewRepositoryBinding>,
 ) -> Response {
+    let path = repository_path(&request);
     let w = request.into_write();
     let built = async {
         let resolves = w
@@ -660,7 +686,7 @@ pub async fn bind(
         };
         json(RepositoryBindingOutcome {
             outcome: word.to_owned(),
-            binding: binding_body(stored, None),
+            binding: binding_body(stored, path),
         })
     }
     .await;
@@ -672,6 +698,7 @@ pub async fn change(
     state: AppState,
     request: Dispatched<IntegrationBindingCtx, ChangeRepositoryBinding>,
 ) -> Response {
+    let path = repository_path(&request);
     let w = request.into_write();
     let built = async {
         let (outcome, stored) = hosting(&state)?
@@ -687,7 +714,7 @@ pub async fn change(
         };
         json(RepositoryBindingOutcome {
             outcome: word.to_owned(),
-            binding: binding_body(stored, None),
+            binding: binding_body(stored, path),
         })
     }
     .await;
