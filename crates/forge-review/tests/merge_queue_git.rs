@@ -673,10 +673,12 @@ async fn a_risk_stop_entry_is_never_batched_with_others() {
     let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
     let stop = w.mr("fs", &[("fs.txt", "x\n")]).await;
     let b = w.mr("fb", &[("fb.txt", "x\n")]).await;
-    forge_db::checks::record_forge_check_run(
+    // Through forge-db's test helper: only forge-checks calls the check
+    // commands (forge-checks tests/decided_callers.rs).
+    forge_db::test_support::record_forge_check(
         &w.t.db,
-        &system("req-risk"),
-        (w.project, &oid(stop.head_sha.as_deref().expect("head"))),
+        w.project,
+        &oid(stop.head_sha.as_deref().expect("head")),
         &forge_db::checks::NewCheckRun {
             name: CheckName::parse(forge_core::checks::RISK_CHECK).expect("name"),
             status: CheckStatus::Completed,
@@ -686,8 +688,7 @@ async fn a_risk_stop_entry_is_never_batched_with_others() {
             annotations: Vec::new(),
         },
     )
-    .await
-    .expect("risk");
+    .await;
     for mr in [&a, &stop, &b] {
         w.enqueue(mr).await.expect("enqueue");
     }

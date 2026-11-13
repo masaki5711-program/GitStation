@@ -688,6 +688,25 @@ pub async fn issue_session(db: &Db, user: forge_core::UserId) -> crate::sessions
         .expect("issue a test session")
 }
 
+/// Records one of forge's own check runs (`forge/risk`, …) on `head` of
+/// `project` as the system, for tests in crates that may not call the check
+/// commands themselves (forge-checks `tests/decided_callers.rs`). Tests only
+/// (feature `test-support`).
+pub async fn record_forge_check(
+    db: &Db,
+    project: forge_core::ProjectId,
+    head: &forge_core::ObjectId,
+    new: &crate::checks::NewCheckRun,
+) -> crate::checks::Reported {
+    let ctx = crate::change::ChangeContext::new(
+        crate::change::Actor::System,
+        forge_core::RequestId::parse("req-test-forge-check").expect("request id"),
+    );
+    crate::checks::record_forge_check_run(db, &ctx, (project, head), new)
+        .await
+        .expect("record a test forge check run")
+}
+
 /// Opens a merge request as `author` without a route's decision (`decide`
 /// accepts everything), for tests in crates that may not call the review
 /// commands themselves (forge-review `tests/decided_callers.rs`). It records
