@@ -688,6 +688,28 @@ pub async fn issue_session(db: &Db, user: forge_core::UserId) -> crate::sessions
         .expect("issue a test session")
 }
 
+/// Opens a merge request as `author` without a route's decision (`decide`
+/// accepts everything), for tests in crates that may not call the review
+/// commands themselves (forge-review `tests/decided_callers.rs`). It records
+/// the `Opened` event, so subscribers (work item detection, the feed) see
+/// the merge request as they would a real one. Tests only (feature
+/// `test-support`).
+pub async fn open_merge_request(
+    db: &Db,
+    project: forge_core::ids::ProjectId,
+    author: forge_core::UserId,
+    new: &crate::review::NewMergeRequest,
+) -> crate::review::StoredMergeRequest {
+    let ctx = crate::change::ChangeContext::new(
+        crate::change::Actor::User(author),
+        forge_core::RequestId::parse("req-test-open-mr").expect("request id"),
+    );
+    let (stored, ()) = crate::review::open_mr_decided(db, &ctx, project, author, new, |_| Ok(()))
+        .await
+        .expect("open a test merge request");
+    stored
+}
+
 /// The whole error chain as the log would show it.
 pub fn chain(err: &ForgeError) -> String {
     let mut text = err.to_string();
