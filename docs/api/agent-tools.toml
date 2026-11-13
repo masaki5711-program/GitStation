@@ -1006,7 +1006,3 @@ reason = "Deployment environments (approval, freeze, rollback) are a Maintainer'
 [[excluded]]
 gstn = "deploy target-set"
 reason = "Deployment targets are an administrator's: people_only (ADR-0031)."
-
-[[excluded]]
-gstn = "deploy approve"
-reason = "Approving a deployment is a person's: people_only; an agent or the auto-merge never approves (ADR-0031)."

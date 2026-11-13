@@ -1299,18 +1299,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["id","environment","sha","status"]}"#,
     },
     CommandSpec {
-        name: "deploy approve",
-        summary: "Approve a waiting deployment (a Maintainer, a person, not its requester nor the author of the merge request behind the sha: FG-DEPLOY-0009). prod is approved only in the browser (a token gets FG-AUTH-0002 session_required).",
-        args: &[
-            arg("--project", "option", true, "The project id."),
-            arg("deployment", "positional", true, "The deployment id."),
-        ],
-        examples: &["gstn deploy approve --project 7 12"],
-        scopes: &["api"],
-        routes: &["POST /api/v1/projects/{id}/deployments/{deployment_id}/approve"],
-        output: r#"{"type":"object","required":["id","status","approved_by"]}"#,
-    },
-    CommandSpec {
         name: "context work-item",
         summary: "Show a kanflow work item's context in a project: its linked merge requests and the @req tests of its acceptance criteria, each with its source (M3 X5).",
         args: &[

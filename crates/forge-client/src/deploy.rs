@@ -1,7 +1,7 @@
 //! `gstn deploy …` (M4 C11, plan 14 §4.2, ADR-0031): a project's
 //! deployment environments, targets and deployments. One REST call each.
-//! prod is approved only in the browser (a token is refused with
-//! FG-AUTH-0002 session_required); `approve` serves dev and stg.
+//! A deployment is approved only in the browser (a token is refused with
+//! FG-AUTH-0002 session_required, every tier).
 
 use serde_json::{json, Value};
 
@@ -201,21 +201,6 @@ pub fn deploy(cli: &Cli, cmd: &DeployCommand, env: EnvFn<'_>, io: &mut Io<'_>) -
                 Some(&json!({"environment": tier.as_str(), "sha": sha})),
             )?;
             let human = format!("Requested {}", deployment_line(&out));
-            emit(io, cli, out, &human)
-        }
-        DeployCommand::Approve {
-            project,
-            deployment,
-        } => {
-            let c = client(cli, env, io)?;
-            let out = call(
-                &c,
-                Method::Post,
-                &format!("{}/deployments/{deployment}/approve", base(*project)),
-                &[],
-                None,
-            )?;
-            let human = format!("Approved {}", deployment_line(&out));
             emit(io, cli, out, &human)
         }
     }

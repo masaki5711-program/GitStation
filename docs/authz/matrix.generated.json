@@ -96,7 +96,7 @@
   { "action": "DeployEnvironmentManage", "allow": 4, "deny": 15, "public": false, "git_operation": false },
   { "action": "DeployTargetManage", "allow": 2, "deny": 12, "public": false, "git_operation": false },
   { "action": "DeployCreate", "allow": 5, "deny": 10, "public": false, "git_operation": false },
-  { "action": "DeployApprove", "allow": 7, "deny": 27, "public": false, "git_operation": false },
+  { "action": "DeployApprove", "allow": 6, "deny": 28, "public": false, "git_operation": false },
   { "action": "JobArtifactUpload", "allow": 1, "deny": 13, "public": false, "git_operation": false },
   { "action": "JobArtifactDownload", "allow": 1, "deny": 12, "public": false, "git_operation": false },
   { "action": "RunnerRegister", "allow": 1, "deny": 10, "public": false, "git_operation": false },

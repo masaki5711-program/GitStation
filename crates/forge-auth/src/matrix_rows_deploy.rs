@@ -99,39 +99,41 @@ pub(crate) const DEPLOY_ROWS: &[Row] = &[
     row(A::DeployCreate, W::AgentTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::DeployCreate, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),
     row(A::DeployCreate, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
-    // --- DeployApprove ---
+    // --- DeployApprove: a web session on every tier ---
     row(A::DeployApprove, W::Maintainer, STG, Allow),
-    row(A::DeployApprove, W::MaintainerTokenApi, STG, Allow),
     row(A::DeployApprove, W::Owner, STG, Allow),
     row(A::DeployApprove, W::Admin, STG, Allow),
     row(A::DeployApprove, W::Maintainer, PROD, Allow),
     row(A::DeployApprove, W::Owner, PROD, Allow),
     row(A::DeployApprove, W::Admin, PROD, Allow),
-    // prod: a web session only.
+    // A token never approves (session_required), whatever the tier.
+    row(A::DeployApprove, W::MaintainerTokenApi, STG, deny(E::InsufficientScope)),
     row(A::DeployApprove, W::MaintainerTokenApi, PROD, deny(E::InsufficientScope)),
     row(A::DeployApprove, W::OwnerTokenApi, PROD, deny(E::InsufficientScope)),
     row(A::DeployApprove, W::AdminTokenAdmin, PROD, deny(E::InsufficientScope)),
-    // Never one's own request or merge request, administrators included.
+    row(A::DeployApprove, W::DevTokenApi, STG, deny(E::InsufficientScope)),
+    row(A::DeployApprove, W::MaintainerTokenReadApi, STG, deny(E::InsufficientScope)),
+    // Never one's own request nor a change one is behind, administrators
+    // included.
     row(A::DeployApprove, W::Maintainer, PROD_MINE, deny(E::DeploySelfApprovalRefused)),
     row(A::DeployApprove, W::Maintainer, PROD_MR_MINE, deny(E::DeploySelfApprovalRefused)),
     row(A::DeployApprove, W::Admin, PROD_MINE, deny(E::DeploySelfApprovalRefused)),
     row(A::DeployApprove, W::Admin, PROD_MR_MINE, deny(E::DeploySelfApprovalRefused)),
-    row(A::DeployApprove, W::MaintainerTokenApi, STG_MINE, deny(E::DeploySelfApprovalRefused)),
+    row(A::DeployApprove, W::Maintainer, STG_MINE, deny(E::DeploySelfApprovalRefused)),
     // Below Maintainer.
     row(A::DeployApprove, W::Developer, STG, deny(E::Forbidden)),
-    row(A::DeployApprove, W::DevTokenApi, STG, deny(E::Forbidden)),
     row(A::DeployApprove, W::Developer, PROD, deny(E::Forbidden)),
     row(A::DeployApprove, W::NonMember, PROD_INTERNAL, deny(E::Forbidden)),
     row(A::DeployApprove, W::NonMember, PROD, deny(E::NotFound)),
-    // Automation never approves: an agent token, a service account (the
-    // kind of the auto-merge principal), a bot, even in a session.
-    row(A::DeployApprove, W::AgentMaintainerTokenApi, STG, deny(E::Forbidden)),
-    row(A::DeployApprove, W::AgentOwnerTokenApi, PROD, deny(E::Forbidden)),
-    row(A::DeployApprove, W::AgentAdminTokenAdmin, PROD, deny(E::Forbidden)),
+    // Automation never approves: an agent token (refused as a token), a
+    // service account (the kind of the auto-merge principal) or a bot,
+    // even in a session.
+    row(A::DeployApprove, W::AgentMaintainerTokenApi, STG, deny(E::InsufficientScope)),
+    row(A::DeployApprove, W::AgentAdminTokenAdmin, PROD, deny(E::InsufficientScope)),
+    row(A::DeployApprove, W::ServiceAccountMaintainerTokenApi, PROD, deny(E::InsufficientScope)),
     row(A::DeployApprove, W::ServiceAccountAdminSession, PROD, deny(E::Forbidden)),
     row(A::DeployApprove, W::BotAdminSession, PROD, deny(E::Forbidden)),
     row(A::DeployApprove, W::Maintainer, PROD_DELETED, deny(E::PendingDeletion)),
-    row(A::DeployApprove, W::MaintainerTokenReadApi, STG, deny(E::InsufficientScope)),
     row(A::DeployApprove, W::Disabled, PROD, deny(E::AccountDisabled)),
     row(A::DeployApprove, W::Anonymous, PROD, deny(E::Unauthenticated)),
 ];

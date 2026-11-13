@@ -49,3 +49,14 @@
 ### Risks
 - ターゲットの `authorized_keys` に `command=` が無いと、鍵が漏れたときにそのホストで何でもできる → runbook `deploy` の前提に書き、鍵は forge のホストだけに置く。
 - worker の停止で `running` が残る → doctor `deploy.known_hosts` が古い `running` を数え、runbook で人が決める。
+
+## Amendment 2026-11-13（C11 のレビュー: deploy-safety-reviewer・security-reviewer）
+
+1. **デプロイできるコミット**: そのプロジェクトの**保護されたブランチから到達できるコミット**だけ（保護規則に合うブランチの先端と `git merge-base`、forge-git の browse API、argv・時間切れ）。適用された MR のマージも保護ブランチへの直接の push も、どちらも保護を通っているので両方を認める（MR のマージに限ると、保護ブランチへの push を許した設定のプロジェクトがデプロイできない）。**prod はさらに、その SHA の push のパイプラインが成功していること**。外れたら FG-DEPLOY-0011（`commit_not_found` / `not_on_protected_branch` / `no_succeeded_pipeline`）。自動の要求（決定 9）は作成時に保護されていた push のパイプライン（`ci_pipelines.protected`）だけ。
+2. **承認できない人**: 要求者に加え、その SHA の**背後の人すべて**（その SHA をマージ結果か head に持つ**すべての** MR の作成者、そのコミットを push した人（`push_commits`）、コミットの author と committer（メールでアカウントに対応））。承認者にはコミットの件名・author を API で見せる（`deployments.commit_*`、要求の時に git から読んで固定）。
+3. **承認は全環境で Web のセッションだけ**（`DeployApprove` を session-only に。トークンは FG-AUTH-0002 `session_required`。`gstn` に承認のコマンドは無い）。承認の後にターゲットが変わったら実行しない（`blocked`、FG-DEPLOY-0001 `target_changed_after_approval`）。
+4. **止まった worker**: 実行中は 30 秒ごとに `heartbeat_at` を書く。5 分途絶えた `running` は、どの worker の次の回（起動直後を含む）でも `failed`（FG-DEPLOY-0012、監査の行あり、ロールバックはしない）。終わりの記録に失敗したら 3 回やり直し、それでも駄目ならこの掃除に任せる。worker の遷移（開始・成功・失敗・ロールバック・ロールバックの失敗・blocked・abandoned）はすべて同じトランザクションで監査の行を書く。
+5. **ssh の 255**: 接続が開かなかったことを ssh のメッセージが示すとき（refused / timed_out / dns / auth / network / handshake）だけ「未接続」とし、それ以外の 255 は**スクリプトが動いたかもしれない**（`connection_lost`）としてロールバックの対象に入れる。
+6. **リモートのロック（ターゲットのスクリプトの契約）**: ssh を時間切れで止めてもリモートのスクリプトは動き続けうる（`-T` には端末が無く、SIGHUP が届かないことがある）。スクリプトは `deploy` と `rollback` で**同じ排他ロック**（例: `flock /var/lock/forge-deploy-<script>`）を取り、`rollback` はそのロックを待ってから前の版に戻す（forge の `rollback` の時間切れは `deploy.script_timeout_secs`）。こうして時間切れの後のロールバックが、まだ動いている `deploy` を追い越さない。
+7. **接続先の制限**: ループバック・未指定・リンクローカル（169.254.169.254 を含む）・マルチキャストのアドレスと、forge 自身の HTTP のポートには接続しない。`deploy.allowed_networks`（CIDR）を設定するとその中だけ。登録時（アドレスの直書き）と**接続のたびに名前を引いた後**に確かめ、ssh は確かめたアドレスに `HostKeyAlias=<名前>` で接続する（確かめと接続の間の DNS の変化で行き先が変わらない）。外れたら FG-DEPLOY-0013。API の読み手にはコードだけ、詳しい理由はログ。
+8. **細部**: スクリプトの名前にシェル・インタプリタ（sh・bash・python… など）は使えない。ssh の `HOME` は呼び出しごとの空のディレクトリ。ssh の失敗の分類（上の 5 の class）をログの `reason` に出す。

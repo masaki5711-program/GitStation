@@ -1656,4 +1656,16 @@ fn deploy_key_file_is_optional_absolute_and_timeouts_bounded() {
         assert_invalid(&e, config_key, reason);
     }
     assert!(load(None, &env(&[("FORGE_DEPLOY_KEY", "/k")])).is_err());
+    let nets = load(
+        None,
+        &env(&[("FORGE_DEPLOY_ALLOWED_NETWORKS", "10.0.0.0/8, fd00::/8")]),
+    )
+    .expect("networks");
+    assert_eq!(nets.deploy.allowed_networks.len(), 2);
+    let e = load(
+        None,
+        &env(&[("FORGE_DEPLOY_ALLOWED_NETWORKS", "10.0.0.0/40")]),
+    )
+    .expect_err("bad");
+    assert_invalid(&e, "deploy.allowed_networks", "invalid");
 }

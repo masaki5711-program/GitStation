@@ -77,7 +77,21 @@ pub async fn run_once(
     timeouts: Timeouts,
 ) -> Result<Pass, ForgeError> {
     let request_id = RequestId::generate();
-    for (id, project, tier) in db::block_unapproved(db_handle).await? {
+    // Deployments whose worker stopped (this one before a restart
+    // included): ended `failed`, never rolled back.
+    for (id, project, tier) in db::abandon_stale(db_handle, &request_id, STALE_SECS).await? {
+        tracing::error!(
+            target: "forge_deploy",
+            event = "forge.deploy.abandoned",
+            error_code = ErrorCode::DeploymentAbandoned.id(),
+            request_id = %request_id,
+            deployment_id = id,
+            project_id = project,
+            environment = tier.as_str(),
+            "deployment abandoned: its worker stopped"
+        );
+    }
+    for (id, project, tier) in db::block_unapproved(db_handle, &request_id).await? {
         tracing::info!(
             target: "forge_deploy",
             event = "forge.deploy.blocked",
@@ -107,7 +121,7 @@ pub async fn run_once(
     // Logged once per failure streak by the worker's supervisor
     // (`task=deploy_runner`, with `error_code` and `reason`).
     check_key_file(key_file)?;
-    match db::claim_next(db_handle).await? {
+    match db::claim_next(db_handle, &request_id).await? {
         Claim::Idle => Ok(Pass::Idle),
         Claim::Blocked {
             id,
@@ -130,8 +144,32 @@ pub async fn run_once(
             Ok(Pass::Blocked(id))
         }
         Claim::Run(claimed) => {
+            // The heartbeat while it runs: a stopped worker leaves a stale
+            // one, and the next pass of any worker ends the deployment.
+            let beat = {
+                let db_handle = db_handle.clone(); // clone: the pool handle
+                let id = claimed.id;
+                tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(HEARTBEAT);
+                    loop {
+                        tick.tick().await;
+                        if let Err(e) = db::heartbeat(&db_handle, id).await {
+                            tracing::warn!(
+                                target: "forge_deploy",
+                                event = "forge.deploy.heartbeat_failed",
+                                error_code = e.code().id(),
+                                deployment_id = id,
+                                error = %e,
+                                "deployment heartbeat not recorded"
+                            );
+                        }
+                    }
+                })
+            };
             let end = execute(transport, &claimed, timeouts, &request_id).await;
-            db::finish(db_handle, claimed.id, &end).await?;
+            let recorded = record_end(db_handle, &request_id, &claimed, &end).await;
+            beat.abort();
+            recorded?;
             tracing::info!(
                 target: "forge_deploy",
                 event = "forge.deploy.finished",
@@ -147,6 +185,44 @@ pub async fn run_once(
             Ok(Pass::Ran(claimed.id, end.status))
         }
     }
+}
+
+/// How often a running deployment's heartbeat is written.
+const HEARTBEAT: Duration = Duration::from_secs(30);
+/// A running deployment without a heartbeat for this long is abandoned.
+pub const STALE_SECS: u32 = 300;
+
+/// Record the end, retried a few times: a database that cannot take it
+/// leaves the deployment `running` without a heartbeat, and the sweep
+/// ends it (`FG-DEPLOY-0012`). Every failure is logged here.
+async fn record_end(
+    db_handle: &Db,
+    request_id: &RequestId,
+    claimed: &Claimed,
+    end: &Finish,
+) -> Result<(), ForgeError> {
+    let mut last = None;
+    for attempt in 1..=3u32 {
+        match db::finish(db_handle, request_id, claimed.id, end).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                tracing::error!(
+                    target: "forge_deploy",
+                    event = "forge.deploy.finish_failed",
+                    error_code = e.code().id(),
+                    request_id = %request_id,
+                    deployment_id = claimed.id,
+                    status = end.status.as_str(),
+                    attempt,
+                    error = %e,
+                    "deployment end not recorded"
+                );
+                last = Some(e);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| ForgeError::new(ErrorCode::Internal)))
 }
 
 /// A target and its parsed pin, or why it cannot be called.
@@ -188,6 +264,9 @@ struct Failure<'a> {
     code: ErrorCode,
     target: &'a RunTarget,
     host_key_mismatch: bool,
+    /// The remote script may have run (it failed, timed out, or the
+    /// session was lost after it opened): the target counts as changed.
+    may_have_run: bool,
 }
 
 /// Run one step on one target and log a failure.
@@ -214,6 +293,7 @@ async fn step<'a>(
                 code: ErrorCode::DeployTargetUnreachable,
                 target: t,
                 host_key_mismatch: false,
+                may_have_run: false,
             });
         }
     };
@@ -221,18 +301,26 @@ async fn step<'a>(
         RemoteVerb::Health => ErrorCode::HealthCheckFailed,
         RemoteVerb::Deploy | RemoteVerb::Rollback => ErrorCode::DeployScriptFailed,
     };
-    let (code, reason, exit) = match transport.call(&call).await {
+    let (code, reason, exit, may_have_run) = match transport.call(&call).await {
         Outcome::Ok => return Ok(()),
-        Outcome::Exit(code) => (script_code, "exit", code),
-        Outcome::Timeout => (script_code, "timeout", None),
-        Outcome::Unreachable(reason) => (ErrorCode::DeployTargetUnreachable, reason, None),
-        Outcome::HostKeyMismatch => (ErrorCode::HostKeyMismatch, "host_key_mismatch", None),
+        Outcome::Exit(code) => (script_code, "exit", code, true),
+        Outcome::Timeout => (script_code, "timeout", None, true),
+        Outcome::Lost => (
+            ErrorCode::DeployTargetUnreachable,
+            "connection_lost",
+            None,
+            true,
+        ),
+        Outcome::Unreachable(reason) => (ErrorCode::DeployTargetUnreachable, reason, None, false),
+        Outcome::NotAllowed(reason) => (ErrorCode::DeployTargetNotAllowed, reason, None, false),
+        Outcome::HostKeyMismatch => (ErrorCode::HostKeyMismatch, "host_key_mismatch", None, false),
     };
     log_failure(claimed, t, verb, code, reason, exit, request_id);
     Err(Failure {
         code,
         target: t,
         host_key_mismatch: code == ErrorCode::HostKeyMismatch,
+        may_have_run,
     })
 }
 
@@ -247,7 +335,9 @@ fn log_failure(
 ) {
     let alerting = matches!(
         code,
-        ErrorCode::DeployTargetUnreachable | ErrorCode::HostKeyMismatch
+        ErrorCode::DeployTargetUnreachable
+            | ErrorCode::HostKeyMismatch
+            | ErrorCode::DeployTargetNotAllowed
     );
     if alerting {
         tracing::error!(
@@ -326,9 +416,10 @@ pub async fn execute(
         match deployed {
             Ok(()) => changed.push(t),
             Err(f) => {
-                // The script ran (an exit or a timeout): the target may be
-                // half changed and is rolled back too.
-                if f.code == ErrorCode::DeployScriptFailed {
+                // The script may have run (an exit, a timeout, a lost
+                // session): the target may be half changed and is rolled
+                // back too.
+                if f.may_have_run {
                     changed.push(t);
                 }
                 failure = Some(f);

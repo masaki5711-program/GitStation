@@ -233,3 +233,26 @@ fn an_insecure_key_file_is_refused() {
     }
     check_key_file(Some(&key)).expect("a private key file is accepted");
 }
+
+#[tokio::test]
+async fn a_lost_session_counts_the_target_as_changed() {
+    // ssh exited 255 without proof that the session never opened: the
+    // script may have run, so stg rolls web-1 back too.
+    let fake = Fake::new(vec![("web-1", RemoteVerb::Deploy, Outcome::Lost)]);
+    let end = run(&fake, &claimed(DeployTier::Stg, true, Some(&prev()))).await;
+    assert_eq!(end.status, DeploymentStatus::RolledBack);
+    assert_eq!(end.error_code, Some(ErrorCode::DeployTargetUnreachable));
+    assert!(fake
+        .calls()
+        .iter()
+        .any(|c| c.0 == "web-1" && c.1 == "rollback"));
+    // A refused address never ran anything: nothing to roll back.
+    let fake = Fake::new(vec![(
+        "web-1",
+        RemoteVerb::Deploy,
+        Outcome::NotAllowed("denied_address"),
+    )]);
+    let end = run(&fake, &claimed(DeployTier::Stg, true, Some(&prev()))).await;
+    assert_eq!(end.status, DeploymentStatus::Failed);
+    assert_eq!(end.error_code, Some(ErrorCode::DeployTargetNotAllowed));
+}

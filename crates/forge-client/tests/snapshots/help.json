@@ -6938,43 +6938,6 @@
           "required": true
         },
         {
-          "description": "The deployment id.",
-          "kind": "positional",
-          "name": "deployment",
-          "repeatable": false,
-          "required": true
-        }
-      ],
-      "examples": [
-        "gstn deploy approve --project 7 12"
-      ],
-      "name": "deploy approve",
-      "output": {
-        "required": [
-          "id",
-          "status",
-          "approved_by"
-        ],
-        "type": "object"
-      },
-      "routes": [
-        "POST /api/v1/projects/{id}/deployments/{deployment_id}/approve"
-      ],
-      "scopes": [
-        "api"
-      ],
-      "summary": "Approve a waiting deployment (a Maintainer, a person, not its requester nor the author of the merge request behind the sha: FG-DEPLOY-0009). prod is approved only in the browser (a token gets FG-AUTH-0002 session_required)."
-    },
-    {
-      "args": [
-        {
-          "description": "The project id.",
-          "kind": "option",
-          "name": "--project",
-          "repeatable": false,
-          "required": true
-        },
-        {
           "description": "The work item, canonical PBI-<n>.",
           "kind": "option",
           "name": "--ref",

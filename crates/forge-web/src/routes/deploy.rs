@@ -17,8 +17,8 @@
 //!   "sha"}` → `201` (`pending_approval` or `queued`); `409 FG-DEPLOY-0002`
 //!   in a freeze window.
 //! - `POST …/deployments/{deployment_id}/approve` (`DeployApprove`): a
-//!   Maintainer who is a person, not the requester nor the merge
-//!   request's author, in a web session for prod → `200` (`queued`);
+//!   Maintainer who is a person in a web session (every tier), not the
+//!   requester nor anyone behind the SHA → `200` (`queued`);
 //!   `409 FG-DEPLOY-0010` when it is not waiting for an approval.
 
 use axum::http::request::Parts;
@@ -173,6 +173,11 @@ pub struct DeploymentBody {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    /// The commit as git read it at the request (shown to the approver;
+    /// `None` for an automatic request).
+    pub commit_subject: Option<String>,
+    pub commit_author_name: Option<String>,
+    pub commit_author_email: Option<String>,
 }
 
 /// `GET …/deployments`.
@@ -226,6 +231,9 @@ fn deployment_body(d: StoredDeployment) -> DeploymentBody {
         created_at: d.created_at,
         started_at: d.started_at,
         finished_at: d.finished_at,
+        commit_subject: d.commit_subject,
+        commit_author_name: d.commit_author_name,
+        commit_author_email: d.commit_author_email,
     }
 }
 

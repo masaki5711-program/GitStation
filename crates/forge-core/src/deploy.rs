@@ -164,8 +164,51 @@ pub fn check_target_name(name: &str) -> Result<(), &'static str> {
 /// The per-target script's registered name: `[a-z0-9][a-z0-9._-]{0,63}`
 /// (no `/`: the target resolves it, ADR-0031 decision 3).
 pub fn check_script_name(name: &str) -> Result<(), &'static str> {
-    lower_token(name, 64, true).map_err(|_| "invalid_script_name")
+    lower_token(name, 64, true).map_err(|_| "invalid_script_name")?;
+    // A shell or an interpreter would turn the next argument (the verb)
+    // into code; the target's dispatcher maps a name to one fixed script.
+    let stem = name.split('.').next().unwrap_or(name);
+    let interpreter = INTERPRETERS.contains(&stem)
+        || ["python", "perl", "ruby", "php", "node", "lua"]
+            .iter()
+            .any(|p| stem.starts_with(p));
+    if interpreter {
+        return Err("interpreter_script_name");
+    }
+    Ok(())
 }
+
+/// Names a target script may not have (shells and command runners).
+const INTERPRETERS: &[&str] = &[
+    "sh",
+    "bash",
+    "dash",
+    "zsh",
+    "ksh",
+    "csh",
+    "tcsh",
+    "fish",
+    "busybox",
+    "env",
+    "sudo",
+    "su",
+    "doas",
+    "exec",
+    "eval",
+    "xargs",
+    "nohup",
+    "timeout",
+    "nice",
+    "setsid",
+    "awk",
+    "gawk",
+    "sed",
+    "tclsh",
+    "expect",
+    "pwsh",
+    "powershell",
+    "cmd",
+];
 
 /// The login user on the target: `[a-z_][a-z0-9_-]{0,31}`.
 pub fn check_user(user: &str) -> Result<(), &'static str> {
@@ -190,6 +233,9 @@ pub fn check_user(user: &str) -> Result<(), &'static str> {
 pub fn check_host(host: &str) -> Result<(), &'static str> {
     if host.is_empty() || host.len() > 253 {
         return Err("invalid_host");
+    }
+    if host == "localhost" || host.ends_with(".localhost") {
+        return Err("denied_address");
     }
     let label_ok = |l: &str| {
         !l.is_empty()
@@ -374,6 +420,18 @@ pub enum DeployChange {
         tier: DeployTier,
         sha: String,
     },
+    /// The worker side (the system): `deployment.started` (`running`),
+    /// `.succeeded`, `.failed`, `.rolled_back`, `.rollback_failed`,
+    /// `.blocked`, `.abandoned` (a `failed` the sweep wrote).
+    Progress {
+        project: ProjectId,
+        deployment: i64,
+        tier: DeployTier,
+        status: DeploymentStatus,
+        abandoned: bool,
+        error_code: Option<String>,
+        failed_target: Option<String>,
+    },
 }
 
 impl DeployChange {
@@ -385,6 +443,20 @@ impl DeployChange {
             Self::TargetSet { created: false, .. } => "deploy_target.updated",
             Self::Requested { .. } => "deployment.requested",
             Self::Approved { .. } => "deployment.approved",
+            Self::Progress {
+                abandoned: true, ..
+            } => "deployment.abandoned",
+            Self::Progress { status, .. } => match status {
+                DeploymentStatus::Running => "deployment.started",
+                DeploymentStatus::Succeeded => "deployment.succeeded",
+                DeploymentStatus::Failed => "deployment.failed",
+                DeploymentStatus::RolledBack => "deployment.rolled_back",
+                DeploymentStatus::RollbackFailed => "deployment.rollback_failed",
+                DeploymentStatus::Blocked => "deployment.blocked",
+                DeploymentStatus::PendingApproval | DeploymentStatus::Queued => {
+                    "deployment.requested"
+                }
+            },
         }
     }
 
@@ -393,7 +465,8 @@ impl DeployChange {
             Self::EnvironmentSet { project, .. }
             | Self::TargetSet { project, .. }
             | Self::Requested { project, .. }
-            | Self::Approved { project, .. } => *project,
+            | Self::Approved { project, .. }
+            | Self::Progress { project, .. } => *project,
         }
     }
 
@@ -463,6 +536,144 @@ impl DeployChange {
                 "environment": tier.as_str(),
                 "sha": sha,
             }),
+            Self::Progress {
+                project,
+                deployment,
+                tier,
+                status,
+                error_code,
+                failed_target,
+                ..
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "deployment_id": deployment,
+                "environment": tier.as_str(),
+                "status": status.as_str(),
+                "error_code": error_code,
+                "failed_target": failed_target,
+            }),
+        }
+    }
+}
+
+/// One network `address/prefix` (IPv4 or IPv6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IpNet {
+    addr: std::net::IpAddr,
+    prefix: u8,
+}
+
+impl IpNet {
+    /// Parse `10.0.0.0/8` or `fd00::/8` (a bare address is a /32 or /128).
+    pub fn parse(raw: &str) -> Result<Self, &'static str> {
+        let (addr, prefix) = match raw.split_once('/') {
+            Some((a, p)) => (a, Some(p)),
+            None => (raw, None),
+        };
+        let addr: std::net::IpAddr = addr.trim().parse().map_err(|_| "invalid_network")?;
+        let max = if addr.is_ipv4() { 32 } else { 128 };
+        let prefix = match prefix {
+            None => max,
+            Some(p) => p.trim().parse::<u8>().map_err(|_| "invalid_network")?,
+        };
+        if prefix > max {
+            return Err("invalid_network");
+        }
+        Ok(Self { addr, prefix })
+    }
+
+    pub fn contains(&self, ip: std::net::IpAddr) -> bool {
+        let ip = canonical(ip);
+        match (self.addr, ip) {
+            (std::net::IpAddr::V4(net), std::net::IpAddr::V4(a)) => {
+                prefix_eq(&net.octets(), &a.octets(), self.prefix)
+            }
+            (std::net::IpAddr::V6(net), std::net::IpAddr::V6(a)) => {
+                prefix_eq(&net.octets(), &a.octets(), self.prefix)
+            }
+            (std::net::IpAddr::V4(_), std::net::IpAddr::V6(_))
+            | (std::net::IpAddr::V6(_), std::net::IpAddr::V4(_)) => false,
+        }
+    }
+}
+
+fn prefix_eq(a: &[u8], b: &[u8], bits: u8) -> bool {
+    let full = usize::from(bits / 8);
+    let rest = bits % 8;
+    if a.get(..full) != b.get(..full) {
+        return false;
+    }
+    if rest == 0 {
+        return true;
+    }
+    let mask = 0xffu8 << (8 - rest);
+    match (a.get(full), b.get(full)) {
+        (Some(x), Some(y)) => x & mask == y & mask,
+        _ => false,
+    }
+}
+
+/// An IPv4-mapped IPv6 address as its IPv4 address.
+fn canonical(ip: std::net::IpAddr) -> std::net::IpAddr {
+    match ip {
+        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => std::net::IpAddr::V4(v4),
+            None => std::net::IpAddr::V6(v6),
+        },
+        std::net::IpAddr::V4(_) => ip,
+    }
+}
+
+/// Where forge may connect for a deployment (M4 C11 review): never
+/// loopback, unspecified, link-local (169.254.169.254 included),
+/// multicast or broadcast; never a port forge itself listens on; and,
+/// when `allowed` is set (`deploy.allowed_networks`), only inside it.
+/// Checked at registration (a literal address) and at every connect after
+/// name resolution.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TargetPolicy {
+    pub allowed: Vec<IpNet>,
+    pub forge_ports: Vec<u16>,
+}
+
+impl TargetPolicy {
+    /// May forge connect to `ip:port`? `Err` is the log reason.
+    pub fn check(&self, ip: std::net::IpAddr, port: u16) -> Result<(), &'static str> {
+        let ip = canonical(ip);
+        let denied = match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback()
+                    || v4.is_unspecified()
+                    || v4.is_link_local()
+                    || v4.is_multicast()
+                    || v4.is_broadcast()
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+        if denied {
+            return Err("denied_address");
+        }
+        if self.forge_ports.contains(&port) {
+            return Err("forge_port");
+        }
+        if !self.allowed.is_empty() && !self.allowed.iter().any(|n| n.contains(ip)) {
+            return Err("outside_allowed_networks");
+        }
+        Ok(())
+    }
+
+    /// The registration check: a literal address is checked now, a name at
+    /// every connect.
+    pub fn check_registered(&self, host: &str, port: u16) -> Result<(), &'static str> {
+        match host.parse::<std::net::IpAddr>() {
+            Ok(ip) => self.check(ip, port),
+            Err(_) if self.forge_ports.contains(&port) => Err("forge_port"),
+            Err(_) => Ok(()),
         }
     }
 }

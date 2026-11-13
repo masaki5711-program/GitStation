@@ -591,8 +591,9 @@ pub enum Resource {
     JobSelf(JobSelf),
     /// One deployment as `DeployApprove` decides it (M4 C11, ADR-0031
     /// decision 6): the project, the environment's tier, who requested it
-    /// (`None`: the system, an automatic deployment) and the author of the
-    /// merge request whose merge produced its SHA (`None`: none known).
+    /// (`None`: the system, an automatic deployment) and the people behind
+    /// its SHA (merge request authors, pushers, commit author and
+    /// committer as accounts).
     /// Built by [`crate::DeploymentCtx`] from one loaded row.
     Deployment(DeploymentView),
     /// One ref update in a push. The kind is derived from `name` inside
@@ -854,12 +855,12 @@ impl RunnerJob {
 }
 
 /// See [`Resource::Deployment`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentView {
     pub project: ProjectView,
     pub tier: forge_core::deploy::DeployTier,
     pub requested_by: Option<UserId>,
-    pub merge_request_author: Option<UserId>,
+    pub change_authors: Vec<UserId>,
 }
 
 /// See [`Resource::JobSelf`]. Private fields, a crate-only constructor.

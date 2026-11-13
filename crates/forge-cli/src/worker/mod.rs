@@ -202,7 +202,10 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
                 notify.as_ref(),
             ),
             // M4 C11: deployments only with the deploy key.
-            (webhook, deploy::DeployLane::from_config(&cfg.deploy)),
+            (
+                webhook,
+                deploy::DeployLane::from_config(&cfg.deploy, deploy::target_policy(cfg)),
+            ),
             stopped,
         )
         .await;

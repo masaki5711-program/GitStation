@@ -21,6 +21,27 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+/// Every commit is on `refs/heads/main` (synthetic).
+struct OnMain;
+
+impl forge_deploy::CommitSource for OnMain {
+    fn facts<'a>(
+        &'a self,
+        _: ProjectId,
+        _: &'a forge_core::ObjectId,
+    ) -> forge_deploy::FactsFuture<'a> {
+        Box::pin(async {
+            Ok(Some(forge_deploy::CommitFacts {
+                subject: "Fix the cart".to_owned(),
+                author_name: "Carol".to_owned(),
+                author_email: "carol@example.test".to_owned(),
+                committer_email: "carol@example.test".to_owned(),
+                protected_branch: Some("refs/heads/main".to_owned()),
+            }))
+        })
+    }
+}
+
 const HOST_KEY: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJ";
 
 fn ctx(request: &str) -> ChangeContext {
@@ -127,7 +148,11 @@ impl World {
                 projects: Arc::new(self.t.db.clone()),
             },
         )
-        .with_deploy(forge_deploy::Deploy::new(self.t.db.clone()));
+        .with_deploy(forge_deploy::Deploy::new(
+            self.t.db.clone(),
+            Arc::new(OnMain),
+            forge_core::deploy::TargetPolicy::default(),
+        ));
         let res = forge_web::app(state, AppConfig::default())
             .expect("router")
             .oneshot(req)
@@ -162,6 +187,18 @@ impl World {
     }
 
     async fn setup(&self) {
+        // prod deploys only a SHA whose push pipeline succeeded.
+        for c in ['a', 'b'] {
+            self.t
+                .exec_superuser(&format!(
+                    "INSERT INTO forge.ci_pipelines (project_id, ref, sha, source, status, \
+                       request_id, protected, copy_mark) VALUES ({}, 'refs/heads/main', '{}', \
+                       'push', 'succeeded', 'req-pipe', true, 'open')",
+                    self.web.get(),
+                    c.to_string().repeat(40)
+                ))
+                .await;
+        }
         for tier in ["stg", "prod"] {
             let prod = tier == "prod";
             let a = self
@@ -226,13 +263,13 @@ async fn only_a_person_in_a_session_approves_prod_and_never_their_own_request() 
     assert_eq!(d.status, StatusCode::CREATED, "{}", d.json);
     assert_eq!(d.json["status"], "pending_approval");
     let id = d.json["id"].as_i64().expect("id");
-    // An agent, a token and a Developer are refused.
+    // Any token (an agent's too) is refused: approval is a web session.
     let a = w
         .approve(token(w.maintainer, &[Scope::Api]).as_agent(true), id)
         .await;
     assert_eq!(
         (a.status, a.code()),
-        (StatusCode::FORBIDDEN, "FG-AUTH-0003")
+        (StatusCode::FORBIDDEN, "FG-AUTH-0002")
     );
     let a = w.approve(token(w.maintainer, &[Scope::Api]), id).await;
     assert_eq!(

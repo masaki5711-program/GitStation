@@ -876,6 +876,7 @@ dependencies = [
  "forge-core",
  "forge-db",
  "forge-errors",
+ "forge-git",
  "sqlx",
  "tempfile",
  "tokio",

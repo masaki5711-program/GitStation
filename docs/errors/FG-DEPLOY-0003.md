@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-M4 C11 (ADR-0031 decision 3): ssh to a target failed before the remote script ran: the connection was refused or timed out (`ConnectTimeout`), the name did not resolve, authentication failed (the key in `deploy.ssh_key_file` is not in the target user's authorized_keys), the ssh program could not be started, or the whole call passed its timeout. ssh exits 255 without a host key message. The deployment fails (`failed`, or rolled back on an environment with `auto_rollback` when a target was already changed).
+M4 C11 (ADR-0031 decision 3): ssh to a target failed: before the remote script ran (`reason` refused / timed_out / dns / auth / network / spawn: the connection never opened, the target is unchanged) or with the connection lost after it opened (`connection_lost`: ssh exited 255 with no message that proves it never opened; the script may have run, so the target counts as changed and is rolled back on an environment with `auto_rollback`). The deployment fails (`failed`, or `rolled_back`).
 
 ## 調べ方 (diagnosis)
 

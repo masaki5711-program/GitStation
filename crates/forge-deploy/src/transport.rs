@@ -15,7 +15,7 @@ use std::pin::Pin;
 use std::process::Stdio;
 use std::time::Duration;
 
-use forge_core::deploy::{HostKey, RemoteVerb};
+use forge_core::deploy::{HostKey, RemoteVerb, TargetPolicy};
 use tokio::io::AsyncReadExt as _;
 
 /// One remote call.
@@ -42,9 +42,16 @@ pub enum Outcome {
     Exit(Option<i32>),
     /// The whole call passed its timeout (the ssh process is killed).
     Timeout,
-    /// ssh could not reach or log in to the host (`connect`) or could not
-    /// be started (`spawn`); the script never ran.
+    /// ssh never opened a session (its message proves it: `refused`,
+    /// `timed_out`, `dns`, `auth`, `network`, `handshake`) or could not be
+    /// started (`spawn`); the script never ran.
     Unreachable(&'static str),
+    /// ssh failed (255) without a message that proves the session never
+    /// opened: the script may have run (the target counts as changed).
+    Lost,
+    /// The host resolved to an address forge never connects to
+    /// (`TargetPolicy`; the reason); nothing was sent.
+    NotAllowed(&'static str),
     /// The host presented another key than the pinned one.
     HostKeyMismatch,
 }
@@ -59,11 +66,15 @@ pub trait DeployTransport: Send + Sync {
 }
 
 /// The ssh options of every call, in order (before `-p`, `-l`, `--`).
+/// `address` is the checked address ssh connects to; the pinned key is
+/// looked up by the target's name (`HostKeyAlias`), so a DNS change
+/// between the check and the connect cannot redirect the session.
 pub fn ssh_argv(
     key_file: &Path,
     known_hosts: &Path,
     connect_timeout: Duration,
     call: &RemoteCall,
+    address: &str,
 ) -> Vec<String> {
     let mut argv: Vec<String> = vec!["-F".into(), "none".into()];
     argv.push("-i".into());
@@ -75,6 +86,7 @@ pub fn ssh_argv(
         format!("UserKnownHostsFile=\"{}\"", known_hosts.display()),
         "GlobalKnownHostsFile=none".to_owned(),
         format!("HostKeyAlgorithms={}", call.host_key.key_type()),
+        format!("HostKeyAlias={}", call.host),
         "UpdateHostKeys=no".to_owned(),
         "CheckHostIP=no".to_owned(),
         "IdentitiesOnly=yes".to_owned(),
@@ -102,9 +114,9 @@ pub fn ssh_argv(
     argv.push("-l".into());
     argv.push(call.user.clone()); // clone: the argv owns its strings
     argv.push("--".into());
-    argv.push(call.host.clone()); // clone: as above
-                                  // The remote command: three plain tokens (`forge_core::deploy` checks
-                                  // that each is `[A-Za-z0-9._-]` before a call is built).
+    argv.push(address.to_owned());
+    // The remote command: three plain tokens (`forge_core::deploy` checks
+    // that each is `[A-Za-z0-9._-]` before a call is built).
     argv.push(call.script.clone()); // clone: as above
     argv.push(call.verb.as_str().to_owned());
     argv.push(call.sha.clone()); // clone: as above
@@ -119,9 +131,25 @@ const MISMATCH_MARKERS: &[&str] = &[
     "No matching host key type found",
 ];
 
+/// ssh messages that prove the session never opened, with their class.
+const NEVER_OPENED: &[(&str, &str)] = &[
+    ("Connection refused", "refused"),
+    ("Connection timed out", "timed_out"),
+    ("Operation timed out", "timed_out"),
+    ("Could not resolve hostname", "dns"),
+    ("Name or service not known", "dns"),
+    ("Permission denied", "auth"),
+    ("Too many authentication failures", "auth"),
+    ("No route to host", "network"),
+    ("Network is unreachable", "network"),
+    ("kex_exchange_identification", "handshake"),
+    ("Unable to negotiate", "handshake"),
+];
+
 /// ssh's exit status and its stderr into an [`Outcome`]: 0 is the
-/// script's success; 255 is ssh's own failure (a host key mismatch when it
-/// says so, an unreachable host otherwise); any other status is the
+/// script's success; 255 is ssh's own failure — a host key mismatch or a
+/// session that provably never opened when ssh says so, otherwise
+/// [`Outcome::Lost`] (the script may have run); any other status is the
 /// script's.
 pub fn classify(code: Option<i32>, stderr: &[u8]) -> Outcome {
     match code {
@@ -129,13 +157,38 @@ pub fn classify(code: Option<i32>, stderr: &[u8]) -> Outcome {
         Some(255) => {
             let text = String::from_utf8_lossy(stderr);
             if MISMATCH_MARKERS.iter().any(|m| text.contains(m)) {
-                Outcome::HostKeyMismatch
-            } else {
-                Outcome::Unreachable("connect")
+                return Outcome::HostKeyMismatch;
+            }
+            match NEVER_OPENED.iter().find(|(m, _)| text.contains(m)) {
+                Some((_, class)) => Outcome::Unreachable(class),
+                None => Outcome::Lost,
             }
         }
         other => Outcome::Exit(other),
     }
+}
+
+/// The address ssh connects to: the target name resolved now, every
+/// address checked against `policy` (one refused address refuses the
+/// target: no fallback to another).
+pub async fn resolve(
+    policy: &TargetPolicy,
+    host: &str,
+    port: u16,
+    limit: Duration,
+) -> Result<std::net::IpAddr, Outcome> {
+    let found = match tokio::time::timeout(limit, tokio::net::lookup_host((host, port))).await {
+        Ok(Ok(found)) => found.map(|a| a.ip()).collect::<Vec<_>>(),
+        Ok(Err(_)) => return Err(Outcome::Unreachable("dns")),
+        Err(_) => return Err(Outcome::Unreachable("timed_out")),
+    };
+    let Some(first) = found.first().copied() else {
+        return Err(Outcome::Unreachable("dns"));
+    };
+    for ip in &found {
+        policy.check(*ip, port).map_err(Outcome::NotAllowed)?;
+    }
+    Ok(first)
 }
 
 /// The most of ssh's stderr read for [`classify`] (never logged).
@@ -147,18 +200,35 @@ pub struct SshTransport {
     program: PathBuf,
     key_file: PathBuf,
     connect_timeout: Duration,
+    policy: TargetPolicy,
 }
 
 impl SshTransport {
-    pub fn new(program: PathBuf, key_file: PathBuf, connect_timeout: Duration) -> Self {
+    pub fn new(
+        program: PathBuf,
+        key_file: PathBuf,
+        connect_timeout: Duration,
+        policy: TargetPolicy,
+    ) -> Self {
         Self {
             program,
             key_file,
             connect_timeout,
+            policy,
         }
     }
 
     async fn run(&self, call: &RemoteCall) -> Outcome {
+        let address = match resolve(&self.policy, &call.host, call.port, self.connect_timeout).await
+        {
+            Ok(ip) => ip.to_string(),
+            Err(outcome) => return outcome,
+        };
+        // A scratch HOME: ssh reads no user configuration or keys of the
+        // forge account (the files go with the directory).
+        let Ok(home) = tempfile::Builder::new().prefix("forge-ssh-home-").tempdir() else {
+            return Outcome::Unreachable("spawn");
+        };
         // One known_hosts file per call holding only the pinned key; removed
         // when the guard drops.
         let known = match tempfile::Builder::new()
@@ -171,11 +241,23 @@ impl SshTransport {
         if known.path().display().to_string().contains('"') {
             return Outcome::Unreachable("spawn");
         }
-        let line = call.host_key.known_hosts_line(&call.host, call.port);
+        // The pin under the target name, with and without the port
+        // brackets (ssh looks up the HostKeyAlias either way).
+        let line = format!(
+            "{}{}",
+            call.host_key.known_hosts_line(&call.host, 22),
+            call.host_key.known_hosts_line(&call.host, call.port)
+        );
         if tokio::fs::write(known.path(), line).await.is_err() {
             return Outcome::Unreachable("spawn");
         }
-        let argv = ssh_argv(&self.key_file, known.path(), self.connect_timeout, call);
+        let argv = ssh_argv(
+            &self.key_file,
+            known.path(),
+            self.connect_timeout,
+            call,
+            &address,
+        );
         let mut cmd = tokio::process::Command::new(&self.program);
         cmd.args(&argv)
             .env_clear()
@@ -192,6 +274,7 @@ impl SshTransport {
                 cmd.env(k, v);
             }
         }
+        cmd.env("HOME", home.path()).env("USERPROFILE", home.path());
         let Ok(mut child) = cmd.spawn() else {
             return Outcome::Unreachable("spawn");
         };

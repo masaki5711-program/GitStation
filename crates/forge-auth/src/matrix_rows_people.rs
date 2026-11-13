@@ -113,7 +113,7 @@ const GROUPS: [[Row; 2]; 35] = [
     // M4 C11: deploy configuration and approval are kept for people.
     both!(A::DeployEnvironmentManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     both!(A::DeployTargetManage, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::PrivateProject),
-    both!(A::DeployApprove, MAINTAINER.0, MAINTAINER.1, crate::matrix_rows_deploy::STG),
+    both!(A::DeployApprove, ADMIN_SESSION.0, ADMIN_SESSION.1, crate::matrix_rows_deploy::STG),
     both!(A::WebhookDeliver, MAINTAINER.0, MAINTAINER.1, F::ProjectEvents {
         class: forge_core::VisibilityClass::Integration,
         project: crate::matrix_review::MrProject::Private,

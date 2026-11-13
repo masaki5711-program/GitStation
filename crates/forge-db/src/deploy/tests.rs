@@ -121,15 +121,43 @@ impl World {
         tier: DeployTier,
         sha: &str,
     ) -> Result<StoredDeployment, ForgeError> {
+        // prod deploys only a SHA whose push pipeline succeeded.
+        if tier.is_prod() {
+            self.succeeded_pipeline(sha).await;
+        }
+        let commit = CommitInput {
+            subject: "Fix the cart".to_owned(),
+            author_name: "Carol".to_owned(),
+            author_email: "carol@example.test".to_owned(),
+            committer_email: "carol@example.test".to_owned(),
+        };
         request_decided(
             &self.t.db,
             &ctx(Actor::User(who), "req-deploy"),
-            self.project(),
-            tier,
-            sha,
+            (self.project(), tier, sha),
+            Some(&commit),
             |_| Ok(()),
         )
         .await
+    }
+
+    async fn succeeded_pipeline(&self, sha: &str) {
+        let mut su = self.t.superuser().await;
+        sqlx::query(
+            "INSERT INTO forge.ci_pipelines (project_id, ref, sha, source, status, request_id, \
+               protected, copy_mark) \
+             VALUES ($1, 'refs/heads/main', $2, 'push', 'succeeded', 'req-pipe', true, 'open') \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(self.project().get())
+        .bind(sha)
+        .execute(&mut su)
+        .await
+        .expect("pipeline");
+    }
+
+    fn rid(&self) -> RequestId {
+        RequestId::parse("req-worker").expect("rid")
     }
 
     async fn approve(&self, who: UserId, id: i64) -> Result<StoredDeployment, ForgeError> {
@@ -303,7 +331,7 @@ async fn a_freeze_window_blocks_at_request_and_at_execution() {
         .expect("request");
     assert_eq!(d.status, DeploymentStatus::Queued);
     w.env(DeployTier::Stg, around_now()).await;
-    match claim_next(&w.t.db).await.expect("claim") {
+    match claim_next(&w.t.db, &w.rid()).await.expect("claim") {
         Claim::Blocked { id, code, .. } => {
             assert_eq!(id, d.id);
             assert_eq!(code, ErrorCode::DeployFrozen);
@@ -316,7 +344,10 @@ async fn a_freeze_window_blocks_at_request_and_at_execution() {
         .expect("row");
     assert_eq!(stored.status, DeploymentStatus::Blocked);
     assert_eq!(stored.error_code.as_deref(), Some("FG-DEPLOY-0002"));
-    assert_eq!(claim_next(&w.t.db).await.expect("idle"), Claim::Idle);
+    assert_eq!(
+        claim_next(&w.t.db, &w.rid()).await.expect("idle"),
+        Claim::Idle
+    );
     w.t.drop_now().await;
 }
 
@@ -342,7 +373,7 @@ async fn an_expired_approval_blocks_the_deployment() {
     .fetch_one(&mut su)
     .await
     .expect("insert");
-    match claim_next(&w.t.db).await.expect("claim") {
+    match claim_next(&w.t.db, &w.rid()).await.expect("claim") {
         Claim::Blocked {
             id: got,
             code,
@@ -371,7 +402,7 @@ async fn an_expired_approval_blocks_the_deployment() {
     .expect("insert pending");
     let late = w.approve(w.bob, pending).await.expect_err("too late");
     assert_eq!(late.code(), ErrorCode::DeployApprovalRequired);
-    let blocked = block_unapproved(&w.t.db).await.expect("block");
+    let blocked = block_unapproved(&w.t.db, &w.rid()).await.expect("block");
     assert_eq!(
         blocked.iter().map(|b| b.0).collect::<Vec<_>>(),
         vec![pending]
@@ -393,7 +424,7 @@ async fn a_claim_records_the_previous_version_and_runs_one_per_environment() {
         .request(w.alice, DeployTier::Stg, &sha('b'))
         .await
         .expect("second");
-    let Claim::Run(run) = claim_next(&w.t.db).await.expect("claim") else {
+    let Claim::Run(run) = claim_next(&w.t.db, &w.rid()).await.expect("claim") else {
         panic!("expected a run");
     };
     assert_eq!(run.id, first.id);
@@ -407,15 +438,22 @@ async fn a_claim_records_the_previous_version_and_runs_one_per_environment() {
         vec!["web-1", "web-2"]
     );
     // The environment runs one at a time.
-    assert_eq!(claim_next(&w.t.db).await.expect("busy"), Claim::Idle);
+    assert_eq!(
+        claim_next(&w.t.db, &w.rid()).await.expect("busy"),
+        Claim::Idle
+    );
     let end = Finish {
         status: DeploymentStatus::Succeeded,
         error_code: None,
         failed_target: None,
     };
-    assert!(finish(&w.t.db, first.id, &end).await.expect("finish"));
-    assert!(!finish(&w.t.db, first.id, &end).await.expect("only once"));
-    let Claim::Run(next) = claim_next(&w.t.db).await.expect("claim 2") else {
+    assert!(finish(&w.t.db, &w.rid(), first.id, &end)
+        .await
+        .expect("finish"));
+    assert!(!finish(&w.t.db, &w.rid(), first.id, &end)
+        .await
+        .expect("only once"));
+    let Claim::Run(next) = claim_next(&w.t.db, &w.rid()).await.expect("claim 2") else {
         panic!("expected the second");
     };
     assert_eq!(next.id, second.id);
@@ -455,5 +493,128 @@ async fn a_succeeded_push_pipeline_requests_an_automatic_deployment_once() {
         .await
         .expect("again")
         .is_empty());
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_commit_shown_to_the_approver_keeps_its_people_from_approving() {
+    let w = world().await;
+    w.env(DeployTier::Prod, Vec::new()).await;
+    w.target(DeployTier::Prod, "web-1").await.expect("target");
+    // prod without a succeeded pipeline of the SHA is refused.
+    let e = request_decided(
+        &w.t.db,
+        &ctx(Actor::User(w.alice), "req-deploy"),
+        (w.project(), DeployTier::Prod, &sha('9')),
+        None,
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("no pipeline");
+    assert_eq!(e.code(), ErrorCode::DeployCommitNotAllowed);
+    let d = w
+        .request(w.alice, DeployTier::Prod, &sha('a'))
+        .await
+        .expect("request");
+    assert_eq!(d.commit_subject.as_deref(), Some("Fix the cart"));
+    assert_eq!(d.commit_author_email.as_deref(), Some("carol@example.test"));
+    // Bob pushed that commit: he is behind it and may not approve.
+    w.t.commit_audited(
+        ("project", w.project().get()),
+        &[format!(
+            "INSERT INTO forge.push_commits (repository_id, commit_sha, pusher_id, project_id,                request_id) VALUES (1, '{}', {}, {}, 'req-push')",
+            sha('a'),
+            w.bob.get(),
+            w.project().get()
+        )],
+    )
+    .await;
+    let stored = get_deployment(&w.t.db, w.project(), d.id)
+        .await
+        .expect("get")
+        .expect("row");
+    assert_eq!(stored.change_authors, vec![w.bob.get()]);
+    let refused = w.approve(w.bob, d.id).await.expect_err("pusher");
+    assert_eq!(refused.code(), ErrorCode::DeploySelfApprovalRefused);
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_running_deployment_without_heartbeat_is_abandoned() {
+    let w = world().await;
+    w.env(DeployTier::Stg, Vec::new()).await;
+    w.target(DeployTier::Stg, "web-1").await.expect("target");
+    let d = w
+        .request(w.alice, DeployTier::Stg, &sha('a'))
+        .await
+        .expect("request");
+    let Claim::Run(run) = claim_next(&w.t.db, &w.rid()).await.expect("claim") else {
+        panic!("expected a run");
+    };
+    assert!(heartbeat(&w.t.db, run.id).await.expect("beat"));
+    assert!(abandon_stale(&w.t.db, &w.rid(), 300)
+        .await
+        .expect("fresh")
+        .is_empty());
+    // The worker stopped: its heartbeat is old.
+    let mut su = w.t.superuser().await;
+    sqlx::query(
+        "UPDATE forge.deployments SET heartbeat_at = now() - interval '1 hour' WHERE id = $1",
+    )
+    .bind(d.id)
+    .execute(&mut su)
+    .await
+    .expect("age");
+    let ended = abandon_stale(&w.t.db, &w.rid(), 300).await.expect("sweep");
+    assert_eq!(ended.iter().map(|e| e.0).collect::<Vec<_>>(), vec![d.id]);
+    let stored = get_deployment(&w.t.db, w.project(), d.id)
+        .await
+        .expect("get")
+        .expect("row");
+    assert_eq!(stored.status, DeploymentStatus::Failed);
+    assert_eq!(stored.error_code.as_deref(), Some("FG-DEPLOY-0012"));
+    // A late finish of the stopped worker changes nothing.
+    let end = Finish {
+        status: DeploymentStatus::Succeeded,
+        error_code: None,
+        failed_target: None,
+    };
+    assert!(!finish(&w.t.db, &w.rid(), d.id, &end).await.expect("late"));
+    let actions = w.audit_actions().await;
+    for a in ["deployment.started", "deployment.abandoned"] {
+        assert!(actions.iter().any(|x| x == a), "{a} in {actions:?}");
+    }
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_target_changed_after_the_approval_blocks_the_deployment() {
+    let w = world().await;
+    w.env(DeployTier::Prod, Vec::new()).await;
+    w.target(DeployTier::Prod, "web-1").await.expect("target");
+    let d = w
+        .request(w.alice, DeployTier::Prod, &sha('a'))
+        .await
+        .expect("request");
+    w.approve(w.bob, d.id).await.expect("approve");
+    // The administrator re-points the target after the approval.
+    let mut su = w.t.superuser().await;
+    sqlx::query("SELECT pg_sleep(0.01)")
+        .execute(&mut su)
+        .await
+        .expect("tick");
+    w.target(DeployTier::Prod, "web-1").await.expect("changed");
+    match claim_next(&w.t.db, &w.rid()).await.expect("claim") {
+        Claim::Blocked { id, reason, .. } => {
+            assert_eq!(id, d.id);
+            assert_eq!(reason, "target_changed_after_approval");
+        }
+        other @ (Claim::Idle | Claim::Run(_)) => panic!("expected blocked, got {other:?}"),
+    }
+    assert!(w
+        .audit_actions()
+        .await
+        .iter()
+        .any(|a| a == "deployment.blocked"));
     w.t.drop_now().await;
 }

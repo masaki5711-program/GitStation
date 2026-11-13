@@ -11,14 +11,15 @@ use crate::model::{DeploymentView, ProjectView, Resource};
 use crate::prove::{sealed, LoadedProject, ResourceCtx};
 
 /// One deployment as loaded (one row).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedDeployment {
     pub id: i64,
     pub tier: DeployTier,
     /// `None`: requested by the system (an automatic deployment).
     pub requested_by: Option<UserId>,
-    /// The author of the merge request whose merge produced the SHA.
-    pub merge_request_author: Option<UserId>,
+    /// The people behind the SHA: merge request authors, pushers, the
+    /// commit author and committer (as accounts).
+    pub change_authors: Vec<UserId>,
 }
 
 /// A deployment of a project (`DeployApprove`). The id is the project and
@@ -55,7 +56,7 @@ impl ResourceCtx for DeploymentCtx {
             },
             tier: self.deployment.tier,
             requested_by: self.deployment.requested_by,
-            merge_request_author: self.deployment.merge_request_author,
+            change_authors: self.deployment.change_authors.clone(), // clone: the resource owns it
         })
     }
     fn id(&self) -> (ProjectId, i64) {

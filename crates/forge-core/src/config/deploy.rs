@@ -7,6 +7,7 @@
 //! | `deploy.connect_timeout_secs` | 10 | 1 ..= 120 — ssh `ConnectTimeout` |
 //! | `deploy.script_timeout_secs` | 900 | 10 ..= 7200 — one `deploy` / `rollback` call |
 //! | `deploy.health_timeout_secs` | 120 | 5 ..= 1800 — one `health` call |
+//! | `deploy.allowed_networks` | none | comma-separated CIDRs; when set, targets must resolve inside them (loopback, link-local and forge's own ports are always refused) |
 //!
 //! forge never reads the key's content; it checks the file before each
 //! deployment (`forge_deploy`) and in `forge doctor`.
@@ -23,6 +24,7 @@ const PROGRAM_KEY: &str = "deploy.ssh_program";
 const CONNECT_KEY: &str = "deploy.connect_timeout_secs";
 const SCRIPT_KEY: &str = "deploy.script_timeout_secs";
 const HEALTH_KEY: &str = "deploy.health_timeout_secs";
+const NETWORKS_KEY: &str = "deploy.allowed_networks";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeployConfig {
@@ -33,6 +35,8 @@ pub struct DeployConfig {
     pub connect_timeout: Duration,
     pub script_timeout: Duration,
     pub health_timeout: Duration,
+    /// `deploy.allowed_networks` (empty: any address the policy allows).
+    pub allowed_networks: Vec<crate::deploy::IpNet>,
 }
 
 impl Default for DeployConfig {
@@ -43,6 +47,7 @@ impl Default for DeployConfig {
             connect_timeout: Duration::from_secs(10),
             script_timeout: Duration::from_secs(900),
             health_timeout: Duration::from_secs(120),
+            allowed_networks: Vec::new(),
         }
     }
 }
@@ -73,7 +78,16 @@ impl DeployConfig {
                 n => Ok(Duration::from_secs(u64::from(n))),
             }
         };
+        let allowed_networks = match get(NETWORKS_KEY).map(str::trim) {
+            None | Some("") => Vec::new(),
+            Some(raw) => raw
+                .split(',')
+                .map(|n| crate::deploy::IpNet::parse(n.trim()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| invalid(NETWORKS_KEY, "invalid"))?,
+        };
         Ok(Self {
+            allowed_networks,
             ssh_key_file,
             ssh_program,
             connect_timeout: secs(CONNECT_KEY, d.connect_timeout, 1, 120)?,

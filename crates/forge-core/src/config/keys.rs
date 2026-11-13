@@ -276,6 +276,7 @@ pub const KEYS: &[Key] = &[
     // M4 C11: deployments over SSH (ADR-0031).
     text("deploy.ssh_key_file", "FORGE_DEPLOY_SSH_KEY_FILE"),
     text("deploy.ssh_program", "FORGE_DEPLOY_SSH_PROGRAM"),
+    text("deploy.allowed_networks", "FORGE_DEPLOY_ALLOWED_NETWORKS"),
     number(
         "deploy.connect_timeout_secs",
         "FORGE_DEPLOY_CONNECT_TIMEOUT_SECS",

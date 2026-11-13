@@ -1,4 +1,4 @@
-# Runbook: deploy（FG-DEPLOY-0001〜0010。関連: FG-AUTH-0002、FG-AUTH-0003、FG-WEB-0006、FG-REPO-0005）
+# Runbook: deploy（FG-DEPLOY-0001〜0013。関連: FG-AUTH-0002、FG-AUTH-0003、FG-WEB-0006、FG-REPO-0005）
 
 M4 C11（計画 14 §4.1・§4.2、ADR-0031）のデプロイが期待どおりに動かないとき。forge の worker（タスク `deploy_runner`）が待ちの
 デプロイを 1 つずつ取り、ターゲットごとに `ssh … -- <host> <script> deploy|health|rollback <sha>` を動かす。表は
@@ -6,7 +6,7 @@ M4 C11（計画 14 §4.1・§4.2、ADR-0031）のデプロイが期待どおり�
 `forge.deployments`（要求・承認・状態・前の版）。ルートは `GET|PUT /api/v1/projects/{id}/deploy/environments[/{tier}[/targets/{name}]]`、
 `GET|POST /api/v1/projects/{id}/deployments`、`POST …/deployments/{deployment_id}/approve`。doctor `deploy.known_hosts`。
 
-**prod は人の承認が必須**（Maintainer 以上の人の Web のセッション、要求者と MR の作成者を除く）。prod は自動でロールバックしない。
+**prod は人の承認が必須**。承認はどの環境でも Maintainer 以上の人の Web のセッションだけで、要求者と、その SHA の背後の人（MR の作成者・push した人・コミットの author と committer）は承認できない。prod は自動でロールバックしない。
 
 ## 前提（ターゲットのホストの準備）
 
@@ -16,6 +16,10 @@ M4 C11（計画 14 §4.1・§4.2、ADR-0031）のデプロイが期待どおり�
   そのホストで何でもできる。
 - スクリプトは `deploy <sha>`（その SHA を自分で取得して入れ替える）、`health <sha>`（0 で健全）、`rollback <sha>`（前の版に戻す）
   を受ける。出力は forge に残らない（シークレットを含みうる）。ホスト側のログに書く。
+- **ロックの契約**: `deploy` と `rollback` は同じ排他ロック（例: `flock /var/lock/forge-deploy-<script>`）を取る。`rollback` はロックを
+  待ってから戻す。forge が `deploy` を時間切れで止めてもリモートで動き続けることがあり、ロックが無いと後の `rollback` と競合する（ADR-0031 追記 6）。
+- スクリプトの名前にシェル・インタプリタ（`sh`・`bash`・`python…` など）は使えない。dispatch は名前を 1 つの固定のスクリプトに対応づける。
+- デプロイできるのは保護されたブランチにあるコミットだけ（prod はその push のパイプラインの成功も要る。FG-DEPLOY-0011）。
 - ターゲットの host key は、ホストの管理者から別の経路で受け取る（`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` の指紋と照合）。
   同じネットワークの `ssh-keyscan` の結果だけを信じない。
 
@@ -56,6 +60,12 @@ M4 C11（計画 14 §4.1・§4.2、ADR-0031）のデプロイが期待どおり�
    自動マージの主体は承認できない（FG-AUTH-0003、仕様）。
 8. `running` のまま残る（doctor の警告）: worker が途中で止まった。ホスト側でどこまで進んだかをスクリプトのログで確かめる。
 
+9. **止まったデプロイ（FG-DEPLOY-0012）**: worker の心拍が 5 分途絶えた `running` は次の回で `failed` になる（ロールバックはしない）。
+   `SELECT id, sha, previous_sha, started_at, heartbeat_at FROM forge.deployments WHERE id = <deployment_id>;` と worker のログ
+   （`forge.deploy.finish_failed`、異常終了）を見る。各ターゲットで動いている版をスクリプトのログで確かめる。
+10. **接続先が許されない（FG-DEPLOY-0013）**: ログの `reason`（`denied_address` / `outside_allowed_networks` / `forge_port`）と `host`。
+   ホストの DNS が 127.0.0.1・169.254.x.x などを返していないか、`deploy.allowed_networks` に入っているかを確かめる。
+
 ## Mitigate（変更は人の承認のあと）
 
 1. **鍵（FG-DEPLOY-0008）** `[MUTATING — needs approval]`: 秘密鍵を `deploy.ssh_key_file` に置き、`chown <forge の利用者>`、
@@ -71,9 +81,13 @@ M4 C11（計画 14 §4.1・§4.2、ADR-0031）のデプロイが期待どおり�
    別の Maintainer が承認する `[MUTATING — needs approval]`。前へ直すなら修正の SHA を同じ手順で出す。
 6. **ロールバックの失敗（FG-DEPLOY-0006）** `[MUTATING — needs approval]`: ターゲットのリリースのディレクトリから手で前の版に戻す
    （スクリプトの手順書に従う）。その後、確かな SHA を要求してデプロイの履歴をそろえる。
-7. **`running` が残った** `[MUTATING — needs approval]`: ホストの状態を確かめた上で、DB の管理者の接続（forge_owner）で
+7. **`running` が残った**（心拍の掃除が動かないとき。通常は Diagnose 9 のとおり自動で `failed` になる） `[MUTATING — needs approval]`: ホストの状態を確かめた上で、DB の管理者の接続（forge_owner）で
    `UPDATE forge.deployments SET status = 'failed', error_code = 'FG-DEPLOY-0007', failed_target = '<name>', finished_at = now(), updated_at = now() WHERE id = <deployment_id> AND status = 'running';`
    （その環境の次のデプロイが動けるようになる）。戻し: なし（終わった行は変わらない。もう一度要求する）。
+
+8. **止まったデプロイの後** `[MUTATING — needs approval]`: ターゲットをスクリプトのログで確かめ、必要なら手で前の版に戻し、確かな SHA を要求する。
+9. **接続先** `[MUTATING — needs approval]`: DNS を直すか、管理者がターゲットの `host` を直す（監査に残る）。正当なネットワークなら
+   `deploy.allowed_networks` に足して `forge worker` を再起動。戻し: 設定を元に戻して再起動。
 
 ## Verify
 

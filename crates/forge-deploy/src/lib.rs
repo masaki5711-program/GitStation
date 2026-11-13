@@ -16,9 +16,11 @@ use forge_auth::{
     AccountFacts, Action, Authorized, DeploymentCtx, LoadedDeployment, LoadedProject, Principal,
     ProjectCtx,
 };
+use std::sync::Arc;
+
 use forge_core::deploy::{
     check_host, check_port, check_script_name, check_target_name, check_user, DeployTier, HostKey,
-    DEFAULT_APPROVAL_TTL_MINUTES, MAX_APPROVAL_TTL_MINUTES,
+    TargetPolicy, DEFAULT_APPROVAL_TTL_MINUTES, MAX_APPROVAL_TTL_MINUTES,
 };
 use forge_core::{ObjectId, ProjectId, RefName, RequestId, UserId};
 use forge_db::change::{Actor, ChangeContext};
@@ -28,8 +30,11 @@ use forge_errors::{ErrorCode, ForgeError};
 
 pub use forge_db::deploy::{StoredDeployment, StoredEnvironment, StoredTarget};
 
+pub mod commits;
 pub mod run;
 pub mod transport;
+
+pub use commits::{CommitFacts, CommitSource, FactsFuture, GitCommits};
 
 /// Who asked and with which credential (the audit row's).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,7 +131,7 @@ pub fn loaded_deployment(d: &StoredDeployment) -> LoadedDeployment {
         id: d.id,
         tier: d.tier,
         requested_by: d.requested_by.map(UserId::new),
-        merge_request_author: d.merge_request_author.map(UserId::new),
+        change_authors: d.change_authors.iter().copied().map(UserId::new).collect(),
     }
 }
 
@@ -171,10 +176,17 @@ pub fn check_environment(
 
 /// Check a target as sent: every value that reaches ssh's command line or
 /// the known_hosts file.
-pub fn check_target(spec: &TargetSpec) -> Result<forge_db::deploy::TargetInput, ForgeError> {
+pub fn check_target(
+    spec: &TargetSpec,
+    policy: &TargetPolicy,
+) -> Result<forge_db::deploy::TargetInput, ForgeError> {
     check_target_name(&spec.name).map_err(|r| param("name", r))?;
     check_host(&spec.host).map_err(|r| param("host", r))?;
     let port = check_port(spec.port).map_err(|r| param("port", r))?;
+    // A literal address now; a name at every connect (`transport`).
+    policy
+        .check_registered(&spec.host, port)
+        .map_err(|r| param("host", r))?;
     check_user(&spec.user).map_err(|r| param("user", r))?;
     check_script_name(&spec.script).map_err(|r| param("script", r))?;
     let host_key =
@@ -191,14 +203,28 @@ pub fn check_target(spec: &TargetSpec) -> Result<forge_db::deploy::TargetInput, 
 }
 
 /// The deployments' service (`forge serve` builds one).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Deploy {
     db: Db,
+    commits: Arc<dyn CommitSource>,
+    policy: TargetPolicy,
+}
+
+impl std::fmt::Debug for Deploy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Deploy").finish_non_exhaustive()
+    }
 }
 
 impl Deploy {
-    pub fn new(db: Db) -> Self {
-        Self { db }
+    /// `commits` reads what a request names (git in `forge serve`);
+    /// `policy` the addresses a target may have.
+    pub fn new(db: Db, commits: Arc<dyn CommitSource>, policy: TargetPolicy) -> Self {
+        Self {
+            db,
+            commits,
+            policy,
+        }
     }
 
     /// `GET …/deploy/environments` (`DeployRead`): the environments and
@@ -277,7 +303,7 @@ impl Deploy {
     ) -> Result<(StoredTarget, bool), ForgeError> {
         require(proof.action(), Action::DeployTargetManage)?;
         let user = caller(proof.principal(), Action::DeployTargetManage)?;
-        let input = check_target(spec)?;
+        let input = check_target(spec, &self.policy)?;
         let project = *proof.id();
         let ctx = change_context(request, proof.principal(), user);
         let (stored, created) =
@@ -316,13 +342,38 @@ impl Deploy {
         let user = caller(proof.principal(), Action::DeployCreate)?;
         let sha = ObjectId::parse(sha).map_err(|_| param("sha", "not_an_object_id"))?;
         let project = *proof.id();
+        // Only a commit a protected branch holds (ADR-0031 amendment).
+        let refused = |reason: &'static str| {
+            tracing::info!(
+                target: "forge_deploy",
+                event = "forge.deploy.commit_refused",
+                error_code = ErrorCode::DeployCommitNotAllowed.id(),
+                request_id = %request.request_id,
+                project_id = project.get(),
+                environment = tier.as_str(),
+                reason,
+                "deployment request refused: commit not allowed"
+            );
+            ForgeError::new(ErrorCode::DeployCommitNotAllowed).with_context("reason", reason)
+        };
+        let Some(facts) = self.commits.facts(project, &sha).await? else {
+            return Err(refused("commit_not_found"));
+        };
+        if facts.protected_branch.is_none() {
+            return Err(refused("not_on_protected_branch"));
+        }
+        let commit = forge_db::deploy::CommitInput {
+            subject: facts.subject,
+            author_name: facts.author_name,
+            author_email: facts.author_email,
+            committer_email: facts.committer_email,
+        };
         let ctx = change_context(request, proof.principal(), user);
         let stored = forge_db::deploy::request_decided(
             &self.db,
             &ctx,
-            project,
-            tier,
-            sha.as_str(),
+            (project, tier, sha.as_str()),
+            Some(&commit),
             |facts| reconfirm(proof, facts),
         )
         .await?;

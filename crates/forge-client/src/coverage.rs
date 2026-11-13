@@ -955,7 +955,7 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "POST",
         "/api/v1/projects/{id}/deployments/{deployment_id}/approve",
-        Coverage::Command("deploy approve"),
+        Coverage::BrowserOnly("a deployment is approved in a web session only (every tier): tokens are refused (FG-AUTH-0002 session_required); runbook deploy"),
     ),
 ];
 

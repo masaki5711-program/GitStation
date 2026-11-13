@@ -1391,29 +1391,22 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             admin_only()
         }
         (Action::DeployCreate, Resource::Project(p)) => need(Role::Developer, p.role),
-        // Approving (ADR-0031 decision 6): people only; prod in a web
-        // session only; never the requester nor the merge request's
-        // author, administrators included, before any role; Maintainer
-        // and above.
+        // Approving (ADR-0031 decision 6 and its amendment): a web
+        // session (a token was refused above as session-only); people
+        // only; never the requester nor anyone behind the SHA,
+        // administrators included, before any role; Maintainer and above.
         (Action::DeployApprove, Resource::Deployment(d)) => {
             people_only()?;
-            if d.tier.is_prod() {
-                if let Credential::Token(scopes) = principal.credential() {
-                    let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
-                    return Err(deny(ErrorCode::InsufficientScope)
-                        .with_context("reason", "session_required")
-                        .with_context("environment", d.tier.as_str())
-                        .with_context("token_scopes", held.join(",")));
-                }
-            }
             let own = |reason: &'static str| {
-                deny(ErrorCode::DeploySelfApprovalRefused).with_context("reason", reason)
+                deny(ErrorCode::DeploySelfApprovalRefused)
+                    .with_context("reason", reason)
+                    .with_context("environment", d.tier.as_str())
             };
             if d.requested_by == Some(user) {
                 return Err(own("requester"));
             }
-            if d.merge_request_author == Some(user) {
-                return Err(own("merge_request_author"));
+            if d.change_authors.contains(&user) {
+                return Err(own("change_author"));
             }
             need(Role::Maintainer, d.project.role)
         }

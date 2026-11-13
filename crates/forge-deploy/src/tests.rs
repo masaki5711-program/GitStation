@@ -14,7 +14,32 @@ use forge_db::projects::{self, CreatedProject, NewProject};
 use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
 
+use forge_core::deploy::TargetPolicy;
+
 use super::*;
+use crate::commits::{CommitFacts, CommitSource, FactsFuture};
+
+/// Every SHA starting with `f` is off the protected branches; `e` is no
+/// commit at all; anything else is on `refs/heads/main`.
+struct OnMain;
+
+impl CommitSource for OnMain {
+    fn facts<'a>(&'a self, _: ProjectId, sha: &'a ObjectId) -> FactsFuture<'a> {
+        let first = sha.as_str().chars().next();
+        Box::pin(async move {
+            Ok(match first {
+                Some('e') => None,
+                _ => Some(CommitFacts {
+                    subject: "Fix the cart".to_owned(),
+                    author_name: "Carol".to_owned(),
+                    author_email: "carol@example.test".to_owned(),
+                    committer_email: "carol@example.test".to_owned(),
+                    protected_branch: (first != Some('f')).then(|| "refs/heads/main".to_owned()),
+                }),
+            })
+        })
+    }
+}
 use crate::run::{run_once, Pass, Timeouts};
 use crate::transport::{CallFuture, DeployTransport, Outcome, RemoteCall};
 
@@ -70,7 +95,18 @@ async fn world() -> World {
     )
     .await
     .expect("bob is a Maintainer");
-    let deploy = Deploy::new(t.db.clone());
+    let deploy = Deploy::new(t.db.clone(), Arc::new(OnMain), TargetPolicy::default());
+    // prod deploys only a SHA whose push pipeline succeeded.
+    for c in ['a', 'c'] {
+        t.exec_superuser(&format!(
+            "INSERT INTO forge.ci_pipelines (project_id, ref, sha, source, status, request_id, \
+               protected, copy_mark) VALUES ({}, 'refs/heads/main', '{}', 'push', 'succeeded', \
+               'req-pipe', true, 'open')",
+            web.project_id.get(),
+            c.to_string().repeat(40)
+        ))
+        .await;
+    }
     World {
         t,
         deploy,
@@ -130,7 +166,8 @@ impl World {
         // Targets are an administrator's: written here through forge-db
         // with the same checks.
         for tier in [DeployTier::Stg, DeployTier::Prod] {
-            let input = check_target(&target_spec("web-1")).expect("valid");
+            let input =
+                check_target(&target_spec("web-1"), &TargetPolicy::default()).expect("valid");
             forge_db::deploy::put_target_decided(
                 &self.t.db,
                 &ChangeContext::new(DbActor::User(self.alice), rid("req-target")),
@@ -223,7 +260,7 @@ fn values_that_could_reach_ssh_are_refused_before_anything_is_written() {
             "port",
         ),
     ] {
-        let e = check_target(&spec).expect_err(param_name);
+        let e = check_target(&spec, &TargetPolicy::default()).expect_err(param_name);
         assert_eq!(e.code(), ErrorCode::RequestInvalid);
         assert!(
             e.to_string().contains(&format!("param={param_name}")),
@@ -378,5 +415,42 @@ async fn a_worker_pass_runs_a_queued_stg_deployment_to_success() {
         .await
         .expect("idle");
     assert_eq!(pass, Pass::Idle);
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_commit_off_the_protected_branches_is_refused() {
+    let w = world().await;
+    w.setup().await;
+    let p = w.proof(w.bob, Action::DeployCreate).await;
+    for (c, reason) in [('f', "not_on_protected_branch"), ('e', "commit_not_found")] {
+        let e = w
+            .deploy
+            .request(
+                &request("req-d1"),
+                &p,
+                DeployTier::Stg,
+                &c.to_string().repeat(40),
+            )
+            .await
+            .expect_err(reason);
+        assert_eq!(e.code(), ErrorCode::DeployCommitNotAllowed);
+        assert!(e.to_string().contains(reason), "{e}");
+    }
+    // prod also needs a succeeded pipeline of the SHA ('b' has none).
+    let e = w
+        .deploy
+        .request(&request("req-d2"), &p, DeployTier::Prod, &"b".repeat(40))
+        .await
+        .expect_err("no pipeline");
+    assert_eq!(e.code(), ErrorCode::DeployCommitNotAllowed);
+    // The approver sees the commit.
+    let d = w
+        .deploy
+        .request(&request("req-d3"), &p, DeployTier::Stg, &"d".repeat(40))
+        .await
+        .expect("request");
+    assert_eq!(d.commit_subject.as_deref(), Some("Fix the cart"));
+    assert_eq!(d.commit_author_name.as_deref(), Some("Carol"));
     w.t.drop_now().await;
 }

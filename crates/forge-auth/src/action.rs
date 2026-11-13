@@ -475,11 +475,11 @@ actions! {
     DeployCreate,
     /// `POST …/deployments/{deployment_id}/approve` (`Resource::Deployment`):
     /// people only, Maintainer and above, never the requester nor the
-    /// author of the merge request that produced the SHA
-    /// (`FG-DEPLOY-0009`); for prod a web session only (a token is
-    /// `FG-AUTH-0002 reason=session_required`). An agent, a service
-    /// account (the auto-merge principal included), a bot, an act-as
-    /// request, a runner and a job never approve; `api`.
+    /// people behind the SHA — merge request authors, pushers, the commit
+    /// author and committer (`FG-DEPLOY-0009`); a web session only on
+    /// every tier (a token is `FG-AUTH-0002 reason=session_required`). An
+    /// agent, a service account (the auto-merge principal included), a
+    /// bot, an act-as request, a runner and a job never approve.
     DeployApprove,
     /// `PUT /api/v1/runner/jobs/{job_id}/artifacts?path=` (M4 C6): a job
     /// uploads one file of its artifacts — its own token, its own job,
@@ -608,6 +608,8 @@ impl Action {
                 | Action::ActAsAssertionIssue
                 | Action::RunnerRegister
                 | Action::RunnerManage
+                // M4 C11 review: an approval is a person's in the browser.
+                | Action::DeployApprove
         )
     }
 
@@ -708,6 +710,8 @@ impl Action {
             // M4 C6: a job's own artifacts (`ci_rule`: the job's token only).
             | Action::JobArtifactUpload
             | Action::JobArtifactDownload
+            // M4 C11 review: session only.
+            | Action::DeployApprove
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -802,7 +806,6 @@ impl Action {
             | Action::DeployEnvironmentManage
             | Action::DeployTargetManage
             | Action::DeployCreate
-            | Action::DeployApprove
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),

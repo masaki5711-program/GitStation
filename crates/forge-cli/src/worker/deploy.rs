@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::config::DeployConfig;
+use forge_core::deploy::TargetPolicy;
 use forge_db::Db;
 use forge_deploy::run::{run_once, Pass, Timeouts};
 use forge_deploy::transport::{DeployTransport, SshTransport};
@@ -35,15 +36,32 @@ pub(crate) struct DeployLane {
     pub(crate) timeouts: Timeouts,
 }
 
+/// Where a target may be (M4 C11 review): `deploy.allowed_networks`, and
+/// never the port forge serves HTTP on (`server.bind`).
+pub(crate) fn target_policy(cfg: &forge_core::config::Config) -> TargetPolicy {
+    let forge_ports = cfg
+        .server
+        .bind
+        .rsplit_once(':')
+        .and_then(|(_, p)| p.parse::<u16>().ok())
+        .into_iter()
+        .collect();
+    TargetPolicy {
+        allowed: cfg.deploy.allowed_networks.clone(), // clone: the policy owns it
+        forge_ports,
+    }
+}
+
 impl DeployLane {
     /// The lane of `deploy.*`; `None` without `deploy.ssh_key_file`.
-    pub(crate) fn from_config(cfg: &DeployConfig) -> Option<Self> {
+    pub(crate) fn from_config(cfg: &DeployConfig, policy: TargetPolicy) -> Option<Self> {
         let key_file = cfg.ssh_key_file.clone()?; // clone: the lane owns its path
         Some(Self {
             transport: Arc::new(SshTransport::new(
                 cfg.ssh_program.clone(), // clone: the transport owns its path
                 key_file.clone(),        // clone: as above
                 cfg.connect_timeout,
+                policy,
             )),
             key_file,
             timeouts: Timeouts {
@@ -80,7 +98,9 @@ mod tests {
     /// file is the run error).
     #[tokio::test]
     async fn a_deploy_run_with_nothing_waiting_waits_for_the_period() {
-        assert!(DeployLane::from_config(&DeployConfig::default()).is_none());
+        assert!(
+            DeployLane::from_config(&DeployConfig::default(), TargetPolicy::default()).is_none()
+        );
         let t = FreshDb::migrated().await;
         let dir = tempfile::tempdir().expect("dir");
         let key = dir.path().join("deploy_key");
@@ -88,7 +108,7 @@ mod tests {
             ssh_key_file: Some(key.clone()),
             ..DeployConfig::default()
         };
-        let lane = DeployLane::from_config(&cfg).expect("lane");
+        let lane = DeployLane::from_config(&cfg, TargetPolicy::default()).expect("lane");
         let missing = run_deploy(&t.db, &lane).await.expect_err("no key file yet");
         assert_eq!(
             missing.code(),

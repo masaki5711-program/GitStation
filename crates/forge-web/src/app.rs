@@ -826,7 +826,7 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Post,
             d::DEPLOYMENTS,
             Action::DeployCreate,
-            "Request a deployment ({\"environment\": \"stg\", \"sha\"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer)",
+            "Request a deployment ({\"environment\": \"stg\", \"sha\"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer)",
             d::MAX_BODY,
             d::OF_PROJECT,
             d::request,
@@ -836,7 +836,7 @@ fn deploy_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Post,
             d::APPROVE,
             Action::DeployApprove,
-            "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or the author of the merge request that produced the sha; prod needs a web session (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
+            "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
             d::OF_APPROVAL,
             d::approve,
         )

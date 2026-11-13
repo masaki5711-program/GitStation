@@ -2168,13 +2168,6 @@ pub enum DeployCommand {
         #[arg(value_parser = parse_oid)]
         sha: String,
     },
-    /// Approve a waiting deployment (dev / stg; prod in the browser).
-    Approve {
-        #[arg(long, value_parser = parse_id, value_name = "ID")]
-        project: i64,
-        #[arg(value_parser = parse_id)]
-        deployment: i64,
-    },
 }
 
 /// The event of `gstn ci plan`.

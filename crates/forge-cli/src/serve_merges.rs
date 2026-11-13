@@ -184,6 +184,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DeployKeyUnavailable
         | ErrorCode::DeploySelfApprovalRefused
         | ErrorCode::DeploymentStateConflict
+        | ErrorCode::DeployCommitNotAllowed
+        | ErrorCode::DeploymentAbandoned
+        | ErrorCode::DeployTargetNotAllowed
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

@@ -3126,6 +3126,25 @@
               "null"
             ]
           },
+          "commit_author_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_author_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_subject": {
+            "description": "The commit as git read it at the request (shown to the approver;\n`None` for an automatic request).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "created_at": {
             "type": "string"
           },
@@ -15088,7 +15107,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Request a deployment ({\"environment\": \"stg\", \"sha\"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer)",
+        "summary": "Request a deployment ({\"environment\": \"stg\", \"sha\"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer)",
         "x-forge-action": "DeployCreate",
         "x-forge-max-body-bytes": 16384
       }
@@ -15140,7 +15159,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or the author of the merge request that produced the sha; prod needs a web session (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
+        "summary": "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
         "x-forge-action": "DeployApprove"
       }
     },

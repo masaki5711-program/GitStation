@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-M4 C11 (plan 14 §4.2, ADR-0031 decision 6): authorize() refuses `DeployApprove` when the caller requested the deployment, or authored the merge request whose merge produced the deployed SHA, administrators included. Nothing was written.
+M4 C11 (plan 14 §4.2, ADR-0031 decision 6 and its 2026-11-13 amendment): authorize() refuses `DeployApprove` when the caller requested the deployment, or is one of the people behind the deployed SHA: the author of any merge request whose merge or head is that SHA, a person who pushed that commit (push records), or the commit author or committer (matched to an account by email); administrators included. Nothing was written.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action=DeployApprove`, `reason` (`requester` / `merge_request_author`) and the request_id. Read: SELECT requested_by, merge_request_author FROM forge.deployments WHERE id = <deployment_id>;
+The log event carries `action=DeployApprove`, `reason` (`requester` / `change_author`) and the request_id. Read: SELECT requested_by, merge_request_author, commit_author_email, committer_email FROM forge.deployments WHERE id = <deployment_id>; and the pushers: SELECT pusher_id FROM forge.push_commits WHERE project_id = <id> AND commit_sha = <sha>;
 
 ## 対処 (fix)
 

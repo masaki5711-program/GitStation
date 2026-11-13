@@ -59,7 +59,7 @@ fn only_plain_tokens_reach_the_remote_command_line() {
     for bad in ["", "-oProxyCommand=x", "root@x", "Deploy", "a b"] {
         assert!(check_user(bad).is_err(), "{bad:?}");
     }
-    for ok in ["app1.internal.example", "10.0.0.5", "localhost"] {
+    for ok in ["app1.internal.example", "10.0.0.5"] {
         assert!(check_host(ok).is_ok(), "{ok}");
     }
     for bad in [
@@ -146,4 +146,72 @@ fn a_deploy_change_never_carries_a_key_or_output() {
     };
     assert_eq!(a.action(), "deployment.approved");
     assert_eq!(a.project(), ProjectId::new(7));
+}
+
+#[test]
+fn a_shell_is_never_a_target_script() {
+    for bad in [
+        "sh",
+        "bash",
+        "python3",
+        "python3.11",
+        "env",
+        "sudo",
+        "perl",
+        "node",
+    ] {
+        assert_eq!(
+            check_script_name(bad),
+            Err("interpreter_script_name"),
+            "{bad}"
+        );
+    }
+    assert!(check_script_name("web-app").is_ok());
+    assert!(check_script_name("deploy-shop.sh").is_ok());
+    assert_eq!(check_host("localhost"), Err("denied_address"));
+}
+
+#[test]
+fn forge_never_connects_to_its_own_host_or_the_metadata_service() {
+    let open = TargetPolicy {
+        allowed: Vec::new(),
+        forge_ports: vec![8080],
+    };
+    let ip = |s: &str| s.parse::<std::net::IpAddr>().expect("ip");
+    for bad in [
+        "127.0.0.1",
+        "127.1.2.3",
+        "0.0.0.0",
+        "169.254.169.254",
+        "::1",
+        "fe80::1",
+        "::ffff:127.0.0.1",
+        "224.0.0.1",
+    ] {
+        assert_eq!(open.check(ip(bad), 22), Err("denied_address"), "{bad}");
+    }
+    assert_eq!(open.check(ip("10.0.0.5"), 8080), Err("forge_port"));
+    assert!(open.check(ip("10.0.0.5"), 22).is_ok());
+    let fenced = TargetPolicy {
+        allowed: vec![IpNet::parse("10.20.0.0/16").expect("net")],
+        forge_ports: Vec::new(),
+    };
+    assert!(fenced.check(ip("10.20.3.4"), 22).is_ok());
+    assert_eq!(
+        fenced.check(ip("10.21.3.4"), 22),
+        Err("outside_allowed_networks")
+    );
+    assert_eq!(
+        open.check_registered("127.0.0.1", 22),
+        Err("denied_address")
+    );
+    assert!(open.check_registered("app1.internal", 22).is_ok());
+    assert_eq!(
+        open.check_registered("app1.internal", 8080),
+        Err("forge_port")
+    );
+    assert!(IpNet::parse("10.0.0.0/33").is_err());
+    assert!(IpNet::parse("fd00::/8")
+        .expect("v6")
+        .contains(ip("fd12::1")));
 }

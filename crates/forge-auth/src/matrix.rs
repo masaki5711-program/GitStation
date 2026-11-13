@@ -1153,7 +1153,11 @@ impl Fixture {
                     forge_core::deploy::DeployTier::Stg
                 },
                 requested_by: Some(if requested_by_me { ME } else { OTHER }),
-                merge_request_author: mr_author_me.then_some(ME),
+                change_authors: if mr_author_me {
+                    vec![OTHER, ME]
+                } else {
+                    vec![OTHER]
+                },
             }),
             Fixture::Mr(mr) => mr.resource(role),
             Fixture::ActAs(scene) => scene.resource(role),

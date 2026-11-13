@@ -16,6 +16,8 @@ forge-auth.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
 forge-errors.workspace = true
+# M4 C11 review: what may be deployed is read with git (browse API).
+forge-git.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 tracing.workspace = true

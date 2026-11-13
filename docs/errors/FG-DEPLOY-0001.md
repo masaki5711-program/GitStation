@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-M4 C11 (ADR-0031 decisions 6, 7): the environment requires an approval (always for prod) and, when the forge worker took the deployment, its approval had expired (`approval_expires_at <= now()`, the database clock; `approval_ttl_minutes` of the environment, default 60), or a deployment waited for an approval longer than that window. The deployment ends `blocked`; nothing ran on any target. An approval belongs to one deployment (one SHA) and is never carried over: requesting the same SHA again needs a new approval (ADR-0029 obligation 6).
+M4 C11 (ADR-0031 decisions 6, 7): the environment requires an approval (always for prod) and, when the forge worker took the deployment, a target of the environment had been changed after the approval (`reason=target_changed_after_approval`), or its approval had expired (`approval_expires_at <= now()`, the database clock; `approval_ttl_minutes` of the environment, default 60), or a deployment waited for an approval longer than that window. The deployment ends `blocked`; nothing ran on any target. An approval belongs to one deployment (one SHA) and is never carried over: requesting the same SHA again needs a new approval (ADR-0029 obligation 6).
 
 ## 調べ方 (diagnosis)
 
