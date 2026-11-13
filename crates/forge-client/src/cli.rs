@@ -115,6 +115,13 @@ pub enum Command {
         #[command(subcommand)]
         command: QueueCommand,
     },
+    /// Auto-merge (M4 C9): a project's mode and emergency stops, a merge
+    /// request's auto-merge line, and the emergency stop.
+    #[command(disable_help_subcommand = true)]
+    AutoMerge {
+        #[command(subcommand)]
+        command: AutoMergeCommand,
+    },
     /// An integration's event feed (M3 I1c): events, cursor — with the
     /// integration's own service account token.
     #[command(disable_help_subcommand = true)]
@@ -1590,6 +1597,37 @@ pub enum MirrorCommand {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AutoMergeCommand {
+    /// A project's auto-merge: its mode and the emergency stops.
+    Status {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// What auto-merge did with a merge request (queued, waiting, held,
+    /// stopped) and why.
+    Mr {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// Emergency stop of the project's auto-merge — Maintainer.
+    Stop {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Resume the project's auto-merge — Maintainer.
+    Resume {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Emergency stop of auto-merge on the whole instance — administrator.
+    InstanceStop,
+    /// Resume auto-merge on the instance — administrator.
+    InstanceResume,
 }
 
 #[derive(Subcommand, Debug)]

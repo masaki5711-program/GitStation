@@ -587,16 +587,79 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::QUERY,
         );
     user_activity_routes(user_merge_request_routes(runner_routes(pipeline_routes(
-        merge_queue_routes(doc_lint_routes(binding_routes(act_as_routes(
-            mirror_routes(webhook_routes(notification_routes(check_routes(
-                dev_status_routes(feed_routes(integration_routes(service_account_routes(
-                    account_routes(history_routes(browse_routes(git_routes(shell_routes(
-                        merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
-                    ))))),
+        auto_merge_routes(merge_queue_routes(doc_lint_routes(binding_routes(
+            act_as_routes(mirror_routes(webhook_routes(notification_routes(
+                check_routes(dev_status_routes(feed_routes(integration_routes(
+                    service_account_routes(account_routes(history_routes(browse_routes(
+                        git_routes(shell_routes(merge_request_routes(member_routes(
+                            move_routes(hosting_routes(fixed)),
+                        )))),
+                    )))),
                 )))),
             )))),
         )))),
     ))))
+}
+
+/// Auto-merge (M4 C9, ADR-0017 Amendment 2026-11-13): a project's
+/// `merge.auto`, its emergency stop and the instance's. The merge request's
+/// own state is in `merge_request_routes`.
+fn auto_merge_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::auto_merge as a;
+    registry
+        .route_with(
+            Verb::Get,
+            a::ONE,
+            Action::MergeQueueRead,
+            "A project's auto-merge: its merge.auto (off, reserve, conditional, full; a new project is full, projects older than auto-merge start off), the project's and the instance's emergency stop with who and when (as the repository browse API)",
+            a::AutoMergeOf,
+            a::read,
+        )
+        .responds::<a::AutoMergeBody>(Verb::Get, a::ONE)
+        .route_with_body(
+            Verb::Put,
+            a::ONE,
+            Action::AutoMergeSettingsManage,
+            "Change a project's merge.auto (people only; the Owner in a web session); audited",
+            a::MAX_BODY,
+            a::AutoMergeOf,
+            a::put,
+        )
+        .responds::<a::AutoMergeBody>(Verb::Put, a::ONE)
+        .route_with(
+            Verb::Post,
+            a::STOP,
+            Action::AutoMergeStopToggle,
+            "Emergency stop of the project's auto-merge: nothing is added to the merge queue automatically and queued auto-merge entries wait; people still merge (people only; Maintainer); audited",
+            a::AutoMergeOf,
+            a::stop,
+        )
+        .responds::<a::AutoMergeBody>(Verb::Post, a::STOP)
+        .route_with(
+            Verb::Post,
+            a::RESUME,
+            Action::AutoMergeStopToggle,
+            "Resume the project's auto-merge after an emergency stop (people only; Maintainer); audited",
+            a::AutoMergeOf,
+            a::resume,
+        )
+        .responds::<a::AutoMergeBody>(Verb::Post, a::RESUME)
+        .route(
+            Verb::Post,
+            a::ADMIN_STOP,
+            Action::AutoMergeInstanceStopToggle,
+            "Emergency stop of auto-merge on the whole instance (people only; an administrator, a token needs admin); audited",
+            a::instance_stop,
+        )
+        .responds::<a::InstanceAutoMergeBody>(Verb::Post, a::ADMIN_STOP)
+        .route(
+            Verb::Post,
+            a::ADMIN_RESUME,
+            Action::AutoMergeInstanceStopToggle,
+            "Resume auto-merge on the instance (people only; an administrator, a token needs admin); audited",
+            a::instance_resume,
+        )
+        .responds::<a::InstanceAutoMergeBody>(Verb::Post, a::ADMIN_RESUME)
 }
 
 /// The merge requests of the caller's own work across projects (plan 15
@@ -2333,6 +2396,16 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::merge_queue_entry,
         )
         .responds::<mr::QueueEntryStatusBody>(Verb::Get, mr::MERGE_QUEUE)
+        // M4 C9: what auto-merge did with the merge request (one line).
+        .route_with(
+            Verb::Get,
+            mr::AUTO_MERGE,
+            Action::MergeRequestRead,
+            "What auto-merge did with a merge request: the project's mode, the emergency stop in effect, and its last state (queued, waiting, held, stopped) with the stop class, a stable reason, the forge/risk rule or check behind it and FG-REVIEW-0026 / 0027 (null: none for its current head) (as the repository browse API)",
+            mr::AutoMergeStateOf,
+            mr::auto_merge_state,
+        )
+        .responds::<mr::MergeRequestAutoMergeBody>(Verb::Get, mr::AUTO_MERGE)
         // M3 R5 (ADR-0024 §8, §9): approvals of the head the caller saw,
         // their evaluation, and the project's approval rules.
         .route_with_body(

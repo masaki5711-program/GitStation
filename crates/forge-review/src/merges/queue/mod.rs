@@ -13,7 +13,9 @@
 //!   (one compare-and-swap of the target to the tested commit, then the
 //!   normal merge record per entry).
 
-use forge_auth::{Action, Authorized, MergeRequestCtx, ProjectCtx, RefProtection};
+use forge_auth::{
+    Action, Authorized, AutoMergeCtx, MergeRequestCtx, Principal, ProjectCtx, RefProtection,
+};
 use forge_core::merge_results::reported_on_merge_results;
 use forge_core::{
     CheckConclusion, CheckName, CheckStatus, Freshness, MergeCheckRuns, MergeMethod, ObjectId,
@@ -22,7 +24,7 @@ use forge_core::{
 use forge_db::review::merge_queue::{
     self as db, PauseOutcome, QueueView, StoredEntry, StoredQueue,
 };
-use forge_db::review::merges::{CredentialRef, MergeGate, NewEntry};
+use forge_db::review::merges::{CredentialRef, CredentialState, MergeGate, NewEntry};
 use forge_errors::{ErrorCode, ForgeError};
 
 use super::conditions::CheckRuns;
@@ -116,16 +118,70 @@ pub(crate) fn decide_queued(
             .with_context("reason", "retargeted")
             .with_context("merge_request_id", stored.id.get()));
     }
-    let protection = RefProtection::of(&gate.protection, &stored.target_branch);
-    let ctx = MergeRequestCtx::merging(
-        loaded(&gate.facts.project),
-        crate::loaded_merge_request(stored),
-        protection,
-    );
-    forge_auth::prove(&principal, Action::MergeRequestMerge, ctx).map(drop)?;
+    if principal.is_auto_merge() {
+        // M4 C9: the auto-merge principal's entry lands only while the
+        // project's mode acts and no emergency stop is on (read now).
+        prove_auto(gate, Action::MergeRequestMerge)?;
+    } else {
+        let protection = RefProtection::of(&gate.protection, &stored.target_branch);
+        let ctx = MergeRequestCtx::merging(
+            loaded(&gate.facts.project),
+            crate::loaded_merge_request(stored),
+            protection,
+        );
+        forge_auth::prove(&principal, Action::MergeRequestMerge, ctx).map(drop)?;
+    }
     super::conditions::method_allowed(&gate.approvals.settings, asked.method)?;
     check_head(stored, asked)?;
     evaluate(gate, stored, asked, mergeable, ff_possible, runs)
+}
+
+/// The auto-merge principal's decision on the locked gate (M4 C9):
+/// `authorize(action)` on `Resource::AutoMerge` with the project's mode and
+/// emergency stop as read in the gate's transaction. The merge request's
+/// author (on whose behalf it lands) must still be active.
+pub(crate) fn prove_auto(gate: &MergeGate, action: Action) -> Result<(), ForgeError> {
+    let CredentialState::AutoMerge { mode, stop } = gate.credential.credential else {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "auto_merge_credential_missing")
+            .with_context("action", action.name()));
+    };
+    let stored = gate
+        .facts
+        .merge_request
+        .as_ref()
+        .ok_or_else(crate::absent)?;
+    if !gate.facts.account.active {
+        return Err(ForgeError::new(ErrorCode::AccountDisabled)
+            .with_context("reason", "author_disabled")
+            .with_context("merge_request_id", stored.id.get()));
+    }
+    let ctx = AutoMergeCtx::new(
+        loaded(&gate.facts.project),
+        stored.iid,
+        &crate::loaded_merge_request(stored),
+        mode,
+        stop,
+    );
+    forge_auth::prove(&Principal::auto_merge(), action, ctx).map(drop)
+}
+
+/// Whether `e` is the auto-merge principal's refusal for an emergency stop
+/// or a mode that no longer acts (the entry waits or leaves; nothing broke).
+pub(crate) fn auto_merge_paused(e: &ForgeError) -> Option<&'static str> {
+    if e.code() != ErrorCode::Forbidden {
+        return None;
+    }
+    let reason = e
+        .context()
+        .iter()
+        .find(|(k, _)| *k == "reason")
+        .map(|(_, v)| v.as_str());
+    match reason {
+        Some("auto_merge_emergency_stop") => Some("auto_merge_stopped"),
+        Some("auto_merge_mode") => Some("auto_merge_off"),
+        _ => None,
+    }
 }
 
 /// FG-REVIEW-0008 when the merge request's head (or its source branch's
@@ -339,6 +395,137 @@ impl Review {
             queue_id = entry.queue_id,
             head_sha = entry.head_sha.as_str(),
             method = entry.method.as_str(),
+        );
+        Ok(entry)
+    }
+
+    /// The auto-merge principal's "merge when ready" (M4 C9, ADR-0017
+    /// Amendment 2026-11-13): merge request `mr` (open, head `head`) of
+    /// `project` joins its target's queue with the project's default
+    /// method, on behalf of its author (the commit identity and
+    /// `merged_by`), audited `merge_queue.auto_enqueued` with actor system.
+    /// Decided under the review locks exactly as a person's enqueue —
+    /// `authorize(MergeQueueEnqueue)` (here on `Resource::AutoMerge`: the
+    /// mode acts, no emergency stop) and `evaluate_merge()` with only
+    /// `ci/pipeline` left to the queue — so it can never queue what a
+    /// person could not.
+    pub(crate) async fn enqueue_auto(
+        &self,
+        request_id: &forge_core::RequestId,
+        repo: ProjectRepository,
+        mr: &forge_db::review::StoredMergeRequest,
+        head: &ObjectId,
+    ) -> Result<StoredEntry, ForgeError> {
+        let project = mr.project_id;
+        let settings = super::conditions::settings_of(
+            &forge_db::review::merge_settings(&self.db, project).await?,
+        );
+        let method = settings.default_method();
+        settings.check(method)?;
+        let author = mr.author;
+        let mut tips = Vec::with_capacity(2);
+        for (which, name) in [
+            ("source_branch", &mr.source_branch),
+            ("target_branch", &mr.target_branch),
+        ] {
+            let found = self
+                .require_branches(project, repo, author, &[(which, name)])
+                .await;
+            tips.push(match found {
+                Ok(mut heads) => heads.pop(),
+                Err(e) if super::is_ref_not_found(&e) => None,
+                Err(e) => return Err(e),
+            });
+        }
+        let target_tip = tips.pop().flatten();
+        let source_tip = tips.pop().flatten();
+        let asker = crate::approvals::Asker {
+            request_id,
+            project,
+            repo: crate::ready(project, repo)?,
+        };
+        let approval_git = self
+            .review_git()?
+            .facts(
+                &self.db,
+                asker,
+                mr,
+                head,
+                target_tip.as_ref(),
+                &mut crate::approvals::Budget::new(crate::approvals::REQUEST_BUDGET),
+            )
+            .await?;
+        let ctx = forge_db::change::ChangeContext::new(
+            forge_db::change::Actor::System,
+            request_id.clone(), // clone: the context owns it
+        );
+        let new = NewEntry {
+            head_sha: head.clone(), // clone: forge-db owns its request
+            method,
+            message: None,
+            credential: CredentialRef::AutoMerge(project),
+        };
+        let (entry, ()) = forge_db::review::merges::enqueue_mr_decided(
+            &self.db,
+            &ctx,
+            (project, mr.iid),
+            author,
+            &new,
+            |gate| {
+                prove_auto(gate, Action::MergeQueueEnqueue)?;
+                let stored = gate
+                    .facts
+                    .merge_request
+                    .as_ref()
+                    .ok_or_else(crate::absent)?;
+                if gate.live.is_some() {
+                    // forge-db answers FG-REVIEW-0011 for it.
+                    return Ok(());
+                }
+                super::conditions::method_allowed(&gate.approvals.settings, method)?;
+                if stored.head_sha.as_deref() != Some(head.as_str()) {
+                    return Err(super::request_head_changed(
+                        "source_moved",
+                        stored.head_sha.as_deref().unwrap_or(""),
+                        head.as_str(),
+                    ));
+                }
+                let asked = Asked {
+                    requested_by: author,
+                    head,
+                    method,
+                    target: &stored.target_branch,
+                    source_tip: source_tip.as_ref(),
+                    target_tip: target_tip.as_ref(),
+                    approvals: approval_git.clone(), // clone: the gate evaluates its own copy
+                };
+                check_head(stored, &asked)?;
+                let runs = TrainRuns {
+                    inner: &gate.check_runs,
+                    train: deferred_run(),
+                };
+                let mergeable = Some(stored_mergeable(
+                    gate.mergeability.as_ref(),
+                    head,
+                    target_tip.as_ref(),
+                ));
+                evaluate(gate, stored, &asked, mergeable, None, &runs)
+            },
+            |mr| super::request::default_message(method, mr),
+        )
+        .await
+        .map_err(|e| e.with_context("merge_request_id", mr.id.get()))?;
+        tracing::info!(
+            target: "forge_review",
+            event = "forge.merge_queue.enqueued",
+            request_id = %request_id,
+            project_id = project.get(),
+            merge_request_id = mr.id.get(),
+            entry_id = entry.id,
+            queue_id = entry.queue_id,
+            head_sha = entry.head_sha.as_str(),
+            method = entry.method.as_str(),
+            by = "auto_merge",
         );
         Ok(entry)
     }

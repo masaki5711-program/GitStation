@@ -604,6 +604,177 @@
         ],
         "type": "object"
       },
+      "AutoMergeBody": {
+        "additionalProperties": false,
+        "description": "A project's auto-merge.",
+        "properties": {
+          "acts": {
+            "description": "The auto-merge principal acts in this mode (`conditional` / `full`).",
+            "type": "boolean"
+          },
+          "instance_stop": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AutoMergeStopBody",
+                "description": "The instance's emergency stop (`null`: off)."
+              }
+            ]
+          },
+          "mode": {
+            "description": "`off`, `reserve`, `conditional` or `full` (`full`: a new project's\ndefault; projects older than auto-merge start `off`).",
+            "type": "string"
+          },
+          "mode_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_stop": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AutoMergeStopBody",
+                "description": "The project's emergency stop (`null`: off)."
+              }
+            ]
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/AutoMergeViewerBody"
+          }
+        },
+        "required": [
+          "project_id",
+          "mode",
+          "acts",
+          "mode_by",
+          "mode_at",
+          "project_stop",
+          "instance_stop",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "AutoMergeStateBody": {
+        "additionalProperties": false,
+        "description": "The merge request's last auto-merge state.",
+        "properties": {
+          "changed_at": {
+            "description": "UTC, RFC 3339: when it last changed / was last looked at.",
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "class": {
+            "description": "The stop class (`stopped` only): `program_breakage`, `data_loss`,\n`leak`, `developer_pc`, `not_assessed`, `emergency_stop`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "description": "The forge/risk rule or the check behind it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "description": "`FG-REVIEW-0026` (a stop) or `FG-REVIEW-0027` (an emergency stop).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "description": "The head it was decided on.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "A stable word: `risk_stop`, `required_check_failed`,\n`pipeline_failed`, `merge_queue_checks_failed`, `instance_stopped`,\n`project_stopped`, `draft`, `risk_pending`, `approvals_missing`,\n`protected_path`, `dequeued_by_person`, `queued`, … .",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "The request id of the decision (the log line of a stop).",
+            "type": "string"
+          },
+          "state": {
+            "description": "`queued`, `waiting`, `held` or `stopped`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "class",
+          "reason",
+          "detail",
+          "error_code",
+          "head_sha",
+          "request_id",
+          "changed_at",
+          "checked_at"
+        ],
+        "type": "object"
+      },
+      "AutoMergeStopBody": {
+        "additionalProperties": false,
+        "description": "Who turned an emergency stop on, and when.",
+        "properties": {
+          "at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "by",
+          "at"
+        ],
+        "type": "object"
+      },
+      "AutoMergeViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do now (a hint; the routes decide again).",
+        "properties": {
+          "can_change_mode": {
+            "type": "boolean"
+          },
+          "can_stop": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_change_mode",
+          "can_stop"
+        ],
+        "type": "object"
+      },
       "BindProject": {
         "additionalProperties": false,
         "description": "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`.",
@@ -5113,6 +5284,26 @@
         ],
         "type": "object"
       },
+      "InstanceAutoMergeBody": {
+        "additionalProperties": false,
+        "description": "The instance's emergency stop.",
+        "properties": {
+          "stop": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AutoMergeStopBody"
+              }
+            ]
+          }
+        },
+        "required": [
+          "stop"
+        ],
+        "type": "object"
+      },
       "IntegrationAccountBody": {
         "additionalProperties": false,
         "description": "The service account an integration acts as.",
@@ -6005,6 +6196,50 @@
           "entries",
           "recent",
           "viewer"
+        ],
+        "type": "object"
+      },
+      "MergeRequestAutoMergeBody": {
+        "additionalProperties": false,
+        "description": "A merge request's auto-merge.",
+        "properties": {
+          "acts": {
+            "description": "The auto-merge principal acts in this mode.",
+            "type": "boolean"
+          },
+          "auto_merge": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AutoMergeStateBody"
+              }
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "description": "The project's `merge.auto`.",
+            "type": "string"
+          },
+          "stop": {
+            "description": "The emergency stop in effect: `instance`, `project` (`null`: none).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "mode",
+          "acts",
+          "stop",
+          "auto_merge"
         ],
         "type": "object"
       },
@@ -7416,6 +7651,20 @@
         "required": [
           "required_approvals",
           "expected_updated_at"
+        ],
+        "type": "object"
+      },
+      "PutAutoMerge": {
+        "additionalProperties": false,
+        "description": "`PUT …/auto-merge`.",
+        "properties": {
+          "mode": {
+            "description": "`off`, `reserve`, `conditional` or `full`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
         ],
         "type": "object"
       },
@@ -12029,6 +12278,64 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/api/v1/admin/auto-merge/resume": {
+      "post": {
+        "operationId": "post_api_v1_admin_auto_merge_resume",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceAutoMergeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Resume auto-merge on the instance (people only; an administrator, a token needs admin); audited",
+        "x-forge-action": "AutoMergeInstanceStopToggle"
+      }
+    },
+    "/api/v1/admin/auto-merge/stop": {
+      "post": {
+        "operationId": "post_api_v1_admin_auto_merge_stop",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceAutoMergeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Emergency stop of auto-merge on the whole instance (people only; an administrator, a token needs admin); audited",
+        "x-forge-action": "AutoMergeInstanceStopToggle"
+      }
+    },
     "/api/v1/admin/integrations": {
       "get": {
         "operationId": "get_api_v1_admin_integrations",
@@ -14459,6 +14766,179 @@
         "x-forge-max-body-bytes": 16384
       }
     },
+    "/api/v1/projects/{id}/auto-merge": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_auto_merge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoMergeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's auto-merge: its merge.auto (off, reserve, conditional, full; a new project is full, projects older than auto-merge start off), the project's and the instance's emergency stop with who and when (as the repository browse API)",
+        "x-forge-action": "MergeQueueRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_auto_merge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutAutoMerge"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoMergeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a project's merge.auto (people only; the Owner in a web session); audited",
+        "x-forge-action": "AutoMergeSettingsManage",
+        "x-forge-max-body-bytes": 256
+      }
+    },
+    "/api/v1/projects/{id}/auto-merge/resume": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_auto_merge_resume",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoMergeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Resume the project's auto-merge after an emergency stop (people only; Maintainer); audited",
+        "x-forge-action": "AutoMergeStopToggle"
+      }
+    },
+    "/api/v1/projects/{id}/auto-merge/stop": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_auto_merge_stop",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoMergeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Emergency stop of the project's auto-merge: nothing is added to the merge queue automatically and queued auto-merge entries wait; people still merge (people only; Maintainer); audited",
+        "x-forge-action": "AutoMergeStopToggle"
+      }
+    },
     "/api/v1/projects/{id}/ci/variables": {
       "get": {
         "operationId": "get_api_v1_projects_id_ci_variables",
@@ -16259,6 +16739,55 @@
         "summary": "Approve a merge request's head (people only; Developer; never the author; a token needs merge_approve)",
         "x-forge-action": "MergeRequestApprove",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/auto-merge": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_auto_merge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestAutoMergeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "What auto-merge did with a merge request: the project's mode, the emergency stop in effect, and its last state (queued, waiting, held, stopped) with the stop class, a stable reason, the forge/risk rule or check behind it and FG-REVIEW-0026 / 0027 (null: none for its current head) (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/close": {

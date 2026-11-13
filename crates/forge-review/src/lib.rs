@@ -48,6 +48,7 @@ pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, UserNa
 pub mod activity;
 mod after_version;
 pub mod approvals;
+mod auto_merge_settings;
 pub mod conflicts;
 pub mod discussions;
 mod fields;
@@ -71,6 +72,9 @@ pub use activity::{
     MAX_INVOLVED_PROJECTS, SHOWN_TYPES,
 };
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
+pub use forge_db::review::auto_merge::{
+    AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, StopMark, StoredState as AutoMergeState,
+};
 pub use forge_db::review::merge_queue::{
     PauseOutcome, QueueView, StoredBatch as StoredQueueBatch, StoredEntry as StoredQueueEntry,
     StoredQueue,
@@ -84,9 +88,9 @@ pub use forge_db::review::{StoredPrediction, StoredScan};
 pub use merge_conditions::MergeStatus;
 pub use mergeability::{check, prune_merge_results, CheckReport, Mergeability, PruneReport};
 pub use merges::{
-    evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeQueue, MergeReport,
-    MergeSettings, MergeTimeouts, Merger, QueueAsk, QueueLimits, ReconcileReport, StoredMerge,
-    TickReport,
+    evaluate_merge, AutoMergeLimits, AutoMergeReport, AutoMerger, BlockReason, CredentialRef,
+    MergeAsk, MergeClearance, MergeQueue, MergeReport, MergeSettings, MergeTimeouts, Merger,
+    QueueAsk, QueueLimits, ReconcileReport, StoredMerge, TickReport,
 };
 pub use user_lists::{
     AttentionReason, UserListCount, UserListCounts, UserListItem, UserListPage, UserListQuery,
@@ -259,6 +263,12 @@ fn change_context(
         (Credential::Runner(_) | Credential::Job(_), _) => {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "ci_principal_in_review"))
+        }
+        // The auto-merge principal acts through `AutoMerger`, never a
+        // person's command (M4 C9).
+        (Credential::AutoMerge, _) => {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "auto_merge_principal_in_review"))
         }
     };
     let mut ctx = ChangeContext::new(actor, request.request_id.clone());

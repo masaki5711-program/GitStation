@@ -121,6 +121,40 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             forge_review::Merger::clone(&merger),
             format!("serve-{}", forge_core::RequestId::generate()),
         )));
+        // M4 C9: the auto-merge worker queues mergeable merge requests of
+        // `full` / `conditional` projects as the auto-merge principal. The
+        // same Review serves the routes.
+        let review = forge_review::Review::new(
+            db.clone(),                          // clone: the pool handle is shared
+            Arc::new(smart_http.browse.clone()), // clone: shares the ref cache
+        )
+        // M3 R1b: the administrator's purge deletes version refs with the
+        // same git and storage, and drops the same browse caches.
+        .with_version_refs(
+            forge_review::VersionRefs::new(
+                smart_http.git.clone(),     // clone: Arc handles
+                smart_http.storage.clone(), // clone: the root path
+            )
+            .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
+        )
+        // M3 R3: inline positions and `outdated` read the versions' diffs
+        // through the same browse API (reach checks, limits).
+        .with_diffs(Arc::new(smart_http.browse.clone())) // clone: shares the caches
+        // M3 R5: the approval evaluation's git reads (changed paths, the
+        // range, the target's CODEOWNERS).
+        .with_review_git(forge_review::approvals::ReviewGit::new(
+            smart_http.git.clone(),     // clone: Arc handles
+            smart_http.storage.clone(), // clone: the root path
+        ))
+        // M3 C1 (ADR-0024 §11): the merge status reads the head's check
+        // runs from the database (the request and the merge job read them
+        // in the gate's transaction).
+        .with_check_results(Arc::new(db.clone())); // clone: the pool handle is shared
+        let auto_merge_tasks =
+            crate::serve_auto_merge::spawn(Arc::new(forge_review::AutoMerger::new(
+                review.clone(),                       // clone: shares the pool and caches
+                forge_review::Merger::clone(&merger), // clone: shares git and storage
+            )));
         let merge_tasks = crate::serve_merges::spawn(&db, merger)?;
         let oidc = crate::oidc::service(cfg, &db)?;
         let mut state = app_state(&db, database, cfg.web.session_idle, oidc.as_ref())
@@ -135,32 +169,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             // invalidation is seen).
             // M3 R1b: the administrator's purge deletes version refs with
             // the same git and storage, and drops the same browse caches.
-            .with_review(
-                forge_review::Review::new(
-                    db.clone(),                          // clone: the pool handle is shared
-                    Arc::new(smart_http.browse.clone()), // clone: shares the ref cache
-                )
-                .with_version_refs(
-                    forge_review::VersionRefs::new(
-                        smart_http.git.clone(),     // clone: Arc handles
-                        smart_http.storage.clone(), // clone: the root path
-                    )
-                    .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
-                )
-                // M3 R3: inline positions and `outdated` read the versions'
-                // diffs through the same browse API (reach checks, limits).
-                .with_diffs(Arc::new(smart_http.browse.clone())) // clone: shares the caches
-                // M3 R5: the approval evaluation's git reads (changed paths,
-                // the range, the target's CODEOWNERS).
-                .with_review_git(forge_review::approvals::ReviewGit::new(
-                    smart_http.git.clone(),     // clone: Arc handles
-                    smart_http.storage.clone(), // clone: the root path
-                ))
-                // M3 C1 (ADR-0024 §11): the merge status reads the head's
-                // check runs from the database (the request and the merge
-                // job read them in the gate's transaction).
-                .with_check_results(Arc::new(db.clone())), // clone: the pool handle is shared
-            )
+            .with_review(review)
             // M3 C1: the Checks API; a report's commit must be reachable
             // through the same browse API (reach checks, limits, caches).
             .with_checks(forge_checks::Checks::new(
@@ -272,6 +281,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // The merge in progress gets its grace, then is released (an
         // `executing` attempt is the reconciliation's after the restart).
         // A task that panicked or did not end in time is logged there.
+        auto_merge_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         queue_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         merge_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         // A receive-pack whose body was complete runs on in its own task
