@@ -167,7 +167,8 @@ pub struct PipelineBody {
     #[serde(rename = "ref")]
     pub git_ref: String,
     pub sha: String,
-    /// `push`, `merge_request`, `schedule`, `manual`.
+    /// `push`, `merge_request`, `schedule`, `manual`, `merge_queue` (M4 C8: a
+    /// merge queue's train, on the target branch).
     pub source: String,
     #[schema(required = true, minimum = 1)]
     pub merge_request_id: Option<i64>,

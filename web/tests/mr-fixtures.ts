@@ -221,6 +221,8 @@ export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Han
     [`GET ${MR_API}/3/versions/1/diff`]: () => json(200, versionDiff(1, DIFF)),
     // U2: the latest merge attempt (read while a merge runs).
     [`GET ${MR_API}/3/merge`]: () => json(200, { iid: 3, merge: null }),
+    // M4 C8: never queued.
+    [`GET ${MR_API}/3/merge-queue`]: () => json(200, { iid: 3, entry: null }),
     // The detail under the status: the head's check runs and the predicted conflicts.
     [`GET ${CHECKS_API}`]: () => json(200, checkRuns([])),
     [`GET ${MR_API}/3/conflicts`]: () => json(200, conflicts([])),

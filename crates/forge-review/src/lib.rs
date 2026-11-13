@@ -72,6 +72,10 @@ pub use activity::{
     MAX_INVOLVED_PROJECTS, SHOWN_TYPES,
 };
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
+pub use forge_db::review::merge_queue::{
+    PauseOutcome, QueueView, StoredBatch as StoredQueueBatch, StoredEntry as StoredQueueEntry,
+    StoredQueue,
+};
 pub use forge_db::review::settings::loosens as settings_loosen_approvals;
 pub use forge_db::review::{
     CodeownersEnforcement, PurgeOutcome, RefreshRequest, SettingsOutcome, StoredMergeSettings,
@@ -81,8 +85,9 @@ pub use forge_db::review::{StoredPrediction, StoredScan};
 pub use merge_conditions::MergeStatus;
 pub use mergeability::{check, prune_merge_results, CheckReport, Mergeability, PruneReport};
 pub use merges::{
-    evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeReport,
-    MergeSettings, MergeTimeouts, Merger, ReconcileReport, StoredMerge,
+    evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeQueue, MergeReport,
+    MergeSettings, MergeTimeouts, Merger, QueueAsk, QueueLimits, ReconcileReport, StoredMerge,
+    TickReport,
 };
 pub use user_lists::{
     AttentionReason, UserListCount, UserListCounts, UserListItem, UserListPage, UserListQuery,

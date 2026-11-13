@@ -43,6 +43,7 @@ import {
   DeliveriesScreen,
   EditorScreen,
   MembersScreen,
+  MergeQueueScreen,
   PipelineScreen,
   PipelinesScreen,
   ProjectSettings,
@@ -50,7 +51,7 @@ import {
 } from '../lazyScreens';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'edit', 'new'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull', 'webhooks', 'documents', 'pipelines', 'merge-queue', 'edit', 'new'];
 
 export function RepoViews({
   projectId,
@@ -179,6 +180,10 @@ export function RepoViews({
         ) : (
           <PipelineScreen key={pipelineId} projectId={projectId} project={project} id={pipelineId} />
         );
+      break;
+    case 'merge-queue':
+      screen =
+        tail.length === 0 ? <MergeQueueScreen projectId={projectId} project={project} /> : <NotFound />;
       break;
     case 'settings':
       screen = <ProjectSettings projectId={projectId} />;

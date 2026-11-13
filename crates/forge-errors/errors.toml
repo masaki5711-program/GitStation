@@ -2812,3 +2812,43 @@ cause = "M4 C6 review: the stored artifacts of one project (every job, until the
 diagnosis = "The log event carries `project_id`, `stored_bytes`, `quota_bytes`. Read: SELECT count(*), sum(size_bytes), min(expires_at) FROM forge.ci_artifacts WHERE project_id = <id>;"
 fix = "Declare fewer or smaller artifact paths, or wait for older artifacts to expire; the operator may raise `ci.artifact_quota_bytes` (runbook ci-runner, Artifacts) and restart forge serve."
 test = "an_upload_past_the_project_quota_is_refused"
+
+[[error]]
+code = "FG-CI-0023"
+name = "MergeQueueChecksFailed"
+http_status = 409
+severity = "info"
+user_message_ja = "マージキューで、この MR だけを入れたマージ結果のパイプラインが失敗しました。MR はキューから外されました。パイプラインの診断を確かめて直してから、もう一度キューに入れてください。"
+user_message_en = "In the merge queue, the pipeline on the merge result with only this merge request failed. The merge request was removed from the queue. Read the pipeline diagnosis, fix it and add it to the queue again."
+user_message_id = "Di antrean merge, pipeline pada hasil merge yang hanya berisi merge request ini gagal. Merge request dikeluarkan dari antrean. Baca diagnosis pipeline, perbaiki, lalu masukkan lagi ke antrean."
+cause = "M4 C8 (ADR-0030 §7): the merge queue tested a batch of ONE entry — the merge of this merge request's head on top of the target tip (the train commit `refs/merge-queue/<queue_id>/train`) — and its pipeline (`ci_pipelines.source = merge_queue`, sha = the train) ended red: `failed`, `invalid` (FG-CI-0001), `error` (FG-CI-0002) or `canceled`. A batch of 2–4 that is red is bisected first (the entries go back to the queue and the next batch is the first half), so this code names the culprit once its batch is alone. The entry is `removed` with `reason=checks_failed`; nothing moved the target."
+diagnosis = "`forge serve` logs `forge.merge_queue.entry_removed` (info) with `error_code`, `request_id` (the batch's), `queue_id`, `batch_id`, `entry_id`, `merge_request_id`, `train_sha`, `pipeline_status` and `pipeline_id`. `gstn queue list --project <id> --target <branch>` shows the removed entry with its reason; the pipeline is `gstn pipeline list --project <id>` (source merge_queue, sha = train_sha) and `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>`."
+fix = "Read the pipeline diagnosis of the train, fix the change (it may only fail together with what is already on the target), push a new version and add the merge request to the queue again (gstn queue add). Nothing to change on the server."
+test = "one_bad_entry_of_four_is_found_by_bisection"
+
+[[error]]
+code = "FG-CI-0024"
+name = "MergeQueueStalled"
+http_status = 503
+severity = "alert"
+user_message_ja = "マージキューの試験が期限までに終わりませんでした。管理者に連絡してください。"
+user_message_en = "The merge queue's test did not finish in time. Contact the administrator."
+user_message_id = "Pengujian antrean merge tidak selesai tepat waktu. Hubungi administrator."
+cause = "M4 C8 (ADR-0030 §14): a merge queue batch stayed `testing` past its deadline (default 2 hours after it was built): its train pipeline never finished (no runner took the jobs — FG-CI-0005 —, a job hangs until its own timeout, the `ci.pipeline_create` job is dead or still queued). The queue reaps it: the batch is `abandoned` (`reason=timeout`), its entries go back to the queue with one more attempt, and an entry reaped for the third time is `removed` with this code. The target never moved for a reaped batch."
+diagnosis = "`forge serve` logs `forge.merge_queue.batch_stalled` (error) with `error_code`, `request_id` (the batch's), `queue_id`, `batch_id`, `train_sha`, `deadline`, `pipeline_status` (`none` when no pipeline row exists) and `entries`; an entry removed for good is `forge.merge_queue.entry_removed` with the same code. `forge doctor` `review.merge_queue` reports live batches past their deadline and queues whose lease is long expired. Read (read-only): SELECT id, queue_id, state, train_sha, deadline_at FROM forge.merge_queue_batches WHERE state IN ('testing','landing') ORDER BY id; SELECT id, status FROM forge.ci_pipelines WHERE source = 'merge_queue' ORDER BY id DESC LIMIT 10; and the dead `ci.pipeline_create` jobs (runbook ci-pipelines)."
+fix = "Follow runbook merge-queue: make the pipelines run (runbook ci-runner for FG-CI-0005, ci-pipelines for a dead create job), then add the removed merge requests to the queue again. Pausing the queue (gstn queue pause) stops new batches while CI is down."
+runbook = "merge-queue"
+test = "a_batch_past_its_deadline_is_reaped_and_requeued"
+
+[[error]]
+code = "FG-CI-0025"
+name = "MergeQueueEntryRefused"
+http_status = 409
+severity = "info"
+user_message_ja = "この MR はマージキューに入れられません（すでに入っている、開いていない、またはキューに入っていません）。MR の状態を確かめてください。"
+user_message_en = "This merge request cannot be added to or removed from the merge queue (it is already queued, not open, or not in the queue). Check the merge request's state."
+user_message_id = "Merge request ini tidak dapat dimasukkan ke atau dikeluarkan dari antrean merge (sudah ada di antrean, tidak terbuka, atau tidak ada di antrean). Periksa status merge request."
+cause = "M4 C8 (ADR-0030 §2, §10): `POST …/merge-requests/{iid}/merge-queue` or `DELETE` of it was refused by the queue's own state: `reason=already_queued` (the merge request has a live entry — queued or being tested), `not_queued` (a removal of a merge request with no live entry), `landing` (a removal while its batch is landing: the landing owns it), `not_open` (closed or merged); and `POST …/merge-requests/{iid}/merge` of a merge request in the queue is `reason=already_queued` (remove it from the queue first), `head_changed` is not this code (FG-REVIEW-0008). Whether the merge request may be merged at all is decided before (FG-AUTH-0003, FG-REVIEW-0007 with its reasons, FG-REVIEW-0011 for a live merge attempt). Nothing was written."
+diagnosis = "The log event carries `reason`, `merge_request_id`, `entry_id` (the live entry, when there is one) and `request_id`. `gstn queue status --project <id> <iid>` shows the live entry and its position."
+fix = "Nothing on the server: an already queued merge request waits for its turn (remove it first to re-add it); a closed one must be reopened."
+test = "a_merge_request_already_in_the_queue_is_refused"

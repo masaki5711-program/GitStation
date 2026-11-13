@@ -46,6 +46,7 @@ pub mod approvals;
 mod commands;
 pub mod conflicts;
 pub mod discussions;
+pub mod merge_queue;
 pub mod merge_results;
 pub mod mergeability;
 pub mod merges;

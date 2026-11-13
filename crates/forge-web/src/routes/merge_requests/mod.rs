@@ -57,6 +57,7 @@ mod discussions;
 mod loaders;
 mod mergeability;
 mod merges;
+mod queue;
 mod settings;
 mod status;
 mod versions;
@@ -90,6 +91,12 @@ pub use mergeability::{mergeability, MergeabilityBody};
 pub use merges::{
     merge, merge_status, MergeAttemptBody, MergeMergeRequest, MergeRequestToMerge, MergeStatusBody,
     MergeStatusOf, MAX_BODY as MERGE_MAX_BODY, MERGE,
+};
+pub use queue::{
+    dequeue as merge_queue_dequeue, enqueue as merge_queue_enqueue, entry as merge_queue_entry,
+    entry_body, EnqueueMergeRequest, MergeRequestToDequeue, MergeRequestToQueue, QueueEntryBody,
+    QueueEntryOf, QueueEntryStatusBody, QUEUE as MERGE_QUEUE,
+    QUEUE_MAX_BODY as MERGE_QUEUE_MAX_BODY,
 };
 pub use settings::{
     get_settings as merge_settings, put_codeowners as put_codeowners_enforcement,

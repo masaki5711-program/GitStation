@@ -45,6 +45,9 @@ pub enum Source {
     MergeRequest,
     Schedule,
     Manual,
+    /// M4 C8 (ADR-0030 §5): a merge queue's train (`ref` = the target
+    /// branch, no merge request, never protected).
+    MergeQueue,
 }
 
 impl Source {
@@ -54,6 +57,7 @@ impl Source {
             Self::MergeRequest => "merge_request",
             Self::Schedule => "schedule",
             Self::Manual => "manual",
+            Self::MergeQueue => "merge_queue",
         }
     }
 
@@ -63,6 +67,7 @@ impl Source {
             "merge_request" => Some(Self::MergeRequest),
             "schedule" => Some(Self::Schedule),
             "manual" => Some(Self::Manual),
+            "merge_queue" => Some(Self::MergeQueue),
             _ => None,
         }
     }
@@ -409,7 +414,7 @@ async fn insert(
            protected) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
          ON CONFLICT (project_id, source, ref, sha, coalesce(merge_request_id, 0)) \
-           WHERE source IN ('push', 'merge_request') DO NOTHING \
+           WHERE source IN ('push', 'merge_request', 'merge_queue') DO NOTHING \
          RETURNING id",
     )
     .bind(r.project.get())

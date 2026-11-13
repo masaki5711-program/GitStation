@@ -643,6 +643,29 @@ async fn finish_steps(
         "projects.purge.finish.repository_history_imports",
     )
     .await?;
+    // M4 C8: the merge queue — entries reference the batches, the queues,
+    // the merge requests and the merge attempts; batches the queues.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_queue_entries WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_queue_entries",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_queue_batches WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_queue_batches",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_queues WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_queues",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.merge_request_merges WHERE project_id = $1",

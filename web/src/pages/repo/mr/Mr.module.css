@@ -166,3 +166,26 @@
     grid-row: 1;
   }
 }
+
+/* M4 C8: a target's merge queue. */
+.queueState {
+  margin: 0 0 var(--gs-space-3);
+}
+
+.queueHeading {
+  margin: var(--gs-space-4) 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-lg);
+}
+
+.queueList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queueNote {
+  color: var(--gs-color-text-muted);
+}

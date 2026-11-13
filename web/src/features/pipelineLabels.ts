@@ -39,6 +39,8 @@ export function pipelineSourceLabel(t: TFunction, source: string): string {
       return t('pipelines.source.schedule');
     case 'manual':
       return t('pipelines.source.manual');
+    case 'merge_queue':
+      return t('pipelines.source.mergeQueue');
     default:
       return source;
   }

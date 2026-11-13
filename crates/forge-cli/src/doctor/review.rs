@@ -47,3 +47,79 @@ pub(super) async fn merges_check(db: &Db) -> Check {
         Err(e) => fail(MERGES, e),
     }
 }
+
+const QUEUE: &str = "review.merge_queue";
+
+/// A queue's lease expired longer ago than this: its worker is gone (a
+/// running worker takes an expired lease over within a few seconds).
+const LEASE_GRACE: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// The line of `review.merge_queue` from its facts.
+fn queue_line(h: &forge_db::review::merge_queue::QueueHealth) -> Check {
+    use forge_errors::{ErrorCode, ForgeError};
+    if h.stalled_batches > 0 {
+        let ids: Vec<String> = h.stalled_ids.iter().map(i64::to_string).collect();
+        return fail(
+            QUEUE,
+            ForgeError::new(ErrorCode::MergeQueueStalled)
+                .with_context("stalled_batches", h.stalled_batches)
+                .with_context("batch_ids", ids.join(",")),
+        );
+    }
+    if h.orphaned_queues > 0 {
+        let ids: Vec<String> = h.orphaned_ids.iter().map(i64::to_string).collect();
+        return fail(
+            QUEUE,
+            ForgeError::new(ErrorCode::MergeQueueStalled)
+                .with_context("reason", "worker_not_running")
+                .with_context("queues", h.orphaned_queues)
+                .with_context("queue_ids", ids.join(",")),
+        );
+    }
+    ok(
+        QUEUE,
+        "no merge queue batch past its deadline, every queue worked",
+    )
+}
+
+/// `review.merge_queue` (M4 C8, FG-CI-0024, runbook merge-queue): no live
+/// batch past its deadline (the worker reaps it at its next step: a count
+/// means no worker runs), and no queue whose lease expired long ago.
+pub(super) async fn merge_queue_check(db: &Db) -> Check {
+    match forge_db::review::merge_queue::health(db, LEASE_GRACE).await {
+        Ok(h) => queue_line(&h),
+        Err(e) => fail(QUEUE, e),
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::super::Outcome;
+    use super::*;
+    use forge_db::review::merge_queue::QueueHealth;
+
+    #[test]
+    fn a_stalled_batch_or_an_orphaned_queue_fails_with_the_stall_code() {
+        assert!(matches!(
+            queue_line(&QueueHealth::default()).outcome,
+            Outcome::Ok(_)
+        ));
+        for h in [
+            QueueHealth {
+                stalled_batches: 1,
+                stalled_ids: vec![4],
+                ..QueueHealth::default()
+            },
+            QueueHealth {
+                orphaned_queues: 2,
+                orphaned_ids: vec![2, 1],
+                ..QueueHealth::default()
+            },
+        ] {
+            let Outcome::Fail(e) = queue_line(&h).outcome else {
+                panic!("not a failure: {h:?}");
+            };
+            assert_eq!(e.code(), forge_errors::ErrorCode::MergeQueueStalled);
+        }
+    }
+}
