@@ -1604,3 +1604,56 @@ fn ci_secret_keys_file_is_optional_absolute_and_its_namespace_closed() {
         assert_invalid(&e, "ci.artifact_quota_bytes", reason);
     }
 }
+
+/// M4 C11: `[deploy]` — no key file by default (no deployment runs), a set
+/// one is an absolute path, the timeouts are bounded, and an unknown
+/// `FORGE_DEPLOY_*` variable is a typo.
+#[test]
+fn deploy_key_file_is_optional_absolute_and_timeouts_bounded() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert!(cfg.deploy.ssh_key_file.is_none());
+    assert_eq!(cfg.deploy.ssh_program, std::path::PathBuf::from("ssh"));
+    assert_eq!(cfg.deploy.connect_timeout.as_secs(), 10);
+    let key = std::env::temp_dir().join("deploy_key");
+    let key_text = key.display().to_string();
+    let cfg = load(
+        None,
+        &env(&[
+            ("FORGE_DEPLOY_SSH_KEY_FILE", key_text.as_str()),
+            ("FORGE_DEPLOY_HEALTH_TIMEOUT_SECS", "30"),
+        ]),
+    )
+    .expect("set");
+    assert_eq!(cfg.deploy.ssh_key_file.as_deref(), Some(key.as_path()));
+    assert_eq!(cfg.deploy.health_timeout.as_secs(), 30);
+    for (key, value, config_key, reason) in [
+        (
+            "FORGE_DEPLOY_SSH_KEY_FILE",
+            "relative/key",
+            "deploy.ssh_key_file",
+            "not_absolute",
+        ),
+        (
+            "FORGE_DEPLOY_SSH_KEY_FILE",
+            " ",
+            "deploy.ssh_key_file",
+            "empty",
+        ),
+        (
+            "FORGE_DEPLOY_CONNECT_TIMEOUT_SECS",
+            "0",
+            "deploy.connect_timeout_secs",
+            "below_min",
+        ),
+        (
+            "FORGE_DEPLOY_SCRIPT_TIMEOUT_SECS",
+            "9999",
+            "deploy.script_timeout_secs",
+            "above_max",
+        ),
+    ] {
+        let e = load(None, &env(&[(key, value)])).expect_err(key);
+        assert_invalid(&e, config_key, reason);
+    }
+    assert!(load(None, &env(&[("FORGE_DEPLOY_KEY", "/k")])).is_err());
+}

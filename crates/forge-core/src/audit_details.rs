@@ -411,6 +411,10 @@ pub enum AuditDetails {
     /// project, no event; never the value). Shapes:
     /// [`CiVariableChange::to_value`].
     CiVariable(CiVariableChange),
+    /// M4 C11: a deployment environment or target set, a deployment
+    /// requested or approved (resource the project, no event; never a key
+    /// or script output). Shapes: [`crate::deploy::DeployChange::to_value`].
+    Deploy(crate::deploy::DeployChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -584,6 +588,7 @@ impl AuditDetails {
             Self::Pipeline(change) => change.action(),
             Self::Runner(change) => change.action(),
             Self::CiVariable(change) => change.action(),
+            Self::Deploy(change) => change.action(),
         }
     }
 
@@ -645,7 +650,8 @@ impl AuditDetails {
             | Self::DocLintMigration(_)
             | Self::Pipeline(_)
             | Self::Runner(_)
-            | Self::CiVariable(_) => None,
+            | Self::CiVariable(_)
+            | Self::Deploy(_) => None,
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,
@@ -1070,6 +1076,7 @@ impl AuditDetails {
             Self::Pipeline(change) => change.to_value(),
             Self::Runner(change) => change.to_value(),
             Self::CiVariable(change) => change.to_value(),
+            Self::Deploy(change) => change.to_value(),
         }
     }
 
@@ -1155,7 +1162,8 @@ impl AuditDetails {
             | Self::DocLintMigration(_)
             | Self::Pipeline(_)
             | Self::Runner(_)
-            | Self::CiVariable(_) => self.to_value(),
+            | Self::CiVariable(_)
+            | Self::Deploy(_) => self.to_value(),
         }
     }
 }
