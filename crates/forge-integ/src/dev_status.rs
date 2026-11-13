@@ -21,21 +21,26 @@
 //! `feed_cursor` misses nothing (events after it may already be reflected:
 //! at least once, like the feed). Both share the feed's one-read-at-a-time
 //! slot per integration.
+//!
+//! Each merge request names its author and who merged it; their employee
+//! numbers are added (one read on the write pool, like the feed's actor)
+//! only for a token holding `user_employee_number`.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use forge_auth::{Action, Authorized, IntegrationFeedCtx};
 use forge_core::{DevStatusPosition, IntegrationId, WorkItemRef};
 use forge_db::feed::{
-    DevCheckRun, DevItemStatus, DevWorkItem, MrStateFilter, MAX_DEV_STATUS_LIMIT,
+    self as db_feed, DevCheckRun, DevItemStatus, DevWorkItem, MrStateFilter, MAX_DEV_STATUS_LIMIT,
     MAX_PAGE_MERGE_REQUESTS,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::{internal, Decided, Feed};
+use crate::{internal, personal_scopes, Decided, Feed};
 
 pub use forge_core::checks::{CheckConclusion, CheckStatus};
-pub use forge_db::feed::{DevMergeRequest, DEFAULT_DEV_STATUS_LIMIT};
+pub use forge_db::feed::{DevMergeRequest, DevPerson, DEFAULT_DEV_STATUS_LIMIT};
 
 /// What `GET …/work-items/{ref}/dev-status` asks for (parsed by the route).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +140,45 @@ fn status_of(item: DevWorkItem, status: Option<DevItemStatus>) -> WorkItemStatus
 }
 
 impl Feed {
+    /// Add the employee numbers of the merge requests' people for a token
+    /// holding `user_employee_number` (read on the write pool, all of them
+    /// at once; the read pool never sees them). Without the scope nothing
+    /// is read and nothing is added.
+    async fn with_employee_numbers(
+        &self,
+        proof: &Authorized<IntegrationFeedCtx>,
+        statuses: &mut BTreeMap<i64, DevItemStatus>,
+    ) -> Result<(), ForgeError> {
+        let (_, employee) = personal_scopes(proof);
+        if !employee {
+            return Ok(());
+        }
+        let people = || {
+            statuses
+                .values()
+                .flat_map(|s| &s.merge_requests)
+                .flat_map(|mr| [Some(&mr.author), mr.merged_by.as_ref()])
+                .flatten()
+        };
+        let mut users: Vec<_> = people().map(|p| p.id).collect();
+        users.sort();
+        users.dedup();
+        let facts = db_feed::personal_facts(&self.db, &users).await?;
+        for status in statuses.values_mut() {
+            for mr in &mut status.merge_requests {
+                for person in [Some(&mut mr.author), mr.merged_by.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some((_, number)) = facts.get(&person.id) {
+                        person.employee_number.clone_from(number);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The feed position of a page cursor, checked like a feed cursor.
     fn page_start(
         &self,
@@ -175,6 +219,7 @@ impl Feed {
                 .dev_status_of(&d.visible, &ids, query.state, None)
                 .await?
                 .statuses;
+            self.with_employee_numbers(proof, &mut statuses).await?;
             let as_of = d.state.bound();
             let feed_cursor = self.position(&d, integration, as_of).seal(&self.keys)?;
             let work_items = items
@@ -233,6 +278,7 @@ impl Feed {
                 .dev_status_of(&d.visible, &ids, query.state, Some(MAX_PAGE_MERGE_REQUESTS))
                 .await?;
             let mut statuses = read.statuses;
+            self.with_employee_numbers(proof, &mut statuses).await?;
             if let Some(last) = read.cut_after {
                 items.retain(|i| i.id.is_some_and(|id| id <= last));
                 has_more = true;

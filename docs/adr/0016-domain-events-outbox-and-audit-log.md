@@ -1653,3 +1653,21 @@ kanflow との通しの試験で見つかった 2 つの抜け（I1b / I1c の�
 3. 文書: `docs/api/integration-feed.md`（この種類の欄）、`docs/api/dev-status.md`（結び直しの直後）、Runbook `integrations`（診断の 8）。
    kanflow 側（K3 `GitStationSource`）は、`merge_request.work_items_changed` を他の `merge_request.*` と同じく `data.iid` で読み直すので
    変更なしで動く。PBI との対応を kanflow が GitStation のリンクから取るようにするのは kanflow 側の仕事（この変更の外）。
+
+## Amendment（2026-11-13、`feat/core-dev-status-mr-people`: 開発状況の MR の作成者とマージした人）
+
+kanflow のマージの履歴（作成者が空だった）と「自分の止まっている MR」（N10、ブランチの名前ではなく社員番号で突き合わせる）のため、
+I1d の Amendment 3 の MR の欄に 2 つを **足した**（schema_version 1 のまま。消す・変える欄は無い）。
+
+1. **`author`**（MR を開いた人）と **`merged_by`**（適用されたマージの試みの `requested_by`。`state = merged` でなければ `null`）。
+   どちらも `{id, username, display_name, employee_number}`（`display_name` は MR の API の `author.display_name` と同じ値。kanflow の
+   表示が取り直しのたびに名前と表示名で入れ替わらないように）。`merged_at` も同じ試み（終了の新しいもの）から取る。
+2. **人の欄の開示はイベントの履歴の `actor` と同じ規則**（新しいスコープは作らない）: `employee_number` はトークンが `user_employee_number`
+   を持つときだけ。持たないとき・値の無い利用者は欄ごと無い。メールは出さない。
+3. **読み方**: id・名前・表示名は MR の文の中で `forge.users` を結合して読む（読み取りのプールが見られる列だけ。N+1 にしない）。社員番号は
+   読み取りのプールから見えない（ADR-0018 §2）ので、スコープがあるときだけ履歴と同じ `feed::personal_facts` で、答えのすべての人を
+   書き込みのプールから 1 回で読む。
+
+テスト: forge-web `dev_status_names_who_opened_and_who_merged`（作成者、開いた MR の `merged_by` が `null`、マージ後に設定、スコープの
+有無で社員番号の有無、ページの経路も同じ）、単体の `a_merge_request_has_the_golden_fields`・`what_the_allowlist_leaves_out_is_null`。
+拒否の試験（`dev_status_principal_must_be_the_integrations_service_account`）は変えていない。文書: `docs/api/dev-status.md`、例の JSON。
