@@ -22,6 +22,7 @@
 //! `branch=source_branch|target_branch`. A branch deleted later leaves the
 //! merge request in place (ADR-0024 §1).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use forge_auth::{
@@ -71,6 +72,10 @@ pub use activity::{
     MAX_INVOLVED_PROJECTS, SHOWN_TYPES,
 };
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
+pub use forge_db::review::merge_queue::{
+    PauseOutcome, QueueView, StoredBatch as StoredQueueBatch, StoredEntry as StoredQueueEntry,
+    StoredQueue,
+};
 pub use forge_db::review::settings::loosens as settings_loosen_approvals;
 pub use forge_db::review::{
     CodeownersEnforcement, PurgeOutcome, RefreshRequest, SettingsOutcome, StoredMergeSettings,
@@ -80,8 +85,9 @@ pub use forge_db::review::{StoredPrediction, StoredScan};
 pub use merge_conditions::MergeStatus;
 pub use mergeability::{check, prune_merge_results, CheckReport, Mergeability, PruneReport};
 pub use merges::{
-    evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeReport,
-    MergeSettings, MergeTimeouts, Merger, ReconcileReport, StoredMerge,
+    evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeQueue, MergeReport,
+    MergeSettings, MergeTimeouts, Merger, QueueAsk, QueueLimits, ReconcileReport, StoredMerge,
+    TickReport,
 };
 pub use user_lists::{
     AttentionReason, UserListCount, UserListCounts, UserListItem, UserListPage, UserListQuery,
@@ -434,6 +440,31 @@ impl Review {
         limit: usize,
     ) -> Result<Vec<StoredMergeRequest>, ForgeError> {
         review::list(&self.db, project, state, before, limit).await
+    }
+
+    /// The employee numbers of `users` (people with one only), for a
+    /// caller the shared rule lets see them
+    /// ([`Principal::personal_disclosure`]: a token holding
+    /// `user_employee_number`); for anyone else nothing is read and the map
+    /// is empty. One statement on the write pool for every person of the
+    /// answer (the read pool cannot see the column, ADR-0018 §2) — the
+    /// event feed's and the development status's read.
+    pub async fn employee_numbers(
+        &self,
+        caller: &Principal,
+        users: &[UserId],
+    ) -> Result<BTreeMap<UserId, String>, ForgeError> {
+        if !caller.personal_disclosure().employee_number || users.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let mut users = users.to_vec();
+        users.sort();
+        users.dedup();
+        Ok(forge_db::feed::personal_facts(&self.db, &users)
+            .await?
+            .into_iter()
+            .filter_map(|(id, (_, number))| number.map(|n| (id, n)))
+            .collect())
     }
 
     /// The commit identity of `user` (the simple editor's commit, E1; the

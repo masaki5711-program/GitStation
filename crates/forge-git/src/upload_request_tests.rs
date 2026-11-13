@@ -227,6 +227,9 @@ fn deepen_not_naming_a_hidden_ref_is_refused() {
         // M4 C4 review: the pipeline refs are hidden the same way.
         "refs/pipelines/5/head",
         "pipelines/5/head",
+        // M4 C8: the merge queue's train refs too.
+        "refs/merge-queue/3/train",
+        "merge-queue/3/train",
     ] {
         let line = format!("deepen-not {rev}\n");
         let v0 = body(&[data(&format!("want {A}\n")), data(&line), Packet::Flush]);

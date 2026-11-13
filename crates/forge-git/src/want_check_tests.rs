@@ -366,6 +366,7 @@ fn want_walks_exclude_the_hidden_refs() {
     let git = Git::new(GitConfig::new("git", home.path()));
     let exclude = format!("--exclude={}*", crate::hidden_refs::HIDDEN_REF_PREFIX);
     let pipelines = format!("--exclude={}*", crate::hidden_refs::PIPELINE_REF_PREFIX);
+    let queues = format!("--exclude={}*", crate::hidden_refs::MERGE_QUEUE_REF_PREFIX);
     assert_eq!(
         strings(&git.commit_walk().argv()),
         [
@@ -375,6 +376,7 @@ fn want_walks_exclude_the_hidden_refs() {
             "--not",
             exclude.as_str(),
             pipelines.as_str(),
+            queues.as_str(),
             "--all"
         ]
     );
@@ -385,6 +387,7 @@ fn want_walks_exclude_the_hidden_refs() {
             "--objects",
             exclude.as_str(),
             pipelines.as_str(),
+            queues.as_str(),
             "--all",
             "--no-object-names"
         ]

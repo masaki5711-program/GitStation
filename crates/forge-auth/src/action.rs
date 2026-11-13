@@ -444,6 +444,27 @@ actions! {
     PipelineCancel,
     /// `POST …/pipelines/{pipeline_id}/retry`: Developer and above; `api`.
     PipelineRetry,
+    // --- merge queue (M4 C8, plan 14 §4.2, ADR-0030) ---
+    /// `GET /api/v1/projects/{id}/merge-queue?target=`: a queue's entries
+    /// (one merge request's place is `MergeRequestRead` on
+    /// `GET …/merge-requests/{iid}/merge-queue`). As `RepoBrowse` (an agent audience too: the
+    /// queue is metadata); `read_api`.
+    MergeQueueRead,
+    /// `POST …/merge-requests/{iid}/merge-queue`: "merge when ready" — add
+    /// the merge request to its target's queue. Decided as
+    /// `MergeRequestMerge` (people only; the target's push role; a token
+    /// needs `merge_execute`): the queue merges for the person who asked.
+    MergeQueueEnqueue,
+    /// `DELETE …/merge-requests/{iid}/merge-queue`: take it out of the
+    /// queue. As `MergeQueueEnqueue` (who may merge it may stop it).
+    MergeQueueDequeue,
+    /// `POST /api/v1/projects/{id}/merge-queue/pause`: the emergency stop
+    /// of a target's queue (no new batch, no landing). People only,
+    /// Developer and above (plan 14 §4.2); `api`.
+    MergeQueuePause,
+    /// `POST /api/v1/projects/{id}/merge-queue/resume`: start a paused
+    /// queue again. People only, Maintainer and above; `api`.
+    MergeQueueManage,
     /// `GET /api/v1/projects/{id}/ci/variables`, `PUT|DELETE
     /// …/ci/variables/{name}` (M4 C6, plan 14 §4.2): list a project's CI
     /// variables (names and flags, never a value), set or delete one. A
@@ -661,6 +682,11 @@ impl Action {
                 | Action::DocLintMigrationManage
                 | Action::RunnerRegister
                 | Action::RunnerManage
+                // M4 C8: the queue merges for a person (ADR-0030 §2, §9).
+                | Action::MergeQueueEnqueue
+                | Action::MergeQueueDequeue
+                | Action::MergeQueuePause
+                | Action::MergeQueueManage
                 // M4 C6: CI secrets are a person's.
                 | Action::CiVariableManage
                 // M4 C11: deploy configuration and approval are a person's.
@@ -757,6 +783,7 @@ impl Action {
             | Action::PipelineRead
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::MergeQueueRead
             | Action::CiArtifactRead
             | Action::DeployRead
             | Action::Metrics => Some(Scope::ReadApi),
@@ -802,13 +829,18 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             | Action::CiVariableManage
             | Action::DeployEnvironmentManage
             | Action::DeployTargetManage
             | Action::DeployCreate
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
-            Action::MergeRequestMerge => Some(Scope::MergeExecute),
+            Action::MergeRequestMerge
+            // M4 C8: adding to the queue is the merge, delayed.
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue => Some(Scope::MergeExecute),
             // M3 R5: satisfied by `merge_approve` alone.
             Action::MergeRequestApprove | Action::MergeRequestUnapprove => {
                 Some(Scope::MergeApprove)
@@ -936,6 +968,12 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C8: the merge queue is no act-as action.
+            | Action::MergeQueueRead
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             // M4 C6: nor are CI secrets.
             | Action::CiVariableManage
             // M4 C11: nor are deployments (an approval is a person's own).
@@ -1076,6 +1114,12 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C8: a job never reads or changes a merge queue.
+            | Action::MergeQueueRead
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             // M4 C6: a job never reads or sets a secret through the API
             // (ADR-0029 decision 8: they come with the claim).
             | Action::CiVariableManage

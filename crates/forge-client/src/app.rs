@@ -213,6 +213,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Webhook { command } => crate::webhooks::webhook(cli, command, env, io),
         Command::Mirror { command } => crate::mirror::mirror(cli, command, env, io),
         Command::Pipeline { command } => crate::pipelines::pipeline(cli, command, env, io),
+        Command::Queue { command } => crate::merge_queue::queue(cli, command, env, io),
         Command::Integration { command } => crate::integrations::feed(cli, command, env, io),
         Command::IntegrationBinding { command } => {
             crate::integrations::binding(cli, command, env, io)

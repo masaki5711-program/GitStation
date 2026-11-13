@@ -374,7 +374,7 @@ $FORGE --config <CONF_DIR>/forge.toml serve      # --bind で上書き可。起�
 ```
 
 - 起動ログの目印: `forge.serve.listening`（`bind`、`version`、`db_target`）、OIDC があれば `forge.serve.oidc_enabled`、無ければ warn `forge.serve.oidc_disabled` (出典: `crates/forge-cli/src/serve.rs`)。
-- 常駐化: systemd のユニットは**リポジトリに無い**（runbook が `systemctl status forge` を前提に書いているだけ: `ops/runbooks/server-start-failed.md`）。ユニットの作成は**提案**で、次を満たす: `forge worker` と `forge serve` を別ユニット、`serve` のユーザーは `db-migrate.pw` / `db-maint.pw` を読めない、`LimitNOFILE` を十分に、再起動ポリシー付き。
+- 常駐化: 本番（Linux）用の systemd のユニット・`forgectl`・nginx・PostgreSQL の設定は `ops/linux/`（2026-11-13 追加）。手順は runbook `linux-install` / `linux-upgrade`。`forge worker` と `forge serve` は別ユニット、サービスからは `db-migrate.pw` / `db-maint.pw` が見えない（`InaccessiblePaths`）、`LimitNOFILE=65536`、`Restart=on-failure`。
 - 停止は SIGINT/SIGTERM。実行中の push は猶予内に待つ (出典: `crates/forge-cli/src/serve.rs`)。
 
 ### 3.6 最初の管理者とトークン（運用者の CLI）

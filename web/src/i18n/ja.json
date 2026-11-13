@@ -1370,7 +1370,8 @@
       "push": "push",
       "mergeRequest": "MR",
       "schedule": "定期実行",
-      "manual": "手動実行"
+      "manual": "手動実行",
+      "mergeQueue": "マージキュー"
     },
     "by": {
       "system": "自動",
@@ -1520,5 +1521,43 @@
       "mrFailed": "マージリクエストは作成できませんでした: {{message}}",
       "openMr": "マージリクエストを作る"
     }
+  },
+  "mergeQueue": {
+    "mrLabel": "マージキュー",
+    "actionsLabel": "マージキューの操作",
+    "enqueue": "マージキューに入れる",
+    "dequeue": "マージキューから外す",
+    "enqueueHint": "キューに入れると、前に並ぶ変更と一緒にパイプラインが通ったときに自動でマージされます。",
+    "openQueue": "キューを見る",
+    "state": {
+      "queued": "マージキューの {{position}} 番目で待っています。",
+      "testing": "マージキューで試験中です。通ればマージされます。",
+      "merged": "マージキューからマージされました。",
+      "removed": "マージキューから外れました（{{why}}）。直してからもう一度入れてください。"
+    },
+    "reason": {
+      "dequeued": "外されました",
+      "checks_failed": "この変更だけのパイプラインが失敗しました",
+      "conflict": "前に並ぶ変更と衝突しました",
+      "head_changed": "新しい版が push されました",
+      "stalled": "試験が期限までに終わりませんでした",
+      "not_open": "MR が閉じられました",
+      "other": "マージの条件を満たさなくなりました"
+    },
+    "title": "マージキュー（{{target}}）",
+    "subtitle": "並んだ変更をまとめて試し、通ったものから順にマージします。",
+    "pause": "キューを止める",
+    "resume": "キューを再開する",
+    "paused": "止まっています。新しい試験もマージもしません。再開を押すと続きから動きます。",
+    "running": "動いています。一度に最大 {{limit}} 件をまとめて試します。",
+    "batchTitle": "試験中のまとまり",
+    "batchLine": "{{size}} 件をまとめたコミット {{train}} を試験中です。",
+    "openPipelines": "パイプラインを見る",
+    "empty": "並んでいる変更はありません。",
+    "emptyHint": "MR の画面で「マージキューに入れる」を押すと、ここに並びます。",
+    "listLabel": "並んでいる変更",
+    "recentTitle": "最近の結果",
+    "mr": "!{{iid}}",
+    "alone": "（1 件だけで試します）"
   }
 }

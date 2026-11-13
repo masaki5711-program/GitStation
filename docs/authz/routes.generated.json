@@ -945,6 +945,33 @@
     "word": "fixed"
   },
   {
+    "action": "MergeQueueRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-queue",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeQueuePause",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-queue/pause",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeQueueManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-queue/resume",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MergeRequestList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests",
@@ -1101,6 +1128,33 @@
     "action": "MergeRequestMerge",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/merge",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeQueueEnqueue",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeQueueDequeue",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
     "people_only": true,
     "public": false,
     "scope": "fixed",
@@ -2183,6 +2237,24 @@
     "public": true,
     "scope": "project",
     "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/merge-queue/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "merge-queue"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/merge-queue/{*rest}",
+    "people_only": false,
+    "public": true,
+    "scope": "project",
+    "word": "merge-queue"
   },
   {
     "action": "WebShell",

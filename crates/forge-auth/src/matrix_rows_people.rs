@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 35] = [
+const GROUPS: [[Row; 2]; 39] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -70,6 +70,11 @@ const GROUPS: [[Row; 2]; 35] = [
     // Session only: the twin is the administrator's session.
     both!(A::MergeRequestVersionRefsPurge, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Mr(MF::other())),
     both!(A::MergeRequestMerge, MERGER.0, MERGER.1, F::Mr(MF::other())),
+    // M4 C8: the merge queue merges for a person.
+    both!(A::MergeQueueEnqueue, MERGER.0, MERGER.1, F::Mr(MF::other())),
+    both!(A::MergeQueueDequeue, MERGER.0, MERGER.1, F::Mr(MF::other())),
+    both!(A::MergeQueuePause, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    both!(A::MergeQueueManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     both!(A::MergeRequestApprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
     both!(A::MergeRequestUnapprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
     both!(A::ApprovalRuleManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),

@@ -108,6 +108,13 @@ pub enum Command {
         #[command(subcommand)]
         command: PipelineCommand,
     },
+    /// The merge queue (M4 C8): add a merge request (merge when ready),
+    /// remove it, its place, a target's queue, pause and resume.
+    #[command(disable_help_subcommand = true)]
+    Queue {
+        #[command(subcommand)]
+        command: QueueCommand,
+    },
     /// An integration's event feed (M3 I1c): events, cursor — with the
     /// integration's own service account token.
     #[command(disable_help_subcommand = true)]
@@ -1589,6 +1596,62 @@ pub enum MirrorCommand {
     Sync {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum QueueCommand {
+    /// Add a merge request to its target's merge queue: it is merged once
+    /// a pipeline on it, together with what is ahead of it, passes (as a
+    /// merge: the target's push role; a token needs merge_execute).
+    Add {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        /// The head commit you reviewed (`mr view` shows it); another head
+        /// is refused (FG-REVIEW-0008).
+        #[arg(long, value_parser = parse_oid, value_name = "SHA")]
+        sha: String,
+        /// The method (default: the project's).
+        #[arg(long, value_enum)]
+        method: Option<MergeMethodArg>,
+    },
+    /// Take a merge request out of the queue.
+    Remove {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// A merge request's latest entry and its place in the queue.
+    Status {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// A target branch's queue: the batch being tested and the entries.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The target branch (`main` or `refs/heads/main`).
+        #[arg(long, value_parser = parse_text, value_name = "BRANCH")]
+        target: String,
+    },
+    /// Stop a target's queue (no new batch, no landing) — Developer.
+    Pause {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_text, value_name = "BRANCH")]
+        target: String,
+    },
+    /// Start a paused queue again — Maintainer.
+    Resume {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_text, value_name = "BRANCH")]
+        target: String,
     },
 }
 

@@ -458,3 +458,11 @@
 .number {
   font-variant-numeric: tabular-nums;
 }
+
+/* M4 C8: "merge when ready" — the merge queue's line and buttons. */
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  margin-top: var(--gs-space-3);
+}

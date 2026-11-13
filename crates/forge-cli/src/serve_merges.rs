@@ -165,6 +165,11 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobWorkspaceTooLarge
         | ErrorCode::ServiceStartFailed
         | ErrorCode::JobIsolationUnsafe
+        // M4 C8: the merge queue's own outcomes (its landing never runs
+        // the merge job).
+        | ErrorCode::MergeQueueChecksFailed
+        | ErrorCode::MergeQueueStalled
+        | ErrorCode::MergeQueueEntryRefused
         // M4 C6: CI secrets and artifacts, never a merge's.
         | ErrorCode::SecretKeyUnavailable
         | ErrorCode::SecretOnUnprotectedRef

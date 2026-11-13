@@ -1800,6 +1800,8 @@ fn hidden_merge_request_refs_are_not_advertised_or_fetchable() {
         "refs/merge-requests/1/v1",
         "refs/merge-requests/1/head",
         "refs/merge-requests/1/merge",
+        // M4 C8 (ADR-0030 §3): the merge queue's train ref.
+        "refs/merge-queue/1/train",
     ] {
         let out = local_git(s.home.path())
             .arg("--git-dir")
@@ -1823,6 +1825,7 @@ fn hidden_merge_request_refs_are_not_advertised_or_fetchable() {
             !listed.contains("refs/merge-requests"),
             "v{version}: {listed}"
         );
+        assert!(!listed.contains("refs/merge-queue"), "v{version}: {listed}");
         assert!(!listed.contains(&s.secret_commit), "v{version}: {listed}");
     }
     let (out, dest) = s.clone_into(Some(&s.alice), "alice/web.git", &["--mirror"]);
@@ -1848,6 +1851,7 @@ fn hidden_merge_request_refs_are_not_advertised_or_fetchable() {
     assert_eq!(advertised.status, 200);
     let text = String::from_utf8_lossy(&advertised.body);
     assert!(!text.contains("refs/merge-requests"), "{text}");
+    assert!(!text.contains("refs/merge-queue"), "{text}");
     assert!(!text.contains(&s.secret_commit), "{text}");
     for (label, body, protocol) in [
         ("v0 commit", v0_request(&s.secret_commit), None),

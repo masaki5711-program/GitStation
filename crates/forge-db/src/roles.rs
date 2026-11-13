@@ -9,7 +9,7 @@
 
 use forge_core::ids::{GroupId, NamespaceId, ProjectId, UserId};
 use forge_core::namespace_path::MAX_DEPTH;
-use forge_core::Role;
+use forge_core::{Role, Visibility};
 use forge_errors::{ErrorCode, ForgeError};
 
 use sqlx::postgres::PgConnection;
@@ -153,6 +153,227 @@ pub async fn load_project_roles(
 ) -> Result<MemberRoles, ForgeError> {
     load(db, BY_PROJECT, project.get(), user, "project").await
 }
+
+// ── Plan 15 MR 2: the chain's visibility and what lies below ──
+
+/// What one chain read knows about a user and a group, project or
+/// namespace (plan 15 MR 2): the roles of the role loaders, the effective
+/// visibility and whether the user holds a role strictly below. Facts
+/// only — `authorize()` decides with them from plan 15 MR 3; nothing does
+/// yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainAccess {
+    /// The same answer as [`load_group_roles`] / [`load_namespace_roles`] /
+    /// [`load_project_roles`] on the same anchor.
+    pub roles: MemberRoles,
+    /// The narrowest visibility on the chain from the anchor to the top
+    /// level: `groups.visibility` of each group and, for a project anchor,
+    /// `projects.visibility` (`private` < `internal`). `None` only when the
+    /// chain holds no group and no project (a personal namespace anchor:
+    /// it has no visibility, `Resource::Namespace` decides).
+    pub visibility: Option<Visibility>,
+    /// The user (active) holds a direct role on a group or on a not-deleted
+    /// project strictly below the anchor (any depth up to the cap). With an
+    /// effective `private` anchor this is exactly "something below is
+    /// visible to the user": everything below is private too, so only a
+    /// role there makes it visible (a role above the anchor is a role on
+    /// it, in `roles`). The pass-through view of plan 15 §3.2.
+    pub has_visible_descendant: bool,
+}
+
+/// The visibility of one chain row (with its `kind`): the group's or the
+/// project's stored value, NULL on a personal namespace (and on a group or
+/// project namespace whose row is missing — refused by the fold).
+macro_rules! chain_visibility_columns {
+    () => {
+        "c.kind, CASE c.kind \
+           WHEN 'group' THEN (SELECT g.visibility FROM forge.groups g WHERE g.id = c.owner_id) \
+           WHEN 'project' THEN (SELECT p.visibility FROM forge.projects p \
+             WHERE p.id = c.owner_id) \
+         END AS visibility"
+    };
+}
+
+/// The access loaders' statement: the role loaders' chain and columns, the
+/// visibility of each row, and (the same on every row: an uncorrelated
+/// subquery, evaluated once) whether a direct membership of the user ($2)
+/// — active user; a group, or a project not deleted — has the anchor as a
+/// strict ancestor. Their chains are walked upwards (`above`, capped at $3
+/// steps like `chain`) from the memberships, which the user indexes
+/// (`group_members_user`, `project_members_user`) find; the anchor's
+/// subtree is never scanned. Both CTEs are `UNION` (deduplicated): many
+/// memberships below one group share their ancestors, which are walked
+/// once per step instead of once per membership.
+///
+/// A `parent_id` cycle or a chain past the cap is reported by `chain` (its
+/// `truncated` column, `FG-DB-0018` in [`fold_chain`]) before the result
+/// is used; `above` has no such signal and only stops at the cap, so a
+/// cycle that does not touch the anchor's own chain is not detected here.
+///
+/// The `project` arm (a project has nothing below it) leaves the walk out
+/// and answers `false`; the namespace anchor also skips it when the anchor
+/// is a project namespace.
+macro_rules! access_sql {
+    (project, $anchor:literal) => {
+        concat!(
+            "WITH RECURSIVE ",
+            chain_cte!($anchor),
+            " SELECT ",
+            chain_role_columns!(),
+            ", ",
+            chain_visibility_columns!(),
+            ", false AS has_visible_descendant FROM chain c ORDER BY c.step"
+        )
+    };
+    ($anchor:literal) => {
+        concat!(
+            "WITH RECURSIVE ",
+            chain_cte!($anchor),
+            ", member_ns (id) AS ( \
+               SELECT n.id FROM forge.group_members m \
+               JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
+               JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = m.group_id \
+               WHERE m.user_id = $2 \
+               UNION \
+               SELECT n.id FROM forge.project_members m \
+               JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
+               JOIN forge.projects p ON p.id = m.project_id AND p.deleted_at IS NULL \
+               JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = m.project_id \
+               WHERE m.user_id = $2), \
+               above (id, parent_id, step) AS ( \
+               SELECT n.id, n.parent_id, 1 FROM forge.namespaces n \
+               WHERE n.id IN (SELECT id FROM member_ns) \
+               AND (SELECT kind FROM chain WHERE step = 1) <> 'project' \
+               UNION \
+               SELECT n.id, n.parent_id, a.step + 1 \
+               FROM forge.namespaces n JOIN above a ON n.id = a.parent_id \
+               WHERE a.step < $3) \
+               SELECT ",
+            chain_role_columns!(),
+            ", ",
+            chain_visibility_columns!(),
+            ", EXISTS (SELECT 1 FROM above a \
+               WHERE a.parent_id = (SELECT id FROM chain WHERE step = 1)) \
+               AS has_visible_descendant \
+               FROM chain c ORDER BY c.step"
+        )
+    };
+}
+
+const ACCESS_BY_GROUP: &str = access_sql!("kind = 'group' AND owner_id = $1");
+const ACCESS_BY_NAMESPACE: &str = access_sql!("id = $1");
+const ACCESS_BY_PROJECT: &str = access_sql!(project, "kind = 'project' AND owner_id = $1");
+
+/// One access row: `step`, `truncated`, `role`, `kind`, `visibility`,
+/// `has_visible_descendant`.
+type AccessRow = (i32, bool, Option<String>, String, Option<String>, bool);
+
+/// [`ChainAccess`] of `user` on `group`, in one statement on the read pool.
+/// Errors as [`load_group_roles`], and `FG-DB-0018`
+/// `reason=unknown_visibility` (`raw`) for a stored visibility outside
+/// `private` / `internal` (or a group / project row missing under its
+/// namespace) anywhere on the chain.
+pub async fn load_group_access(
+    db: &Db,
+    group: GroupId,
+    user: UserId,
+) -> Result<ChainAccess, ForgeError> {
+    load_access(db, ACCESS_BY_GROUP, group.get(), user, "group").await
+}
+
+/// [`ChainAccess`] of `user` on `namespace` (a project namespace answers as
+/// [`load_project_access`]). Errors as [`load_group_access`].
+pub async fn load_namespace_access(
+    db: &Db,
+    namespace: NamespaceId,
+    user: UserId,
+) -> Result<ChainAccess, ForgeError> {
+    load_access(db, ACCESS_BY_NAMESPACE, namespace.get(), user, "namespace").await
+}
+
+/// [`ChainAccess`] of `user` on `project`: the visibility includes the
+/// project's own. Nothing here looks at the deletion of the project itself
+/// (`resolve::project_access`). Errors as [`load_group_access`].
+pub async fn load_project_access(
+    db: &Db,
+    project: ProjectId,
+    user: UserId,
+) -> Result<ChainAccess, ForgeError> {
+    load_access(db, ACCESS_BY_PROJECT, project.get(), user, "project").await
+}
+
+/// Run one access query and fold it.
+async fn load_access(
+    db: &Db,
+    sql: &'static str,
+    anchor: i64,
+    user: UserId,
+    resource: &'static str,
+) -> Result<ChainAccess, ForgeError> {
+    let rows: Vec<AccessRow> = db
+        .within("roles.load_access", async {
+            sqlx::query_as(sql)
+                .bind(anchor)
+                .bind(user.get())
+                .bind(CAP)
+                .fetch_all(db.pool().executor())
+                .await
+                .map_err(|e| read_query_error("roles.load_access", e))
+        })
+        .await?;
+    if rows.is_empty() {
+        return Err(ForgeError::new(ErrorCode::NotFound)
+            .with_context("resource", resource)
+            .with_context("reason", "absent"));
+    }
+    fold_access(rows, resource, anchor, Some(user))
+}
+
+/// Fold access rows: the roles by [`fold_chain`] (so a truncated chain or
+/// an unknown role fails first, as in the role loaders), then the
+/// narrowest visibility over the group and project rows.
+fn fold_access(
+    rows: Vec<AccessRow>,
+    resource: &'static str,
+    id: i64,
+    user: Option<UserId>,
+) -> Result<ChainAccess, ForgeError> {
+    let has_visible_descendant = rows.iter().any(|row| row.5);
+    let roles = fold_chain(
+        rows.iter()
+            .map(|(step, truncated, role, ..)| (*step, *truncated, role.clone())),
+        resource,
+        id,
+        user,
+    )?;
+    let mut visibility: Option<Visibility> = None;
+    for (_, _, _, kind, raw, _) in &rows {
+        if kind != "group" && kind != "project" {
+            continue;
+        }
+        let Some(v) = raw.as_deref().and_then(Visibility::parse) else {
+            // Bounded: the column is unchecked text once the CHECK is gone.
+            let raw: String = raw
+                .as_deref()
+                .unwrap_or("<missing>")
+                .chars()
+                .take(32)
+                .collect();
+            return Err(invalid("unknown_visibility", resource, id, user).with_context("raw", raw));
+        };
+        visibility = Some(match (visibility, v) {
+            (Some(Visibility::Private), _) | (_, Visibility::Private) => Visibility::Private,
+            _ => Visibility::Internal,
+        });
+    }
+    Ok(ChainAccess {
+        roles,
+        visibility,
+        has_visible_descendant,
+    })
+}
+
+// ── end plan 15 MR 2 ──
 
 // ── M1 phase 8b MR7a: the same roles, read inside a write transaction ──
 
@@ -378,3 +599,6 @@ mod project_tests;
 #[cfg(test)]
 #[path = "roles_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "roles_visibility_tests.rs"]
+mod visibility_tests;

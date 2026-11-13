@@ -42,6 +42,7 @@ mod credential;
 mod health;
 mod job;
 mod lock;
+mod queue;
 mod request;
 
 pub use credential::{CredentialFacts, CredentialState};
@@ -55,6 +56,8 @@ pub use lock::{
     is_lock_busy, lock_merges, try_lock_merges, MergeLock, MERGE_LOCK_BUSY, MERGE_LOCK_HOLD,
     MERGE_LOCK_WAIT, REPO_MAINT_LOCK_PREFIX,
 };
+pub use queue::{enqueue_mr_decided, queue_merge_mr_decided, NewEntry, QueueStep};
+pub(crate) use queue::{live_entry_on, queue_on, queue_record};
 pub(crate) use request::refuse_live_merge;
 pub use request::{request_merge_mr_decided, MergeGate, NewMerge};
 

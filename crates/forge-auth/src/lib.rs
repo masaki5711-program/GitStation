@@ -59,6 +59,7 @@ mod matrix_rows_mirror;
 // Plan 13 Q13: the document lint's migration setting.
 mod matrix_rows_doc_lint;
 // M4 C2: CI pipelines.
+mod matrix_rows_merge_queue;
 mod matrix_rows_pipelines;
 // M4 C5: CI outputs.
 mod matrix_rows_ci_outputs;
@@ -89,10 +90,10 @@ pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
     AssertionFacts, AssertionSubject, BindingSubject, CodeownersToggle, CopyMark, Credential,
     DeploymentView, IntegrationFeedView, JobCredential, JobTokenState, MembershipChange,
-    MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView, PinnedCopy, Principal,
-    ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential,
-    RunnerJob, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
-    ViaView, Visibility,
+    MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView, PersonalDisclosure,
+    PinnedCopy, Principal, ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource,
+    Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView, TombstoneRelease, TransferTarget,
+    UnresolvedReason, ViaView, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
