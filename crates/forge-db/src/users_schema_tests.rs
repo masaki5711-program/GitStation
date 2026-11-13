@@ -103,6 +103,21 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: s(&["updated_at"]),
                 txn_audited_columns: vec![],
             },
+            // M4 C11: deployment environments and targets.
+            AuditedTable {
+                name: "deploy_environments".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "deploy_targets".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "doc_lint_migrations".into(),
                 audit_resource: AuditResource::Literal("project".into()),

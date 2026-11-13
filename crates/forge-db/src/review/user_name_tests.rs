@@ -31,6 +31,9 @@ fn row(username: Option<&str>, display_name: Option<&str>) -> Row {
         updated_at: "2026-11-03T00:00:00Z".to_owned(),
         closed_at: None,
         closed_by: None,
+        merged_by: None,
+        merged_by_username: None,
+        merged_by_display_name: None,
     }
 }
 

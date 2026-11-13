@@ -6799,6 +6799,273 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        }
+      ],
+      "examples": [
+        "gstn deploy envs --project 7 --json"
+      ],
+      "name": "deploy envs",
+      "output": {
+        "required": [
+          "environments"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/deploy/environments"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's deployment environments (dev, stg, prod): approval rule and window, freeze windows, automatic rollback and deployment, and their targets with the pinned host key fingerprint (project readers)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "dev, stg or prod.",
+          "kind": "positional",
+          "name": "tier",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A Maintainer approves each deployment.",
+          "kind": "flag",
+          "name": "--requires-approval",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Roll back when a deployment fails (not prod).",
+          "kind": "flag",
+          "name": "--auto-rollback",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The approval window, 1..=1440 (default 60).",
+          "kind": "option",
+          "name": "--ttl-minutes",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Deploy the newest succeeded push pipeline of this branch (not prod).",
+          "kind": "option",
+          "name": "--auto-deploy-ref",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A freeze window START/END (RFC 3339); repeatable.",
+          "kind": "option",
+          "name": "--freeze",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn deploy env-set --project 7 stg --auto-rollback --auto-deploy-ref refs/heads/main"
+      ],
+      "name": "deploy env-set",
+      "output": {
+        "required": [
+          "tier",
+          "requires_approval",
+          "auto_rollback"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/deploy/environments/{tier}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create or change a deployment environment (a Maintainer, a person). prod always requires an approval and never rolls back or deploys by itself (400 FG-WEB-0006). Audited."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "dev, stg or prod.",
+          "kind": "positional",
+          "name": "tier",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The target name.",
+          "kind": "positional",
+          "name": "name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A DNS name or an IPv4 address.",
+          "kind": "option",
+          "name": "--host",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Default 22.",
+          "kind": "option",
+          "name": "--port",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The login user.",
+          "kind": "option",
+          "name": "--user",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "e.g. ssh-ed25519.",
+          "kind": "option",
+          "name": "--host-key-type",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The base64 public key.",
+          "kind": "option",
+          "name": "--host-key",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The registered script name.",
+          "kind": "option",
+          "name": "--script",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Register it disabled.",
+          "kind": "flag",
+          "name": "--disabled",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn deploy target-set --project 7 stg web-1 --host app1.internal --user deploy --host-key-type ssh-ed25519 --host-key AAAA... --script web-app"
+      ],
+      "name": "deploy target-set",
+      "output": {
+        "required": [
+          "name",
+          "host",
+          "host_key_fingerprint"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Register or change a deployment target (an administrator with the admin scope, a person): host, port, user, the pinned host key (checked strictly; a mismatch stops with FG-DEPLOY-0004) and the script name, the only command run on the host. Audited."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn deploy list --project 7 --json"
+      ],
+      "name": "deploy list",
+      "output": {
+        "required": [
+          "deployments"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/deployments"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's newest deployments: environment, sha, status, requester, approver, previous version, error code (project readers)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "dev, stg or prod.",
+          "kind": "positional",
+          "name": "tier",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The full commit id.",
+          "kind": "positional",
+          "name": "sha",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn deploy request --project 7 stg 0123456789abcdef0123456789abcdef01234567"
+      ],
+      "name": "deploy request",
+      "output": {
+        "required": [
+          "id",
+          "environment",
+          "sha",
+          "status"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/deployments"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Request a deployment of a commit (Developer): pending_approval when the environment requires an approval (always prod), queued otherwise; 409 FG-DEPLOY-0002 in a freeze window."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         },
         {
           "description": "The work item, canonical PBI-<n>.",

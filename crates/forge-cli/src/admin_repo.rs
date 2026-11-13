@@ -72,7 +72,7 @@ pub fn allow_import(
     repo_id: i64,
     ttl_hours: u64,
 ) -> Result<String, ForgeError> {
-    let storage = Storage::open(cfg.storage_root()?)?;
+    let storage = Storage::from_config(cfg)?;
     with_db(&cfg.database, async |db| {
         allow_import_with(db, &storage, request_id, repo_id, ttl_hours).await
     })

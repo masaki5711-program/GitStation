@@ -162,6 +162,24 @@ pub const KEYS: &[Key] = &[
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",
     ),
+    // The memory caps of pack-heavy git (`config/git_pack.rs`).
+    number(
+        "git.pack.window_memory_mib",
+        "FORGE_GIT_PACK_WINDOW_MEMORY_MIB",
+    ),
+    number("git.pack.threads", "FORGE_GIT_PACK_THREADS"),
+    number(
+        "git.pack.delta_base_cache_mib",
+        "FORGE_GIT_PACK_DELTA_BASE_CACHE_MIB",
+    ),
+    number(
+        "git.pack.packed_git_limit_mib",
+        "FORGE_GIT_PACK_PACKED_GIT_LIMIT_MIB",
+    ),
+    number(
+        "git.pack.packed_git_window_mib",
+        "FORGE_GIT_PACK_PACKED_GIT_WINDOW_MIB",
+    ),
     // D5 MR3: how long a deleted project can be restored.
     number(
         "hosting.deletion_grace_days",
@@ -273,6 +291,22 @@ pub const KEYS: &[Key] = &[
     // M4 C6: the CI variables' keys (ADR-0013).
     text("ci.secret_keys_file", "FORGE_CI_SECRET_KEYS_FILE"),
     number("ci.artifact_quota_bytes", "FORGE_CI_ARTIFACT_QUOTA_BYTES"),
+    // M4 C11: deployments over SSH (ADR-0031).
+    text("deploy.ssh_key_file", "FORGE_DEPLOY_SSH_KEY_FILE"),
+    text("deploy.ssh_program", "FORGE_DEPLOY_SSH_PROGRAM"),
+    text("deploy.allowed_networks", "FORGE_DEPLOY_ALLOWED_NETWORKS"),
+    number(
+        "deploy.connect_timeout_secs",
+        "FORGE_DEPLOY_CONNECT_TIMEOUT_SECS",
+    ),
+    number(
+        "deploy.script_timeout_secs",
+        "FORGE_DEPLOY_SCRIPT_TIMEOUT_SECS",
+    ),
+    number(
+        "deploy.health_timeout_secs",
+        "FORGE_DEPLOY_HEALTH_TIMEOUT_SECS",
+    ),
     number(
         "webhook.delivery_retention_days",
         "FORGE_WEBHOOK_DELIVERY_RETENTION_DAYS",

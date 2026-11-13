@@ -3349,7 +3349,8 @@ export interface components {
             checked_at: string;
             /**
              * @description The conflicted paths both change (at most 100;
-             *     `conflicts_truncated` beyond).
+             *     `conflicts_truncated` beyond, or when paths an AI agent is not
+             *     given were left out).
              */
             conflicts: string[];
             conflicts_truncated: boolean;
@@ -3421,6 +3422,7 @@ export interface components {
              */
             predictions: components["schemas"]["ConflictPredictionBody"][];
             scan: components["schemas"]["ConflictScanBody"];
+            withheld?: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description One check run on the head. */
         ContextCheckBody: {
@@ -3598,7 +3600,10 @@ export interface components {
             documents: number;
             /** @description `FG-AUTH-0021`. */
             error_code: string;
-            /** @description Changed files of such documents (a diff's or a merge request's). */
+            /**
+             * @description Changed files of such documents (a diff's or a merge request's),
+             *     or their paths among a merge request's conflicts.
+             */
             files: number;
             /** @description Their requirements. */
             requirements: number;
@@ -4884,8 +4889,11 @@ export interface components {
         };
         /** @description One merge request as the API shows it. */
         MergeRequestBody: {
-            /** @description The author's names (read with the merge request). */
-            author: components["schemas"]["UserNameBody"];
+            /**
+             * @description The author (read with the merge request); `employee_number` only on
+             *     the list and the detail, for a token holding `user_employee_number`.
+             */
+            author: components["schemas"]["MergeRequestPersonBody"];
             /** Format: int64 */
             author_id: number;
             closed_at?: string | null;
@@ -4905,6 +4913,7 @@ export interface components {
              * @description The project's own number of it.
              */
             iid: number;
+            merged_by: null | components["schemas"]["MergeRequestPersonBody"];
             /** Format: int64 */
             project_id: number;
             /** @description The branch name without `refs/heads/`. */
@@ -4929,6 +4938,22 @@ export interface components {
              * @description Pass as `before` for the next page; `null` on the last page.
              */
             next_before?: number | null;
+        };
+        /**
+         * @description A person a merge request names, in the development status's shape
+         *     (`docs/api/dev-status.md`): no employee number without the caller's
+         *     `user_employee_number` scope (a browser session never sees one).
+         */
+        MergeRequestPersonBody: {
+            display_name: string;
+            /**
+             * @description Only for a token holding `user_employee_number` (absent otherwise,
+             *     and for a person without one).
+             */
+            employee_number?: string | null;
+            /** Format: int64 */
+            id: number;
+            username: string;
         };
         /** @description `GET …/status` (the stable contract, `schema_version` 1). */
         MergeRequestStatusBody: {
@@ -5052,7 +5077,10 @@ export interface components {
             /** @description The head and target tip the last finished check looked at. */
             checked_head_sha: string | null;
             checked_target_sha: string | null;
-            /** @description The conflicted paths (at most 100; `conflicts_truncated` beyond). */
+            /**
+             * @description The conflicted paths (at most 100; `conflicts_truncated` beyond, or
+             *     when paths an AI agent is not given were left out).
+             */
             conflicts: string[];
             conflicts_truncated: boolean;
             /** @description The merge request's current head (`null` before its first version). */
@@ -5076,6 +5104,7 @@ export interface components {
              *     status but the two decisions means "unknown".
              */
             status: string;
+            withheld?: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description A move as it was written. */
         MoveBody: {

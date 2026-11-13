@@ -58,6 +58,8 @@ pub mod store;
 pub mod webhooks;
 // M4 C6: a project's CI variables (secrets).
 pub mod ci_variables;
+// M4 C11: deployments.
+pub mod deploy;
 // M4 C6: `gstn pipeline artifact-download`.
 pub mod pipeline_artifacts;
 // M3 O2: the push mirror to GitLab.

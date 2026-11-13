@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-doc", "crates/forge-ci", "crates/forge-agent", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-pipelines", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client", "crates/forge-runner"]
+members = ["crates/forge-errors", "crates/forge-doc", "crates/forge-ci", "crates/forge-agent", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-integ", "crates/forge-notify", "crates/forge-pipelines", "crates/forge-deploy", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client", "crates/forge-runner"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,6 +24,7 @@ forge-checks = { path = "crates/forge-checks" }
 forge-integ = { path = "crates/forge-integ" }
 forge-notify = { path = "crates/forge-notify" }
 forge-pipelines = { path = "crates/forge-pipelines" }
+forge-deploy = { path = "crates/forge-deploy" }
 forge-oidc = { path = "crates/forge-oidc" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }
