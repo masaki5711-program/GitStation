@@ -3215,6 +3215,10 @@
               }
             ]
           },
+          "author": {
+            "$ref": "#/components/schemas/DevStatusPersonBody",
+            "description": "Who opened it."
+          },
           "checks": {
             "description": "Every check run reported on the head (empty: none — never success).\n`null`: the integration's `event_types` do not admit\n`check.completed`.",
             "items": {
@@ -3268,6 +3272,17 @@
               "null"
             ]
           },
+          "merged_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DevStatusPersonBody",
+                "description": "Who merged it (the applied merge's requester); `null` unless merged."
+              }
+            ]
+          },
           "project": {
             "$ref": "#/components/schemas/DevStatusProjectBody"
           },
@@ -3305,7 +3320,9 @@
           "approvals",
           "checks",
           "checks_state",
-          "link"
+          "link",
+          "author",
+          "merged_by"
         ],
         "type": "object"
       },
@@ -3353,6 +3370,44 @@
           "work_items",
           "next_cursor",
           "has_more"
+        ],
+        "type": "object"
+      },
+      "DevStatusPersonBody": {
+        "additionalProperties": false,
+        "description": "A person a merge request names (no employee number without the\ntoken's `user_employee_number` scope).",
+        "properties": {
+          "display_name": {
+            "description": "The current display name, as the merge request API's\n`author.display_name` (`null`: the account is gone).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "employee_number": {
+            "description": "Only with the `user_employee_number` scope (absent otherwise, and\nfor a person without one).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "description": "The current username (`null`: the account is gone).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
         ],
         "type": "object"
       },

@@ -200,6 +200,18 @@ pub(crate) async fn project_of(
     id: ProjectId,
     viewer: Option<UserId>,
 ) -> Result<Option<forge_auth::LoadedProject>, ForgeError> {
+    Ok(project_record_of(state, id, viewer)
+        .await?
+        .map(|record| projects::loaded(&record)))
+}
+
+/// The project row [`project_of`] reads, for a route that also answers
+/// with it (its path); `None` when it is absent for `viewer`.
+pub(crate) async fn project_record_of(
+    state: &AppState,
+    id: ProjectId,
+    viewer: Option<UserId>,
+) -> Result<Option<forge_core::ProjectRecord>, ForgeError> {
     let Some(record) = projects::load_bounded(state, id, viewer).await? else {
         return Ok(None);
     };
@@ -209,7 +221,7 @@ pub(crate) async fn project_of(
             .with_context("project_id", id.get())
             .with_context("loaded_project_id", record.id.get()));
     }
-    Ok(Some(projects::loaded(&record)))
+    Ok(Some(record))
 }
 
 pub(crate) fn found<R>(ctx: R) -> Lookup<R> {

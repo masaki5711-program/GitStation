@@ -25,6 +25,10 @@
 //! `all` (default) / `open` / `merged` / `closed`, `limit` 1..=100
 //! (default 50), `cursor` the previous page's `next_cursor`; anything
 //! else, repeated or empty is refused. The cursor's value is never logged.
+//!
+//! Each merge request names its `author` and `merged_by` (`null` unless
+//! merged) as `{id, username, display_name, employee_number}`; the employee number only
+//! for a token holding `user_employee_number`, like the feed's actor.
 
 use std::time::Duration;
 
@@ -35,8 +39,8 @@ use forge_auth::IntegrationFeedCtx;
 use forge_core::{parse_positive_id, IntegrationId, UserId, WorkItemRef};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_integ::{
-    checks_state, DevMergeRequest, DevStatus, Feed, MrStateFilter, PageQuery, WorkItemQuery,
-    WorkItemStatus, DEFAULT_DEV_STATUS_LIMIT, MAX_DEV_STATUS_LIMIT,
+    checks_state, DevMergeRequest, DevPerson, DevStatus, Feed, MrStateFilter, PageQuery,
+    WorkItemQuery, WorkItemStatus, DEFAULT_DEV_STATUS_LIMIT, MAX_DEV_STATUS_LIMIT,
 };
 use serde::Serialize;
 
@@ -134,6 +138,26 @@ pub struct DevStatusLinkBody {
     pub linked_at: String,
 }
 
+/// A person a merge request names (no employee number without the
+/// token's `user_employee_number` scope).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DevStatusPersonBody {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    /// The current username (`null`: the account is gone).
+    #[schema(required = true)]
+    pub username: Option<String>,
+    /// The current display name, as the merge request API's
+    /// `author.display_name` (`null`: the account is gone).
+    #[schema(required = true)]
+    pub display_name: Option<String>,
+    /// Only with the `user_employee_number` scope (absent otherwise, and
+    /// for a person without one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub employee_number: Option<String>,
+}
+
 /// One merge request linked to the work item.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -175,6 +199,11 @@ pub struct DevStatusMergeRequestBody {
     #[schema(required = true)]
     pub checks_state: Option<String>,
     pub link: DevStatusLinkBody,
+    /// Who opened it.
+    pub author: DevStatusPersonBody,
+    /// Who merged it (the applied merge's requester); `null` unless merged.
+    #[schema(required = true)]
+    pub merged_by: Option<DevStatusPersonBody>,
 }
 
 /// One work item's development status.
@@ -229,6 +258,15 @@ pub struct DevStatusPageBody {
     pub has_more: bool,
 }
 
+fn person_body(person: DevPerson) -> DevStatusPersonBody {
+    DevStatusPersonBody {
+        id: person.id.get(),
+        username: person.username,
+        display_name: person.display_name,
+        employee_number: person.employee_number,
+    }
+}
+
 fn merge_request_body(mr: DevMergeRequest) -> DevStatusMergeRequestBody {
     let checks_state = mr.checks.as_deref().map(|c| checks_state(c).to_owned());
     DevStatusMergeRequestBody {
@@ -264,6 +302,8 @@ fn merge_request_body(mr: DevMergeRequest) -> DevStatusMergeRequestBody {
             source: mr.link_source,
             linked_at: mr.linked_at,
         },
+        author: person_body(mr.author),
+        merged_by: mr.merged_by.map(person_body),
     }
 }
 
@@ -495,6 +535,15 @@ mod unit {
 
     const ONE: &str = "/api/v1/integrations/7/work-items/PBI-12/dev-status";
 
+    fn person(id: i64, number: Option<&str>) -> DevPerson {
+        DevPerson {
+            id: UserId::new(id),
+            username: Some(format!("u{id}")),
+            display_name: Some(format!("User {id}")),
+            employee_number: number.map(str::to_owned),
+        }
+    }
+
     #[test]
     fn a_work_item_query_is_parsed_strictly() {
         let q = parse_work_item(ONE, None).expect("plain");
@@ -586,6 +635,8 @@ mod unit {
             }]),
             link_source: "auto".to_owned(),
             linked_at: "2026-11-04T01:00:01Z".to_owned(),
+            author: person(41, Some("E-1041")),
+            merged_by: Some(person(42, Some("E-1042"))),
         });
         let got = serde_json::to_value(&body).expect("json");
         let keys = |v: &serde_json::Value| {
@@ -596,11 +647,19 @@ mod unit {
             k.sort();
             k
         };
-        let want = &golden["work_item"]["work_items"][0]["merge_requests"][0];
+        let mrs = &golden["work_item"]["work_items"][0]["merge_requests"];
+        let want = &mrs[0];
         assert_eq!(keys(&got), keys(want));
-        for nested in ["project", "approvals", "link"] {
+        for nested in ["project", "approvals", "link", "author"] {
             assert_eq!(keys(&got[nested]), keys(&want[nested]), "{nested}");
         }
+        // The example's merged one names who merged it.
+        let merged = mrs
+            .as_array()
+            .and_then(|m| m.iter().find(|m| m["state"] == "merged"))
+            .expect("a merged example");
+        assert_eq!(keys(&got["merged_by"]), keys(&merged["merged_by"]));
+        assert!(want["merged_by"].is_null());
         assert_eq!(keys(&got["checks"][0]), keys(&want["checks"][0]));
         assert_eq!(got["checks_state"], "success");
     }
@@ -627,11 +686,21 @@ mod unit {
             checks: None,
             link_source: "auto".to_owned(),
             linked_at: "2026-11-04T01:00:01Z".to_owned(),
+            author: person(41, None),
+            merged_by: None,
         });
         let got = serde_json::to_value(&body).expect("json");
         assert!(got["checks"].is_null(), "{got}");
         assert!(got["checks_state"].is_null(), "{got}");
         assert!(got["approvals"].is_null(), "{got}");
+        // Without the scope the employee number is absent (like the feed);
+        // `merged_by` is `null`, never absent.
+        assert_eq!(
+            got["author"],
+            serde_json::json!({"id": 41, "username": "u41", "display_name": "User 41"})
+        );
+        assert!(got.as_object().is_some_and(|o| o.contains_key("merged_by")));
+        assert!(got["merged_by"].is_null(), "{got}");
     }
 
     #[test]
