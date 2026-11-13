@@ -9786,6 +9786,290 @@
           "required": true
         },
         {
+          "description": "The merge request number.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The head commit you reviewed.",
+          "kind": "option",
+          "name": "--sha",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "merge_commit, squash or fast_forward (default: the project's).",
+          "kind": "option",
+          "name": "--method",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn queue add --project 7 --iid 12 --sha 0123456789abcdef0123456789abcdef01234567"
+      ],
+      "name": "queue add",
+      "output": {
+        "required": [
+          "entry_id",
+          "iid",
+          "state",
+          "position",
+          "target_branch",
+          "head_sha",
+          "method",
+          "isolate",
+          "batch_id",
+          "train_sha",
+          "merge_id",
+          "reason",
+          "error_code",
+          "enqueued_by",
+          "request_id",
+          "created_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/merge-queue"
+      ],
+      "scopes": [
+        "merge_execute"
+      ],
+      "summary": "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target's push role; a token needs merge_execute). Everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0025 when already queued."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request number.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn queue remove --project 7 --iid 12"
+      ],
+      "name": "queue remove",
+      "output": {
+        "required": [
+          "entry_id",
+          "iid",
+          "state",
+          "position",
+          "target_branch",
+          "head_sha",
+          "method",
+          "isolate",
+          "batch_id",
+          "train_sha",
+          "merge_id",
+          "reason",
+          "error_code",
+          "enqueued_by",
+          "request_id",
+          "created_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/merge-requests/{iid}/merge-queue"
+      ],
+      "scopes": [
+        "merge_execute"
+      ],
+      "summary": "Take a merge request out of the merge queue (as adding it). 409 FG-CI-0025 when it is not queued."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request number.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn queue status --project 7 --iid 12 --json"
+      ],
+      "name": "queue status",
+      "output": {
+        "required": [
+          "iid",
+          "entry"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/merge-queue"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A merge request's latest merge queue entry (null: never queued): its state, place, why it runs alone, and why it left (reason and code)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The target branch (main or refs/heads/main).",
+          "kind": "option",
+          "name": "--target",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn queue list --project 7 --target main --json"
+      ],
+      "name": "queue list",
+      "output": {
+        "required": [
+          "project_id",
+          "target_branch",
+          "paused",
+          "paused_by",
+          "paused_at",
+          "batch_limit",
+          "batch",
+          "entries",
+          "recent",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-queue"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A target branch's merge queue: paused or not, the next batch bound, the batch being tested (base, train, deadline), the queued entries in order and the latest merged or removed ones."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The target branch.",
+          "kind": "option",
+          "name": "--target",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn queue pause --project 7 --target main"
+      ],
+      "name": "queue pause",
+      "output": {
+        "required": [
+          "project_id",
+          "target_branch",
+          "paused",
+          "paused_by",
+          "paused_at",
+          "batch_limit",
+          "batch",
+          "entries",
+          "recent",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-queue/pause"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Pause a target branch's merge queue (the emergency stop): no new batch, no landing; merge requests may still be added (people only; Developer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The target branch.",
+          "kind": "option",
+          "name": "--target",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn queue resume --project 7 --target main"
+      ],
+      "name": "queue resume",
+      "output": {
+        "required": [
+          "project_id",
+          "target_branch",
+          "paused",
+          "paused_by",
+          "paused_at",
+          "batch_limit",
+          "batch",
+          "entries",
+          "recent",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-queue/resume"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Resume a paused merge queue (people only; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
           "description": "Only this branch (main or refs/heads/main).",
           "kind": "option",
           "name": "--ref",

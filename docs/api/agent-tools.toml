@@ -500,6 +500,30 @@ gstn = "mr unapprove"
 reason = "Approval is a person's; an agent never adds or withdraws one."
 
 [[excluded]]
+gstn = "queue add"
+reason = "Adding to the merge queue is a merge (people only); the auto-merge principal is C9's."
+
+[[excluded]]
+gstn = "queue remove"
+reason = "Taking a merge request out of the merge queue is a person's, as adding it."
+
+[[excluded]]
+gstn = "queue pause"
+reason = "The merge queue's emergency stop is a person's (people only)."
+
+[[excluded]]
+gstn = "queue resume"
+reason = "Starting a merge queue again is a Maintainer's (people only)."
+
+[[deferred]]
+gstn = "queue list"
+reason = "A merge queue read tool waits for C9 (auto-merge), which decides what an agent watches."
+
+[[deferred]]
+gstn = "queue status"
+reason = "As queue list."
+
+[[excluded]]
 gstn = "mr merge"
 reason = "Merging is the auto-merge's or a person's (plan 06 §4.7); an agent never merges."
 

@@ -857,8 +857,11 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // too. The direct-push ban of a protected branch (R6) is not read:
         // merge requests are how such a branch changes. Readiness (open,
         // draft, conflicts, …) is `evaluate_merge()`'s, never decided here.
+        // M4 C8 (ADR-0030 §2, §10): adding to and taking out of the merge
+        // queue are decided as the merge itself (the queue merges for the
+        // person who asked; the landing decides MergeRequestMerge again).
         (
-            Action::MergeRequestMerge,
+            Action::MergeRequestMerge | Action::MergeQueueEnqueue | Action::MergeQueueDequeue,
             Resource::MergeRequest {
                 project,
                 source_branch,
@@ -1379,6 +1382,20 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             need(Role::Maintainer, p.role)
         }
 
+        // --- merge queue (M4 C8, plan 14 §4.2, ADR-0030) ---
+        // Reading: as RepoBrowse (metadata; an agent audience too).
+        (Action::MergeQueueRead, Resource::Project(p)) => need(Role::Reporter, read_role(p)),
+        // The emergency stop: people only, Developer and above; starting
+        // again: people only, Maintainer and above.
+        (Action::MergeQueuePause, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Developer, p.role)
+        }
+        (Action::MergeQueueManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1489,6 +1506,11 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::MergeQueueRead
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             | Action::CiVariableManage
             | Action::CiArtifactRead
             | Action::JobArtifactUpload

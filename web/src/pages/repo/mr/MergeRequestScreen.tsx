@@ -26,6 +26,7 @@ import { ConditionsPanel } from '../../../features/mr/ConditionsPanel';
 import { DiscussionThread, threadElementId } from '../../../features/mr/DiscussionThread';
 import { MrChanges } from '../../../features/mr/MrChanges';
 import { MrSidePanel } from '../../../features/mr/MrSidePanel';
+import { QueueSection } from '../../../features/mr/QueueControl';
 import { Announcer } from '../../../features/mr/announce';
 import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
 import { FOCUS_FIRST_UNRESOLVED, StatusLine } from '../../../features/mr/StatusLine';
@@ -312,6 +313,7 @@ function Overview({
   return (
     <>
       <ConditionsPanel projectId={projectId} iid={mr.iid} sourceBranch={mr.source_branch} />
+      <QueueSection projectId={projectId} project={project} iid={mr.iid} open={mr.state === 'open'} />
       <CheckRunsSection projectId={projectId} project={project} iid={mr.iid} head={head} />
       <ConflictsSection projectId={projectId} project={project} iid={mr.iid} />
       <section aria-labelledby="mr-description-title">

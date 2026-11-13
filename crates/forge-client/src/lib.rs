@@ -59,6 +59,7 @@ pub mod pipeline_artifacts;
 // M3 O2: the push mirror to GitLab.
 pub mod mirror;
 // M4 C2: CI pipelines.
+pub mod merge_queue;
 pub mod pipelines;
 // Plan 13 Q13: the document lint migration setting.
 pub mod doc_migration;

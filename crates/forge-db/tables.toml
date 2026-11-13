@@ -756,6 +756,24 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 
+# ── M4 C8 (20261213100000, ADR-0030): the merge queue — per target branch
+# queues, the batches (trains) tested and the entries; the worker's state,
+# a person's enqueue / dequeue / pause / resume is audited by the command ──
+[tables.merge_queues]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.merge_queue_batches]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.merge_queue_entries]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
 # ── 2026-11-12 (20261210100000, ADR-0008 amendment "history import"): the
 # one-time history import allowance of an empty repository, set by the
 # operator CLI and used up by the first accepted push; audited on the project ──

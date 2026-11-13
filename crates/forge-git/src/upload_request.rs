@@ -110,6 +110,7 @@ fn check_deepen_not(payload: &[u8]) -> Result<(), ForgeError> {
     for prefix in [
         crate::hidden_refs::HIDDEN_REF_PREFIX,
         crate::hidden_refs::PIPELINE_REF_PREFIX,
+        crate::hidden_refs::MERGE_QUEUE_REF_PREFIX,
     ] {
         let hidden = prefix.strip_prefix("refs/").unwrap_or(prefix).as_bytes();
         if rev.windows(hidden.len()).any(|w| w == hidden) {

@@ -59,6 +59,7 @@ mod matrix_rows_mirror;
 // Plan 13 Q13: the document lint's migration setting.
 mod matrix_rows_doc_lint;
 // M4 C2: CI pipelines.
+mod matrix_rows_merge_queue;
 mod matrix_rows_pipelines;
 // M4 C5: CI outputs.
 mod matrix_rows_ci_outputs;

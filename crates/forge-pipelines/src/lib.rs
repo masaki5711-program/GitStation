@@ -377,7 +377,9 @@ impl Pipelines {
             .ok_or_else(|| internal("not_a_branch"))?;
         let trigger = Trigger {
             event: match request.source {
-                Source::MergeRequest => Event::MergeRequest,
+                // M4 C8 (ADR-0030 §5): a merge queue's train is a merge
+                // result: the merge request's jobs run on it.
+                Source::MergeRequest | Source::MergeQueue => Event::MergeRequest,
                 Source::Push | Source::Manual | Source::Schedule => Event::Push,
             },
             branch: branch.to_owned(),
