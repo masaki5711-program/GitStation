@@ -148,6 +148,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::RiskStop
         | ErrorCode::RiskWarn
         | ErrorCode::RiskNotAssessed
+        | ErrorCode::AutoMergeStopped
+        | ErrorCode::AutoMergeEmergencyStopped
+        | ErrorCode::AutoMergeScanFailed
         // M4 C1: a `.forge-ci.yml` content outcome (never a merge's).
         | ErrorCode::CiConfigInvalid
         // M4 C2: pipeline outcomes (never a merge's).

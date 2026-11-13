@@ -140,6 +140,15 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
     if let Credential::Runner(_) | Credential::Job(_) = principal.credential() {
         return crate::job::decide(principal, action, resource);
     }
+    // The auto-merge principal (M4 C9): its own arm, closed by default.
+    if let Credential::AutoMerge = principal.credential() {
+        return crate::auto_merge::decide(action, resource);
+    }
+    // A merge request as the auto-merge principal reaches it is no
+    // resource for anyone else.
+    if let Resource::AutoMerge(_) = resource {
+        return Err(deny(ErrorCode::Forbidden).with_context("reason", "auto_merge_resource"));
+    }
     if action.is_public() {
         return Ok(());
     }
@@ -1396,6 +1405,23 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             need(Role::Maintainer, p.role)
         }
 
+        // --- auto-merge (M4 C9, ADR-0017 Amendment 2026-11-13) ---
+        // The mode: the Owner's (a session only, `is_session_only`).
+        (Action::AutoMergeSettingsManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Owner, p.role)
+        }
+        // The project's emergency stop, on and off: Maintainer and above.
+        (Action::AutoMergeStopToggle, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+        // The instance's: administrators.
+        (Action::AutoMergeInstanceStopToggle, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1511,6 +1537,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::MergeQueueDequeue
             | Action::MergeQueuePause
             | Action::MergeQueueManage
+            | Action::AutoMergeSettingsManage
+            | Action::AutoMergeStopToggle
+            | Action::AutoMergeInstanceStopToggle
             | Action::CiVariableManage
             | Action::CiArtifactRead
             | Action::JobArtifactUpload
@@ -1555,7 +1584,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::ActAsConfirm(_)
             | Resource::CiOutput { .. }
             | Resource::RunnerJob(_)
-            | Resource::JobSelf(_),
+            | Resource::JobSelf(_)
+            | Resource::AutoMerge(_),
         ) => wrong_resource(),
     }
 }
@@ -1653,6 +1683,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::PinnedCopy(_)
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
+        | Resource::AutoMerge(_)
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_) => None,
     }
@@ -1691,6 +1722,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::PinnedCopy(_)
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
+        | Resource::AutoMerge(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

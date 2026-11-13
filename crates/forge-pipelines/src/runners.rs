@@ -55,11 +55,13 @@ pub const NO_RUNNER_LOG_EVERY: Duration = Duration::from_secs(600);
 fn runner_of(principal: &Principal, action: Action) -> Result<i64, ForgeError> {
     match principal.credential() {
         Credential::Runner(c) => Ok(c.runner_id),
-        Credential::Session | Credential::Token(_) | Credential::ActAs(_) | Credential::Job(_) => {
-            Err(ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "runner_proof_without_runner")
-                .with_context("action", action.name()))
-        }
+        Credential::Session
+        | Credential::Token(_)
+        | Credential::ActAs(_)
+        | Credential::Job(_)
+        | Credential::AutoMerge => Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "runner_proof_without_runner")
+            .with_context("action", action.name())),
     }
 }
 

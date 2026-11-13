@@ -400,7 +400,8 @@ impl ActAs {
             Credential::Session
             | Credential::ActAs(_)
             | Credential::Runner(_)
-            | Credential::Job(_) => false,
+            | Credential::Job(_)
+            | Credential::AutoMerge => false,
         };
         Ok(ClaimAnswer {
             assertion: claimed.token,

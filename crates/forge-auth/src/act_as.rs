@@ -58,9 +58,11 @@ use forge_core::act_as::{assertion_invalid, Intent};
 pub fn act_as_admission(token: &Principal) -> Result<(), ForgeError> {
     let scopes = match token.credential() {
         Credential::Token(scopes) => scopes.as_slice(),
-        Credential::Session | Credential::ActAs(_) | Credential::Runner(_) | Credential::Job(_) => {
-            return Err(refused("act_as_requires_service_account"))
-        }
+        Credential::Session
+        | Credential::ActAs(_)
+        | Credential::Runner(_)
+        | Credential::Job(_)
+        | Credential::AutoMerge => return Err(refused("act_as_requires_service_account")),
     };
     credential_checks(token.account_kind(), scopes, token.is_agent())
 }
@@ -180,6 +182,7 @@ fn decide_rule(
             | Resource::PinnedCopy(_)
             | Resource::RunnerJob(_)
             | Resource::JobSelf(_)
+            | Resource::AutoMerge(_)
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
             | Resource::GroupTransfer { .. }
@@ -224,6 +227,7 @@ fn decide_rule(
         | Resource::PinnedCopy(_)
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
+        | Resource::AutoMerge(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -371,6 +375,7 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::PinnedCopy(_)
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
+        | Resource::AutoMerge(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
@@ -462,6 +467,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::PinnedCopy(_)
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
+        | Resource::AutoMerge(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

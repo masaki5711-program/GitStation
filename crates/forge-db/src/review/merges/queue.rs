@@ -110,6 +110,7 @@ pub async fn enqueue_mr_decided<P>(
     default_message: impl FnOnce(&crate::review::StoredMergeRequest) -> String,
 ) -> Result<(StoredEntry, P), ForgeError> {
     const ACTION: &str = "merge_queue.enqueued";
+    let auto = new.credential.is_auto_merge();
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let facts = facts(&mut tx, project, Some(iid), viewer).await?;
@@ -194,13 +195,30 @@ pub async fn enqueue_mr_decided<P>(
                 row.parse()
             })
             .await?;
-        let change = MergeQueueChange::Enqueued {
-            project,
-            merge_request: mr.id,
-            iid: mr.iid,
-            entry: entry.id,
-            target_branch: mr.target_branch.as_str().to_owned(),
-            head_sha: entry.head_sha.as_str().to_owned(),
+        let (target_branch, head_sha) = (
+            mr.target_branch.as_str().to_owned(),
+            entry.head_sha.as_str().to_owned(),
+        );
+        // M4 C9: the auto-merge principal's entry is its own audit action
+        // (actor system; `enqueued_by` is the author it lands for).
+        let change = if auto {
+            MergeQueueChange::AutoEnqueued {
+                project,
+                merge_request: mr.id,
+                iid: mr.iid,
+                entry: entry.id,
+                target_branch,
+                head_sha,
+            }
+        } else {
+            MergeQueueChange::Enqueued {
+                project,
+                merge_request: mr.id,
+                iid: mr.iid,
+                entry: entry.id,
+                target_branch,
+                head_sha,
+            }
         };
         Ok(Settle::Commit(queue_record(change), (entry, decided)))
     }

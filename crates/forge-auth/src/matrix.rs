@@ -154,6 +154,8 @@ pub(crate) enum Actor {
     /// A CI job of `matrix_rows_ci::JOB_PROJECT` pinned at
     /// `matrix_rows_ci::JOB_SHA`, its token in this state.
     Job(crate::model::JobTokenState),
+    /// The auto-merge principal (M4 C9): `matrix_rows_auto_merge.rs`.
+    AutoMerge,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -196,6 +198,14 @@ pub(crate) enum Fixture {
         kind: RefKind,
         update: RefUpdate,
         protected: Option<Role>,
+    },
+    /// A merge request of a private project as the auto-merge principal
+    /// reaches it (M4 C9): the project's mode and emergency stop, pending
+    /// deletion when `deleted`.
+    AutoMerge {
+        mode: forge_core::auto_merge::AutoMergeMode,
+        stop: Option<forge_core::auto_merge::StopScope>,
+        deleted: bool,
     },
     /// A branch update on a private project whose Maintainer-level
     /// protection forbids direct pushes (M3 R6).
@@ -580,6 +590,7 @@ impl Actor {
             Actor::ActAs(via) => via.principal(),
             Actor::Runner => crate::matrix_rows_ci::runner(),
             Actor::Job(state) => crate::matrix_rows_ci::job(state),
+            Actor::AutoMerge => Principal::auto_merge(),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -625,7 +636,7 @@ impl Actor {
             }
             Actor::ActAs(via) => via.person,
             // No membership: the job arm decides on the token alone.
-            Actor::Runner | Actor::Job(_) => None,
+            Actor::Runner | Actor::Job(_) | Actor::AutoMerge => None,
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -733,7 +744,8 @@ impl Actor {
             | Actor::BotTokenReadRepository
             | Actor::ActAs(_)
             | Actor::Runner
-            | Actor::Job(_) => None,
+            | Actor::Job(_)
+            | Actor::AutoMerge => None,
         }
     }
 
@@ -815,6 +827,11 @@ impl Fixture {
                 other_project,
                 other_job,
             } => crate::matrix_rows_ci::job_self(other_project, other_job),
+            Fixture::AutoMerge {
+                mode,
+                stop,
+                deleted,
+            } => crate::matrix_rows_auto_merge::target_resource(mode, stop, deleted),
             Fixture::Ref {
                 kind,
                 update,
@@ -1207,6 +1224,8 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_doc_lint::DOC_LINT_ROWS,
         crate::matrix_rows_pipelines::PIPELINE_ROWS.as_slice(),
         crate::matrix_rows_merge_queue::MERGE_QUEUE_ROWS.as_slice(),
+        crate::matrix_rows_auto_merge::AUTO_MERGE_ROWS.as_slice(),
+        &crate::matrix_rows_auto_merge::generated_denies(),
         crate::matrix_rows_ci_outputs::CI_OUTPUT_ROWS.as_slice(),
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,

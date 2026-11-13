@@ -186,7 +186,10 @@ impl<R: ResourceCtx> Authorized<R> {
         // A CI principal (M4 C3) has no account to re-read: its credential's
         // own state was read with the request (a disabled runner or a
         // revoked job token never authenticated).
-        if let Credential::Runner(_) | Credential::Job(_) = self.principal.credential() {
+        // The auto-merge principal (M4 C9) has no account either.
+        if let Credential::Runner(_) | Credential::Job(_) | Credential::AutoMerge =
+            self.principal.credential()
+        {
             return prove(&self.principal, self.action, fresh);
         }
         let principal = match self.principal.user() {

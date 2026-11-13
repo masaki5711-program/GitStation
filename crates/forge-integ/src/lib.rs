@@ -484,6 +484,8 @@ fn personal_scopes(proof: &Authorized<IntegrationFeedCtx>) -> (bool, bool) {
         Credential::ActAs(_) => &[],
         // Refused on the feed (ADR-0029 §8); nothing personal.
         Credential::Runner(_) | Credential::Job(_) => &[],
+        // Never on the feed (M4 C9: it reads nothing).
+        Credential::AutoMerge => &[],
     };
     (
         scopes.contains(&Scope::UserEmail),

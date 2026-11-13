@@ -929,6 +929,10 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ("forge.merge_queues", operational()),
         ("forge.merge_queue_batches", operational()),
         ("forge.merge_queue_entries", operational()),
+        // ── M4 C9: auto-merge (20261214100000) ──
+        ("forge.project_auto_merge", operational()),
+        ("forge.auto_merge_instance", operational()),
+        ("forge.auto_merge_states", operational()),
         // ── 2026-11-12: the history import allowance (20261210100000) ──
         ("forge.repository_history_imports", operational()),
         // ── M4 C6: CI variables (20261211100000) ──
@@ -1128,6 +1132,10 @@ const LATER_TABLES: &[&str] = &[
     "merge_queues",
     "merge_queue_batches",
     "merge_queue_entries",
+    // ── M4 C9: auto-merge (20261214100000) ──
+    "project_auto_merge",
+    "auto_merge_instance",
+    "auto_merge_states",
     // ── 2026-11-12: the history import allowance (20261210100000) ──
     "repository_history_imports",
     // ── M4 C6: CI variables (20261211100000) ──

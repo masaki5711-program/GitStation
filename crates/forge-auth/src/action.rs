@@ -465,6 +465,22 @@ actions! {
     /// `POST /api/v1/projects/{id}/merge-queue/resume`: start a paused
     /// queue again. People only, Maintainer and above; `api`.
     MergeQueueManage,
+    // --- auto-merge (M4 C9, plan 04 M-5, ADR-0017 Amendment 2026-11-13) ---
+    /// `PUT /api/v1/projects/{id}/auto-merge`: change the project's
+    /// `merge.auto` (`off` / `reserve` / `conditional` / `full`). People
+    /// only, a web session only, the project's Owner (administrators too).
+    /// The project's state is read with `GET …/auto-merge`
+    /// (`MergeQueueRead`).
+    AutoMergeSettingsManage,
+    /// `POST /api/v1/projects/{id}/auto-merge/stop` and `…/resume`: the
+    /// project's emergency stop of auto-merge. People only (never an agent,
+    /// a service account or the auto-merge principal), Maintainer and
+    /// above; `api`.
+    AutoMergeStopToggle,
+    /// `POST /api/v1/admin/auto-merge/stop` and `…/resume`: the instance's
+    /// emergency stop of auto-merge. People only, administrators (a token
+    /// needs `admin`); `api`.
+    AutoMergeInstanceStopToggle,
     /// `GET /api/v1/projects/{id}/ci/variables`, `PUT|DELETE
     /// …/ci/variables/{name}` (M4 C6, plan 14 §4.2): list a project's CI
     /// variables (names and flags, never a value), set or delete one. A
@@ -599,6 +615,8 @@ impl Action {
                 | Action::ActAsAssertionIssue
                 | Action::RunnerRegister
                 | Action::RunnerManage
+                // M4 C9: the auto-merge mode is the Owner's choice in a session.
+                | Action::AutoMergeSettingsManage
         )
     }
 
@@ -657,6 +675,10 @@ impl Action {
                 | Action::MergeQueueManage
                 // M4 C6: CI secrets are a person's.
                 | Action::CiVariableManage
+                // M4 C9: auto-merge's mode and emergency stops are a person's.
+                | Action::AutoMergeSettingsManage
+                | Action::AutoMergeStopToggle
+                | Action::AutoMergeInstanceStopToggle
         )
     }
 
@@ -691,6 +713,7 @@ impl Action {
             | Action::ActAsAssertionIssue
             | Action::RunnerRegister
             | Action::RunnerManage
+            | Action::AutoMergeSettingsManage
             // M4 C3: the runner API is a runner's (`ci_rule`); no person's
             // token reaches it (`authorize()`: `runner_only`).
             | Action::RunnerJobRequest
@@ -792,6 +815,8 @@ impl Action {
             | Action::PipelineRetry
             | Action::MergeQueuePause
             | Action::MergeQueueManage
+            | Action::AutoMergeStopToggle
+            | Action::AutoMergeInstanceStopToggle
             | Action::CiVariableManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
@@ -932,6 +957,10 @@ impl Action {
             | Action::MergeQueueDequeue
             | Action::MergeQueuePause
             | Action::MergeQueueManage
+            // M4 C9: nor is auto-merge.
+            | Action::AutoMergeSettingsManage
+            | Action::AutoMergeStopToggle
+            | Action::AutoMergeInstanceStopToggle
             // M4 C6: nor are CI secrets.
             | Action::CiVariableManage
             // M4 C3: runners are no act-as action.
@@ -1072,6 +1101,10 @@ impl Action {
             | Action::MergeQueueDequeue
             | Action::MergeQueuePause
             | Action::MergeQueueManage
+            // M4 C9: nor auto-merge.
+            | Action::AutoMergeSettingsManage
+            | Action::AutoMergeStopToggle
+            | Action::AutoMergeInstanceStopToggle
             // M4 C6: a job never reads or sets a secret through the API
             // (ADR-0029 decision 8: they come with the claim).
             | Action::CiVariableManage
