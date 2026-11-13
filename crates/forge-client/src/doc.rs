@@ -337,7 +337,7 @@ impl Files {
 /// `git ls-files -z --cached --others --exclude-standard` in `root`, at
 /// most `max` bytes (more: the second value is true). Git is pointed at
 /// `root` only: the variables that name another repository are removed.
-fn list_files(root: &Path, max: usize) -> Result<(Vec<u8>, bool)> {
+pub(crate) fn list_files(root: &Path, max: usize) -> Result<(Vec<u8>, bool)> {
     let fail = |why: String| {
         ClientError::local(
             ErrorCode::CliInputFailed,

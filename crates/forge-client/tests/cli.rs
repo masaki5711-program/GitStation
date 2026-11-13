@@ -951,6 +951,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "ci variable list",
             "ci variable set",
             "ci variable delete",
+            "agent verify",
             "context work-item",
             "context requirement",
             "context merge-request",

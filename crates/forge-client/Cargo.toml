@@ -18,6 +18,9 @@ forge-doc.workspace = true
 # M4 C1 (contract 9, ADR-0020 Amendment): the pure `.forge-ci.yml` lint and
 # plan for `gstn ci`.
 forge-ci.workspace = true
+# Plan 16 A1 (contract 9, ADR-0032): the pure agent part / lock checks for
+# `gstn agent verify`.
+forge-agent.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true

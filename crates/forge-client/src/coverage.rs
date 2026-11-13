@@ -986,6 +986,10 @@ pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
         "ci plan",
         "plan 14 C1: the execution plan of the working tree's .forge-ci.yml with forge-ci; nothing is sent",
     ),
+    (
+        "agent verify",
+        "plan 16 A1: checks the working tree's agent configuration against agent.lock.json and the part signatures with forge-agent and local keys; nothing is sent",
+    ),
     ("help", "describes the commands from the registry"),
     ("schema", "describes one command from the registry"),
 ];

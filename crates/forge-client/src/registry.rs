@@ -1230,6 +1230,21 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["DELETE /api/v1/projects/{id}/ci/variables/{name}"],
         output: r#"{"type":"null"}"#,
     },
+    // Plan 16 A1 (ADR-0032): the agent configuration's checks, local only.
+    CommandSpec {
+        name: "agent verify",
+        summary: "Check the repository's Claude Code configuration on this computer: every managed file (.claude/, CLAUDE.md, .mcp.json) must match .gitstation/agent.lock.json (FG-AGENT-0007), and every part's digest and Ed25519 signature must verify with the local public keys (FG-AGENT-0002; a missing or stale key list is FG-AGENT-0003). With --part, check one part directory instead: part.toml, install paths (FG-AGENT-0001), the static scan for undeclared commands, network or permissions (FG-AGENT-0005) and MCP hosts outside the list (FG-AGENT-0013), and print its digest. Exit 1 with the most serious problem's code. Local only: revocation is not checked.",
+        args: &[
+            arg("--part", "option", false, "A part directory to check instead of the repository's lock."),
+            arg("--lock", "option", false, "The lock (default: .gitstation/agent.lock.json at the root of the repository found upward)."),
+            arg("--keys", "option", false, "The public key list (default: agent-keys.json in the gstn configuration directory)."),
+            ArgSpec { name: "--mcp-allowed-hosts", kind: "option", required: false, repeatable: true, description: "With --part: the internal hosts an MCP server may name, comma-separated (an exact host, or .suffix for its subdomains)." },
+        ],
+        examples: &["gstn agent verify", "gstn agent verify --json", "gstn agent verify --part parts/format-on-save --mcp-allowed-hosts mcp.corp.internal"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["problems"],"properties":{"lock":{"type":["string","null"]},"parts":{"type":"integer"},"files":{"type":"integer"},"keys":{"enum":["local"]},"revocation_checked":{"type":"boolean"},"part":{"type":"string"},"slug":{"type":["string","null"]},"kind":{"type":["string","null"]},"version":{"type":["string","null"]},"capabilities":{"type":["array","null"],"items":{"type":"string"}},"digest":{"type":["string","null"]},"problems":{"type":"array","items":{"type":"object","required":["error_code","reason","subject"],"properties":{"error_code":{"type":"string"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}}}}"#,
+    },
     CommandSpec {
         name: "context work-item",
         summary: "Show a kanflow work item's context in a project: its linked merge requests and the @req tests of its acceptance criteria, each with its source (M3 X5).",
