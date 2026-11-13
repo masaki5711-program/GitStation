@@ -182,6 +182,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     None => pipelines,
                 }
             })
+            // M4 C11: deployments (the routes; the worker runs them).
+            .with_deploy(forge_deploy::Deploy::new(db.clone())) // clone: the pool handle is shared
             // M3 I1c: the integrations' event feed seals its cursors with
             // the same keys as the lists (another purpose, so neither opens
             // the other's).

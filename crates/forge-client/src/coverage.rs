@@ -926,6 +926,37 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/users/{id}/rename",
         Coverage::Command("user rename"),
     ),
+    // M4 C11 (ADR-0031): deployments (prod is approved in the browser).
+    (
+        "GET",
+        "/api/v1/projects/{id}/deploy/environments",
+        Coverage::Command("deploy envs"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/deploy/environments/{tier}",
+        Coverage::Command("deploy env-set"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}",
+        Coverage::Command("deploy target-set"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/deployments",
+        Coverage::Command("deploy list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/deployments",
+        Coverage::Command("deploy request"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/deployments/{deployment_id}/approve",
+        Coverage::Command("deploy approve"),
+    ),
 ];
 
 /// Commands that call no API route, and why: local work only (C-1 counts

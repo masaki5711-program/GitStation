@@ -1,0 +1,29 @@
+[package]
+name = "forge-deploy"
+description = "forge deployments over SSH: environments, targets, requests and approvals, and the worker that runs the per-target script with a pinned host key"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A feature crate (plan 14 C11, ADR-0031, contract 9): forge-web / forge-cli
+# -> forge-deploy -> forge-auth / forge-db -> forge-core -> forge-errors. It
+# runs no SQL of its own (`forge_db::deploy`) and never depends on another
+# feature crate.
+[dependencies]
+forge-auth.workspace = true
+forge-core.workspace = true
+forge-db.workspace = true
+forge-errors.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+forge-db = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+sqlx.workspace = true
+
+[lints]
+workspace = true

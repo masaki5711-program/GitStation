@@ -44,6 +44,8 @@ mod ci;
 mod ci_runners;
 // M4 C6: the CI variables' keys.
 mod ci_secrets;
+// M4 C11: deployment targets, pins and the deploy key.
+mod deploy;
 // M3 I1c: the integrations' event feed.
 mod integrations;
 // M3 O3: FG-GIT-0018, FG-GIT-0019, the ref count.
@@ -92,7 +94,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 38] = [
+const DB_CHECKS: [&str; 39] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -155,6 +157,8 @@ const DB_CHECKS: [&str; 38] = [
     ci_runners::NAME,
     // M4 C6: FG-CI-0016 (the CI variables' keys).
     ci_secrets::NAME,
+    // M4 C11: FG-DEPLOY-0008 / 0004 (the deploy key, the pinned host keys).
+    deploy::NAME,
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -306,6 +310,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let pipelines = ci::pipelines_check(db).await;
     let runners = ci_runners::runners_check(db).await;
     let secret_keys = ci_secrets::secret_keys_check(db, cfg).await;
+    let known_hosts = deploy::known_hosts_check(db, cfg).await;
     vec![
         bootstrap,
         connections,
@@ -346,6 +351,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         pipelines,
         runners,
         secret_keys,
+        known_hosts,
     ]
 }
 
