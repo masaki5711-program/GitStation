@@ -3103,6 +3103,129 @@
         ],
         "type": "object"
       },
+      "DeploymentBody": {
+        "additionalProperties": false,
+        "description": "A deployment.",
+        "properties": {
+          "approval_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approved_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "commit_author_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_author_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_subject": {
+            "description": "The commit as git read it at the request (shown to the approver;\n`None` for an automatic request).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failed_target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "previous_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_by": {
+            "description": "`None`: the system (an automatic deployment).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sha": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`pending_approval`, `queued`, `running`, `succeeded`, `failed`,\n`rolled_back`, `rollback_failed`, `blocked`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "environment",
+          "sha",
+          "status",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "DeploymentList": {
+        "additionalProperties": false,
+        "description": "`GET …/deployments`.",
+        "properties": {
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "deployments"
+        ],
+        "type": "object"
+      },
       "DevStatusApprovalsBody": {
         "additionalProperties": false,
         "description": "The approvals given on the head and target now.",
@@ -4474,6 +4597,77 @@
         ],
         "type": "object"
       },
+      "EnvironmentBody": {
+        "additionalProperties": false,
+        "description": "An environment and its targets.",
+        "properties": {
+          "approval_ttl_minutes": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "auto_deploy_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_rollback": {
+            "type": "boolean"
+          },
+          "freeze_windows": {
+            "description": "`<start>/<end>` in UTC.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "frozen_now": {
+            "type": "boolean"
+          },
+          "requires_approval": {
+            "type": "boolean"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TargetBody"
+            },
+            "type": "array"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier",
+          "requires_approval",
+          "approval_ttl_minutes",
+          "auto_rollback",
+          "freeze_windows",
+          "frozen_now",
+          "targets",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "EnvironmentList": {
+        "additionalProperties": false,
+        "description": "`GET …/deploy/environments`.",
+        "properties": {
+          "environments": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "environments"
+        ],
+        "type": "object"
+      },
       "Error": {
         "additionalProperties": false,
         "properties": {
@@ -4879,6 +5073,23 @@
           "provider",
           "project_id",
           "ref"
+        ],
+        "type": "object"
+      },
+      "FreezeWindow": {
+        "additionalProperties": false,
+        "description": "One freeze window `[starts_at, ends_at)`, timestamps with a time zone.",
+        "properties": {
+          "ends_at": {
+            "type": "string"
+          },
+          "starts_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "starts_at",
+          "ends_at"
         ],
         "type": "object"
       },
@@ -6579,6 +6790,25 @@
         ],
         "type": "object"
       },
+      "NewDeployment": {
+        "additionalProperties": false,
+        "description": "`POST …/deployments`.",
+        "properties": {
+          "environment": {
+            "description": "`dev`, `stg` or `prod`.",
+            "type": "string"
+          },
+          "sha": {
+            "description": "The full commit id (lowercase hex).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "sha"
+        ],
+        "type": "object"
+      },
       "NewPipelineRun": {
         "additionalProperties": false,
         "description": "`POST …/pipelines`.",
@@ -7526,6 +7756,47 @@
         ],
         "type": "object"
       },
+      "PutEnvironment": {
+        "additionalProperties": false,
+        "description": "`PUT …/deploy/environments/{tier}`.",
+        "properties": {
+          "approval_ttl_minutes": {
+            "description": "How long a request waits for an approval and an approval for the\nworker (1..=1440, default 60).",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "auto_deploy_ref": {
+            "description": "Deploy the newest succeeded push pipeline of this branch\n(`refs/heads/...`; never for prod).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_rollback": {
+            "description": "Roll every target back when a deployment fails (never for prod).",
+            "type": "boolean"
+          },
+          "freeze_windows": {
+            "description": "No deployment is requested or run inside these (at most 50).",
+            "items": {
+              "$ref": "#/components/schemas/FreezeWindow"
+            },
+            "type": "array"
+          },
+          "requires_approval": {
+            "description": "A Maintainer approves each deployment (always true for prod).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requires_approval",
+          "auto_rollback"
+        ],
+        "type": "object"
+      },
       "PutMergeRule": {
         "additionalProperties": false,
         "description": "`PUT …/merge-rule` (absent fields: off / 0, except\n`require_work_item_link` and `expected_updated_at`: required).",
@@ -7611,6 +7882,55 @@
           "reset_approvals_on_push",
           "committer_approvals_excluded",
           "expected_updated_at"
+        ],
+        "type": "object"
+      },
+      "PutTarget": {
+        "additionalProperties": false,
+        "description": "`PUT …/targets/{name}`.",
+        "properties": {
+          "enabled": {
+            "description": "Default true.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "host": {
+            "description": "A DNS name or an IPv4 address (lowercase).",
+            "type": "string"
+          },
+          "host_key": {
+            "description": "The base64 public key (the last field of a known_hosts line).",
+            "type": "string"
+          },
+          "host_key_type": {
+            "description": "`ssh-ed25519`, `ecdsa-sha2-nistp256|384|521`, `rsa-sha2-512|256`.",
+            "type": "string"
+          },
+          "port": {
+            "description": "Default 22.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "script": {
+            "description": "The registered script name run on the host.",
+            "type": "string"
+          },
+          "user": {
+            "description": "The login user on the host.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "user",
+          "host_key_type",
+          "host_key",
+          "script"
         ],
         "type": "object"
       },
@@ -10142,6 +10462,52 @@
         },
         "required": [
           "linked"
+        ],
+        "type": "object"
+      },
+      "TargetBody": {
+        "additionalProperties": false,
+        "description": "A target (its pin by fingerprint; never a private key).",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "host_key_fingerprint": {
+            "type": "string"
+          },
+          "host_key_type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "script": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "port",
+          "user",
+          "host_key_type",
+          "host_key_fingerprint",
+          "script",
+          "enabled",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -14856,6 +15222,317 @@
         },
         "summary": "A kanflow work item's context: the project's linked merge requests and the @req tests of its acceptance criteria, each with its source",
         "x-forge-action": "ContextRead"
+      }
+    },
+    "/api/v1/projects/{id}/deploy/environments": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_deploy_environments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's deployment environments (dev, stg, prod) with their approval rule, approval window, freeze windows (and whether one is in force now), automatic rollback and deployment, and their targets with the pinned host key fingerprint; never a key (project readers)",
+        "x-forge-action": "DeployRead"
+      }
+    },
+    "/api/v1/projects/{id}/deploy/environments/{tier}": {
+      "put": {
+        "operationId": "put_api_v1_projects_id_deploy_environments_tier",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutEnvironment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create or change a deployment environment ({\"requires_approval\", \"auto_rollback\", \"approval_ttl_minutes\"?, \"auto_deploy_ref\"?, \"freeze_windows\"?}): 201 created or 200 changed; prod always requires an approval and never rolls back or deploys by itself (400 FG-WEB-0006); audited (people only; Maintainer)",
+        "x-forge-action": "DeployEnvironmentManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}": {
+      "put": {
+        "operationId": "put_api_v1_projects_id_deploy_environments_tier_targets_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TargetBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Register or change a deployment target ({\"host\", \"port\"?, \"user\", \"host_key_type\", \"host_key\", \"script\", \"enabled\"?}): the host key is pinned (StrictHostKeyChecking=yes against it alone) and only the named script runs on the host; 404 FG-REPO-0005 without the environment; audited (people only; administrators)",
+        "x-forge-action": "DeployTargetManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/deployments": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_deployments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers)",
+        "x-forge-action": "DeployRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_deployments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewDeployment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Request a deployment ({\"environment\": \"stg\", \"sha\"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer)",
+        "x-forge-action": "DeployCreate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/deployments/{deployment_id}/approve": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_deployments_deployment_id_approve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
+        "x-forge-action": "DeployApprove"
       }
     },
     "/api/v1/projects/{id}/doc-lint/migration": {

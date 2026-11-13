@@ -223,6 +223,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Spec { command } => crate::specs::spec(cli, command, env, io),
         Command::Doc { command } => crate::doc::doc(cli, command, env, io),
         Command::Ci { command } => crate::ci::ci(cli, command, env, io),
+        Command::Deploy { command } => crate::deploy::deploy(cli, command, env, io),
         Command::Context { command } => crate::context::context(cli, command, env, io),
         Command::Mcp => crate::mcp::serve(cli, env, io),
         Command::Namespace { command } => hosting::namespace(cli, command, env, io),

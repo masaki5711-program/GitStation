@@ -154,6 +154,8 @@ pub mod ci_runners;
 pub mod ci_outputs;
 // M4 C6: CI variables (secrets).
 pub mod ci_variables;
+// M4 C11: deployments (environments, targets, requests, approvals, the worker).
+pub mod deploy;
 // M4 C6: CI artifacts (the rows; the files are forge-pipelines').
 pub mod ci_artifacts;
 // ── end M3 O1 ──

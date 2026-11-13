@@ -1010,3 +1010,23 @@ reason = "A person's own inbox; not asked for yet."
 [[deferred]]
 gstn = "mr mine"
 reason = "A person's own work lists across projects (plan 15 MR 6); not asked for yet."
+
+[[deferred]]
+gstn = "deploy envs"
+reason = "M4 C11: deployment environments and targets (metadata); a tool comes with the deployment screens."
+
+[[deferred]]
+gstn = "deploy list"
+reason = "M4 C11: deployments (metadata); a tool comes with the deployment screens."
+
+[[deferred]]
+gstn = "deploy request"
+reason = "M4 C11: requesting a deployment; prod waits for a person, but an agent tool for it is not decided yet."
+
+[[excluded]]
+gstn = "deploy env-set"
+reason = "Deployment environments (approval, freeze, rollback) are a Maintainer's: people_only (ADR-0031)."
+
+[[excluded]]
+gstn = "deploy target-set"
+reason = "Deployment targets are an administrator's: people_only (ADR-0031)."

@@ -170,6 +170,13 @@ pub enum Command {
         #[command(subcommand)]
         command: CiCommand,
     },
+    /// Deployments (M4 C11): environments, targets, requests and
+    /// approvals of a project.
+    #[command(disable_help_subcommand = true)]
+    Deploy {
+        #[command(subcommand)]
+        command: DeployCommand,
+    },
     /// The context API (M3 X5): a work item's, a requirement's or a merge
     /// request's context, every item with its source.
     #[command(disable_help_subcommand = true)]
@@ -2132,6 +2139,97 @@ pub enum CiVariableCommand {
         /// Confirm (gstn never prompts).
         #[arg(long)]
         yes: bool,
+    },
+}
+
+/// A deployment environment.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeployEnv {
+    Dev,
+    Stg,
+    Prod,
+}
+
+impl DeployEnv {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Stg => "stg",
+            Self::Prod => "prod",
+        }
+    }
+}
+
+/// `gstn deploy` (M4 C11, ADR-0031).
+#[derive(Subcommand, Debug)]
+pub enum DeployCommand {
+    /// The environments with their targets and pinned fingerprints.
+    Envs {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Create or change an environment (a Maintainer, a person).
+    EnvSet {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(value_enum)]
+        tier: DeployEnv,
+        /// A Maintainer approves each deployment (always for prod).
+        #[arg(long)]
+        requires_approval: bool,
+        /// Roll back when a deployment fails (never for prod).
+        #[arg(long)]
+        auto_rollback: bool,
+        /// The approval window in minutes (1..=1440, default 60).
+        #[arg(long)]
+        ttl_minutes: Option<i32>,
+        /// Deploy the newest succeeded push pipeline of this branch.
+        #[arg(long, value_parser = parse_text)]
+        auto_deploy_ref: Option<String>,
+        /// A freeze window START/END (RFC 3339 timestamps); repeatable.
+        #[arg(long, value_parser = parse_text)]
+        freeze: Vec<String>,
+    },
+    /// Register or change a target (an administrator with the admin scope).
+    TargetSet {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(value_enum)]
+        tier: DeployEnv,
+        /// The target name, [a-z0-9][a-z0-9-]*.
+        #[arg(value_parser = parse_text)]
+        name: String,
+        #[arg(long, value_parser = parse_text)]
+        host: String,
+        #[arg(long, default_value_t = 22)]
+        port: i32,
+        #[arg(long, value_parser = parse_text)]
+        user: String,
+        /// e.g. ssh-ed25519.
+        #[arg(long, value_parser = parse_text)]
+        host_key_type: String,
+        /// The base64 public key (the last field of a known_hosts line).
+        #[arg(long, value_parser = parse_text)]
+        host_key: String,
+        /// The registered script name run on the host.
+        #[arg(long, value_parser = parse_text)]
+        script: String,
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// The newest deployments.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Request a deployment of a commit.
+    Request {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(value_enum)]
+        tier: DeployEnv,
+        #[arg(value_parser = parse_oid)]
+        sha: String,
     },
 }
 

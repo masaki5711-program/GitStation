@@ -36,6 +36,8 @@ forge-integ.workspace = true
 forge-notify.workspace = true
 # M4 C2: CI pipelines (the routes; the SQL is forge-db's, behind it).
 forge-pipelines.workspace = true
+# M4 C11: the deployment routes.
+forge-deploy.workspace = true
 url.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).

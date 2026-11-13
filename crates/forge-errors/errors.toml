@@ -2852,3 +2852,182 @@ cause = "M4 C8 (ADR-0030 §2, §10): `POST …/merge-requests/{iid}/merge-queue`
 diagnosis = "The log event carries `reason`, `merge_request_id`, `entry_id` (the live entry, when there is one) and `request_id`. `gstn queue status --project <id> <iid>` shows the live entry and its position."
 fix = "Nothing on the server: an already queued merge request waits for its turn (remove it first to re-add it); a closed one must be reopened."
 test = "a_merge_request_already_in_the_queue_is_refused"
+
+# ── M4 C11 (plan 14 §4.3, ADR-0031): deployments over SSH ──
+
+[[error]]
+code = "FG-DEPLOY-0001"
+name = "DeployApprovalRequired"
+http_status = 409
+severity = "info"
+user_message_ja = "このデプロイには有効な承認が必要です。承認の期限が切れたか、まだ承認されていません。もう一度デプロイを要求し、承認を受けてください。"
+user_message_en = "This deployment needs a valid approval. The approval has expired or was never given. Request the deployment again and have it approved."
+user_message_id = "Deployment ini memerlukan persetujuan yang valid. Persetujuan telah kedaluwarsa atau belum diberikan. Minta deployment lagi dan mintalah persetujuan."
+cause = "M4 C11 (ADR-0031 decisions 6, 7): the environment requires an approval (always for prod) and, when the forge worker took the deployment, a target of the environment had been changed after the approval (`reason=target_changed_after_approval`), or its approval had expired (`approval_expires_at <= now()`, the database clock; `approval_ttl_minutes` of the environment, default 60), or a deployment waited for an approval longer than that window. The deployment ends `blocked`; nothing ran on any target. An approval belongs to one deployment (one SHA) and is never carried over: requesting the same SHA again needs a new approval (ADR-0029 obligation 6)."
+diagnosis = "The worker logs `forge.deploy.blocked` (info) with `error_code`, `request_id`, `deployment_id`, `project_id`, `environment` and `reason=approval_expired`. Read: SELECT id, status, approved_by, approved_at, approval_expires_at, error_code FROM forge.deployments WHERE id = <deployment_id>;"
+fix = "Request the deployment again (POST /api/v1/projects/{id}/deployments) and approve it within the environment's approval window; raise `approval_ttl_minutes` of the environment if approvals regularly expire before the worker runs (runbook deploy)."
+test = "an_expired_approval_blocks_the_deployment"
+
+[[error]]
+code = "FG-DEPLOY-0002"
+name = "DeployFrozen"
+http_status = 409
+severity = "info"
+user_message_ja = "この環境は凍結期間中のため、デプロイできません。凍結期間が終わってからもう一度要求してください。"
+user_message_en = "This environment is in a freeze window, so it cannot be deployed. Request the deployment again after the freeze window ends."
+user_message_id = "Lingkungan ini sedang dalam masa pembekuan, sehingga tidak dapat di-deploy. Minta deployment lagi setelah masa pembekuan berakhir."
+cause = "M4 C11 (ADR-0031 decision 7): `now()` (the database clock) is inside one of the environment's `freeze_windows`. Checked when a deployment is requested (the request is refused, nothing written) and again when the worker takes it (the deployment ends `blocked`, nothing ran on any target). There is no bypass for automation or administrators: change the freeze windows (DeployEnvironmentManage, audited) instead."
+diagnosis = "The route logs the refusal with `error_code`, `request_id`, `project_id`, `environment`; the worker logs `forge.deploy.blocked` with `deployment_id`, `reason=frozen`. Read: SELECT tier, freeze_windows FROM forge.deploy_environments WHERE project_id = <id>;"
+fix = "Wait for the freeze window to end and request again, or (a Maintainer) shorten the window: PUT /api/v1/projects/{id}/deploy/environments/{tier} with the new `freeze_windows`."
+test = "a_freeze_window_blocks_at_request_and_at_execution"
+
+[[error]]
+code = "FG-DEPLOY-0003"
+name = "DeployTargetUnreachable"
+http_status = 502
+severity = "alert"
+user_message_ja = "デプロイ先のサーバーに接続できませんでした。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The deployment target server could not be reached. Give the request ID to the administrator."
+user_message_id = "Server tujuan deployment tidak dapat dijangkau. Berikan ID permintaan kepada administrator."
+cause = "M4 C11 (ADR-0031 decision 3): ssh to a target failed: before the remote script ran (`reason` refused / timed_out / dns / auth / network / spawn: the connection never opened, the target is unchanged) or with the connection lost after it opened (`connection_lost`: ssh exited 255 with no message that proves it never opened; the script may have run, so the target counts as changed and is rolled back on an environment with `auto_rollback`). The deployment fails (`failed`, or `rolled_back`)."
+diagnosis = "The worker logs `forge.deploy.target_failed` (error) with `error_code`, `request_id`, `deployment_id`, `target`, `host`, `port`, `step` (`deploy` / `health` / `rollback`) and `reason` (`connect` / `timeout` / `spawn`); ssh's own messages are not logged. Reproduce from the forge host: ssh -F none -i <deploy.ssh_key_file> -o BatchMode=yes -p <port> -l <user> -- <host> true. `forge doctor` (deploy.known_hosts) lists every target with its pinned fingerprint."
+fix = "Follow runbook deploy (Unreachable target): fix the network, DNS, the target's sshd or the authorized_keys entry of the deploy key, then request the deployment again."
+runbook = "deploy"
+test = "an_unreachable_target_fails_the_deployment"
+
+[[error]]
+code = "FG-DEPLOY-0004"
+name = "HostKeyMismatch"
+http_status = 502
+severity = "alert"
+user_message_ja = "デプロイ先のサーバーの鍵が登録された鍵と一致しないため、デプロイを止めました。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The deployment was stopped because the target server's host key does not match the registered key. Give the request ID to the administrator."
+user_message_id = "Deployment dihentikan karena kunci host server tujuan tidak cocok dengan kunci yang terdaftar. Berikan ID permintaan kepada administrator."
+cause = "M4 C11 (ADR-0031 decision 4): ssh ran with `StrictHostKeyChecking=yes` against a known_hosts file holding only the target's pinned public key (`deploy_targets.host_key_type` / `host_key`) and `HostKeyAlgorithms` of that type, and the server presented another key (`Host key verification failed`). Either the server was reinstalled or its key rotated without the target being updated, or something is impersonating the server. The deployment stops at once: no retry, no other target, no rollback over the untrusted connection, and no path that accepts the new key."
+diagnosis = "The worker logs `forge.deploy.target_failed` (error) with `error_code`, `request_id`, `deployment_id`, `target`, `host`, `port`, `pinned_fingerprint` (SHA256:...). Compare with the server's key read out of band (on the server: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub), never with ssh-keyscan alone over the same network."
+fix = "Follow runbook deploy (Host key mismatch): confirm the server's real key with its administrator; if the change is legitimate, an administrator registers the new key (PUT /api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}, audited) and the deployment is requested again; if not, treat it as a security incident."
+runbook = "deploy"
+test = "a_host_key_mismatch_stops_without_retry_or_rollback"
+
+[[error]]
+code = "FG-DEPLOY-0005"
+name = "HealthCheckFailed"
+http_status = 502
+severity = "warn"
+user_message_ja = "デプロイの後のヘルスチェックが失敗しました。"
+user_message_en = "The health check after the deployment failed."
+user_message_id = "Pemeriksaan kesehatan setelah deployment gagal."
+cause = "M4 C11 (ADR-0031 decision 8): after `<script> deploy <sha>` succeeded on every target, `<script> health <sha>` exited non-zero or passed its timeout on at least one. On an environment with `auto_rollback` (stg by default) the worker rolls every target back to the recorded previous version (`rolled_back` when that works); prod never rolls back by itself (`failed`): a person decides (runbook deploy)."
+diagnosis = "The worker logs `forge.deploy.target_failed` (warn) with `error_code`, `request_id`, `deployment_id`, `target`, `step=health`, `exit_code` or `reason=timeout`, then `forge.deploy.finished` with `status`. The script's output is not logged (it may carry secrets): read the application's own log on the target. Read: SELECT id, status, sha, previous_sha, error_code, failed_target FROM forge.deployments WHERE id = <deployment_id>;"
+fix = "Fix the application and deploy a new SHA. On prod, follow runbook deploy (Failed health check) to decide between a manual rollback (request a deployment of `previous_sha`) and a forward fix."
+runbook = "deploy"
+test = "a_failed_health_check_on_prod_fails_without_rollback"
+
+[[error]]
+code = "FG-DEPLOY-0006"
+name = "RollbackFailed"
+http_status = 502
+severity = "alert"
+user_message_ja = "デプロイの失敗の後のロールバックが失敗しました。環境が壊れたままの可能性があります。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The rollback after a failed deployment failed. The environment may still be broken. Give the request ID to the administrator."
+user_message_id = "Rollback setelah deployment yang gagal juga gagal. Lingkungan mungkin masih rusak. Berikan ID permintaan kepada administrator."
+cause = "M4 C11 (ADR-0031 decision 8): a deployment failed on an environment with `auto_rollback`, and `<script> rollback <previous_sha>` or the health check after it failed on a target, or there was no previous version to go back to (the environment's first deployment). The environment is in an unknown state."
+diagnosis = "The worker logs `forge.deploy.rollback_failed` (error) with `error_code`, `request_id`, `deployment_id`, `target`, `previous_sha` and `reason` (`no_previous_version` / `script_failed` / `health_failed` / `unreachable` / `host_key_mismatch`). Read: SELECT id, status, sha, previous_sha, error_code, failed_target FROM forge.deployments WHERE id = <deployment_id>;"
+fix = "Follow runbook deploy (Rollback failed): restore the target by hand from its own release directory, then deploy a known good SHA."
+runbook = "deploy"
+test = "a_failed_rollback_is_rollback_failed"
+
+[[error]]
+code = "FG-DEPLOY-0007"
+name = "DeployScriptFailed"
+http_status = 502
+severity = "warn"
+user_message_ja = "デプロイ先のデプロイのスクリプトが失敗しました。"
+user_message_en = "The deployment script on the target failed."
+user_message_id = "Skrip deployment di server tujuan gagal."
+cause = "M4 C11 (ADR-0031 decision 3): `<script> deploy <sha>` on a target exited non-zero or passed `deploy.script_timeout_secs` (the ssh process is killed). Targets after it are not touched; with `auto_rollback` the targets already changed, and this one, are rolled back to the previous version."
+diagnosis = "The worker logs `forge.deploy.target_failed` (warn) with `error_code`, `request_id`, `deployment_id`, `target`, `step=deploy`, `exit_code` or `reason=timeout`. The script's output is not logged: read the script's own log on the target."
+fix = "Fix the script or the application on the target (runbook deploy, Script failed), then request the deployment again."
+runbook = "deploy"
+test = "a_failed_script_on_stg_rolls_back"
+
+[[error]]
+code = "FG-DEPLOY-0008"
+name = "DeployKeyUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "デプロイの鍵が使えないため、デプロイできません。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "Deployments cannot run because the deployment key is unavailable. Give the request ID to the administrator."
+user_message_id = "Deployment tidak dapat dijalankan karena kunci deployment tidak tersedia. Berikan ID permintaan kepada administrator."
+cause = "M4 C11 (ADR-0031 decision 5): `deploy.ssh_key_file` is not configured, not a regular file, unreadable, or (Unix) readable by group or others (`mode & 0o077 != 0`; ssh refuses such a key too). The worker checks it before taking a deployment: nothing ran on any target and the deployment stays `queued` (it runs once the key is fixed, while its approval is valid). The key's content is never read by forge or logged."
+diagnosis = "The worker logs the failed run of task `deploy_runner` (once per failure streak) with `error_code`, `reason` (`unconfigured` / `unreadable` / `not_a_file` / `insecure_permissions`) and `mode`. `forge doctor` (deploy.known_hosts) reports the same."
+fix = "Follow runbook deploy (Deploy key): put the private key at the configured path, owned by the forge user, chmod 600, and set `deploy.ssh_key_file`; restart forge worker."
+runbook = "deploy"
+test = "an_insecure_key_file_is_refused"
+
+[[error]]
+code = "FG-DEPLOY-0009"
+name = "DeploySelfApprovalRefused"
+http_status = 403
+severity = "info"
+user_message_ja = "自分が要求したデプロイや、自分が作ったマージリクエストの変更のデプロイは承認できません。ほかの Maintainer に承認を依頼してください。"
+user_message_en = "You cannot approve a deployment you requested, or one of a change from your own merge request. Ask another Maintainer to approve it."
+user_message_id = "Anda tidak dapat menyetujui deployment yang Anda minta, atau deployment dari perubahan merge request Anda sendiri. Minta Maintainer lain untuk menyetujuinya."
+cause = "M4 C11 (plan 14 §4.2, ADR-0031 decision 6 and its 2026-11-13 amendment): authorize() refuses `DeployApprove` when the caller requested the deployment, or is one of the people behind the deployed SHA: the author of any merge request whose merge or head is that SHA, a person who pushed that commit (push records), or the commit author or committer (matched to an account by email); administrators included. Nothing was written."
+diagnosis = "The log event carries `action=DeployApprove`, `reason` (`requester` / `change_author`) and the request_id. Read: SELECT requested_by, merge_request_author, commit_author_email, committer_email FROM forge.deployments WHERE id = <deployment_id>; and the pushers: SELECT pusher_id FROM forge.push_commits WHERE project_id = <id> AND commit_sha = <sha>;"
+fix = "Ask another Maintainer of the project (a person, in a web session for prod) to approve."
+test = "the_requester_cannot_approve_their_own_deployment"
+
+[[error]]
+code = "FG-DEPLOY-0010"
+name = "DeploymentStateConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "このデプロイは今の状態では承認できません。画面を読み込み直してください。"
+user_message_en = "This deployment cannot be approved in its current state. Reload the page."
+user_message_id = "Deployment ini tidak dapat disetujui dalam keadaannya saat ini. Muat ulang halaman."
+cause = "M4 C11: `POST /api/v1/projects/{id}/deployments/{deployment_id}/approve` on a deployment that is not `pending_approval` (already approved and queued, running or finished). The state is read under the row's lock, so two people approving at once get one approval and one conflict. Not a fault."
+diagnosis = "The log event carries `deployment_id`, `project_id` and `status` (the state found)."
+fix = "Nothing to fix: reload the deployment. To deploy again, request a new deployment."
+test = "approving_a_deployment_twice_is_a_state_conflict"
+
+[[error]]
+code = "FG-DEPLOY-0011"
+name = "DeployCommitNotAllowed"
+http_status = 422
+severity = "info"
+user_message_ja = "このコミットはデプロイできません。保護されたブランチにあるコミットだけをデプロイできます（本番は CI が成功したものだけ）。"
+user_message_en = "This commit cannot be deployed. Only a commit on a protected branch can be deployed (for production, one whose CI pipeline succeeded)."
+user_message_id = "Commit ini tidak dapat di-deploy. Hanya commit pada branch yang dilindungi yang dapat di-deploy (untuk produksi, yang pipeline CI-nya berhasil)."
+cause = "M4 C11 review (ADR-0031 amendment 2026-11-13): a requested SHA must be a commit of the project reachable from a branch some protection rule protects (an applied merge request merge or a commit pushed to a protected branch: both passed the protection), checked with git (`merge-base` against each protected branch tip, argv, the browse timeout); prod also needs a succeeded push pipeline of that SHA. `reason`: `commit_not_found`, `not_on_protected_branch`, `no_succeeded_pipeline`. Nothing was written."
+diagnosis = "The route logs the refusal with `error_code`, `request_id`, `project_id`, `environment`, `reason`. Check by hand: git --git-dir <repository> merge-base --is-ancestor <sha> refs/heads/<protected branch>; SELECT id, status FROM forge.ci_pipelines WHERE project_id = <id> AND sha = <sha>;"
+fix = "Merge the change through a merge request into a protected branch (or protect the branch), wait for its pipeline to succeed, and request that SHA."
+test = "a_commit_off_the_protected_branches_is_refused"
+
+[[error]]
+code = "FG-DEPLOY-0012"
+name = "DeploymentAbandoned"
+http_status = 500
+severity = "alert"
+user_message_ja = "デプロイの実行が途中で止まりました。環境の状態を確かめる必要があります。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The deployment stopped part way. The state of the environment needs to be checked. Give the request ID to the administrator."
+user_message_id = "Deployment berhenti di tengah jalan. Kondisi lingkungan perlu diperiksa. Berikan ID permintaan kepada administrator."
+cause = "M4 C11 review: a deployment was `running` but its worker stopped sending heartbeats (the worker process stopped or crashed, or could not record the end in the database). The sweep of `deploy_runner` (at every pass, so also when a worker starts) ended it `failed` with this code and an audit row; it never rolls back by itself: what the targets run is unknown."
+diagnosis = "The worker logs `forge.deploy.abandoned` (error) with `error_code`, `request_id`, `deployment_id`, `project_id`, `environment`. Read: SELECT id, status, sha, previous_sha, started_at, heartbeat_at FROM forge.deployments WHERE id = <deployment_id>; and the worker log around heartbeat_at (`forge.deploy.finish_failed`, a crash)."
+fix = "Follow runbook deploy (Abandoned deployment): check on each target what version runs (its script log), restore it by hand if needed, then request a known good SHA."
+runbook = "deploy"
+test = "a_running_deployment_without_heartbeat_is_abandoned"
+
+[[error]]
+code = "FG-DEPLOY-0013"
+name = "DeployTargetNotAllowed"
+http_status = 502
+severity = "alert"
+user_message_ja = "デプロイ先のアドレスが許可されていないため、接続しませんでした。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The deployment target address is not allowed, so forge did not connect. Give the request ID to the administrator."
+user_message_id = "Alamat tujuan deployment tidak diizinkan, sehingga forge tidak terhubung. Berikan ID permintaan kepada administrator."
+cause = "M4 C11 review: when the worker connected, the target host resolved to an address forge never connects to (loopback, unspecified, link-local including 169.254.169.254, multicast), outside `deploy.allowed_networks` when set, or the port is one forge itself listens on. Checked at registration for a literal address and again at every connect after name resolution (ssh then connects to the checked address, the pinned key matched by name through HostKeyAlias). Nothing ran on the target."
+diagnosis = "The worker logs `forge.deploy.target_failed` (error) with `error_code`, `deployment_id`, `target`, `host`, `port` and `reason` (`denied_address` / `outside_allowed_networks` / `forge_port` / `unresolved`); the resolved address is in the log, not in the API."
+fix = "Follow runbook deploy (Target not allowed): fix the DNS record or the target (an administrator, PUT …/targets/{name}), or add the network to `deploy.allowed_networks` and restart forge worker."
+runbook = "deploy"
+test = "a_target_resolving_to_loopback_is_refused_at_connect"

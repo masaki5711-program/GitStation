@@ -188,6 +188,15 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     None => pipelines,
                 }
             })
+            // M4 C11: deployments (the routes; the worker runs them).
+            .with_deploy(forge_deploy::Deploy::new(
+                db.clone(), // clone: the pool handle is shared
+                Arc::new(forge_deploy::GitCommits::new(
+                    db.clone(),                // clone: as above
+                    smart_http.browse.clone(), // clone: shares the ref cache
+                )),
+                crate::worker::deploy::target_policy(cfg),
+            ))
             // M3 I1c: the integrations' event feed seals its cursors with
             // the same keys as the lists (another purpose, so neither opens
             // the other's).

@@ -92,6 +92,20 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-errors",
         ],
     ),
+    // M4 C11 (plan 14, ADR-0031, contract 9): deployments over SSH —
+    // written through forge-db, decided in forge-auth; forge-git reads
+    // what may be deployed (a protected branch holds it); never another
+    // feature crate.
+    (
+        "forge-deploy",
+        &[
+            "forge-auth",
+            "forge-git",
+            "forge-db",
+            "forge-core",
+            "forge-errors",
+        ],
+    ),
     // M2 MR4 (ADR-0021 §2): the OIDC sign-in, beside forge-hosting.
     (
         "forge-oidc",
@@ -107,6 +121,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-integ",
             "forge-notify",
             "forge-pipelines",
+            "forge-deploy",
             "forge-auth",
             "forge-git",
             "forge-core",
@@ -126,6 +141,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-integ",
             "forge-notify",
             "forge-pipelines",
+            "forge-deploy",
             "forge-auth",
             "forge-git",
             "forge-db",
