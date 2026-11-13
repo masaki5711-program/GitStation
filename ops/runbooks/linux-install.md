@@ -48,6 +48,9 @@ GitStation を、PFS（IoT 基盤）と同じ Linux サーバーに**初めて**
 ## 2. リリースを置く `[MUTATING — needs approval]`
 
 ビルド機で `ops/linux/build-release.sh --target <手順 0 の #2>` が作った `gitstation-<版>-<target>.tar.gz` と `.sha256` を運ぶ。
+`.sha256` は署名ではない: tar.gz と同じ経路で運んだ値は、改ざんされた tar.gz と一緒に差し替えられうる。ビルドした人から**別の経路**
+（社内チャットで値を読み上げる、別の保管場所）で sha256 を受け取り、下の `sha256sum -c` の結果と照らす。ビルドは `.dirty`（未コミットの変更）を
+既定で拒否する。`BUILD-INFO` の `commit` が `.dirty` で終わる版は本番に入れない。
 
 ```sh
 cd /tmp && sha256sum -c gitstation-<版>-<target>.tar.gz.sha256      # OK でなければ止める
@@ -130,7 +133,7 @@ grep -n PLACEHOLDER /etc/forge/forge.toml           # 残っていないこと�
 ## 7. スキーマ `[MUTATING — needs approval]`
 
 ```sh
-sudo forgectl db migrate             # forge_migrator。初回は stderr に WARN の JSON（DDL の監査の記録）が多数出るが異常ではない
+sudo forgectl db migrate             # forge_migrator。forge のプロセスが動いていると拒否される（ここではまだ起動していない）。初回は stderr に WARN の JSON（DDL の監査の記録）が多数出るが異常ではない
 sudo forgectl db status --check      # 終了コード 0、serve compatible
 sudo forgectl doctor                 # FAIL 0。warn は users.administration（管理者なし）と outbox（worker 未起動）程度
 ```
@@ -174,6 +177,10 @@ curl -fsS https://<GitStation のホスト名>/healthz
 
 - PFS の nginx が既に 443 を持つなら、新しい nginx は入れず、その設定に `server` ブロックを足す（PFS チームの合意）。
 - `client_max_body_size` と `proxy_*_timeout` は `git.http.push_max_bytes` / `git.http.timeout_ms` 以上に保つ。
+- forge が見る接続元は**プロキシだけ**（信頼するプロキシの設定は無い）。1 人あたりの制限はプロキシの `limit_conn`（接続元ごと 32）と
+  `limit_req`（サインインの開始とコールバック、接続元ごと 10 回 / 分）で行う。forge 側の `server.max_connections_per_peer` はプロキシ全体の
+  上限になるので、例の設定の 512 から、想定する同時接続（利用者数 × 数本 + git の clone）に合わせて決める（`max_connections` 以下。runbook `connections`）。
+  社内の NAT の後ろに多数の利用者がいて 1 つのアドレスに見えるなら、`limit_conn` を上げる。
 
 ロールバック: 設定のファイルを消して `nginx -t && systemctl reload nginx`。
 

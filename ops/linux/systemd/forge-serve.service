@@ -44,6 +44,10 @@ LimitNOFILE=65536
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
+# Other users' processes are invisible, and /proc shows processes only
+# (no /proc/sys etc.).
+ProtectProc=invisible
+ProcSubset=pid
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/forge

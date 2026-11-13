@@ -13,6 +13,7 @@ d      /var/lib/forge/repositories        0750 forge forge -
 d      /var/lib/forge/state-copy          0700 forge forge -
 # backup.dir — PLACEHOLDER: a different disk, mounted before this runs.
 d      /srv/forge-backup                  0700 forge forge -
-# forgectl's private run directories (removed after each command).
+# forgectl's private run directories (removed after each command; a
+# leftover of a killed forgectl is removed by the age, 1 hour).
 # 0711: forge may enter its own run.XXXXXXXX directory, nobody may list.
-d      /run/forge-admin                   0711 root  root  -
+d      /run/forge-admin                   0711 root  root  1h

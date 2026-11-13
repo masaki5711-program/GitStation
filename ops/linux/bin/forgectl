@@ -3,65 +3,108 @@
 #
 #   sudo forgectl doctor
 #   sudo forgectl db status --check
-#   sudo forgectl db migrate                       # + the forge_migrator login
 #   sudo forgectl admin token issue --user alice ...
-#   sudo forgectl restore finish --generation ...  # + the forge_maint login
+#   sudo forgectl db migrate                          # + the forge_migrator login
+#   sudo forgectl restore finish --generation ...     # + the forge_maint login
+#   sudo forgectl admin events new-epoch              # + the forge_maint login
+#   sudo forgectl --release <version> db status       # a release other than current
 #
 # What it does (runbook linux-install, ADR-0018):
 #   - runs `forge --config /etc/forge/forge.toml <args>` as the service user
 #     `forge` (repositories stay owned by forge; git never sees a foreign
-#     owner), with a clean environment and USER=<the sudo user> so the audit
-#     row names the operator;
-#   - for `db migrate`, `restore finish` and `admin events new-epoch` only:
-#     copies the privileged password (root:root 0600 under
-#     /etc/forge/secrets-privileged/) into a fresh private directory under
-#     /run/forge-admin/ for the duration of the command, and passes its path
-#     and the login's URL (/etc/forge/forgectl.env) through the environment.
-#     forge-serve / forge-worker / forge-backup have
-#     InaccessiblePaths=/run/forge-admin and /etc/forge/secrets-privileged,
-#     so the server processes never see those credentials.
+#     owner), with an empty environment plus USER=<the operator> so the
+#     audit row names the person;
+#   - only when the command is exactly `db migrate`, `restore finish` or
+#     `admin events new-epoch`: copies the privileged password
+#     (/etc/forge/secrets-privileged/, root:root 0600) into a fresh private
+#     directory under /run/forge-admin/ for the duration of the command and
+#     passes its path and the login's URL (/etc/forge/forgectl.env) through
+#     the environment. These commands are REFUSED while any process of the
+#     `forge` user runs (stop forge-serve, forge-worker, forge-backup
+#     first): a process of the same uid could otherwise read the copy
+#     through /proc/<pid>/root. The units also hide /run/forge-admin and
+#     /etc/forge/secrets-privileged (InaccessiblePaths) and other processes
+#     (ProtectProc=invisible).
 #
+# Paths are fixed (no environment overrides: sudo resets the environment,
+# and a root tool must not take its binary or secrets from the caller).
 # Must run as root. Exit status: forge's, or 2 for a forgectl usage/setup
 # error (nothing was run).
 set -euo pipefail
+umask 077
 
-FORGE_BIN="${FORGECTL_FORGE_BIN:-/opt/gitstation/current/bin/forge}"
-CONFIG="${FORGECTL_CONFIG:-/etc/forge/forge.toml}"
-ENV_FILE="${FORGECTL_ENV_FILE:-/etc/forge/forgectl.env}"
-PRIV_DIR="${FORGECTL_PRIVILEGED_DIR:-/etc/forge/secrets-privileged}"
-RUN_BASE="${FORGECTL_RUN_DIR:-/run/forge-admin}"
-SERVICE_USER="${FORGECTL_USER:-forge}"
-SERVICE_HOME="${FORGECTL_HOME:-/var/lib/forge}"
+readonly RELEASES=/opt/gitstation/releases
+readonly CURRENT_BIN=/opt/gitstation/current/bin/forge
+readonly CONFIG=/etc/forge/forge.toml
+readonly ENV_FILE=/etc/forge/forgectl.env
+readonly PRIV_DIR=/etc/forge/secrets-privileged
+readonly RUN_BASE=/run/forge-admin
+readonly SERVICE_USER=forge
+readonly SERVICE_HOME=/var/lib/forge
 
 die() {
   printf 'forgectl: %s\n' "$*" >&2
   exit 2
 }
 
-[ "$#" -gt 0 ] || die "usage: forgectl <forge subcommand> [args...]  (see: forgectl --help)"
+# Root-owned, and no access for group or others (mode & 077 == 0).
+require_root_private() { # <path>
+  local owner mode
+  owner="$(stat -c '%u' -- "$1")" || die "cannot stat $1"
+  mode="$(stat -c '%a' -- "$1")" || die "cannot stat $1"
+  [ "$owner" = "0" ] || die "$1 must be owned by root (uid $owner)"
+  (((8#$mode & 8#077) == 0)) || die "$1 must not be accessible to group or others (mode $mode)"
+}
+
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo forgectl ...)"
-[ -x "$FORGE_BIN" ] || die "forge binary not found or not executable: $FORGE_BIN"
+
+forge_bin="$CURRENT_BIN"
+if [ "${1:-}" = "--release" ]; then
+  [ "$#" -ge 2 ] || die "--release needs a version"
+  case "$2" in
+    '' | . | .. | */* | -*) die "invalid release name: $2" ;;
+  esac
+  forge_bin="$RELEASES/$2/bin/forge"
+  shift 2
+fi
+[ "$#" -gt 0 ] || die "usage: forgectl [--release <version>] <forge subcommand> [args...]"
+
+# The configuration is fixed: a caller-chosen one could point forge at
+# other files with root-staged credentials.
+for arg in "$@"; do
+  case "$arg" in
+    --config | --config=* | -c | -c*) die "--config is fixed to $CONFIG" ;;
+  esac
+done
+
+[ -x "$forge_bin" ] || die "forge binary not found or not executable: $forge_bin"
+[ "$(stat -c '%u' -- "$(readlink -f -- "$forge_bin")")" = "0" ] || die "$forge_bin must be owned by root"
 [ -r "$CONFIG" ] || die "configuration not readable: $CONFIG"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || die "service user missing: $SERVICE_USER (systemd-sysusers)"
 command -v runuser >/dev/null 2>&1 || die "runuser (util-linux) not found"
 
-# Which privileged login the command needs (detected from the words, so an
-# operator cannot forget it; an unneeded login is simply not staged).
+# Which privileged login the command needs: exact subcommands only.
 need_migrate=0
 need_maint=0
-words=" $* "
-case "$words" in
-  *" db migrate "*) need_migrate=1 ;;
-esac
-case "$words" in
-  *" restore finish "* | *" events new-epoch "*) need_maint=1 ;;
-esac
+if [ "${1:-}" = "db" ] && [ "${2:-}" = "migrate" ]; then
+  need_migrate=1
+elif [ "${1:-}" = "restore" ] && [ "${2:-}" = "finish" ]; then
+  need_maint=1
+elif [ "${1:-}" = "admin" ] && [ "${2:-}" = "events" ] && [ "${3:-}" = "new-epoch" ]; then
+  need_maint=1
+fi
 
-# The URLs of the privileged logins: KEY=VALUE, two known keys only.
 migrate_url=""
 maint_url=""
 if [ "$need_migrate" -eq 1 ] || [ "$need_maint" -eq 1 ]; then
+  # No other process of the service user may run while the copy exists.
+  if pgrep -u "$SERVICE_USER" >/dev/null 2>&1; then
+    die "processes of '$SERVICE_USER' are running ($(pgrep -u "$SERVICE_USER" -d, || true)): stop forge-serve, forge-worker and forge-backup first"
+  fi
   [ -f "$ENV_FILE" ] || die "missing $ENV_FILE (copy ops/linux/etc/forgectl.env.example)"
+  require_root_private "$ENV_FILE"
+  require_root_private "$PRIV_DIR"
+  # KEY=VALUE, two known keys only; parsed, never sourced.
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line%$'\r'}"
     case "$line" in
@@ -84,6 +127,10 @@ if [ -z "$operator" ] || [ "$operator" = "root" ]; then
   operator="$(logname 2>/dev/null || true)"
 fi
 operator="${operator:-root}"
+case "$operator" in
+  *[!A-Za-z0-9._-]*) operator="root" ;;
+esac
+
 envs=(
   "PATH=/usr/local/bin:/usr/bin:/bin"
   "LANG=C.UTF-8"
@@ -112,6 +159,7 @@ staged=""
 stage_secret() { # <source file> <name>
   local src="$1" name="$2"
   [ -f "$src" ] || die "missing privileged secret: $src"
+  require_root_private "$src"
   if [ -z "$stage" ]; then
     [ -d "$RUN_BASE" ] || die "missing $RUN_BASE (systemd-tmpfiles --create /etc/tmpfiles.d/forge.conf)"
     stage="$(mktemp -d "$RUN_BASE/run.XXXXXXXX")"
@@ -136,5 +184,5 @@ fi
 # Not exec: the trap must remove the staged copy after forge exits.
 status=0
 runuser -u "$SERVICE_USER" -- /usr/bin/env -i "${envs[@]}" \
-  "$FORGE_BIN" --config "$CONFIG" "$@" || status=$?
+  "$forge_bin" --config "$CONFIG" "$@" || status=$?
 exit "$status"

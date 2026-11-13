@@ -13,7 +13,18 @@
 #      NoNewPrivileges=no
 #      RestrictSUIDSGID=no
 #      CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE
-#    and a sudoers rule limited to `/usr/bin/pgbackrest --stanza=forge *`.
+#    a root-owned wrapper as backup.pgbackrest_bin
+#      /usr/local/bin/forge-pgbackrest (root:root 0755):
+#        #!/bin/sh
+#        exec /usr/bin/sudo -n -u postgres /usr/bin/pgbackrest "$@"
+#    and a sudoers rule (visudo -f /etc/sudoers.d/forge-pgbackrest) that
+#    allows exactly the two command lines forge runs (no wildcard):
+#      Defaults:forge env_reset
+#      forge ALL=(postgres) NOPASSWD: \
+#        /usr/bin/pgbackrest --stanza=forge --type=full --log-level-console=warn backup, \
+#        /usr/bin/pgbackrest --stanza=forge --output=json info
+#    (crates/forge-cli/src/backup/db_tool.rs; a changed stanza or argument
+#    list must change this rule too.)
 [Unit]
 Description=GitStation backup (forge backup)
 Documentation=file:///opt/gitstation/current/share/runbooks/backup-restore.md
@@ -44,6 +55,10 @@ LimitNOFILE=65536
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
+# Other users' processes are invisible, and /proc shows processes only
+# (no /proc/sys etc.).
+ProtectProc=invisible
+ProcSubset=pid
 ProtectSystem=strict
 ProtectHome=yes
 # storage.root and the state copies (read), backup.dir (write). PLACEHOLDER

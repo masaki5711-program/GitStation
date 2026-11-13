@@ -226,6 +226,8 @@ fn the_units_run_the_packaged_binary_and_hide_the_privileged_credentials() {
         assert_eq!(directive(&unit, "NoNewPrivileges"), ["yes"], "{file}");
         assert_eq!(directive(&unit, "ProtectSystem"), ["strict"], "{file}");
         assert_eq!(directive(&unit, "PrivateTmp"), ["yes"], "{file}");
+        assert_eq!(directive(&unit, "ProtectProc"), ["invisible"], "{file}");
+        assert_eq!(directive(&unit, "ProcSubset"), ["pid"], "{file}");
         let hidden = directive(&unit, "InaccessiblePaths").join(" ");
         for path in ["/etc/forge/secrets-privileged", "/run/forge-admin"] {
             assert!(hidden.contains(path), "{file} must hide {path}");
@@ -260,6 +262,11 @@ fn the_units_run_the_packaged_binary_and_hide_the_privileged_credentials() {
     ] {
         assert!(forgectl.contains(needle), "forgectl: {needle}");
     }
+    // A root tool takes no paths from the caller's environment.
+    assert!(
+        !forgectl.contains("${FORGECTL_"),
+        "forgectl must not read FORGECTL_* overrides"
+    );
 
     // tmpfiles creates every directory the configuration names.
     let tmpfiles = read("ops/linux/systemd/forge.tmpfiles");

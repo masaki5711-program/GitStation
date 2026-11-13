@@ -69,11 +69,20 @@ sudo forgectl admin token list --user <名前>
 sudo forgectl restore finish --generation <世代>   # forge_maint のパスワードを一時的に渡す
 ```
 
-- `db migrate`、`restore finish`、`admin events new-epoch` のときだけ、`/etc/forge/forgectl.env` の URL と
-  `/etc/forge/secrets-privileged/` のパスワードを渡す（コマンドの語から自動で判定）。
-- それ以外は `forge --config /etc/forge/forge.toml <引数>` を `forge` ユーザーで実行するだけ。
-- 終了コードは forge のもの。forgectl 自身の誤り（root でない、ファイルが無い）は 2 で、forge は実行しない。
+- **ちょうど** `db migrate`、`restore finish`、`admin events new-epoch` のときだけ（先頭の語で判定）、`/etc/forge/forgectl.env` の URL と
+  `/etc/forge/secrets-privileged/` のパスワードを渡す。どちらも root の持ち物でグループ・他人が触れない（`0600` / `0700`）ことを
+  `stat` で確かめ、違えば止める。
+- **この 3 つは `forge` ユーザーのプロセスが 1 つでも動いていると拒否する**（`forge-serve`・`forge-worker`・`forge-backup` を先に止める）。
+  同じ uid のプロセスは `/proc/<pid>/root` から一時的な写しに届きうるため。ユニットは加えて `ProtectProc=invisible`・`ProcSubset=pid`・
+  `InaccessiblePaths=` で守る。`admin events new-epoch` も止めてから流す（短い計画停止）。別の uid で動かす案（`systemd-run --uid`、
+  専用の `forge-admin` ユーザー）は、`forge.toml` の秘密（`db-app.pw` など）とリポジトリの持ち主が `forge` なので採らなかった。
+- それ以外は `forge --config /etc/forge/forge.toml <引数>` を `forge` ユーザーで実行するだけ。`--config` は固定（引数に書くと拒否）。
+- バイナリは `/opt/gitstation/current/bin/forge`（root の持ち物であること）。更新の前に新しい版で試すときは
+  `forgectl --release <版> …`（`/opt/gitstation/releases/<版>/bin/forge`）。パスを環境変数で替える方法は無い。
+- 終了コードは forge のもの。forgectl 自身の誤り（root でない、ファイルが無い、権限が広い）は 2 で、forge は実行しない。
 - 環境は空にしてから渡す（`PG*` などの変数は持ち込まない。forge は `PGPASSWORD` などがあると拒否する）。`RUST_LOG` だけは引き継ぐ。
+- sudo の設定は既定の `Defaults env_reset` を保つ（`env_keep` に `FORGE_*`・`PG*`・`LD_*` を足さない）。運用者に forgectl だけを許すなら
+  `<運用者> ALL=(root) /usr/local/sbin/forgectl` の 1 行にする。
 
 ## ビルド
 

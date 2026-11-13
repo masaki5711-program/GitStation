@@ -4,9 +4,11 @@
 # 2.28.1; forge does not use the extension).
 #
 #   install -d -m 0700 -o root -g root /etc/forge/pg
-#   openssl rand -hex 24 > /etc/forge/pg/superuser.pw && chmod 0644 /etc/forge/pg/superuser.pw
-#   (0644 so the container's postgres user can read the bind-mounted file;
-#    the 0700 root directory keeps every host account out)
+#   PGUID="$(docker run --rm timescale/timescaledb:2.28.1-pg16 id -u postgres)"   # e.g. 70 (Alpine) or 999 (Debian)
+#   (umask 077; openssl rand -hex 24 > /etc/forge/pg/superuser.pw)
+#   chown "$PGUID:$PGUID" /etc/forge/pg/superuser.pw && chmod 0400 /etc/forge/pg/superuser.pw
+#   (readable only by the container's postgres uid, which reads the
+#    bind-mounted file; the 0700 root directory keeps host accounts out)
 #   docker compose -f /opt/gitstation/current/share/postgresql/compose.yml up -d --wait
 #   (podman: `podman compose …` or `podman-compose …`)
 #

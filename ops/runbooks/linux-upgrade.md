@@ -32,7 +32,7 @@
 2. 新しい版がどのマイグレーションを持つか（読み取りのみ。DB は変えない）:
 
    ```sh
-   FORGECTL_FORGE_BIN=$NEW/bin/forge forgectl db status
+   forgectl --release <新版> db status
    ```
 
    - `pending -` なら**マイグレーションなし**: 戻しはリンクの付け替えだけ（戻し A）。
@@ -66,14 +66,15 @@
 
    ```sh
    systemctl stop forge-serve forge-worker     # serve は実行中の push を待つ（最大 180 秒）
-   systemctl is-active forge-serve forge-worker   # inactive
+   systemctl is-active forge-serve forge-worker forge-backup.service   # すべて inactive
+   pgrep -u forge || echo none                   # none（forgectl の db migrate は forge のプロセスがあると拒否する）
    ```
 
 2. **マイグレーション**（`pending` があるときだけ）`[MUTATING — needs approval]`（ロールバック: 下の「戻し」B）
 
    ```sh
-   FORGECTL_FORGE_BIN=$NEW/bin/forge forgectl db migrate
-   FORGECTL_FORGE_BIN=$NEW/bin/forge forgectl db status --check     # 終了コード 0、serve compatible
+   forgectl --release <新版> db migrate
+   forgectl --release <新版> db status --check     # 終了コード 0、serve compatible
    ```
 
    失敗（FG-DB-0003）: 各マイグレーションは 1 つのトランザクションなので何も変わっていない。runbook `db-migration` で原因を読み、

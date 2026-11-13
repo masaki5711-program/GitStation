@@ -2,16 +2,19 @@
 # Build the GitStation Linux release tarball.
 #
 #   ops/linux/build-release.sh [--target <triple>] [--version <v>] [--out <dir>]
-#                              [--skip-web] [--dry-run]
+#                              [--skip-web] [--allow-dirty] [--dry-run]
 #
 #   --target   x86_64-unknown-linux-gnu (default) or aarch64-unknown-linux-gnu
 #   --version  release name (default: <workspace version>+g<short commit>[.dirty])
 #   --out      output directory (default: dist/)
 #   --skip-web use the existing web/dist (already built by `npm run build`)
+#   --allow-dirty  build although tracked files are modified (the release
+#              is marked .dirty; never for production)
 #   --dry-run  check the inputs and print every command without running any
 #
-# Output: <out>/gitstation-<version>-<target>.tar.gz, its .sha256, and the
-# line appended to <out>/SHA256SUMS. Inside: bin/forge (UI embedded:
+# Output: <out>/gitstation-<version>-<target>.tar.gz, its .sha256, and
+# <out>/SHA256SUMS rewritten for every tarball in <out>. A checksum is not a
+# signature: carry it over a separate channel (runbook linux-install 2). Inside: bin/forge (UI embedded:
 # forge-cli feature embed-ui, as the CI release job builds it), share/ (the
 # systemd units, example configuration, forgectl, nginx, PostgreSQL, the
 # database bootstrap SQL, the runbooks) and BUILD-INFO.
@@ -33,6 +36,7 @@ target="x86_64-unknown-linux-gnu"
 version=""
 out=""
 skip_web=0
+allow_dirty=0
 dry_run=0
 
 die() {
@@ -46,6 +50,7 @@ while [ "$#" -gt 0 ]; do
     --version) [ "$#" -ge 2 ] || die "--version needs a value"; version="$2"; shift 2 ;;
     --out) [ "$#" -ge 2 ] || die "--out needs a value"; out="$2"; shift 2 ;;
     --skip-web) skip_web=1; shift ;;
+    --allow-dirty) allow_dirty=1; shift ;;
     --dry-run) dry_run=1; shift ;;
     -h | --help) sed -n '2,32p' "$0"; exit 0 ;;
     *) die "unknown argument: $1 (see --help)" ;;
@@ -135,7 +140,10 @@ run() {
 }
 
 printf 'build-release: %s (commit %s%s)\n' "$name" "$commit" "$dirty"
-[ -z "$dirty" ] || printf 'build-release: WARNING: tracked files are modified; the release is marked .dirty\n' >&2
+if [ -n "$dirty" ]; then
+  [ "$allow_dirty" -eq 1 ] || die "tracked files are modified: commit them, or pass --allow-dirty (never for production)"
+  printf 'build-release: WARNING: tracked files are modified; the release is marked .dirty\n' >&2
+fi
 
 # 1. The web UI (embedded into the binary by the embed-ui feature).
 if [ "$skip_web" -eq 0 ]; then
@@ -198,11 +206,16 @@ fi
 run mkdir -p "$out"
 run tar --sort=name --owner=0 --group=0 --numeric-owner -C "$stage_root" -czf "$tarball" "$name"
 if [ "$dry_run" -eq 1 ]; then
-  printf '+ sha256 %s >> %s/SHA256SUMS\n' "$tarball" "$out"
+  printf '+ sha256 %s; rewrite %s/SHA256SUMS\n' "$tarball" "$out"
 else
   sum="$(sha256 "$tarball")"
   printf '%s  %s\n' "$sum" "$name.tar.gz" >"$tarball.sha256"
-  printf '%s  %s\n' "$sum" "$name.tar.gz" >>"$out/SHA256SUMS"
+  sums="$out/SHA256SUMS.tmp"
+  : >"$sums"
+  for t in "$out"/gitstation-*.tar.gz; do
+    printf '%s  %s\n' "$(sha256 "$t")" "$(basename "$t")" >>"$sums"
+  done
+  mv -f "$sums" "$out/SHA256SUMS"
   rm -rf -- "$stage_root"
   printf 'build-release: %s\nbuild-release: sha256 %s\n' "$tarball" "$sum"
 fi
