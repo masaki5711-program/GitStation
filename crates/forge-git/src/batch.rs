@@ -31,7 +31,12 @@
 //!   A process unused for `idle` is closed by a background sweep. The
 //!   processes do not take a slot of the global git pool (they are bounded
 //!   by `per_repo × max_repos` on their own and would otherwise hold slots
-//!   while idle).
+//!   while idle). Memory: each process holds at most
+//!   `git.pack.delta_base_cache_mib` of inflated bases plus its mapped pack
+//!   windows (≤ `git.pack.packed_git_limit_mib`, file-backed: the page cache
+//!   reclaims them), so the pool's worst case is `per_repo × max_repos ×
+//!   (delta_base_cache + a few MiB)` (`GitConfig::pack`,
+//!   `ops/runbooks/memory-sizing.md`).
 //! - **Every exchange has a timeout** (the caller's, never past its
 //!   operation's deadline). A timeout, an I/O error (the process died, its
 //!   output ended mid-answer) or an answer out of protocol kills the

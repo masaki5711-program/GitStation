@@ -4,6 +4,7 @@ use forge_core::RefName;
 use forge_errors::{ErrorCode, Lang};
 
 use super::*;
+use crate::config::GitPackConfig;
 use crate::redact::redact;
 
 /// A git handle with a private HOME (never the shared temp dir).
@@ -582,4 +583,86 @@ fn a_kill_time_is_carried_rounded_up_to_the_millisecond() {
         7,
         "whole ms unchanged"
     );
+}
+
+fn argv_strings(cmd: &GitCommand) -> Vec<String> {
+    cmd.argv()
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// `git.pack.*`: every pack-heavy subcommand starts with the memory caps
+/// (first, so its own `-c` of the same key comes later and wins); every
+/// other subcommand gets none.
+#[test]
+fn pack_heavy_subcommands_start_with_the_memory_caps() {
+    let (_h, g) = git();
+    let caps = [
+        "-c",
+        "pack.windowMemory=256m",
+        "-c",
+        "pack.threads=2",
+        "-c",
+        "core.deltaBaseCacheLimit=64m",
+        "-c",
+        "core.packedGitLimit=1024m",
+        "-c",
+        "core.packedGitWindowSize=64m",
+    ];
+    for sub in crate::config::PACK_HEAVY_SUBCOMMANDS {
+        let argv = argv_strings(&g.command(sub).config_override("pack.threads", "1"));
+        assert_eq!(argv[..caps.len()], caps, "{sub}");
+        assert_eq!(argv[caps.len()..], ["-c", "pack.threads=1", sub], "{sub}");
+    }
+    for sub in ["log", "rev-parse", "for-each-ref", "commit-graph", "fsck"] {
+        assert_eq!(argv_strings(&g.command(sub)), [sub], "{sub}");
+    }
+}
+
+#[test]
+fn memory_caps_follow_the_configuration() {
+    let (_h, g) = git_with(|c| {
+        c.pack = GitPackConfig {
+            window_memory_mib: 32,
+            threads: 1,
+            delta_base_cache_mib: 16,
+            packed_git_limit_mib: 256,
+            packed_git_window_mib: 32,
+        }
+    });
+    assert_eq!(
+        argv_strings(&g.command("upload-pack")),
+        [
+            "-c",
+            "pack.windowMemory=32m",
+            "-c",
+            "pack.threads=1",
+            "-c",
+            "core.deltaBaseCacheLimit=16m",
+            "-c",
+            "core.packedGitLimit=256m",
+            "-c",
+            "core.packedGitWindowSize=32m",
+            "upload-pack",
+        ]
+    );
+}
+
+/// The installed git accepts the caps (it parses `core.*` at start and
+/// dies on a value it cannot read).
+#[tokio::test]
+async fn real_git_accepts_the_memory_caps() {
+    let (h, g) = git();
+    let dir = h.path().join("work");
+    let sha = repo_with_commit(&g, &dir).await;
+    let out = g
+        .command("cat-file")
+        .repo(dir.join(".git"))
+        .arg("-t")
+        .revision(Revision::object_id(&sha).expect("sha"))
+        .output()
+        .await
+        .expect("cat-file with the caps");
+    assert_eq!(out.stdout_str().trim(), "commit");
 }

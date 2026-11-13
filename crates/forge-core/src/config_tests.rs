@@ -1669,3 +1669,77 @@ fn deploy_key_file_is_optional_absolute_and_timeouts_bounded() {
     .expect_err("bad");
     assert_invalid(&e, "deploy.allowed_networks", "invalid");
 }
+
+/// `git.pack.*`: the memory caps of pack-heavy git — defaults, the
+/// `[git.pack]` table, environment overrides, ranges and the window ≤
+/// limit rule (FG-SYS-0002).
+#[test]
+fn git_pack_caps_have_defaults_file_env_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.git_pack, GitPackConfig::DEFAULT);
+    assert_eq!(cfg.git_pack.window_memory_mib, 256);
+    assert_eq!(cfg.git_pack.threads, 2);
+    assert_eq!(cfg.git_pack.delta_base_cache_mib, 64);
+    assert_eq!(cfg.git_pack.packed_git_limit_mib, 1024);
+    assert_eq!(cfg.git_pack.packed_git_window_mib, 64);
+
+    let f = file("[git.pack]\nthreads = 4\nwindow_memory_mib = 128\n");
+    let cfg = load(
+        Some(f.path()),
+        &env(&[
+            ("FORGE_GIT_PACK_DELTA_BASE_CACHE_MIB", "32"),
+            ("FORGE_GIT_PACK_PACKED_GIT_LIMIT_MIB", "512"),
+            ("FORGE_GIT_PACK_PACKED_GIT_WINDOW_MIB", "512"),
+        ]),
+    )
+    .expect("file + env");
+    assert_eq!(
+        cfg.git_pack,
+        GitPackConfig {
+            window_memory_mib: 128,
+            threads: 4,
+            delta_base_cache_mib: 32,
+            packed_git_limit_mib: 512,
+            packed_git_window_mib: 512,
+        }
+    );
+
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_GIT_PACK_THREADS", "0")],
+            "git.pack.threads",
+            "zero",
+        ),
+        (
+            vec![("FORGE_GIT_PACK_THREADS", "65")],
+            "git.pack.threads",
+            "above_max",
+        ),
+        (
+            vec![("FORGE_GIT_PACK_WINDOW_MEMORY_MIB", "4097")],
+            "git.pack.window_memory_mib",
+            "above_max",
+        ),
+        (
+            vec![("FORGE_GIT_PACK_DELTA_BASE_CACHE_MIB", "-1")],
+            "git.pack.delta_base_cache_mib",
+            "invalid",
+        ),
+        (
+            vec![("FORGE_GIT_PACK_PACKED_GIT_LIMIT_MIB", "8")],
+            "git.pack.packed_git_limit_mib",
+            "below_min",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_PACK_PACKED_GIT_LIMIT_MIB", "64"),
+                ("FORGE_GIT_PACK_PACKED_GIT_WINDOW_MIB", "128"),
+            ],
+            "git.pack.packed_git_window_mib",
+            "above_limit",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        assert_invalid(&err, key, reason);
+    }
+}
