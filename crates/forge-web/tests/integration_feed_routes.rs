@@ -1002,15 +1002,13 @@ async fn numbered_person(t: &FreshDb, name: &str, number: &str) -> UserId {
         .user_id
 }
 
-/// `author` opens a merge request in `web` from `source` (decided: the
-/// status reads only the rows).
+/// `author` opens a merge request in `web` from `source`. Only forge-review
+/// may call the review commands (forge-review tests/decided_callers.rs), so
+/// this goes through forge-db's test helper, which records the `Opened`
+/// event the work item detection reads.
 async fn open_mr_as(w: &World, author: UserId, source: &str) -> (i64, i64) {
-    let (stored, ()) = forge_db::review::open_mr_decided(
+    let stored = forge_db::test_support::open_merge_request(
         &w.t.db,
-        &ChangeContext::new(
-            Actor::User(author),
-            RequestId::parse(&format!("req-open-{}", source.replace('/', "-"))).expect("id"),
-        ),
         w.web,
         author,
         &forge_db::review::NewMergeRequest {
@@ -1020,10 +1018,8 @@ async fn open_mr_as(w: &World, author: UserId, source: &str) -> (i64, i64) {
             target_branch: RefName::parse("refs/heads/main").expect("branch"),
             draft: false,
         },
-        |_| Ok(()),
     )
-    .await
-    .expect("open");
+    .await;
     (stored.id.get(), stored.iid)
 }
 
