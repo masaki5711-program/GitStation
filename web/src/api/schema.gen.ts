@@ -3349,7 +3349,8 @@ export interface components {
             checked_at: string;
             /**
              * @description The conflicted paths both change (at most 100;
-             *     `conflicts_truncated` beyond).
+             *     `conflicts_truncated` beyond, or when paths an AI agent is not
+             *     given were left out).
              */
             conflicts: string[];
             conflicts_truncated: boolean;
@@ -3421,6 +3422,7 @@ export interface components {
              */
             predictions: components["schemas"]["ConflictPredictionBody"][];
             scan: components["schemas"]["ConflictScanBody"];
+            withheld?: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description One check run on the head. */
         ContextCheckBody: {
@@ -3598,7 +3600,10 @@ export interface components {
             documents: number;
             /** @description `FG-AUTH-0021`. */
             error_code: string;
-            /** @description Changed files of such documents (a diff's or a merge request's). */
+            /**
+             * @description Changed files of such documents (a diff's or a merge request's),
+             *     or their paths among a merge request's conflicts.
+             */
             files: number;
             /** @description Their requirements. */
             requirements: number;
@@ -5052,7 +5057,10 @@ export interface components {
             /** @description The head and target tip the last finished check looked at. */
             checked_head_sha: string | null;
             checked_target_sha: string | null;
-            /** @description The conflicted paths (at most 100; `conflicts_truncated` beyond). */
+            /**
+             * @description The conflicted paths (at most 100; `conflicts_truncated` beyond, or
+             *     when paths an AI agent is not given were left out).
+             */
             conflicts: string[];
             conflicts_truncated: boolean;
             /** @description The merge request's current head (`null` before its first version). */
@@ -5076,6 +5084,7 @@ export interface components {
              *     status but the two decisions means "unknown".
              */
             status: string;
+            withheld?: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description A move as it was written. */
         MoveBody: {

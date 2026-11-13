@@ -1813,7 +1813,7 @@
             "type": "string"
           },
           "conflicts": {
-            "description": "The conflicted paths both change (at most 100;\n`conflicts_truncated` beyond).",
+            "description": "The conflicted paths both change (at most 100;\n`conflicts_truncated` beyond, or when paths an AI agent is not\ngiven were left out).",
             "items": {
               "type": "string"
             },
@@ -1950,6 +1950,17 @@
           },
           "scan": {
             "$ref": "#/components/schemas/ConflictScanBody"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "For an AI agent (plan 06 D-5): the conflicted paths of confidential\ndocuments left out of `predictions` (absent when none was)."
+              }
+            ]
           }
         },
         "required": [
@@ -2527,7 +2538,7 @@
             "type": "string"
           },
           "files": {
-            "description": "Changed files of such documents (a diff's or a merge request's).",
+            "description": "Changed files of such documents (a diff's or a merge request's),\nor their paths among a merge request's conflicts.",
             "minimum": 0,
             "type": "integer"
           },
@@ -6430,7 +6441,7 @@
             ]
           },
           "conflicts": {
-            "description": "The conflicted paths (at most 100; `conflicts_truncated` beyond).",
+            "description": "The conflicted paths (at most 100; `conflicts_truncated` beyond, or\nwhen paths an AI agent is not given were left out).",
             "items": {
               "type": "string"
             },
@@ -6465,6 +6476,17 @@
           "status": {
             "description": "`unchecked`, `checking`, `can_be_merged`, `cannot_be_merged` or\n`check_failed`. Only `can_be_merged` lets a merge go ahead; every\nstatus but the two decisions means \"unknown\".",
             "type": "string"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "For an AI agent (plan 06 D-5): the conflicted paths of confidential\ndocuments left out (absent when none was)."
+              }
+            ]
           }
         },
         "required": [
