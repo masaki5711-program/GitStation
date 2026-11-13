@@ -18,7 +18,12 @@
 --
 -- Lock impact: ACCESS EXCLUSIVE on forge.groups for the ALTER, the CHECK
 -- validation (one scan of a small table) and the trigger swap, until
--- COMMIT. Accepted: groups is small and this runs once at deploy.
+-- COMMIT. Accepted: groups is small and this runs once at deploy. The
+-- wait for that lock is bounded by the migrator connection's session
+-- lock_timeout (database.lock_timeout, options::connect_options): a busy
+-- table fails the migration (FG-DB-0003 sql_failed) instead of queueing
+-- every reader of groups behind the ALTER. (A `SET LOCAL lock_timeout`
+-- here is refused by the root migrations gate: only role hand-overs.)
 
 ALTER TABLE forge.groups ADD COLUMN visibility text NOT NULL DEFAULT 'internal'
     CONSTRAINT groups_visibility CHECK (visibility IN ('private', 'internal'));

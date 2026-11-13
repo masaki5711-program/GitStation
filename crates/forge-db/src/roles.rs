@@ -201,45 +201,68 @@ macro_rules! chain_visibility_columns {
 /// strict ancestor. Their chains are walked upwards (`above`, capped at $3
 /// steps like `chain`) from the memberships, which the user indexes
 /// (`group_members_user`, `project_members_user`) find; the anchor's
-/// subtree is never scanned.
+/// subtree is never scanned. Both CTEs are `UNION` (deduplicated): many
+/// memberships below one group share their ancestors, which are walked
+/// once per step instead of once per membership.
+///
+/// A `parent_id` cycle or a chain past the cap is reported by `chain` (its
+/// `truncated` column, `FG-DB-0018` in [`fold_chain`]) before the result
+/// is used; `above` has no such signal and only stops at the cap, so a
+/// cycle that does not touch the anchor's own chain is not detected here.
+///
+/// The `project` arm (a project has nothing below it) leaves the walk out
+/// and answers `false`; the namespace anchor also skips it when the anchor
+/// is a project namespace.
 macro_rules! access_sql {
+    (project, $anchor:literal) => {
+        concat!(
+            "WITH RECURSIVE ",
+            chain_cte!($anchor),
+            " SELECT ",
+            chain_role_columns!(),
+            ", ",
+            chain_visibility_columns!(),
+            ", false AS has_visible_descendant FROM chain c ORDER BY c.step"
+        )
+    };
     ($anchor:literal) => {
         concat!(
             "WITH RECURSIVE ",
             chain_cte!($anchor),
             ", member_ns (id) AS ( \
                SELECT n.id FROM forge.group_members m \
-                 JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
-                 JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = m.group_id \
+               JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
+               JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = m.group_id \
                WHERE m.user_id = $2 \
-               UNION ALL \
+               UNION \
                SELECT n.id FROM forge.project_members m \
-                 JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
-                 JOIN forge.projects p ON p.id = m.project_id AND p.deleted_at IS NULL \
-                 JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = m.project_id \
+               JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
+               JOIN forge.projects p ON p.id = m.project_id AND p.deleted_at IS NULL \
+               JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = m.project_id \
                WHERE m.user_id = $2), \
-             above (id, parent_id, step) AS ( \
+               above (id, parent_id, step) AS ( \
                SELECT n.id, n.parent_id, 1 FROM forge.namespaces n \
                WHERE n.id IN (SELECT id FROM member_ns) \
-               UNION ALL \
+               AND (SELECT kind FROM chain WHERE step = 1) <> 'project' \
+               UNION \
                SELECT n.id, n.parent_id, a.step + 1 \
                FROM forge.namespaces n JOIN above a ON n.id = a.parent_id \
                WHERE a.step < $3) \
-             SELECT ",
+               SELECT ",
             chain_role_columns!(),
             ", ",
             chain_visibility_columns!(),
             ", EXISTS (SELECT 1 FROM above a \
                WHERE a.parent_id = (SELECT id FROM chain WHERE step = 1)) \
                AS has_visible_descendant \
-             FROM chain c ORDER BY c.step"
+               FROM chain c ORDER BY c.step"
         )
     };
 }
 
 const ACCESS_BY_GROUP: &str = access_sql!("kind = 'group' AND owner_id = $1");
 const ACCESS_BY_NAMESPACE: &str = access_sql!("id = $1");
-const ACCESS_BY_PROJECT: &str = access_sql!("kind = 'project' AND owner_id = $1");
+const ACCESS_BY_PROJECT: &str = access_sql!(project, "kind = 'project' AND owner_id = $1");
 
 /// One access row: `step`, `truncated`, `role`, `kind`, `visibility`,
 /// `has_visible_descendant`.

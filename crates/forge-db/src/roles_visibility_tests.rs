@@ -479,3 +479,75 @@ async fn a_chain_beyond_the_cap_is_membership_data_invalid() {
     );
     t.drop_now().await;
 }
+
+/// Review MEDIUM: a user with ~2000 memberships below one deep group. The
+/// walk shares the ancestors (UNION) and stays fast; the read pool's
+/// statement timeout is never near. Bulk rows are written as superuser
+/// with the row triggers off (no command writes 2000 groups quickly; this
+/// database is dropped).
+#[tokio::test]
+async fn two_thousand_memberships_below_a_deep_group_stay_fast() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await.user_id;
+    let bob = user(&t, "bob").await.user_id;
+    let top = group(&t, "d1", None, alice).await;
+    let other = group(&t, "other", None, alice).await;
+    let top_id = top.group_id;
+    let mut leaf = top;
+    for depth in 2..=10 {
+        leaf = group(&t, &format!("d{depth}"), Some(&leaf), alice).await;
+    }
+    t.exec_superuser(&format!(
+        "ALTER TABLE forge.groups DISABLE TRIGGER USER; \
+         ALTER TABLE forge.namespaces DISABLE TRIGGER USER; \
+         ALTER TABLE forge.group_members DISABLE TRIGGER USER; \
+         WITH g AS (INSERT INTO forge.groups (display_name) \
+           SELECT 'Bulk ' || i FROM generate_series(1, 2000) AS i RETURNING id) \
+         INSERT INTO forge.namespaces (parent_id, kind, owner_id, segment, full_path, depth) \
+           SELECT p.id, 'group', g.id, 'b' || g.id, p.full_path || '/b' || g.id, p.depth + 1 \
+           FROM g CROSS JOIN forge.namespaces p WHERE p.id = {leaf}; \
+         INSERT INTO forge.group_members (group_id, user_id, role) \
+           SELECT n.owner_id, {bob}, 'guest' FROM forge.namespaces n \
+           WHERE n.parent_id = {leaf} AND n.kind = 'group'; \
+         ALTER TABLE forge.groups ENABLE TRIGGER USER; \
+         ALTER TABLE forge.namespaces ENABLE TRIGGER USER; \
+         ALTER TABLE forge.group_members ENABLE TRIGGER USER",
+        leaf = leaf.namespace_id.get(),
+        bob = bob.get(),
+    ))
+    .await;
+    let mut su = t.superuser().await;
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM forge.group_members WHERE user_id = $1")
+        .bind(bob.get())
+        .fetch_one(&mut su)
+        .await
+        .expect("count");
+    assert_eq!(n, 2000);
+    drop(su);
+
+    let started = std::time::Instant::now();
+    assert!(
+        load_group_access(&t.db, top_id, bob)
+            .await
+            .expect("top")
+            .has_visible_descendant
+    );
+    assert!(
+        load_group_access(&t.db, leaf.group_id, bob)
+            .await
+            .expect("leaf")
+            .has_visible_descendant
+    );
+    assert!(
+        !load_group_access(&t.db, other.group_id, bob)
+            .await
+            .expect("other")
+            .has_visible_descendant
+    );
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_secs(5),
+        "three loads took {took:?}"
+    );
+    t.drop_now().await;
+}
