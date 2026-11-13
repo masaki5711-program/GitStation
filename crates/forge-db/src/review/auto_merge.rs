@@ -1,5 +1,5 @@
 //! Auto-merge's rows (M4 C9, ADR-0017 Amendment 2026-11-13; migration
-//! 20261214100000): `forge.project_auto_merge` (a project's `merge.auto`
+//! 20261215100000): `forge.project_auto_merge` (a project's `merge.auto`
 //! and emergency stop; no row = `full`, not stopped),
 //! `forge.auto_merge_instance` (the instance's emergency stop) and
 //! `forge.auto_merge_states` (what auto-merge did with each open merge

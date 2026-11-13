@@ -779,7 +779,7 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 
-# ── M4 C9 (20261214100000, ADR-0017 Amendment 2026-11-13): auto-merge — a
+# ── M4 C9 (20261215100000, ADR-0017 Amendment 2026-11-13): auto-merge — a
 # project's mode and emergency stop, the instance's emergency stop, and what
 # auto-merge did with each open merge request; a person's changes are
 # audited by the command ──

@@ -10335,6 +10335,192 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        }
+      ],
+      "examples": [
+        "gstn auto-merge status --project 7 --json"
+      ],
+      "name": "auto-merge status",
+      "output": {
+        "required": [
+          "project_id",
+          "mode",
+          "acts",
+          "mode_by",
+          "mode_at",
+          "project_stop",
+          "instance_stop",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/auto-merge"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's auto-merge: its merge.auto (off, reserve, conditional, full) and the project's and the instance's emergency stop (as the repository browse API)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request number.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn auto-merge mr --project 7 --iid 12 --json"
+      ],
+      "name": "auto-merge mr",
+      "output": {
+        "required": [
+          "iid",
+          "mode",
+          "acts",
+          "stop",
+          "auto_merge"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/auto-merge"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "What auto-merge did with a merge request: queued, waiting (for what), held, or stopped with its class, reason, the forge/risk rule or check behind it and FG-REVIEW-0026 / 0027."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn auto-merge stop --project 7"
+      ],
+      "name": "auto-merge stop",
+      "output": {
+        "required": [
+          "project_id",
+          "mode",
+          "acts",
+          "mode_by",
+          "mode_at",
+          "project_stop",
+          "instance_stop",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/auto-merge/stop"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Emergency stop of the project's auto-merge: nothing is queued automatically and queued auto-merge entries wait; people still merge (people only; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn auto-merge resume --project 7"
+      ],
+      "name": "auto-merge resume",
+      "output": {
+        "required": [
+          "project_id",
+          "mode",
+          "acts",
+          "mode_by",
+          "mode_at",
+          "project_stop",
+          "instance_stop",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/auto-merge/resume"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Resume the project's auto-merge (people only; Maintainer)."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn auto-merge instance-stop"
+      ],
+      "name": "auto-merge instance-stop",
+      "output": {
+        "required": [
+          "stop"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/admin/auto-merge/stop"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Emergency stop of auto-merge on the whole instance (people only; an administrator, a token needs admin)."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn auto-merge instance-resume"
+      ],
+      "name": "auto-merge instance-resume",
+      "output": {
+        "required": [
+          "stop"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/admin/auto-merge/resume"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Resume auto-merge on the instance (people only; an administrator, a token needs admin)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         },
         {
           "description": "Only this branch (main or refs/heads/main).",

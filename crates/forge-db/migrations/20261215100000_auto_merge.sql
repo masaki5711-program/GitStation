@@ -117,4 +117,4 @@ ALTER TABLE forge.merge_request_merges RENAME CONSTRAINT merge_request_merges_cr
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261214100000, "guarded_changes": []}');
+    '{"version": 20261215100000, "guarded_changes": []}');
