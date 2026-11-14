@@ -26,6 +26,7 @@ import { ConditionsPanel } from '../../../features/mr/ConditionsPanel';
 import { DiscussionThread, threadElementId } from '../../../features/mr/DiscussionThread';
 import { MrChanges } from '../../../features/mr/MrChanges';
 import { MrSidePanel } from '../../../features/mr/MrSidePanel';
+import { AutoMergeLine } from '../../../features/mr/AutoMergeLine';
 import { QueueSection } from '../../../features/mr/QueueControl';
 import { Announcer } from '../../../features/mr/announce';
 import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
@@ -313,6 +314,7 @@ function Overview({
   return (
     <>
       <ConditionsPanel projectId={projectId} iid={mr.iid} sourceBranch={mr.source_branch} />
+      <AutoMergeLine projectId={projectId} iid={mr.iid} open={mr.state === 'open'} />
       <QueueSection projectId={projectId} project={project} iid={mr.iid} open={mr.state === 'open'} />
       <CheckRunsSection projectId={projectId} project={project} iid={mr.iid} head={head} />
       <ConflictsSection projectId={projectId} project={project} iid={mr.iid} />

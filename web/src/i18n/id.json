@@ -624,6 +624,28 @@
       "removeConfirm": "Hapus syarat",
       "removed": "Syarat merge {{pattern}} dihapus."
     },
+    "autoMerge": {
+      "title": "Merge otomatis",
+      "intro": "Saat merge request dapat digabung, merge otomatis GitStation memasukkannya ke antrean merge dan menggabungkannya bila pengujian antrean hijau. Persetujuan dan aturan cabang terlindungi tetap berlaku.",
+      "mode": {
+        "off": "Mati (orang yang menggabungkan)",
+        "reserve": "Hanya reservasi (orang menekan \"Gabung saat siap\")",
+        "conditional": "Bersyarat (perubahan autentikasi, migrasi, atau konfigurasi menunggu orang)",
+        "full": "Sepenuhnya otomatis (bawaan proyek baru)"
+      },
+      "current": "Mode saat ini: {{mode}}",
+      "modeLabel": "Mode merge otomatis",
+      "stopsOnly": "Merge otomatis hanya berhenti bila perubahan berpotensi merusak program, menghapus data basis data, membocorkan rahasia, atau mengubah kode yang berjalan di PC pengembang, dan saat penghentian darurat. Peringatan tidak menghentikannya.",
+      "save": "Simpan mode",
+      "saved": "Mode sekarang \"{{mode}}\".",
+      "ownerOnly": "Hanya Owner proyek yang dapat mengubah mode (masuk lewat web).",
+      "stop": "Hentikan darurat merge otomatis",
+      "resume": "Lanjutkan merge otomatis",
+      "stopped": "Merge otomatis dihentikan. Merge request otomatis di antrean menunggu. Orang tetap dapat menggabungkan.",
+      "resumed": "Merge otomatis berjalan lagi.",
+      "projectStopped": "Merge otomatis proyek ini sedang dihentikan darurat (sejak {{at}}).",
+      "instanceStopped": "Administrator menghentikan merge otomatis untuk semua (sejak {{at}})."
+    },
     "docLint": {
       "title": "Pemeriksaan dokumen selama migrasi",
       "intro": "Referensi rusak antar dokumen adalah error di pemeriksaan forge/doc-lint. Selama dokumen dipindahkan ke GitStation, Anda dapat menjadikannya peringatan sampai suatu tanggal. Setelah tanggal itu, otomatis menjadi error lagi.",
@@ -1520,6 +1542,42 @@
       "direct": "Perubahan di-commit ke {{branch}}.",
       "mrFailed": "Merge request tidak dapat dibuka: {{message}}",
       "openMr": "Buka merge request"
+    }
+  },
+  "autoMerge": {
+    "label": "Merge otomatis:",
+    "why": {
+      "instance_stopped": "administrator menghentikan merge otomatis untuk semua.",
+      "project_stopped": "merge otomatis proyek ini sedang dihentikan darurat.",
+      "data_loss": "dihentikan: perubahan berpotensi menghapus data basis data ({{detail}}).",
+      "leak": "dihentikan: perubahan berpotensi membocorkan data pribadi atau rahasia ({{detail}}).",
+      "developer_pc": "dihentikan: perubahan menyentuh kode yang berjalan di PC pengembang (.claude, CLAUDE.md, .mcp.json, submodul) ({{detail}}).",
+      "breakage_check": "dihentikan: pemeriksaan wajib {{detail}} merah.",
+      "breakage_queue": "dihentikan: merge request ini sendiri merah di antrean merge.",
+      "breakage_risk": "dihentikan: perubahan berpotensi menghapus sebagian besar kode ({{detail}}).",
+      "not_assessed": "dihentikan: risiko perubahan tidak dapat diperiksa (forge/risk).",
+      "draft": "menunggu: ini masih draf.",
+      "risk_pending": "menunggu pemeriksaan risiko (forge/risk).",
+      "approvals": "menunggu persetujuan.",
+      "protected_path": "menunggu: menyentuh jalur yang diputuskan orang (autentikasi, migrasi, konfigurasi).",
+      "conflict": "menunggu: bentrok dengan cabang tujuan.",
+      "waiting": "menunggu syarat merge terpenuhi.",
+      "held": "seseorang mengeluarkannya dari antrean merge, jadi versi ini tidak digabung otomatis.",
+      "queued": "di antrean merge; digabung bila pengujian hijau.",
+      "queued_warning": "di antrean merge dengan peringatan; digabung bila pengujian hijau.",
+      "queued_by_person": "seseorang memasukkannya ke antrean merge."
+    },
+    "next": {
+      "instance_stopped": "Orang tetap dapat menggabungkan; administrator melanjutkannya.",
+      "project_stopped": "Orang tetap dapat menggabungkan; Maintainer melanjutkannya di pengaturan proyek.",
+      "person_decides": "Perbaiki perubahan, atau minta orang yang sudah memeriksa menekan \"Gabung saat siap\".",
+      "fix_and_push": "Perbaiki lalu push; berlanjut sendiri setelah hijau.",
+      "draft": "Tandai siap bila sudah siap.",
+      "nothing": "Tidak ada yang perlu dilakukan.",
+      "approvals": "Minta peninjau untuk menyetujui.",
+      "merge_when_ready": "Periksa, lalu tekan \"Gabung saat siap\".",
+      "conflict": "Selesaikan bentrok lalu push.",
+      "waiting": "Lihat syarat merge di bawah."
     }
   },
   "mergeQueue": {
