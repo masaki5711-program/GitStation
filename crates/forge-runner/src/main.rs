@@ -21,7 +21,7 @@ use forge_runner::runner::{Runner, HEARTBEAT_EVERY};
 use forge_runner::workspace::Workspace;
 
 /// How long the start-up verification of a GPU runner's model store may
-/// take (every file's sha256; FG-CI-0027 past it).
+/// take (every file's sha256; FG-CI-0030 past it).
 const STARTUP_STORE_CHECK: Duration = Duration::from_secs(3600);
 
 #[derive(Parser)]

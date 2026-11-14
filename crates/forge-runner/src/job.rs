@@ -29,9 +29,9 @@
 //!    masked like the job's output);
 //!    Plan 17 P17-1: a service with `gpu: true` (in a job tagged
 //!    `gpu-eval`) gets the runner host's `[gpu_eval]` CDI devices and its
-//!    model store read-only — verified by digest first (`FG-CI-0027`); on a
+//!    model store read-only — verified by digest first (`FG-CI-0030`); on a
 //!    runner without `[gpu_eval]` the job fails before any container
-//!    (`FG-CI-0026`). The job's own container never gets either;
+//!    (`FG-CI-0029`). The job's own container never gets either;
 //! 7. always: the container removed, the pod removed (`pod rm --force`),
 //!    the job directory removed.
 //!
@@ -106,7 +106,7 @@ pub struct Executor {
     /// `job_id` → the job's fetch URL (the runner's configured server).
     pub fetch_url: Box<dyn Fn(i64) -> Result<String, ForgeError> + Send + Sync>,
     /// Plan 17 P17-1: the runner host's GPU and model store (`None`: no
-    /// GPU here; a service that asks for it fails the job, FG-CI-0026).
+    /// GPU here; a service that asks for it fails the job, FG-CI-0029).
     pub gpu_eval: Option<GpuEval>,
 }
 
@@ -535,24 +535,30 @@ impl Executor {
                     .map_err(|e| start_failed("workspace_unusable").with_source(e))?,
             )
         };
-        // One deadline for the whole container phase (review): the pulls
-        // (part of each create), the services and the script share the
-        // job's timeout.
-        let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_s));
         // Plan 17 P17-1: the model store is what its digests say, before a
-        // service gets it (within the job's time).
+        // service gets it — with its own deadline (review), outside the
+        // job's time.
         if let Some(store) = gpu.and_then(|g| g.model_store.as_ref()) {
             sink.line("verifying the model store (sha256 of every file)");
-            match store.verify(deadline, stop)? {
+            let until = Instant::now() + crate::gpu::VERIFY_TIMEOUT;
+            match store.verify(until, stop)? {
                 Verified::Ok { files, bytes } => {
                     sink.line(&format!(
                         "model store verified: {files} file(s), {bytes} bytes"
                     ));
                 }
                 Verified::Stopped => return Ok(ScriptEnd::Stopped),
-                Verified::TimedOut => return Err(timed_out(timeout_s)),
+                Verified::TimedOut => {
+                    return Err(ForgeError::new(ErrorCode::ModelStoreUnverified)
+                        .with_context("reason", "deadline")
+                        .with_context("timeout_ms", crate::gpu::VERIFY_TIMEOUT.as_millis()))
+                }
             }
         }
+        // One deadline for the whole container phase (review): the pulls
+        // (part of each create), the services and the script share the
+        // job's timeout.
+        let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_s));
         // 6a. The pod and its services.
         let pod = if spec.services().is_empty() {
             None

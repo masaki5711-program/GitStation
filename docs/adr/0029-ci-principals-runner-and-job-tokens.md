@@ -266,9 +266,9 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
      他の Runner での割り当てとコンテナの設定は今と同じ。
   6. **モデル置き場はダイジェストで確かめてから渡す**（Runner の起動のときと、それを渡すジョブのたびに、ジョブの期限の中で）:
      `<path>/forge-models.sha256`（sha256sum の形）の sha256 が設定の `manifest_sha256`、列挙したすべてのファイルがその sha256、
-     列挙の外のファイル・リンク・特殊ファイルが無い、グループ・他人が書けず Runner の利用者のものでもない。違えば FG-CI-0027
+     列挙の外のファイル・リンク・特殊ファイルが無い、グループ・他人が書けず Runner の利用者のものでもない。違えば FG-CI-0030
      （alert）でジョブは失敗し、ポッドもコンテナも作らない（起動のときは Runner が止まる）。
-  7. 求めたのに Runner のホストに `[gpu_eval]` が無ければ FG-CI-0026（warn）。チェックアウト・ポッド・コンテナの前に失敗にし、
+  7. 求めたのに Runner のホストに `[gpu_eval]` が無ければ FG-CI-0029（warn）。チェックアウト・ポッド・コンテナの前に失敗にし、
      GPU 無しで走らせることはしない（`forge/ai-eval` は `error` になり、合格にはならない）。
 - **選ばなかったもの**: `.forge-ci.yml` に装置やパスを書かせる（リポジトリを書ける人がホストの資源を選べてしまう）。ジョブの
   コンテナに GPU を渡す（ジョブのスクリプトは MR の作者のコードで、GPU のドライバの面を広げる）。モデルを毎回レジストリから pull
@@ -276,7 +276,24 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
   （SELinux のラベルは管理者が一度付ける。runbook）。起動のときだけ確かめる — 起動の後の書き換えを見逃す。
 - **既存の Runner への影響**: `[gpu_eval]` の無い Runner・タグ `gpu-eval` の無い Runner は何も変わらない。GPU のジョブは毎回
   モデル置き場の全ファイルの sha256 を読む（数十 GB で数十秒。ジョブの `timeout` に含まれる）。
-- runbook `ci-runner`（「GPU の Runner とモデル置き場」）、FG-CI-0026 GpuUnavailable（新規、warn）、FG-CI-0027 ModelStoreUnverified
+- **レビュー（ci-runner-security-reviewer、2026-11-15）で足したこと**:
+  - **プロジェクトの許可と同時実行の上限**（サーバーの設定）: `ci.gpu_eval_projects`（プロジェクトの id の一覧、既定は空 = どの
+    プロジェクトも使えない）と `ci.gpu_eval_max_running`（1 プロジェクトで同時に動く `gpu-eval` のジョブ、既定 1、1〜16）。
+    一覧に無いプロジェクトの `gpu-eval` のジョブを持つパイプラインは作成のときに `invalid`（FG-CI-0001 `gpu_eval_not_allowed`、
+    ジョブの名前）。取得の文も同じ条件を持つ（一覧に無いプロジェクトのジョブ・上限に達したプロジェクトのジョブは取らない）。
+    GPU の Runner の取得は勧告ロックで 1 つずつにし、数えた上限が並行の取得で破れないようにする。
+  - **モデル置き場の確かめを強める**: 設定の読み込みでパスを一度だけ正規化し（`realpath`）、それを確かめてマウントする。
+    確かめのたびに、パスが正規のままか（`not_canonical`）、上のすべてのディレクトリが root のもので、リンクでなく、グループ・
+    他人が書けないか（`ancestor_unsafe`）を見る。各ファイルは `O_NOFOLLOW` で開き、開いたハンドルの装置・inode が走査で見た
+    ものと同じで、リンクが 1 つであること（`replaced`・`hardlink`）。Runner の利用者だけでなく、その subuid の範囲（ジョブの
+    コンテナの利用者）のファイルも断る（`owner_untrusted`）。**置き場の持ち主は信頼する**（持ち主の権限があれば確かめと読み取りの
+    間に書き換えられる。それ以外の誰も — Runner も、ジョブも — 書けないことを確かめる）。
+  - 確かめには**ジョブの `timeout` と別の期限**（ジョブの前 30 分、起動のとき 1 時間）。超えたら FG-CI-0030 `reason=deadline`
+    （時間切れの FG-CI-0010 ではない）。
+  - **ループバックの共有（受け入れた残り）**: ジョブのコンテナは GPU のサービスとポッドのループバックを共有する。ジョブは
+    Ollama の API（`127.0.0.1:11434`）を呼べ、それが評価ベンチの目的。ジョブが GPU の装置そのものやモデル置き場のファイルに
+    触れることはない。より狭くするなら unix ソケットだけを共有のボリュームで渡す形があり得る（今はしない）。
+- runbook `ci-runner`（「GPU の Runner とモデル置き場」）、FG-CI-0029 GpuUnavailable（新規、warn）、FG-CI-0030 ModelStoreUnverified
   （新規、alert）。
 
 ## Error codes and runbooks affected
@@ -285,6 +302,6 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
 - 2026-11-12: FG-CI-0015 JobIsolationUnsafe（新規、alert。runbook `ci-runner` の「ジョブの切り離し」）。
 - C6: FG-CI-0016 SecretKeyUnavailable（alert）、FG-CI-0017 SecretOnUnprotectedRef、FG-CI-0018 SecretNotDefined（info）、runbook `ci-secrets`（新規）。FG-CI-0019 ArtifactTooLarge（info）、FG-CI-0020 ArtifactTransferFailed（warn、runbook `ci-runner`）。C6 のレビュー: FG-CI-0021 SecretInArtifact（warn、runbook `ci-secrets`）、FG-CI-0022 ArtifactQuotaExceeded（info）。
-- 計画 17 P17-1（2026-11-14）: FG-CI-0026 GpuUnavailable（warn）、FG-CI-0027 ModelStoreUnverified（alert）、FG-CI-0001 に `service_gpu_without_tag`、FG-CI-0008 に `gpu_without_tag`。
+- 計画 17 P17-1（2026-11-14）: FG-CI-0029 GpuUnavailable（warn）、FG-CI-0030 ModelStoreUnverified（alert）、FG-CI-0001 に `service_gpu_without_tag`、FG-CI-0008 に `gpu_without_tag`。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節、P17-1 で「GPU の Runner とモデル置き場」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

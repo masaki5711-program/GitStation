@@ -1,4 +1,4 @@
-# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014、FG-CI-0015、FG-CI-0020、FG-CI-0026、FG-CI-0027。関連: FG-CI-0006、FG-CI-0019、FG-AUTH-0001 / 0003、FG-REPO-0005）
+# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014、FG-CI-0015、FG-CI-0020、FG-CI-0029、FG-CI-0030。関連: FG-CI-0006、FG-CI-0019、FG-AUTH-0001 / 0003、FG-REPO-0005）
 
 M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブの取得の long-poll、心拍とリース、ログ、完了、リースの回収）が
 期待どおりに動かないとき。表 `forge.ci_runners`・`forge.ci_job_tokens`・`forge.ci_log_chunks`・`forge.ci_jobs`（`runner_id`・`lease_until`・
@@ -22,7 +22,7 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
   起動できない、計画 14 C5s）。ジョブのログの最後の行にも同じコード
 - Runner のホストのログに FG-CI-0015（**alert**）: ジョブのコンテナが Runner から切り離されていることを確かめられず、Runner が
   ジョブを取らない（起動しない、または次の取得の前に止まった。ADR-0029 の追記 2026-11-12）
-- Runner のホストのログに FG-CI-0026（GPU を求めたジョブを GPU の無い Runner が取った）・FG-CI-0027（**alert**、GPU の Runner の
+- Runner のホストのログに FG-CI-0029（GPU を求めたジョブを GPU の無い Runner が取った）・FG-CI-0030（**alert**、GPU の Runner の
   モデル置き場がダイジェストと合わない）。計画 17 P17-1、「GPU の Runner とモデル置き場」の節
 
 ## Impact
@@ -198,7 +198,7 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
 
 **試験環境**では、Runner を Docker の上のコンテナとして動かせる（`ops/runner/README.md`。本番では使わない: seccomp を外し、ジョブごとのメモリとプロセス数の上限が効かず、外側のコンテナの上限だけになる）。
 
-### GPU の Runner とモデル置き場（計画 17 P17-1、ADR-0029 の追記 2026-11-14、FG-CI-0026 / FG-CI-0027）
+### GPU の Runner とモデル置き場（計画 17 P17-1、ADR-0029 の追記 2026-11-14、FG-CI-0029 / FG-CI-0030）
 
 評価ベンチ（計画 17 §1.6）のように GPU で Ollama などを動かすジョブのための Runner。**GPU とモデル置き場を渡すのはこの Runner の
 ホストの設定だけ**で、`.forge-ci.yml` はサービスの `gpu: true` で求めるだけ（装置・パスは書けない）。求めてよいのはタグ `gpu-eval` の
@@ -215,7 +215,10 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
    名前を確かめる: `nvidia-ctk cdi list`（例 `nvidia.com/gpu=all`）。
    SELinux が有効なら `sudo setsebool -P container_use_devices on`。
 2. モデル置き場を **Runner の利用者以外の持ち物**で作る（例 `root:root`、ディレクトリ 0755・ファイル 0644。グループ・他人が書ける
-   ものや Runner の利用者のものがあると FG-CI-0027 `writable`）。中身は `models/models.toml` で承認したモデルだけ（Ollama なら
+   ものは FG-CI-0030 `writable`、Runner の利用者とその subuid の範囲のものは `owner_untrusted`、ハードリンクは `hardlink`）。
+   置き場の**上のディレクトリもすべて root のもの・グループと他人が書けない・リンクでない**こと（`/srv` の下に置く。`/tmp` や
+   利用者のホームの下は `ancestor_unsafe`）。パスにシンボリックリンクを挟まない（Runner は読み込みのときに一度だけ解決し、
+   その後に変わると `not_canonical`）。置き場の持ち主（root）は信頼する前提。中身は `models/models.toml` で承認したモデルだけ（Ollama なら
    `OLLAMA_MODELS` の `blobs/`・`manifests/` を写す）。シンボリックリンクは置かない（`link`）。SELinux なら一度だけラベルを付ける:
    `sudo semanage fcontext -a -t container_ro_file_t '/srv/forge-models(/.*)?' && sudo restorecon -R /srv/forge-models`
    （Runner は再ラベルしない）。
@@ -237,14 +240,21 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
    sha256、1 時間まで）を確かめる。
 5. 管理者が Runner にタグ `gpu-eval` を付ける（Runner の管理の画面、RunnerManage。この Runner はタグの無いジョブを取らなくなる）。
 
-**確かめ**: Runner は起動のときと、モデル置き場を渡すジョブのたびに（ジョブの `timeout` の中で）、マニフェストの sha256・列挙した
-全ファイルの sha256・列挙の外のファイルが無いこと・書けないことを確かめる。ジョブのログに `model store verified: <n> file(s)`。
+**プロジェクトの許可**（サーバーの設定、人の承認のあと）: `forge serve` の設定に `ci.gpu_eval_projects = "<プロジェクトの id>,…"`
+（環境変数 `FORGE_CI_GPU_EVAL_PROJECTS`、既定は空 = どのプロジェクトも使えない）と、必要なら `ci.gpu_eval_max_running`
+（`FORGE_CI_GPU_EVAL_MAX_RUNNING`、1 プロジェクトで同時に動く `gpu-eval` のジョブ、既定 1）。一覧に無いプロジェクトの `gpu-eval` の
+ジョブを持つパイプラインは `invalid`（FG-CI-0001 `gpu_eval_not_allowed`、ジョブの名前が出る）。一覧から外したあとに残った
+`pending` のジョブは取られない（10 分で FG-CI-0005。取り消すか、一覧に戻す）。
 
-**FG-CI-0026（warn）**: GPU を求めたジョブを `[gpu_eval]` の無い Runner が取った（タグとホストの設定が食い違う）。ジョブは
+**確かめ**: Runner は起動のときと、モデル置き場を渡すジョブのたびに（ジョブの `timeout` の中で）、マニフェストの sha256・列挙した
+全ファイルの sha256・列挙の外のファイルが無いこと・書けないことを確かめる（ジョブの `timeout` とは別の期限: ジョブの前は 30 分、
+起動のときは 1 時間。超えたら FG-CI-0030 `reason=deadline`）。ジョブのログに `model store verified: <n> file(s)`。
+
+**FG-CI-0029（warn）**: GPU を求めたジョブを `[gpu_eval]` の無い Runner が取った（タグとホストの設定が食い違う）。ジョブは
 チェックアウトの前に失敗。直し方: その Runner のホストに `[gpu_eval]` を設定して再起動するか、GPU の無い Runner からタグ
 `gpu-eval` を外す。その後パイプラインをやり直す。
 
-**FG-CI-0027（alert）**: モデル置き場がダイジェストと合わない。`reason`（`manifest_digest`・`file_digest`・`unlisted_file`・
+**FG-CI-0030（alert）**: モデル置き場がダイジェストと合わない。`reason`（`manifest_digest`・`file_digest`・`unlisted_file`・
 `missing_file`・`link`・`writable`・`not_regular`・`unreadable` など）と `file` を見る。読み取りだけで確かめる:
 `sha256sum /srv/forge-models/forge-models.sha256`、`cd /srv/forge-models && sha256sum -c --quiet forge-models.sha256`、
 `find /srv/forge-models -type l -o ! -type f ! -type d`、`find /srv/forge-models -perm /022 -o -user <Runner の利用者>`。

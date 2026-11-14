@@ -93,6 +93,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // a bad file stops the start.
     let ci_secret_keys = cfg.ci.secret_keys()?.map(Arc::new);
     let artifact_quota = cfg.ci.artifact_quota_bytes;
+    // Plan 17 P17-1: the projects that may use the GPU runner.
+    let gpu_eval = cfg.ci.gpu_eval.clone(); // clone: moved into the pipelines
     block_on(async {
         let smart_http = smart_http(storage, &cfg.git_http, cfg.git_pack)?;
         forge_git::version::detect(&smart_http.git).await?;
@@ -188,10 +190,12 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     )),
                 );
                 // M4 C6: the artifact files under the storage root.
-                let pipelines = pipelines.with_artifacts(
-                    forge_pipelines::artifacts::ArtifactStore::new(smart_http.storage.path())
-                        .with_quota(artifact_quota),
-                );
+                let pipelines = pipelines
+                    .with_artifacts(
+                        forge_pipelines::artifacts::ArtifactStore::new(smart_http.storage.path())
+                            .with_quota(artifact_quota),
+                    )
+                    .with_gpu_eval(gpu_eval);
                 match &ci_secret_keys {
                     Some(keys) => pipelines.with_secret_keys(Arc::clone(keys)),
                     None => pipelines,

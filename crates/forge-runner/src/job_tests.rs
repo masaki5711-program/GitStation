@@ -1381,6 +1381,7 @@ fn model_store(dir: &std::path::Path) -> crate::gpu::ModelStore {
     std::fs::write(dir.join(crate::gpu::MANIFEST), &manifest).unwrap();
     crate::gpu::ModelStore {
         refuse_own_files: false,
+        check_ancestors: false,
         ..crate::gpu::ModelStore::new(dir.to_path_buf(), "/models".to_owned(), hash(&manifest))
     }
 }
@@ -1394,7 +1395,7 @@ fn gpu_setup(fake: &Arc<Fake>, store: &std::path::Path) -> Setup {
     s
 }
 
-/// FG-CI-0026: a service asks for the GPU on a runner whose host has none
+/// FG-CI-0029: a service asks for the GPU on a runner whose host has none
 /// (not the `gpu-eval` runner): the job fails before any container, pod or
 /// checkout — never a run without it.
 #[test]
@@ -1475,7 +1476,7 @@ fn job_container_has_no_gpu() {
     assert!(log.contains("model store verified: 1 file(s)"), "{log}");
 }
 
-/// FG-CI-0027: a model store that differs from its digests fails the job
+/// FG-CI-0030: a model store that differs from its digests fails the job
 /// before any pod or container (the service never sees it).
 #[test]
 fn a_changed_model_store_fails_the_job_before_any_container() {

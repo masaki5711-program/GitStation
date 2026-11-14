@@ -33,6 +33,45 @@ fn request(branch: &str, source: Source) -> PipelineRequest {
     }
 }
 
+/// Plan 17 P17-1 (review): a `gpu-eval` job of a project the policy does
+/// not list makes the pipeline `invalid` (`gpu_eval_not_allowed`, the job
+/// named); a listed project, or a plan without such a job, is unchanged.
+#[test]
+fn a_gpu_eval_job_of_an_unlisted_project_is_an_invalid_pipeline() {
+    let job = |name: &str, tags: &[&str]| db::NewCiJob {
+        name: name.to_owned(),
+        stage: "test".to_owned(),
+        wave: 0,
+        needs: Vec::new(),
+        image: image(),
+        timeout_s: 600,
+        tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+        secrets: Vec::new(),
+    };
+    let planned = || db::Planned::Jobs(vec![job("unit", &[]), job("bench", &["gpu-eval"])]);
+    let none = forge_core::config::GpuEvalPolicy::default();
+    match gpu_eval_refused(planned(), 7, &none) {
+        db::Planned::Invalid(problems) => {
+            assert_eq!(problems.len(), 1);
+            assert_eq!(problems[0].reason, "gpu_eval_not_allowed");
+            assert_eq!(problems[0].subject.as_deref(), Some("bench"));
+        }
+        other @ (db::Planned::Jobs(_) | db::Planned::Error) => panic!("{other:?}"),
+    }
+    let listed = forge_core::config::GpuEvalPolicy {
+        projects: vec![7],
+        max_running_per_project: 1,
+    };
+    assert!(
+        matches!(gpu_eval_refused(planned(), 7, &listed), db::Planned::Jobs(j) if j.len() == 2)
+    );
+    let plain = db::Planned::Jobs(vec![job("unit", &["linux"])]);
+    assert!(matches!(
+        gpu_eval_refused(plain, 7, &none),
+        db::Planned::Jobs(_)
+    ));
+}
+
 fn image() -> String {
     format!("registry.internal/rust@sha256:{}", "a".repeat(64))
 }

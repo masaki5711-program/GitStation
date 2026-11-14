@@ -112,7 +112,7 @@ pub struct RunnerConfig {
     pub work_dir_max_bytes: Option<u64>,
     /// Plan 17 P17-1: the GPU and the model store a service of a
     /// `gpu-eval` job may get (`None`: this runner has no GPU; a service
-    /// that asks fails with FG-CI-0026).
+    /// that asks fails with FG-CI-0029).
     pub gpu_eval: Option<GpuEval>,
 }
 
@@ -301,7 +301,17 @@ impl RunnerConfig {
     /// Read and check the file at `path`.
     pub fn load(path: &Path) -> Result<Self, ForgeError> {
         let text = std::fs::read_to_string(path).map_err(|_| invalid("config", "unreadable"))?;
-        Self::parse(&text)
+        let mut cfg = Self::parse(&text)?;
+        // Plan 17 P17-1 (review): the model store's path resolved once —
+        // what is verified and mounted — and the directories above it
+        // checked now (FG-CI-0030 otherwise).
+        if let Some(gpu) = cfg.gpu_eval.as_mut() {
+            if let Some(store) = gpu.model_store.as_mut() {
+                *store = store.canonical()?;
+                store.check_ancestors()?;
+            }
+        }
+        Ok(cfg)
     }
 
     /// The runner's token: `FORGE_RUNNER_TOKEN` (`env`), else the token file.
@@ -490,7 +500,7 @@ mod tests {
         assert_eq!(gpu.devices, ["nvidia.com/gpu=all"]);
         let ms = gpu.model_store.expect("store");
         assert_eq!(ms.target, "/models");
-        assert!(ms.refuse_own_files);
+        assert!(ms.refuse_own_files && ms.check_ancestors);
         let path = format!("path = \"{store}\"");
         for (text, key, want) in [
             (

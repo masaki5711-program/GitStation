@@ -165,7 +165,7 @@ impl Pipelines {
         let runner = runner_of(proof.principal(), Action::RunnerJobRequest)?;
         let deadline = Instant::now() + wait.min(LONG_POLL_MAX);
         loop {
-            if let Some(claimed) = lease::claim(&self.db, runner).await? {
+            if let Some(claimed) = lease::claim_with(&self.db, runner, &self.gpu_eval).await? {
                 let secrets = match self.release_secrets(&claimed).await {
                     Ok(secrets) => secrets,
                     // Cancelled between the claim and the release: nothing
