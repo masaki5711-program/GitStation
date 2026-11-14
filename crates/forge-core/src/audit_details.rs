@@ -2,6 +2,7 @@
 //! (no email, employee number, external id, display name, IP).
 
 use crate::approval::ApprovalRuleChange;
+use crate::auto_merge::AutoMergeChange;
 use crate::checks::CheckRunChange;
 use crate::doc_lint_migration::DocLintMigrationChange;
 use crate::event_type::EventType;
@@ -412,6 +413,11 @@ pub enum AuditDetails {
     /// removed it, or paused / resumed a queue (resource the project, no
     /// event). Shapes: [`MergeQueueChange::to_value`].
     MergeQueue(MergeQueueChange),
+    /// M4 C9 (ADR-0017 Amendment 2026-11-13): a person changed a project's
+    /// `merge.auto` or turned an emergency stop on or off (resource the
+    /// project or the instance, no event). Shapes:
+    /// [`AutoMergeChange::to_value`].
+    AutoMerge(AutoMergeChange),
     /// M4 C6: a Maintainer set or deleted a CI variable (resource the
     /// project, no event; never the value). Shapes:
     /// [`CiVariableChange::to_value`].
@@ -593,6 +599,7 @@ impl AuditDetails {
             Self::Pipeline(change) => change.action(),
             Self::Runner(change) => change.action(),
             Self::MergeQueue(change) => change.action(),
+            Self::AutoMerge(change) => change.action(),
             Self::CiVariable(change) => change.action(),
             Self::Deploy(change) => change.action(),
         }
@@ -657,6 +664,7 @@ impl AuditDetails {
             | Self::Pipeline(_)
             | Self::Runner(_)
             | Self::MergeQueue(_)
+            | Self::AutoMerge(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => None,
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
@@ -1083,6 +1091,7 @@ impl AuditDetails {
             Self::Pipeline(change) => change.to_value(),
             Self::Runner(change) => change.to_value(),
             Self::MergeQueue(change) => change.to_value(),
+            Self::AutoMerge(change) => change.to_value(),
             Self::CiVariable(change) => change.to_value(),
             Self::Deploy(change) => change.to_value(),
         }
@@ -1171,6 +1180,7 @@ impl AuditDetails {
             | Self::Pipeline(_)
             | Self::Runner(_)
             | Self::MergeQueue(_)
+            | Self::AutoMerge(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => self.to_value(),
         }

@@ -158,6 +158,8 @@ pub mod ci_variables;
 pub mod deploy;
 // M4 C6: CI artifacts (the rows; the files are forge-pipelines').
 pub mod ci_artifacts;
+// Plan 17 P17-2: the forge/ai-eval check (ADR-0034).
+pub mod ci_ai_eval;
 // ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

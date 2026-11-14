@@ -13,6 +13,8 @@ Checks API（M3 C1、ADR-0024 §10、`docs/api/checks.md`）で、CI や kanflow
 - 結論が変わった報告だけが `check.completed` のイベントを出す（同じ結論の報告を繰り返してもイベントは増えない）。
 - forge 自身のチェック（`forge/spec-drift`、`forge/risk`、`forge/spec-lint`、`forge/spec-trace`、`forge/doc-lint`、`forge/ci-lint`）は
   `forge worker` が MR の版の head に書く。`forge/ci-lint`（計画 14 C1）の読み方は下の F。
+- `forge/ai-eval`（計画 17 P17-2、ADR-0034）は、`.forge-ci.yml` のジョブが成果物 `eval-report.json` を宣言したパイプラインのコミットにだけ
+  `forge worker`（タスク `ci_ai_eval`）が書く。CI のジョブ自身は書けない。`error` の読み方は runbook `ai-eval-bench`。
 
 ## Trigger
 

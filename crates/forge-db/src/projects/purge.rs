@@ -661,6 +661,21 @@ async fn finish_steps(
         "projects.purge.finish.repository_history_imports",
     )
     .await?;
+    // M4 C9: auto-merge's rows of the project.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.auto_merge_states WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.auto_merge_states",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.project_auto_merge WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.project_auto_merge",
+    )
+    .await?;
     // M4 C8: the merge queue — entries reference the batches, the queues,
     // the merge requests and the merge attempts; batches the queues.
     delete_rows(

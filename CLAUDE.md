@@ -56,11 +56,13 @@ optimises for diagnosing failures from artifacts alone (logs with
 8. **On-prem.** No runtime dependency on external services; no secrets in
    source; synthetic data only in tests.
 9. **Dependency direction is one-way:** `forge-web / forge-cli → feature crates
-   → forge-auth / forge-git / forge-db → forge-core → forge-doc → forge-errors`.
-   `forge-doc` is pure (document parsing / fmt / lint; no I/O). The client
-   `forge-client` (`gstn`) is outside this graph: it depends on
-   `forge-errors` and `forge-doc` only and nothing depends on it (ADR-0020,
-   ADR-0026).
+   → forge-auth / forge-git / forge-db → forge-core → forge-agent → forge-ci →
+   forge-doc → forge-errors`. `forge-doc` (document parsing / fmt / lint),
+   `forge-ci` (`.forge-ci.yml` parse / lint / plan) and `forge-agent` (agent
+   part / lock parse, digest, Ed25519 verify, static scan) are pure (no I/O,
+   no DB). The client `forge-client` (`gstn`) is outside this graph: it
+   depends on `forge-errors`, `forge-doc`, `forge-ci` and `forge-agent` only
+   and nothing depends on it (ADR-0020, ADR-0026, ADR-0029, ADR-0032).
 
 ## How to work (the gates the local hooks would enforce)
 

@@ -1,0 +1,31 @@
+[package]
+name = "forge-agent"
+description = "forge agent parts, pure: part.toml and agent.lock.json parse and lint, the order-independent digest, Ed25519 verification and the static scan of hooks and MCP definitions. No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Pure (plan 16 A1, ADR-0032, CLAUDE.md contract 9: forge-core → forge-agent →
+# forge-ci): it reads bytes and returns values — no file, network, clock, DB
+# or async runtime. The dependencies allowed are checked by tests/purity.rs.
+# Used by gstn (`gstn agent verify`) and, from A5, by forge-marketplace.
+[dependencies]
+forge-errors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+sha2.workspace = true
+url.workspace = true
+base64.workspace = true
+# Ed25519 (RFC 8032) verification and, for the publisher, signing from a
+# seed. Already in the tree (rustls, forge-oidc), vetted by cargo deny
+# (ISC-style / MIT / Apache-2.0); no new crate for the signature.
+ring.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -79,7 +79,10 @@ pub(crate) fn decide(
         Credential::Runner(c) => runner(c, action, rule, resource),
         Credential::Job(c) => job(c, action, rule, resource),
         // `authorize()` calls this for the CI credentials only.
-        Credential::Session | Credential::Token(_) | Credential::ActAs(_) => {
+        Credential::Session
+        | Credential::Token(_)
+        | Credential::ActAs(_)
+        | Credential::AutoMerge => {
             Err(ForgeError::new(ErrorCode::Internal).with_context("reason", "not_a_ci_principal"))
         }
     };
@@ -232,6 +235,7 @@ fn job(
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
         | Resource::RunnerJob(_)
+        | Resource::AutoMerge(_)
         | Resource::Deployment(_)
         | Resource::ActAsConfirm(_) => Err(not_found("job_requires_pinned_copy")),
     }

@@ -779,6 +779,25 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 
+# ── M4 C9 (20261215100000, ADR-0017 Amendment 2026-11-13): auto-merge — a
+# project's mode and emergency stop, the instance's emergency stop, and what
+# auto-merge did with each open merge request; a person's changes are
+# audited by the command ──
+[tables.project_auto_merge]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.auto_merge_instance]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.auto_merge_states]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
 # ── 2026-11-12 (20261210100000, ADR-0008 amendment "history import"): the
 # one-time history import allowance of an empty repository, set by the
 # operator CLI and used up by the first accepted push; audited on the project ──

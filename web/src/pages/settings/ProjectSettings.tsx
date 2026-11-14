@@ -23,6 +23,7 @@ import { formatDateTime, roleLabel } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
+import { AutoMergeSection } from './AutoMergeSettings';
 import { DocLintMigrationSection } from './DocLintMigration';
 import { GeneralForm, MoveForm } from './Forms';
 import { IntegrationBindingsSection } from './IntegrationBindings';
@@ -87,6 +88,7 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       <MergingSection projectId={projectId} />
       <ApprovalRulesSection projectId={projectId} canManage={viewer.can_manage} />
       <MergeConditionsSection projectId={projectId} canManage={viewer.can_manage} />
+      <AutoMergeSection projectId={projectId} />
       <DocLintMigrationSection projectId={projectId} />
       <IntegrationBindingsSection project={p} />
       <Section id="move-title" title={t('settings.move.title')}>

@@ -102,6 +102,7 @@ impl World {
         mark: CopyMark,
     ) -> i64 {
         let new = NewPipeline {
+            ai_eval_job: None,
             request: PipelineRequest {
                 project: self.web.project_id,
                 git_ref: RefName::parse("refs/heads/main").expect("ref"),

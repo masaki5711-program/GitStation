@@ -2512,6 +2512,47 @@ fix = "Nothing on the server. For no_open_merge_request / target_missing, open o
 test = "a_head_with_no_open_merge_request_is_neutral_and_not_assessed"
 
 [[error]]
+code = "FG-REVIEW-0026"
+name = "AutoMergeStopped"
+http_status = 409
+severity = "info"
+user_message_ja = "この MR は自動マージを止めました（プログラムの破壊・DB の破壊・機密の流出・開発者の PC で動くコードの変更のおそれ）。MR に出ている理由を読み、直すか人がマージしてください。"
+user_message_en = "Auto-merge stopped for this merge request (it may break the program, destroy database data, leak a secret or change code that runs on developers' PCs). Read the reason on the merge request, then fix it or have a person merge it."
+user_message_id = "Merge otomatis dihentikan untuk merge request ini (berpotensi merusak program, menghapus data basis data, membocorkan rahasia, atau mengubah kode yang berjalan di PC pengembang). Baca alasannya pada merge request, lalu perbaiki atau minta seseorang menggabungkannya."
+cause = "M4 C9 (plan 04 M-5 / M-6, ADR-0017 Amendment 2026-11-13): the auto-merge worker of a project whose `merge.auto` is `full` (or `conditional`) found a merge request it would have added to the merge queue, but one of the stop classes holds on its head: `program_breakage` (a required check or the merge request's own `ci/pipeline` on its merge result concluded red — `required_check_failed` / `pipeline_failed` —, the merge queue's train of the merge request alone was red — `merge_queue_checks_failed` —, or `forge/risk` found a mass deletion or a change too large to assess), `data_loss` (`forge/risk`: an applied migration changed, a destructive statement, a data lifecycle job, a rollback step), `leak` (`forge/risk`: a secret by name or content), `developer_pc` (`forge/risk`: `agent_config` / `submodule_change`), or `not_assessed` (`forge/risk` ended `error` / `action_required`, concluded `failure` without a rule forge knows, or concluded `neutral` naming a not-assessed rule such as `content_not_scanned` or no rule it can read: the head cannot be shown safe). The landing decides forge/risk again for an auto-merge entry: a stop recorded after the enqueue removes it from the queue with this code (`reason=risk_stop`). A `warn` never stops. The stop is recorded on the merge request (`forge.auto_merge_states`, state `stopped`) and shown in one line; nothing was queued. Not a server fault."
+diagnosis = "`forge serve` logs `forge.auto_merge.stopped` (info) once per new stop with `error_code`, `request_id`, `project_id`, `merge_request_id`, `head_sha`, `class`, `reason` and `detail` (the forge/risk rule or the check name). `GET /api/v1/projects/{id}/merge-requests/{iid}/auto-merge` answers the same state; `gstn checks list --project <id> --sha <head>` shows the forge/risk findings. Read (read-only): SELECT * FROM forge.auto_merge_states WHERE merge_request_id = <id>."
+fix = "Nothing on the server. Fix the change (a new head is assessed again; a red check goes green by a fix or a re-run), or have a person press 'merge when ready' after reading the reason: a person's merge is not stopped by auto-merge. The forge/risk rules cannot be lowered by a project."
+test = "each_stop_class_stops_auto_merge"
+
+[[error]]
+code = "FG-REVIEW-0027"
+name = "AutoMergeEmergencyStopped"
+http_status = 409
+severity = "warn"
+user_message_ja = "自動マージは緊急停止中です。止めた人（プロジェクトの Maintainer、またはインスタンスの管理者）が再開するまで、自動ではマージされません。人がマージすることはできます。"
+user_message_en = "Auto-merge is under an emergency stop. Nothing is merged automatically until the person who may (a project Maintainer, or an instance administrator) resumes it. A person can still merge."
+user_message_id = "Merge otomatis sedang dihentikan darurat. Tidak ada yang digabung otomatis sampai orang yang berwenang (Maintainer proyek atau administrator instans) melanjutkannya. Seseorang tetap dapat menggabungkan."
+cause = "M4 C9 (plan 04 M-5 \"緊急停止\", ADR-0017 Amendment 2026-11-13): a project Maintainer (`POST /api/v1/projects/{id}/auto-merge/stop`) or an instance administrator (`POST /api/v1/admin/auto-merge/stop`) turned the emergency stop on. While it is on, the auto-merge worker queues nothing, the merge queue builds no batch from the project's auto-merge entries (they stay queued, paused) and a batch holding one is thrown away before it lands. A person's entries and merges are not stopped. Logged once when the switch is turned on, and named on every merge request it holds (state `stopped`, class `emergency_stop`)."
+diagnosis = "The toggle is audited (`auto_merge.stopped` / `auto_merge.resumed`, actor the person, resource the project or the instance) and logged `forge.auto_merge.emergency_stop` (warn) with `request_id`, `scope` (`project` / `instance`), `project_id` and `user_id`. `GET /api/v1/projects/{id}/auto-merge` shows `project_stopped` / `instance_stopped` with who and when. Read (read-only): SELECT * FROM forge.auto_merge_instance; SELECT * FROM forge.project_auto_merge WHERE stopped_at IS NOT NULL."
+fix = "Follow runbook auto-merge: find why it was stopped (the audit row), fix the cause, then resume (`POST …/auto-merge/resume`; the instance switch by an administrator). Queued auto-merge entries continue from where they were."
+runbook = "auto-merge"
+test = "the_emergency_stop_pauses_auto_merge_and_its_queue_entries"
+
+[[error]]
+code = "FG-REVIEW-0028"
+name = "AutoMergeScanFailed"
+http_status = 503
+severity = "alert"
+user_message_ja = "自動マージの確認に失敗しました。管理者に連絡してください。"
+user_message_en = "Checking merge requests for auto-merge failed. Contact the administrator."
+user_message_id = "Pemeriksaan merge request untuk merge otomatis gagal. Hubungi administrator."
+cause = "M4 C9: the auto-merge worker in `forge serve` could not decide a merge request (reading its facts from the database, its check runs, or the changed paths from git failed or timed out) for longer than one failure streak, so merge requests of `full` / `conditional` projects are not being queued automatically. Nothing was merged or queued by the failed step; people can still merge."
+diagnosis = "`forge serve` logs `forge.auto_merge.scan_failed` (error) with `error_code`, `request_id`, `cause_code` (the underlying FG code: FG-DB-*, FG-GIT-*), `project_id`, `merge_request_id` and `streak`. Look up `cause_code` in the catalog; `forge doctor` shows the database and storage checks."
+fix = "Follow runbook auto-merge: fix the underlying cause (database or git storage, see `cause_code`); the worker retries with backoff and continues by itself. If it must not act meanwhile, turn the instance emergency stop on."
+runbook = "auto-merge"
+test = "a_scan_failure_is_logged_with_its_cause"
+
+[[error]]
 code = "FG-CI-0001"
 name = "CiConfigInvalid"
 http_status = 422
@@ -2519,7 +2560,7 @@ severity = "info"
 user_message_ja = "CI の定義ファイル .forge-ci.yml が規則に合っていません。一覧の行と理由を直してください。"
 user_message_en = "The CI definition file .forge-ci.yml breaks a rule. Fix the lines and reasons listed."
 user_message_id = "Berkas definisi CI .forge-ci.yml melanggar aturan. Perbaiki baris dan alasan yang dicantumkan."
-cause = "The pipeline definition lint (forge_ci::check, plan 14 C1, plan 04 P-1) found a problem in a repository's `.forge-ci.yml`, or a plan for a trigger could not be made (forge_ci::plan). Each problem is `line reason [subject]`; `reason` is stable. Reading (bounded like forge-doc): too_large (over 64 KiB), not_utf8, empty_file, not_a_mapping, and the strict YAML tree's syntax / multiple_documents / yaml_anchor / yaml_alias / yaml_tag / too_deep (nesting over 16) / too_many_keys (over 64 in one mapping) / duplicate_key (also a job name written twice) / key_not_text. Schema (version 1; every key is known): key_unknown, field_missing (version, stages, jobs, stage, image), field_invalid (a wrong type, a duplicate list item, merge_requests not true/false), version_unsupported, stages_empty, stage_name_invalid, stage_duplicate, too_many_stages (over 16), stage_unknown, jobs_empty, too_many_jobs (over 48), job_name_invalid, image_not_pinned (not an OCI reference `[host[:port]/]lowercase/path[:tag]@sha256:<64 hex>`), script_empty, too_many_script_lines (over 200), script_line_invalid (a control character other than tab), script_line_too_long (over 4096 bytes), timeout_missing, timeout_invalid (not `<n>s|m|h`), timeout_too_long (over 4h), tag_invalid, too_many_tags (8), secret_name_invalid (the name is not echoed), too_many_secrets (16), branch_pattern_invalid, too_many_branches (16), artifact_path_invalid (absolute, `..`, `.git`, a glob metacharacter, a backslash, a drive), too_many_artifacts (16); services (plan 14 C5s): too_many_services (2), service_name_invalid (not `[a-z][a-z0-9-]{0,30}`), service_duplicate, field_missing (name, image of a service), image_not_pinned (subject: the service), service_env_invalid (a key not `[A-Za-z_][A-Za-z0-9_]*`, a value that is not text, over 1024 bytes or with a control character; the key and value are not echoed), too_many_service_env (16), service_user_invalid (not a name, uid or uid:gid), service_tmpfs_invalid (not absolute, `/`, `/tmp`, under /proc /sys /dev, `.` / `..`, or a character outside `[A-Za-z0-9._-/]`), too_many_service_tmpfs (4), service_gpu_without_tag (plan 17 P17-1: a service with `gpu: true` in a job whose `tags` lack `gpu-eval`; `gpu` is only `true` / `false`, otherwise field_invalid — a device or a path can never be named here). Across jobs (only on a well-formed file): needs_unknown, needs_duplicate, too_many_needs (16), needs_later_stage, needs_cycle (each job on a cycle), secret_on_unprotected_ref (a job with secrets that runs for merge requests, or for a branch pattern the repository's protected patterns do not cover), secret_protection_unknown (a local check without the protected list: no branch counts as protected; pass `gstn ci lint --protected`). At most 100 problems, then too_many_problems; a subject is cut to 64 characters. Plan: needs_not_in_pipeline (a selected job needs a job the trigger does not run), secret_on_unprotected_ref (a selected job with secrets in a merge request's pipeline or on an unprotected branch: the plan fails rather than drop the secrets). Where: `gstn ci lint` / `gstn ci plan` on the working tree (exit 1) and the check `forge/ci-lint` on a merge request version's head (conclusion `failure`). Not a server fault: the file is the repository's content."
+cause = "The pipeline definition lint (forge_ci::check, plan 14 C1, plan 04 P-1) found a problem in a repository's `.forge-ci.yml`, or a plan for a trigger could not be made (forge_ci::plan). Each problem is `line reason [subject]`; `reason` is stable. Reading (bounded like forge-doc): too_large (over 64 KiB), not_utf8, empty_file, not_a_mapping, and the strict YAML tree's syntax / multiple_documents / yaml_anchor / yaml_alias / yaml_tag / too_deep (nesting over 16) / too_many_keys (over 64 in one mapping) / duplicate_key (also a job name written twice) / key_not_text. Schema (version 1; every key is known): key_unknown, field_missing (version, stages, jobs, stage, image), field_invalid (a wrong type, a duplicate list item, merge_requests not true/false), version_unsupported, stages_empty, stage_name_invalid, stage_duplicate, too_many_stages (over 16), stage_unknown, jobs_empty, too_many_jobs (over 48), job_name_invalid, image_not_pinned (not an OCI reference `[host[:port]/]lowercase/path[:tag]@sha256:<64 hex>`), script_empty, too_many_script_lines (over 200), script_line_invalid (a control character other than tab), script_line_too_long (over 4096 bytes), timeout_missing, timeout_invalid (not `<n>s|m|h`), timeout_too_long (over 4h), tag_invalid, too_many_tags (8), secret_name_invalid (the name is not echoed), too_many_secrets (16), branch_pattern_invalid, too_many_branches (16), artifact_path_invalid (absolute, `..`, `.git`, a glob metacharacter, a backslash, a drive), too_many_artifacts (16); services (plan 14 C5s): too_many_services (2), service_name_invalid (not `[a-z][a-z0-9-]{0,30}`), service_duplicate, field_missing (name, image of a service), image_not_pinned (subject: the service), service_env_invalid (a key not `[A-Za-z_][A-Za-z0-9_]*`, a value that is not text, over 1024 bytes or with a control character; the key and value are not echoed), too_many_service_env (16), service_user_invalid (not a name, uid or uid:gid), service_tmpfs_invalid (not absolute, `/`, `/tmp`, under /proc /sys /dev, `.` / `..`, or a character outside `[A-Za-z0-9._-/]`), too_many_service_tmpfs (4), service_gpu_without_tag (plan 17 P17-1: a service with `gpu: true` in a job whose `tags` lack `gpu-eval`; `gpu` is only `true` / `false`, otherwise field_invalid — a device or a path can never be named here), gpu_eval_not_allowed (plan 17 P17-1, written by forge serve, not the local lint: a job tagged `gpu-eval` in a project the server's `ci.gpu_eval_projects` does not list; subject = the job; ask the administrator to list the project). Across jobs (only on a well-formed file): needs_unknown, needs_duplicate, too_many_needs (16), needs_later_stage, needs_cycle (each job on a cycle), secret_on_unprotected_ref (a job with secrets that runs for merge requests, or for a branch pattern the repository's protected patterns do not cover), secret_protection_unknown (a local check without the protected list: no branch counts as protected; pass `gstn ci lint --protected`). At most 100 problems, then too_many_problems; a subject is cut to 64 characters. Plan: needs_not_in_pipeline (a selected job needs a job the trigger does not run), secret_on_unprotected_ref (a selected job with secrets in a merge request's pipeline or on an unprotected branch: the plan fails rather than drop the secrets), eval_report_declared_twice (plan 17 P17-2: more than one selected job declares the artifact `eval-report.json`; subject: the second job). Where: `gstn ci lint` / `gstn ci plan` on the working tree (exit 1) and the check `forge/ci-lint` on a merge request version's head (conclusion `failure`). Not a server fault: the file is the repository's content."
 diagnosis = "The log event carries `reason` and `line` of the first problem and `problems` (how many). Reproduce with forge_ci::lint on the same bytes (each problem's line, reason and subject); the reasons and bounds are in crates/forge-ci/README.md."
 fix = "Correct `.forge-ci.yml` at the listed line (pin the image by digest, set a timeout of at most 4h, keep secrets on jobs limited to protected branches with merge_requests: false, break the needs cycle). Nothing to change on the server."
 test = "a_pipeline_definition_with_a_cycle_is_ci_config_invalid"
@@ -2853,8 +2894,94 @@ diagnosis = "The log event carries `reason`, `merge_request_id`, `entry_id` (the
 fix = "Nothing on the server: an already queued merge request waits for its turn (remove it first to re-add it); a closed one must be reopened."
 test = "a_merge_request_already_in_the_queue_is_refused"
 
+# ── Plan 16 A1 (ADR-0032): agent parts — forge-agent and `gstn agent verify` ──
+# Numbers follow plan 16 §5; the gaps (0004, 0006, 0008–0012) are registered
+# with the MRs that first raise them (A3–A10).
+
 [[error]]
-code = "FG-CI-0026"
+code = "FG-AGENT-0001"
+name = "PartManifestInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "エージェントの部品の形が正しくありません（part.toml、ファイルの置き場所、種類、大きさ）。部品を直してください。"
+user_message_en = "The agent part is not well-formed (part.toml, file locations, kind or size). Fix the part."
+user_message_id = "Bagian agen tidak berbentuk benar (part.toml, lokasi berkas, jenis, atau ukuran). Perbaiki bagian tersebut."
+cause = "Plan 16 A1 (ADR-0032 §2): forge-agent's part lint refused a part directory or a lock entry. `reason`: `manifest_missing`, `manifest_syntax` (TOML error or an unknown key — nothing is ignored), `manifest_not_utf8`, `slug_invalid`, `kind_unknown`, `version_invalid` (semver), `require_invalid`, `capability_unknown` (exec / network / permissions / fs-write only), `no_files`, `path_not_allowed` (outside `.claude/` and not `CLAUDE.md` / `.mcp.json`, `..`, `.git`, absolute, a drive letter, a per-checkout file such as `.claude/settings.local.json`), `path_characters` (non-ASCII, backslash, colon, control characters, a trailing dot or space), a path not in the canonical case (`.Claude/`, `claude.md`), `path_length`, `duplicate_file` (also two paths that differ only by letter case), `file_missing` (listed, not in the directory), `file_not_declared` (in the directory, not listed), `not_a_regular_file` (a symlink), `too_many_files` (> 200), `too_large` (> 1 MiB), `hook_not_node` (a script under `.claude/hooks/` that is not .js / .cjs / .mjs), `mcp_file_outside_mcp_part`, `file_not_utf8`, `settings_json_invalid`, `mcp_json_invalid`, `json_invalid`. Nothing was published or written."
+diagnosis = "`gstn agent verify --part <dir> --json` lists every problem with its `reason` and `subject` (the path or field). The part's own `part.toml` and directory listing are the input; nothing on the server is involved."
+fix = "Fix the part: put files only under `.claude/` (or `CLAUDE.md`, `.mcp.json` for an mcp part), list every file in `files`, drop symlinks, keep within 200 files and 1 MiB, use a semver `version`."
+test = "manifest_rejects_path_outside_claude_dir"
+
+[[error]]
+code = "FG-AGENT-0002"
+name = "PartSignatureInvalid"
+http_status = 422
+severity = "alert"
+user_message_ja = "エージェントの部品の署名か要約が合いません。改ざんの疑いがあります。この設定を使わず、管理者に連絡してください。"
+user_message_en = "The agent part's signature or digest does not match. It may have been tampered with. Do not use this configuration and contact the administrator."
+user_message_id = "Tanda tangan atau digest bagian agen tidak cocok. Mungkin telah dirusak. Jangan gunakan konfigurasi ini dan hubungi administrator."
+cause = "Plan 16 §2.2 (ADR-0032 §3–§4): a part's Ed25519 signature over its digest did not verify. `reason`: `digest_mismatch` (the digest recomputed from the lock's manifest fields and file hashes differs from the recorded one — the lock or a file was edited), `bad_signature` (the digest was recomputed too, or the signature or key is wrong), `signature_malformed`, `key_revoked` (the signing key was revoked). Signed parts never change after publication, so every case means the configuration is not what the marketplace published."
+diagnosis = "`gstn agent verify --json` names the part (`slug@version`) and key in `subject`. Compare the repository's `.gitstation/agent.lock.json` and `.claude/` with the last builder merge request (`git log -p -- .gitstation .claude`): who changed them and in which merge request. Runbook agent-supply-chain."
+fix = "Follow runbook agent-supply-chain: do not run Claude Code in the working tree, restore `.claude/` and the lock from the last verified commit or regenerate them with the builder, find who changed them; a revoked key means the parts must be re-published and updated."
+runbook = "agent-supply-chain"
+test = "verify_rejects_one_byte_change"
+
+[[error]]
+code = "FG-AGENT-0003"
+name = "SigningKeyUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "エージェントの部品を確かめる鍵がありません。鍵を更新してからもう一度確かめてください。"
+user_message_en = "The key to verify the agent parts is not available. Update the keys and verify again."
+user_message_id = "Kunci untuk memverifikasi bagian agen tidak tersedia. Perbarui kunci lalu verifikasi lagi."
+cause = "Plan 16 §2.2 (ADR-0032 §4): the key list needed to verify a part signature is missing, unreadable or does not name the part's key. `reason`: `keys_missing` (gstn: no `agent-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable`, `keys_invalid` (not the JSON key list, a duplicate or empty kid, a public key that is not 32 bytes of base64), `unknown_key` (the lock names a `key_id` the list does not hold: the local list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The server-side key file (`agent.signing_keys_file`) comes with A3."
+diagnosis = "`gstn agent verify --json`: `reason` and `subject` (the kid). Look at the key list file (`--keys`, or `agent-keys.json` in the gstn configuration directory): which kids it holds and whether it parses. Runbook agent-signing-key."
+fix = "Get the current public keys from the administrator (from A5: `GET /api/v1/agent-keys`) into `agent-keys.json`, then verify again. A kid nobody issued is a tampering sign: runbook agent-supply-chain."
+runbook = "agent-signing-key"
+test = "unknown_key_id_is_signing_key_unavailable"
+
+[[error]]
+code = "FG-AGENT-0005"
+name = "PartCapabilityUndeclared"
+http_status = 422
+severity = "info"
+user_message_ja = "エージェントの部品が、宣言していない能力（コマンドの実行、ネットワーク、権限の設定）を使っているか、検査できない書き方をしています。"
+user_message_en = "The agent part uses a capability it does not declare (running commands, network, permission settings), or code the scan cannot check."
+user_message_id = "Bagian agen menggunakan kemampuan yang tidak dideklarasikan (menjalankan perintah, jaringan, pengaturan izin), atau kode yang tidak dapat diperiksa."
+cause = "Plan 16 §8 (ADR-0032 §5, Amendment 2026-11-14): forge-agent's static scan found, in a part's files: `undeclared_child_process` (`child_process` / `cluster`; a hook command — settings.json `hooks`, another JSON `command`, `hooks:` in Markdown front matter — that is not exactly `node <.claude/… .js of this part>`; a slash command's inline bash `` !` ``; an MCP server with `command`; without the `exec` capability), `undeclared_network` (http / https / net / tls / dgram / dns / undici, `fetch`, `WebSocket`, `XMLHttpRequest`, `EventSource`, an MCP `url`, without `network`), `undeclared_permissions` (`permissions` in settings.json), `undeclared_fs_write` (writeFile, appendFile, createWriteStream, unlink, rename, mkdir, copyFile, symlink, chmod, truncate, rmSync, … without `fs-write`), `settings_key_not_allowed` (a settings.json key other than $schema, hooks, permissions, model, includeCoAuthoredBy, cleanupPeriodDays, outputStyle — statusLine, apiKeyHelper, env … run or change what the scan cannot judge), `hook_target_not_in_part` (a `node` hook naming a script the part does not ship), or `dynamic_code` (code the scan cannot follow: any `\\u` escape; the identifiers eval, Function, Reflect, constructor, binding, _linkedBinding, dlopen, mainModule, createRequire, getBuiltinModule, globalThis, global; `process` not followed by `.`; `import` as a call; a `require` that is not one plain string literal; the modules vm / worker_threads / module / inspector / v8 / wasi). Every file that is not Markdown or JSON is scanned as a script (node runs any extension), as identifiers, so spacing and comments between tokens change nothing. `dynamic_code`, `settings_key_not_allowed` and `hook_target_not_in_part` are refused even when every capability is declared."
+diagnosis = "`gstn agent verify --part <dir> --json`: each problem's `reason` and `subject` (the file; for dynamic_code also the construct)."
+fix = "Declare the capability in part.toml's `capabilities` (the marketplace shows it to everyone who installs the part), or remove the use. For `dynamic_code`, write a plain `require('<name>')`; reword a comment that names a refused construct."
+test = "scan_flags_undeclared_child_process"
+
+[[error]]
+code = "FG-AGENT-0007"
+name = "AgentLockMismatch"
+http_status = 409
+severity = "warn"
+user_message_ja = "リポジトリのエージェントの設定が agent.lock.json と合いません。ビルダーで作り直すか、変更の承認を受けてください。"
+user_message_en = "The repository's agent configuration does not match agent.lock.json. Regenerate it with the builder or get the change approved."
+user_message_id = "Konfigurasi agen repositori tidak cocok dengan agent.lock.json. Buat ulang dengan builder atau minta persetujuan perubahan."
+cause = "Plan 16 §3 (ADR-0032 §6): a managed file (`.claude/**`, `CLAUDE.md`, `.mcp.json`, except per-checkout files) differs from `.gitstation/agent.lock.json`. `reason`: `file_changed` (the file's SHA-256 is not the lock's: edited by hand), `file_missing`, `unmanaged_file` (a managed file the lock does not pin, neither a part's nor `custom`; managed paths match in any letter case — `.Claude/settings.json`, `CLAUDE.MD` — and a tracked per-checkout file such as `.claude/settings.local.json` is managed), `case_collision` (two tracked paths that differ only by letter case), `custom_unverified` (a hand-added `custom` file that can run code — anything but Markdown without hooks or `` !` `` — has no signature or scan; it stays unverified until the builder's approval check, A7), `not_a_regular_file` (a symlink where a managed file is, or a `.claude` that is not a directory), `duplicate_path`, `lock_missing` (managed files without a lock), `lock_unreadable`, `lock_invalid` (not the lock's JSON, an unknown key, a bad hash), `lock_version_unsupported`."
+diagnosis = "`gstn agent verify --json` lists each path with its reason. `git log -p -- <path>` shows who changed it; `git status -- .claude` shows uncommitted edits. Every file is `file_changed` at once after a checkout with `core.autocrlf=true` (LF became CRLF): the check fails closed; check `git config core.autocrlf`."
+fix = "Undo the hand edit (git restore); for line endings set `core.autocrlf=false` (or `.gitattributes` `* -text` for `.claude/`) and check out again; or add the file as `custom` through a builder merge request (a person approves it), or regenerate the configuration with the builder."
+test = "verify_flags_hand_edited_file"
+
+[[error]]
+code = "FG-AGENT-0013"
+name = "McpEndpointNotAllowed"
+http_status = 422
+severity = "info"
+user_message_ja = "MCP の行き先が社内の許可の一覧にありません。社外のサービスにはつなげません。"
+user_message_en = "The MCP endpoint is not on the internal allow-list. External services cannot be connected."
+user_message_id = "Endpoint MCP tidak ada dalam daftar izin internal. Layanan eksternal tidak dapat dihubungkan."
+cause = "Plan 16 §8, contract 8 (on-prem; ADR-0032 §5): a part's `.mcp.json` names an `http(s)://` or `ws(s)://` URL — in `url`, `args`, `env` or anywhere in a server's definition — whose host is not on the allow-list (`mcp_host_not_allowed`; an exact host, or a `.suffix` entry matching a subdomain only). With no list, every URL is refused."
+diagnosis = "`gstn agent verify --part <dir> --mcp-allowed-hosts <a,b> --json`: `subject` is the host refused."
+fix = "Point the MCP server at an internal host on the list, or ask the administrator to add the internal host to the list. External hosts are not allowed."
+test = "mcp_external_host_rejected"
+
+# ── Plan 17 P17-1 (ADR-0029 amendment 2026-11-14): the GPU runner ──
+
+[[error]]
+code = "FG-CI-0029"
 name = "GpuUnavailable"
 http_status = 503
 severity = "warn"
@@ -2868,14 +2995,14 @@ runbook = "ci-runner"
 test = "gpu_denied_on_untagged_runner"
 
 [[error]]
-code = "FG-CI-0027"
+code = "FG-CI-0030"
 name = "ModelStoreUnverified"
 http_status = 503
 severity = "alert"
 user_message_ja = "CI の Runner のモデル置き場が、登録されたダイジェストと一致しませんでした。ジョブは実行されていません。管理者に連絡してください。"
 user_message_en = "The CI runner's model store does not match its registered digests. The job did not run. Contact the administrator."
 user_message_id = "Penyimpanan model runner CI tidak cocok dengan digest yang terdaftar. Tugas tidak dijalankan. Hubungi administrator."
-cause = "Plan 17 P17-1 (ADR-0029 amendment 2026-11-14): the GPU runner hands its model store (`[gpu_eval.model_store]` `path`) read-only to a service that asked for the GPU, and first verifies it — at the runner's start and before every such job: `<path>/forge-models.sha256` (sha256sum lines `<hex>  <relative path>`) must have the configured `manifest_sha256` (`reason=manifest_digest`, with `expected` / `actual`; `manifest_missing`, `manifest_invalid` with `line` or `file`), every listed file must exist (`missing_file`) and have its sha256 (`file_digest`, with `file`, `expected`, `actual`), nothing else may be in the store (`unlisted_file`, `link` — a symbolic link —, `not_regular`, `name_invalid`, `too_deep`, `too_many_files`), nothing may be writable by group or others or owned by the runner's own user (`writable`, with `file`), and it must be readable (`unreadable`, `not_a_directory`). At the start a verification longer than one hour is `reason=deadline`. Someone changed or added a model file without updating the manifest and the runner's configuration, the store's ownership or modes are wrong, or the store was tampered with. The job fails before any pod or container: no service ever sees an unverified model; at the start the runner exits."
+cause = "Plan 17 P17-1 (ADR-0029 amendment 2026-11-14): the GPU runner hands its model store (`[gpu_eval.model_store]` `path`) read-only to a service that asked for the GPU, and first verifies it — at the runner's start and before every such job: `<path>/forge-models.sha256` (sha256sum lines `<hex>  <relative path>`) must have the configured `manifest_sha256` (`reason=manifest_digest`, with `expected` / `actual`; `manifest_missing`, `manifest_invalid` with `line` or `file`), every listed file must exist (`missing_file`) and have its sha256 (`file_digest`, with `file`, `expected`, `actual`), nothing else may be in the store (`unlisted_file`, `link` — a symbolic link —, `not_regular`, `name_invalid`, `too_deep`, `too_many_files`), nothing may be writable by group or others (`writable`, with `file`) or owned by the runner's own user or one of its subordinate ids from /etc/subuid (`owner_untrusted`), no file may have a second hard link (`hardlink`), each file is opened without following a link and must be the file the walk saw — device and inode — (`replaced`), the configured path must be canonical (`not_canonical`: a symbolic link on the way; the runner resolves it once when it loads its configuration) and every directory above it must be root's, not a link and not writable by group or others (`ancestor_unsafe`, with `file`), and it must be readable (`unreadable`, `not_a_directory`). The verification has its own deadline outside the job's timeout: 30 minutes before a job, one hour at the start (`reason=deadline`, `timeout_ms`). The store's owner is trusted (it could change a file between the check and the service's read); the checks keep everyone else — the runner, the jobs — out. Someone changed or added a model file without updating the manifest and the runner's configuration, the store's ownership or modes are wrong, or the store was tampered with. The job fails before any pod or container: no service ever sees an unverified model; at the start the runner exits."
 diagnosis = "The runner host (`journalctl -u forge-runner`, JSON) logs it once (alert) with `error_code`, `request_id` and in `context` `reason`, `file`, `expected`, `actual` (and `job_id`, `attempt`, `pipeline_id`, `project_id` for a job); the job's log ends with the same code. Read-only on the host: `sha256sum <path>/forge-models.sha256` against `manifest_sha256` in `/etc/forge-runner/config.toml`; `cd <path> && sha256sum -c forge-models.sha256`; `find <path> -type l -o ! -type f ! -type d`; `find <path> -perm /022 -o -user <runner user>`; who changed the store (the host's audit log, `ls -l --time-style=full-iso`)."
 fix = "Follow runbook ci-runner (GPU runner): treat an unexplained change as a security event (incident). Otherwise restore the store from the approved models (models.toml digests), regenerate the manifest, put its sha256 in `manifest_sha256` and restart the runner — host changes need human approval. Never make the store writable by the runner's user."
 runbook = "ci-runner"
@@ -3059,3 +3186,72 @@ diagnosis = "The worker logs `forge.deploy.target_failed` (error) with `error_co
 fix = "Follow runbook deploy (Target not allowed): fix the DNS record or the target (an administrator, PUT …/targets/{name}), or add the network to `deploy.allowed_networks` and restart forge worker."
 runbook = "deploy"
 test = "a_target_resolving_to_loopback_is_refused_at_connect"
+
+# ── Plan 17 P17-2: the `forge/ai-eval` check (area AIASSET, ADR-0034). 0001 ManifestInvalid
+#    and 0005 ModelDigestMismatch stay for P17-3 / P17-1 (plan 17 §5.4). ──
+
+[[error]]
+code = "FG-AIASSET-0002"
+name = "BenchUnavailable"
+http_status = 503
+severity = "warn"
+user_message_ja = "AI の評価ベンチの結果がありません。`forge/ai-eval` は error の扱いです。"
+user_message_en = "The AI evaluation bench produced no result. `forge/ai-eval` is reported as error."
+user_message_id = "Bench evaluasi AI tidak menghasilkan hasil. `forge/ai-eval` dilaporkan sebagai error."
+cause = "Plan 17 §1.6 gate 5 (ADR-0034): a pipeline whose `.forge-ci.yml` job declares the artifact `eval-report.json` ended without a usable report: the declaring job did not succeed (failed, canceled — e.g. no `gpu-eval` runner, a timeout), the pipeline ended without running it, or the job succeeded but uploaded no `eval-report.json` (or its stored file is gone); or the pipeline stayed pending / running for more than 24 hours; or the report or the baseline could not be read 5 times in a row (storage, git, a repository not ready; each failure backed off up to 10 minutes) or failed with an internal error. forge's worker wrote `forge/ai-eval` = `error`, never success: a merge request that requires it waits."
+diagnosis = "The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0002`, `pipeline_id`, `job` and `reason` (`job_failed` / `job_canceled` / `job_not_run` with `detail=pipeline_<status>` / `report_missing` / `report_file_missing` / `pipeline_stale` / `read_failed` with `detail=cause <code> after <n> attempts`). Each counted read failure before that is `forge.ai_eval.read_failed` (info) with the cause's `error_code` and `failures`. Read: SELECT j.name, j.status, j.attempt, j.error_code FROM forge.ci_jobs j JOIN forge.ci_pipelines p ON p.id = j.pipeline_id WHERE p.id = <pipeline_id> AND j.name = p.ai_eval_job; SELECT id, path, attempt FROM forge.ci_artifacts WHERE job_id = <job_id>; and `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>` for the job's failure."
+fix = "Follow runbook ai-eval-bench: bring the `gpu-eval` runner back (or wait for it), make the bench job write `eval-report.json` at the work tree root and declare it under `artifacts: { paths }`, then retry the pipeline."
+runbook = "ai-eval-bench"
+test = "missing_report_is_error_not_success"
+
+[[error]]
+code = "FG-AIASSET-0003"
+name = "BaselineMissing"
+http_status = 409
+severity = "info"
+user_message_ja = "AI の評価の基準（evals/baselines/）が無いか、読めません。`forge/ai-eval` は error の扱いです。"
+user_message_en = "The AI evaluation baseline (evals/baselines/) is missing or unreadable. `forge/ai-eval` is reported as error."
+user_message_id = "Baseline evaluasi AI (evals/baselines/) tidak ada atau tidak dapat dibaca. `forge/ai-eval` dilaporkan sebagai error."
+cause = "Plan 17 §1.6 gate 5, §5.4 (ADR-0034): the report names its models (`models`), and the baseline `evals/baselines/<models>.json` at the merge base of the pipeline's commit with its base branch (a merge request's target branch, a merge queue train's branch, otherwise the default branch: the change never supplies its own baseline) is absent, or there is no such merge base, not a regular file, larger than 1 MiB, not a valid `gitstation.ai-eval-report/v1` document, or names other models. Without a baseline there is nothing to compare with, so the check is `error` (never success)."
+diagnosis = "The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0003`, `pipeline_id`, `baseline` (the path) and `reason` (`base_unresolved` / `baseline_absent` / `baseline_not_a_file` / `baseline_too_large` / `baseline_invalid` with `detail` / `baseline_models_mismatch`); `detail` names the merge-base commit. Check by hand: git merge-base <sha> <target tip>; git show <merge base>:evals/baselines/<models>.json, against the schema in docs/ai-eval-report.md."
+fix = "Merge the baseline first, in its own merge request approved by a person (`evals/baselines/` is a protected path); a change of models then compares against it. Or fix the report's `models`."
+test = "baseline_absent_is_error"
+
+[[error]]
+code = "FG-AIASSET-0004"
+name = "EvalRegression"
+http_status = 422
+severity = "info"
+user_message_ja = "AI の評価が基準より悪くなりました（回帰・安全のケース・指標）。`forge/ai-eval` の比較表を見てください。"
+user_message_en = "The AI evaluation is worse than the baseline (a regression, a safety case or a metric). See the comparison table of `forge/ai-eval`."
+user_message_id = "Evaluasi AI lebih buruk daripada baseline (regresi, kasus keamanan, atau metrik). Lihat tabel perbandingan `forge/ai-eval`."
+cause = "Plan 17 §1.6 gates 1–4 (ADR-0034): the report relabelled a baseline case with another kind (only regular → reproduction is taken), a safety case ran fewer times than in the baseline, did not pass every run or is missing from the report, a regular case that passed every run in the baseline is missing from the report, a reproduction case of the merge request does not pass by majority, a case that passed every run in the baseline passes at most half its runs now, or a summary metric is past the baseline by more than the allowed delta (hit rate −0.02, false alarm rate +0.02, p95 latency +20 % unless the baseline sets `allowed`). Flaky cases (some but not all runs passed, in the baseline or now) are listed, never counted. The check is `failure`."
+diagnosis = "The check run's summary has the comparison table and every finding; the worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0004`, `pipeline_id`, `findings` and the first `reason` (`case_kind_changed` / `safety_runs_short` / `safety_case_failed` / `safety_case_missing` / `reproduction_not_fixed` / `case_missing` / `stable_case_regressed` / `metric_below_baseline`). The full report is the artifact `eval-report.json` of the bench job."
+fix = "Fix the change (skill, playbook, prompt) until the bench passes. A baseline change is a protected-path merge request approved by an approver, never a way around a regression."
+test = "regression_when_stable_case_drops"
+
+[[error]]
+code = "FG-AIASSET-0006"
+name = "CaseNotReproducing"
+http_status = 422
+severity = "info"
+user_message_ja = "再現ケースが基準で既に合格しています（外れを再現していません）。ケースを見直してください。"
+user_message_en = "A reproduction case already passes in the baseline, so it does not reproduce the miss. Review the case."
+user_message_id = "Kasus reproduksi sudah lulus di baseline, sehingga tidak mereproduksi kesalahan. Tinjau kasusnya."
+cause = "Plan 17 §1.6 gate 2, §5.4 (ADR-0034): a case of kind `reproduction` passes every run in the baseline. A reproduction case must be red before the fix (red → green); one green already proves nothing. The check is `failure`."
+diagnosis = "The summary lists the case under the findings with `case_not_reproducing`; the worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0006` and `pipeline_id`."
+fix = "Rewrite the case so it reproduces the miss on the current assets (it fails in the baseline), or make it `regular` if it is a plain regression case."
+test = "reproduction_case_green_in_baseline_is_not_reproducing"
+
+[[error]]
+code = "FG-AIASSET-0007"
+name = "EvalReportInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "AI の評価の結果（eval-report.json）の形が正しくありません。`forge/ai-eval` は error の扱いです。"
+user_message_en = "The AI evaluation result (eval-report.json) is malformed. `forge/ai-eval` is reported as error."
+user_message_id = "Hasil evaluasi AI (eval-report.json) tidak valid. `forge/ai-eval` dilaporkan sebagai error."
+cause = "Plan 17 P17-2 (ADR-0034): the artifact `eval-report.json` of the declaring job is not a `gitstation.ai-eval-report/v1` document: not JSON, an unknown field or schema, a bad `models` name, no cases at all (`cases_empty`), a case id repeated or malformed, `passes` above `runs`, `runs` outside 1–15, more than 5000 cases, a metric outside its range, larger than 1 MiB, or its stored bytes no longer match the sha256 recorded at upload. The check is `error` (never success)."
+diagnosis = "The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0007`, `pipeline_id`, `reason` and `detail` (the field or case at fault, never the report's text). The schema is docs/ai-eval-report.md."
+fix = "Fix the bench's report writer (the PFS `bench` entry point) to the v1 schema and retry the pipeline."
+test = "report_with_passes_above_runs_is_invalid"

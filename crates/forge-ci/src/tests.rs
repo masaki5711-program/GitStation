@@ -703,6 +703,52 @@ fn a_plan_is_the_same_for_the_same_input() {
     assert_eq!(a, b);
 }
 
+/// `valid()` with `artifacts: { paths: [<paths>] }` added to job `job`
+/// (whose stage line follows its name).
+fn with_artifacts(text: &str, job: &str, stage: &str, paths: &str) -> String {
+    let at = format!("  {job}:\n    stage: {stage}\n");
+    text.replace(
+        &at,
+        &format!("{at}    artifacts:\n      paths: [{paths}]\n"),
+    )
+}
+
+/// Plan 17 P17-2 (ADR-0034): only the exact root path `eval-report.json`
+/// declares the AI evaluation report; a pipeline without it has no
+/// declaring job (and so no `forge/ai-eval`).
+#[test]
+fn only_the_root_eval_report_path_declares_the_ai_eval_report() {
+    let p = plan_for(&valid(), Event::Push, "main").expect("plan");
+    assert_eq!(p.eval_report_job(), None);
+    assert!(p.jobs.iter().all(|j| !j.eval_report));
+    let declared = with_artifacts(&valid(), "unit", "test", "eval-report.json, out/log.txt");
+    let p = plan_for(&declared, Event::MergeRequest, "feature-x").expect("plan");
+    assert_eq!(p.eval_report_job(), Some("unit"));
+    for other in [
+        "out/eval-report.json",
+        "eval-report.json.bak",
+        "Eval-Report.json",
+    ] {
+        let text = with_artifacts(&valid(), "unit", "test", other);
+        let p = plan_for(&text, Event::Push, "main").expect("plan");
+        assert_eq!(p.eval_report_job(), None, "{other}");
+    }
+}
+
+/// Two selected jobs declaring the report make the plan invalid; a
+/// trigger that selects only one of them is fine.
+#[test]
+fn two_jobs_declaring_the_eval_report_are_refused() {
+    let one = with_artifacts(&valid(), "unit", "test", "eval-report.json");
+    let text = with_artifacts(&one, "deploy", "deploy", "eval-report.json");
+    let err = plan_for(&text, Event::Push, "main").expect_err("two reports");
+    assert_eq!(err[0].reason, "eval_report_declared_twice");
+    assert_eq!(err[0].subject.as_deref(), Some("unit"));
+    // A merge request runs no `deploy`: one report.
+    let p = plan_for(&text, Event::MergeRequest, "feature-x").expect("plan");
+    assert_eq!(p.eval_report_job(), Some("unit"));
+}
+
 #[test]
 fn events_parse_and_print() {
     assert_eq!(Event::parse("push"), Some(Event::Push));

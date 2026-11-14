@@ -52,3 +52,10 @@ CLAUDE.md の契約 9（エージェントモデル 813c66e）: `gstn` が依存
 解析・lint・実行計画の純粋なクレート（I/O・DB・秘密なし、依存は `forge-errors` と `forge-doc` だけ、`tests/purity.rs`）で、手元の `gstn ci lint` / `gstn ci plan`
 （計画 04 P-3）とサーバーの `forge/ci-lint` に同じ答えを出すため。層は `forge-core → forge-ci → forge-doc → forge-errors`。パイプラインの実行（DB・イベント）は
 `forge-ci` に入れず、後の機能クレート（仮称 `forge-pipelines`）に置く。サーバー側のどのクレートも `forge-client` に依存しない、は変えない。
+
+## Amendment（2026-11-13、計画 16 A1、ADR-0032）— `forge-agent` への依存
+
+CLAUDE.md の契約 9（エージェントモデル W15-0、`chore/harness-w15-agent-supply-chain`）: `gstn` が依存してよいクレートを **`forge-errors`・`forge-doc`・
+`forge-ci`・`forge-agent`** にする。`forge-agent` はエージェントの部品と lock の解析・lint・要約・Ed25519 の確かめ・静的な検査の純粋なクレート
+（I/O・DB・秘密なし、`tests/purity.rs`）で、`gstn agent verify` が開発者の PC で、リポジトリの中のフックに頼らずに `.claude/` を確かめるため。層は
+`forge-core → forge-agent → forge-ci → forge-doc → forge-errors`。サーバー側のどのクレートも `forge-client` に依存しない、は変えない。

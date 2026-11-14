@@ -118,6 +118,7 @@ async fn credentials(t: &FreshDb) -> Callers {
     let _pipeline = pipelines::create(
         &t.db,
         &NewPipeline {
+            ai_eval_job: None,
             request: PipelineRequest {
                 project: web,
                 git_ref: RefName::parse("refs/heads/main").expect("ref"),

@@ -181,11 +181,12 @@ impl EntryRow {
                 .ok_or_else(|| bad("stored_entry_method_invalid"))?,
             message: self.message,
             enqueued_by: UserId::new(self.enqueued_by),
-            credential: match self.credential_kind.as_str() {
-                "session" => CredentialRef::Session(self.credential_id),
-                "token" => CredentialRef::Token(self.credential_id),
-                _ => return Err(bad("stored_entry_credential_invalid")),
-            },
+            credential: CredentialRef::stored(
+                &self.credential_kind,
+                self.credential_id,
+                ProjectId::new(self.project_id),
+            )
+            .ok_or_else(|| bad("stored_entry_credential_invalid"))?,
             request_id: RequestId::parse(&self.request_id)
                 .ok_or_else(|| bad("stored_entry_request_id_invalid"))?,
             isolate: self

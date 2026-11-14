@@ -148,6 +148,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::RiskStop
         | ErrorCode::RiskWarn
         | ErrorCode::RiskNotAssessed
+        | ErrorCode::AutoMergeStopped
+        | ErrorCode::AutoMergeEmergencyStopped
+        | ErrorCode::AutoMergeScanFailed
         // M4 C1: a `.forge-ci.yml` content outcome (never a merge's).
         | ErrorCode::CiConfigInvalid
         // M4 C2: pipeline outcomes (never a merge's).
@@ -194,6 +197,12 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DeployCommitNotAllowed
         | ErrorCode::DeploymentAbandoned
         | ErrorCode::DeployTargetNotAllowed
+        // Plan 17 P17-2: the forge/ai-eval check's codes (never a merge's).
+        | ErrorCode::BenchUnavailable
+        | ErrorCode::BaselineMissing
+        | ErrorCode::EvalRegression
+        | ErrorCode::CaseNotReproducing
+        | ErrorCode::EvalReportInvalid
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden
@@ -331,7 +340,15 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::HistoryImportRefused
         | ErrorCode::HistoryImportRecordFailed
         // M3 N1: the mail job's own code never reaches a merge.
-        | ErrorCode::SmtpUnavailable => false,
+        | ErrorCode::SmtpUnavailable
+        // Plan 16 A1: agent parts are verified by gstn (and, from A5/A7,
+        // the marketplace and forge/agent-lock), never by a merge run.
+        | ErrorCode::PartManifestInvalid
+        | ErrorCode::PartSignatureInvalid
+        | ErrorCode::SigningKeyUnavailable
+        | ErrorCode::PartCapabilityUndeclared
+        | ErrorCode::AgentLockMismatch
+        | ErrorCode::McpEndpointNotAllowed => false,
     }
 }
 

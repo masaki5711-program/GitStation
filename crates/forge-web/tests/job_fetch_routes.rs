@@ -190,6 +190,7 @@ impl World {
         db::create(
             &self.t.db,
             &NewPipeline {
+                ai_eval_job: None,
                 request: PipelineRequest {
                     project,
                     git_ref: RefName::parse("refs/heads/main").expect("ref"),
