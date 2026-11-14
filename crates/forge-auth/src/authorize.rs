@@ -643,6 +643,18 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // is not found for everyone, administrators included (an
         // administration route for others' tokens is not built yet).
         (Action::TokenRevoke, Resource::Token { owner }) => own_token(*owner),
+        // M4 C13 (ADR-0032 §2): one's own SSH keys, for nobody else — an
+        // administrator included. Adding one is session-only (above): a
+        // token never adds a key; the backstop as for `TokenCreate`.
+        (Action::SshKeyList | Action::SshKeyDelete, Resource::Token { owner }) => own_token(*owner),
+        (Action::SshKeyAdd, Resource::Token { owner }) => {
+            if matches!(principal.credential(), Credential::Token(_)) {
+                return Err(
+                    deny(ErrorCode::Forbidden).with_context("reason", "token_cannot_add_ssh_key")
+                );
+            }
+            own_token(*owner)
+        }
         // M3 N1: a person's own mail settings, for nobody else — an
         // administrator included (support reads the delivery records).
         // M3 U4: their own in-app notifications likewise (the resource is
@@ -1433,6 +1445,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::TokenCreate
             | Action::TokenList
             | Action::TokenRevoke
+            | Action::SshKeyList
+            | Action::SshKeyAdd
+            | Action::SshKeyDelete
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
             | Action::UserMergeRequestList

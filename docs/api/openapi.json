@@ -34,6 +34,27 @@
         ],
         "type": "object"
       },
+      "AddSshKey": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/user/ssh-keys`.",
+        "properties": {
+          "key": {
+            "description": "One public key line: `ssh-ed25519 AAAA… [comment]` (Ed25519 or\nECDSA P-256 / P-384 / P-521).",
+            "type": "string"
+          },
+          "title": {
+            "description": "1..=100 characters; empty or absent = the key's comment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
       "AdminUser": {
         "additionalProperties": false,
         "description": "One user as the administration sees it (no e-mail or other personal\nidentifiers: the read pool never has them).",
@@ -9740,6 +9761,100 @@
         "required": [
           "versions",
           "truncated"
+        ],
+        "type": "object"
+      },
+      "SshKeyBody": {
+        "additionalProperties": false,
+        "description": "One key as the API shows it.",
+        "properties": {
+          "algorithm": {
+            "type": "string"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "fingerprint": {
+            "description": "`SHA256:…` (what `ssh-keygen -l -E sha256 -f <key>.pub` prints).",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_key": {
+            "description": "`<algorithm> <base64>` (no comment).",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "algorithm",
+          "fingerprint",
+          "public_key",
+          "created_at",
+          "last_used_at"
+        ],
+        "type": "object"
+      },
+      "SshKeyList": {
+        "additionalProperties": false,
+        "description": "The caller's keys and the SSH server's facts.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SshKeyBody"
+            },
+            "type": "array"
+          },
+          "ssh": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SshServerBody"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "ssh"
+        ],
+        "type": "object"
+      },
+      "SshServerBody": {
+        "additionalProperties": false,
+        "description": "The SSH server as clients see it (`null` while `git.ssh.enabled` is\noff).",
+        "properties": {
+          "clone_host": {
+            "description": "`host:port` of clone URLs: `ssh://git@<clone_host>/<path>.git`.",
+            "type": "string"
+          },
+          "host_key_fingerprints": {
+            "description": "The host key fingerprints (`SHA256:…`) to compare on the first\nconnection.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "clone_host",
+          "host_key_fingerprints"
         ],
         "type": "object"
       },
@@ -21024,6 +21139,107 @@
         },
         "summary": "End one of the caller's web sessions (sessions only)",
         "x-forge-action": "SessionRevoke"
+      }
+    },
+    "/api/v1/user/ssh-keys": {
+      "get": {
+        "operationId": "get_api_v1_user_ssh_keys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SshKeyList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's SSH public keys and the SSH server's host and host key fingerprints",
+        "x-forge-action": "SshKeyList"
+      },
+      "post": {
+        "operationId": "post_api_v1_user_ssh_keys",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddSshKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SshKeyBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add an SSH public key for the caller (web sessions only; Ed25519 / ECDSA)",
+        "x-forge-action": "SshKeyAdd",
+        "x-forge-max-body-bytes": 10240
+      }
+    },
+    "/api/v1/user/ssh-keys/{id}": {
+      "delete": {
+        "operationId": "delete_api_v1_user_ssh_keys_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete one of the caller's SSH keys",
+        "x-forge-action": "SshKeyDelete"
       }
     },
     "/api/v1/user/tokens": {

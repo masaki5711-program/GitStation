@@ -85,6 +85,8 @@ pub mod roles;
 // ── end D2 ──
 // ── D3: personal access tokens ──
 pub mod tokens;
+// M4 C13: people's SSH public keys (ADR-0032 §2).
+pub mod ssh_keys;
 // ── end D3 ──
 // ── M3 S0: service accounts (ADR-0019 Addendum S0) ──
 pub mod service_accounts;

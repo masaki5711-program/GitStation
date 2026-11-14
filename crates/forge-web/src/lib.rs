@@ -34,6 +34,8 @@ pub mod registry;
 pub mod routes;
 pub mod security_headers;
 pub mod server;
+// M4 C13: the SSH git transport (ADR-0032).
+pub mod ssh;
 pub mod ui;
 
 pub use app::{app, registry as route_registry, AppConfig, AppState, Lookups};

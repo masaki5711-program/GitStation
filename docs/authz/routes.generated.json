@@ -1836,6 +1836,33 @@
     "word": "fixed"
   },
   {
+    "action": "SshKeyList",
+    "method": "GET",
+    "path": "/api/v1/user/ssh-keys",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SshKeyAdd",
+    "method": "POST",
+    "path": "/api/v1/user/ssh-keys",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SshKeyDelete",
+    "method": "DELETE",
+    "path": "/api/v1/user/ssh-keys/{id}",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "TokenList",
     "method": "GET",
     "path": "/api/v1/user/tokens",

@@ -23,6 +23,8 @@ mod database;
 // M3 I1c: `feed.*`.
 mod feed;
 mod git_http;
+// M4 C13: `git.ssh.*` (ADR-0032).
+pub mod git_ssh;
 mod hosting;
 mod keys;
 mod maintenance;
@@ -53,6 +55,7 @@ pub use ci::CiConfig;
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
+pub use git_ssh::GitSshConfig;
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
@@ -177,6 +180,8 @@ pub struct Config {
     pub audit: AuditConfig,
     /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
     pub git_http: GitHttpConfig,
+    /// `git.ssh.*` (the SSH git transport, M4 C13, ADR-0032).
+    pub git_ssh: GitSshConfig,
     /// `hosting.*` (the deletion grace period, D5 MR3; the purge period, D5 MR4).
     pub hosting: HostingConfig,
     /// `review.*` (the mergeability fan-out cap, M3 R2).
@@ -209,6 +214,14 @@ impl Config {
         if self.server.limits.read_idle_timeout < self.git_http.idle_timeout {
             return Err(invalid(
                 "server.read_idle_timeout_ms",
+                "below_git_idle_timeout",
+            ));
+        }
+        // M4 C13: an SSH connection idle for git's own idle limit must not
+        // be closed by SSH first.
+        if self.git_ssh.inactivity_timeout < self.git_http.idle_timeout {
+            return Err(invalid(
+                "git.ssh.inactivity_timeout_ms",
                 "below_git_idle_timeout",
             ));
         }
@@ -436,6 +449,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         )?,
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
+        git_ssh: GitSshConfig::load(get)?,
         hosting: HostingConfig::load(get)?,
         review: ReviewConfig::load(get)?,
         feed: FeedConfig::load(get)?,

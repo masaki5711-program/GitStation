@@ -60,7 +60,9 @@ mod matrix_rows_mirror;
 mod matrix_rows_doc_lint;
 // M4 C2: CI pipelines.
 mod matrix_rows_merge_queue;
+// M4 C13: the SSH git transport and SSH keys (ADR-0032).
 mod matrix_rows_pipelines;
+mod matrix_rows_ssh;
 // M4 C5: CI outputs.
 mod matrix_rows_ci_outputs;
 // M4 C6: CI variables.
@@ -89,7 +91,7 @@ pub use model::{
     MergeRequestEdit, MergeRequestState, NamespaceView, PinnedCopy, Principal, ProjectView,
     RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob,
     Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView,
-    Visibility,
+    Visibility, SSH_KEY_SCOPES,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,

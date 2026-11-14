@@ -200,6 +200,12 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
+    /// Your SSH keys for git over SSH: list, delete (add one in the browser).
+    #[command(name = "ssh-key", disable_help_subcommand = true)]
+    SshKey {
+        #[command(subcommand)]
+        command: SshKeyCommand,
+    },
     /// Your notifications: the in-app list (M3 U4) and your settings (M3 N1).
     #[command(disable_help_subcommand = true)]
     Notifications {
@@ -1293,6 +1299,21 @@ pub enum TokenCommand {
     List,
     /// Revoke one of your tokens. Needs --yes.
     Revoke {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// `gstn ssh-key` (M4 C13).
+#[derive(Subcommand, Debug)]
+pub enum SshKeyCommand {
+    /// Your SSH keys (fingerprints) and the server's host key fingerprints.
+    List,
+    /// Delete one of your SSH keys. Needs --yes.
+    Delete {
         #[arg(value_parser = parse_id)]
         id: i64,
         /// Confirm (gstn never prompts).

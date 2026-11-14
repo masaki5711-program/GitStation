@@ -162,6 +162,33 @@ pub const KEYS: &[Key] = &[
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",
     ),
+    // M4 C13: the SSH git transport (ADR-0032).
+    boolean("git.ssh.enabled", "FORGE_GIT_SSH_ENABLED"),
+    text("git.ssh.bind", "FORGE_GIT_SSH_BIND"),
+    text("git.ssh.host_key_file", "FORGE_GIT_SSH_HOST_KEY_FILE"),
+    text("git.ssh.clone_host", "FORGE_GIT_SSH_CLONE_HOST"),
+    number("git.ssh.max_connections", "FORGE_GIT_SSH_MAX_CONNECTIONS"),
+    number(
+        "git.ssh.max_connections_per_peer",
+        "FORGE_GIT_SSH_MAX_CONNECTIONS_PER_PEER",
+    ),
+    number(
+        "git.ssh.connections_per_minute_per_peer",
+        "FORGE_GIT_SSH_CONNECTIONS_PER_MINUTE_PER_PEER",
+    ),
+    number(
+        "git.ssh.auth_failures_per_minute_per_peer",
+        "FORGE_GIT_SSH_AUTH_FAILURES_PER_MINUTE_PER_PEER",
+    ),
+    number("git.ssh.auth_timeout_ms", "FORGE_GIT_SSH_AUTH_TIMEOUT_MS"),
+    number(
+        "git.ssh.max_auth_attempts",
+        "FORGE_GIT_SSH_MAX_AUTH_ATTEMPTS",
+    ),
+    number(
+        "git.ssh.inactivity_timeout_ms",
+        "FORGE_GIT_SSH_INACTIVITY_TIMEOUT_MS",
+    ),
     // D5 MR3: how long a deleted project can be restored.
     number(
         "hosting.deletion_grace_days",

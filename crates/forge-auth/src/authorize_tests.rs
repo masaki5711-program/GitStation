@@ -532,7 +532,12 @@ fn mismatched_resource_is_an_internal_error_not_an_allow() {
         // A token resource fits only the token actions.
         if matches!(
             action,
-            Action::TokenCreate | Action::TokenList | Action::TokenRevoke
+            Action::TokenCreate
+                | Action::TokenList
+                | Action::TokenRevoke
+                | Action::SshKeyList
+                | Action::SshKeyAdd
+                | Action::SshKeyDelete
         ) {
             continue;
         }

@@ -70,7 +70,47 @@ pub trait Authenticator: Send + Sync {
                 .with_context("reason", "ci_tokens_unsupported"))
         })
     }
+
+    /// An SSH public key a client offered or proved (M4 C13, ADR-0032 §2),
+    /// by its SHA-256 fingerprint (`SHA256:…`, [`crate::ssh_key`]): the
+    /// owner, active. Errors: `FG-AUTH-0001 reason=ssh_key_unknown`,
+    /// `FG-AUTH-0004 reason=owner_disabled`, `FG-DB-0001`, `FG-DB-0019`.
+    /// With `record_use`, the key's `last_used_at` is refreshed (at most
+    /// every 10 minutes; a failure there is logged, never the answer) —
+    /// the server passes it only once the signature was verified.
+    ///
+    /// The default refuses every key (an authenticator that knows no SSH
+    /// keys: test doubles).
+    fn authenticate_ssh_key<'a>(
+        &'a self,
+        _request_id: &'a RequestId,
+        _fingerprint: &'a str,
+        _record_use: bool,
+    ) -> SshKeyAuthFuture<'a> {
+        Box::pin(async {
+            Err(ForgeError::new(forge_errors::ErrorCode::Unauthenticated)
+                .with_context("reason", "ssh_keys_unsupported"))
+        })
+    }
 }
+
+/// Who an SSH key stands for (M4 C13, ADR-0032 §2). The owner is active: a
+/// disabled owner's key is refused by the authenticator (`FG-AUTH-0004`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshKeyIdentity {
+    /// `forge.user_ssh_keys.id` (the log `ssh_key_id`).
+    pub key_id: i64,
+    pub user_id: UserId,
+    /// The owner's username (the shell greeting; never an authorization
+    /// input).
+    pub username: String,
+    /// The owner's account kind (`users.kind`).
+    pub kind: UserKind,
+}
+
+/// The future [`Authenticator::authenticate_ssh_key`] returns.
+pub type SshKeyAuthFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<SshKeyIdentity, ForgeError>> + Send + 'a>>;
 
 /// A job token's state as read with it (M4 C3): `forge_auth::JobTokenState`
 /// is built from it by forge-web.

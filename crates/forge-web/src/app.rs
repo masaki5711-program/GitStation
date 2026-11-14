@@ -158,6 +158,10 @@ pub struct AppState {
     /// once (`reason=in_flight`).
     pub ci_output_limiter: Arc<routes::namespaces::CallerLimiter>,
     pub ci_output_in_flight: Arc<routes::specs::InFlight>,
+    /// The SSH git transport as clients see it (M4 C13, ADR-0032): the
+    /// clone host and the host key fingerprints the SSH key page shows.
+    /// `None` while `git.ssh.enabled` is off.
+    pub ssh_info: Option<Arc<crate::ssh::SshPublicInfo>>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -219,7 +223,16 @@ impl AppState {
             ci_output_in_flight: Arc::new(routes::specs::InFlight::new(
                 routes::pipelines::OUTPUT_MAX_IN_FLIGHT,
             )),
+            ssh_info: None,
         }
+    }
+
+    /// The SSH transport's public facts (M4 C13; `forge serve` sets them
+    /// when `git.ssh.enabled`).
+    #[must_use]
+    pub fn with_ssh_info(mut self, info: crate::ssh::SshPublicInfo) -> Self {
+        self.ssh_info = Some(Arc::new(info));
+        self
     }
 
     /// Acting for a person (M3 S2).
@@ -1057,8 +1070,37 @@ pub fn registry_without_content_routes() -> Registry<AppState> {
 /// Tokens, sessions, the user search and the user administration (M2 MR6,
 /// plan 10 §5, ADR-0021 §17).
 fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
-    use routes::{directory as d, tokens as t, user_sessions as s};
+    use routes::{directory as d, ssh_keys as k, tokens as t, user_sessions as s};
     registry
+        // M4 C13 (ADR-0032 §2): the caller's SSH keys.
+        .route_with(
+            Verb::Get,
+            k::COLLECTION,
+            Action::SshKeyList,
+            "The caller's SSH public keys and the SSH server's host and host key fingerprints",
+            k::OwnSshKeys,
+            k::list,
+        )
+        .responds::<k::SshKeyList>(Verb::Get, k::COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            k::COLLECTION,
+            Action::SshKeyAdd,
+            "Add an SSH public key for the caller (web sessions only; Ed25519 / ECDSA)",
+            k::MAX_BODY,
+            k::OwnSshKeys,
+            k::add,
+        )
+        .responds_created::<k::SshKeyBody>(Verb::Post, k::COLLECTION)
+        .route_with(
+            Verb::Delete,
+            k::ONE,
+            Action::SshKeyDelete,
+            "Delete one of the caller's SSH keys",
+            k::SshKeyToDelete,
+            k::delete,
+        )
+        .responds_no_content(Verb::Delete, k::ONE)
         .route_with(
             Verb::Get,
             t::COLLECTION,

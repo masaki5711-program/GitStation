@@ -38,6 +38,13 @@
 //! `PATH` with HOME pinned to the storage root (as the worker does), its
 //! stream pools and timeouts from `git.http.*`, the version checked
 //! (≥ 2.38, `FG-GIT-0001`) before the server binds.
+//!
+//! SSH (M4 C13, ADR-0032): with `git.ssh.enabled` the host key
+//! (`git.ssh.host_key_file`) is read before anything binds (a missing or
+//! broken key stops the start, `FG-SYS-0002`; `forge serve` never makes
+//! one), and the SSH listener (`git.ssh.bind`) serves git over the same
+//! router as HTTP. Both stop on the same signal. An SSH listener that ends
+//! while HTTP still serves is `FG-GIT-0036 reason=server_stopped`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -93,6 +100,22 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // a bad file stops the start.
     let ci_secret_keys = cfg.ci.secret_keys()?.map(Arc::new);
     let artifact_quota = cfg.ci.artifact_quota_bytes;
+    // M4 C13: the SSH host key, read before anything binds.
+    let ssh = if cfg.git_ssh.enabled {
+        let path = cfg.git_ssh.host_key_file.as_deref().ok_or_else(|| {
+            ForgeError::new(ErrorCode::ConfigInvalid)
+                .with_context("config_key", forge_core::config::git_ssh::HOST_KEY_FILE_KEY)
+                .with_context("reason", "missing")
+        })?;
+        let key = forge_web::ssh::load_host_key(path)?;
+        let public = forge_web::ssh::SshPublicInfo {
+            clone_host: ssh_clone_host(cfg, &web_origin),
+            host_key_fingerprints: vec![key.fingerprint().to_owned()],
+        };
+        Some((key, public))
+    } else {
+        None
+    };
     block_on(async {
         let smart_http = smart_http(storage, &cfg.git_http)?;
         forge_git::version::detect(&smart_http.git).await?;
@@ -251,11 +274,50 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 "forge.serve.oidc_disabled"
             ),
         }
+        if let Some((_, public)) = &ssh {
+            state = state.with_ssh_info(public.clone()); // clone: the server keeps it too
+        }
+        let authenticator = Arc::clone(&state.authenticator); // clone: the SSH server shares it
         let router = forge_web::app(
             state,
             app_config_for(database, &cfg.git_http, &cfg.server.limits),
         )?;
         let listener = forge_web::server::bind(bind).await?;
+        // One signal stops both servers.
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            forge_web::server::shutdown_signal().await;
+            stop_tx.send_replace(true);
+        });
+        let stopped = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
+            // A dropped sender also stops (it only drops after the signal).
+            let _ = rx.wait_for(|stop| *stop).await; // ignore: see above
+        };
+        let ssh_task = match ssh {
+            Some((key, public)) => {
+                let ssh_listener = forge_web::ssh::bind(&cfg.git_ssh.bind).await?;
+                tracing::info!(
+                    bind = cfg.git_ssh.bind.as_str(),
+                    host_key = key.fingerprint(),
+                    clone_host = public.clone_host.as_str(),
+                    "forge.serve.ssh_listening"
+                );
+                let server = forge_web::ssh::SshServer::new(
+                    router.clone(), // clone: the same routes serve SSH
+                    authenticator,
+                    &key,
+                    public,
+                    forge_web::ssh::SshLimits::from_config(&cfg.git_ssh),
+                );
+                let until = stopped(stop_rx.clone()); // clone: one receiver per server
+                Some(tokio::spawn(forge_web::ssh::serve(
+                    ssh_listener,
+                    server,
+                    until,
+                )))
+            }
+            None => None,
+        };
         tracing::info!(
             bind,
             version = env!("CARGO_PKG_VERSION"),
@@ -266,9 +328,26 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             listener,
             router,
             ServerLimits::from_config(&cfg.server.limits),
-            forge_web::server::shutdown_signal(),
+            stopped(stop_rx),
         )
         .await;
+        if let Some(task) = ssh_task {
+            let ended = if task.is_finished() {
+                // It ended before the signal: SSH was down meanwhile.
+                Some("server_stopped")
+            } else {
+                None
+            };
+            match tokio::time::timeout(SSH_SHUTDOWN_WAIT, task).await {
+                Ok(Ok(Ok(()))) if ended.is_none() => {}
+                outcome => forge_core::telemetry::log_failure(
+                    &ForgeError::new(ErrorCode::SshTransportFailed)
+                        .with_context("reason", ended.unwrap_or("server_stopped"))
+                        .with_context("outcome", format!("{outcome:?}")),
+                    &forge_core::RequestId::generate(),
+                ),
+            }
+        }
         // The merge in progress gets its grace, then is released (an
         // `executing` attempt is the reconciliation's after the restart).
         // A task that panicked or did not end in time is logged there.
@@ -291,6 +370,32 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         tracing::info!("forge.serve.stopped");
         Ok(String::new())
     })
+}
+
+/// How long a shutdown waits for the SSH listener (it waits for its own
+/// connections up to 10 s).
+const SSH_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The `host:port` SSH clone URLs show: `git.ssh.clone_host`, else the host
+/// of `web.base_url` with the port of `git.ssh.bind`.
+fn ssh_clone_host(cfg: &Config, web_origin: &str) -> String {
+    if let Some(host) = &cfg.git_ssh.clone_host {
+        return host.clone(); // clone: the config keeps its value
+    }
+    let without_scheme = web_origin
+        .split_once("://")
+        .map_or(web_origin, |(_, rest)| rest);
+    let host = match without_scheme.strip_prefix('[') {
+        // [v6]:port → [v6]
+        Some(rest) => rest
+            .split_once(']')
+            .map_or(without_scheme.to_owned(), |(v6, _)| format!("[{v6}]")),
+        None => without_scheme
+            .rsplit_once(':')
+            .map_or(without_scheme, |(h, _)| h)
+            .to_owned(),
+    };
+    format!("{host}:{}", cfg.git_ssh.port())
 }
 
 /// How long a shutdown waits for the merge runner (its grace, the abort
@@ -453,6 +558,35 @@ mod tests {
         .expect("config");
         let bound = probe_timeout_for(&cfg.database);
         assert!(bound > cfg.database.acquire_timeout * 2, "{bound:?}");
+    }
+
+    /// M4 C13: the SSH clone host comes from the configuration, else from
+    /// the web origin's host and the SSH port.
+    #[test]
+    fn the_ssh_clone_host_follows_the_configuration_then_the_web_origin() {
+        let cfg = load(
+            None,
+            &Env::from_pairs([("FORGE_GIT_SSH_BIND", "0.0.0.0:2200")]),
+        )
+        .expect("config");
+        assert_eq!(
+            ssh_clone_host(&cfg, "https://git.example.test:8443"),
+            "git.example.test:2200"
+        );
+        assert_eq!(
+            ssh_clone_host(&cfg, "https://git.example.test"),
+            "git.example.test:2200"
+        );
+        assert_eq!(ssh_clone_host(&cfg, "http://[::1]:8080"), "[::1]:2200");
+        let cfg = load(
+            None,
+            &Env::from_pairs([("FORGE_GIT_SSH_CLONE_HOST", "ssh.example.test:22")]),
+        )
+        .expect("config");
+        assert_eq!(
+            ssh_clone_host(&cfg, "https://git.example.test"),
+            "ssh.example.test:22"
+        );
     }
 
     #[test]

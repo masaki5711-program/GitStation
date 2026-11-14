@@ -246,7 +246,26 @@ enum AdminCommand {
         command: RunnerCommand,
     },
     // ── end M4 C4 ──
+    // ── M4 C13 ──
+    /// The SSH git transport's host key (runbook ssh-transport): make it
+    /// once, or show its fingerprint.
+    SshHostKey {
+        #[command(subcommand)]
+        command: SshHostKeyCommand,
+    },
+    // ── end M4 C13 ──
 }
+
+// ── M4 C13 ──
+#[derive(Subcommand)]
+enum SshHostKeyCommand {
+    /// Make the Ed25519 host key at `git.ssh.host_key_file` (never replaces
+    /// an existing file) and print its fingerprint and `known_hosts` line.
+    Generate,
+    /// Print the fingerprint and `known_hosts` line of the configured key.
+    Show,
+}
+// ── end M4 C13 ──
 
 // ── M4 C4 ──
 #[derive(Subcommand)]
@@ -566,6 +585,9 @@ fn main() -> ExitCode {
                 }
                 | AdminCommand::Runner {
                     command: RunnerCommand::Register { .. } | RunnerCommand::Disable { .. },
+                }
+                | AdminCommand::SshHostKey {
+                    command: SshHostKeyCommand::Generate,
                 },
         }
         // M3 O1: backup and the mutating restore steps.
@@ -596,6 +618,9 @@ fn main() -> ExitCode {
                 }
                 | AdminCommand::Runner {
                     command: RunnerCommand::List,
+                }
+                | AdminCommand::SshHostKey {
+                    command: SshHostKeyCommand::Show,
                 },
         }
         | Command::Doctor { .. }
@@ -715,6 +740,12 @@ fn main() -> ExitCode {
                     command: ActAsCommand::ClaimedMac { value, kid },
                 },
         } => config().and_then(|cfg| admin::act_as_claimed_mac(&cfg, &value, kid)),
+        Command::Admin {
+            command: AdminCommand::SshHostKey { command },
+        } => config().and_then(|cfg| match command {
+            SshHostKeyCommand::Generate => admin::ssh_host_key_generate(&cfg),
+            SshHostKeyCommand::Show => admin::ssh_host_key_show(&cfg),
+        }),
         Command::Admin {
             command: AdminCommand::Runner { command },
         } => config().and_then(|cfg| match command {

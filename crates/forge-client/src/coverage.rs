@@ -45,6 +45,22 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/user/tokens/{id}",
         Coverage::Command("token revoke"),
     ),
+    // M4 C13: your SSH keys (ADR-0032 §2).
+    (
+        "GET",
+        "/api/v1/user/ssh-keys",
+        Coverage::Command("ssh-key list"),
+    ),
+    (
+        "POST",
+        "/api/v1/user/ssh-keys",
+        Coverage::BrowserOnly("sessions only: a token never adds an SSH key (FG-AUTH-0002 session_required); add it in the browser"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/user/ssh-keys/{id}",
+        Coverage::Command("ssh-key delete"),
+    ),
     // M3 N1: your own notification settings.
     (
         "GET",

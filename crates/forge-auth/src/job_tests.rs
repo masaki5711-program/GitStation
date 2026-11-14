@@ -385,6 +385,30 @@ fn only_forge_web_builds_ci_principals() {
     );
 }
 
+/// M4 C13 (ADR-0032 §2): an SSH key's principal is built by forge-web's
+/// SSH transport only, from a key the authenticator resolved to an active
+/// owner — never by a worker or another route.
+#[test]
+fn only_forge_web_builds_ssh_principals() {
+    // Assembled so this file's own code does not match the needle.
+    let needles = [["Principal::", "ssh_key("].concat()];
+    let allowed = [
+        // The constructor's own module and the matrix's fixtures.
+        "forge-auth/src/model.rs",
+        "forge-auth/src/matrix.rs",
+        // The production caller: the SSH transport's authentication.
+        "forge-web/src/ssh/handler.rs",
+    ];
+    let offenders: Vec<_> = mentions(&needles)
+        .into_iter()
+        .filter(|f| !allowed.contains(&f.as_str()))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "only forge-web's SSH transport builds an SSH key principal: {offenders:?}"
+    );
+}
+
 /// M4 C4: the job fetch route's context decides exactly like
 /// `authorize_pinned_copy` — its own project at its own SHA while live; another
 /// project or SHA is the invisible project's 404; an ended job is
