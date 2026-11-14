@@ -35,3 +35,4 @@
 | [0029](0029-ci-principals-runner-and-job-tokens.md) | CI の主体 — Runner と Job の資格情報、CI の信頼の境界 | proposed（accepted は C0 のレビューの後） | 2026-11-10 |
 | [0030](0030-merge-queue.md) | マージキュー — ターゲットごとの列、まとめて試すマージ結果、失敗の二分 | proposed（accepted は C8 のレビューの後） | 2026-11-12 |
 | [0031](0031-deploy-over-ssh.md) | デプロイ — forge の worker から SSH、固定した host key、prod は人の承認 | proposed（accepted は C11 のレビューの後） | 2026-11-13 |
+| [0034](0034-ai-eval-check.md) | AI の評価のチェック `forge/ai-eval` — ベンチの報告の形、基準との比較、宣言したパイプラインだけ | proposed（accepted は P17-2 のレビューの後） | 2026-11-14 |
