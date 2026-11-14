@@ -115,6 +115,8 @@ mod ci_leases;
 mod ci_outputs;
 // M4 C6: CI artifacts past their 30 days.
 mod ci_artifacts;
+// Plan 17 P17-2: the forge/ai-eval check (ADR-0034).
+mod ci_ai_eval;
 // M4 C11: deployments over SSH.
 pub(crate) mod deploy;
 mod in_app_retention;
@@ -261,6 +263,9 @@ enum Task {
     CiOutputs,
     /// CI artifacts past their 30 days removed (`ci_artifacts`, M4 C6).
     CiArtifactExpiry,
+    /// The `forge/ai-eval` checks of the pipelines that declare the AI
+    /// evaluation report (`ci_ai_eval`, plan 17 P17-2), with the storage.
+    CiAiEval,
     /// Deployments over SSH (`deploy`, M4 C11), with `deploy.ssh_key_file`.
     DeployRunner,
     /// Dead `check.spec_drift` jobs answered with `error` (`spec_drift_sweep`, M3 X2).
@@ -399,6 +404,8 @@ fn tasks_with(
     if let Some(m) = maintenance {
         // M4 C6: the artifact files live under the storage root.
         tasks.push(Task::CiArtifactExpiry);
+        // Plan 17 P17-2: the report files and the baselines are under it too.
+        tasks.push(Task::CiAiEval);
         tasks.push(Task::MaintenanceRunner);
         tasks.push(Task::MaintenanceSchedule);
         // ── M3 O2: the lag sweep always, the runner with the credentials ──
@@ -542,6 +549,7 @@ impl Task {
             Self::CiLeaseReaper => ci_leases::NAME,
             Self::CiOutputs => ci_outputs::NAME,
             Self::CiArtifactExpiry => ci_artifacts::NAME,
+            Self::CiAiEval => ci_ai_eval::NAME,
             Self::DeployRunner => deploy::NAME,
             Self::SpecDriftSweep => spec_drift_sweep::NAME,
             Self::RiskSweep => risk_sweep::NAME,
@@ -581,6 +589,7 @@ impl Task {
             Self::CiLeaseReaper => ci_leases::PERIOD,
             Self::CiOutputs => ci_outputs::PERIOD,
             Self::CiArtifactExpiry => ci_artifacts::PERIOD,
+            Self::CiAiEval => ci_ai_eval::PERIOD,
             Self::DeployRunner => deploy::PERIOD,
             Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
             Self::RiskSweep => risk_sweep::PERIOD,
@@ -653,6 +662,10 @@ impl Task {
                     let store = forge_pipelines::artifacts::ArtifactStore::new(storage.root.path());
                     ci_artifacts::run_ci_artifact_expiry(db, &store).await
                 }
+                None => Err(self.unconfigured()),
+            },
+            Self::CiAiEval => match shared.storage.as_ref() {
+                Some(storage) => ci_ai_eval::run_ci_ai_eval(db, storage).await,
                 None => Err(self.unconfigured()),
             },
             Self::InAppRetention => in_app_retention::run_in_app_retention(db).await,

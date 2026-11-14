@@ -33,7 +33,7 @@
   { "action": "ApprovalRuleManage", "allow": 4, "deny": 17, "public": false, "git_operation": false },
   { "action": "MergeSettingsManage", "allow": 9, "deny": 16, "public": false, "git_operation": false },
   { "action": "CodeownersEnforcementToggle", "allow": 7, "deny": 20, "public": false, "git_operation": false },
-  { "action": "CheckWrite", "allow": 4, "deny": 37, "public": false, "git_operation": false },
+  { "action": "CheckWrite", "allow": 4, "deny": 40, "public": false, "git_operation": false },
   { "action": "CheckRead", "allow": 7, "deny": 9, "public": false, "git_operation": false },
   { "action": "CheckNamespaceGrantManage", "allow": 3, "deny": 14, "public": false, "git_operation": false },
   { "action": "GroupRead", "allow": 7, "deny": 8, "public": false, "git_operation": false },

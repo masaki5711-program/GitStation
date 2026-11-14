@@ -2,6 +2,8 @@
 //! server-side crate. Depends only on `forge-errors` (CLAUDE.md §3.9).
 
 pub mod act_as;
+// Plan 17 P17-2 (ADR-0034): the AI evaluation report and its gates.
+pub mod ai_eval;
 pub mod approval;
 pub mod audit_details;
 pub mod authenticator;

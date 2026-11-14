@@ -2519,7 +2519,7 @@ severity = "info"
 user_message_ja = "CI の定義ファイル .forge-ci.yml が規則に合っていません。一覧の行と理由を直してください。"
 user_message_en = "The CI definition file .forge-ci.yml breaks a rule. Fix the lines and reasons listed."
 user_message_id = "Berkas definisi CI .forge-ci.yml melanggar aturan. Perbaiki baris dan alasan yang dicantumkan."
-cause = "The pipeline definition lint (forge_ci::check, plan 14 C1, plan 04 P-1) found a problem in a repository's `.forge-ci.yml`, or a plan for a trigger could not be made (forge_ci::plan). Each problem is `line reason [subject]`; `reason` is stable. Reading (bounded like forge-doc): too_large (over 64 KiB), not_utf8, empty_file, not_a_mapping, and the strict YAML tree's syntax / multiple_documents / yaml_anchor / yaml_alias / yaml_tag / too_deep (nesting over 16) / too_many_keys (over 64 in one mapping) / duplicate_key (also a job name written twice) / key_not_text. Schema (version 1; every key is known): key_unknown, field_missing (version, stages, jobs, stage, image), field_invalid (a wrong type, a duplicate list item, merge_requests not true/false), version_unsupported, stages_empty, stage_name_invalid, stage_duplicate, too_many_stages (over 16), stage_unknown, jobs_empty, too_many_jobs (over 48), job_name_invalid, image_not_pinned (not an OCI reference `[host[:port]/]lowercase/path[:tag]@sha256:<64 hex>`), script_empty, too_many_script_lines (over 200), script_line_invalid (a control character other than tab), script_line_too_long (over 4096 bytes), timeout_missing, timeout_invalid (not `<n>s|m|h`), timeout_too_long (over 4h), tag_invalid, too_many_tags (8), secret_name_invalid (the name is not echoed), too_many_secrets (16), branch_pattern_invalid, too_many_branches (16), artifact_path_invalid (absolute, `..`, `.git`, a glob metacharacter, a backslash, a drive), too_many_artifacts (16); services (plan 14 C5s): too_many_services (2), service_name_invalid (not `[a-z][a-z0-9-]{0,30}`), service_duplicate, field_missing (name, image of a service), image_not_pinned (subject: the service), service_env_invalid (a key not `[A-Za-z_][A-Za-z0-9_]*`, a value that is not text, over 1024 bytes or with a control character; the key and value are not echoed), too_many_service_env (16), service_user_invalid (not a name, uid or uid:gid), service_tmpfs_invalid (not absolute, `/`, `/tmp`, under /proc /sys /dev, `.` / `..`, or a character outside `[A-Za-z0-9._-/]`), too_many_service_tmpfs (4). Across jobs (only on a well-formed file): needs_unknown, needs_duplicate, too_many_needs (16), needs_later_stage, needs_cycle (each job on a cycle), secret_on_unprotected_ref (a job with secrets that runs for merge requests, or for a branch pattern the repository's protected patterns do not cover), secret_protection_unknown (a local check without the protected list: no branch counts as protected; pass `gstn ci lint --protected`). At most 100 problems, then too_many_problems; a subject is cut to 64 characters. Plan: needs_not_in_pipeline (a selected job needs a job the trigger does not run), secret_on_unprotected_ref (a selected job with secrets in a merge request's pipeline or on an unprotected branch: the plan fails rather than drop the secrets). Where: `gstn ci lint` / `gstn ci plan` on the working tree (exit 1) and the check `forge/ci-lint` on a merge request version's head (conclusion `failure`). Not a server fault: the file is the repository's content."
+cause = "The pipeline definition lint (forge_ci::check, plan 14 C1, plan 04 P-1) found a problem in a repository's `.forge-ci.yml`, or a plan for a trigger could not be made (forge_ci::plan). Each problem is `line reason [subject]`; `reason` is stable. Reading (bounded like forge-doc): too_large (over 64 KiB), not_utf8, empty_file, not_a_mapping, and the strict YAML tree's syntax / multiple_documents / yaml_anchor / yaml_alias / yaml_tag / too_deep (nesting over 16) / too_many_keys (over 64 in one mapping) / duplicate_key (also a job name written twice) / key_not_text. Schema (version 1; every key is known): key_unknown, field_missing (version, stages, jobs, stage, image), field_invalid (a wrong type, a duplicate list item, merge_requests not true/false), version_unsupported, stages_empty, stage_name_invalid, stage_duplicate, too_many_stages (over 16), stage_unknown, jobs_empty, too_many_jobs (over 48), job_name_invalid, image_not_pinned (not an OCI reference `[host[:port]/]lowercase/path[:tag]@sha256:<64 hex>`), script_empty, too_many_script_lines (over 200), script_line_invalid (a control character other than tab), script_line_too_long (over 4096 bytes), timeout_missing, timeout_invalid (not `<n>s|m|h`), timeout_too_long (over 4h), tag_invalid, too_many_tags (8), secret_name_invalid (the name is not echoed), too_many_secrets (16), branch_pattern_invalid, too_many_branches (16), artifact_path_invalid (absolute, `..`, `.git`, a glob metacharacter, a backslash, a drive), too_many_artifacts (16); services (plan 14 C5s): too_many_services (2), service_name_invalid (not `[a-z][a-z0-9-]{0,30}`), service_duplicate, field_missing (name, image of a service), image_not_pinned (subject: the service), service_env_invalid (a key not `[A-Za-z_][A-Za-z0-9_]*`, a value that is not text, over 1024 bytes or with a control character; the key and value are not echoed), too_many_service_env (16), service_user_invalid (not a name, uid or uid:gid), service_tmpfs_invalid (not absolute, `/`, `/tmp`, under /proc /sys /dev, `.` / `..`, or a character outside `[A-Za-z0-9._-/]`), too_many_service_tmpfs (4). Across jobs (only on a well-formed file): needs_unknown, needs_duplicate, too_many_needs (16), needs_later_stage, needs_cycle (each job on a cycle), secret_on_unprotected_ref (a job with secrets that runs for merge requests, or for a branch pattern the repository's protected patterns do not cover), secret_protection_unknown (a local check without the protected list: no branch counts as protected; pass `gstn ci lint --protected`). At most 100 problems, then too_many_problems; a subject is cut to 64 characters. Plan: needs_not_in_pipeline (a selected job needs a job the trigger does not run), secret_on_unprotected_ref (a selected job with secrets in a merge request's pipeline or on an unprotected branch: the plan fails rather than drop the secrets), eval_report_declared_twice (plan 17 P17-2: more than one selected job declares the artifact `eval-report.json`; subject: the second job). Where: `gstn ci lint` / `gstn ci plan` on the working tree (exit 1) and the check `forge/ci-lint` on a merge request version's head (conclusion `failure`). Not a server fault: the file is the repository's content."
 diagnosis = "The log event carries `reason` and `line` of the first problem and `problems` (how many). Reproduce with forge_ci::lint on the same bytes (each problem's line, reason and subject); the reasons and bounds are in crates/forge-ci/README.md."
 fix = "Correct `.forge-ci.yml` at the listed line (pin the image by digest, set a timeout of at most 4h, keep secrets on jobs limited to protected branches with merge_requests: false, break the needs cycle). Nothing to change on the server."
 test = "a_pipeline_definition_with_a_cycle_is_ci_config_invalid"
@@ -3031,3 +3031,72 @@ diagnosis = "The worker logs `forge.deploy.target_failed` (error) with `error_co
 fix = "Follow runbook deploy (Target not allowed): fix the DNS record or the target (an administrator, PUT …/targets/{name}), or add the network to `deploy.allowed_networks` and restart forge worker."
 runbook = "deploy"
 test = "a_target_resolving_to_loopback_is_refused_at_connect"
+
+# ── Plan 17 P17-2: the `forge/ai-eval` check (area AIASSET, ADR-0034). 0001 ManifestInvalid
+#    and 0005 ModelDigestMismatch stay for P17-3 / P17-1 (plan 17 §5.4). ──
+
+[[error]]
+code = "FG-AIASSET-0002"
+name = "BenchUnavailable"
+http_status = 503
+severity = "warn"
+user_message_ja = "AI の評価ベンチの結果がありません。`forge/ai-eval` は error の扱いです。"
+user_message_en = "The AI evaluation bench produced no result. `forge/ai-eval` is reported as error."
+user_message_id = "Bench evaluasi AI tidak menghasilkan hasil. `forge/ai-eval` dilaporkan sebagai error."
+cause = "Plan 17 §1.6 gate 5 (ADR-0034): a pipeline whose `.forge-ci.yml` job declares the artifact `eval-report.json` ended without a usable report: the declaring job did not succeed (failed, canceled — e.g. no `gpu-eval` runner, a timeout), the pipeline ended without running it, or the job succeeded but uploaded no `eval-report.json` (or its stored file is gone). forge's worker wrote `forge/ai-eval` = `error`, never success: a merge request that requires it waits."
+diagnosis = "The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0002`, `pipeline_id`, `job` and `reason` (`job_failed` / `job_canceled` / `job_not_run` / `pipeline_<status>` / `report_missing` / `report_file_missing`). Read: SELECT j.name, j.status, j.attempt, j.error_code FROM forge.ci_jobs j JOIN forge.ci_pipelines p ON p.id = j.pipeline_id WHERE p.id = <pipeline_id> AND j.name = p.ai_eval_job; SELECT id, path, attempt FROM forge.ci_artifacts WHERE job_id = <job_id>; and `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>` for the job's failure."
+fix = "Follow runbook ai-eval-bench: bring the `gpu-eval` runner back (or wait for it), make the bench job write `eval-report.json` at the work tree root and declare it under `artifacts: { paths }`, then retry the pipeline."
+runbook = "ai-eval-bench"
+test = "missing_report_is_error_not_success"
+
+[[error]]
+code = "FG-AIASSET-0003"
+name = "BaselineMissing"
+http_status = 409
+severity = "info"
+user_message_ja = "AI の評価の基準（evals/baselines/）が無いか、読めません。`forge/ai-eval` は error の扱いです。"
+user_message_en = "The AI evaluation baseline (evals/baselines/) is missing or unreadable. `forge/ai-eval` is reported as error."
+user_message_id = "Baseline evaluasi AI (evals/baselines/) tidak ada atau tidak dapat dibaca. `forge/ai-eval` dilaporkan sebagai error."
+cause = "Plan 17 §1.6 gate 5, §5.4 (ADR-0034): the report names its models (`models`), and the baseline `evals/baselines/<models>.json` at the pipeline's commit is absent, not a regular file, larger than 1 MiB, not a valid `gitstation.ai-eval-report/v1` document, or names other models. Without a baseline there is nothing to compare with, so the check is `error` (never success)."
+diagnosis = "The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0003`, `pipeline_id`, `baseline` (the path) and `reason` (`baseline_absent` / `baseline_not_a_file` / `baseline_too_large` / `baseline_invalid` with `detail` / `baseline_models_mismatch`). Check by hand: git show <sha>:evals/baselines/<models>.json, against the schema in docs/ai-eval-report.md."
+fix = "Add the baseline from an approved nightly result (a merge request to `evals/baselines/`, a protected path: an approver's approval), or fix the report's `models`."
+test = "baseline_absent_is_error"
+
+[[error]]
+code = "FG-AIASSET-0004"
+name = "EvalRegression"
+http_status = 422
+severity = "info"
+user_message_ja = "AI の評価が基準より悪くなりました（回帰・安全のケース・指標）。`forge/ai-eval` の比較表を見てください。"
+user_message_en = "The AI evaluation is worse than the baseline (a regression, a safety case or a metric). See the comparison table of `forge/ai-eval`."
+user_message_id = "Evaluasi AI lebih buruk daripada baseline (regresi, kasus keamanan, atau metrik). Lihat tabel perbandingan `forge/ai-eval`."
+cause = "Plan 17 §1.6 gates 1–4 (ADR-0034): a safety case did not pass every run or is missing from the report, a reproduction case of the merge request does not pass by majority, a case that passed every run in the baseline passes at most half its runs now, or a summary metric is past the baseline by more than the allowed delta (hit rate −0.02, false alarm rate +0.02, p95 latency +20 % unless the baseline sets `allowed`). Flaky cases (some but not all runs passed, in the baseline or now) are listed, never counted. The check is `failure`."
+diagnosis = "The check run's summary has the comparison table and every finding; the worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0004`, `pipeline_id`, `findings` and the first `reason` (`safety_case_failed` / `safety_case_missing` / `reproduction_not_fixed` / `stable_case_regressed` / `metric_below_baseline`). The full report is the artifact `eval-report.json` of the bench job."
+fix = "Fix the change (skill, playbook, prompt) until the bench passes. A baseline change is a protected-path merge request approved by an approver, never a way around a regression."
+test = "regression_when_stable_case_drops"
+
+[[error]]
+code = "FG-AIASSET-0006"
+name = "CaseNotReproducing"
+http_status = 422
+severity = "info"
+user_message_ja = "再現ケースが基準で既に合格しています（外れを再現していません）。ケースを見直してください。"
+user_message_en = "A reproduction case already passes in the baseline, so it does not reproduce the miss. Review the case."
+user_message_id = "Kasus reproduksi sudah lulus di baseline, sehingga tidak mereproduksi kesalahan. Tinjau kasusnya."
+cause = "Plan 17 §1.6 gate 2, §5.4 (ADR-0034): a case of kind `reproduction` passes every run in the baseline. A reproduction case must be red before the fix (red → green); one green already proves nothing. The check is `failure`."
+diagnosis = "The summary lists the case under the findings with `case_not_reproducing`; the worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0006` and `pipeline_id`."
+fix = "Rewrite the case so it reproduces the miss on the current assets (it fails in the baseline), or make it `regular` if it is a plain regression case."
+test = "reproduction_case_green_in_baseline_is_not_reproducing"
+
+[[error]]
+code = "FG-AIASSET-0007"
+name = "EvalReportInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "AI の評価の結果（eval-report.json）の形が正しくありません。`forge/ai-eval` は error の扱いです。"
+user_message_en = "The AI evaluation result (eval-report.json) is malformed. `forge/ai-eval` is reported as error."
+user_message_id = "Hasil evaluasi AI (eval-report.json) tidak valid. `forge/ai-eval` dilaporkan sebagai error."
+cause = "Plan 17 P17-2 (ADR-0034): the artifact `eval-report.json` of the declaring job is not a `gitstation.ai-eval-report/v1` document: not JSON, an unknown field or schema, a bad `models` name, a case id repeated or malformed, `passes` above `runs`, `runs` outside 1–15, more than 5000 cases, a metric outside its range, larger than 1 MiB, or its stored bytes no longer match the sha256 recorded at upload. The check is `error` (never success)."
+diagnosis = "The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0007`, `pipeline_id`, `reason` and `detail` (the field or case at fault, never the report's text). The schema is docs/ai-eval-report.md."
+fix = "Fix the bench's report writer (the PFS `bench` entry point) to the v1 schema and retry the pipeline."
+test = "report_with_passes_above_runs_is_invalid"

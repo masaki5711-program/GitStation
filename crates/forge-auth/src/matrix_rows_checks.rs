@@ -21,6 +21,7 @@ use forge_errors::ErrorCode as E;
 use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Fixture as F, Row};
 use crate::matrix_review::MrProject as P;
+use crate::model::JobTokenState as J;
 
 const fn row(action: A, actor: W, fixture: F, expect: Expect) -> Row {
     Row {
@@ -65,6 +66,10 @@ const FORGE: F = run(Ns::Forge, false, P::Private);
 const CI_PIPELINE: F = F::CiPipelineCheckRun { granted: true };
 const CI_PIPELINE_UNGRANTED: F = F::CiPipelineCheckRun { granted: false };
 const EXT: F = run(Ns::Ext, false, P::Private);
+/// `forge/ai-eval` (plan 17 P17-2, ADR-0034): a `forge/` name — forge's
+/// worker writes it from the bench's `eval-report.json`; the CI job that
+/// ran the bench never reports it (ADR-0029 decision 8).
+const AI_EVAL: F = FORGE;
 
 const SA: F = F::ServiceAccountTarget {
     human: false,
@@ -112,6 +117,11 @@ pub(crate) const CHECK_ROWS: &[Row] = &[
     row(A::CheckWrite, W::AdminTokenAdmin, CI_PIPELINE, deny(E::Forbidden)),
     row(A::CheckWrite, W::AgentTokenApi, CI_PIPELINE, deny(E::Forbidden)),
     row(A::CheckWrite, W::Developer, CI_PIPELINE, deny(E::Forbidden)),
+    // forge/ai-eval (plan 17 P17-2): never by the CI job that ran the
+    // bench, a granted service account, an agent or an administrator.
+    row(A::CheckWrite, W::Job(J::Live), AI_EVAL, deny(E::Forbidden)),
+    row(A::CheckWrite, W::ServiceAccountOwnerTokenApi, AI_EVAL, deny(E::Forbidden)),
+    row(A::CheckWrite, W::AgentOwnerTokenApi, AI_EVAL, deny(E::Forbidden)),
     // ext/ is refused for everyone in C1.
     row(A::CheckWrite, W::DevTokenApi, EXT, deny(E::Forbidden)),
     row(A::CheckWrite, W::MaintainerTokenApi, EXT, deny(E::Forbidden)),
@@ -211,6 +221,28 @@ mod tests {
         ];
         for (actor, fixture, reason) in cases {
             assert_eq!(reason_of(actor, fixture), reason, "{actor:?} {fixture:?}");
+        }
+    }
+
+    /// Plan 17 P17-2 (ADR-0034, ADR-0029 decision 8): `forge/ai-eval` is a
+    /// `forge/` name only forge's worker writes. The CI job that ran the
+    /// bench (its own token) is refused like every other check write, and
+    /// so are a granted service account and an administrator.
+    #[test]
+    fn job_cannot_write_ai_eval() {
+        let name = forge_core::CheckName::parse(forge_core::checks::AI_EVAL_CHECK).expect("name");
+        assert_eq!(name.namespace(), Ns::Forge);
+        assert!(forge_core::checks::system_reports(&name));
+        let job = W::Job(J::Live);
+        let err = authorize(&job.principal(), A::CheckWrite, &AI_EVAL.resource(job))
+            .expect_err("a job never reports a check");
+        assert_eq!(err.code(), E::Forbidden);
+        for actor in [W::ServiceAccountOwnerTokenApi, W::Admin, W::AdminTokenAdmin] {
+            assert_eq!(
+                reason_of(actor, AI_EVAL),
+                "forge_namespace_internal",
+                "{actor:?}"
+            );
         }
     }
 }
