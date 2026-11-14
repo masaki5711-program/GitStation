@@ -16,12 +16,12 @@
 
 ## 原因 (cause)
 
-Plan 16 §3 (ADR-0032 §6): a managed file (`.claude/**`, `CLAUDE.md`, `.mcp.json`, except per-checkout files) differs from `.gitstation/agent.lock.json`. `reason`: `file_changed` (the file's SHA-256 is not the lock's: edited by hand), `file_missing`, `unmanaged_file` (a managed file the lock does not pin, neither a part's nor `custom`), `not_a_regular_file` (a symlink where a managed file is), `duplicate_path`, `lock_missing` (managed files without a lock), `lock_unreadable`, `lock_invalid` (not the lock's JSON, an unknown key, a bad hash), `lock_version_unsupported`.
+Plan 16 §3 (ADR-0032 §6): a managed file (`.claude/**`, `CLAUDE.md`, `.mcp.json`, except per-checkout files) differs from `.gitstation/agent.lock.json`. `reason`: `file_changed` (the file's SHA-256 is not the lock's: edited by hand), `file_missing`, `unmanaged_file` (a managed file the lock does not pin, neither a part's nor `custom`; managed paths match in any letter case — `.Claude/settings.json`, `CLAUDE.MD` — and a tracked per-checkout file such as `.claude/settings.local.json` is managed), `case_collision` (two tracked paths that differ only by letter case), `custom_unverified` (a hand-added `custom` file that can run code — anything but Markdown without hooks or `` !` `` — has no signature or scan; it stays unverified until the builder's approval check, A7), `not_a_regular_file` (a symlink where a managed file is, or a `.claude` that is not a directory), `duplicate_path`, `lock_missing` (managed files without a lock), `lock_unreadable`, `lock_invalid` (not the lock's JSON, an unknown key, a bad hash), `lock_version_unsupported`.
 
 ## 調べ方 (diagnosis)
 
-`gstn agent verify --json` lists each path with its reason. `git log -p -- <path>` shows who changed it; `git status -- .claude` shows uncommitted edits.
+`gstn agent verify --json` lists each path with its reason. `git log -p -- <path>` shows who changed it; `git status -- .claude` shows uncommitted edits. Every file is `file_changed` at once after a checkout with `core.autocrlf=true` (LF became CRLF): the check fails closed; check `git config core.autocrlf`.
 
 ## 対処 (fix)
 
-Undo the hand edit (git restore), or add the file as `custom` through a builder merge request (a person approves it), or regenerate the configuration with the builder.
+Undo the hand edit (git restore); for line endings set `core.autocrlf=false` (or `.gitattributes` `* -text` for `.claude/`) and check out again; or add the file as `custom` through a builder merge request (a person approves it), or regenerate the configuration with the builder.

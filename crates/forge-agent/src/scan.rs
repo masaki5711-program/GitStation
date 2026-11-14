@@ -2,32 +2,52 @@
 //! on every developer's PC, so the scan is conservative: what it cannot see
 //! through is refused, not trusted.
 //!
-//! Scripts (`.js` / `.cjs` / `.mjs`), the raw source (comments included):
-//! - a module name `child_process` / `cluster` anywhere → needs `exec`;
-//! - `http` `https` `http2` `net` `tls` `dgram` `dns` `undici`, `fetch(`,
-//!   `WebSocket`, `XMLHttpRequest` → needs `network`;
-//! - code the scan cannot follow is refused outright (`dynamic_code`): a
-//!   `require` whose argument is not one plain string literal (computed,
-//!   concatenated, escaped, or `require` passed around), `import(`, `eval(`,
-//!   `Function(`, `.constructor`, `process.binding` / `_linkedBinding` /
-//!   `dlopen`, `process[`, `globalThis[` / `global[`, `Reflect.`,
-//!   `mainModule`, `createRequire`, and the modules `vm` `worker_threads`
-//!   `module` `inspector` `v8` `wasi`. Indirection the scan still cannot
-//!   see is caught by the other layers (two people review every part, the
-//!   server's hook test job, beta first — plan 16 §8).
+//! **Scripts** — every part file that is not `.md` or `.json` (node runs a
+//! file of any extension), the raw source, comments included, read as
+//! identifiers so spacing and comments between tokens change nothing
+//! (`eval (`, `eval/**/(`):
+//! - module `child_process` / `cluster` → needs `exec`;
+//! - modules `http` `https` `http2` `net` `tls` `dgram` `dns` `undici`, the
+//!   identifiers `fetch` `WebSocket` `XMLHttpRequest` `EventSource` → needs
+//!   `network`;
+//! - file writes (`writeFile`, `appendFile`, `createWriteStream`, `unlink`,
+//!   `rename`, `mkdir`, `copyFile`, `symlink`, `chmod`, `truncate`, `rmSync`,
+//!   …) → needs `fs-write`;
+//! - refused outright (`dynamic_code`): any `\u` escape; the identifiers
+//!   `eval` `Function` `Reflect` `constructor` `binding` `_linkedBinding`
+//!   `dlopen` `mainModule` `createRequire` `getBuiltinModule` `globalThis`
+//!   `global`; `process` not followed by `.`; `import` used as a call;
+//!   a `require` that is not `require(<one plain string literal>)`; the
+//!   modules `vm` `worker_threads` `module` `inspector` `v8` `wasi`.
+//!   Indirection the scan still cannot see is caught by the other layers
+//!   (two people review every part, the server's hook test job, beta first
+//!   — plan 16 §8).
 //!
-//! `.claude/settings.json`: `permissions` → needs `permissions`; a hook
-//! `command` whose program is not `node` → needs `exec`.
+//! **Hook commands** (`.claude/settings.json` `hooks`, any other `.json` with
+//! `command`, `hooks:` in a Markdown front matter): only the exact form
+//! `node <.claude/… .js|.cjs|.mjs of this part>` (optionally after
+//! `"$CLAUDE_PROJECT_DIR"/`) runs without `exec`; anything else — shell
+//! metacharacters, `node -e`, `node --require`, another program — needs
+//! `exec`, and a `node` target outside the part is refused.
 //!
-//! `.mcp.json`: a server with `command` → needs `exec`; with `url` → needs
-//! `network`; every `http(s)://` / `ws(s)://` URL in a server's definition
-//! (url, args, env, headers) must name a host on the allow-list
-//! (`FG-AGENT-0013`, contract 8: nothing outside the company).
+//! **`.claude/settings.json`**: only the keys in [`SETTINGS_KEYS`];
+//! `statusLine`, `apiKeyHelper`, `env`, … are refused (each runs or changes
+//! something the scan cannot judge). `permissions` → needs `permissions`.
+//!
+//! **Markdown**: a `` !` `` (a slash command's inline bash) → needs `exec`.
+//!
+//! **`.mcp.json`**: a server with `command` → needs `exec`; with `url` →
+//! needs `network`; every endpoint in a server's definition — any
+//! `scheme://`, a `//host`, a bare host name or IPv4 address in `url`,
+//! `args`, `env` — must name a host on the allow-list (`FG-AGENT-0013`,
+//! contract 8: nothing outside the company).
+
+use std::collections::BTreeSet;
 
 use forge_errors::ErrorCode;
 use serde_json::Value;
 
-use crate::{Capability, Part, Problem};
+use crate::{check_install_path, Capability, Part, Problem};
 
 /// What the scan may allow; from the server's configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -52,15 +72,81 @@ impl ScanPolicy {
     }
 }
 
+/// The `settings.json` keys a part may set (security review A1, finding 5):
+/// everything else may run a program or change Claude Code beyond what the
+/// capabilities describe.
+pub const SETTINGS_KEYS: [&str; 7] = [
+    "$schema",
+    "hooks",
+    "permissions",
+    "model",
+    "includeCoAuthoredBy",
+    "cleanupPeriodDays",
+    "outputStyle",
+];
+
 const CHILD_MODULES: [&str; 2] = ["child_process", "cluster"];
 const NET_MODULES: [&str; 8] = [
     "http", "https", "http2", "net", "tls", "dgram", "dns", "undici",
 ];
 const DYNAMIC_MODULES: [&str; 6] = ["vm", "worker_threads", "module", "inspector", "v8", "wasi"];
+const NET_WORDS: [&str; 4] = ["fetch", "WebSocket", "XMLHttpRequest", "EventSource"];
+const DYNAMIC_WORDS: [&str; 12] = [
+    "eval",
+    "Function",
+    "Reflect",
+    "constructor",
+    "binding",
+    "_linkedBinding",
+    "dlopen",
+    "mainModule",
+    "createRequire",
+    "getBuiltinModule",
+    "globalThis",
+    "global",
+];
+const FS_WRITE_WORDS: [&str; 30] = [
+    "writeFile",
+    "writeFileSync",
+    "appendFile",
+    "appendFileSync",
+    "createWriteStream",
+    "unlink",
+    "unlinkSync",
+    "rmSync",
+    "rmdir",
+    "rmdirSync",
+    "rename",
+    "renameSync",
+    "mkdir",
+    "mkdirSync",
+    "mkdtemp",
+    "mkdtempSync",
+    "copyFile",
+    "copyFileSync",
+    "cpSync",
+    "symlink",
+    "symlinkSync",
+    "linkSync",
+    "chmod",
+    "chmodSync",
+    "chown",
+    "chownSync",
+    "truncate",
+    "truncateSync",
+    "utimes",
+    "utimesSync",
+];
+/// Extensions that make a dotted word a file name, not a host.
+const FILE_EXTS: [&str; 22] = [
+    "js", "cjs", "mjs", "ts", "json", "md", "py", "sh", "ps1", "bat", "cmd", "exe", "jar", "txt",
+    "yml", "yaml", "toml", "lock", "cfg", "conf", "ini", "env",
+];
 
 /// Scan every file of `part` against its declared capabilities.
 pub fn scan(part: &Part, policy: &ScanPolicy) -> Vec<Problem> {
     let caps = &part.manifest.capabilities;
+    let files: BTreeSet<&str> = part.files.iter().map(|f| f.path.as_str()).collect();
     let mut out = Vec::new();
     for f in &part.files {
         let path = f.path.as_str();
@@ -74,22 +160,52 @@ pub fn scan(part: &Part, policy: &ScanPolicy) -> Vec<Problem> {
             }
         };
         let Ok(text) = std::str::from_utf8(&f.content) else {
-            if is_script(path) || path.ends_with(".json") {
+            out.push(Problem::about(
+                ErrorCode::PartManifestInvalid,
+                "file_not_utf8",
+                path,
+            ));
+            continue;
+        };
+        // Classified ignoring case: Windows and macOS open `Settings.JSON`.
+        let key = crate::case_key(path);
+        if key == ".claude/settings.json" {
+            scan_settings(path, text, &files, &mut out, &need);
+        } else if key == ".mcp.json" {
+            scan_mcp(path, text, policy, &mut out, &need);
+        } else if key.ends_with(".json") {
+            // Data beside a hook; if it carries commands, they are hooks.
+            if let Ok(v) = serde_json::from_str::<Value>(text) {
+                let mut commands = Vec::new();
+                collect_key(&v, "command", &mut commands);
+                check_commands(path, &commands, &files, &mut out, &need);
+            } else {
                 out.push(Problem::about(
                     ErrorCode::PartManifestInvalid,
-                    "file_not_utf8",
+                    "json_invalid",
                     path,
                 ));
             }
-            continue;
-        };
-        if is_script(path) {
+        } else if key.ends_with(".md") {
+            let (hooks, commands) = front_matter_commands(text);
+            if hooks && commands.is_empty() {
+                // `hooks:` in a form the scan does not read: a program.
+                need(&mut out, Capability::Exec, "undeclared_child_process");
+            }
+            check_commands(path, &commands, &files, &mut out, &need);
+            if text.contains("!`") {
+                need(&mut out, Capability::Exec, "undeclared_child_process");
+            }
+        } else {
             let found = scan_script(text);
             if found.child_process {
                 need(&mut out, Capability::Exec, "undeclared_child_process");
             }
             if found.network {
                 need(&mut out, Capability::Network, "undeclared_network");
+            }
+            if found.fs_write {
+                need(&mut out, Capability::FsWrite, "undeclared_fs_write");
             }
             if let Some(what) = found.dynamic {
                 out.push(Problem::new(
@@ -98,60 +214,148 @@ pub fn scan(part: &Part, policy: &ScanPolicy) -> Vec<Problem> {
                     Some(format!("{path}: {what}")),
                 ));
             }
-        } else if path == ".claude/settings.json" {
-            match serde_json::from_str::<Value>(text) {
-                Ok(v) => {
-                    if v.get("permissions").is_some() {
-                        need(&mut out, Capability::Permissions, "undeclared_permissions");
-                    }
-                    if let Some(hooks) = v.get("hooks") {
-                        let mut commands = Vec::new();
-                        collect_key(hooks, "command", &mut commands);
-                        if commands.iter().any(|c| !is_node_command(c)) {
-                            need(&mut out, Capability::Exec, "undeclared_child_process");
-                        }
-                    }
-                }
-                Err(_) => out.push(Problem::about(
-                    ErrorCode::PartManifestInvalid,
-                    "settings_json_invalid",
-                    path,
-                )),
-            }
-        } else if path == ".mcp.json" {
-            scan_mcp(path, text, policy, &mut out, &need);
         }
     }
     out
 }
 
-fn scan_mcp(
+type Need<'a> = dyn Fn(&mut Vec<Problem>, Capability, &'static str) + 'a;
+
+fn scan_settings(
     path: &str,
     text: &str,
-    policy: &ScanPolicy,
+    files: &BTreeSet<&str>,
     out: &mut Vec<Problem>,
-    need: &dyn Fn(&mut Vec<Problem>, Capability, &'static str),
+    need: &Need<'_>,
 ) {
-    let servers = match serde_json::from_str::<Value>(text) {
-        Ok(v) => match v.get("mcpServers").and_then(Value::as_object) {
-            Some(s) => s.clone(), // clone: the parsed value is local
-            None => {
-                out.push(Problem::about(
-                    ErrorCode::PartManifestInvalid,
-                    "mcp_json_invalid",
-                    path,
-                ));
-                return;
-            }
-        },
-        Err(_) => {
-            out.push(Problem::about(
-                ErrorCode::PartManifestInvalid,
-                "mcp_json_invalid",
-                path,
+    let Ok(Value::Object(v)) = serde_json::from_str::<Value>(text) else {
+        out.push(Problem::about(
+            ErrorCode::PartManifestInvalid,
+            "settings_json_invalid",
+            path,
+        ));
+        return;
+    };
+    for key in v.keys() {
+        if !SETTINGS_KEYS.contains(&key.as_str()) {
+            out.push(Problem::new(
+                ErrorCode::PartCapabilityUndeclared,
+                "settings_key_not_allowed",
+                Some(format!(
+                    "{path}: {}",
+                    key.chars().take(64).collect::<String>()
+                )),
             ));
-            return;
         }
+    }
+    if v.contains_key("permissions") {
+        need(out, Capability::Permissions, "undeclared_permissions");
+    }
+    if let Some(hooks) = v.get("hooks") {
+        let mut commands = Vec::new();
+        collect_key(hooks, "command", &mut commands);
+        check_commands(path, &commands, files, out, need);
+    }
+}
+
+/// Hook commands (module docs): the plain `node <part script>` form, or
+/// `exec`.
+fn check_commands(
+    path: &str,
+    commands: &[String],
+    files: &BTreeSet<&str>,
+    out: &mut Vec<Problem>,
+    need: &Need<'_>,
+) {
+    let mut needs_exec = false;
+    for c in commands {
+        match node_target(c) {
+            Some(target) if files.contains(target) => {}
+            Some(_) => out.push(Problem::new(
+                ErrorCode::PartCapabilityUndeclared,
+                "hook_target_not_in_part",
+                Some(format!(
+                    "{path}: {}",
+                    c.chars().take(200).collect::<String>()
+                )),
+            )),
+            None => needs_exec = true,
+        }
+    }
+    if needs_exec {
+        need(out, Capability::Exec, "undeclared_child_process");
+    }
+}
+
+/// The script of `node <path>` when the command is exactly that form: one
+/// space, no flag, no shell metacharacter, a canonical install path of a
+/// Node script (optionally after `"$CLAUDE_PROJECT_DIR"/`).
+pub(crate) fn node_target(command: &str) -> Option<&str> {
+    let rest = command.strip_prefix("node ")?;
+    let rest = rest
+        .strip_prefix("\"$CLAUDE_PROJECT_DIR\"/")
+        .or_else(|| rest.strip_prefix("$CLAUDE_PROJECT_DIR/"))
+        .unwrap_or(rest);
+    let plain = rest
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'/' | b'-'));
+    let script = [".js", ".cjs", ".mjs"].iter().any(|e| rest.ends_with(e));
+    (plain && script && rest.starts_with(".claude/") && check_install_path(rest).is_ok())
+        .then_some(rest)
+}
+
+/// A Markdown file's front matter: whether it has `hooks:`, and the values
+/// of its `command:` lines (quotes removed).
+pub(crate) fn front_matter_commands(text: &str) -> (bool, Vec<String>) {
+    let mut lines = text.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return (false, Vec::new());
+    }
+    let mut hooks = false;
+    let mut commands = Vec::new();
+    for line in lines {
+        let t = line.trim();
+        if t == "---" {
+            break;
+        }
+        if t.starts_with("hooks:") {
+            hooks = true;
+        }
+        let t = t.trim_start_matches("- ");
+        if let Some(v) = t.strip_prefix("command:") {
+            let v = v.trim();
+            let v = v
+                .strip_prefix('"')
+                .and_then(|x| x.strip_suffix('"'))
+                .or_else(|| v.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')))
+                .unwrap_or(v);
+            commands.push(v.to_owned());
+        }
+    }
+    (hooks, commands)
+}
+
+/// Whether a Markdown file runs commands (hooks in its front matter, or a
+/// slash command's `` !` `` line).
+pub(crate) fn markdown_runs_commands(text: &str) -> bool {
+    let (hooks, commands) = front_matter_commands(text);
+    hooks || !commands.is_empty() || text.contains("!`")
+}
+
+fn scan_mcp(path: &str, text: &str, policy: &ScanPolicy, out: &mut Vec<Problem>, need: &Need<'_>) {
+    let parsed = serde_json::from_str::<Value>(text);
+    let Some(servers) = parsed
+        .as_ref()
+        .ok()
+        .and_then(|v| v.get("mcpServers"))
+        .and_then(Value::as_object)
+    else {
+        out.push(Problem::about(
+            ErrorCode::PartManifestInvalid,
+            "mcp_json_invalid",
+            path,
+        ));
+        return;
     };
     for server in servers.values() {
         if server.get("command").is_some() {
@@ -163,7 +367,7 @@ fn scan_mcp(
         let mut strings = Vec::new();
         collect_strings(server, &mut strings);
         for s in strings {
-            for host in url_hosts(&s) {
+            for host in endpoint_hosts(&s) {
                 if !policy.host_allowed(&host) {
                     out.push(Problem::new(
                         ErrorCode::McpEndpointNotAllowed,
@@ -176,29 +380,13 @@ fn scan_mcp(
     }
 }
 
-fn is_script(path: &str) -> bool {
-    [".js", ".cjs", ".mjs"].iter().any(|e| path.ends_with(e))
-}
-
-/// `node …` (the hook runtime, plan 09 §3.1). Anything else runs another
-/// program.
-fn is_node_command(c: &str) -> bool {
-    let first = c.split_whitespace().next().unwrap_or("");
-    let first = first.trim_matches('"');
-    first == "node" || first == "node.exe"
-}
-
 fn collect_key(v: &Value, key: &str, out: &mut Vec<String>) {
     match v {
         Value::Object(m) => {
             for (k, x) in m {
                 if k == key {
-                    if let Some(s) = x.as_str() {
-                        out.push(s.to_owned());
-                    } else {
-                        // A non-string command: treated as "not node".
-                        out.push(String::new());
-                    }
+                    // A non-string command is "not the node form".
+                    out.push(x.as_str().unwrap_or_default().to_owned());
                 } else {
                     collect_key(x, key, out);
                 }
@@ -223,45 +411,108 @@ fn collect_strings(v: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// The hosts of every `http(s)://` / `ws(s)://` URL inside `s`. A URL that
-/// does not parse yields its raw authority, which is then not on the list.
-fn url_hosts(s: &str) -> Vec<String> {
-    let lower = s.to_ascii_lowercase();
+/// Every host an MCP string may reach: any `scheme://…`, a `//host…`, a
+/// bare dotted host name (not a file name) or an IPv4 address, with or
+/// without a port. A URL that does not parse yields its raw text, which is
+/// then not on the list.
+fn endpoint_hosts(s: &str) -> Vec<String> {
     let mut hosts = Vec::new();
-    for scheme in ["http://", "https://", "ws://", "wss://"] {
-        let mut from = 0;
-        while let Some(i) = lower.get(from..).and_then(|rest| rest.find(scheme)) {
-            let start = from + i;
-            // No scheme is a substring of another (`https://` does not
-            // contain `http://`), so each URL is found once.
-            let tail = s.get(start..).unwrap_or("");
-            let end = tail
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                .unwrap_or(tail.len());
-            let candidate = tail.get(..end).unwrap_or("");
-            match url::Url::parse(candidate) {
-                Ok(u) => hosts.push(u.host_str().unwrap_or("").to_owned()),
-                Err(_) => hosts.push(candidate.to_owned()),
+    let tokens = s.split(|c: char| {
+        c.is_whitespace() || matches!(c, '=' | ',' | '"' | '\'' | ';' | '(' | ')' | '<' | '>')
+    });
+    for token in tokens.filter(|t| !t.is_empty()) {
+        if token.contains("://") {
+            match url::Url::parse(token) {
+                Ok(u) => hosts.push(u.host_str().unwrap_or(token).to_owned()),
+                Err(_) => hosts.push(token.to_owned()),
             }
-            from = start + scheme.len();
+        } else if let Some(rest) = token.strip_prefix("//") {
+            let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+            hosts.push(strip_port(host).to_owned());
+        } else {
+            let head = token.split('/').next().unwrap_or(token);
+            let host = strip_port(head);
+            if looks_like_host(host) {
+                hosts.push(host.to_owned());
+            }
         }
     }
     hosts
+}
+
+fn strip_port(h: &str) -> &str {
+    match h.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|c| c.is_ascii_digit()) => host,
+        _ => h,
+    }
+}
+
+fn looks_like_host(h: &str) -> bool {
+    let labels: Vec<&str> = h.split('.').collect();
+    if labels.len() < 2
+        || labels.iter().any(|l| l.is_empty())
+        || !h
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
+    {
+        return false;
+    }
+    let ipv4 = labels.len() == 4
+        && labels
+            .iter()
+            .all(|l| l.len() <= 3 && l.bytes().all(|c| c.is_ascii_digit()));
+    let last = labels.last().copied().unwrap_or("");
+    let named = last.len() >= 2
+        && last.bytes().all(|c| c.is_ascii_alphabetic())
+        && !FILE_EXTS.contains(&last.to_ascii_lowercase().as_str());
+    ipv4 || named
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct ScriptFindings {
     pub child_process: bool,
     pub network: bool,
+    pub fs_write: bool,
     /// The first construct the scan cannot follow.
     pub dynamic: Option<&'static str>,
 }
 
-/// Scan one script (module docs). Comments are scanned too: a lexer that
-/// strips them can be desynchronised by a regex literal (`/'/`) into
-/// hiding real code as a "comment", so the raw source is what is searched.
+fn is_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Every identifier-like word of `src` with its byte offset (strings and
+/// comments included: the scan is conservative).
+fn words(src: &str) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in src.char_indices() {
+        match (is_ident(c), start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                out.push((s, src.get(s..i).unwrap_or("")));
+                start = None;
+            }
+            (true, Some(_)) | (false, None) => {}
+        }
+    }
+    if let Some(s) = start {
+        out.push((s, src.get(s..).unwrap_or("")));
+    }
+    out
+}
+
+fn next_non_ws(src: &str, from: usize) -> Option<char> {
+    src.get(from..)
+        .and_then(|r| r.chars().find(|c| !c.is_whitespace()))
+}
+
+/// Scan one script (module docs).
 pub(crate) fn scan_script(src: &str) -> ScriptFindings {
     let mut f = ScriptFindings::default();
+    if src.contains("\\u") {
+        f.dynamic.get_or_insert("unicode_escape");
+    }
     let mut names = string_literals(src);
     names.extend(module_names(src));
     for lit in &names {
@@ -276,33 +527,24 @@ pub(crate) fn scan_script(src: &str) -> ScriptFindings {
             f.dynamic.get_or_insert("dynamic_module");
         }
     }
-    // Also in an identifier, a property or an escaped literal.
-    if src.contains("child_process") {
-        f.child_process = true;
-    }
-    for token in ["fetch(", "WebSocket", "XMLHttpRequest"] {
-        if contains_word(src, token) {
+    for (at, w) in words(src) {
+        let after = at + w.len();
+        if w == "child_process" {
+            f.child_process = true;
+        } else if NET_WORDS.contains(&w) {
             f.network = true;
-        }
-    }
-    let dynamic_tokens: [(&str, &'static str); 13] = [
-        ("eval(", "eval"),
-        ("Function(", "function_constructor"),
-        (".constructor", "constructor"),
-        ("process.binding", "process_binding"),
-        ("process._linkedBinding", "process_binding"),
-        ("process.dlopen", "process_dlopen"),
-        ("process[", "process_index"),
-        ("mainModule", "main_module"),
-        ("createRequire", "create_require"),
-        ("import(", "dynamic_import"),
-        ("globalThis[", "global_index"),
-        ("global[", "global_index"),
-        ("Reflect.", "reflect"),
-    ];
-    for (token, what) in dynamic_tokens {
-        if contains_word(src, token) {
-            f.dynamic.get_or_insert(what);
+        } else if FS_WRITE_WORDS.contains(&w) {
+            f.fs_write = true;
+        } else if let Some(d) = DYNAMIC_WORDS.iter().find(|d| **d == w) {
+            f.dynamic.get_or_insert(*d);
+        } else if w == "process" && next_non_ws(src, after) != Some('.') {
+            f.dynamic.get_or_insert("process_access");
+        } else if w == "import" {
+            let static_form = next_non_ws(src, after)
+                .is_some_and(|c| matches!(c, '{' | '*' | '\'' | '"' | '.') || is_ident(c));
+            if !static_form {
+                f.dynamic.get_or_insert("dynamic_import");
+            }
         }
     }
     if let Some(what) = unplain_require(src) {
@@ -346,26 +588,6 @@ fn module_names(src: &str) -> Vec<String> {
         }
     }
     out
-}
-
-fn is_ident(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '$'
-}
-
-/// `token` in `code` not preceded by an identifier character (so `myeval(`
-/// is not `eval(`, but `globalThis.eval(` is).
-fn contains_word(code: &str, token: &str) -> bool {
-    let mut from = 0;
-    while let Some(i) = code.get(from..).and_then(|r| r.find(token)) {
-        let at = from + i;
-        let before = code.get(..at).and_then(|b| b.chars().next_back());
-        // A token that starts with `.` is a property: anywhere.
-        if token.starts_with('.') || before.is_none_or(|c| !is_ident(c)) {
-            return true;
-        }
-        from = at + token.len();
-    }
-    false
 }
 
 /// The first `require` that is not `require(<one plain string literal>)`.

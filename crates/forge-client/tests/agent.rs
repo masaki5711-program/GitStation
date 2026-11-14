@@ -257,3 +257,42 @@ fn a_part_directory_is_linted_scanned_and_digested() {
     assert_eq!(out.code, 1);
     assert!(out.stderr.contains("FG-AGENT-0001"), "{}", out.stderr);
 }
+
+// ── security review A1 ──
+
+/// Finding 2: Claude Code loads hooks from `settings.local.json`; tracked,
+/// it is checked like any other file (untracked, it is the developer's own).
+#[test]
+fn finding2_a_tracked_settings_local_json_is_unmanaged() {
+    let r = repo();
+    let st = Command::new("git")
+        .args(["add", "-f", ".claude/settings.local.json"])
+        .current_dir(r.root())
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let out = r.verify(&[]);
+    assert_eq!(out.code, 1, "{}", out.stdout);
+    assert!(out.stdout.contains("unmanaged_file"), "{}", out.stdout);
+    assert!(out.stdout.contains("settings.local.json"), "{}", out.stdout);
+}
+
+/// Finding 3: a `.claude` that is not a directory (here the text file git
+/// writes for a symlink when symlinks are off) fails, never "no
+/// configuration".
+#[test]
+fn finding3_a_claude_path_that_is_not_a_directory_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success());
+    std::fs::write(dir.path().join(".claude"), "../../elsewhere/.claude").unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let out = gstn(dir.path(), config.path(), &["agent", "verify", "--json"]);
+    assert_eq!(out.code, 1, "{}{}", out.stdout, out.stderr);
+    assert!(out.stdout.contains("not_a_regular_file"), "{}", out.stdout);
+    assert!(out.stderr.contains("FG-AGENT-0007"), "{}", out.stderr);
+}

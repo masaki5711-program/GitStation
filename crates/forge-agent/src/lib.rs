@@ -32,7 +32,7 @@ pub use manifest::{
     parse_part, Capability, EntryKind, Kind, Manifest, Part, PartFile, TreeEntry, MANIFEST,
     MAX_PART_BYTES, MAX_PART_FILES,
 };
-pub use path::{check_install_path, is_managed_path};
+pub use path::{case_key, check_install_path, is_managed_path, is_per_checkout_path};
 pub use scan::{scan, ScanPolicy};
 pub use sign::{
     public_key_from_seed, sign_digest, verify_signature, KeyRing, PublicKey, SIGNATURE_DOMAIN,

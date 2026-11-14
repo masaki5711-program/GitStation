@@ -28,10 +28,21 @@ use forge_errors::ErrorCode;
 use serde::Deserialize;
 
 use crate::manifest::manifest_from_parts;
+use crate::scan::markdown_runs_commands;
 use crate::{
-    check_install_path, digest, is_managed_path, sha256, unhex32, verify_signature, Digest,
-    KeyRing, Problem,
+    case_key, check_install_path, digest, is_managed_path, sha256, unhex32, verify_signature,
+    Digest, KeyRing, Problem,
 };
+
+/// Whether a managed file can run code or change what runs: anything but
+/// Markdown that runs no command (hooks in front matter, `` !` ``).
+fn runs_code(path: &str, bytes: &[u8]) -> bool {
+    let key = case_key(path);
+    if !key.ends_with(".md") {
+        return true;
+    }
+    std::str::from_utf8(bytes).map_or(true, markdown_runs_commands)
+}
 
 /// Where the lock lives in a repository.
 pub const LOCK_PATH: &str = ".gitstation/agent.lock.json";
@@ -129,25 +140,44 @@ fn mismatch(reason: &'static str, subject: &str) -> Problem {
 }
 
 /// Verify `lock` against `tree` (every managed file of the working tree:
-/// path → bytes) with `keys`.
-pub fn verify_lock(lock: &Lock, keys: &KeyRing, tree: &BTreeMap<String, Vec<u8>>) -> LockReport {
+/// path → bytes) with the keys in `ring_`.
+pub fn verify_lock(lock: &Lock, ring_: &KeyRing, tree: &BTreeMap<String, Vec<u8>>) -> LockReport {
     let mut report = LockReport::default();
     let mut pinned: BTreeSet<&str> = BTreeSet::new();
+    let mut keys: BTreeSet<String> = BTreeSet::new();
 
     for part in &lock.parts {
         report.parts += 1;
         let label = format!("{}@{}", part.slug, part.version);
-        verify_part(part, &label, keys, &mut report.problems);
+        verify_part(part, &label, ring_, &mut report.problems);
         for f in &part.files {
-            check_file(f, tree, &mut pinned, &mut report);
+            check_file(f, tree, &mut pinned, &mut keys, &mut report);
         }
     }
     for f in &lock.custom {
-        check_file(f, tree, &mut pinned, &mut report);
+        check_file(f, tree, &mut pinned, &mut keys, &mut report);
+        // Security review A1, finding 6: a hand-added file nobody signed or
+        // scanned is not "verified" while its approval cannot be checked
+        // here (A7). Text that runs nothing (plain Markdown) passes.
+        let runs = match tree.get(&f.path) {
+            Some(bytes) => runs_code(&f.path, bytes),
+            // Missing: already `file_missing`.
+            None => false,
+        };
+        if runs {
+            report.problems.push(mismatch("custom_unverified", &f.path));
+        }
     }
+    let mut by_case: BTreeMap<String, &str> = BTreeMap::new();
     for path in tree.keys() {
         if is_managed_path(path) && !pinned.contains(path.as_str()) {
             report.problems.push(mismatch("unmanaged_file", path));
+        }
+        // Finding 1: two names a case-insensitive file system makes one.
+        if let Some(other) = by_case.insert(case_key(path), path) {
+            report
+                .problems
+                .push(mismatch("case_collision", &format!("{other} / {path}")));
         }
     }
     report
@@ -210,6 +240,7 @@ fn check_file<'a>(
     f: &'a LockFile,
     tree: &BTreeMap<String, Vec<u8>>,
     pinned: &mut BTreeSet<&'a str>,
+    keys: &mut BTreeSet<String>,
     report: &mut LockReport,
 ) {
     report.files += 1;
@@ -221,7 +252,7 @@ fn check_file<'a>(
         ));
         return;
     }
-    if !pinned.insert(f.path.as_str()) {
+    if !keys.insert(case_key(&f.path)) || !pinned.insert(f.path.as_str()) {
         report.problems.push(mismatch("duplicate_path", &f.path));
         return;
     }

@@ -15,6 +15,10 @@
 //! - With `--part <dir>`: one part directory — `part.toml`, install paths,
 //!   the static scan (with `--mcp-allowed-hosts`) — and its digest.
 //!
+//! Line endings: a checkout with `core.autocrlf=true` turns LF into CRLF,
+//! so every file is `file_changed` — the check fails closed (FG-AGENT-0007
+//! says how to fix the checkout).
+//!
 //! Exit 1 with the most serious problem's code (FG-AGENT-0002 before 0003,
 //! 0005, 0013, 0007, 0001); every problem is listed. Bounds (never a silent
 //! pass): [`MAX_TREE_FILES`] managed files and [`MAX_TREE_BYTES`] bytes,
@@ -26,8 +30,8 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use forge_agent::{
-    is_managed_path, parse_part, scan, verify_lock, EntryKind, KeyRing, Lock, Problem, ScanPolicy,
-    TreeEntry, LOCK_PATH, MAX_PART_BYTES, MAX_PART_FILES,
+    is_managed_path, is_per_checkout_path, parse_part, scan, verify_lock, EntryKind, KeyRing, Lock,
+    Problem, ScanPolicy, TreeEntry, LOCK_PATH, MAX_PART_BYTES, MAX_PART_FILES,
 };
 use forge_errors::ErrorCode;
 use serde_json::{json, Value};
@@ -86,30 +90,61 @@ fn read_small(path: &Path, max: usize, what: &str) -> Result<Option<Vec<u8>>> {
     Ok(Some(out))
 }
 
-/// The repository's managed files: path → bytes, plus the managed paths
-/// that are not regular files (a symlink is never followed).
 /// Managed path → bytes.
 type Tree = BTreeMap<String, Vec<u8>>;
 
-fn managed_tree(root: &Path) -> Result<(Tree, Vec<String>)> {
-    let (listing, cut) = crate::doc::list_files(root, crate::doc::MAX_LISTING_BYTES)?;
+/// The managed paths `git ls-files <which>` lists (non-UTF-8 names kept,
+/// lossily, so they are reported rather than skipped).
+fn listed(root: &Path, which: &[&str]) -> Result<Vec<String>> {
+    let (listing, cut) = crate::doc::ls_files(root, crate::doc::MAX_LISTING_BYTES, which)?;
     if cut {
         return Err(input("agent_tree_listing_too_large"));
     }
+    Ok(listing
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| String::from_utf8_lossy(p).into_owned())
+        .filter(|p| is_managed_path(p))
+        .collect())
+}
+
+/// The repository's managed files: path → bytes, plus the managed paths
+/// that are not regular files (a symlink is never followed).
+///
+/// Security review A1: tracked files are always managed — a tracked
+/// `.claude/settings.local.json` is checked like any other (finding 2);
+/// untracked per-checkout files are the developer's own and skipped. A
+/// `.claude` that is not a directory (a symlink, or the text file git
+/// writes for one where symlinks are off) is irregular, never "no
+/// configuration" (finding 3).
+fn managed_tree(root: &Path) -> Result<(Tree, Vec<String>)> {
+    let mut paths = listed(root, &["--cached"])?;
+    paths.extend(
+        listed(root, &["--others", "--exclude-standard"])?
+            .into_iter()
+            .filter(|p| !is_per_checkout_path(p)),
+    );
     let mut tree = BTreeMap::new();
     let mut irregular = Vec::new();
+    match std::fs::symlink_metadata(root.join(".claude")) {
+        Ok(m) if !m.is_dir() => irregular.push(".claude".to_owned()),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(input(&format!("agent_file_unreadable kind={:?}", e.kind()))),
+    }
     let mut total = 0usize;
-    for raw in listing.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-        let Ok(path) = std::str::from_utf8(raw) else {
-            continue; // not a managed path: those are ASCII-checked below
-        };
-        if !is_managed_path(path) || tree.contains_key(path) {
+    for path in paths {
+        if tree.contains_key(&path) || irregular.contains(&path) {
             continue;
         }
         if tree.len() >= MAX_TREE_FILES {
             return Err(input("agent_tree_too_many_files"));
         }
-        let full = root.join(path);
+        if path.contains(char::REPLACEMENT_CHARACTER) || path.eq_ignore_ascii_case(".claude") {
+            irregular.push(path);
+            continue;
+        }
+        let full = root.join(&path);
         let meta = match std::fs::symlink_metadata(&full) {
             Ok(m) => m,
             // Listed but deleted in the working tree: Claude Code cannot run it.
@@ -117,7 +152,7 @@ fn managed_tree(root: &Path) -> Result<(Tree, Vec<String>)> {
             Err(e) => return Err(input(&format!("agent_file_unreadable kind={:?}", e.kind()))),
         };
         if !meta.is_file() {
-            irregular.push(path.to_owned());
+            irregular.push(path);
             continue;
         }
         let left = MAX_TREE_BYTES.saturating_sub(total);
@@ -127,7 +162,7 @@ fn managed_tree(root: &Path) -> Result<(Tree, Vec<String>)> {
             continue;
         };
         total += bytes.len();
-        tree.insert(path.to_owned(), bytes);
+        tree.insert(path, bytes);
     }
     Ok((tree, irregular))
 }

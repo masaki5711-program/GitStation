@@ -80,6 +80,9 @@ pub enum Capability {
     Network,
     /// Widens Claude Code's `permissions` in `settings.json`.
     Permissions,
+    /// Writes, removes or renames files (`fs.writeFile`, `unlink`, …): a
+    /// hook cannot be checked to write only under `.claude/`.
+    FsWrite,
 }
 
 impl Capability {
@@ -88,6 +91,7 @@ impl Capability {
             Capability::Exec => "exec",
             Capability::Network => "network",
             Capability::Permissions => "permissions",
+            Capability::FsWrite => "fs-write",
         }
     }
 
@@ -96,6 +100,7 @@ impl Capability {
             "exec" => Capability::Exec,
             "network" => Capability::Network,
             "permissions" => Capability::Permissions,
+            "fs-write" => Capability::FsWrite,
             _ => return None,
         })
     }
@@ -189,7 +194,13 @@ pub fn parse_part(entries: &[TreeEntry]) -> Result<Part, Vec<Problem>> {
         return Err(problems);
     }
     let mut by_path: BTreeMap<&str, &TreeEntry> = BTreeMap::new();
+    let mut case_keys = BTreeSet::new();
     for e in entries {
+        // Two names one file system may take for one file (finding 1).
+        if !case_keys.insert(crate::path::case_key(&e.path)) {
+            problems.push(invalid("duplicate_file", Some(e.path.clone())));
+            continue;
+        }
         if e.kind != EntryKind::File {
             problems.push(invalid("not_a_regular_file", Some(e.path.clone())));
             continue;
@@ -313,11 +324,14 @@ pub(crate) fn manifest_from_parts(
         problems.push(invalid("no_files", None));
     }
     let mut seen = BTreeSet::new();
+    let mut case_keys = BTreeSet::new();
     for f in files {
         if let Err(reason) = check_install_path(f) {
             problems.push(invalid(reason, Some(f.chars().take(260).collect())));
-        } else if !seen.insert(f.clone()) {
+        } else if !case_keys.insert(crate::path::case_key(f)) {
             problems.push(invalid("duplicate_file", Some(f.clone())));
+        } else {
+            seen.insert(f.clone());
         }
         if f == ".mcp.json" && kind_parsed != Some(Kind::Mcp) {
             problems.push(invalid("mcp_file_outside_mcp_part", Some(f.clone())));
@@ -348,9 +362,10 @@ pub(crate) fn manifest_from_parts(
 /// Hooks are Node.js (plan 09 §3.1): scripts under `.claude/hooks/` are
 /// `.js` / `.cjs` / `.mjs`; data and docs beside them are `.json` / `.md`.
 fn hook_file_allowed(path: &str) -> bool {
+    let key = crate::case_key(path);
     [".js", ".cjs", ".mjs", ".json", ".md"]
         .iter()
-        .any(|ext| path.ends_with(ext))
+        .any(|ext| key.ends_with(ext))
 }
 
 fn valid_slug(s: &str) -> bool {

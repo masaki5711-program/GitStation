@@ -91,3 +91,32 @@ Claude Code の環境（`.claude/`・`CLAUDE.md`・`.mcp.json`）を MR で作�
 - lock の形は v1。生成したファイル（A7）、取り消しの確かめ（A5 の API）、サーバーの許可の一覧（`agent.mcp_allowed_hosts`、A3 の設定）は後の MR で足す。
 - 後の MR の約束: `forge-marketplace` は公開で `parse_part` → `scan` → `sign_digest` の順に同じ関数を使い、`forge/agent-lock`（A7）は `verify_lock` を使う。
   3 か所の確かめは同じコードになる。
+
+## Amendment（2026-11-14、A1 の security-reviewer の指摘 HIGH 7 件・MEDIUM 2 件・LOW 1 件）
+
+決定 2・5・6・7 を次のとおり強める（それぞれに試験 `finding1_*`〜`finding7_*`・`medium_*`、`crates/forge-client/tests/agent.rs` の `finding2_*`・`finding3_*`）。
+
+1. **大文字・小文字**: Windows と macOS は `.Claude/settings.json`・`CLAUDE.MD`・`.MCP.json` を本物の設定として開く。管理する範囲は大文字・小文字を
+   区別せずに判定する（`.claude` そのものも含む）。部品の置き場所は ASCII だけ・決まった綴りだけ（Unicode の正規化で 2 つの名前が 1 つのファイルに
+   なる余地を無くす）。部品の中と lock の中で大文字・小文字だけが違う 2 つのパスは `duplicate_file` / `duplicate_path`、作業ツリーでは `case_collision`。
+2. **人ごとのファイル**: Claude Code は `.claude/settings.local.json` からもフックを読む。除くのは **git が追跡していない** ときだけ。追跡していれば
+   他のファイルと同じく管理し、lock に無いので `unmanaged_file`。
+3. **`.claude` がディレクトリでない**（symlink、symlink を切った checkout で git が書くテキストのファイル）: `not_a_regular_file` で失敗する。
+   「設定なし」にしない。
+4. **フックのコマンド**: `exec` なしで許すのは **`node <この部品の .claude/… の .js|.cjs|.mjs>`** の形だけ（`"$CLAUDE_PROJECT_DIR"/` は可）。
+   空白 1 つ、フラグなし、シェルの記号なし。`node x.js; curl …`・`node -e`・`node --require` は `exec` が要る。部品に無いスクリプトを指す `node` は
+   `hook_target_not_in_part` で断る。
+5. **settings.json は許可の一覧**（`$schema`・`hooks`・`permissions`・`model`・`includeCoAuthoredBy`・`cleanupPeriodDays`・`outputStyle`）。他の鍵
+   （`statusLine`・`apiKeyHelper`・`env` など）は `settings_key_not_allowed`。Markdown の front matter の `hooks:` のコマンドは 4 と同じに検査し、
+   スラッシュコマンドの `` !` `` は `exec` が要る。他の JSON の `command` も 4 と同じ。
+6. **`custom`**: 署名も検査も無いので、コードを動かしうる `custom` のファイル（コマンドの無い Markdown 以外）は `custom_unverified`（FG-AGENT-0007、
+   終了コード 1）。A7 で承認を確かめられるようになるまで「確かめた」と言わない。
+7. **スクリプトの検査**: Markdown と JSON 以外の **全部のファイル** をスクリプトとして検査する（node は拡張子を問わず動かす）。生のソースを
+   **識別子の列** として読み、空白やコメントを挟んでも同じ（`eval (`、`import/**/(`）。`\u` のエスケープはどこでも断る。`getBuiltinModule`・
+   `globalThis`・`global`、`.` が続かない `process`、呼び出しの `import` を断る。
+
+MEDIUM: MCP の行き先は、どのスキームの `scheme://`・`//host`・素のホスト名（ファイル名の拡張子でない）・IPv4 アドレスも許可の一覧で確かめる。
+能力 `fs-write` を足す（ファイルの書き込み・削除・名前の変更。書き先が `.claude/` の中かを静的に確かめられないため、使うだけで宣言が要る）。
+
+LOW: `core.autocrlf=true` の checkout は LF を CRLF にするので、全部のファイルが `file_changed` になる（安全側に失敗する）。FG-AGENT-0007 の
+diagnosis / fix に書いた。
