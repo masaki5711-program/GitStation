@@ -141,6 +141,7 @@ async fn whoami(_: AppState, request: Dispatched<InstanceCtx>) -> Response {
         Credential::ActAs(_) => vec!["<act_as>"],
         Credential::Runner(_) => vec!["<runner>"],
         Credential::Job(_) => vec!["<job>"],
+        Credential::AutoMerge => vec!["<auto_merge>"],
     };
     Json(json!({
         "user": principal.user().map(|u| u.get()),
@@ -161,6 +162,7 @@ async fn whoami_raw(_: AppState, request: Dispatched<ProjectCtx>) -> Response {
         Credential::ActAs(_) => vec!["<act_as>"],
         Credential::Runner(_) => vec!["<runner>"],
         Credential::Job(_) => vec!["<job>"],
+        Credential::AutoMerge => vec!["<auto_merge>"],
     };
     Json(json!({
         "user": principal.user().map(|u| u.get()),

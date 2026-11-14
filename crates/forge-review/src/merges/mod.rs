@@ -44,6 +44,7 @@ use forge_git::browse::Browser;
 use forge_git::{Git, StorageRoot};
 
 mod attribution;
+mod auto;
 pub mod conditions;
 pub mod evaluate;
 mod execute;
@@ -52,6 +53,7 @@ mod reconcile;
 mod request;
 mod source;
 
+pub use auto::{AutoMergeLimits, AutoMergeReport, AutoMerger};
 pub use conditions::{conditions, method_allowed, CheckRuns, Conditions};
 pub use evaluate::{
     blocked, evaluate_merge, stored_mergeable, BlockReason, CheckConclusion, CheckRun, CheckStatus,
@@ -291,6 +293,9 @@ pub(crate) fn job_principal(
             is_agent,
             usable: true,
         } => (Credential::Token(scopes.clone()), *is_agent), // clone: the principal owns its scopes
+        // M4 C9: the auto-merge principal never decides as a person; its
+        // decisions go through `queue::prove_auto` (a resource of its own).
+        CredentialState::AutoMerge { .. } => return Ok(Principal::auto_merge()),
     };
     Ok(
         Principal::authenticated(user, account.is_admin, account.active, credential, kind)

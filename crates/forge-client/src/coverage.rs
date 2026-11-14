@@ -806,6 +806,42 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
         Coverage::Command("queue status"),
     ),
+    // M4 C9 (ADR-0017 Amendment 2026-11-13): auto-merge.
+    (
+        "GET",
+        "/api/v1/projects/{id}/auto-merge",
+        Coverage::Command("auto-merge status"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/auto-merge",
+        Coverage::BrowserOnly("sessions only: the Owner changes merge.auto in the browser (FG-AUTH-0002 session_required for a token)"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/auto-merge/stop",
+        Coverage::Command("auto-merge stop"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/auto-merge/resume",
+        Coverage::Command("auto-merge resume"),
+    ),
+    (
+        "POST",
+        "/api/v1/admin/auto-merge/stop",
+        Coverage::Command("auto-merge instance-stop"),
+    ),
+    (
+        "POST",
+        "/api/v1/admin/auto-merge/resume",
+        Coverage::Command("auto-merge instance-resume"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/auto-merge",
+        Coverage::Command("auto-merge mr"),
+    ),
     // M4 C6 (ADR-0029 decision 8): a project's CI variables.
     (
         "GET",

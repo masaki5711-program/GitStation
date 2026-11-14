@@ -252,6 +252,22 @@ impl Review {
             .merge_request(project, iid)
             .await?
             .ok_or_else(crate::absent)?;
+        self.status_of(request_id, repo, user, current, method)
+            .await
+    }
+
+    /// The status of `current` (module docs of [`Self::merge_status`]);
+    /// `user` keys the branch reads' cache only. M4 C9: the auto-merge
+    /// worker reads it for the merge request's author.
+    pub(crate) async fn status_of(
+        &self,
+        request_id: &forge_core::RequestId,
+        repo: ProjectRepository,
+        user: forge_core::UserId,
+        current: review::StoredMergeRequest,
+        method: Option<MergeMethod>,
+    ) -> Result<MergeStatus, ForgeError> {
+        let project = current.project_id;
         let settings = review::merge_settings(&self.db, project).await?;
         let method = method.unwrap_or(settings.values.default_method);
         crate::merges::method_allowed(&settings, method)?;
@@ -418,7 +434,7 @@ impl Review {
     }
 
     /// The tip of `branch` (`None`: absent), through the browse API.
-    async fn branch_tip(
+    pub(crate) async fn branch_tip(
         &self,
         project: forge_core::ProjectId,
         repo: ProjectRepository,

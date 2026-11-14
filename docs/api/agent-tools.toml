@@ -524,6 +524,30 @@ gstn = "queue status"
 reason = "As queue list."
 
 [[excluded]]
+gstn = "auto-merge stop"
+reason = "The emergency stop of auto-merge is a person's (people only, Maintainer); an agent never stops or resumes it."
+
+[[excluded]]
+gstn = "auto-merge resume"
+reason = "As auto-merge stop."
+
+[[excluded]]
+gstn = "auto-merge instance-stop"
+reason = "The instance's emergency stop is an administrator's (people only)."
+
+[[excluded]]
+gstn = "auto-merge instance-resume"
+reason = "As auto-merge instance-stop."
+
+[[deferred]]
+gstn = "auto-merge status"
+reason = "A read tool for an agent waits for the dev-status integration of auto-merge (after C9)."
+
+[[deferred]]
+gstn = "auto-merge mr"
+reason = "As auto-merge status: the merge request screen and gstn show the line meanwhile."
+
+[[excluded]]
 gstn = "mr merge"
 reason = "Merging is the auto-merge's or a person's (plan 06 §4.7); an agent never merges."
 

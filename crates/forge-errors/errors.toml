@@ -2512,6 +2512,47 @@ fix = "Nothing on the server. For no_open_merge_request / target_missing, open o
 test = "a_head_with_no_open_merge_request_is_neutral_and_not_assessed"
 
 [[error]]
+code = "FG-REVIEW-0026"
+name = "AutoMergeStopped"
+http_status = 409
+severity = "info"
+user_message_ja = "この MR は自動マージを止めました（プログラムの破壊・DB の破壊・機密の流出・開発者の PC で動くコードの変更のおそれ）。MR に出ている理由を読み、直すか人がマージしてください。"
+user_message_en = "Auto-merge stopped for this merge request (it may break the program, destroy database data, leak a secret or change code that runs on developers' PCs). Read the reason on the merge request, then fix it or have a person merge it."
+user_message_id = "Merge otomatis dihentikan untuk merge request ini (berpotensi merusak program, menghapus data basis data, membocorkan rahasia, atau mengubah kode yang berjalan di PC pengembang). Baca alasannya pada merge request, lalu perbaiki atau minta seseorang menggabungkannya."
+cause = "M4 C9 (plan 04 M-5 / M-6, ADR-0017 Amendment 2026-11-13): the auto-merge worker of a project whose `merge.auto` is `full` (or `conditional`) found a merge request it would have added to the merge queue, but one of the stop classes holds on its head: `program_breakage` (a required check or the merge request's own `ci/pipeline` on its merge result concluded red — `required_check_failed` / `pipeline_failed` —, the merge queue's train of the merge request alone was red — `merge_queue_checks_failed` —, or `forge/risk` found a mass deletion or a change too large to assess), `data_loss` (`forge/risk`: an applied migration changed, a destructive statement, a data lifecycle job, a rollback step), `leak` (`forge/risk`: a secret by name or content), `developer_pc` (`forge/risk`: `agent_config` / `submodule_change`), or `not_assessed` (`forge/risk` ended `error` / `action_required`, concluded `failure` without a rule forge knows, or concluded `neutral` naming a not-assessed rule such as `content_not_scanned` or no rule it can read: the head cannot be shown safe). The landing decides forge/risk again for an auto-merge entry: a stop recorded after the enqueue removes it from the queue with this code (`reason=risk_stop`). A `warn` never stops. The stop is recorded on the merge request (`forge.auto_merge_states`, state `stopped`) and shown in one line; nothing was queued. Not a server fault."
+diagnosis = "`forge serve` logs `forge.auto_merge.stopped` (info) once per new stop with `error_code`, `request_id`, `project_id`, `merge_request_id`, `head_sha`, `class`, `reason` and `detail` (the forge/risk rule or the check name). `GET /api/v1/projects/{id}/merge-requests/{iid}/auto-merge` answers the same state; `gstn checks list --project <id> --sha <head>` shows the forge/risk findings. Read (read-only): SELECT * FROM forge.auto_merge_states WHERE merge_request_id = <id>."
+fix = "Nothing on the server. Fix the change (a new head is assessed again; a red check goes green by a fix or a re-run), or have a person press 'merge when ready' after reading the reason: a person's merge is not stopped by auto-merge. The forge/risk rules cannot be lowered by a project."
+test = "each_stop_class_stops_auto_merge"
+
+[[error]]
+code = "FG-REVIEW-0027"
+name = "AutoMergeEmergencyStopped"
+http_status = 409
+severity = "warn"
+user_message_ja = "自動マージは緊急停止中です。止めた人（プロジェクトの Maintainer、またはインスタンスの管理者）が再開するまで、自動ではマージされません。人がマージすることはできます。"
+user_message_en = "Auto-merge is under an emergency stop. Nothing is merged automatically until the person who may (a project Maintainer, or an instance administrator) resumes it. A person can still merge."
+user_message_id = "Merge otomatis sedang dihentikan darurat. Tidak ada yang digabung otomatis sampai orang yang berwenang (Maintainer proyek atau administrator instans) melanjutkannya. Seseorang tetap dapat menggabungkan."
+cause = "M4 C9 (plan 04 M-5 \"緊急停止\", ADR-0017 Amendment 2026-11-13): a project Maintainer (`POST /api/v1/projects/{id}/auto-merge/stop`) or an instance administrator (`POST /api/v1/admin/auto-merge/stop`) turned the emergency stop on. While it is on, the auto-merge worker queues nothing, the merge queue builds no batch from the project's auto-merge entries (they stay queued, paused) and a batch holding one is thrown away before it lands. A person's entries and merges are not stopped. Logged once when the switch is turned on, and named on every merge request it holds (state `stopped`, class `emergency_stop`)."
+diagnosis = "The toggle is audited (`auto_merge.stopped` / `auto_merge.resumed`, actor the person, resource the project or the instance) and logged `forge.auto_merge.emergency_stop` (warn) with `request_id`, `scope` (`project` / `instance`), `project_id` and `user_id`. `GET /api/v1/projects/{id}/auto-merge` shows `project_stopped` / `instance_stopped` with who and when. Read (read-only): SELECT * FROM forge.auto_merge_instance; SELECT * FROM forge.project_auto_merge WHERE stopped_at IS NOT NULL."
+fix = "Follow runbook auto-merge: find why it was stopped (the audit row), fix the cause, then resume (`POST …/auto-merge/resume`; the instance switch by an administrator). Queued auto-merge entries continue from where they were."
+runbook = "auto-merge"
+test = "the_emergency_stop_pauses_auto_merge_and_its_queue_entries"
+
+[[error]]
+code = "FG-REVIEW-0028"
+name = "AutoMergeScanFailed"
+http_status = 503
+severity = "alert"
+user_message_ja = "自動マージの確認に失敗しました。管理者に連絡してください。"
+user_message_en = "Checking merge requests for auto-merge failed. Contact the administrator."
+user_message_id = "Pemeriksaan merge request untuk merge otomatis gagal. Hubungi administrator."
+cause = "M4 C9: the auto-merge worker in `forge serve` could not decide a merge request (reading its facts from the database, its check runs, or the changed paths from git failed or timed out) for longer than one failure streak, so merge requests of `full` / `conditional` projects are not being queued automatically. Nothing was merged or queued by the failed step; people can still merge."
+diagnosis = "`forge serve` logs `forge.auto_merge.scan_failed` (error) with `error_code`, `request_id`, `cause_code` (the underlying FG code: FG-DB-*, FG-GIT-*), `project_id`, `merge_request_id` and `streak`. Look up `cause_code` in the catalog; `forge doctor` shows the database and storage checks."
+fix = "Follow runbook auto-merge: fix the underlying cause (database or git storage, see `cause_code`); the worker retries with backoff and continues by itself. If it must not act meanwhile, turn the instance emergency stop on."
+runbook = "auto-merge"
+test = "a_scan_failure_is_logged_with_its_cause"
+
+[[error]]
 code = "FG-CI-0001"
 name = "CiConfigInvalid"
 http_status = 422
