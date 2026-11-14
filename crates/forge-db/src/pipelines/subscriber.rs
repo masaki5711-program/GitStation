@@ -198,7 +198,8 @@ impl Subscriber for PipelineRequests {
                 | EventType::WorkItemUnlinked
                 | EventType::MergeRequestWorkItemsChanged
                 | EventType::MergeRequestRelinkRequested
-                | EventType::WebhookDisabled => Ok(()),
+                | EventType::WebhookDisabled
+                | EventType::MergeRequestRevertDrafted => Ok(()),
             }
         })
     }

@@ -342,7 +342,8 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::WorkItemUnlinked
                 | EventType::MergeRequestWorkItemsChanged
                 | EventType::MergeRequestRelinkRequested
-                | EventType::WebhookDisabled => Ok(()),
+                | EventType::WebhookDisabled
+                | EventType::MergeRequestRevertDrafted => Ok(()),
             }
         })
     }
