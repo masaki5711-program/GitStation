@@ -48,6 +48,9 @@ pub enum Credential {
     AutoMerge,
 }
 
+/// The scopes an SSH key carries (M4 C13, ADR-0033 §2).
+pub const SSH_KEY_SCOPES: [Scope; 2] = [Scope::ReadRepository, Scope::WriteRepository];
+
 /// What a runner request authenticated with (ADR-0029 §1). The token's
 /// lookup (`ci_runners`, SHA-256 hash only) lands with the runner API
 /// (M4 C3); authentication refuses an unknown or disabled runner's token
@@ -235,6 +238,23 @@ impl Principal {
             agent: false,
             kind,
         }
+    }
+
+    /// A person who proved an SSH key (M4 C13, ADR-0033 §2): decided as a
+    /// token with exactly the `read_repository` and `write_repository`
+    /// scopes — git clone / fetch / push and nothing of the API — with no
+    /// administrator rights (no `admin` scope) and never an agent's
+    /// credential. forge-web's SSH transport builds it from a key the
+    /// authenticator resolved to an active owner (test
+    /// `only_forge_web_builds_ssh_principals`).
+    pub fn ssh_key(user: UserId, kind: AccountKind) -> Self {
+        Self::authenticated(
+            user,
+            false,
+            true,
+            Credential::Token(SSH_KEY_SCOPES.to_vec()),
+            kind,
+        )
     }
 
     /// The account's kind (ADR-0024 §8.4).

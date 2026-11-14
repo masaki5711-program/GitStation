@@ -2777,6 +2777,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/ssh-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's SSH public keys and the SSH server's host and host key fingerprints */
+        get: operations["get_api_v1_user_ssh_keys"];
+        put?: never;
+        /** Add an SSH public key for the caller (web sessions only; Ed25519 / ECDSA) */
+        post: operations["post_api_v1_user_ssh_keys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/ssh-keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete one of the caller's SSH keys */
+        delete: operations["delete_api_v1_user_ssh_keys_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user/tokens": {
         parameters: {
             query?: never;
@@ -2894,6 +2929,16 @@ export interface components {
         AddNote: {
             /** @description Plain text / Markdown, 1 character to 60 KiB. */
             body: string;
+        };
+        /** @description `POST /api/v1/user/ssh-keys`. */
+        AddSshKey: {
+            /**
+             * @description One public key line: `ssh-ed25519 AAAA… [comment]` (Ed25519 or
+             *     ECDSA P-256 / P-384 / P-521).
+             */
+            key: string;
+            /** @description 1..=100 characters; empty or absent = the key's comment. */
+            title?: string | null;
         };
         /**
          * @description One user as the administration sees it (no e-mail or other personal
@@ -6717,6 +6762,38 @@ export interface components {
             truncated: boolean;
             /** @description Newest first within a series (`v` / `spec-v`), series by name. */
             versions: components["schemas"]["SpecVersionBody"][];
+        };
+        /** @description One key as the API shows it. */
+        SshKeyBody: {
+            algorithm: string;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** @description `SHA256:…` (what `ssh-keygen -l -E sha256 -f <key>.pub` prints). */
+            fingerprint: string;
+            /** Format: int64 */
+            id: number;
+            last_used_at: string | null;
+            /** @description `<algorithm> <base64>` (no comment). */
+            public_key: string;
+            title: string;
+        };
+        /** @description The caller's keys and the SSH server's facts. */
+        SshKeyList: {
+            items: components["schemas"]["SshKeyBody"][];
+            ssh: null | components["schemas"]["SshServerBody"];
+        };
+        /**
+         * @description The SSH server as clients see it (`null` while `git.ssh.enabled` is
+         *     off).
+         */
+        SshServerBody: {
+            /** @description `host:port` of clone URLs: `ssh://git@<clone_host>/<path>.git`. */
+            clone_host: string;
+            /**
+             * @description The host key fingerprints (`SHA256:…`) to compare on the first
+             *     connection.
+             */
+            host_key_fingerprints: string[];
         };
         /** @description `POST …/discussions`. */
         StartDiscussion: {
@@ -14194,6 +14271,97 @@ export interface operations {
             header?: never;
             path: {
                 public_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_ssh_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SshKeyList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_user_ssh_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddSshKey"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SshKeyBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_user_ssh_keys_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
             };
             cookie?: never;
         };

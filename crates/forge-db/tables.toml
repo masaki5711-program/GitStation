@@ -865,3 +865,17 @@ txn_audited_columns = []
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── M4 C13 (20261218100000, ADR-0033 §2): people's SSH public keys, added
+# and deleted by their owner in a web session, audited on the owner
+# (`ssh_key.added` / `ssh_key.deleted`); public data, so the read pool sees
+# every column ──
+[tables.user_ssh_keys]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "user"
+audit_id_column = "user_id"
+# Refreshed by authentication at most every 10 minutes.
+unaudited_columns = ["last_used_at"]
+txn_audited_columns = []

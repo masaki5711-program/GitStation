@@ -160,6 +160,21 @@ pub enum AuditDetails {
         user: UserId,
         public_id: String,
     },
+    /// `ssh_key.added` (M4 C13, ADR-0033 §2, audit-only, on the owner): the
+    /// key's id, algorithm and SHA-256 fingerprint. Never the title (free
+    /// text) or the key itself.
+    SshKeyAdded {
+        key_id: i64,
+        user: UserId,
+        algorithm: String,
+        fingerprint: String,
+    },
+    /// `ssh_key.deleted` (M4 C13, audit-only, on the owner).
+    SshKeyDeleted {
+        key_id: i64,
+        user: UserId,
+        fingerprint: String,
+    },
     // ── D4 MR3b: repository provisioning ──
     /// `repository.created` (D4 MR3b): the provisioning job created (or
     /// adopted) the bare repository and marked it ready. Also the payload of
@@ -553,6 +568,8 @@ impl AuditDetails {
             Self::ServiceAccountCreated { .. } => "service_account.created",
             Self::ServiceAccountUpdated { .. } => "service_account.updated",
             Self::TokenRevoked { .. } => "token.revoked",
+            Self::SshKeyAdded { .. } => "ssh_key.added",
+            Self::SshKeyDeleted { .. } => "ssh_key.deleted",
             // ── D4 MR3b ──
             Self::RepositoryCreated { .. } => "repository.created",
             Self::RepositoryReprovisionRequested { .. } => "repository.reprovision_requested",
@@ -619,7 +636,9 @@ impl AuditDetails {
             | Self::MemberRoleChanged { .. }
             | Self::MemberRemoved { .. }
             | Self::ServiceAccountCreated { .. }
-            | Self::ServiceAccountUpdated { .. } => None,
+            | Self::ServiceAccountUpdated { .. }
+            | Self::SshKeyAdded { .. }
+            | Self::SshKeyDeleted { .. } => None,
             Self::ProjectCreated { .. } => Some(EventType::ProjectCreated),
             Self::TokenCreated { .. } => Some(EventType::TokenCreated),
             Self::TokenRevoked { .. } => Some(EventType::TokenRevoked),
@@ -704,6 +723,8 @@ impl AuditDetails {
     /// TokenCreated `{"token_id","user_id","public_id","scopes","expires_at","is_agent"}`,
     /// (+ `"issued_by_user_id"` when an administrator issued it, M3 S0),
     /// TokenRevoked `{"token_id","user_id","public_id"}`,
+    /// SshKeyAdded `{"ssh_key_id","user_id","algorithm","fingerprint"}`,
+    /// SshKeyDeleted `{"ssh_key_id","user_id","fingerprint"}`,
     /// ServiceAccountCreated `{"namespace_id","owner_id","purpose_chars"}`,
     /// ServiceAccountUpdated `{"owner_from","owner_to","fields"}`,
     /// RepositoryCreated `{"project_id","repository_id"}`,
@@ -881,6 +902,26 @@ impl AuditDetails {
                 "token_id": token_id,
                 "user_id": user.get(),
                 "public_id": public_id,
+            }),
+            Self::SshKeyAdded {
+                key_id,
+                user,
+                algorithm,
+                fingerprint,
+            } => serde_json::json!({
+                "ssh_key_id": key_id,
+                "user_id": user.get(),
+                "algorithm": algorithm,
+                "fingerprint": fingerprint,
+            }),
+            Self::SshKeyDeleted {
+                key_id,
+                user,
+                fingerprint,
+            } => serde_json::json!({
+                "ssh_key_id": key_id,
+                "user_id": user.get(),
+                "fingerprint": fingerprint,
             }),
             // ── D4 MR3b ──
             Self::RepositoryCreated {
@@ -1138,6 +1179,8 @@ impl AuditDetails {
             | Self::MemberRemoved { .. }
             | Self::TokenCreated { .. }
             | Self::TokenRevoked { .. }
+            | Self::SshKeyAdded { .. }
+            | Self::SshKeyDeleted { .. }
             | Self::ServiceAccountCreated { .. }
             | Self::ServiceAccountUpdated { .. }
             | Self::RepositoryCreated { .. }

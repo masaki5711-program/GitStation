@@ -149,6 +149,13 @@ pub(crate) enum Actor {
     /// A service account acting for the person `ME` (M3 S2, ADR-0025):
     /// `matrix_rows_act_as.rs`.
     ActAs(crate::matrix_rows_act_as::Via),
+    /// A person through an SSH key (M4 C13, ADR-0033 §2,
+    /// `Principal::ssh_key`): `matrix_rows_ssh.rs`. A Developer, a
+    /// Reporter, and an administrator who is not a member (an SSH key
+    /// lends no administrator right).
+    SshKeyDeveloper,
+    SshKeyReporter,
+    SshKeyAdmin,
     /// A registered CI runner (M4 C0, ADR-0029): `matrix_rows_ci.rs`.
     Runner,
     /// A CI job of `matrix_rows_ci::JOB_PROJECT` pinned at
@@ -598,6 +605,9 @@ impl Actor {
                 token_of(AccountKind::ServiceAccount, false, &[Scope::ActAs]).as_agent(true)
             }
             Actor::ActAs(via) => via.principal(),
+            Actor::SshKeyDeveloper | Actor::SshKeyReporter | Actor::SshKeyAdmin => {
+                Principal::ssh_key(ME, AccountKind::Human)
+            }
             Actor::Runner => crate::matrix_rows_ci::runner(),
             Actor::Job(state) => crate::matrix_rows_ci::job(state),
             Actor::AutoMerge => Principal::auto_merge(),
@@ -616,7 +626,9 @@ impl Actor {
             Actor::Guest | Actor::GuestTokenReadApi | Actor::ServiceAccountGuestTokenRead => {
                 Some(Role::Guest)
             }
-            Actor::Reporter | Actor::ServiceAccountReporterTokenApi => Some(Role::Reporter),
+            Actor::Reporter | Actor::ServiceAccountReporterTokenApi | Actor::SshKeyReporter => {
+                Some(Role::Reporter)
+            }
             Actor::Developer
             | Actor::DevTokenReadRepository
             | Actor::DevTokenWriteRepository
@@ -640,7 +652,8 @@ impl Actor {
             | Actor::ServiceAccountDisabledTokenReadApi
             | Actor::AgentTokenReadRepository
             | Actor::ServiceAccountTokenReadRepository
-            | Actor::BotTokenReadRepository => Some(Role::Developer),
+            | Actor::BotTokenReadRepository
+            | Actor::SshKeyDeveloper => Some(Role::Developer),
             Actor::ServiceAccountTokenActAs | Actor::ServiceAccountAgentTokenActAs => {
                 Some(Role::Reporter)
             }
@@ -677,7 +690,8 @@ impl Actor {
             | Actor::AdminTokenMergeApproveAdmin
             | Actor::AdminTokenReadApiAdmin
             | Actor::ServiceAccountNonMemberTokenReadApi
-            | Actor::BotNonMemberTokenReadApi => None,
+            | Actor::BotNonMemberTokenReadApi
+            | Actor::SshKeyAdmin => None,
         }
     }
 
@@ -753,6 +767,9 @@ impl Actor {
             | Actor::ServiceAccountTokenReadRepository
             | Actor::BotTokenReadRepository
             | Actor::ActAs(_)
+            | Actor::SshKeyDeveloper
+            | Actor::SshKeyReporter
+            | Actor::SshKeyAdmin
             | Actor::Runner
             | Actor::Job(_)
             | Actor::AutoMerge => None,
@@ -1265,6 +1282,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,
         crate::matrix_rows_spec_refs::CONTEXT_READ_ROWS,
         crate::matrix_rows_repo_copy::REPO_COPY_ROWS,
+        crate::matrix_rows_ssh::SSH_ROWS,
         crate::matrix_rows_ci::CI_ROWS,
         crate::matrix_rows_ci::RUNNER_ROWS.as_slice(),
         crate::matrix_rows_ci::JOB_ARTIFACT_ROWS.as_slice(),

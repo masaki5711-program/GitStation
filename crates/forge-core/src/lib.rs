@@ -57,6 +57,8 @@ pub mod role;
 pub mod scope;
 pub mod session_token;
 pub mod spec_version;
+// M4 C13: people's SSH public keys (ADR-0033 §2).
+pub mod ssh_key;
 // ── M3 X4: requirement blocks, `@req` tags, the index, spec-lint and spec-trace ──
 pub mod req_tags;
 // Moved to forge-doc (plan 13 stage 2 MR1); the path stays for every caller.
@@ -85,7 +87,7 @@ pub use audit_details::{
 };
 pub use authenticator::{
     Authenticator, CiAuthFuture, CiIdentity, CiJobTokenState, SessionAuthenticator,
-    SessionIdentity, TokenIdentity,
+    SessionIdentity, SshKeyAuthFuture, SshKeyIdentity, TokenIdentity,
 };
 pub use checks::{
     CheckConclusion, CheckResultsSource, CheckRun, CheckRunsOnHead, CheckStatus,

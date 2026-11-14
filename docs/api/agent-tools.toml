@@ -584,6 +584,14 @@ gstn = "token revoke"
 reason = "Tokens are a person's (session-only management)."
 
 [[excluded]]
+gstn = "ssh-key list"
+reason = "SSH keys are a person's credentials (added in a web session only)."
+
+[[excluded]]
+gstn = "ssh-key delete"
+reason = "SSH keys are a person's credentials (added in a web session only)."
+
+[[excluded]]
 gstn = "project create"
 reason = "Creates a repository in a namespace: administration, a person decides."
 

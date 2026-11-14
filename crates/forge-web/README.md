@@ -8,6 +8,20 @@ and serving. **Handlers never decide**: the registry calls
 `forge_auth::prove(principal, def.action, ctx)` and hands the handler the
 admitted proof.
 
+**SSH git transport** (M4 C13, ADR-0033, runbook `ssh-transport`):
+`forge_web::ssh` — `SshServer::new(router, authenticator, host_key, public,
+limits)` and `ssh::serve(listener, server, shutdown)`; host keys
+`ssh::generate_host_key` / `ssh::load_host_key`. A git command over SSH is
+served by the **same router**: `ssh::bridge` turns it into the Smart HTTP
+requests (`info/refs`, `git-upload-pack` per v2 request, one
+`git-receive-pack`) with `Principal::ssh_key` (the `read_repository` +
+`write_repository` scopes) as a request extension, so the dispatcher,
+`authorize()`, the push path and the fetch checks are Smart HTTP's own.
+Codes: FG-GIT-0033 (not a git command), FG-GIT-0034 (protocol v2 needed),
+FG-GIT-0035 (connection bounds), FG-GIT-0036 (the transport failed). The
+caller's SSH keys: `GET|POST /api/v1/user/ssh-keys`, `DELETE
+/api/v1/user/ssh-keys/{id}` (`routes::ssh_keys`; adding is session-only).
+
 **Public API**
 - `app(AppState, AppConfig) -> Result<Router, ForgeError>` — the product
   router (routes come only from `app::registry()`).

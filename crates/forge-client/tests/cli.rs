@@ -969,6 +969,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "user end-sessions",
             "token list",
             "token revoke",
+            "ssh-key list",
+            "ssh-key delete",
             "notifications get",
             "notifications set",
             "notifications list",

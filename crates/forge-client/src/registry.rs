@@ -1452,6 +1452,28 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["DELETE /api/v1/user/tokens/{id}"],
         output: r#"{"type":"object","required":["id","revoked"],"properties":{"id":{"type":"integer"},"revoked":{"const":true}}}"#,
     },
+    // ── M4 C13: your SSH keys ──
+    CommandSpec {
+        name: "ssh-key list",
+        summary: "List your SSH keys (fingerprints) and, while SSH is on, the clone host and the server's host key fingerprints.",
+        args: &[],
+        examples: &["gstn ssh-key list --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/user/ssh-keys"],
+        output: r#"{"type":"object","required":["items","ssh"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","title","algorithm","fingerprint","public_key","created_at","last_used_at"]}},"ssh":{"type":["object","null"]}}}"#,
+    },
+    CommandSpec {
+        name: "ssh-key delete",
+        summary: "Delete one of your SSH keys (git over SSH stops working with it). Needs --yes.",
+        args: &[
+            arg("id", "positional", true, "The key id (ssh-key list)."),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn ssh-key delete 4 --yes"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/user/ssh-keys/{id}"],
+        output: r#"{"type":"object","required":["id","deleted"],"properties":{"id":{"type":"integer"},"deleted":{"const":true}}}"#,
+    },
     // ── M3 N1: your notification settings ──
     CommandSpec {
         name: "notifications get",

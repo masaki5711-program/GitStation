@@ -144,6 +144,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // Plan 06 D-5 safety net: a whole copy refused to an agent (git
         // routes; never a merge's).
         | ErrorCode::RepositoryCopyWithheld
+        | ErrorCode::SshKeyInvalid
         // M3 X7: notices named in a `forge/risk` run (never a merge's).
         | ErrorCode::RiskStop
         | ErrorCode::RiskWarn
@@ -337,6 +338,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // 2026-11-12: the history import is the operator CLI's and a push's.
         | ErrorCode::HistoryImportRefused
         | ErrorCode::HistoryImportRecordFailed
+        | ErrorCode::SshCommandRefused
+        | ErrorCode::SshProtocolV2Required
+        | ErrorCode::SshConnectionRefused
+        | ErrorCode::SshTransportFailed
         // M3 N1: the mail job's own code never reaches a merge.
         | ErrorCode::SmtpUnavailable
         // Plan 16 A1: agent parts are verified by gstn (and, from A5/A7,

@@ -231,6 +231,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Namespace { command } => hosting::namespace(cli, command, env, io),
         Command::User { command } => hosting::user(cli, command, env, io),
         Command::Token { command } => hosting::token(cli, command, env, io),
+        Command::SshKey { command } => hosting::ssh_key(cli, command, env, io),
         Command::Notifications { command } => {
             crate::notifications::notifications(cli, command, env, io)
         }

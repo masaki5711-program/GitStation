@@ -25,6 +25,8 @@ mod deploy;
 // M3 I1c: `feed.*`.
 mod feed;
 mod git_http;
+// M4 C13: `git.ssh.*` (ADR-0033).
+pub mod git_ssh;
 // `git.pack.*`: the memory caps of pack-heavy git.
 mod git_pack;
 mod hosting;
@@ -59,6 +61,7 @@ pub use deploy::{DeployConfig, SSH_KEY_FILE_KEY as DEPLOY_SSH_KEY_FILE_KEY};
 pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use git_pack::GitPackConfig;
+pub use git_ssh::GitSshConfig;
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
@@ -185,6 +188,8 @@ pub struct Config {
     pub audit: AuditConfig,
     /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
     pub git_http: GitHttpConfig,
+    /// `git.ssh.*` (the SSH git transport, M4 C13, ADR-0033).
+    pub git_ssh: GitSshConfig,
     /// `git.pack.*` (the memory caps of pack-heavy git: delta window,
     /// threads, base cache, pack mappings).
     pub git_pack: GitPackConfig,
@@ -224,6 +229,19 @@ impl Config {
                 "server.read_idle_timeout_ms",
                 "below_git_idle_timeout",
             ));
+        }
+        // M4 C13: an SSH connection idle for git's own idle limit must not
+        // be closed by SSH first.
+        if self.git_ssh.inactivity_timeout < self.git_http.idle_timeout {
+            return Err(invalid(
+                "git.ssh.inactivity_timeout_ms",
+                "below_git_idle_timeout",
+            ));
+        }
+        // ... nor a connection's lifetime end a git operation within its own
+        // total timeout.
+        if self.git_ssh.max_connection < self.git_http.timeout {
+            return Err(invalid("git.ssh.max_connection_ms", "below_git_timeout"));
         }
         Ok(self)
     }
@@ -449,6 +467,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         )?,
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
+        git_ssh: GitSshConfig::load(get)?,
         git_pack: GitPackConfig::load(get)?,
         hosting: HostingConfig::load(get)?,
         review: ReviewConfig::load(get)?,

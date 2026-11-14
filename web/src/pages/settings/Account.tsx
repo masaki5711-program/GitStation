@@ -1,4 +1,4 @@
-// `/{username}/-/settings`: the signed-in person's account — tokens, sessions,
+// `/{username}/-/settings`: the signed-in person's account — tokens, SSH keys, sessions,
 // projects waiting for deletion and (administrators) users. The tab is the
 // `?tab=` query, so a link can point at one; no server change is needed (the
 // shell is served for `/{namespace}/-/settings`).
@@ -24,10 +24,11 @@ import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefresh
 import styles from './Settings.module.css';
 import { Notifications } from './Notifications';
 import { ServiceAccounts } from './ServiceAccounts';
+import { SshKeys } from './SshKeys';
 import { Tokens } from './Tokens';
 import { PageHeader } from '../../ui/PageHeader';
 
-type Tab = 'tokens' | 'sessions' | 'notifications' | 'trash' | 'admin' | 'service-accounts' | 'integrations';
+type Tab = 'tokens' | 'ssh-keys' | 'sessions' | 'notifications' | 'trash' | 'admin' | 'service-accounts' | 'integrations';
 
 export function Account({ path }: { path: string }) {
   const { t } = useTranslation();
@@ -35,12 +36,13 @@ export function Account({ path }: { path: string }) {
   const [params] = useSearchParams();
   const wanted = params.get('tab');
   const tab: Tab =
-    wanted === 'sessions' || wanted === 'notifications' || wanted === 'trash' || ((wanted === 'admin' || wanted === 'service-accounts' || wanted === 'integrations') && session.user.is_admin)
+    wanted === 'ssh-keys' || wanted === 'sessions' || wanted === 'notifications' || wanted === 'trash' || ((wanted === 'admin' || wanted === 'service-accounts' || wanted === 'integrations') && session.user.is_admin)
       ? wanted
       : 'tokens';
   const base = `/${path}/-/settings`;
   const tabs: { id: Tab; label: string }[] = [
     { id: 'tokens', label: t('tokens.title') },
+    { id: 'ssh-keys', label: t('sshKeys.title') },
     { id: 'sessions', label: t('sessions.title') },
     { id: 'notifications', label: t('notifications.title') },
     { id: 'trash', label: t('trash.title') },
@@ -73,6 +75,7 @@ export function Account({ path }: { path: string }) {
         </ul>
       </nav>
       {tab === 'tokens' && <Tokens />}
+      {tab === 'ssh-keys' && <SshKeys />}
       {tab === 'sessions' && <Sessions />}
       {tab === 'notifications' && <Notifications />}
       {tab === 'trash' && <Trash />}

@@ -152,6 +152,21 @@ impl forge_core::Authenticator for Db {
     ) -> forge_core::CiAuthFuture<'a> {
         crate::ci_runners::authenticate_ci(self, request_id, presented)
     }
+
+    /// M4 C13: an SSH key by its fingerprint (`crate::ssh_keys`).
+    fn authenticate_ssh_key<'a>(
+        &'a self,
+        request_id: &'a RequestId,
+        fingerprint: &'a str,
+        record_use: bool,
+    ) -> forge_core::SshKeyAuthFuture<'a> {
+        Box::pin(crate::ssh_keys::authenticate(
+            self,
+            request_id,
+            fingerprint,
+            record_use,
+        ))
+    }
 }
 
 /// Constant-time comparison with the stored hash; a hash that is not 32
