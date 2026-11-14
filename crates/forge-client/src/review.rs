@@ -343,6 +343,10 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
             env,
             io,
         ),
+        // M4 C10: one-step revert (`mr_revert.rs`).
+        MrCommand::Revert { project, iid } => {
+            crate::mr_revert::revert(cli, (*project, *iid), env, io)
+        }
         // M3 R6: the merge status (`mr_conditions.rs`).
         MrCommand::Status { project, iid } => {
             crate::mr_conditions::status(cli, (*project, *iid), env, io)

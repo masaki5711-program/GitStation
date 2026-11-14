@@ -994,6 +994,14 @@ pub enum MrCommand {
         #[arg(long, value_parser = parse_wait_secs, value_name = "SECS", requires = "wait")]
         wait_timeout: Option<u64>,
     },
+    /// Revert a merged merge request in one step (M4 C10): opens a merge
+    /// request from the new branch revert/mr-<iid> into its target.
+    Revert {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
     /// Approve the head you reviewed (--sha; M3 R5). The answer says
     /// whether the approval counts now.
     Approve {

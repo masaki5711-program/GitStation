@@ -121,6 +121,19 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             forge_review::Merger::clone(&merger),
             format!("serve-{}", forge_core::RequestId::generate()),
         )));
+        // M4 C10 (plan 04 M-4): the system's revert drafts after a failed
+        // target pipeline write a branch: here, next to the browse cache.
+        let revert_tasks = crate::serve_reverts::spawn(
+            &db,
+            Arc::new(
+                forge_review::Reverter::new(
+                    db.clone(),                 // clone: the pool handle is shared
+                    smart_http.git.clone(),     // clone: Arc handles
+                    smart_http.storage.clone(), // clone: the root path
+                )
+                .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
+            ),
+        )?;
         let merge_tasks = crate::serve_merges::spawn(&db, merger)?;
         let oidc = crate::oidc::service(cfg, &db)?;
         let mut state = app_state(&db, database, cfg.web.session_idle, oidc.as_ref())
@@ -282,6 +295,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // `executing` attempt is the reconciliation's after the restart).
         // A task that panicked or did not end in time is logged there.
         queue_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
+        revert_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         merge_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         // A receive-pack whose body was complete runs on in its own task
         // (and records the push afterwards): let it finish before the

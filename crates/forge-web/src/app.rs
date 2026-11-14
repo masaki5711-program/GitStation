@@ -2380,6 +2380,18 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::merge_status,
         )
         .responds::<mr::MergeStatusBody>(Verb::Get, mr::MERGE)
+        // M4 C10 (plan 04 M-4, ADR-0024 Amendment C10): one action opens a
+        // merge request reverting a merged one; decided as opening it
+        // (MergeRequestCreate) and pushing its branch (RepoPush).
+        .route_with(
+            Verb::Post,
+            mr::REVERT,
+            Action::MergeRequestCreate,
+            "Revert a merged merge request in one step: opens a merge request from the new branch revert/mr-<iid> (one revert commit on the target's tip) into the target. Decided as opening a merge request (Developer; a token needs api) and pushing the branch (a token needs write_repository; a protected revert/* refuses, FG-GIT-0008). 409 FG-REVIEW-0029 (not merged, branch exists, nothing to revert) or FG-REVIEW-0030 (the revert conflicts: nothing is opened)",
+            mr::MergeRequestToRevert,
+            mr::revert,
+        )
+        .responds_created::<mr::RevertBody>(Verb::Post, mr::REVERT)
         // M4 C8 (ADR-0030 §2, §10, §11): "merge when ready" — the merge
         // request in its target's merge queue.
         .route_with_body(

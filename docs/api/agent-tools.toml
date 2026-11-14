@@ -1030,3 +1030,7 @@ reason = "Deployment environments (approval, freeze, rollback) are a Maintainer'
 [[excluded]]
 gstn = "deploy target-set"
 reason = "Deployment targets are an administrator's: people_only (ADR-0031)."
+
+[[deferred]]
+gstn = "mr revert"
+reason = "M4 C10: opening a revert merge request is opening a merge request (an agent may); a tool comes with the agent's main-broken flow (plan 04 M-4)."

@@ -40,6 +40,7 @@ mod runtime;
 mod serve;
 mod serve_merge_queue;
 mod serve_merges;
+mod serve_reverts;
 mod state_copy;
 mod worker;
 

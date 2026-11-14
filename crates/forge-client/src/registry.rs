@@ -783,6 +783,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["iid","merge"],"properties":{"merge":{"type":["object","null"]}}}"#,
     },
     CommandSpec {
+        name: "mr revert",
+        summary: "Revert a merged merge request in one step: opens a merge request from the new branch revert/mr-<iid> (one revert commit on the target's tip; git revert -m 1 of a merge commit, the squash commit, or a whole fast-forward) into its target. Decided as opening a merge request and pushing the branch (Developer). A revert that conflicts opens nothing (FG-REVIEW-0030); not merged, an existing revert branch or nothing left to revert is FG-REVIEW-0029.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merged merge request's number in the project."),
+        ],
+        examples: &["gstn mr revert --project 7 --iid 3"],
+        scopes: &["api", "write_repository"],
+        routes: &["POST /api/v1/projects/{id}/merge-requests/{iid}/revert"],
+        output: r#"{"type":"object","required":["merge_request","reverted_iid","commit_sha","parent_sha"],"properties":{"merge_request":{"type":"object","required":["iid","source_branch","target_branch","draft"]}}}"#,
+    },
+    CommandSpec {
         name: "mr discussions",
         summary: "List a merge request's discussions with their notes, oldest first; an inline thread is `outdated` when a later version rewrote its line.",
         args: &[

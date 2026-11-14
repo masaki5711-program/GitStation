@@ -61,6 +61,8 @@ mod matrix_rows_doc_lint;
 // M4 C2: CI pipelines.
 mod matrix_rows_merge_queue;
 mod matrix_rows_pipelines;
+// M4 C10: one-step revert (existing actions, revert-shaped rows).
+mod matrix_rows_revert;
 // M4 C5: CI outputs.
 mod matrix_rows_ci_outputs;
 // M4 C6: CI variables.

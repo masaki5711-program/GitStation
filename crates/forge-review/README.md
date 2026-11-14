@@ -235,3 +235,15 @@ repository), `tests/decided_callers.rs`, `tests/versions_git.rs` (R1b, real git:
 planner); the SQL side in
 `crates/forge-db/src/review/tests.rs` (iid allocation under concurrency, one
 event per transition, the state guard, FG-REVIEW-0001).
+
+**M4 C10 — one-step revert** (`src/revert.rs`, plan 04 M-4, ADR-0024 Amendment
+2026-11-14): `Reverter::revert` opens the merge request that reverts one merged
+merge request (branch `revert/mr-<iid>`, one commit whose tree is
+`forge_git::revert`'s — no work tree), decided as `MergeRequestCreate` of the revert
+(reconfirmed under the lock) and `RepoPush` of the branch (`authorize_ref_updates`).
+`Reverter::draft_after_failure` is the job `merge_request.revert_draft` (`forge serve`,
+enqueued by forge-db's `revert-drafts` subscriber): a DRAFT revert when the target's own
+push pipeline failed on the merged commit and had not failed before the merge, decided as
+the reverted merge request's author and recorded as `merge_request.revert_drafted`. Owned
+codes: FG-REVIEW-0029 RevertRefused, FG-REVIEW-0030 RevertConflict (a conflicting revert
+opens nothing). Tests: `tests/revert_git.rs`.
