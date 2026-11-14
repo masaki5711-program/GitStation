@@ -1,8 +1,13 @@
-//! Connection admission of the SSH transport (M4 C13, ADR-0032 §4): a cap
+//! Connection admission of the SSH transport (M4 C13, ADR-0033 §4): a cap
 //! in total and per peer, new connections per peer per minute, and a
 //! minute's lockout of a peer whose connections keep failing to
 //! authenticate. A refused connection is closed before the SSH handshake
-//! (`FG-GIT-0035`); refusals are logged at most once per
+//! (`FG-GIT-0035`). Connections that have not authenticated yet have
+//! their own, smaller cap (`git.ssh.max_unauthenticated_connections`):
+//! a flood of handshakes cannot take the slots of working clients. Failed
+//! authentications are counted per connection that ends unauthenticated,
+//! per peer address — behind a NAT every client shares it (runbook
+//! ssh-transport). Refusals are logged at most once per
 //! [`REFUSAL_LOG_INTERVAL`] with the count they stand for.
 //!
 //! Peers are keyed like the HTTP server's (`server::peer_key`: an IPv6
@@ -29,6 +34,8 @@ const SWEEP_AT: usize = 4096;
 pub struct AdmissionLimits {
     pub max_connections: usize,
     pub max_connections_per_peer: usize,
+    /// Connections not authenticated yet, in total.
+    pub max_unauthenticated: usize,
     pub connections_per_minute_per_peer: u32,
     pub auth_failures_per_minute_per_peer: u32,
 }
@@ -65,6 +72,7 @@ impl PeerState {
 #[derive(Debug, Default)]
 struct Table {
     open: usize,
+    unauthenticated: usize,
     peers: HashMap<IpAddr, PeerState>,
 }
 
@@ -100,12 +108,17 @@ pub struct Admission {
 pub struct Admitted {
     admission: Arc<Admission>,
     peer: IpAddr,
+    authenticated: std::sync::atomic::AtomicBool,
 }
 
 impl Drop for Admitted {
     fn drop(&mut self) {
+        let authenticated = self.is_authenticated();
         let mut table = self.admission.lock();
         table.open = table.open.saturating_sub(1);
+        if !authenticated {
+            table.unauthenticated = table.unauthenticated.saturating_sub(1);
+        }
         let now = Instant::now();
         if let Some(state) = table.peers.get_mut(&self.peer) {
             state.open = state.open.saturating_sub(1);
@@ -117,6 +130,19 @@ impl Drop for Admitted {
 }
 
 impl Admitted {
+    /// A key was proven: the connection leaves the unauthenticated cap.
+    pub fn authenticated(&self) {
+        use std::sync::atomic::Ordering;
+        if !self.authenticated.swap(true, Ordering::SeqCst) {
+            let mut table = self.admission.lock();
+            table.unauthenticated = table.unauthenticated.saturating_sub(1);
+        }
+    }
+
+    pub fn is_authenticated(&self) -> bool {
+        self.authenticated.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// The connection ended without a successful authentication: one
     /// failure for its peer.
     pub fn auth_failed(&self) {
@@ -156,6 +182,13 @@ impl Admission {
                 open: table.open as u64,
             });
         }
+        if table.unauthenticated >= l.max_unauthenticated {
+            return Err(Refusal {
+                reason: "unauthenticated_limit",
+                limit: l.max_unauthenticated as u64,
+                open: table.unauthenticated as u64,
+            });
+        }
         let state = table.peers.entry(peer).or_default();
         state.roll(now);
         if state.failures >= l.auth_failures_per_minute_per_peer {
@@ -182,9 +215,11 @@ impl Admission {
         state.open += 1;
         state.opened = state.opened.saturating_add(1);
         table.open += 1;
+        table.unauthenticated += 1;
         Ok(Admitted {
             admission: Arc::clone(self),
             peer,
+            authenticated: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -238,6 +273,7 @@ mod tests {
     const LIMITS: AdmissionLimits = AdmissionLimits {
         max_connections: 4,
         max_connections_per_peer: 2,
+        max_unauthenticated: 4,
         connections_per_minute_per_peer: 5,
         auth_failures_per_minute_per_peer: 3,
     };
@@ -273,6 +309,30 @@ mod tests {
         assert_eq!(b.admit(ip(9), t0).unwrap_err().reason, "rate_limit");
         // The next minute starts afresh.
         drop(b.admit(ip(9), t0 + WINDOW).unwrap());
+    }
+
+    #[test]
+    fn unauthenticated_connections_have_their_own_cap() {
+        let limits = AdmissionLimits {
+            max_unauthenticated: 2,
+            ..LIMITS
+        };
+        let a = Admission::new(limits);
+        let t0 = Instant::now();
+        let first = a.admit(ip(1), t0).unwrap();
+        let _second = a.admit(ip(2), t0).unwrap();
+        assert_eq!(
+            a.admit(ip(3), t0).unwrap_err().reason,
+            "unauthenticated_limit"
+        );
+        // Authenticated connections no longer count against it.
+        first.authenticated();
+        first.authenticated(); // idempotent
+        let third = a.admit(ip(3), t0).unwrap();
+        assert_eq!(a.open(), 3);
+        drop(third);
+        drop(first);
+        let _fourth = a.admit(ip(4), t0).unwrap();
     }
 
     #[test]

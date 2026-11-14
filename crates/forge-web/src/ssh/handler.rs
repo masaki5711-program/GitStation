@@ -1,4 +1,4 @@
-//! One SSH connection's handler (M4 C13, ADR-0032 §2–§3): public-key
+//! One SSH connection's handler (M4 C13, ADR-0033 §2–§3): public-key
 //! authentication against the people's keys (`Authenticator::
 //! authenticate_ssh_key`), one session channel at a time, an `exec` of a
 //! git command (anything else refused), and the command itself run by a
@@ -11,10 +11,18 @@
 //! key); `pty-req`, `subsystem`, X11, agent and port forwarding — refused.
 //! Password, keyboard-interactive and `none` authentication are never
 //! offered.
+//!
+//! The key is decided again (`record_use = false`) at every session
+//! channel and every command, so a key deleted or an account disabled
+//! after the connection authenticated stops working at its next channel
+//! or command; the connection itself ends at `git.ssh.max_connection_ms`
+//! (`super::run_connection`). A channel that sends no command within
+//! [`EXEC_WAIT`] is closed.
 
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use forge_auth::{AccountKind, Principal};
 use forge_core::ssh_key::{fingerprint_of_blob, SshKeyAlgorithm};
@@ -28,7 +36,11 @@ use tokio::io::AsyncWriteExt as _;
 
 use super::bridge::{self, Caller};
 use super::command::parse_command;
+use super::limits::Admitted;
 use super::Shared;
+
+/// How long a session channel may wait for its `exec` (or `shell`).
+pub(crate) const EXEC_WAIT: Duration = Duration::from_secs(30);
 
 /// Session channels one connection may hold at once (git uses one; an
 /// OpenSSH control master may share a connection).
@@ -38,20 +50,22 @@ const MAX_CHANNELS: usize = 4;
 pub(crate) struct Handler {
     shared: Arc<Shared>,
     peer: IpAddr,
-    identity: Option<SshKeyIdentity>,
-    /// Set once a key was proven (the connection task's auth timeout and
-    /// failure count read it).
-    authenticated: Arc<AtomicBool>,
+    /// The proven key (its fingerprint) and who it stood for then.
+    identity: Option<(SshKeyIdentity, String)>,
+    /// The connection's admission: marked authenticated once a key was
+    /// proven (the auth timeout, the unauthenticated cap and the failure
+    /// count read it).
+    admitted: Arc<Admitted>,
     channels: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Handler {
-    pub(crate) fn new(shared: Arc<Shared>, peer: IpAddr, authenticated: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(shared: Arc<Shared>, peer: IpAddr, admitted: Arc<Admitted>) -> Self {
         Self {
             shared,
             peer,
             identity: None,
-            authenticated,
+            admitted,
             channels: Arc::default(),
         }
     }
@@ -68,7 +82,7 @@ impl Handler {
 
     /// Look the key up; a refusal is logged here (once per attempt, at the
     /// code's level) and becomes `Reject`.
-    async fn lookup(&self, key: &PublicKey, proven: bool) -> Option<SshKeyIdentity> {
+    async fn lookup(&self, key: &PublicKey, proven: bool) -> Option<(SshKeyIdentity, String)> {
         let request_id = RequestId::generate();
         let Some(fingerprint) = Self::accepted_fingerprint(key) else {
             tracing::info!(
@@ -85,10 +99,18 @@ impl Handler {
             .authenticate_ssh_key(&request_id, &fingerprint, proven)
             .await
         {
-            Ok(identity) => Some(identity),
-            // An unknown key is normal while a client tries its keys: only
-            // the proven attempt is worth a line.
-            Err(e) if e.code() == ErrorCode::Unauthenticated && !proven => None,
+            Ok(identity) => Some((identity, fingerprint)),
+            // An unknown key, or a disabled owner's, is normal while a client
+            // tries its keys: only the proven attempt is worth a line.
+            Err(e)
+                if !proven
+                    && matches!(
+                        e.code(),
+                        ErrorCode::Unauthenticated | ErrorCode::AccountDisabled
+                    ) =>
+            {
+                None
+            }
             Err(e) => {
                 telemetry::log_failure(&e.with_context("transport", "ssh"), &request_id);
                 None
@@ -124,7 +146,7 @@ impl russh::server::Handler for Handler {
         _user: &str,
         key: VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
-        let Some(identity) = self.lookup(key.public_key, true).await else {
+        let Some((identity, fingerprint)) = self.lookup(key.public_key, true).await else {
             return Ok(Auth::reject());
         };
         tracing::info!(
@@ -133,8 +155,8 @@ impl russh::server::Handler for Handler {
             user_id = identity.user_id.get(),
             "forge.ssh.authenticated"
         );
-        self.identity = Some(identity);
-        self.authenticated.store(true, Ordering::SeqCst);
+        self.identity = Some((identity, fingerprint));
+        self.admitted.authenticated();
         Ok(Auth::Accept)
     }
 
@@ -142,12 +164,25 @@ impl russh::server::Handler for Handler {
         &mut self,
         channel: Channel<Msg>,
         reply: ChannelOpenHandle,
-        _session: &mut Session,
+        session: &mut Session,
     ) -> Result<(), Self::Error> {
-        let Some(identity) = self.identity.clone() else {
+        let Some((identity, fingerprint)) = self.identity.clone() else {
             // Dropping the handle refuses the channel.
             return Ok(());
         };
+        // The key is decided again: deleted, or its owner disabled, since
+        // the connection authenticated: no channel, and the connection ends.
+        let request_id = RequestId::generate();
+        if let Err(e) = recheck(&self.shared, &request_id, &fingerprint, &identity).await {
+            telemetry::log_failure(&e.with_context("at", "channel_open"), &request_id);
+            drop(reply);
+            session.disconnect(
+                russh::Disconnect::ByApplication,
+                "the SSH key is no longer valid",
+                "",
+            )?;
+            return Ok(());
+        }
         if self.channels.fetch_add(1, Ordering::SeqCst) >= MAX_CHANNELS {
             self.channels.fetch_sub(1, Ordering::SeqCst);
             return Ok(());
@@ -160,6 +195,8 @@ impl russh::server::Handler for Handler {
             peer: self.peer,
             ssh_key_id: identity.key_id,
             user_id: identity.user_id,
+            fingerprint,
+            idle: self.shared.idle_timeout,
         };
         tokio::spawn(async move {
             run_channel(shared, caller, identity.username, channel).await;
@@ -250,9 +287,22 @@ async fn run_channel(shared: Arc<Shared>, caller: Caller, username: String, chan
     let (mut read, write) = channel.split();
     let mut git_protocol: Option<String> = None;
     let request_id = RequestId::generate();
+    let deadline = tokio::time::Instant::now() + EXEC_WAIT;
     let status = loop {
-        let Some(message) = read.wait().await else {
-            return; // closed before any command
+        let message = match tokio::time::timeout_at(deadline, read.wait()).await {
+            Ok(Some(message)) => message,
+            // Closed before any command.
+            Ok(None) => return,
+            Err(_) => {
+                tracing::info!(
+                    target: "forge_web::ssh",
+                    ssh_key_id = caller.ssh_key_id,
+                    wait_ms = EXEC_WAIT.as_millis(),
+                    "forge.ssh.channel_without_command"
+                );
+                let _ = write.close().await; // ignore: the client may be gone
+                return;
+            }
         };
         match message {
             ChannelMsg::SetEnv {
@@ -317,6 +367,28 @@ async fn exec(
     read: &mut russh::ChannelReadHalf,
     write: &russh::ChannelWriteHalf<Msg>,
 ) -> u32 {
+    // The key is decided again before any command runs.
+    let lookup = shared
+        .authenticator
+        .authenticate_ssh_key(request_id, &caller.fingerprint, false);
+    match lookup.await {
+        Ok(now) if now.user_id == caller.user_id => {}
+        Ok(_) => {
+            let err = ForgeError::new(ErrorCode::Unauthenticated)
+                .with_context("reason", "ssh_key_owner_changed")
+                .with_context("ssh_key_id", caller.ssh_key_id)
+                .with_context("at", "exec");
+            refuse(&err, request_id, write).await;
+            return 1;
+        }
+        Err(err) => {
+            let err = err
+                .with_context("at", "exec")
+                .with_context("transport", "ssh");
+            refuse(&err, request_id, write).await;
+            return 1;
+        }
+    }
     let command = match parse_command(raw) {
         Ok(command) => command,
         Err(err) => {
@@ -352,6 +424,26 @@ async fn exec(
         "forge.ssh.command"
     );
     outcome.exit_status
+}
+
+/// The key decided again (no use recorded): still known, its owner still
+/// active and the same person as at authentication.
+async fn recheck(
+    shared: &Shared,
+    request_id: &RequestId,
+    fingerprint: &str,
+    at_auth: &SshKeyIdentity,
+) -> Result<(), ForgeError> {
+    let now = shared
+        .authenticator
+        .authenticate_ssh_key(request_id, fingerprint, false)
+        .await?;
+    if now.user_id != at_auth.user_id {
+        return Err(ForgeError::new(ErrorCode::Unauthenticated)
+            .with_context("reason", "ssh_key_owner_changed")
+            .with_context("ssh_key_id", at_auth.key_id));
+    }
+    Ok(())
 }
 
 /// Log a refusal decided here and answer it in-band.

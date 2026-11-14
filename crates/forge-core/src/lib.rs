@@ -55,7 +55,7 @@ pub mod role;
 pub mod scope;
 pub mod session_token;
 pub mod spec_version;
-// M4 C13: people's SSH public keys (ADR-0032 §2).
+// M4 C13: people's SSH public keys (ADR-0033 §2).
 pub mod ssh_key;
 // ── M3 X4: requirement blocks, `@req` tags, the index, spec-lint and spec-trace ──
 pub mod req_tags;

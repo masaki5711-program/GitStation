@@ -385,7 +385,7 @@ fn only_forge_web_builds_ci_principals() {
     );
 }
 
-/// M4 C13 (ADR-0032 §2): an SSH key's principal is built by forge-web's
+/// M4 C13 (ADR-0033 §2): an SSH key's principal is built by forge-web's
 /// SSH transport only, from a key the authenticator resolved to an active
 /// owner — never by a worker or another route.
 #[test]

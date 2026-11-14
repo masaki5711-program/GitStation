@@ -1,4 +1,4 @@
--- M4 C13 (ADR-0032 §2, plan 14 C13): people's SSH public keys for the SSH
+-- M4 C13 (ADR-0033 §2, plan 14 C13): people's SSH public keys for the SSH
 -- git transport.
 --
 -- forge.user_ssh_keys (tables.toml kind = "audited", on ('user', user_id)):
@@ -60,4 +60,4 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261215100000, "guarded_changes": ["forge.user_ssh_keys.audited_change_present"]}');
+    '{"version": 20261218100000, "guarded_changes": ["forge.user_ssh_keys.audited_change_present"]}');

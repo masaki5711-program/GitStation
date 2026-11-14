@@ -45,7 +45,7 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/user/tokens/{id}",
         Coverage::Command("token revoke"),
     ),
-    // M4 C13: your SSH keys (ADR-0032 §2).
+    // M4 C13: your SSH keys (ADR-0033 §2).
     (
         "GET",
         "/api/v1/user/ssh-keys",

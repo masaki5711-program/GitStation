@@ -24,7 +24,7 @@ entry point from M1.
 | `forge admin runner register --name <n> --admin <user> [--tags a,b] [--description d]` | M4 C4 (runbook `ci-runner`): register a CI runner, recorded as registered by `--admin` (an active human administrator, else FG-AUTH-0003); its token `fgr_…` is printed **once** on stdout, never logged. Until the administration screen exists this is the way to register one (the API takes an administrator's web session only) |
 | `forge admin runner list` | the runners (id, name, enabled, tags, last contact; never a token) |
 | `forge admin runner disable <runner_id> --admin <user>` | disable a runner (the administrator is recorded as the audit actor): its token and its jobs' tokens are refused from the next request |
-| `forge admin ssh-host-key generate` | M4 C13 (ADR-0032 §2, runbook `ssh-transport`): make the SSH transport's Ed25519 host key at `git.ssh.host_key_file` once (0600 on Unix; an existing file is never replaced: FG-SYS-0002 `target_exists`) and print its fingerprint and `known_hosts` line. `forge serve` never makes one |
+| `forge admin ssh-host-key generate` | M4 C13 (ADR-0033 §2, runbook `ssh-transport`): make the SSH transport's Ed25519 host key at `git.ssh.host_key_file` once (0600 on Unix; an existing file is never replaced: FG-SYS-0002 `target_exists`) and print its fingerprint and `known_hosts` line. `forge serve` never makes one |
 | `forge admin ssh-host-key show` | the configured host key's fingerprint and `known_hosts` line (reads only) |
 | `forge admin repo reprovision <repo_id>` | enqueue the provisioning job of a repository still `provisioning` again (after its job died; FG-REPO-0012); refused for a ready repository (FG-REPO-0014 `repository_ready`) |
 

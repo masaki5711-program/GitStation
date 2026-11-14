@@ -1,12 +1,18 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)] // tests may fail loudly (rust/testing.md)
 //! The SSH git transport with the real `git` and OpenSSH `ssh` clients
-//! (M4 C13, ADR-0032): the product router served by `forge_web::ssh` on
+//! (M4 C13, ADR-0033): the product router served by `forge_web::ssh` on
 //! 127.0.0.1:0 the way `forge serve` wires it, against the development
 //! database. Every key, user and repository is synthetic; the client keys
 //! are made by `ssh-keygen` in a temporary directory and the server's host
 //! key is pinned in a `known_hosts` file (`StrictHostKeyChecking=yes`).
 //!
-//! Skipped with a message when `ssh` or `ssh-keygen` is not installed.
+//! Skipped with a message when `ssh` or `ssh-keygen` is not installed —
+//! except under CI (`CI` set), where a missing client fails the test.
+//!
+//! Besides the journey: a clone and a push larger than one 64 KiB chunk
+//! and SSH window, a push over `receive.maxInputSize` (refused, no ref),
+//! a client killed in the middle of a clone (the server keeps serving),
+//! and a fetch whose v2 negotiation takes several rounds.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -163,6 +169,20 @@ impl Fixture {
     }
 }
 
+/// A deterministic, incompressible byte stream (xorshift; synthetic data).
+fn noise(len: usize, seed: u64) -> Vec<u8> {
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15 ^ seed;
+    let mut out = Vec::with_capacity(len + 8);
+    while out.len() < len {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
 fn keygen(dir: &Path, name: &str) -> (PathBuf, String) {
     let path = dir.join(name);
     let mut cmd = Command::new("ssh-keygen");
@@ -299,7 +319,9 @@ fn fixture() -> Fixture {
     let seed_s = slash(&seed);
     local(&["init", "-q", "-b", "main", &seed_s]);
     std::fs::write(seed.join("README"), "synthetic over ssh\n").expect("write");
-    local(&["-C", &seed_s, "add", "README"]);
+    // Larger than a 64 KiB chunk and an SSH window: incompressible.
+    std::fs::write(seed.join("big.bin"), noise(1024 * 1024, 1)).expect("write");
+    local(&["-C", &seed_s, "add", "README", "big.bin"]);
     local(&["-C", &seed_s, "commit", "-q", "-m", "one"]);
     local(&["-C", &seed_s, "push", "-q", &slash(&bare), "main"]);
 
@@ -310,7 +332,11 @@ fn fixture() -> Fixture {
         let smart = SmartHttp::new(
             git.clone(), // clone: shared pools
             StorageRoot::open(&storage).expect("root"),
-            GitHttpLimits::default(),
+            GitHttpLimits {
+                // receive.maxInputSize: a 4 MiB pack is refused.
+                push_max_bytes: std::num::NonZeroU64::new(2 * 1024 * 1024).expect("non-zero"),
+                ..GitHttpLimits::default()
+            },
         )
         .with_push_checks(PathBuf::from(env!("CARGO_BIN_EXE_forge")))
         .expect("push checks armed")
@@ -343,12 +369,15 @@ fn fixture() -> Fixture {
                 admission: AdmissionLimits {
                     max_connections: 16,
                     max_connections_per_peer: 16,
+                    max_unauthenticated: 16,
                     connections_per_minute_per_peer: 1000,
                     auth_failures_per_minute_per_peer: 1000,
                 },
                 auth_timeout: Duration::from_secs(30),
                 max_auth_attempts: 6,
                 inactivity_timeout: Duration::from_secs(120),
+                max_connection: Duration::from_secs(600),
+                idle_timeout: Duration::from_secs(60),
             },
         );
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -403,6 +432,10 @@ fn bare_ref(f: &Fixture, name: &str) -> Option<String> {
 #[test]
 fn git_clone_and_push_over_ssh_go_through_the_same_checks_as_smart_http() {
     if !ssh_available() {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI: the OpenSSH client (ssh, ssh-keygen) must be installed for this test"
+        );
         eprintln!(
             "SKIPPED git_clone_and_push_over_ssh_go_through_the_same_checks_as_smart_http: \
              `ssh` / `ssh-keygen` (OpenSSH client) is not installed on this host"
@@ -511,4 +544,141 @@ fn git_clone_and_push_over_ssh_go_through_the_same_checks_as_smart_http() {
     assert!(text(&out).contains("FG-GIT-0033"), "{}", text(&out));
     let out = f.ssh(&f.alice_key, "cat /etc/passwd");
     assert!(text(&out).contains("FG-GIT-0033"), "{}", text(&out));
+
+    // ── larger than a chunk / window, and over receive.maxInputSize ──
+    assert_eq!(
+        std::fs::read(work.join("big.bin")).expect("big.bin").len(),
+        1024 * 1024,
+        "the clone carried the 1 MiB file whole"
+    );
+    std::fs::write(work.join("mid.bin"), noise(300 * 1024, 2)).expect("write");
+    assert!(in_work(&f.carol_key, &["add", "mid.bin"]).status.success());
+    assert!(in_work(&f.carol_key, &["commit", "-q", "-m", "mid"])
+        .status
+        .success());
+    let out = in_work(
+        &f.carol_key,
+        &["push", "-q", "origin", "HEAD:refs/heads/mid"],
+    );
+    assert!(out.status.success(), "300 KiB push: {}", text(&out));
+    assert!(bare_ref(&f, "refs/heads/mid").is_some());
+    std::fs::write(work.join("huge.bin"), noise(4 * 1024 * 1024, 3)).expect("write");
+    assert!(in_work(&f.carol_key, &["add", "huge.bin"]).status.success());
+    assert!(in_work(&f.carol_key, &["commit", "-q", "-m", "huge"])
+        .status
+        .success());
+    let out = in_work(&f.carol_key, &["push", "origin", "HEAD:refs/heads/huge"]);
+    assert!(!out.status.success(), "over maxInputSize: {}", text(&out));
+    assert_eq!(bare_ref(&f, "refs/heads/huge"), None);
+
+    // ── a fetch whose v2 negotiation takes several rounds ──
+    // 300 local commits on top of main the server never saw (haves are
+    // sent 32 at a time), and a new commit on the server's main.
+    let main =
+        String::from_utf8_lossy(&in_work(&f.alice_key, &["rev-parse", "origin/main"]).stdout)
+            .trim()
+            .to_owned();
+    let mut stream = String::new();
+    for i in 1..=300_u64 {
+        let from = if i == 1 {
+            format!("from {main}\n")
+        } else {
+            String::new()
+        };
+        stream.push_str(&format!(
+            "commit refs/heads/local\ncommitter t <t@example.invalid> {} +0000\ndata 3\nc{:02}\n{from}M 644 inline n{i}.txt\ndata 2\n{:02}\n",
+            4_000_000_000_u64 + i,
+            i % 100,
+            i % 100
+        ));
+    }
+    let mut import = f.git(&f.alice_key);
+    import.args(["-C", &w, "fast-import", "--quiet"]);
+    import
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = import.spawn().expect("fast-import");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(stream.as_bytes())
+            .expect("stream");
+    }
+    let out = child.wait_with_output().expect("fast-import");
+    assert!(out.status.success(), "fast-import: {}", text(&out));
+    let seed = f.dir.path().join("seed");
+    let mut cmd = Command::new("git");
+    cmd.env("HOME", f.dir.path().join("home"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "forge-test")
+        .env("GIT_AUTHOR_EMAIL", "forge-test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "forge-test")
+        .env("GIT_COMMITTER_EMAIL", "forge-test@example.invalid")
+        .args([
+            "-C",
+            &slash(&seed),
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "server side",
+        ]);
+    assert!(run(cmd, "seed commit").status.success());
+    let mut cmd = Command::new("git");
+    cmd.env("HOME", f.dir.path().join("home")).args([
+        "-C",
+        &slash(&seed),
+        "push",
+        "-q",
+        "--force",
+        &slash(&f.bare),
+        "main",
+    ]);
+    let out = run(cmd, "seed push");
+    assert!(out.status.success(), "{}", text(&out));
+    let trace = f.dir.path().join("fetch-trace.txt");
+    let mut cmd = f.git(&f.alice_key);
+    cmd.env("GIT_TRACE_PACKET", slash(&trace)).args([
+        "-C",
+        &w,
+        "-c",
+        "fetch.negotiationAlgorithm=consecutive",
+        "fetch",
+        "-q",
+        "origin",
+    ]);
+    let out = run(cmd, "multi-round fetch");
+    assert!(out.status.success(), "fetch: {}", text(&out));
+    let rounds = std::fs::read_to_string(&trace)
+        .expect("trace")
+        .matches("> command=fetch")
+        .count();
+    assert!(rounds >= 2, "the negotiation took {rounds} round(s)");
+    assert_eq!(
+        String::from_utf8_lossy(&in_work(&f.alice_key, &["rev-parse", "origin/main"]).stdout)
+            .trim(),
+        bare_ref(&f, "refs/heads/main").expect("main")
+    );
+
+    // ── a client killed in the middle of a clone ──
+    let killed = f.dir.path().join("killed");
+    let mut cmd = f.git(&f.alice_key);
+    cmd.args(["clone", "-q", &f.url("alice/web.git")])
+        .arg(&killed)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = cmd.spawn().expect("clone");
+    std::thread::sleep(Duration::from_millis(150));
+    let _ = child.kill(); // ignore: it may have finished already
+    let _ = child.wait(); // ignore: see above
+                          // The server keeps serving.
+    let mut cmd = f.git(&f.alice_key);
+    cmd.args(["ls-remote", &f.url("alice/web.git")]);
+    let out = run(cmd, "ls-remote after a killed clone");
+    assert!(out.status.success(), "{}", text(&out));
 }

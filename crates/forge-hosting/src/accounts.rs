@@ -112,7 +112,7 @@ impl Hosting {
         .await
     }
 
-    // ── SSH keys (M4 C13, ADR-0032 §2) ──
+    // ── SSH keys (M4 C13, ADR-0033 §2) ──
 
     /// The SSH keys of the proof's owner (`SshKeyList`), newest first.
     pub async fn ssh_keys(

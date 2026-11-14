@@ -73,7 +73,7 @@
 | [FG-AUTH-0020](FG-AUTH-0020.md) | 403 | warn | A service account (kanflow) acting for a person (`Forge-Act-As`, ADR-0025 §5) sent a `Forge-Assertion` that does not prove the person confirmed exactly this action, or claimed one that cannot be claimed |
 | [FG-AUTH-0021](FG-AUTH-0021.md) | 403 | info | Plan 06 D-5 (M3 X5, ADR-0023 Amendment X5): what is marked confidential is never handed to an AI agent by the context API |
 | [FG-AUTH-0022](FG-AUTH-0022.md) | 403 | info | Plan 06 D-5, ADR-0026 decision of 2026-11-10 (the safety net), extended to the CI outputs by ADR-0029 decision 5 (M4 C5) |
-| [FG-AUTH-0023](FG-AUTH-0023.md) | 422 | info | M4 C13 (ADR-0032 §2): `POST /api/v1/user/ssh-keys` refused the key |
+| [FG-AUTH-0023](FG-AUTH-0023.md) | 422 | info | M4 C13 (ADR-0033 §2): `POST /api/v1/user/ssh-keys` refused the key |
 | [FG-GIT-0007](FG-GIT-0007.md) | 403 | info | A push would rewrite (non-fast-forward) a protected ref |
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |
@@ -100,10 +100,10 @@
 | [FG-GIT-0024](FG-GIT-0024.md) | 500 | warn | The push checks (M3 X8) stopped at a bound and let the push through (fail open with a warn, ADR-0008 amendment X8): `reason=objects_cap` (more than 500 000 new objects, or the object list did not fit its output cap), `bytes_cap` (more than 256 MiB of text blobs to scan for secrets), `deadline` (the 60 s bound of the secret scan), `large_blob_unscanned` (a text blob over 1 MiB and under the size limit was not scanned for secrets; `skipped_large` counts them) |
 | [FG-GIT-0025](FG-GIT-0025.md) | 409 | info | `forge admin repo allow-import <repo_id> [--ttl-hours N]` (2026-11-12, ADR-0008 amendment "history import") refused to allow the one-time history import: `reason=repository_not_empty` (the repository already has refs: the allowance is only for the first push into an empty repository), `repository_not_ready` (the repository is still `provisioning` or is being purged), `ttl_out_of_range` (the TTL is outside 1 to 168 hours) |
 | [FG-GIT-0026](FG-GIT-0026.md) | 500 | alert | A push accepted under the one-time history import allowance (2026-11-12, ADR-0008 amendment "history import") was applied, but `forge serve` could not write its audit rows (`repository.history_imported` and one `repository.history_secret_imported` per finding only in history) nor mark the allowance used: the database failed or timed out (`cause_code`), `reason=record_failed` / `timeout` |
-| [FG-GIT-0033](FG-GIT-0033.md) | 400 | info | M4 C13 (ADR-0032): an authenticated SSH client asked the SSH git transport for something it does not serve |
-| [FG-GIT-0034](FG-GIT-0034.md) | 400 | info | M4 C13 (ADR-0032 §3): `git-upload-pack` over SSH was asked without `GIT_PROTOCOL=version=2` (the SSH `env` request git sends through OpenSSH) |
-| [FG-GIT-0035](FG-GIT-0035.md) | 503 | warn | M4 C13 (ADR-0032 §4): the SSH git transport closed a connection because of a bound |
-| [FG-GIT-0036](FG-GIT-0036.md) | 500 | alert | M4 C13 (ADR-0032): the SSH git transport itself failed — not git and not authorization (those keep their own codes, e.g |
+| [FG-GIT-0033](FG-GIT-0033.md) | 400 | info | M4 C13 (ADR-0033): an authenticated SSH client asked the SSH git transport for something it does not serve |
+| [FG-GIT-0034](FG-GIT-0034.md) | 400 | info | M4 C13 (ADR-0033 §3): `git-upload-pack` over SSH was asked without `GIT_PROTOCOL=version=2` (the SSH `env` request git sends through OpenSSH) |
+| [FG-GIT-0035](FG-GIT-0035.md) | 503 | warn | M4 C13 (ADR-0033 §4): the SSH git transport closed a connection because of a bound |
+| [FG-GIT-0036](FG-GIT-0036.md) | 500 | alert | M4 C13 (ADR-0033): the SSH git transport itself failed — not git and not authorization (those keep their own codes, e.g |
 | [FG-WEB-0001](FG-WEB-0001.md) | 404 | info | No registered route matches the request path: no fixed route, and the dispatcher (ADR-0015) refused the raw path by its string rules or found no scoped route for its word and method. |
 | [FG-WEB-0002](FG-WEB-0002.md) | 503 | warn | A request exceeded the server's request timeout and was cancelled. |
 | [FG-SYS-0004](FG-SYS-0004.md) | 500 | alert | forge serve could not bind its listen address (address in use, permission denied for a privileged port, or an invalid address). |

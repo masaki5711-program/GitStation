@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-M4 C13 (ADR-0032 §3): `git-upload-pack` over SSH was asked without `GIT_PROTOCOL=version=2` (the SSH `env` request git sends through OpenSSH). forge serves SSH fetches through the same stateless upload-pack request as Smart HTTP (want check, confidential copy check, stream caps), which needs protocol v2's one-request-per-round shape; v0's stateful negotiation is not translated. Causes: git older than 2.26 without `protocol.version=2`, `protocol.version=0` in the client's configuration, or an SSH client git cannot pass the variable through (`GIT_SSH_VARIANT=simple`, plink). Push (`git-receive-pack`) has no v2 and is not affected.
+M4 C13 (ADR-0033 §3): `git-upload-pack` over SSH was asked without `GIT_PROTOCOL=version=2` (the SSH `env` request git sends through OpenSSH). forge serves SSH fetches through the same stateless upload-pack request as Smart HTTP (want check, confidential copy check, stream caps), which needs protocol v2's one-request-per-round shape; v0's stateful negotiation is not translated. Causes: git older than 2.26 without `protocol.version=2`, `protocol.version=0` in the client's configuration, or an SSH client git cannot pass the variable through (`GIT_SSH_VARIANT=simple`, plink). Push (`git-receive-pack`) has no v2 and is not affected.
 
 ## 調べ方 (diagnosis)
 

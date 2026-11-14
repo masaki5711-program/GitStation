@@ -1,4 +1,4 @@
-// SSH public keys (M4 C13, ADR-0032 §2): list, add and delete one's own keys
+// SSH public keys (M4 C13, ADR-0033 §2): list, add and delete one's own keys
 // for git over SSH, and the server's host key fingerprint to compare on the
 // first connection. Adding works in a browser session only (the API refuses
 // a token). A key is public data: nothing here is secret.

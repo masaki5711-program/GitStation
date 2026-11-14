@@ -202,7 +202,7 @@ actions! {
     TokenList,
     /// `DELETE /api/v1/user/tokens/{id}` (M2 MR6).
     TokenRevoke,
-    // --- REST API: SSH public keys (M4 C13, ADR-0032 §2) ---
+    // --- REST API: SSH public keys (M4 C13, ADR-0033 §2) ---
     /// `GET /api/v1/user/ssh-keys`: one's own SSH keys (and the server's
     /// host key fingerprints). Decided like `TokenList` (`read_api`).
     SshKeyList,

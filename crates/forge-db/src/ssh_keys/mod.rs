@@ -1,4 +1,4 @@
-//! People's SSH public keys (M4 C13, ADR-0032 §2): add, list, delete and
+//! People's SSH public keys (M4 C13, ADR-0033 §2): add, list, delete and
 //! authenticate. `add` / `delete` each write one audit row on the owner
 //! (resource `user`; `ssh_key.added` / `ssh_key.deleted`, audit only, no
 //! event). A key is public data: the read pool sees every column; the

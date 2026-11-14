@@ -1,5 +1,5 @@
 //! The permission matrix rows of the SSH git transport and SSH keys (M4
-//! C13, ADR-0032 §2):
+//! C13, ADR-0033 §2):
 //!
 //! - A person through an SSH key (`Principal::ssh_key`) is decided exactly
 //!   like a token with `read_repository` + `write_repository`: clone /

@@ -85,7 +85,7 @@ fn ssh_host_key_report(
     ))
 }
 
-/// `forge admin ssh-host-key generate` (M4 C13, ADR-0032 §2, runbook
+/// `forge admin ssh-host-key generate` (M4 C13, ADR-0033 §2, runbook
 /// ssh-transport): make the SSH host key at `git.ssh.host_key_file` once.
 /// An existing file is never replaced (`FG-SYS-0002 reason=target_exists`).
 pub fn ssh_host_key_generate(cfg: &forge_core::config::Config) -> Result<String, ForgeError> {

@@ -1,4 +1,4 @@
-//! SSH public keys of people (M4 C13, ADR-0032 §2): the one line a user
+//! SSH public keys of people (M4 C13, ADR-0033 §2): the one line a user
 //! pastes (`<algorithm> <base64 blob> [comment]`, OpenSSH's
 //! `authorized_keys` / `.pub` form), parsed strictly, and its SHA-256
 //! fingerprint (`SHA256:<base64 without padding>`, what `ssh-keygen -l`

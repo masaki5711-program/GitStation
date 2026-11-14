@@ -78,7 +78,17 @@ fn caller() -> Caller {
         peer: IpAddr::from([192, 0, 2, 9]),
         ssh_key_id: 3,
         user_id: UserId::new(7),
+        fingerprint: "SHA256:5ytgilOc3oe+dzOfNlMNUlML18fMocF7QAyCsvhkxkA".to_owned(),
+        idle: std::time::Duration::from_secs(10),
     }
+}
+
+/// A receive-pack command list: one update with these capabilities.
+fn commands(caps: &str) -> Vec<u8> {
+    let old = "1".repeat(40);
+    let new = "2".repeat(40);
+    let line = format!("{old} {new} refs/heads/main\0{caps}\n");
+    format!("{:04x}{line}0000", line.len() + 4).into_bytes()
 }
 
 fn ok_body(bytes: &'static [u8]) -> axum::response::Response {
@@ -369,4 +379,106 @@ fn only_version_2_counts_as_v2() {
     assert!(wants_v2(Some("object-format=sha1:version=2")));
     assert!(!wants_v2(Some("version=20")));
     assert!(!wants_v2(None));
+}
+
+#[tokio::test]
+async fn push_options_are_refused_on_side_band_3_without_a_post() {
+    let (router, seen) = stub(Box::new(|_| ok_body(b"000fadvertised\n0000")));
+    let cmd = parse_command(b"git-receive-pack 'alice/web.git'").unwrap();
+    let mut input = commands("report-status side-band-64k push-options");
+    input.extend_from_slice(b"000bopt=1\n0000");
+    let mut out = Vec::new();
+    let outcome = run(&router, &caller(), &cmd, None, &rid(), &input[..], &mut out).await;
+    assert_eq!(outcome.exit_status, 1);
+    assert_eq!(outcome.refused, Some("FG-GIT-0033"));
+    let answer = &out[b"000fadvertised\n0000".len()..];
+    assert_eq!(answer[4], 3, "side-band 3: {answer:?}");
+    assert!(String::from_utf8_lossy(&answer[5..]).starts_with("FG-GIT-0033 "));
+    assert_eq!(seen.lock().unwrap().len(), 1, "no POST");
+}
+
+#[tokio::test]
+async fn a_push_refusal_after_the_pack_goes_to_side_band_3() {
+    let (router, _) = stub(Box::new(|s| {
+        if s.method == "GET" {
+            ok_body(b"000fadvertised\n0000")
+        } else {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "error_code": "FG-GIT-0004",
+                    "user_message": "busy",
+                    "request_id": "req-http-9",
+                })),
+            )
+                .into_response()
+        }
+    }));
+    let cmd = parse_command(b"git-receive-pack 'alice/web.git'").unwrap();
+    let mut input = commands("report-status side-band-64k");
+    input.extend_from_slice(b"PACK-bytes");
+    let mut out = Vec::new();
+    let outcome = run(&router, &caller(), &cmd, None, &rid(), &input[..], &mut out).await;
+    assert_eq!(outcome.refused, Some("FG-GIT-0004"));
+    let answer = &out[b"000fadvertised\n0000".len()..];
+    assert_eq!(answer[4], 3);
+    assert_eq!(&answer[5..], b"FG-GIT-0004 busy (request_id: req-http-9)\n");
+    // Without a side-band it stays an ERR line.
+    let mut plain = commands("report-status");
+    plain.extend_from_slice(b"PACK-bytes");
+    let mut out = Vec::new();
+    run(&router, &caller(), &cmd, None, &rid(), &plain[..], &mut out).await;
+    assert!(out[b"000fadvertised\n0000".len() + 4..].starts_with(b"ERR FG-GIT-0004"));
+}
+
+#[tokio::test]
+async fn the_route_gets_exactly_version_2_never_the_clients_text() {
+    let (router, seen) = stub(Box::new(|_| ok_body(b"000eversion 2\n0000")));
+    let cmd = parse_command(b"git-upload-pack 'alice/web.git'").unwrap();
+    let mut out = Vec::new();
+    run(
+        &router,
+        &caller(),
+        &cmd,
+        Some("version=2:object-format=sha1:x=\u{1}"),
+        &rid(),
+        &b"0000"[..],
+        &mut out,
+    )
+    .await;
+    assert_eq!(
+        seen.lock().unwrap()[0].git_protocol.as_deref(),
+        Some("version=2")
+    );
+}
+
+#[tokio::test]
+async fn a_client_idle_inside_a_request_ends_the_command() {
+    let (router, seen) = stub(Box::new(|_| ok_body(b"000eversion 2\n0000")));
+    let cmd = parse_command(b"git-upload-pack 'alice/web.git'").unwrap();
+    let mut idle = caller();
+    idle.idle = std::time::Duration::from_millis(200);
+    // A request is begun and then nothing more comes; the side stays open.
+    let (mut client, server) = tokio::io::duplex(1 << 16);
+    tokio::io::AsyncWriteExt::write_all(&mut client, b"0014command=ls-refs\n")
+        .await
+        .unwrap();
+    let mut out = Vec::new();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        run(
+            &router,
+            &idle,
+            &cmd,
+            Some("version=2"),
+            &rid(),
+            server,
+            &mut out,
+        ),
+    )
+    .await
+    .expect("the idle bound ends it");
+    assert_eq!(outcome.exit_status, 1);
+    drop(client);
+    let _ = seen; // the POST may or may not have started; its body never ends
 }

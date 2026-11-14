@@ -160,7 +160,7 @@ pub enum AuditDetails {
         user: UserId,
         public_id: String,
     },
-    /// `ssh_key.added` (M4 C13, ADR-0032 §2, audit-only, on the owner): the
+    /// `ssh_key.added` (M4 C13, ADR-0033 §2, audit-only, on the owner): the
     /// key's id, algorithm and SHA-256 fingerprint. Never the title (free
     /// text) or the key itself.
     SshKeyAdded {

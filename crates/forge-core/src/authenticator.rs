@@ -71,7 +71,7 @@ pub trait Authenticator: Send + Sync {
         })
     }
 
-    /// An SSH public key a client offered or proved (M4 C13, ADR-0032 §2),
+    /// An SSH public key a client offered or proved (M4 C13, ADR-0033 §2),
     /// by its SHA-256 fingerprint (`SHA256:…`, [`crate::ssh_key`]): the
     /// owner, active. Errors: `FG-AUTH-0001 reason=ssh_key_unknown`,
     /// `FG-AUTH-0004 reason=owner_disabled`, `FG-DB-0001`, `FG-DB-0019`.
@@ -94,7 +94,7 @@ pub trait Authenticator: Send + Sync {
     }
 }
 
-/// Who an SSH key stands for (M4 C13, ADR-0032 §2). The owner is active: a
+/// Who an SSH key stands for (M4 C13, ADR-0033 §2). The owner is active: a
 /// disabled owner's key is refused by the authenticator (`FG-AUTH-0004`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshKeyIdentity {

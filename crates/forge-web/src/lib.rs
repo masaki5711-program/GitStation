@@ -34,7 +34,7 @@ pub mod registry;
 pub mod routes;
 pub mod security_headers;
 pub mod server;
-// M4 C13: the SSH git transport (ADR-0032).
+// M4 C13: the SSH git transport (ADR-0033).
 pub mod ssh;
 pub mod ui;
 

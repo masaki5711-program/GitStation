@@ -48,7 +48,7 @@ pub enum Credential {
     AutoMerge,
 }
 
-/// The scopes an SSH key carries (M4 C13, ADR-0032 §2).
+/// The scopes an SSH key carries (M4 C13, ADR-0033 §2).
 pub const SSH_KEY_SCOPES: [Scope; 2] = [Scope::ReadRepository, Scope::WriteRepository];
 
 /// What a runner request authenticated with (ADR-0029 §1). The token's
@@ -240,7 +240,7 @@ impl Principal {
         }
     }
 
-    /// A person who proved an SSH key (M4 C13, ADR-0032 §2): decided as a
+    /// A person who proved an SSH key (M4 C13, ADR-0033 §2): decided as a
     /// token with exactly the `read_repository` and `write_repository`
     /// scopes — git clone / fetch / push and nothing of the API — with no
     /// administrator rights (no `admin` scope) and never an agent's

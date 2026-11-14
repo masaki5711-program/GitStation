@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-M4 C13 (ADR-0032 §2): `POST /api/v1/user/ssh-keys` refused the key. `reason`: `malformed` (not `<algorithm> <base64> [comment]` on one line, base64 that does not decode, a key blob that does not match its algorithm or has trailing bytes; `detail` names which), `algorithm_unsupported` (`algorithm`: RSA, DSA, security-key and certificate types are not accepted — Ed25519 and ECDSA P-256 / P-384 / P-521 only), `too_long` (the line is longer than 8 KiB), `title_invalid` (empty, more than 100 characters, a control or invisible format character), `duplicate` (the same key — by its SHA-256 fingerprint — is already registered, to this user or to another: a key identifies one person; whose is never said), `limit` (the user already has 50 keys), `owner_disabled` (the account is not active). Nothing is written.
+M4 C13 (ADR-0033 §2): `POST /api/v1/user/ssh-keys` refused the key. `reason`: `malformed` (not `<algorithm> <base64> [comment]` on one line, base64 that does not decode, a key blob that does not match its algorithm or has trailing bytes; `detail` names which), `algorithm_unsupported` (`algorithm`: RSA, DSA, security-key and certificate types are not accepted — Ed25519 and ECDSA P-256 / P-384 / P-521 only), `too_long` (the line is longer than 8 KiB), `title_invalid` (empty, more than 100 characters, a control or invisible format character), `duplicate` (the same key — by its SHA-256 fingerprint — is already registered, to this user or to another: a key identifies one person; whose is never said), `limit` (the user already has 50 keys), `owner_disabled` (the account is not active). Nothing is written.
 
 ## 調べ方 (diagnosis)
 

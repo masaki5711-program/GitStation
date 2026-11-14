@@ -652,7 +652,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // is not found for everyone, administrators included (an
         // administration route for others' tokens is not built yet).
         (Action::TokenRevoke, Resource::Token { owner }) => own_token(*owner),
-        // M4 C13 (ADR-0032 §2): one's own SSH keys, for nobody else — an
+        // M4 C13 (ADR-0033 §2): one's own SSH keys, for nobody else — an
         // administrator included. Adding one is session-only (above): a
         // token never adds a key; the backstop as for `TokenCreate`.
         (Action::SshKeyList | Action::SshKeyDelete, Resource::Token { owner }) => own_token(*owner),

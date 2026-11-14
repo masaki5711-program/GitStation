@@ -8,7 +8,7 @@ and serving. **Handlers never decide**: the registry calls
 `forge_auth::prove(principal, def.action, ctx)` and hands the handler the
 admitted proof.
 
-**SSH git transport** (M4 C13, ADR-0032, runbook `ssh-transport`):
+**SSH git transport** (M4 C13, ADR-0033, runbook `ssh-transport`):
 `forge_web::ssh` — `SshServer::new(router, authenticator, host_key, public,
 limits)` and `ssh::serve(listener, server, shutdown)`; host keys
 `ssh::generate_host_key` / `ssh::load_host_key`. A git command over SSH is

@@ -1,11 +1,14 @@
-//! The SSH server's host key (M4 C13, ADR-0032 §2): one Ed25519 key in
+//! The SSH server's host key (M4 C13, ADR-0033 §2): one Ed25519 key in
 //! OpenSSH format at `git.ssh.host_key_file`. Generated once by `forge
 //! admin ssh-host-key generate` (an existing file is never overwritten:
 //! the key users pinned in `known_hosts` must not change by accident);
 //! `forge serve` only reads it. Problems are `FG-SYS-0002
 //! config_key=git.ssh.host_key_file` with `reason` = `missing`,
 //! `unreadable`, `invalid`, `insecure_permissions` (Unix: readable by
-//! group or others), `target_exists` or `write_failed`.
+//! group or others), `wrong_owner` (Unix: not owned by the account forge
+//! runs as), `target_exists` or `write_failed`. On Windows (development
+//! machines only) the file's ACL is not checked: the operator keeps it in
+//! a directory only their account can read (runbook ssh-transport).
 
 use std::io::Write as _;
 use std::path::Path;
@@ -89,11 +92,15 @@ pub fn load_host_key(path: &Path) -> Result<HostKey, ForgeError> {
 
 #[cfg(unix)]
 fn check_permissions(path: &Path) -> Result<(), ForgeError> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mode = std::fs::metadata(path)
-        .map_err(|e| problem("unreadable", path).with_source(e))?
-        .permissions()
-        .mode();
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let meta = std::fs::metadata(path).map_err(|e| problem("unreadable", path).with_source(e))?;
+    let me = rustix::process::geteuid().as_raw();
+    if meta.uid() != me {
+        return Err(problem("wrong_owner", path)
+            .with_context("owner_uid", meta.uid())
+            .with_context("forge_uid", me));
+    }
+    let mode = meta.permissions().mode();
     if mode & 0o077 != 0 {
         return Err(problem("insecure_permissions", path)
             .with_context("mode", format!("{:o}", mode & 0o777)));

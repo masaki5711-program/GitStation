@@ -149,7 +149,7 @@ pub(crate) enum Actor {
     /// A service account acting for the person `ME` (M3 S2, ADR-0025):
     /// `matrix_rows_act_as.rs`.
     ActAs(crate::matrix_rows_act_as::Via),
-    /// A person through an SSH key (M4 C13, ADR-0032 §2,
+    /// A person through an SSH key (M4 C13, ADR-0033 §2,
     /// `Principal::ssh_key`): `matrix_rows_ssh.rs`. A Developer, a
     /// Reporter, and an administrator who is not a member (an SSH key
     /// lends no administrator right).

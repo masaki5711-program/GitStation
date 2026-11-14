@@ -162,7 +162,7 @@ pub const KEYS: &[Key] = &[
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",
     ),
-    // M4 C13: the SSH git transport (ADR-0032).
+    // M4 C13: the SSH git transport (ADR-0033).
     boolean("git.ssh.enabled", "FORGE_GIT_SSH_ENABLED"),
     text("git.ssh.bind", "FORGE_GIT_SSH_BIND"),
     text("git.ssh.host_key_file", "FORGE_GIT_SSH_HOST_KEY_FILE"),
@@ -181,6 +181,14 @@ pub const KEYS: &[Key] = &[
         "FORGE_GIT_SSH_AUTH_FAILURES_PER_MINUTE_PER_PEER",
     ),
     number("git.ssh.auth_timeout_ms", "FORGE_GIT_SSH_AUTH_TIMEOUT_MS"),
+    number(
+        "git.ssh.max_unauthenticated_connections",
+        "FORGE_GIT_SSH_MAX_UNAUTHENTICATED_CONNECTIONS",
+    ),
+    number(
+        "git.ssh.max_connection_ms",
+        "FORGE_GIT_SSH_MAX_CONNECTION_MS",
+    ),
     number(
         "git.ssh.max_auth_attempts",
         "FORGE_GIT_SSH_MAX_AUTH_ATTEMPTS",

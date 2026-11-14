@@ -39,7 +39,7 @@
 //! stream pools and timeouts from `git.http.*`, the version checked
 //! (≥ 2.38, `FG-GIT-0001`) before the server binds.
 //!
-//! SSH (M4 C13, ADR-0032): with `git.ssh.enabled` the host key
+//! SSH (M4 C13, ADR-0033): with `git.ssh.enabled` the host key
 //! (`git.ssh.host_key_file`) is read before anything binds (a missing or
 //! broken key stops the start, `FG-SYS-0002`; `forge serve` never makes
 //! one), and the SSH listener (`git.ssh.bind`) serves git over the same
@@ -325,7 +325,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     authenticator,
                     &key,
                     public,
-                    forge_web::ssh::SshLimits::from_config(&cfg.git_ssh),
+                    forge_web::ssh::SshLimits::from_config(&cfg.git_ssh, &cfg.git_http),
                 );
                 let until = stopped(stop_rx.clone()); // clone: one receiver per server
                 Some(tokio::spawn(forge_web::ssh::serve(

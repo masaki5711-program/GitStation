@@ -1,4 +1,4 @@
-//! The signed-in user's SSH public keys (M4 C13, ADR-0032 §2):
+//! The signed-in user's SSH public keys (M4 C13, ADR-0033 §2):
 //! `GET|POST /api/v1/user/ssh-keys` and `DELETE /api/v1/user/ssh-keys/{id}`.
 //!
 //! - `GET` (`SshKeyList`, `read_api`): the caller's own keys, newest first,

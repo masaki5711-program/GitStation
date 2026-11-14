@@ -25,7 +25,7 @@ mod deploy;
 // M3 I1c: `feed.*`.
 mod feed;
 mod git_http;
-// M4 C13: `git.ssh.*` (ADR-0032).
+// M4 C13: `git.ssh.*` (ADR-0033).
 pub mod git_ssh;
 // `git.pack.*`: the memory caps of pack-heavy git.
 mod git_pack;
@@ -188,7 +188,7 @@ pub struct Config {
     pub audit: AuditConfig,
     /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
     pub git_http: GitHttpConfig,
-    /// `git.ssh.*` (the SSH git transport, M4 C13, ADR-0032).
+    /// `git.ssh.*` (the SSH git transport, M4 C13, ADR-0033).
     pub git_ssh: GitSshConfig,
     /// `git.pack.*` (the memory caps of pack-heavy git: delta window,
     /// threads, base cache, pack mappings).
@@ -237,6 +237,11 @@ impl Config {
                 "git.ssh.inactivity_timeout_ms",
                 "below_git_idle_timeout",
             ));
+        }
+        // ... nor a connection's lifetime end a git operation within its own
+        // total timeout.
+        if self.git_ssh.max_connection < self.git_http.timeout {
+            return Err(invalid("git.ssh.max_connection_ms", "below_git_timeout"));
         }
         Ok(self)
     }

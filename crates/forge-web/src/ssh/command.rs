@@ -1,4 +1,4 @@
-//! The exec command an SSH client sends (M4 C13, ADR-0032 §3): only
+//! The exec command an SSH client sends (M4 C13, ADR-0033 §3): only
 //! `git-upload-pack '<path>'` and `git-receive-pack '<path>'` (also the
 //! `git upload-pack` spelling), the path in git's single quoting. Nothing
 //! here runs anything: the command is mapped onto the Smart HTTP routes

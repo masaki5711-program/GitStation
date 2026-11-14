@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-M4 C13 (ADR-0032): the SSH git transport itself failed — not git and not authorization (those keep their own codes, e.g. FG-GIT-0014, FG-REPO-0005, FG-GIT-0007, which the client receives in-band unchanged). `reason`: `accept` (the listener's accept failed, usually out of file descriptors; the loop pauses 100 ms and goes on), `session` (an SSH session ended with an internal error after authentication), `bridge` (the in-process request to the Smart HTTP route could not be built, or its answer could not be read: a body stream error, an error answer that is not the JSON error body), `server_stopped` (the SSH listener ended while `forge serve` still ran: SSH stays unavailable until a restart). A client that leaves mid-transfer is not this code (logged at debug).
+M4 C13 (ADR-0033): the SSH git transport itself failed — not git and not authorization (those keep their own codes, e.g. FG-GIT-0014, FG-REPO-0005, FG-GIT-0007, which the client receives in-band unchanged). `reason`: `accept` (the listener's accept failed, usually out of file descriptors; the loop pauses 100 ms and goes on), `session` (an SSH session ended with an internal error after authentication), `bridge` (the in-process request to the Smart HTTP route could not be built, or its answer could not be read: a body stream error, an error answer that is not the JSON error body), `server_stopped` (the SSH listener ended while `forge serve` still ran: SSH stays unavailable until a restart). A client that leaves mid-transfer is not this code (logged at debug).
 
 ## 調べ方 (diagnosis)
 

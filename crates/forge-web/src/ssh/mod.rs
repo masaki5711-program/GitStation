@@ -1,4 +1,4 @@
-//! The SSH git transport (M4 C13, ADR-0032): `forge serve`'s in-process
+//! The SSH git transport (M4 C13, ADR-0033): `forge serve`'s in-process
 //! SSH server (russh, the ring backend), for `git clone` / `fetch` /
 //! `push` only. Off unless `git.ssh.enabled`.
 //!
@@ -29,7 +29,6 @@ mod handler;
 use std::borrow::Cow;
 use std::future::Future;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -65,22 +64,65 @@ pub struct SshLimits {
     pub auth_timeout: Duration,
     pub max_auth_attempts: usize,
     pub inactivity_timeout: Duration,
+    /// A connection is closed at this age (`git.ssh.max_connection_ms`).
+    pub max_connection: Duration,
+    /// No byte from the client for this long while a request or a pack is
+    /// being read ends the command (`git.http.idle_timeout_ms`, the same
+    /// bound the Smart HTTP body read has).
+    pub idle_timeout: Duration,
 }
 
 impl SshLimits {
-    pub fn from_config(cfg: &GitSshConfig) -> Self {
+    pub fn from_config(cfg: &GitSshConfig, http: &forge_core::config::GitHttpConfig) -> Self {
         let usize_of = |n: u32| usize::try_from(n).unwrap_or(usize::MAX);
         Self {
             admission: AdmissionLimits {
                 max_connections: usize_of(cfg.max_connections),
                 max_connections_per_peer: usize_of(cfg.max_connections_per_peer),
+                max_unauthenticated: usize_of(cfg.max_unauthenticated_connections),
                 connections_per_minute_per_peer: cfg.connections_per_minute_per_peer,
                 auth_failures_per_minute_per_peer: cfg.auth_failures_per_minute_per_peer,
             },
             auth_timeout: cfg.auth_timeout,
             max_auth_attempts: usize_of(cfg.max_auth_attempts),
             inactivity_timeout: cfg.inactivity_timeout,
+            max_connection: cfg.max_connection,
+            idle_timeout: http.idle_timeout,
         }
+    }
+}
+
+/// The algorithms offered (ADR-0033 §1): curve25519 key exchange (and the
+/// strict-kex / ext-info markers), Ed25519 and ECDSA keys, AEAD ciphers
+/// only. No RSA, no SHA-1, no CBC / CTR.
+fn preferred() -> russh::Preferred {
+    use russh::keys::{Algorithm, EcdsaCurve};
+    russh::Preferred {
+        kex: Cow::Borrowed(&[
+            russh::kex::CURVE25519,
+            russh::kex::CURVE25519_PRE_RFC_8731,
+            russh::kex::EXTENSION_SUPPORT_AS_SERVER,
+            russh::kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
+        ]),
+        key: Cow::Owned(vec![
+            Algorithm::Ed25519,
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP384,
+            },
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP521,
+            },
+        ]),
+        cipher: Cow::Borrowed(&[
+            russh::cipher::CHACHA20_POLY1305,
+            russh::cipher::AES_256_GCM,
+            russh::cipher::AES_128_GCM,
+        ]),
+        mac: Cow::Borrowed(&[russh::mac::HMAC_SHA512_ETM, russh::mac::HMAC_SHA256_ETM]),
+        ..russh::Preferred::DEFAULT
     }
 }
 
@@ -89,6 +131,8 @@ pub(crate) struct Shared {
     router: Router,
     authenticator: Arc<dyn Authenticator>,
     public: SshPublicInfo,
+    /// The client's idle bound while a request or a pack is read.
+    idle_timeout: Duration,
 }
 
 /// The SSH server: the product router (the same one `forge serve` serves
@@ -119,6 +163,7 @@ impl SshServer {
             keepalive_interval: Some(Duration::from_secs(30)),
             keepalive_max: 3,
             nodelay: true,
+            preferred: preferred(),
             ..Config::default()
         };
         Self {
@@ -126,6 +171,7 @@ impl SshServer {
                 router,
                 authenticator,
                 public,
+                idle_timeout: limits.idle_timeout,
             }),
             config: Arc::new(config),
             limits,
@@ -211,9 +257,10 @@ async fn run_connection(
     mut stop: watch::Receiver<bool>,
     admitted: limits::Admitted,
 ) {
-    let authenticated = Arc::new(AtomicBool::new(false));
-    let handler = handler::Handler::new(shared, peer, Arc::clone(&authenticated));
-    let auth_deadline = tokio::time::Instant::now() + limits.auth_timeout;
+    let admitted = Arc::new(admitted);
+    let handler = handler::Handler::new(shared, peer, Arc::clone(&admitted));
+    let started_at = tokio::time::Instant::now();
+    let auth_deadline = started_at + limits.auth_timeout;
     // The id exchange: bounded like authentication (a silent client
     // otherwise holds its slot).
     let started = tokio::time::timeout_at(
@@ -238,12 +285,27 @@ async fn run_connection(
     let mut session = std::pin::pin!(session);
     let mut auth_timer = std::pin::pin!(tokio::time::sleep_until(auth_deadline));
     let mut timer_armed = true;
+    // The connection's maximum age: a revoked key or a disabled account
+    // never lingers on a kept-alive connection.
+    let mut lifetime = std::pin::pin!(tokio::time::sleep_until(started_at + limits.max_connection));
+    let mut lifetime_armed = true;
     let ended = loop {
         tokio::select! {
             ended = &mut session => break ended,
+            () = &mut lifetime, if lifetime_armed => {
+                lifetime_armed = false;
+                tracing::info!(
+                    target: "forge_web::ssh",
+                    max_connection_ms = limits.max_connection.as_millis(),
+                    "forge.ssh.connection_aged_out"
+                );
+                let _ = handle // ignore: the session may be ending already
+                    .disconnect(russh::Disconnect::ByApplication, "maximum connection time".into(), String::new())
+                    .await;
+            }
             () = &mut auth_timer, if timer_armed => {
                 timer_armed = false;
-                if !authenticated.load(Ordering::SeqCst) {
+                if !admitted.is_authenticated() {
                     auth_timed_out(&limits);
                     let _ = handle // ignore: the session may be ending already
                         .disconnect(russh::Disconnect::ByApplication, "authentication timeout".into(), String::new())
@@ -259,7 +321,7 @@ async fn run_connection(
             }
         }
     };
-    let was_authenticated = authenticated.load(Ordering::SeqCst);
+    let was_authenticated = admitted.is_authenticated();
     if !was_authenticated {
         admitted.auth_failed();
     }

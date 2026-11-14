@@ -1,5 +1,5 @@
 //! The SSH git transport's bridge onto the Smart HTTP routes (M4 C13,
-//! ADR-0032 §3). An SSH git command is served by **the same routes** as
+//! ADR-0033 §3). An SSH git command is served by **the same routes** as
 //! Smart HTTP, called in process through the product router: the
 //! dispatcher resolves the path and decides `RepoRead` / `RepoPush` with
 //! `authorize()`, the push handler applies the protected-ref checks, the
@@ -19,9 +19,20 @@
 //!   is a delete: git does not close its side then), is the body of one
 //!   `POST {path}/git-receive-pack`, whose report goes back.
 //!
+//! Only protocol v2 is served for upload-pack (v0 / v1 is FG-GIT-0034; the
+//! route gets `Git-Protocol: version=2`, nothing the client sent). A push
+//! that asks for `push-options` is refused (FG-GIT-0033
+//! `reason=push_options`: the server never advertises them). A client
+//! idle for `git.http.idle_timeout_ms` while a request or a pack is read
+//! ends the command; the route's own body and total timeouts
+//! (`git.http.body_timeout_ms`, `git.http.timeout_ms`) apply to the
+//! in-process body exactly as to an HTTP one.
+//!
 //! An HTTP error answer (401 / 403 / 404 / 503 …) becomes one `ERR` packet
 //! `<FG code> <user message> (request_id: <the HTTP request's id>)`, which
-//! git prints as `fatal: remote error: …`; the route logged it already.
+//! git prints as `fatal: remote error: …` — on side-band 3 instead once
+//! a push negotiated a side-band (git then reads the report through the
+//! side-band); the route logged it already.
 //! An answer that cannot be read is `FG-GIT-0036 reason=bridge` (logged
 //! here). The command's exit status is 0 when the HTTP answer was 200.
 
@@ -62,6 +73,11 @@ pub(crate) struct Caller {
     pub peer: IpAddr,
     pub ssh_key_id: i64,
     pub user_id: UserId,
+    /// The proven key's fingerprint (decided again before each command).
+    pub fingerprint: String,
+    /// No byte from the client for this long while reading ends the
+    /// command (`git.http.idle_timeout_ms`).
+    pub idle: std::time::Duration,
 }
 
 /// How a command ended.
@@ -80,6 +96,7 @@ pub(crate) struct Outcome {
 pub(crate) struct PktInput<R> {
     reader: R,
     buf: Vec<u8>,
+    idle: std::time::Duration,
 }
 
 /// One pkt-line as it came (the 4 length bytes included).
@@ -94,10 +111,19 @@ fn protocol_error(detail: &'static str) -> io::Error {
 }
 
 impl<R: AsyncRead + Unpin> PktInput<R> {
-    pub(crate) fn new(reader: R) -> Self {
+    pub(crate) fn new(reader: R, idle: std::time::Duration) -> Self {
         Self {
             reader,
             buf: Vec::new(),
+            idle,
+        }
+    }
+
+    /// One read, bounded by the idle timeout.
+    async fn read_some(&mut self, chunk: &mut [u8]) -> io::Result<usize> {
+        match tokio::time::timeout(self.idle, self.reader.read(chunk)).await {
+            Ok(read) => read,
+            Err(_) => Err(io::Error::new(io::ErrorKind::TimedOut, "client_idle")),
         }
     }
 
@@ -105,7 +131,7 @@ impl<R: AsyncRead + Unpin> PktInput<R> {
     async fn fill(&mut self, n: usize) -> io::Result<bool> {
         let mut chunk = [0u8; 8192];
         while self.buf.len() < n {
-            let read = self.reader.read(&mut chunk).await?;
+            let read = self.read_some(&mut chunk).await?;
             if read == 0 {
                 return Ok(false);
             }
@@ -150,7 +176,7 @@ impl<R: AsyncRead + Unpin> PktInput<R> {
             return Ok(Some(std::mem::take(&mut self.buf)));
         }
         let mut chunk = vec![0u8; CHUNK];
-        let read = self.reader.read(&mut chunk).await?;
+        let read = self.read_some(&mut chunk).await?;
         if read == 0 {
             return Ok(None);
         }
@@ -181,14 +207,36 @@ pub(crate) fn err_packet(text: &str) -> Vec<u8> {
     out
 }
 
+/// One message on side-band 3 (git: `remote error: <text>`, then it
+/// stops), for a push that negotiated a side-band.
+pub(crate) fn band3_packet(text: &str) -> Vec<u8> {
+    let mut payload = vec![3u8];
+    payload.extend_from_slice(text.as_bytes());
+    payload.push(b'\n');
+    payload.truncate(MAX_PKT - 4);
+    let mut out = format!("{:04x}", payload.len() + 4).into_bytes();
+    out.extend_from_slice(&payload);
+    out
+}
+
+/// A refusal's text as git shows it: `ERR` before a side-band exists,
+/// side-band 3 after.
+fn refusal_bytes(text: &str, sideband: bool) -> Vec<u8> {
+    if sideband {
+        band3_packet(text)
+    } else {
+        err_packet(text)
+    }
+}
+
 /// The in-band answer of a refusal decided here (never a route's).
-fn refusal_line(err: &ForgeError, request_id: &RequestId) -> Vec<u8> {
-    err_packet(&format!(
+fn refusal_text(err: &ForgeError, request_id: &RequestId) -> String {
+    format!(
         "{} {} (request_id: {})",
         err.code().id(),
         err.user_message(Lang::Ja),
         request_id
-    ))
+    )
 }
 
 /// Run one git command over the channel's `input` / `out`.
@@ -211,7 +259,8 @@ where
         command,
         git_protocol,
         request_id,
-        input: PktInput::new(input),
+        input: PktInput::new(input, caller.idle),
+        sideband: false,
         outcome: Outcome {
             exit_status: 0,
             refused: None,
@@ -222,6 +271,7 @@ where
         GitService::UploadPack => exchange.upload_pack(out).await,
         GitService::ReceivePack => exchange.receive_pack(out).await,
     };
+    let sideband = exchange.sideband;
     let mut outcome = exchange.outcome;
     if let Err(stop) = ended {
         outcome.exit_status = 1;
@@ -231,7 +281,8 @@ where
                 telemetry::log_failure(&err, request_id);
                 outcome.refused = Some(err.code().id());
                 // Best effort: the client may be gone already.
-                let _ = out.write_all(&refusal_line(&err, request_id)).await; // ignore: see above
+                let bytes = refusal_bytes(&refusal_text(&err, request_id), sideband);
+                let _ = out.write_all(&bytes).await; // ignore: see above
                 let _ = out.flush().await; // ignore: see above
             }
             Stop::Client(e) => {
@@ -264,6 +315,9 @@ struct Exchange<'a, R> {
     git_protocol: Option<&'a str>,
     request_id: &'a RequestId,
     input: PktInput<R>,
+    /// The push negotiated `side-band` / `side-band-64k`: refusals go to
+    /// band 3 from then on.
+    sideband: bool,
     outcome: Outcome,
 }
 
@@ -276,7 +330,7 @@ impl<R: AsyncRead + Unpin + Send> Exchange<'_, R> {
                 .with_context("ssh_key_id", self.caller.ssh_key_id)
                 .with_context("user_id", self.caller.user_id.get());
             telemetry::log_failure(&err, self.request_id);
-            write(out, &refusal_line(&err, self.request_id)).await?;
+            write(out, &err_packet(&refusal_text(&err, self.request_id))).await?;
             return Err(Stop::Refused(err.code().id()));
         }
         let advert = self
@@ -350,6 +404,20 @@ impl<R: AsyncRead + Unpin + Send> Exchange<'_, R> {
             None | Some(Pkt::Flush) => return Ok(()),
             Some(Pkt::Other(bytes)) => bytes,
         };
+        let caps = capabilities(&first);
+        self.sideband = caps
+            .iter()
+            .any(|c| *c == "side-band" || *c == "side-band-64k");
+        if caps.contains(&"push-options") {
+            let err = ForgeError::new(ErrorCode::SshCommandRefused)
+                .with_context("reason", "push_options")
+                .with_context("ssh_key_id", self.caller.ssh_key_id)
+                .with_context("user_id", self.caller.user_id.get());
+            telemetry::log_failure(&err, self.request_id);
+            let text = refusal_text(&err, self.request_id);
+            write(out, &refusal_bytes(&text, self.sideband)).await?;
+            return Err(Stop::Refused(err.code().id()));
+        }
         let (tx, body) = body_channel();
         let input = &mut self.input;
         let pump = async move {
@@ -438,7 +506,7 @@ impl<R: AsyncRead + Unpin + Send> Exchange<'_, R> {
             let line = error_line(answer, &http_request_id)
                 .await
                 .map_err(|e| self.bridge_failed(e, status, &http_request_id))?;
-            write(out, &line.packet).await?;
+            write(out, &refusal_bytes(&line.text, self.sideband)).await?;
             return Err(Stop::Refused(line.code));
         }
         let mut stripper = if strip_service {
@@ -540,12 +608,10 @@ async fn call(
         };
         builder = builder.header(CONTENT_TYPE, media);
     }
-    if let Some(protocol) = git_protocol {
-        // Only a value a header can carry; anything else is dropped (the
-        // route sees v0, as git would without it).
-        if let Ok(value) = HeaderValue::from_str(protocol) {
-            builder = builder.header("git-protocol", value);
-        }
+    // Only what the bridge serves: upload-pack in v2 (refused before this
+    // otherwise). Nothing the client sent reaches the route verbatim.
+    if command.service == GitService::UploadPack && wants_v2(git_protocol) {
+        builder = builder.header("git-protocol", HeaderValue::from_static("version=2"));
     }
     let mut request = builder.body(body).map_err(|_| failed("request_build"))?;
     request.extensions_mut().insert(caller.principal.clone()); // clone: one per request
@@ -559,9 +625,9 @@ async fn call(
     }
 }
 
-/// An error answer as an `ERR` packet.
+/// An error answer as git will show it.
 struct ErrorLine {
-    packet: Vec<u8>,
+    text: String,
     code: &'static str,
 }
 
@@ -589,7 +655,7 @@ async fn error_line(answer: Response, http_request_id: &str) -> Result<ErrorLine
     };
     let rid = field("request_id").unwrap_or(http_request_id);
     Ok(ErrorLine {
-        packet: err_packet(&format!("{} {message} (request_id: {rid})", code.id())),
+        text: format!("{} {message} (request_id: {rid})", code.id()),
         code: code.id(),
     })
 }
@@ -615,6 +681,22 @@ fn strip_service_prefix(head: &[u8]) -> Option<Vec<u8>> {
     } else {
         Some(head[len..].to_vec())
     }
+}
+
+/// The capabilities after the NUL of a receive-pack command list's first
+/// line.
+fn capabilities(pkt: &[u8]) -> Vec<&str> {
+    let Some(payload) = pkt.get(4..) else {
+        return Vec::new();
+    };
+    let Some(at) = payload.iter().position(|b| *b == 0) else {
+        return Vec::new();
+    };
+    let caps = &payload[at + 1..];
+    let caps = caps.strip_suffix(b"\n").unwrap_or(caps);
+    std::str::from_utf8(caps)
+        .map(|c| c.split(' ').filter(|w| !w.is_empty()).collect())
+        .unwrap_or_default()
 }
 
 /// A receive-pack command that deletes its ref (`<old> <zero> <ref>`).

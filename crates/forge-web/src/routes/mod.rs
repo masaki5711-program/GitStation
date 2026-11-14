@@ -54,7 +54,7 @@ pub mod specs;
 // M3 X5: the context API (plan 03 §6).
 pub mod context;
 pub mod tokens;
-// M4 C13: the caller's SSH keys (ADR-0032 §2).
+// M4 C13: the caller's SSH keys (ADR-0033 §2).
 pub mod ssh_keys;
 pub mod user_activity;
 pub mod user_merge_requests;

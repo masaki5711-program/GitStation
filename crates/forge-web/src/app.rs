@@ -161,7 +161,7 @@ pub struct AppState {
     /// once (`reason=in_flight`).
     pub ci_output_limiter: Arc<routes::namespaces::CallerLimiter>,
     pub ci_output_in_flight: Arc<routes::specs::InFlight>,
-    /// The SSH git transport as clients see it (M4 C13, ADR-0032): the
+    /// The SSH git transport as clients see it (M4 C13, ADR-0033): the
     /// clone host and the host key fingerprints the SSH key page shows.
     /// `None` while `git.ssh.enabled` is off.
     pub ssh_info: Option<Arc<crate::ssh::SshPublicInfo>>,
@@ -1210,7 +1210,7 @@ pub fn registry_without_content_routes() -> Registry<AppState> {
 fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
     use routes::{directory as d, ssh_keys as k, tokens as t, user_sessions as s};
     registry
-        // M4 C13 (ADR-0032 §2): the caller's SSH keys.
+        // M4 C13 (ADR-0033 §2): the caller's SSH keys.
         .route_with(
             Verb::Get,
             k::COLLECTION,
