@@ -432,6 +432,16 @@ pub(crate) enum Fixture {
     ActAs(crate::matrix_rows_act_as::Scene),
     /// The act-as confirmation of a merge request (M3 S2).
     Confirm(crate::matrix_rows_act_as::ConfirmScene),
+    /// A deployment to approve (M4 C11, `matrix_rows_deploy.rs`) of a
+    /// project of `project`'s kind, to prod or not, requested by the
+    /// caller (or by another person), its SHA from a merge request the
+    /// caller authored (or none known).
+    Deployment {
+        prod: bool,
+        requested_by_me: bool,
+        mr_author_me: bool,
+        project: crate::matrix_review::MrProject,
+    },
     /// A binding as an act-as request reaches it (M3 X3):
     /// `matrix_rows_bindings.rs`.
     ActAsBinding(crate::matrix_rows_bindings::BindingScene),
@@ -1143,6 +1153,29 @@ impl Fixture {
                 },
                 class,
             },
+            Fixture::Deployment {
+                prod,
+                requested_by_me,
+                mr_author_me,
+                project,
+            } => Resource::Deployment(crate::model::DeploymentView {
+                project: match project {
+                    crate::matrix_review::MrProject::Private => private,
+                    crate::matrix_review::MrProject::Internal => internal,
+                    crate::matrix_review::MrProject::Deleted => deleted,
+                },
+                tier: if prod {
+                    forge_core::deploy::DeployTier::Prod
+                } else {
+                    forge_core::deploy::DeployTier::Stg
+                },
+                requested_by: Some(if requested_by_me { ME } else { OTHER }),
+                change_authors: if mr_author_me {
+                    vec![OTHER, ME]
+                } else {
+                    vec![OTHER]
+                },
+            }),
             Fixture::Mr(mr) => mr.resource(role),
             Fixture::ActAs(scene) => scene.resource(role),
             Fixture::Confirm(scene) => scene.resource(role),
@@ -1219,6 +1252,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         &crate::matrix_rows_act_as::generated_denies(),
         crate::matrix_rows_webhooks::WEBHOOK_ROWS.as_slice(),
         crate::matrix_rows_ci_variables::CI_VARIABLE_ROWS,
+        crate::matrix_rows_deploy::DEPLOY_ROWS,
         crate::matrix_rows_activity::ACTIVITY_ROWS,
         crate::matrix_rows_mirror::MIRROR_ROWS.as_slice(),
         crate::matrix_rows_doc_lint::DOC_LINT_ROWS,

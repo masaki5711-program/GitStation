@@ -179,6 +179,20 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::ArtifactTransferFailed
         | ErrorCode::SecretInArtifact
         | ErrorCode::ArtifactQuotaExceeded
+        // M4 C11: deployments, never a merge's.
+        | ErrorCode::DeployApprovalRequired
+        | ErrorCode::DeployFrozen
+        | ErrorCode::DeployTargetUnreachable
+        | ErrorCode::HostKeyMismatch
+        | ErrorCode::HealthCheckFailed
+        | ErrorCode::RollbackFailed
+        | ErrorCode::DeployScriptFailed
+        | ErrorCode::DeployKeyUnavailable
+        | ErrorCode::DeploySelfApprovalRefused
+        | ErrorCode::DeploymentStateConflict
+        | ErrorCode::DeployCommitNotAllowed
+        | ErrorCode::DeploymentAbandoned
+        | ErrorCode::DeployTargetNotAllowed
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

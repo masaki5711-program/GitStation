@@ -102,11 +102,22 @@ impl Git {
     }
 
     /// Start building `git <subcommand> …`.
+    ///
+    /// A pack-heavy subcommand ([`crate::config::PACK_HEAVY_SUBCOMMANDS`])
+    /// starts with the memory caps of [`GitConfig::pack`] as its first `-c`.
     pub fn command(&self, subcommand: &'static str) -> GitCommand {
+        let config = if crate::config::PACK_HEAVY_SUBCOMMANDS.contains(&subcommand) {
+            crate::config::pack_cap_overrides(&self.config.pack)
+                .into_iter()
+                .map(|(k, v)| (k, OsString::from(v)))
+                .collect()
+        } else {
+            Vec::new()
+        };
         GitCommand {
             git: self.clone(),
             subcommand,
-            config: Vec::new(),
+            config,
             options: Vec::new(),
             object_operands: Vec::new(),
             revisions: Vec::new(),

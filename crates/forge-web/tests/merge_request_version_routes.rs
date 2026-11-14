@@ -168,6 +168,11 @@ struct World {
 }
 
 async fn world() -> World {
+    world_with(&[("README", "base\n"), ("feature.txt", "one\n")]).await
+}
+
+/// [`world`] with the files of the first head `c1` (on `base`: README).
+async fn world_with(c1_files: &[(&str, &str)]) -> World {
     let t = FreshDb::migrated().await;
     let admin = users::create(
         &t.db,
@@ -212,11 +217,7 @@ async fn world() -> World {
         .await
         .expect("init");
     let base = commit_on(&path, None, &[("README", "base\n")]);
-    let c1 = commit_on(
-        &path,
-        Some(&base),
-        &[("README", "base\n"), ("feature.txt", "one\n")],
-    );
+    let c1 = commit_on(&path, Some(&base), c1_files);
     let c2 = commit_on(
         &path,
         Some(&c1),
@@ -682,5 +683,265 @@ async fn conflicts_are_read_by_members_with_each_prediction() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["scan"]["stale"], true, "{body}");
+    w.t.drop_now().await;
+}
+
+// ── plan 06 D-5 (ADR-0026 §6): conflict paths and the agent audience ────
+
+/// A `.md` marked confidential by its own front matter (synthetic).
+fn secret_md(line: &str) -> String {
+    format!("---\nclassification: confidential\n---\n{line}\n")
+}
+
+/// The files of a head on `base` that adds three paths: a confidential
+/// document, an open document and a file that is no document.
+fn three_files(line: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("README", "base\n".to_owned()),
+        ("secret.md", secret_md(line)),
+        ("feature.txt", format!("{line}\n")),
+        ("notes.md", format!("{line}\n")),
+    ]
+}
+
+fn borrowed<'a>(files: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    files.iter().map(|(p, c)| (*p, c.as_str())).collect()
+}
+
+/// A `read_api` token issued for an AI agent.
+fn agent_token(user: UserId) -> Principal {
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Token(vec![Scope::ReadApi]),
+        forge_auth::AccountKind::Human,
+    )
+    .as_agent(true)
+}
+
+/// A service account's `read_api` token (e.g. the kanflow integration).
+fn service_account(user: UserId) -> Principal {
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Token(vec![Scope::ReadApi]),
+        forge_auth::AccountKind::ServiceAccount,
+    )
+}
+
+/// `GET` on a fresh router (the browse ref list is cached for 5 s), with
+/// `Forge-Context-Audience` when `header` is given; the raw body too.
+async fn get_as(
+    w: &World,
+    tail: &str,
+    who: Principal,
+    header: Option<&str>,
+) -> (StatusCode, Value, String) {
+    let mut req = Request::builder().method("GET").uri(w.uri(tail));
+    if let Some(value) = header {
+        req = req.header("forge-context-audience", value);
+    }
+    let mut req = req.body(Body::empty()).expect("request");
+    req.extensions_mut().insert(who);
+    let res = w.fresh_router().oneshot(req).await.expect("infallible");
+    let status = res.status();
+    let bytes = res.into_body().collect().await.expect("body").to_bytes();
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        raw,
+    )
+}
+
+fn sorted_paths(list: &Value) -> Vec<String> {
+    let mut out: Vec<String> = list
+        .as_array()
+        .expect("a path list")
+        .iter()
+        .map(|p| p.as_str().expect("a path").to_owned())
+        .collect();
+    out.sort();
+    out
+}
+
+impl World {
+    /// The version job, then the conflict scan it requested.
+    async fn scan(&self, mr: MergeRequestId, request: &str) -> forge_review::ScanReport {
+        let rid = RequestId::parse(request).expect("id");
+        let report = forge_review::refresh(
+            &self.t.db,
+            &self.refs,
+            forge_review::RefreshRequest {
+                merge_request: mr,
+                pushed_by: None,
+            },
+            &rid,
+        )
+        .await
+        .expect("refresh");
+        let seq = report.scan_requested.expect("a scan");
+        // clone: the predictor owns its handles
+        let scanner = forge_review::ConflictPredictor::new(self.git.clone(), self.storage.clone());
+        forge_review::scan(
+            &self.t.db,
+            &scanner,
+            forge_db::review::ConflictScanRequest {
+                merge_request: mr,
+                scan_seq: seq,
+            },
+            &rid,
+        )
+        .await
+        .expect("scan")
+    }
+}
+
+/// An agent audience is never given a confidential path among the
+/// predicted conflicts, whoever makes it one (agent token, service account,
+/// `Forge-Context-Audience: agent`); the row, its outcome and the open
+/// paths stay, the list says it was cut and `withheld` counts what was left
+/// out. A person reads every path. With no default branch born, every
+/// document is withheld from an agent (fail closed, as every content read).
+#[tokio::test]
+async fn conflict_paths_of_confidential_documents_are_withheld_from_an_agent() {
+    let mine = three_files("one");
+    let w = world_with(&borrowed(&mine)).await;
+    plumb(&w.path, &["symbolic-ref", "HEAD", "refs/heads/main"], None);
+    w.scan(w.mr, "req-cc1").await;
+    let theirs = three_files("other");
+    let other = commit_on(&w.path, Some(&w.base), &borrowed(&theirs));
+    plumb(&w.path, &["update-ref", "refs/heads/other", &other], None);
+    let (status, opened) = send(
+        w.fresh_router(),
+        "POST",
+        &format!("/api/v1/projects/{}/merge-requests", w.project),
+        session(w.dev),
+        Some(json!({"title": "Other", "source_branch": "other", "target_branch": "main"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let second: i64 =
+        w.t.json_rows("SELECT id FROM forge.merge_requests WHERE iid = 2")
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .expect("second id");
+    let report = w.scan(MergeRequestId::new(second), "req-cc2").await;
+    assert_eq!(report.predicted, vec![w.mr], "{report:?}");
+
+    // A person: every path, nothing withheld.
+    let (status, body, _) = get_as(&w, "/conflicts", session(w.dev), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let p = &body["predictions"][0];
+    assert_eq!(
+        sorted_paths(&p["conflicts"]),
+        vec!["feature.txt", "notes.md", "secret.md"],
+        "{body}"
+    );
+    assert_eq!(p["conflicts_truncated"], false);
+    assert!(body.get("withheld").is_none(), "{body}");
+
+    // Each kind of agent audience: the open paths only.
+    for (who, header, why) in [
+        (agent_token(w.dev), None, "agent token"),
+        (service_account(w.dev), None, "service account"),
+        (session(w.dev), Some("agent"), "header"),
+    ] {
+        let (status, body, raw) = get_as(&w, "/conflicts", who, header).await;
+        assert_eq!(status, StatusCode::OK, "{why}: {body}");
+        assert!(!raw.contains("secret.md"), "{why}: {raw}");
+        let p = &body["predictions"][0];
+        assert_eq!(p["iid"], 2, "{why}");
+        assert_eq!(p["outcome"], "conflict", "{why}");
+        assert_eq!(
+            sorted_paths(&p["conflicts"]),
+            vec!["feature.txt", "notes.md"],
+            "{why}: {body}"
+        );
+        assert_eq!(p["conflicts_truncated"], true, "{why}");
+        assert_eq!(body["withheld"]["files"], 1, "{why}: {body}");
+        assert_eq!(body["withheld"]["error_code"], "FG-AUTH-0021", "{why}");
+    }
+
+    // No default branch born: an agent is given no document path.
+    plumb(
+        &w.path,
+        &["symbolic-ref", "HEAD", "refs/heads/unborn"],
+        None,
+    );
+    let (status, body, raw) = get_as(&w, "/conflicts", agent_token(w.dev), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!raw.contains(".md"), "{raw}");
+    assert_eq!(
+        sorted_paths(&body["predictions"][0]["conflicts"]),
+        vec!["feature.txt"],
+        "{body}"
+    );
+    assert_eq!(body["withheld"]["files"], 2, "{body}");
+    let (_, body, _) = get_as(&w, "/conflicts", session(w.dev), None).await;
+    assert_eq!(
+        sorted_paths(&body["predictions"][0]["conflicts"]).len(),
+        3,
+        "a person still reads every path: {body}"
+    );
+    w.t.drop_now().await;
+}
+
+/// The mergeability's conflicted paths follow the same rule.
+#[tokio::test]
+async fn mergeability_conflict_paths_of_confidential_documents_are_withheld_from_an_agent() {
+    let mine = three_files("one");
+    let w = world_with(&borrowed(&mine)).await;
+    plumb(&w.path, &["symbolic-ref", "HEAD", "refs/heads/main"], None);
+    let target_files = three_files("target");
+    let target = commit_on(&w.path, Some(&w.base), &borrowed(&target_files));
+    plumb(&w.path, &["update-ref", "refs/heads/main", &target], None);
+    w.worker("req-mc1").await;
+
+    let (status, body, _) = get_as(&w, "/mergeability", session(w.dev), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "cannot_be_merged", "{body}");
+    assert_eq!(
+        sorted_paths(&body["conflicts"]),
+        vec!["feature.txt", "notes.md", "secret.md"],
+        "{body}"
+    );
+    assert!(body.get("withheld").is_none(), "{body}");
+
+    for (who, header, why) in [
+        (agent_token(w.dev), None, "agent token"),
+        (service_account(w.dev), None, "service account"),
+        (session(w.dev), Some("agent"), "header"),
+    ] {
+        let (status, body, raw) = get_as(&w, "/mergeability", who, header).await;
+        assert_eq!(status, StatusCode::OK, "{why}: {body}");
+        assert!(!raw.contains("secret.md"), "{why}: {raw}");
+        assert_eq!(body["status"], "cannot_be_merged", "{why}");
+        assert_eq!(
+            sorted_paths(&body["conflicts"]),
+            vec!["feature.txt", "notes.md"],
+            "{why}: {body}"
+        );
+        assert_eq!(body["conflicts_truncated"], true, "{why}");
+        assert_eq!(body["withheld"]["files"], 1, "{why}: {body}");
+    }
+
+    plumb(
+        &w.path,
+        &["symbolic-ref", "HEAD", "refs/heads/unborn"],
+        None,
+    );
+    let (status, body, raw) = get_as(&w, "/mergeability", agent_token(w.dev), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!raw.contains(".md"), "{raw}");
+    assert_eq!(
+        sorted_paths(&body["conflicts"]),
+        vec!["feature.txt"],
+        "{body}"
+    );
+    assert_eq!(body["withheld"]["files"], 2, "{body}");
     w.t.drop_now().await;
 }

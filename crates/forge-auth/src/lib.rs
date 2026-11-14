@@ -67,6 +67,9 @@ mod matrix_rows_ssh;
 mod matrix_rows_ci_outputs;
 // M4 C6: CI variables.
 mod matrix_rows_ci_variables;
+// M4 C11: deployments.
+mod deploy_ctx;
+mod matrix_rows_deploy;
 // ── M3 X1 ──
 mod matrix_rows_spec_refs;
 // Plan 06 D-5 safety net: whole copies of a repository by agents.
@@ -80,6 +83,7 @@ pub use action::{ActAsRule, Action, CiRule};
 pub use authorize::authorize;
 pub use ci_output::{authorize_ci_artifact, authorize_ci_output, CiOutputAllowed};
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
+pub use deploy_ctx::{DeploymentCtx, LoadedDeployment};
 pub use feed_ctx::{prove_visible, IntegrationFeedCtx, LoadedIntegrationFeed};
 pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
 pub use job::authorize_pinned_copy;
@@ -87,11 +91,11 @@ pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest,
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
     AssertionFacts, AssertionSubject, BindingSubject, CodeownersToggle, CopyMark, Credential,
-    IntegrationFeedView, JobCredential, JobTokenState, MembershipChange, MembershipScope,
-    MergeRequestEdit, MergeRequestState, NamespaceView, PinnedCopy, Principal, ProjectView,
-    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob,
-    Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView,
-    Visibility, SSH_KEY_SCOPES,
+    DeploymentView, IntegrationFeedView, JobCredential, JobTokenState, MembershipChange,
+    MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView, PersonalDisclosure,
+    PinnedCopy, Principal, ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource,
+    Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView, TombstoneRelease, TransferTarget,
+    UnresolvedReason, ViaView, Visibility, SSH_KEY_SCOPES,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,

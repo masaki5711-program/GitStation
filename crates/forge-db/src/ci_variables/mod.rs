@@ -129,7 +129,7 @@ pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredVariable>, Fo
 /// [`MAX_VARIABLES_PER_PROJECT`] (two writers at the same moment may pass
 /// it by one: the bound is a guard against runaway scripts, not a quota),
 /// the database's.
-pub async fn put_decided(
+pub async fn put_variable_decided(
     db: &Db,
     ctx: &ChangeContext,
     project: ProjectId,
@@ -204,9 +204,9 @@ pub async fn put_decided(
     tx.settle("ci_variable.set", outcome).await
 }
 
-/// Delete a variable of `project`, decided again as [`put_decided`];
+/// Delete a variable of `project`, decided again as [`put_variable_decided`];
 /// `false`: there was none (nothing written).
-pub async fn delete_decided(
+pub async fn delete_variable_decided(
     db: &Db,
     ctx: &ChangeContext,
     project: ProjectId,

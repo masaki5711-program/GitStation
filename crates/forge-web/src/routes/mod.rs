@@ -69,6 +69,8 @@ pub mod runners;
 pub mod job_fetch;
 // M4 C6: a project's CI variables (secrets).
 pub mod ci_variables;
+// M4 C11: deployments.
+pub mod deploy;
 // M4 C6: CI artifacts (a job's upload, its needs, the project's reads).
 pub mod ci_artifacts;
 // ── M3 I2: project webhooks (ADR-0016 §8) ──

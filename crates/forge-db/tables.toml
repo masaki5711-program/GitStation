@@ -75,6 +75,9 @@ guarded_functions = [
     # M3 X3 review: a binding that resolves work items is its project's only
     # binding (deferred).
     "integration_bindings_resolving_alone",
+    # M4 C11: a deployment's identity never changes; its approval is set
+    # once; it only moves forward.
+    "deployments_guard",
 ]
 
 [tables.events]
@@ -167,6 +170,8 @@ txn_audited_columns = []
 # ── end D1 ──
 
 # ── D2: groups and their members (ADR-0010, ADR-0016 §1) ──
+# Plan 15 MR2: visibility (private / internal) is audited like the other
+# columns (20261214101500 re-creates the trigger).
 [tables.groups]
 guarded = false
 kind = "audited"
@@ -812,6 +817,35 @@ txn_audited_columns = []
 guarded = false
 kind = "derived"
 ro_columns = ["job_id", "attempt", "project_id", "name", "key_id", "masked", "created_at"]
+
+# ── M4 C11 (20261214100000, plan 14 §4.1, ADR-0031): deployments. An
+# environment is set by a Maintainer and a target by an administrator (people
+# only), audited on the project (`deploy_environment.*`, `deploy_target.*`;
+# never a key). A deployment is derived state: its request and approval
+# write their audit rows (`deployment.requested` / `.approved`) in the same
+# transaction; the guard deployments_forward keeps its identity and states ──
+[tables.deploy_environments]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.deploy_targets]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.deployments]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
 
 # ── M4 C13 (20261215100000, ADR-0032 §2): people's SSH public keys, added
 # and deleted by their owner in a web session, audited on the owner

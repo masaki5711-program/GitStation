@@ -169,7 +169,37 @@ pub struct Principal {
     kind: AccountKind,
 }
 
+/// Which personal facts an answer may disclose to a caller (M3 S0 / I1c):
+/// the one rule for every answer that names people — the event feed's
+/// actor, the development status, the merge requests' `author` /
+/// `merged_by`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PersonalDisclosure {
+    /// E-mail addresses (`user_email`).
+    pub email: bool,
+    /// Employee numbers (`user_employee_number`).
+    pub employee_number: bool,
+}
+
 impl Principal {
+    /// What personal facts answers may disclose to this caller: only a
+    /// token issued with `user_email` / `user_employee_number` (no other
+    /// scope satisfies them, `api` and `admin` included). A browser
+    /// session, an act-as request (ADR-0025 §4), a runner and a job
+    /// (ADR-0029 §8) see nothing personal.
+    pub fn personal_disclosure(&self) -> PersonalDisclosure {
+        match &self.credential {
+            Credential::Token(scopes) => PersonalDisclosure {
+                email: scopes.contains(&Scope::UserEmail),
+                employee_number: scopes.contains(&Scope::UserEmployeeNumber),
+            },
+            Credential::Session
+            | Credential::ActAs(_)
+            | Credential::Runner(_)
+            | Credential::Job(_) => PersonalDisclosure::default(),
+        }
+    }
+
     /// No credentials (forge has no anonymous access; only public actions pass).
     pub fn anonymous() -> Self {
         Self {
@@ -609,6 +639,13 @@ pub enum Resource {
     /// and that job's project. Only the job arm reads it: the token's job
     /// and project must be these. Built by [`crate::JobSelfCtx`] only.
     JobSelf(JobSelf),
+    /// One deployment as `DeployApprove` decides it (M4 C11, ADR-0031
+    /// decision 6): the project, the environment's tier, who requested it
+    /// (`None`: the system, an automatic deployment) and the people behind
+    /// its SHA (merge request authors, pushers, commit author and
+    /// committer as accounts).
+    /// Built by [`crate::DeploymentCtx`] from one loaded row.
+    Deployment(DeploymentView),
     /// One ref update in a push. The kind is derived from `name` inside
     /// `authorize()` (callers cannot mislabel a reserved ref); `update` must
     /// come from the ancestry check of old and new object ids; `protection`
@@ -865,6 +902,15 @@ impl RunnerJob {
     pub fn finished(&self) -> bool {
         self.finished
     }
+}
+
+/// See [`Resource::Deployment`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeploymentView {
+    pub project: ProjectView,
+    pub tier: forge_core::deploy::DeployTier,
+    pub requested_by: Option<UserId>,
+    pub change_authors: Vec<UserId>,
 }
 
 /// See [`Resource::JobSelf`]. Private fields, a crate-only constructor.
@@ -1128,4 +1174,48 @@ pub enum TombstoneRelease {
         caller_parent_role: Option<Role>,
         has_parent: bool,
     },
+}
+
+#[cfg(test)]
+mod personal_disclosure_tests {
+    use super::*;
+
+    fn with(credential: Credential) -> Principal {
+        Principal::authenticated(UserId::new(7), true, true, credential, AccountKind::Human)
+    }
+
+    /// Only the scope itself discloses; a session (a browser) and every
+    /// other scope, `api` and `admin` included, disclose nothing.
+    #[test]
+    fn only_the_personal_scopes_disclose() {
+        let none = PersonalDisclosure::default();
+        assert_eq!(with(Credential::Session).personal_disclosure(), none);
+        assert_eq!(
+            with(Credential::Token(vec![
+                Scope::Api,
+                Scope::Admin,
+                Scope::ReadApi
+            ]))
+            .personal_disclosure(),
+            none
+        );
+        assert_eq!(
+            with(Credential::Token(vec![
+                Scope::ReadApi,
+                Scope::UserEmployeeNumber
+            ]))
+            .personal_disclosure(),
+            PersonalDisclosure {
+                email: false,
+                employee_number: true
+            }
+        );
+        assert_eq!(
+            with(Credential::Token(vec![Scope::UserEmail])).personal_disclosure(),
+            PersonalDisclosure {
+                email: true,
+                employee_number: false
+            }
+        );
+    }
 }
