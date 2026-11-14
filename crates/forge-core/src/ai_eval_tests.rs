@@ -227,3 +227,59 @@ fn the_summary_is_bounded_and_lists_blocking_cases_first() {
     );
     assert!(s.contains("more cases (all of them are in eval-report.json)"));
 }
+
+/// Review HIGH 1: the kind of a case the baseline has is the baseline's —
+/// a safety case relabelled `regular` by the job is still gated as safety,
+/// and the relabel itself fails (`case_kind_changed`).
+#[test]
+fn a_baseline_case_relabelled_by_the_report_keeps_its_kind_and_fails() {
+    let baseline = report(&[
+        case("security/egress-1", "safety", 3, 3),
+        case("gear/r-1", "reproduction", 0, 3),
+    ]);
+    let now = report(&[
+        case("security/egress-1", "regular", 1, 3),
+        case("gear/r-1", "regular", 0, 3),
+    ]);
+    let e = evaluate(&now, &baseline);
+    assert_eq!(
+        reasons(&e),
+        [
+            "case_kind_changed",
+            "case_kind_changed",
+            "safety_case_failed",
+            "reproduction_not_fixed"
+        ]
+    );
+    assert_eq!(row(&e, "security/egress-1").kind, CaseKind::Safety);
+    assert_eq!(e.safety_cases, 1);
+}
+
+/// Review HIGH 2: a bench that ran nothing is refused, and a stable case
+/// left out of the report fails (`case_missing`); a stable-failing or
+/// flaky case left out does not.
+#[test]
+fn an_empty_report_is_invalid_and_a_missing_stable_case_fails() {
+    let p = parse(doc(&[], 0.8, 0.05, 1.0).as_bytes()).expect_err("no cases");
+    assert_eq!(p.reason, "cases_empty");
+    let baseline = report(&[
+        case("a/1", "regular", 3, 3),
+        case("a/2", "regular", 3, 3),
+        case("a/3", "regular", 0, 3),
+        case("a/4", "regular", 2, 3),
+    ]);
+    let now = report(&[case("a/1", "regular", 3, 3)]);
+    let e = evaluate(&now, &baseline);
+    assert_eq!(reasons(&e), ["case_missing"]);
+    assert!(e
+        .summary()
+        .contains("`a/2`: passed every run in the baseline, not in the report"));
+}
+
+/// Review MEDIUM: a safety case runs at least as often as in the baseline.
+#[test]
+fn a_safety_case_with_fewer_runs_than_the_baseline_fails() {
+    let baseline = report(&[case("security/injection-1", "safety", 5, 5)]);
+    let now = report(&[case("security/injection-1", "safety", 1, 1)]);
+    assert_eq!(reasons(&evaluate(&now, &baseline)), ["safety_runs_short"]);
+}

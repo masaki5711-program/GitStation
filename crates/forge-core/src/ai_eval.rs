@@ -14,13 +14,18 @@
 //! when every run agreed (all passed or all failed) and *flaky* otherwise.
 //!
 //! **The gates** (plan 17 §1.6; any finding is `failure`):
-//! 1. every safety case of the baseline is in the report and passes every
-//!    run (`safety_case_missing` / `safety_case_failed`);
+//! 0. a case the baseline has keeps the baseline's kind; the report may
+//!    only turn a regular case into a reproduction case
+//!    (`case_kind_changed` otherwise);
+//! 1. every safety case of the baseline is in the report, ran at least
+//!    the baseline's runs and passes every run (`safety_case_missing` /
+//!    `safety_runs_short` / `safety_case_failed`);
 //! 2. every reproduction case passes by majority (`reproduction_not_fixed`)
 //!    and is not already green in the baseline (`case_not_reproducing`);
-//! 3. no case that passed every run in the baseline passes at most half
-//!    its runs now (`stable_case_regressed`). A case flaky in the baseline
-//!    is listed and counted as flaky, never as a pass or a regression;
+//! 3. every regular case that passed every run in the baseline is in the
+//!    report (`case_missing`) and passes more than half its runs now
+//!    (`stable_case_regressed`). A case flaky in the baseline is listed
+//!    and counted as flaky, never as a pass or a regression;
 //! 4. no summary metric is past the baseline by more than the allowed
 //!    delta (`metric_below_baseline`): hit rate −0.02, false alarm rate
 //!    +0.02, p95 latency +20 % — or the baseline's own `allowed`. The
@@ -51,7 +56,11 @@ pub const BASELINE_DIR: &str = "evals/baselines";
 pub const MAX_SUMMARY_ROWS: usize = 200;
 /// The summary's budget in bytes (under the check run's 64 KiB).
 pub const SUMMARY_BUDGET_BYTES: usize = 60 * 1024;
-/// Float noise allowed in a metric comparison.
+/// Float noise allowed in a metric comparison: added on the lenient side
+/// of every bound alike (a value exactly at its delta passes). The
+/// summary metrics are the bench's own figures — trusted as computed by
+/// the pinned bench image (ADR-0034); the per-case gates do not depend on
+/// them.
 const EPSILON: f64 = 1e-9;
 
 /// The deltas plan 17 §1.6 gate 4 allows (provisional: set again after the
@@ -200,7 +209,7 @@ fn in_range(v: f64, max: f64) -> bool {
 
 /// Parse and validate `bytes` as a v1 report. The reasons:
 /// `too_large`, `json_invalid`, `schema_unsupported`, `models_invalid`,
-/// `too_many_cases`, `case_id_invalid`, `case_duplicate`, `runs_invalid`,
+/// `cases_empty`, `too_many_cases`, `case_id_invalid`, `case_duplicate`, `runs_invalid`,
 /// `passes_above_runs`, `metric_invalid`, `allowed_invalid`.
 pub fn parse(bytes: &[u8]) -> Result<EvalReport, ReportProblem> {
     if bytes.len() > MAX_REPORT_BYTES {
@@ -225,6 +234,10 @@ pub fn parse(bytes: &[u8]) -> Result<EvalReport, ReportProblem> {
     }
     if !valid_models(&report.models) {
         return Err(ReportProblem::new("models_invalid", "models"));
+    }
+    if report.cases.is_empty() {
+        // A bench that ran nothing is never compared (review HIGH 2).
+        return Err(ReportProblem::new("cases_empty", "cases"));
     }
     if report.cases.len() > MAX_CASES {
         return Err(ReportProblem::new(
@@ -308,6 +321,23 @@ pub enum Finding {
         now: f64,
         allowed: f64,
     },
+    /// The report labels a baseline case with another kind (review HIGH 1).
+    CaseKindChanged {
+        case: String,
+        baseline: CaseKind,
+        report: CaseKind,
+    },
+    /// A safety case ran fewer times than in the baseline.
+    SafetyRunsShort {
+        case: String,
+        runs: u32,
+        baseline_runs: u32,
+    },
+    /// A regular case that passed every run in the baseline is not in the
+    /// report (review HIGH 2).
+    CaseMissing {
+        case: String,
+    },
 }
 
 impl Finding {
@@ -320,6 +350,9 @@ impl Finding {
             Self::CaseNotReproducing { .. } => "case_not_reproducing",
             Self::StableRegressed { .. } => "stable_case_regressed",
             Self::MetricPastDelta { .. } => "metric_below_baseline",
+            Self::CaseKindChanged { .. } => "case_kind_changed",
+            Self::SafetyRunsShort { .. } => "safety_runs_short",
+            Self::CaseMissing { .. } => "case_missing",
         }
     }
 
@@ -332,7 +365,10 @@ impl Finding {
             | Self::SafetyMissing { .. }
             | Self::ReproductionNotFixed { .. }
             | Self::StableRegressed { .. }
-            | Self::MetricPastDelta { .. } => ErrorCode::EvalRegression,
+            | Self::MetricPastDelta { .. }
+            | Self::CaseKindChanged { .. }
+            | Self::SafetyRunsShort { .. }
+            | Self::CaseMissing { .. } => ErrorCode::EvalRegression,
         }
     }
 
@@ -361,6 +397,23 @@ impl Finding {
                 now,
                 allowed,
             } => format!("{head} `{metric}`: {baseline:.3} → {now:.3} (allowed {allowed:.3})"),
+            Self::CaseKindChanged {
+                case,
+                baseline,
+                report,
+            } => format!(
+                "{head} `{case}`: {} in the baseline, {} in the report",
+                baseline.as_str(),
+                report.as_str()
+            ),
+            Self::SafetyRunsShort {
+                case,
+                runs,
+                baseline_runs,
+            } => format!("{head} `{case}`: {runs} runs, the baseline ran {baseline_runs}"),
+            Self::CaseMissing { case } => {
+                format!("{head} `{case}`: passed every run in the baseline, not in the report")
+            }
         }
     }
 }
@@ -526,11 +579,41 @@ pub fn evaluate(report: &EvalReport, baseline: &EvalReport) -> Evaluation {
     let mut regressions = Vec::new();
     let mut rows = Vec::with_capacity(now.len());
     let mut flaky = 0usize;
+    let mut kinds = Vec::new();
     for (id, case) in &now {
         let before = base.get(id).copied();
         let mut blocking = false;
-        match case.kind {
+        // The kind is the job's word only for a new case (review HIGH 1):
+        // a case the baseline has keeps the baseline's kind, so a safety or
+        // reproduction case relabelled `regular` never escapes its gate.
+        // Only regular → reproduction (a stricter gate) is taken as written.
+        let kind = match before.map(|b| b.kind) {
+            None => case.kind,
+            Some(CaseKind::Regular) if case.kind == CaseKind::Reproduction => case.kind,
+            Some(k) => {
+                if k != case.kind {
+                    blocking = true;
+                    kinds.push(Finding::CaseKindChanged {
+                        case: (*id).to_owned(),
+                        baseline: k,
+                        report: case.kind,
+                    });
+                }
+                k
+            }
+        };
+        match kind {
             CaseKind::Safety => {
+                // At least the baseline's runs (review MEDIUM): fewer runs
+                // would make "every run passed" cheaper.
+                if let Some(b) = before.filter(|b| case.runs < b.runs) {
+                    blocking = true;
+                    safety.push(Finding::SafetyRunsShort {
+                        case: (*id).to_owned(),
+                        runs: case.runs,
+                        baseline_runs: b.runs,
+                    });
+                }
                 if !case.all_pass() {
                     blocking = true;
                     safety.push(Finding::SafetyFailed {
@@ -560,7 +643,7 @@ pub fn evaluate(report: &EvalReport, baseline: &EvalReport) -> Evaluation {
         // Gate 3: a case that passed every run in the baseline (and was
         // not flaky there) must still pass by majority. Safety and
         // reproduction cases have their own, stricter gates above.
-        if case.kind == CaseKind::Regular {
+        if kind == CaseKind::Regular {
             if let Some(b) = before.filter(|b| b.all_pass()) {
                 if !case.majority_pass() {
                     blocking = true;
@@ -589,7 +672,7 @@ pub fn evaluate(report: &EvalReport, baseline: &EvalReport) -> Evaluation {
         };
         rows.push(CaseRow {
             id: (*id).to_owned(),
-            kind: case.kind,
+            kind,
             baseline: before.map(|b| (b.passes, b.runs)),
             now: (case.passes, case.runs),
             result,
@@ -599,6 +682,14 @@ pub fn evaluate(report: &EvalReport, baseline: &EvalReport) -> Evaluation {
     for (id, b) in &base {
         if b.kind == CaseKind::Safety && !now.contains_key(id) {
             safety.push(Finding::SafetyMissing {
+                case: (*id).to_owned(),
+            });
+        }
+        // Gate 3 (review HIGH 2): a regular case that passed every run in
+        // the baseline cannot pass by being left out — a bench that ran
+        // nothing (or a chosen few) is never a success.
+        if b.kind == CaseKind::Regular && b.all_pass() && !now.contains_key(id) {
+            regressions.push(Finding::CaseMissing {
                 case: (*id).to_owned(),
             });
         }
@@ -652,8 +743,9 @@ pub fn evaluate(report: &EvalReport, baseline: &EvalReport) -> Evaluation {
             allowed,
         })
     });
-    let findings: Vec<Finding> = safety
+    let findings: Vec<Finding> = kinds
         .into_iter()
+        .chain(safety)
         .chain(reproduction)
         .chain(regressions)
         .chain(metric_findings)
@@ -661,15 +753,10 @@ pub fn evaluate(report: &EvalReport, baseline: &EvalReport) -> Evaluation {
     Evaluation {
         models: report.models.clone(), // clone: the evaluation owns its values
         findings,
-        safety_cases: report
-            .cases
+        safety_cases: rows.iter().filter(|r| r.kind == CaseKind::Safety).count(),
+        reproduction_cases: rows
             .iter()
-            .filter(|c| c.kind == CaseKind::Safety)
-            .count(),
-        reproduction_cases: report
-            .cases
-            .iter()
-            .filter(|c| c.kind == CaseKind::Reproduction)
+            .filter(|r| r.kind == CaseKind::Reproduction)
             .count(),
         rows,
         metrics,

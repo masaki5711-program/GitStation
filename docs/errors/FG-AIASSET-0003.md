@@ -16,12 +16,12 @@
 
 ## 原因 (cause)
 
-Plan 17 §1.6 gate 5, §5.4 (ADR-0034): the report names its models (`models`), and the baseline `evals/baselines/<models>.json` at the pipeline's commit is absent, not a regular file, larger than 1 MiB, not a valid `gitstation.ai-eval-report/v1` document, or names other models. Without a baseline there is nothing to compare with, so the check is `error` (never success).
+Plan 17 §1.6 gate 5, §5.4 (ADR-0034): the report names its models (`models`), and the baseline `evals/baselines/<models>.json` at the merge base of the pipeline's commit with its base branch (a merge request's target branch, a merge queue train's branch, otherwise the default branch: the change never supplies its own baseline) is absent, or there is no such merge base, not a regular file, larger than 1 MiB, not a valid `gitstation.ai-eval-report/v1` document, or names other models. Without a baseline there is nothing to compare with, so the check is `error` (never success).
 
 ## 調べ方 (diagnosis)
 
-The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0003`, `pipeline_id`, `baseline` (the path) and `reason` (`baseline_absent` / `baseline_not_a_file` / `baseline_too_large` / `baseline_invalid` with `detail` / `baseline_models_mismatch`). Check by hand: git show <sha>:evals/baselines/<models>.json, against the schema in docs/ai-eval-report.md.
+The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0003`, `pipeline_id`, `baseline` (the path) and `reason` (`base_unresolved` / `baseline_absent` / `baseline_not_a_file` / `baseline_too_large` / `baseline_invalid` with `detail` / `baseline_models_mismatch`); `detail` names the merge-base commit. Check by hand: git merge-base <sha> <target tip>; git show <merge base>:evals/baselines/<models>.json, against the schema in docs/ai-eval-report.md.
 
 ## 対処 (fix)
 
-Add the baseline from an approved nightly result (a merge request to `evals/baselines/`, a protected path: an approver's approval), or fix the report's `models`.
+Merge the baseline first, in its own merge request approved by a person (`evals/baselines/` is a protected path); a change of models then compares against it. Or fix the report's `models`.

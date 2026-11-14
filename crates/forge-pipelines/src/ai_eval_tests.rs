@@ -20,17 +20,62 @@ use forge_db::users::{self, NewUser};
 
 use super::*;
 
-/// The baselines by path; every other path is absent.
-struct Baselines(BTreeMap<String, Vec<u8>>);
+/// The merge base every commit resolves to in these tests.
+fn base_commit() -> ObjectId {
+    ObjectId::parse(&"9".repeat(40)).expect("sha")
+}
+
+/// The baselines by (commit, path); every other one is absent. `base`:
+/// what the merge base resolves to; `fail`: every read fails with it.
+struct Baselines {
+    base: Option<ObjectId>,
+    files: BTreeMap<(String, String), Vec<u8>>,
+    fail: Option<ErrorCode>,
+}
+
+impl Baselines {
+    fn empty() -> Self {
+        Self {
+            base: Some(base_commit()),
+            files: BTreeMap::new(),
+            fail: None,
+        }
+    }
+
+    fn at(mut self, commit: &ObjectId, bytes: Vec<u8>) -> Self {
+        self.files.insert(
+            (
+                commit.as_str().to_owned(),
+                "evals/baselines/qwen3-14b.json".to_owned(),
+            ),
+            bytes,
+        );
+        self
+    }
+}
 
 impl BaselineSource for Baselines {
-    fn baseline<'a>(
+    fn base<'a>(
         &'a self,
         _repo: RepoId,
         _commit: &'a ObjectId,
+        _branch: Option<&'a RefName>,
+    ) -> BaseFuture<'a> {
+        let answer = match self.fail {
+            Some(code) => Err(ForgeError::new(code).with_context("reason", "test")),
+            None => Ok(self.base.clone()), // clone: the answer owns it
+        };
+        Box::pin(async move { answer })
+    }
+
+    fn baseline<'a>(
+        &'a self,
+        _repo: RepoId,
+        commit: &'a ObjectId,
         path: &'a str,
     ) -> BaselineFuture<'a> {
-        let found = self.0.get(path).cloned(); // clone: the answer owns its bytes
+        let key = (commit.as_str().to_owned(), path.to_owned());
+        let found = self.files.get(&key).cloned(); // clone: the answer owns its bytes
         Box::pin(async move { Ok(found.map_or(SmallFile::Absent, SmallFile::Found)) })
     }
 }
@@ -208,10 +253,7 @@ impl World {
 }
 
 fn baselines(bytes: Vec<u8>) -> Baselines {
-    Baselines(BTreeMap::from([(
-        "evals/baselines/qwen3-14b.json".to_owned(),
-        bytes,
-    )]))
+    Baselines::empty().at(&base_commit(), bytes)
 }
 
 /// Plan 17 §1.6, §9: a pipeline whose `.forge-ci.yml` declares no
@@ -260,7 +302,7 @@ async fn baseline_absent_is_error() {
     let p = w.pipeline('d', true, "succeeded").await;
     w.upload(p, &report_json(&[("a/1", "regular", 3, 3)], 0.8))
         .await;
-    w.sweep(&Baselines(BTreeMap::new())).await;
+    w.sweep(&Baselines::empty()).await;
     let (conclusion, summary) = w.check('d').await.expect("run");
     assert_eq!(conclusion, "error");
     assert!(
@@ -344,4 +386,97 @@ fn the_report_path_is_forge_cis() {
         forge_db::ci_ai_eval::REPORT_PATH,
         forge_ci::EVAL_REPORT_PATH
     );
+}
+
+/// Review HIGH 3: the baseline is read at the merge base with the target,
+/// never at the change's own commit — a merge request that loosens its
+/// baseline (drops the case, widens `allowed`) is still judged by the
+/// target's. No merge base is `error`, not success.
+#[tokio::test]
+async fn the_baseline_is_read_at_the_merge_base_not_at_the_change() {
+    let w = world().await;
+    let strict = report_json(&[("a/1", "regular", 3, 3)], 0.8);
+    let loose = report_json(&[("a/9", "regular", 0, 3)], 0.1);
+    let p = w.pipeline('3', true, "succeeded").await;
+    w.upload(p, &report_json(&[("a/1", "regular", 1, 3)], 0.8))
+        .await;
+    let change = ObjectId::parse(&"3".repeat(40)).expect("sha");
+    let source = Baselines::empty()
+        .at(&base_commit(), strict)
+        .at(&change, loose);
+    w.sweep(&source).await;
+    let (conclusion, summary) = w.check('3').await.expect("run");
+    assert_eq!(conclusion, "failure", "{summary}");
+    assert!(summary.contains("stable_case_regressed `a/1`"), "{summary}");
+
+    let q = w.pipeline('4', true, "succeeded").await;
+    w.upload(q, &report_json(&[("a/1", "regular", 3, 3)], 0.8))
+        .await;
+    let mut unrelated = Baselines::empty();
+    unrelated.base = None;
+    w.sweep(&unrelated).await;
+    let (conclusion, summary) = w.check('4').await.expect("run");
+    assert_eq!(conclusion, "error");
+    assert!(
+        summary.contains("[FG-AIASSET-0003] base_unresolved"),
+        "{summary}"
+    );
+    w.t.drop_now().await;
+}
+
+/// Review HIGH 4: a read that keeps failing is counted and backed off,
+/// then written `error` (never left queued); an internal error ends at
+/// once.
+#[tokio::test]
+async fn a_read_that_keeps_failing_ends_as_error() {
+    let w = world().await;
+    let p = w.pipeline('5', true, "succeeded").await;
+    w.upload(p, &report_json(&[("a/1", "regular", 3, 3)], 0.8))
+        .await;
+    let mut broken = Baselines::empty();
+    broken.fail = Some(ErrorCode::GitTimeout);
+    for attempt in 1..MAX_READ_FAILURES {
+        let pass = w.sweep(&broken).await;
+        assert_eq!(pass.retried, 1, "attempt {attempt}");
+        assert_eq!(w.check('5').await, None, "attempt {attempt}");
+        // Backed off: the next pass would not look; let the time pass.
+        assert_eq!(w.sweep(&broken).await, AiEvalPass::default());
+        w.t.exec_superuser(&format!(
+            "UPDATE forge.ci_pipelines SET ai_eval_retry_at = now() WHERE id = {p}"
+        ))
+        .await;
+    }
+    w.sweep(&broken).await;
+    let (conclusion, summary) = w.check('5').await.expect("run");
+    assert_eq!(conclusion, "error");
+    assert!(
+        summary.contains("[FG-AIASSET-0002] read_failed") && summary.contains("FG-GIT-"),
+        "{summary}"
+    );
+
+    let q = w.pipeline('6', true, "succeeded").await;
+    w.upload(q, &report_json(&[("a/1", "regular", 3, 3)], 0.8))
+        .await;
+    broken.fail = Some(ErrorCode::Internal);
+    w.sweep(&broken).await;
+    assert_eq!(w.check('6').await.expect("run").0, "error");
+    w.t.drop_now().await;
+}
+
+/// Review MEDIUM: a pipeline stuck pending or running past a day gets
+/// `error`, not an endless `queued`.
+#[tokio::test]
+async fn a_stale_pending_pipeline_is_error() {
+    let w = world().await;
+    let p = w.pipeline('7', true, "succeeded").await;
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.ci_pipelines SET status = 'running', \
+           created_at = now() - interval '2 days' WHERE id = {p}"
+    ))
+    .await;
+    w.sweep(&Baselines::empty()).await;
+    let (conclusion, summary) = w.check('7').await.expect("run");
+    assert_eq!(conclusion, "error");
+    assert!(summary.contains("pipeline_stale"), "{summary}");
+    w.t.drop_now().await;
 }

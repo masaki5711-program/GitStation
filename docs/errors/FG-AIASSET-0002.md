@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-Plan 17 §1.6 gate 5 (ADR-0034): a pipeline whose `.forge-ci.yml` job declares the artifact `eval-report.json` ended without a usable report: the declaring job did not succeed (failed, canceled — e.g. no `gpu-eval` runner, a timeout), the pipeline ended without running it, or the job succeeded but uploaded no `eval-report.json` (or its stored file is gone). forge's worker wrote `forge/ai-eval` = `error`, never success: a merge request that requires it waits.
+Plan 17 §1.6 gate 5 (ADR-0034): a pipeline whose `.forge-ci.yml` job declares the artifact `eval-report.json` ended without a usable report: the declaring job did not succeed (failed, canceled — e.g. no `gpu-eval` runner, a timeout), the pipeline ended without running it, or the job succeeded but uploaded no `eval-report.json` (or its stored file is gone); or the pipeline stayed pending / running for more than 24 hours; or the report or the baseline could not be read 5 times in a row (storage, git, a repository not ready; each failure backed off up to 10 minutes) or failed with an internal error. forge's worker wrote `forge/ai-eval` = `error`, never success: a merge request that requires it waits.
 
 ## 調べ方 (diagnosis)
 
-The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0002`, `pipeline_id`, `job` and `reason` (`job_failed` / `job_canceled` / `job_not_run` / `pipeline_<status>` / `report_missing` / `report_file_missing`). Read: SELECT j.name, j.status, j.attempt, j.error_code FROM forge.ci_jobs j JOIN forge.ci_pipelines p ON p.id = j.pipeline_id WHERE p.id = <pipeline_id> AND j.name = p.ai_eval_job; SELECT id, path, attempt FROM forge.ci_artifacts WHERE job_id = <job_id>; and `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>` for the job's failure.
+The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0002`, `pipeline_id`, `job` and `reason` (`job_failed` / `job_canceled` / `job_not_run` with `detail=pipeline_<status>` / `report_missing` / `report_file_missing` / `pipeline_stale` / `read_failed` with `detail=cause <code> after <n> attempts`). Each counted read failure before that is `forge.ai_eval.read_failed` (info) with the cause's `error_code` and `failures`. Read: SELECT j.name, j.status, j.attempt, j.error_code FROM forge.ci_jobs j JOIN forge.ci_pipelines p ON p.id = j.pipeline_id WHERE p.id = <pipeline_id> AND j.name = p.ai_eval_job; SELECT id, path, attempt FROM forge.ci_artifacts WHERE job_id = <job_id>; and `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>` for the job's failure.
 
 ## 対処 (fix)
 

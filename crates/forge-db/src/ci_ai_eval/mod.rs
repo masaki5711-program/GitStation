@@ -23,7 +23,7 @@
 //! pipeline row `FOR UPDATE SKIP LOCKED`, then the check's locks.
 
 use forge_core::checks::AI_EVAL_CHECK;
-use forge_core::{ObjectId, ProjectId, RepoId};
+use forge_core::{ObjectId, ProjectId, RefName, RepoId};
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::change::{ChangeContext, ChangeTx, Settle};
@@ -41,15 +41,18 @@ fn unreadable(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::Internal).with_context("reason", reason)
 }
 
-/// The declaring pipelines whose status is not yet their check's, oldest
-/// first (at most `limit`).
+/// The declaring pipelines whose status is not yet their check's and
+/// whose backoff ([`record_failure`]) has passed, by when they became due
+/// (a pipeline that keeps failing waits behind newer ones), at most
+/// `limit`.
 pub async fn pipelines_due(db: &Db, limit: i64) -> Result<Vec<i64>, ForgeError> {
     const QUERY: &str = "ci_ai_eval.due";
     db.within(QUERY, async {
         sqlx::query_scalar(
             "SELECT id FROM forge.ci_pipelines \
              WHERE ai_eval_job IS NOT NULL AND ai_eval_status IS DISTINCT FROM status \
-             ORDER BY id LIMIT $1",
+               AND (ai_eval_retry_at IS NULL OR ai_eval_retry_at <= now()) \
+             ORDER BY coalesce(ai_eval_retry_at, created_at), id LIMIT $1",
         )
         .bind(limit)
         .fetch_all(db.pool().executor())
@@ -85,6 +88,14 @@ pub struct AiEvalTarget {
     pub job_status: Option<JobStatus>,
     pub job_attempt: i32,
     pub report: Option<ReportArtifact>,
+    /// The branch the baseline is read against (ADR-0034 §2): a merge
+    /// request pipeline's target branch, a merge queue train's branch;
+    /// `None` for the others (the repository's default branch).
+    pub base_branch: Option<RefName>,
+    /// Seconds since the pipeline was created.
+    pub age_secs: i64,
+    /// Read failures since the check was last written ([`record_failure`]).
+    pub failures: i32,
 }
 
 type TargetRow = (
@@ -98,6 +109,9 @@ type TargetRow = (
     Option<i64>,
     Option<i64>,
     Option<Vec<u8>>,
+    Option<String>,
+    i64,
+    i32,
 );
 
 /// The target of `pipeline` (`None`: gone, or it declares no report).
@@ -109,8 +123,12 @@ pub async fn target(db: &Db, pipeline: i64) -> Result<Option<AiEvalTarget>, Forg
         .within(QUERY, async {
             sqlx::query_as(
                 "SELECT p.project_id, p.sha, p.status, p.ai_eval_job, r.id, j.status, j.attempt, \
-                   a.id, a.size_bytes, a.sha256 \
+                   a.id, a.size_bytes, a.sha256, \
+                   CASE WHEN p.merge_request_id IS NOT NULL THEN m.target_branch \
+                        WHEN p.source = 'merge_queue' THEN p.ref END, \
+                   extract(epoch FROM now() - p.created_at)::bigint, p.ai_eval_failures \
                  FROM forge.ci_pipelines p \
+                 LEFT JOIN forge.merge_requests m ON m.id = p.merge_request_id \
                  LEFT JOIN forge.repositories r ON r.project_id = p.project_id \
                    AND r.state = 'ready' \
                  LEFT JOIN forge.ci_jobs j ON j.pipeline_id = p.id AND j.name = p.ai_eval_job \
@@ -125,7 +143,21 @@ pub async fn target(db: &Db, pipeline: i64) -> Result<Option<AiEvalTarget>, Forg
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    let Some((project, sha, status, job, repo, job_status, attempt, art, size, digest)) = row
+    let Some((
+        project,
+        sha,
+        status,
+        job,
+        repo,
+        job_status,
+        attempt,
+        art,
+        size,
+        digest,
+        base,
+        age_secs,
+        failures,
+    )) = row
     else {
         return Ok(None);
     };
@@ -155,7 +187,38 @@ pub async fn target(db: &Db, pipeline: i64) -> Result<Option<AiEvalTarget>, Forg
         job_status,
         job_attempt: attempt.unwrap_or(0),
         report,
+        base_branch: match base {
+            Some(b) => Some(RefName::parse(&b).map_err(|_| unreadable("stored_branch_invalid"))?),
+            None => None,
+        },
+        age_secs,
+        failures,
     }))
+}
+
+/// Count one read failure of `target` (its report or baseline could not
+/// be read) and back it off: due again after `10 s * 2^failures`, at most
+/// 10 minutes. Only while the pipeline is still at the status `target`
+/// saw and unreported. The failures counted now (`None`: changed or gone,
+/// nothing done). Errors: `FG-DB-*`.
+pub async fn record_failure(db: &Db, target: &AiEvalTarget) -> Result<Option<i32>, ForgeError> {
+    const QUERY: &str = "ci_ai_eval.record_failure";
+    db.within(QUERY, async {
+        sqlx::query_scalar(
+            "UPDATE forge.ci_pipelines SET ai_eval_failures = least(ai_eval_failures + 1, 1000), \
+               ai_eval_retry_at = now() + make_interval(secs => \
+                 least(600, 10 * power(2, least(ai_eval_failures, 10)))) \
+             WHERE id = $1 AND status = $2 AND ai_eval_job IS NOT NULL \
+               AND ai_eval_status IS DISTINCT FROM status \
+             RETURNING ai_eval_failures",
+        )
+        .bind(target.pipeline_id)
+        .bind(target.status.as_str())
+        .fetch_optional(db.write_pool())
+        .await
+        .map_err(|e| query_error(QUERY, e))
+    })
+    .await
 }
 
 /// What [`record`] did.
@@ -228,13 +291,16 @@ pub async fn record(
             return Ok(Settle::Discard(AiEvalCheck::Skipped));
         }
         tx.step(|c| async move {
-            sqlx::query("UPDATE forge.ci_pipelines SET ai_eval_status = $2 WHERE id = $1")
-                .bind(pipeline)
-                .bind(status)
-                .execute(c)
-                .await
-                .map(drop)
-                .map_err(|e| query_error(QUERY, e))
+            sqlx::query(
+                "UPDATE forge.ci_pipelines SET ai_eval_status = $2, ai_eval_failures = 0, \
+                   ai_eval_retry_at = NULL WHERE id = $1",
+            )
+            .bind(pipeline)
+            .bind(status)
+            .execute(c)
+            .await
+            .map(drop)
+            .map_err(|e| query_error(QUERY, e))
         })
         .await?;
         if !newest {

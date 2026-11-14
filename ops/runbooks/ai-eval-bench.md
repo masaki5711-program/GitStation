@@ -9,9 +9,11 @@
 - `forge worker` のログに `forge.ai_eval.check_written`（warn）`error_code=FG-AIASSET-0002`: ベンチが使える報告を残さなかった。
   `reason`: `job_failed`（ベンチのジョブが失敗）/ `job_canceled` / `job_not_run`（`detail=pipeline_<status>`: パイプラインがジョブを動かさずに終わった。
   `gpu-eval` の Runner が無く取り消された・時間切れなど）/ `report_missing`（成功したが `eval-report.json` をアップロードしていない）/
-  `report_file_missing`（行はあるがファイルが保存先に無い: 期限切れの削除・保存先の事故）
+  `report_file_missing`（行はあるがファイルが保存先に無い: 期限切れの削除・保存先の事故）/ `pipeline_stale`（24 時間を越えて待ち・実行中）/
+  `read_failed`（報告・基準を 5 回続けて読めなかった。`detail` の `cause` が元のコード。それまでの失敗は `forge.ai_eval.read_failed`（info））
 - MR の画面・`gstn mr status` で `forge/ai-eval` が `error` のまま、または `required_check_missing`（行が現れない）
-- `forge.ai_eval.check_failed`（warn）が続く: 報告・基準を読めず、次の回にやり直している（`error_code` が原因: FG-REPO-0016 / FG-GIT-* / FG-REPO-0003 保存先の I/O / FG-DB-*）
+- `forge.ai_eval.read_failed`（info）が続く: 報告・基準を読めず、間をあけてやり直している（`error_code` が原因: FG-REPO-0016 / FG-GIT-* / FG-REPO-0003 保存先の I/O）。
+  5 回で `read_failed` の `error` になる。`forge.ai_eval.check_failed`（warn）は DB に書けなかった（FG-DB-*、runbook `db-unavailable`）
 
 ## Impact
 
@@ -31,7 +33,9 @@
 4. ジョブの失敗: `gstn pipeline diagnosis --project <id> --pipeline <pipeline_id>`、ログは `gstn pipeline log`。
    GPU の Runner: `gstn runner list`（タグ `gpu-eval` の Runner が `online` か）、runbook `ci-runner`。
 5. `forge.ai_eval.check_written` の他のコード:
-   - FG-AIASSET-0003 BaselineMissing: `detail` が基準のパス。`git show <sha>:evals/baselines/<models>.json` が無い・形が違う・`models` が違う。
+   - FG-AIASSET-0003 BaselineMissing: `detail` が基準のパスと merge base のコミット。基準は **ベースのブランチとの merge base** から読む
+     （MR の中で足した基準は使わない）。`git merge-base <sha> <ターゲットの先端>` と `git show <merge base>:evals/baselines/<models>.json` で確かめる。
+     `base_unresolved` はベースのブランチが無いか履歴を共有しない。
    - FG-AIASSET-0007 EvalReportInvalid: `reason` と `detail`（フィールド・ケース）。`stored_digest_mismatch` は保存したファイルが
      アップロードのときと違う（保存先の改ざん・事故の疑い: runbook `repo-storage` も見る）。
    - FG-AIASSET-0004 / 0006: ベンチは動いた。チェックの要約の比較表と所見を MR の作者に見てもらう（運用の障害ではない）。
@@ -45,7 +49,8 @@
   再実行で状態が変わると worker が新しい試行の報告で書き直す。
 - 報告が無い・形が違う: ベンチのジョブ（PFS の `bench` の入口）を直す MR。直るまで MR は待つ。**人が承知して `error` を通す抜け道は無い**
   （必須のチェックを外すのは保護ブランチの設定の変更で、監査に残る。計画 17 では行わない）。
-- 基準が無い: 夜間の結果から基準の MR を作る（`evals/baselines/` は保護パス: 承認者の人の承認）。
+- 基準が無い: 夜間の結果から基準の MR を作り、**先にマージする**（`evals/baselines/` は保護パス: 承認者の人の承認）。その後でベンチの MR を再実行する。
+- 読めない失敗が続く: `cause` のコードの runbook（`repo-storage`・`git-unavailable`・`repository-provisioning`）で直してから再実行する。
 - 保存先の事故（`report_file_missing` が多数・`stored_digest_mismatch`）: runbook `repo-storage`。
 
 ## Verify

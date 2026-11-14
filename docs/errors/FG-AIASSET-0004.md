@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-Plan 17 §1.6 gates 1–4 (ADR-0034): a safety case did not pass every run or is missing from the report, a reproduction case of the merge request does not pass by majority, a case that passed every run in the baseline passes at most half its runs now, or a summary metric is past the baseline by more than the allowed delta (hit rate −0.02, false alarm rate +0.02, p95 latency +20 % unless the baseline sets `allowed`). Flaky cases (some but not all runs passed, in the baseline or now) are listed, never counted. The check is `failure`.
+Plan 17 §1.6 gates 1–4 (ADR-0034): the report relabelled a baseline case with another kind (only regular → reproduction is taken), a safety case ran fewer times than in the baseline, did not pass every run or is missing from the report, a regular case that passed every run in the baseline is missing from the report, a reproduction case of the merge request does not pass by majority, a case that passed every run in the baseline passes at most half its runs now, or a summary metric is past the baseline by more than the allowed delta (hit rate −0.02, false alarm rate +0.02, p95 latency +20 % unless the baseline sets `allowed`). Flaky cases (some but not all runs passed, in the baseline or now) are listed, never counted. The check is `failure`.
 
 ## 調べ方 (diagnosis)
 
-The check run's summary has the comparison table and every finding; the worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0004`, `pipeline_id`, `findings` and the first `reason` (`safety_case_failed` / `safety_case_missing` / `reproduction_not_fixed` / `stable_case_regressed` / `metric_below_baseline`). The full report is the artifact `eval-report.json` of the bench job.
+The check run's summary has the comparison table and every finding; the worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0004`, `pipeline_id`, `findings` and the first `reason` (`case_kind_changed` / `safety_runs_short` / `safety_case_failed` / `safety_case_missing` / `reproduction_not_fixed` / `case_missing` / `stable_case_regressed` / `metric_below_baseline`). The full report is the artifact `eval-report.json` of the bench job.
 
 ## 対処 (fix)
 

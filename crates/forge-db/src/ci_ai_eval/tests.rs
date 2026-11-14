@@ -275,3 +275,48 @@ async fn only_the_ai_eval_check_is_written_here() {
     assert_reason(&e, ErrorCode::Internal, "not_ai_eval_check");
     w.t.drop_now().await;
 }
+
+/// Review HIGH 4: a read failure is counted and backed off (not due until
+/// its retry time, then behind newer pipelines); the write resets both.
+#[tokio::test]
+async fn a_read_failure_is_counted_backed_off_and_reset_by_the_write() {
+    let w = world().await;
+    let failing = w.pipeline('a', Source::Push, Some("bench")).await;
+    let newer = w.pipeline('b', Source::Push, Some("bench")).await;
+    w.finish(failing, "succeeded", "succeeded", true).await;
+    let t = target(&w.t.db, failing)
+        .await
+        .expect("t")
+        .expect("declared");
+    assert_eq!((t.failures, t.base_branch.clone()), (0, None));
+    assert_eq!(record_failure(&w.t.db, &t).await.expect("fail"), Some(1));
+    assert_eq!(pipelines_due(&w.t.db, 100).await.expect("due"), [newer]);
+    // The backoff passed: due again, behind the newer pipeline.
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.ci_pipelines SET ai_eval_retry_at = now() WHERE id = {failing}"
+    ))
+    .await;
+    assert_eq!(
+        pipelines_due(&w.t.db, 100).await.expect("due"),
+        [newer, failing]
+    );
+    let t = target(&w.t.db, failing)
+        .await
+        .expect("t")
+        .expect("declared");
+    assert_eq!(t.failures, 1);
+    let written = record(&w.t.db, &system(), &t, &run(CheckConclusion::Error))
+        .await
+        .expect("record");
+    assert!(matches!(written, AiEvalCheck::Written(_)));
+    let row =
+        w.t.json_rows(&format!(
+            "SELECT ai_eval_failures, ai_eval_retry_at FROM forge.ci_pipelines WHERE id = {failing}"
+        ))
+        .await;
+    assert_eq!(row[0]["ai_eval_failures"], 0);
+    assert!(row[0]["ai_eval_retry_at"].is_null());
+    // Reported: a late failure count changes nothing.
+    assert_eq!(record_failure(&w.t.db, &t).await.expect("fail"), None);
+    w.t.drop_now().await;
+}

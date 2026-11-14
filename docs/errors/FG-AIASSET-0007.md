@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-Plan 17 P17-2 (ADR-0034): the artifact `eval-report.json` of the declaring job is not a `gitstation.ai-eval-report/v1` document: not JSON, an unknown field or schema, a bad `models` name, a case id repeated or malformed, `passes` above `runs`, `runs` outside 1–15, more than 5000 cases, a metric outside its range, larger than 1 MiB, or its stored bytes no longer match the sha256 recorded at upload. The check is `error` (never success).
+Plan 17 P17-2 (ADR-0034): the artifact `eval-report.json` of the declaring job is not a `gitstation.ai-eval-report/v1` document: not JSON, an unknown field or schema, a bad `models` name, no cases at all (`cases_empty`), a case id repeated or malformed, `passes` above `runs`, `runs` outside 1–15, more than 5000 cases, a metric outside its range, larger than 1 MiB, or its stored bytes no longer match the sha256 recorded at upload. The check is `error` (never success).
 
 ## 調べ方 (diagnosis)
 

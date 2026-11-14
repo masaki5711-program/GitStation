@@ -23,7 +23,8 @@
    宣言はパスが **ちょうど `eval-report.json`** のときだけ（`out/eval-report.json` などは宣言にならない）。選ばれたジョブの 2 つ以上が宣言すると、
    パイプラインは `invalid`（FG-CI-0001 `eval_report_declared_twice`）。
 2. リポジトリに基準 `evals/baselines/<models>.json`（同じ v1 の形。夜間の結果から人が承認したもの）を置く。`<models>` は報告の `models`。
-   基準は **パイプラインのコミット** から読む。`evals/baselines/**` は保護パスにする（承認者の人の承認が要る。計画 17 §2）。
+   基準は **ベースのブランチ（MR のターゲット、無ければ既定のブランチ）との merge base** から読む。MR の中で基準を変えても、その MR 自身の判定には
+   効かない。基準の変更は先に別の MR で入れる。`evals/baselines/**` は保護パスにする（承認者の人の承認が要る。計画 17 §2）。
 3. forge の worker（タスク `ci_ai_eval`）がパイプラインの状態を追い、コミットのチェック `forge/ai-eval` を書く。
    **宣言の無いパイプラインには、このチェックの行は現れない**（必須にもならない）。
 
@@ -55,7 +56,7 @@
 |---|---|
 | `schema` | `gitstation.ai-eval-report/v1` だけ。ほかは `schema_unsupported` |
 | `models` | `[a-z0-9][a-z0-9._-]{0,62}`、`..` を含まない。基準のファイル名になる |
-| `cases` | 最大 5000 件。`id` は `[a-z0-9][a-z0-9._/-]`（128 バイトまで、空・`.`・`..` の区切りなし）で重複なし。`kind` は `regular` / `safety` / `reproduction`。`runs` は 1〜15、`passes` は `runs` 以下 |
+| `cases` | 1〜5000 件（空は `cases_empty`）。`id` は `[a-z0-9][a-z0-9._/-]`（128 バイトまで、空・`.`・`..` の区切りなし）で重複なし。`kind` は `regular` / `safety` / `reproduction`。`runs` は 1〜15、`passes` は `runs` 以下 |
 | `metrics` | 率は 0〜1、`p95_latency_ms` は 0 以上。5 つとも必須 |
 | `allowed` | 省略可。**基準のものだけを使う**（報告の `allowed` は無視。ジョブが自分のゲートを緩められない） |
 
@@ -66,12 +67,15 @@
 
 - **ケースごとの多数決**: `passes * 2 > runs` で合格。全部の回が同じ（全部合格か全部不合格）なら **安定**、そうでなければ **不安定**。
 - ゲート（どれかに当たれば `failure`）:
-  1. 基準にある安全のケースが報告にあり、**全部の回で合格**（`safety_case_missing` / `safety_case_failed`）
+  0. 基準にあるケースは **基準の `kind`** で判定する。報告が別の種類を書けば `case_kind_changed`（`regular` → `reproduction` だけは認める）
+  1. 基準にある安全のケースが報告にあり、基準の回数以上動き、**全部の回で合格**（`safety_case_missing` / `safety_runs_short` / `safety_case_failed`）
   2. 再現のケースが多数決で合格（`reproduction_not_fixed`）、かつ基準で既に全部の回で合格していない（`case_not_reproducing`、FG-AIASSET-0006）
-  3. 基準で全部の回で合格していた `regular` のケースが、今は半分以下（`stable_case_regressed`）。**基準で不安定なケースは数えない**（一覧に出し、件数を報告）
+  3. 基準で全部の回で合格していた `regular` のケースが報告に無い（`case_missing`）、または今は半分以下（`stable_case_regressed`）。**基準で不安定なケースは数えない**（一覧に出し、件数を報告）
   4. 指標が基準より許す差を越えて悪くない: 的中率 −0.02、誤報の率 +0.02、p95 の時間 +20 %（基準の `allowed` で変えられる）。`attach_precision`・`abstain_accuracy` は表に出すだけ
 - `error`（成功にしない）: 宣言したジョブが成功していない・報告が無い・ファイルが消えた（FG-AIASSET-0002）、報告が v1 でない（0007）、基準が無い・読めない・`models` が違う（0003）。
-- 読めない一時の失敗（保存先・git・DB）は何も書かず、次の回（10 秒ごと）にやり直す。その間、必須の `forge/ai-eval` は待ちのまま。
+- 読めない失敗（保存先・git・リポジトリの準備中）は数えて、10 秒から最大 10 分まで間をあけてやり直す。5 回目（内部の誤りはすぐ）に `error`
+  （FG-AIASSET-0002 `read_failed`）。24 時間を越えて待ち・実行中のパイプラインも `error`（`pipeline_stale`）。
+- 合計の指標はベンチの数字をそのまま使う（ベンチのイメージはダイジェスト固定）。
 
 ## MR に出るもの
 
