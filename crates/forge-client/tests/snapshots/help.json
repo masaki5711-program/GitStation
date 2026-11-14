@@ -7816,6 +7816,94 @@
     {
       "args": [],
       "examples": [
+        "gstn ssh-key list --json"
+      ],
+      "name": "ssh-key list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "title",
+                "algorithm",
+                "fingerprint",
+                "public_key",
+                "created_at",
+                "last_used_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "ssh": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "ssh"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/ssh-keys"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List your SSH keys (fingerprints) and, while SSH is on, the clone host and the server's host key fingerprints."
+    },
+    {
+      "args": [
+        {
+          "description": "The key id (ssh-key list).",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn ssh-key delete 4 --yes"
+      ],
+      "name": "ssh-key delete",
+      "output": {
+        "properties": {
+          "deleted": {
+            "const": true
+          },
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/user/ssh-keys/{id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Delete one of your SSH keys (git over SSH stops working with it). Needs --yes."
+    },
+    {
+      "args": [],
+      "examples": [
         "gstn notifications get --json"
       ],
       "name": "notifications get",
