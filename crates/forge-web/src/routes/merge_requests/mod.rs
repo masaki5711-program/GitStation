@@ -53,6 +53,7 @@ use crate::registry::{Dispatched, QueryParam, WriteParts};
 use crate::routes::write::{bounded, json, no_store};
 
 mod approvals;
+mod auto_merge;
 mod conflicts;
 mod discussion_loaders;
 mod discussions;
@@ -72,6 +73,9 @@ pub use approvals::{
     ApprovalStateBody, ApproveMergeRequest, PutApprovalRule, RulesProject, APPROVALS, APPROVALS_OF,
     APPROVE, MAX_BODY as APPROVAL_MAX_BODY, RULE as APPROVAL_RULE, RULES as APPROVAL_RULES,
     TO_APPROVE, TO_UNAPPROVE, UNAPPROVE,
+};
+pub use auto_merge::{
+    auto_merge_state, AutoMergeStateBody, AutoMergeStateOf, MergeRequestAutoMergeBody, AUTO_MERGE,
 };
 pub use conflicts::{
     conflicts, ConflictPredictionBody, ConflictScanBody, ConflictsBody, CONFLICTS, CONFLICTS_SUFFIX,

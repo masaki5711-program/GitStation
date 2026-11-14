@@ -397,6 +397,14 @@ impl World {
         )
         .await
         .expect("check");
+        // The worker registers its subscribers at start; here, once.
+        forge_db::subscribers::register(
+            &self.t.db,
+            &RevertDrafts,
+            forge_db::subscribers::Start::Beginning,
+        )
+        .await
+        .expect("register");
         forge_db::sequencer::run_once(
             &self.t.db,
             forge_db::sequencer::BatchSize::MAX,

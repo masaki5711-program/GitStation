@@ -466,3 +466,14 @@
   gap: var(--gs-space-2);
   margin-top: var(--gs-space-3);
 }
+
+/* M4 C9: auto-merge stopped — someone has to act (one line). */
+.autoMergeStopped {
+  margin: var(--gs-space-2) 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-color-attention);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}

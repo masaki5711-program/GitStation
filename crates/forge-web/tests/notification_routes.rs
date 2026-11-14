@@ -155,7 +155,8 @@ fn kinds() -> Value {
         "mr_approved",
         "mr_merged",
         "mr_commented",
-        "mr_conflict_predicted"
+        "mr_conflict_predicted",
+        "mr_revert_drafted"
     ])
 }
 

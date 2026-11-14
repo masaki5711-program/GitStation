@@ -234,6 +234,24 @@
     "word": "project_permalink"
   },
   {
+    "action": "AutoMergeInstanceStopToggle",
+    "method": "POST",
+    "path": "/api/v1/admin/auto-merge/resume",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AutoMergeInstanceStopToggle",
+    "method": "POST",
+    "path": "/api/v1/admin/auto-merge/stop",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "IntegrationRead",
     "method": "GET",
     "path": "/api/v1/admin/integrations",
@@ -693,6 +711,42 @@
     "word": "fixed"
   },
   {
+    "action": "MergeQueueRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/auto-merge",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AutoMergeSettingsManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/auto-merge",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AutoMergeStopToggle",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/auto-merge/resume",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AutoMergeStopToggle",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/auto-merge/stop",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "CiVariableManage",
     "method": "GET",
     "path": "/api/v1/projects/{id}/ci/variables",
@@ -1035,6 +1089,15 @@
     "word": "fixed"
   },
   {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/auto-merge",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MergeRequestClose",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/close",
@@ -1173,6 +1236,15 @@
     "action": "MergeRequestReopen",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/reopen",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/revert",
     "people_only": false,
     "public": false,
     "scope": "fixed",

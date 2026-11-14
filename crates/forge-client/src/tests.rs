@@ -375,7 +375,7 @@ fn both_stores_failing_is_credential_store_failed() {
 }
 
 /// The dependency decision (lib.rs, contract 9): forge-client sees only
-/// forge-errors and the pure forge-doc and forge-ci, and no server crate
+/// forge-errors and the pure forge-doc, forge-ci and forge-agent, and no server crate
 /// depends on forge-client.
 #[test]
 fn client_depends_only_on_forge_errors_and_forge_doc() {
@@ -388,10 +388,11 @@ fn client_depends_only_on_forge_errors_and_forge_doc() {
         // crate's own tests; it is not an edge to another forge crate.
         .filter(|l| l.trim() != SELF_DEV_DEP)
         .collect();
-    assert_eq!(deps.len(), 3, "{deps:?}");
+    assert_eq!(deps.len(), 4, "{deps:?}");
     assert!(deps[0].starts_with("forge-errors"), "{deps:?}");
     assert!(deps[1].starts_with("forge-doc"), "{deps:?}");
     assert!(deps[2].starts_with("forge-ci"), "{deps:?}");
+    assert!(deps[3].starts_with("forge-agent"), "{deps:?}");
     // ...and it may only appear under [dev-dependencies].
     let dev = own
         .split("[dev-dependencies]")
@@ -403,6 +404,7 @@ fn client_depends_only_on_forge_errors_and_forge_doc() {
     for (name, text) in [
         ("forge-core", include_str!("../../forge-core/Cargo.toml")),
         ("forge-ci", include_str!("../../forge-ci/Cargo.toml")),
+        ("forge-agent", include_str!("../../forge-agent/Cargo.toml")),
         ("forge-auth", include_str!("../../forge-auth/Cargo.toml")),
         ("forge-db", include_str!("../../forge-db/Cargo.toml")),
         ("forge-git", include_str!("../../forge-git/Cargo.toml")),

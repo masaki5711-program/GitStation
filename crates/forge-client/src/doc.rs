@@ -337,7 +337,13 @@ impl Files {
 /// `git ls-files -z --cached --others --exclude-standard` in `root`, at
 /// most `max` bytes (more: the second value is true). Git is pointed at
 /// `root` only: the variables that name another repository are removed.
-fn list_files(root: &Path, max: usize) -> Result<(Vec<u8>, bool)> {
+pub(crate) fn list_files(root: &Path, max: usize) -> Result<(Vec<u8>, bool)> {
+    ls_files(root, max, &["--cached", "--others", "--exclude-standard"])
+}
+
+/// `git ls-files -z <which>` in `root` (see [`list_files`]); `which` is a
+/// fixed set of flags from this crate, never user input.
+pub(crate) fn ls_files(root: &Path, max: usize, which: &[&str]) -> Result<(Vec<u8>, bool)> {
     let fail = |why: String| {
         ClientError::local(
             ErrorCode::CliInputFailed,
@@ -351,13 +357,8 @@ fn list_files(root: &Path, max: usize) -> Result<(Vec<u8>, bool)> {
     let mut child = cmd
         .arg("-C")
         .arg(root)
-        .args([
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ])
+        .args(["ls-files", "-z"])
+        .args(which)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

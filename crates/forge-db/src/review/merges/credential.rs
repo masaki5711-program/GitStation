@@ -28,6 +28,13 @@ pub enum CredentialState {
     /// No such credential of this user (deleted, or another user's): the
     /// decision refuses it like a revoked one.
     Missing,
+    /// The auto-merge principal (M4 C9): the project's `merge.auto` and
+    /// the emergency stop in effect, read now (`authorize()` refuses a mode
+    /// that does not act and a stop).
+    AutoMerge {
+        mode: forge_core::auto_merge::AutoMergeMode,
+        stop: Option<forge_core::auto_merge::StopScope>,
+    },
 }
 
 /// The requester's account kind and credential (the account's `active` /
@@ -79,6 +86,10 @@ pub(crate) async fn credential_on(
                 },
                 None => CredentialState::Missing,
             }
+        }
+        CredentialRef::AutoMerge(project) => {
+            let (mode, stop) = crate::review::auto_merge::state_on(&mut *conn, project).await?;
+            CredentialState::AutoMerge { mode, stop }
         }
         CredentialRef::Session(id) => {
             let usable: Option<bool> = sqlx::query_scalar(
