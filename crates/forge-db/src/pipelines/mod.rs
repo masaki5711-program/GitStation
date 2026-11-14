@@ -337,6 +337,13 @@ pub struct NewPipeline {
     pub protected: bool,
     pub copy_mark: CopyMark,
     pub planned: Planned,
+    /// Plan 17 P17-2 (ADR-0034): the planned job that declares the AI
+    /// evaluation report (`forge_ci::EVAL_REPORT_PATH`), stored as
+    /// `ci_pipelines.ai_eval_job`. Only then does forge's worker write
+    /// `forge/ai-eval` for the pipeline. Must name one of the planned jobs
+    /// (`FG-SYS-0001 reason=ai_eval_job_not_planned` otherwise); ignored
+    /// unless jobs were planned.
+    pub ai_eval_job: Option<String>,
 }
 
 /// What [`create`] did.
@@ -408,11 +415,19 @@ async fn insert(
 ) -> Result<Option<i64>, ForgeError> {
     let r = &new.request;
     let (status, error_code, problems, jobs) = row_of(new);
+    let ai_eval_job = new.ai_eval_job.as_deref().filter(|_| !jobs.is_empty());
+    if let Some(name) = ai_eval_job {
+        if !jobs.iter().any(|j| j.name == name) {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "ai_eval_job_not_planned")
+                .with_context("job", name.to_owned()));
+        }
+    }
     let inserted: Option<i64> = sqlx::query_scalar(
         "INSERT INTO forge.ci_pipelines (project_id, ref, sha, source, merge_request_id, \
            triggered_by, definition_hash, copy_mark, status, error_code, problems, request_id, \
-           protected) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+           protected, ai_eval_job) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
          ON CONFLICT (project_id, source, ref, sha, coalesce(merge_request_id, 0)) \
            WHERE source IN ('push', 'merge_request', 'merge_queue') DO NOTHING \
          RETURNING id",
@@ -430,6 +445,7 @@ async fn insert(
     .bind(&problems)
     .bind(&new.request_id)
     .bind(new.protected)
+    .bind(ai_eval_job)
     .fetch_optional(&mut *c)
     .await
     .map_err(|e| query_error(query, e))?;

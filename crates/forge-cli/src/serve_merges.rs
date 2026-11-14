@@ -195,6 +195,12 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DeployCommitNotAllowed
         | ErrorCode::DeploymentAbandoned
         | ErrorCode::DeployTargetNotAllowed
+        // Plan 17 P17-2: the forge/ai-eval check's codes (never a merge's).
+        | ErrorCode::BenchUnavailable
+        | ErrorCode::BaselineMissing
+        | ErrorCode::EvalRegression
+        | ErrorCode::CaseNotReproducing
+        | ErrorCode::EvalReportInvalid
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

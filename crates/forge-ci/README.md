@@ -57,7 +57,7 @@ jobs:
 | スキーマ | `script_line_invalid`、`script_line_too_long`（4096 バイト）、`key_unknown`、`field_missing`、`field_invalid`、`version_unsupported`、`stages_empty`、`stage_name_invalid`、`stage_duplicate`、`too_many_stages`（16）、`stage_unknown`、`jobs_empty`、`too_many_jobs`（48）、`job_name_invalid`、`image_not_pinned`、`script_empty`、`too_many_script_lines`（200）、`timeout_missing`、`timeout_invalid`、`timeout_too_long`（4h）、`tag_invalid`、`too_many_tags`（8）、`secret_name_invalid`、`too_many_secrets`（16）、`branch_pattern_invalid`、`too_many_branches`（16）、`artifact_path_invalid`、`too_many_artifacts`（16）、サービス（C5s）: `too_many_services`（2）、`service_name_invalid`、`service_duplicate`、`service_env_invalid`（値は出さない）、`too_many_service_env`（16）、`service_user_invalid`、`service_tmpfs_invalid`、`too_many_service_tmpfs`（4）。警告（エラーではない、`Definition::warnings`、`gstn ci lint` は exit 0）: `service_user_root` |
 | ジョブの間（スキーマが正しいときだけ） | `needs_unknown`、`needs_duplicate`、`too_many_needs`（16）、`needs_later_stage`、`needs_cycle`（循環の上のジョブごと）、`secret_on_unprotected_ref`、`secret_protection_unknown`（保護の一覧を知らない手元の検査） |
 | 全体 | `too_many_problems`（100 件を超えた） |
-| 計画 | `needs_not_in_pipeline`（選ばれたジョブが、その契機で動かないジョブを `needs` に持つ）、`secret_on_unprotected_ref`（保護されていないブランチか MR で、シークレットを持つジョブが選ばれた） |
+| 計画 | `needs_not_in_pipeline`（選ばれたジョブが、その契機で動かないジョブを `needs` に持つ）、`secret_on_unprotected_ref`（保護されていないブランチか MR で、シークレットを持つジョブが選ばれた）、`eval_report_declared_twice`（計画 17 P17-2: 選ばれたジョブの 2 つ以上が成果物 `eval-report.json` を宣言した。`forge/ai-eval` が読む報告が決まらない） |
 
 **`secret_on_unprotected_ref`**: シークレットを持つジョブは `merge_requests: false` が要り、`branches` のどれもが保護されていること。
 `with_protected_branches` の一覧で判定する。パターンが覆われるのは、同じパターンが保護されているか、完全一致の名前が保護のパターンに合うときだけ

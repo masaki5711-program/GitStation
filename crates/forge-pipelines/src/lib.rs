@@ -340,16 +340,20 @@ impl Pipelines {
             SmallFile::Found(bytes) => (bytes, None),
         };
         let rules = forge_db::protected_refs::rules_for(&self.db, project).await?;
-        let planned = match unreadable {
-            Some(reason) => db::Planned::Invalid(vec![StoredProblem {
-                line: 0,
-                reason: reason.to_owned(),
-                subject: None,
-            }]),
+        let (planned, ai_eval_job) = match unreadable {
+            Some(reason) => (
+                db::Planned::Invalid(vec![StoredProblem {
+                    line: 0,
+                    reason: reason.to_owned(),
+                    subject: None,
+                }]),
+                None,
+            ),
             None => Self::plan(request, &bytes, &rules)?,
         };
         let copy_mark = self.marks.measure(repo.id, &request.sha).await;
         Ok(Ok(db::NewPipeline {
+            ai_eval_job,
             request: request.clone(), // clone: the row owns it
             request_id: request_id.to_string(),
             definition_hash: unreadable.is_none().then(|| db::definition_hash(&bytes)),
@@ -359,16 +363,18 @@ impl Pipelines {
         }))
     }
 
-    /// Lint and plan `bytes` for `request` (pure).
+    /// Lint and plan `bytes` for `request` (pure), with the planned job
+    /// that declares the AI evaluation report (plan 17 P17-2:
+    /// `forge_ci::EVAL_REPORT_PATH`), if any.
     fn plan(
         request: &PipelineRequest,
         bytes: &[u8],
         rules: &ProtectionRules,
-    ) -> Result<db::Planned, ForgeError> {
+    ) -> Result<(db::Planned, Option<String>), ForgeError> {
         let ctx = LintContext::with_protected_branches(branch_patterns(rules));
         let def = match forge_ci::check(bytes, &ctx) {
             Ok(def) => def,
-            Err(problems) => return Ok(db::Planned::Invalid(stored(&problems))),
+            Err(problems) => return Ok((db::Planned::Invalid(stored(&problems)), None)),
         };
         let branch = request
             .git_ref
@@ -386,8 +392,11 @@ impl Pipelines {
             protected: protected_push(request, rules),
         };
         match forge_ci::plan(&def, &trigger) {
-            Ok(plan) => Ok(db::Planned::Jobs(jobs_of(&plan)?)),
-            Err(problems) => Ok(db::Planned::Invalid(stored(&problems))),
+            Ok(plan) => Ok((
+                db::Planned::Jobs(jobs_of(&plan)?),
+                plan.eval_report_job().map(str::to_owned),
+            )),
+            Err(problems) => Ok((db::Planned::Invalid(stored(&problems)), None)),
         }
     }
 
@@ -444,6 +453,7 @@ impl Pipelines {
         cause: &ForgeError,
     ) -> Result<(), ForgeError> {
         let new = db::NewPipeline {
+            ai_eval_job: None,
             request: request.clone(), // clone: the row owns it
             request_id: request_id.to_string(),
             definition_hash: None,
@@ -748,6 +758,8 @@ pub mod artifacts;
 // M4 C5: the CI outputs (logs, diagnosis, fingerprints, ci/pipeline).
 pub mod fingerprint;
 pub mod outputs;
+// Plan 17 P17-2: the forge/ai-eval check from the bench's eval-report.json.
+pub mod ai_eval;
 
 #[cfg(test)]
 mod tests;

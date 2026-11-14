@@ -340,6 +340,7 @@ fn a_job(name: &str, needs: &[&str]) -> NewCiJob {
 
 fn new_pipeline(project: ProjectId, source: Source, planned: Planned) -> NewPipeline {
     NewPipeline {
+        ai_eval_job: None,
         request: PipelineRequest {
             project,
             git_ref: branch("main"),

@@ -141,6 +141,7 @@ mod tests {
         .await
         .expect("web");
         let mut new = NewPipeline {
+            ai_eval_job: None,
             request: PipelineRequest {
                 project: web.project_id,
                 git_ref: forge_core::RefName::parse("refs/heads/main").expect("ref"),

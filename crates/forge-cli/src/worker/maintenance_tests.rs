@@ -896,6 +896,7 @@ async fn a_maintenance_run_deletes_finished_pipelines_refs() {
     let live = create(
         &t.db,
         &NewPipeline {
+            ai_eval_job: None,
             request: PipelineRequest {
                 project,
                 git_ref: forge_core::RefName::parse("refs/heads/main").expect("ref"),
