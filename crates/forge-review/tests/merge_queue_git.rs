@@ -1415,3 +1415,74 @@ async fn a_person_who_dequeues_an_auto_merge_entry_holds_that_head() {
     );
     assert!(w.live_entry(&a).await.is_none());
 }
+
+/// C9 security review (HIGH 2): the landing decides forge/risk again for
+/// an auto-merge entry. A stop recorded after the enqueue (a new rule run, a
+/// late finding) keeps it out of the target: the entry leaves with
+/// FG-REVIEW-0026 and auto-merge shows the stop.
+#[tokio::test]
+async fn a_risk_stop_recorded_after_the_enqueue_never_lands() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.risk(&a, CheckConclusion::Success, "No risk found").await;
+    let auto = w.auto();
+    auto.tick().await.expect("tick");
+    assert!(w.live_entry(&a).await.is_some(), "queued while clear");
+    w.risk(
+        &a,
+        CheckConclusion::Failure,
+        "STOP: 1 stop, 0 warn.\n- stop sql_drop db/x.sql:3 [FG-REVIEW-0023]",
+    )
+    .await;
+    let worker = w.worker("w1");
+    let queue = w.queue_id().await;
+    for _ in 0..8 {
+        worker.tick().await.expect("tick");
+        w.finish_pipeline(queue, &BTreeSet::new()).await;
+    }
+    assert_eq!(w.state_of(&a).await, forge_core::MergeRequestState::Open);
+    assert!(!w.main_has("fa.txt"), "a stopped head never lands");
+    let entry = w.entry_of(&a).await;
+    assert_eq!(entry.state, EntryState::Removed);
+    assert_eq!(
+        entry.error_code.as_deref(),
+        Some(ErrorCode::AutoMergeStopped.id())
+    );
+    auto.tick().await.expect("tick");
+    let (state, class, _, detail) = w.auto_state(&a).await.expect("state");
+    assert_eq!(
+        (state.as_str(), class.as_deref(), detail.as_deref()),
+        ("stopped", Some("data_loss"), Some("sql_drop"))
+    );
+}
+
+/// C9 security review (HIGH 1): `neutral` with a part of the head not
+/// assessed (the content scan's bound) is `not_assessed`, never a warning.
+#[tokio::test]
+async fn a_partly_assessed_head_is_stopped_not_queued() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.risk(
+        &a,
+        CheckConclusion::Neutral,
+        "WARN: 0 stop, 1 warn.\n- warn content_not_scanned 61 file(s) [FG-REVIEW-0025]",
+    )
+    .await;
+    w.auto().tick().await.expect("tick");
+    let (state, class, reason, detail) = w.auto_state(&a).await.expect("state");
+    assert_eq!(
+        (
+            state.as_str(),
+            class.as_deref(),
+            reason.as_str(),
+            detail.as_deref()
+        ),
+        (
+            "stopped",
+            Some("not_assessed"),
+            "risk_stop",
+            Some("content_not_scanned")
+        )
+    );
+    assert!(w.live_entry(&a).await.is_none());
+}

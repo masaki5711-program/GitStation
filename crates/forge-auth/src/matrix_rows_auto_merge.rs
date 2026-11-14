@@ -106,10 +106,14 @@ const ENQUEUE: [Row; 11] = principal_rows!(A::MergeQueueEnqueue);
 const MERGE: [Row; 11] = principal_rows!(A::MergeRequestMerge);
 
 #[rustfmt::skip]
-const SETTINGS: [Row; 9] = [
+const SETTINGS: [Row; 12] = [
     row(A::AutoMergeSettingsManage, W::Owner, F::PrivateProject, Allow),
     row(A::AutoMergeSettingsManage, W::Admin, F::PrivateProject, Allow),
     row(A::AutoMergeSettingsManage, W::Maintainer, F::PrivateProject, deny(E::Forbidden)),
+    row(A::AutoMergeSettingsManage, W::Developer, F::PrivateProject, deny(E::Forbidden)),
+    row(A::AutoMergeSettingsManage, W::Reporter, F::PrivateProject, deny(E::Forbidden)),
+    // The auto-merge target is no resource for a person, the Owner included.
+    row(A::AutoMergeSettingsManage, W::Owner, FULL, deny(E::Forbidden)),
     row(A::AutoMergeSettingsManage, W::OwnerTokenApi, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::AutoMergeSettingsManage, W::AgentOwnerTokenApi, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::AutoMergeSettingsManage, W::NonMember, F::PrivateProject, deny(E::NotFound)),

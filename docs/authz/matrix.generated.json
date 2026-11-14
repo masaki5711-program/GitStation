@@ -96,7 +96,7 @@
   { "action": "MergeQueueDequeue", "allow": 5, "deny": 18, "public": false, "git_operation": false },
   { "action": "MergeQueuePause", "allow": 4, "deny": 15, "public": false, "git_operation": false },
   { "action": "MergeQueueManage", "allow": 3, "deny": 15, "public": false, "git_operation": false },
-  { "action": "AutoMergeSettingsManage", "allow": 2, "deny": 14, "public": false, "git_operation": false },
+  { "action": "AutoMergeSettingsManage", "allow": 2, "deny": 17, "public": false, "git_operation": false },
   { "action": "AutoMergeStopToggle", "allow": 4, "deny": 14, "public": false, "git_operation": false },
   { "action": "AutoMergeInstanceStopToggle", "allow": 2, "deny": 14, "public": false, "git_operation": false },
   { "action": "CiVariableManage", "allow": 6, "deny": 20, "public": false, "git_operation": false },

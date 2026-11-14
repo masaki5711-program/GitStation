@@ -174,6 +174,41 @@ pub fn stop_rules(summary: &str) -> Vec<&'static str> {
     found
 }
 
+/// The `warn` rules of `forge/risk` that mean part of the head was not
+/// assessed (`FG-REVIEW-0025`: no open merge request, the target missing,
+/// no common history, a path that is no UTF-8, files the content scan did
+/// not read, targets not assessed). A run naming one of them never shows the
+/// head safe, so auto-merge treats it as `not_assessed` (C9 security review).
+pub const NOT_ASSESSED_RULES: &[&str] = &[
+    "no_open_merge_request",
+    "target_missing",
+    "no_common_history",
+    "non_utf8_path",
+    "content_not_scanned",
+    "targets_not_assessed",
+];
+
+/// The `warn` rules a `forge/risk` run's summary names (its `- warn
+/// <rule>` lines), known rules only, each once, in summary order.
+pub fn warn_rules(summary: &str) -> Vec<&'static str> {
+    let mut found: Vec<&'static str> = Vec::new();
+    for line in summary.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("- warn ") else {
+            continue;
+        };
+        let word = rest.split_whitespace().next().unwrap_or("");
+        if let Some(rule) = RULES
+            .iter()
+            .find(|r| r.id == word && r.level == RiskLevel::Warn)
+        {
+            if !found.contains(&rule.id) {
+                found.push(rule.id);
+            }
+        }
+    }
+    found
+}
+
 /// What a risk layer says about a head.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RiskVerdict {
@@ -190,7 +225,9 @@ pub enum RiskVerdict {
 
 /// The deterministic layer (`forge/risk`, plan 04 M-6 layer 1) from its run
 /// on the head and the run's summary: `success` clear, `neutral` clear with
-/// a warning, `failure` a stop of the worst class its rules name
+/// a warning only when the summary names known `warn` rules and none of
+/// [`NOT_ASSESSED_RULES`] (a partly assessed head, or a `neutral` whose
+/// rules cannot be read, is `not_assessed`: C9 security review), `failure` a stop of the worst class its rules name
 /// (`not_assessed` when it names none forge knows), `error` /
 /// `action_required` `not_assessed`.
 pub fn deterministic_layer(run: Option<CheckRun>, summary: Option<&str>) -> RiskVerdict {
@@ -203,7 +240,21 @@ pub fn deterministic_layer(run: Option<CheckRun>, summary: Option<&str>) -> Risk
     match run.conclusion {
         None => RiskVerdict::Pending,
         Some(CheckConclusion::Success) => RiskVerdict::Clear { warned: false },
-        Some(CheckConclusion::Neutral) => RiskVerdict::Clear { warned: true },
+        Some(CheckConclusion::Neutral) => {
+            let warns = summary.map(warn_rules).unwrap_or_default();
+            let partial = warns.iter().find(|r| NOT_ASSESSED_RULES.contains(r));
+            match (warns.is_empty(), partial) {
+                (false, None) => RiskVerdict::Clear { warned: true },
+                (_, Some(rule)) => RiskVerdict::Stop {
+                    class: StopClass::NotAssessed,
+                    rule: Some(rule),
+                },
+                (true, None) => RiskVerdict::Stop {
+                    class: StopClass::NotAssessed,
+                    rule: None,
+                },
+            }
+        }
         Some(CheckConclusion::Error | CheckConclusion::ActionRequired) => RiskVerdict::Stop {
             class: StopClass::NotAssessed,
             rule: None,

@@ -24,6 +24,7 @@
 
 use std::time::Duration;
 
+use forge_auth::Action;
 use forge_core::merge_queue::{bisected_limit, BatchState, EntryState, Isolation, MAX_REAPS};
 use forge_core::{
     telemetry, CheckConclusion, CheckName, CheckRun, MergeMethod, MergeRequestState, MergeState,
@@ -297,14 +298,30 @@ impl MergeQueue {
                 let auto =
                     forge_db::review::auto_merge::settings(&self.merger.db, entry.project_id)
                         .await?;
-                if !auto.mode.acts() {
-                    self.drop_queued(entry, "auto_merge_off", ErrorCode::MergeQueueEntryRefused)
-                        .await?;
-                    removed = true;
-                    continue;
-                }
-                if auto.stop().is_some() {
-                    continue;
+                let decided =
+                    super::auto_proof(&self.merger.db, mr, &auto, Action::MergeRequestMerge).await;
+                if let Err(e) = decided {
+                    match super::auto_merge_paused(&e) {
+                        // The emergency stop holds it: it stays queued.
+                        Some("auto_merge_stopped") => continue,
+                        Some(_) => {
+                            self.drop_queued(
+                                entry,
+                                "auto_merge_off",
+                                ErrorCode::MergeQueueEntryRefused,
+                            )
+                            .await?;
+                            removed = true;
+                            continue;
+                        }
+                        None if is_refusal(&e) => {
+                            let reason = reason_of(&e);
+                            self.drop_queued(entry, &reason, e.code()).await?;
+                            removed = true;
+                            continue;
+                        }
+                        None => return Err(e),
+                    }
                 }
             }
             let isolate = self.isolation(entry, repo, &base).await?;
@@ -423,10 +440,11 @@ impl MergeQueue {
         let risk = CheckName::parse(forge_core::checks::RISK_CHECK).map_err(|_| {
             ForgeError::new(ErrorCode::Internal).with_context("reason", "risk_check_name")
         })?;
-        if runs
-            .run(&entry.head_sha, &risk)
-            .is_some_and(|r| r.conclusion == Some(CheckConclusion::Failure))
-        {
+        // C9 review: a head forge/risk did not clear (a stop, an error, a
+        // warning or a partial assessment) runs alone too.
+        if runs.run(&entry.head_sha, &risk).is_some_and(|r| {
+            r.conclusion.is_some() && r.conclusion != Some(CheckConclusion::Success)
+        }) {
             return Ok(Some(Isolation::RiskStop));
         }
         let git = &self.merger.git;

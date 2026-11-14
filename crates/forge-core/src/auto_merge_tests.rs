@@ -130,7 +130,13 @@ fn each_stop_class_stops_auto_merge() {
 #[test]
 fn a_warning_does_not_stop_auto_merge() {
     let facts = Facts {
-        risk: deterministic_layer(run(CheckConclusion::Neutral), Some("WARN")),
+        risk: deterministic_layer(
+            run(CheckConclusion::Neutral),
+            Some(
+                "WARN: 0 stop, 1 warn.
+- warn dependency_change Cargo.toml [FG-REVIEW-0024]",
+            ),
+        ),
         ..clear_facts()
     };
     assert_eq!(decide(&facts), Verdict::Enqueue { warned: true });
@@ -342,5 +348,40 @@ fn the_audit_values_name_scope_and_modes() {
     assert_eq!(stop.project(), None);
     for class in StopClass::ALL {
         assert_eq!(StopClass::parse(class.as_str()), Some(class));
+    }
+}
+
+/// C9 security review: `neutral` also means "part of the head was not
+/// assessed" (the content scan reads at most 60 files of 256 KiB). Such a
+/// head, or a neutral run whose rules cannot be read, is never clear.
+#[test]
+fn a_partly_assessed_head_is_not_assessed_never_a_warning() {
+    let partial = "WARN: 0 stop, 2 warn.
+- warn dependency_change Cargo.toml
+- warn content_not_scanned 61 file(s)";
+    assert_eq!(
+        deterministic_layer(run(CheckConclusion::Neutral), Some(partial)),
+        RiskVerdict::Stop {
+            class: StopClass::NotAssessed,
+            rule: Some("content_not_scanned")
+        }
+    );
+    for unreadable in [None, Some("WARN"), Some("- warn invented_rule x")] {
+        assert_eq!(
+            deterministic_layer(run(CheckConclusion::Neutral), unreadable),
+            RiskVerdict::Stop {
+                class: StopClass::NotAssessed,
+                rule: None
+            },
+            "{unreadable:?}"
+        );
+    }
+    for rule in NOT_ASSESSED_RULES {
+        assert!(
+            RULES
+                .iter()
+                .any(|r| r.id == *rule && r.level == RiskLevel::Warn),
+            "{rule} is a warn rule of forge/risk"
+        );
     }
 }

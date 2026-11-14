@@ -1347,3 +1347,17 @@ pub enum SyncTrigger { Schedule, KanflowNotification }
   作成者の名前で記録し、主体は資格情報の種類（`auto_merge`）で区別する。
 - **MR 自身のパイプラインが緑になるまで待ってからキューに入れる**: 採らない。キューは前に並ぶ MR を含めたマージ結果で試すので、
   同じ試験を 2 回回すことになる。赤が分かっていれば先に止める（`pipeline_failed`）。
+
+### F. C9 のレビューで変えた点（2026-11-14、security-reviewer + authz-matrix-auditor）
+
+- **`forge/risk` の `neutral` は、`warn` の規則だけを名指しするときだけ「警告付きで進む」**。`content_not_scanned` など、変更の一部を確かめられなかった
+  規則（`forge_core::auto_merge::NOT_ASSESSED_RULES`）を含むとき、または規則を読めないときは `not_assessed` の停止。
+- **着地でも危険を判定し直す**: 自動マージのエントリーは、着地の判定（`decide_queued`）の中で、その head の `forge/risk` をゲートの
+  トランザクションで読み直す。キューに入れた後に `stop` になったものは着地せず、`FG-REVIEW-0026` で列から外れる。
+  キューの「1 本で走る」も、`forge/risk` が `success` でない head（`failure`・`error`・`neutral`）に広げた。
+- **git を読む前に決める**: 自動マージの worker は、リポジトリの中身（変更されたパス、マージの状態）を読む前に `authorize(MergeQueueEnqueue)`
+  を `Resource::AutoMerge` で決める（`auto_proof`）。キューの組み立ても、自動マージのエントリーを同じ判定で通す（手で方式・停止を見ない）。
+- **作成者の役割**: 自動マージはその MR の作成者のためにマージするので、作成者がプロジェクトの Developer 以上でなければキューに入れず、着地もしない
+  （`reason=author_role`）。
+- **残すこと（M4 の締めで扱う）**: `forge/risk` は head とマージ基点の差分で判定し、キューで前に並ぶ MR を含めたマージ結果の差分では判定しない
+  （前に並ぶ MR もそれぞれ判定され、組み合わせはキューのパイプラインが試す）。インスタンスの許可 `merge.allow_full_auto` も M4 の締めの項目。

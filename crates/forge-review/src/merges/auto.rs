@@ -254,11 +254,39 @@ impl AutoMerger {
                 id: target.repository,
                 state: RepositoryState::Ready,
             };
+            // C9 review: decided before anything of the repository is read
+            // (the mode, the stop, the project and the author's role).
+            let proof = match super::queue::auto_proof(
+                db,
+                &mr,
+                &settings,
+                forge_auth::Action::MergeQueueEnqueue,
+            )
+            .await
+            {
+                Ok(proof) => proof,
+                Err(e) if e.code() == ErrorCode::PendingDeletion => {
+                    db::forget(db, mr.id).await?;
+                    return Ok(Verdict::Inactive);
+                }
+                Err(e) if super::execute::is_refusal(&e) => {
+                    let verdict = Verdict::Waiting {
+                        reason: waiting_reason(&e),
+                    };
+                    self.record(&mr, &head, &verdict, request_id).await?;
+                    return Ok(verdict);
+                }
+                Err(e) => return Err(e),
+            };
             self.read_facts(&mut facts, &mr, &head, repo, request_id)
                 .await?;
             match decide(&facts) {
                 Verdict::Enqueue { warned } => {
-                    match self.review.enqueue_auto(request_id, repo, &mr, &head).await {
+                    match self
+                        .review
+                        .enqueue_auto(request_id, &proof, repo, (&mr, &head))
+                        .await
+                    {
                         Ok(_) => Verdict::Enqueue { warned },
                         // Decided again under the locks: what changed is a
                         // wait (a stop here would be a defect upstream).
@@ -470,6 +498,9 @@ fn waiting_reason(e: &ForgeError) -> &'static str {
         (ErrorCode::MergeBlocked, "mergeability_unknown") => "mergeability_unknown",
         (ErrorCode::MergeBlocked, _) => "merge_blocked",
         (ErrorCode::Forbidden, "auto_merge_emergency_stop") => "emergency_stop",
+        (ErrorCode::Forbidden, "author_role") => "author_role",
+        (ErrorCode::AccountDisabled, _) => "author_disabled",
+        (ErrorCode::AutoMergeStopped, _) => "risk_changed",
         _ => "refused",
     }
 }
