@@ -36,10 +36,11 @@ struct Entry {
 
 // M3 R1a (ADR-0024, plan 11 §11.4): REVIEW for merge requests.
 // M3 I1a (plan 11 §11.4, 02 §9): INT for the kanflow integration.
+// Plan 16 A1 (ADR-0032): AGENT for agent parts, the marketplace and the builder.
 // Plan 17 P17-2 (ADR-0034): AIASSET for the PFS AI assets.
-const AREAS: [&str; 13] = [
+const AREAS: [&str; 14] = [
     "AUTH", "GIT", "REPO", "DB", "CI", "DEPLOY", "DOC", "WEB", "SYS", "CLI", "REVIEW", "INT",
-    "AIASSET",
+    "AGENT", "AIASSET",
 ];
 
 fn main() {

@@ -7,6 +7,7 @@ pub mod ai_eval;
 pub mod approval;
 pub mod audit_details;
 pub mod authenticator;
+pub mod auto_merge;
 pub mod checks;
 pub mod config;
 pub mod cursor;
