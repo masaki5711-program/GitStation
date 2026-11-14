@@ -510,6 +510,7 @@ fn setup(fake: &Arc<Fake>) -> Setup {
                 "https://forge.test/api/v1/runner/jobs/{job}/repo.git"
             ))
         }),
+        gpu_eval: None,
     };
     Setup {
         _dir: dir,
@@ -1354,6 +1355,144 @@ fn a_service_image_outside_the_allowed_registries_is_refused() {
     assert!(s.exec.workspace.is_clean());
 }
 
+// ── the GPU runner (plan 17 P17-1) ──────────────────────────────────────
+
+fn ollama_image() -> String {
+    format!("registry.internal/ollama@sha256:{}", "d".repeat(64))
+}
+
+/// [`definition`] tagged `gpu-eval` with a GPU service `ollama` and a plain
+/// service `db`.
+fn gpu_definition() -> String {
+    format!(
+        "{}    tags: [gpu-eval]\n    services:\n      - name: ollama\n        image: {}\n        gpu: true\n      - name: db\n        image: {}\n",
+        definition("./bench.sh"),
+        ollama_image(),
+        pg_image()
+    )
+}
+
+/// A model store of one file and its manifest, under `dir`; the runner's
+/// own files allowed (a temporary directory is the test user's).
+fn model_store(dir: &std::path::Path) -> crate::gpu::ModelStore {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("model.bin"), b"weights").unwrap();
+    let manifest = format!("{}  model.bin\n", hash("weights"));
+    std::fs::write(dir.join(crate::gpu::MANIFEST), &manifest).unwrap();
+    crate::gpu::ModelStore {
+        refuse_own_files: false,
+        ..crate::gpu::ModelStore::new(dir.to_path_buf(), "/models".to_owned(), hash(&manifest))
+    }
+}
+
+fn gpu_setup(fake: &Arc<Fake>, store: &std::path::Path) -> Setup {
+    let mut s = setup(fake);
+    s.exec.gpu_eval = Some(crate::gpu::GpuEval {
+        devices: vec!["nvidia.com/gpu=all".to_owned()],
+        model_store: Some(model_store(store)),
+    });
+    s
+}
+
+/// FG-CI-0026: a service asks for the GPU on a runner whose host has none
+/// (not the `gpu-eval` runner): the job fails before any container, pod or
+/// checkout — never a run without it.
+#[test]
+fn gpu_denied_on_untagged_runner() {
+    let def = gpu_definition();
+    let fake = fake_with(&def, Podman::Exit(0), ServiceFails::No);
+    let s = setup(&fake);
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
+    assert_eq!(out.result, JobResult::Failed);
+    let err = out.error.expect("refused");
+    assert_eq!(err.code(), ErrorCode::GpuUnavailable);
+    assert!(has_context(&err, "reason", "runner_without_gpu"), "{err:?}");
+    assert!(podman_order(&fake).is_empty(), "{:?}", fake.calls());
+    assert!(fake.by("git", "checkout").is_empty());
+    assert!(s.exec.workspace.is_clean());
+    // The same runner runs a job whose services do not ask, as before.
+    let plain = definition_with_db("make", &pg_image());
+    let fake = fake_with(&plain, Podman::Exit(0), ServiceFails::No);
+    let s = setup(&fake);
+    let out = run(&s, &claim(8, "fgj_8_secret", &plain), &Forge::default());
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+}
+
+/// On the GPU runner only the service that asked gets the CDI device and
+/// the read-only model store; the job's container and the other service get
+/// neither, and the pod keeps `--network=none`.
+#[test]
+fn job_container_has_no_gpu() {
+    let def = gpu_definition();
+    let fake = fake_with(&def, Podman::Exit(0), ServiceFails::No);
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("models");
+    let s = gpu_setup(&fake, &store);
+    let forge = Forge::default();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert_eq!(
+        podman_order(&fake),
+        [
+            "pod create",
+            "create",
+            "start",
+            "create",
+            "start",
+            "create",
+            "start",
+            "rm",
+            "pod rm"
+        ]
+    );
+    assert!(fake.by("podman", "pod create")[0]
+        .argv()
+        .iter()
+        .any(|a| a == "--network=none"));
+    let creates = fake.by("podman", "create");
+    let (ollama, db, job) = (creates[0].argv(), creates[1].argv(), creates[2].argv());
+    assert!(ollama
+        .iter()
+        .any(|a| a == "--name=forge-job-7-1-svc-ollama"));
+    let volume = format!(
+        "--volume={}:/models:ro,nosuid,nodev,noexec",
+        store.to_string_lossy()
+    );
+    for flag in ["--device=nvidia.com/gpu=all", volume.as_str()] {
+        assert!(ollama.iter().any(|a| a == flag), "{flag}: {ollama:?}");
+    }
+    for argv in [&db, &job] {
+        assert!(
+            argv.iter().all(|a| !a.starts_with("--device")
+                && !a.contains(":/models")
+                && !a.starts_with("--network")),
+            "{argv:?}"
+        );
+    }
+    assert!(job.iter().any(|a| a == "--pod=forge-job-7-1"), "{job:?}");
+    assert!(job.iter().any(|a| a == "--entrypoint=/bin/sh"), "{job:?}");
+    let log = forge.logs.lock().unwrap().concat();
+    assert!(log.contains("model store verified: 1 file(s)"), "{log}");
+}
+
+/// FG-CI-0027: a model store that differs from its digests fails the job
+/// before any pod or container (the service never sees it).
+#[test]
+fn a_changed_model_store_fails_the_job_before_any_container() {
+    let def = gpu_definition();
+    let fake = fake_with(&def, Podman::Exit(0), ServiceFails::No);
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("models");
+    let s = gpu_setup(&fake, &store);
+    std::fs::write(store.join("model.bin"), b"poisoned").unwrap();
+    let out = run(&s, &claim(7, "fgj_7_secret", &def), &Forge::default());
+    let err = out.error.expect("refused");
+    assert_eq!(err.code(), ErrorCode::ModelStoreUnverified);
+    assert!(has_context(&err, "reason", "file_digest"), "{err:?}");
+    assert!(podman_order(&fake).is_empty(), "{:?}", fake.calls());
+    assert!(s.exec.workspace.is_clean());
+}
+
 /// A shutdown during a job with services: the job container killed and
 /// removed, then its pod.
 #[test]
@@ -1455,6 +1594,7 @@ fn a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks() {
             env: &env,
             user: Some("999:999"),
             tmpfs: &tmpfs,
+            gpu: None,
         }));
         if !ran.ok() {
             return Err(format!("service create: {ran:?}"));

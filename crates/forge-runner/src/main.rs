@@ -20,6 +20,10 @@ use forge_runner::process::{ProcessRunner, SystemRunner};
 use forge_runner::runner::{Runner, HEARTBEAT_EVERY};
 use forge_runner::workspace::Workspace;
 
+/// How long the start-up verification of a GPU runner's model store may
+/// take (every file's sha256; FG-CI-0027 past it).
+const STARTUP_STORE_CHECK: Duration = Duration::from_secs(3600);
+
 #[derive(Parser)]
 #[command(name = "forge-runner", version, about = "GitStation CI runner")]
 struct Cli {
@@ -137,11 +141,27 @@ fn start(cli: &Cli) -> Result<(), ForgeError> {
             git_limits: GitLimits::default(),
             work_dir_max_bytes: cfg.work_dir_max_bytes,
             fetch_url: Box::new(move |job| fetch_cfg.fetch_url(job)),
+            gpu_eval: cfg.gpu_eval.clone(), // clone: the executor owns its copy
         },
         heartbeat_every: HEARTBEAT_EVERY,
         shutdown: Arc::new(AtomicBool::new(false)),
     };
     runner.exec.check_isolation()?;
+    // Plan 17 P17-1: a GPU runner's model store is verified at the start
+    // too (and again before every job that gets it).
+    if let Some(store) = cfg.gpu_eval.as_ref().and_then(|g| g.model_store.as_ref()) {
+        let deadline = std::time::Instant::now() + STARTUP_STORE_CHECK;
+        match store.verify(deadline, &AtomicBool::new(false))? {
+            forge_runner::gpu::Verified::Ok { files, bytes } => {
+                tracing::info!(target: "forge_runner", event = "forge.runner.model_store_verified", files, bytes, "model store verified");
+            }
+            forge_runner::gpu::Verified::Stopped | forge_runner::gpu::Verified::TimedOut => {
+                return Err(ForgeError::new(ErrorCode::ModelStoreUnverified)
+                    .with_context("reason", "deadline")
+                    .with_context("timeout_ms", STARTUP_STORE_CHECK.as_millis()));
+            }
+        }
+    }
     if matches!(cli.command, Some(Command::Check)) {
         println!("ok: configuration, token, rootless podman, job isolation");
         return Ok(());

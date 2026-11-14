@@ -27,6 +27,11 @@
 //!    script does). When the job fails, the last 50 lines of each
 //!    service's log are appended to the job log (`[service <name>]`,
 //!    masked like the job's output);
+//!    Plan 17 P17-1: a service with `gpu: true` (in a job tagged
+//!    `gpu-eval`) gets the runner host's `[gpu_eval]` CDI devices and its
+//!    model store read-only — verified by digest first (`FG-CI-0027`); on a
+//!    runner without `[gpu_eval]` the job fails before any container
+//!    (`FG-CI-0026`). The job's own container never gets either;
 //! 7. always: the container removed, the pod removed (`pod rm --force`),
 //!    the job directory removed.
 //!
@@ -46,6 +51,7 @@ use sha2::{Digest, Sha256};
 
 use crate::api::{ClaimedJob, JobResult, RunnerApi};
 use crate::git::GitPlan;
+use crate::gpu::{GpuEval, Verified};
 use crate::logsink::LogSink;
 use crate::podman::{
     container_name, service_container_name, valid_image, Container, PodmanPlan, ServiceContainer,
@@ -99,6 +105,9 @@ pub struct Executor {
     pub work_dir_max_bytes: Option<u64>,
     /// `job_id` → the job's fetch URL (the runner's configured server).
     pub fetch_url: Box<dyn Fn(i64) -> Result<String, ForgeError> + Send + Sync>,
+    /// Plan 17 P17-1: the runner host's GPU and model store (`None`: no
+    /// GPU here; a service that asks for it fails the job, FG-CI-0026).
+    pub gpu_eval: Option<GpuEval>,
 }
 
 /// How a script run ended.
@@ -478,6 +487,23 @@ impl Executor {
                     .with_context("service", s.name().to_owned()));
             }
         }
+        // Plan 17 P17-1: the GPU only for a service that asks, of a job
+        // tagged `gpu-eval` (the lint refuses it otherwise), on a runner whose
+        // host has it — decided before any container.
+        let gpu = if spec.services().iter().any(forge_ci::Service::gpu) {
+            if !spec.tags().iter().any(|t| t == forge_ci::GPU_EVAL_TAG) {
+                return Err(mismatch("gpu_without_tag"));
+            }
+            match &self.gpu_eval {
+                Some(gpu) => Some(gpu),
+                None => {
+                    return Err(ForgeError::new(ErrorCode::GpuUnavailable)
+                        .with_context("reason", "runner_without_gpu"))
+                }
+            }
+        } else {
+            None
+        };
         // 5. Checkout and the script.
         self.git_step(
             "checkout",
@@ -513,13 +539,34 @@ impl Executor {
         // (part of each create), the services and the script share the
         // job's timeout.
         let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_s));
+        // Plan 17 P17-1: the model store is what its digests say, before a
+        // service gets it (within the job's time).
+        if let Some(store) = gpu.and_then(|g| g.model_store.as_ref()) {
+            sink.line("verifying the model store (sha256 of every file)");
+            match store.verify(deadline, stop)? {
+                Verified::Ok { files, bytes } => {
+                    sink.line(&format!(
+                        "model store verified: {files} file(s), {bytes} bytes"
+                    ));
+                }
+                Verified::Stopped => return Ok(ScriptEnd::Stopped),
+                Verified::TimedOut => return Err(timed_out(timeout_s)),
+            }
+        }
         // 6a. The pod and its services.
         let pod = if spec.services().is_empty() {
             None
         } else {
-            if let Some(end) =
-                self.start_services(job, name, spec, (deadline, timeout_s), started, stop, sink)?
-            {
+            if let Some(end) = self.start_services(
+                job,
+                name,
+                spec,
+                gpu,
+                (deadline, timeout_s),
+                started,
+                stop,
+                sink,
+            )? {
                 return Ok(end);
             }
             Some(name)
@@ -704,6 +751,7 @@ impl Executor {
         job: &ClaimedJob,
         pod: &str,
         spec: &forge_ci::Job,
+        gpu: Option<&GpuEval>,
         (deadline, timeout_s): (Instant, u32),
         started: &mut Started,
         stop: &AtomicBool,
@@ -727,7 +775,12 @@ impl Executor {
         }
         for s in spec.services() {
             let container = service_container_name(job.job_id, job.attempt, s.name());
-            sink.line(&format!("starting service {} ({})", s.name(), s.image()));
+            sink.line(&format!(
+                "starting service {} ({}){}",
+                s.name(),
+                s.image(),
+                if s.gpu() { " with the GPU" } else { "" }
+            ));
             let failed = |reason: &'static str, step: &'static str| {
                 service_failed(reason)
                     .with_context("service", s.name().to_owned())
@@ -740,6 +793,8 @@ impl Executor {
                 env: s.env(),
                 user: s.user(),
                 tmpfs: s.tmpfs(),
+                // Only the service that asked; `gpu` is `Some` only then.
+                gpu: if s.gpu() { gpu } else { None },
             });
             for (step, cmd) in [
                 ("create", create),

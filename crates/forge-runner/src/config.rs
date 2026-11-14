@@ -19,6 +19,14 @@
 //! # file_size_limit = "4g"   # --ulimit=fsize
 //! # nofile_limit = 4096      # --ulimit=nofile
 //! # work_dir_max_bytes = 21474836480  # checked when the job ends (FG-CI-0012)
+//!
+//! # Only on the runner tagged `gpu-eval` (plan 17 P17-1, `crate::gpu`):
+//! # [gpu_eval]
+//! # devices = ["nvidia.com/gpu=all"]     # CDI names only
+//! # [gpu_eval.model_store]
+//! # path = "/srv/forge-models"           # not the runner's, not writable
+//! # target = "/models"                   # in the service container
+//! # manifest_sha256 = "<64 hex>"         # sha256 of <path>/forge-models.sha256
 //! ```
 //!
 //! Every problem is `FG-SYS-0002 ConfigInvalid` with `config_key` and
@@ -30,6 +38,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use serde::Deserialize;
 use url::Url;
 
+use crate::gpu::{GpuEval, ModelStore, MAX_DEVICES};
 use crate::podman::Limits;
 
 /// The environment variable that may carry the runner's token.
@@ -64,6 +73,25 @@ struct Raw {
     nofile_limit: Option<u32>,
     #[serde(default)]
     work_dir_max_bytes: Option<u64>,
+    #[serde(default)]
+    gpu_eval: Option<RawGpuEval>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGpuEval {
+    #[serde(default)]
+    devices: Vec<String>,
+    #[serde(default)]
+    model_store: Option<RawModelStore>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawModelStore {
+    path: PathBuf,
+    target: String,
+    manifest_sha256: String,
 }
 
 /// A checked configuration.
@@ -82,6 +110,10 @@ pub struct RunnerConfig {
     /// The job's work directory's bound, checked when its container ends
     /// (FG-CI-0012); the filesystem quota is the bound while it runs.
     pub work_dir_max_bytes: Option<u64>,
+    /// Plan 17 P17-1: the GPU and the model store a service of a
+    /// `gpu-eval` job may get (`None`: this runner has no GPU; a service
+    /// that asks fails with FG-CI-0026).
+    pub gpu_eval: Option<GpuEval>,
 }
 
 fn invalid(key: &'static str, reason: &'static str) -> ForgeError {
@@ -137,6 +169,57 @@ fn valid_registry_prefix(prefix: &str) -> bool {
         && path
             .split('/')
             .all(|c| !c.is_empty() && c.bytes().any(|b| b != b'.'))
+}
+
+/// `[gpu_eval]`: CDI names only; the store an absolute host path outside
+/// the work directory without a mount separator, a plain container path,
+/// and a sha256.
+fn gpu_eval(raw: RawGpuEval, work_dir: &Path) -> Result<GpuEval, ForgeError> {
+    if raw.devices.is_empty() {
+        return Err(invalid("gpu_eval.devices", "missing"));
+    }
+    if raw.devices.len() > MAX_DEVICES {
+        return Err(invalid("gpu_eval.devices", "too_many"));
+    }
+    if !raw.devices.iter().all(|d| crate::gpu::valid_cdi_device(d)) {
+        return Err(invalid("gpu_eval.devices", "not_a_cdi_device"));
+    }
+    let model_store = match raw.model_store {
+        None => None,
+        Some(m) => {
+            if !m.path.is_absolute() {
+                return Err(invalid("gpu_eval.model_store.path", "not_absolute"));
+            }
+            if has_mount_separator(&m.path) {
+                return Err(invalid("gpu_eval.model_store.path", "mount_separator"));
+            }
+            if m.path.starts_with(work_dir) || work_dir.starts_with(&m.path) {
+                return Err(invalid("gpu_eval.model_store.path", "overlaps_work_dir"));
+            }
+            if !crate::gpu::valid_target(&m.target) {
+                return Err(invalid(
+                    "gpu_eval.model_store.target",
+                    "not_a_container_path",
+                ));
+            }
+            if m.manifest_sha256.len() != 64
+                || !m
+                    .manifest_sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(invalid(
+                    "gpu_eval.model_store.manifest_sha256",
+                    "not_a_sha256",
+                ));
+            }
+            Some(ModelStore::new(m.path, m.target, m.manifest_sha256))
+        }
+    };
+    Ok(GpuEval {
+        devices: raw.devices,
+        model_store,
+    })
 }
 
 impl RunnerConfig {
@@ -197,6 +280,10 @@ impl RunnerConfig {
         {
             return Err(invalid("image_registries", "not_a_prefix"));
         }
+        let gpu_eval = match raw.gpu_eval {
+            None => None,
+            Some(g) => Some(gpu_eval(g, &raw.work_dir)?),
+        };
         Ok(Self {
             server,
             token_file: raw.token_file,
@@ -207,6 +294,7 @@ impl RunnerConfig {
             podman: raw.podman.unwrap_or_else(|| PathBuf::from("podman")),
             limits,
             work_dir_max_bytes: raw.work_dir_max_bytes,
+            gpu_eval,
         })
     }
 
@@ -375,6 +463,88 @@ mod tests {
             "{REG}server = \"https://x\"\nwork_dir = \"{work}/forge-runner_1.d\""
         ))
         .expect("a plain path");
+    }
+
+    /// Plan 17 P17-1: `[gpu_eval]` names CDI devices and a model store the
+    /// configuration checked; a runner without it has no GPU.
+    #[test]
+    fn the_gpu_runner_configuration_is_checked() {
+        let (work, store) = if cfg!(windows) {
+            ("C:/r", "C:/models")
+        } else {
+            ("/var/lib/forge-runner", "/srv/forge-models")
+        };
+        let base = format!("{REG}server = \"https://x\"\nwork_dir = \"{work}\"\n");
+        assert!(RunnerConfig::parse(&base)
+            .expect("plain")
+            .gpu_eval
+            .is_none());
+        let hex = "b".repeat(64);
+        let good = format!(
+            "{base}[gpu_eval]\ndevices = [\"nvidia.com/gpu=all\"]\n[gpu_eval.model_store]\npath = \"{store}\"\ntarget = \"/models\"\nmanifest_sha256 = \"{hex}\"\n"
+        );
+        let gpu = RunnerConfig::parse(&good)
+            .expect("gpu")
+            .gpu_eval
+            .expect("gpu");
+        assert_eq!(gpu.devices, ["nvidia.com/gpu=all"]);
+        let ms = gpu.model_store.expect("store");
+        assert_eq!(ms.target, "/models");
+        assert!(ms.refuse_own_files);
+        let path = format!("path = \"{store}\"");
+        for (text, key, want) in [
+            (
+                format!("{base}[gpu_eval]\ndevices = []\n"),
+                "gpu_eval.devices",
+                "missing",
+            ),
+            (
+                format!("{base}[gpu_eval]\ndevices = [\"/dev/nvidia0\"]\n"),
+                "gpu_eval.devices",
+                "not_a_cdi_device",
+            ),
+            (
+                good.replace(&path, "path = \"models\""),
+                "gpu_eval.model_store.path",
+                "not_absolute",
+            ),
+            (
+                good.replace(&path, &format!("path = \"{work}/m\"")),
+                "gpu_eval.model_store.path",
+                "overlaps_work_dir",
+            ),
+            (
+                good.replace(&path, &format!("path = \"{store}/a,rw\"")),
+                "gpu_eval.model_store.path",
+                "mount_separator",
+            ),
+            (
+                good.replace("target = \"/models\"", "target = \"/workspace\""),
+                "gpu_eval.model_store.target",
+                "not_a_container_path",
+            ),
+            (
+                good.replace(&hex, "latest"),
+                "gpu_eval.model_store.manifest_sha256",
+                "not_a_sha256",
+            ),
+        ] {
+            let err = RunnerConfig::parse(&text).expect_err(&text);
+            assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+            assert_eq!(reason(&err), want, "{text}");
+            assert!(
+                err.context()
+                    .iter()
+                    .any(|(k, v)| *k == "config_key" && v == key),
+                "{text}"
+            );
+        }
+        // An unknown key (a host path for the job, say) is refused.
+        let err = RunnerConfig::parse(&format!(
+            "{base}[gpu_eval]\ndevices = [\"nvidia.com/gpu=all\"]\njob_volumes = [\"/srv\"]\n"
+        ))
+        .expect_err("unknown");
+        assert_eq!(reason(&err), "unparsable");
     }
 
     /// M4 C4 review: plain http only when asked for explicitly.
