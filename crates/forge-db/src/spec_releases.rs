@@ -10,8 +10,11 @@
 //!   with git that the tag's commit is on the default branch and holds the
 //!   repository's own specification directory, then [`record_release`]:
 //!   one audit row (`spec.released`, actor `system`) and the event, in one
-//!   transaction, deduplicated by `spec_released:<project>:<commit>:<tag
-//!   hash>` (a retried job writes nothing twice).
+//!   transaction, deduplicated by `spec_released:<project>:<tag hash>`: a
+//!   version is released **once** — a retried job, or the tag deleted and
+//!   pushed again at another commit, records nothing (M4 C12 review).
+//! - [`pusher_is_person`]: the release needs a person's push (not a
+//!   service account, a bot, nor a person's agent token, M4 C12 review).
 
 use forge_core::dedup_key::DedupPart;
 use forge_core::pipeline::PipelineChange;
@@ -46,8 +49,10 @@ pub struct PublishRequest {
     /// What the tag pointed at in the push (a commit, or an annotated tag
     /// object: the job peels it).
     pub object: ObjectId,
-    /// The pusher (a person's or a service account's push).
+    /// The pusher when the push was a user's (never a service account's).
     pub released_by: Option<UserId>,
+    /// The push's request id (the job checks which credential pushed).
+    pub push_request_id: Option<String>,
 }
 
 fn invalid_job(reason: &'static str) -> ForgeError {
@@ -80,6 +85,7 @@ pub fn publish_job(
             "tag": request.tag.as_str(),
             "object": request.object.as_str(),
             "released_by": request.released_by.map(UserId::get),
+            "push_request_id": request.push_request_id,
         }),
         max_attempts: MaxAttempts::DEFAULT,
         timeout: JobTimeout::new(SPEC_PUBLISH_TIMEOUT).ok_or_else(|| invalid_job("job_timeout"))?,
@@ -115,12 +121,49 @@ pub fn publish_payload(payload: &serde_json::Value) -> Result<PublishRequest, Fo
             v.as_i64().filter(|id| *id > 0).ok_or_else(bad)?,
         )),
     };
+    let push_request_id = match payload.get("push_request_id") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => Some(
+            v.as_str()
+                .filter(|s| !s.is_empty() && s.len() <= 128)
+                .ok_or_else(bad)?
+                .to_owned(),
+        ),
+    };
     Ok(PublishRequest {
         project: ProjectId::new(project),
         tag,
         object,
         released_by,
+        push_request_id,
     })
+}
+
+/// Whether `user` pushed as a **person**: a human account, and the push of
+/// `push_request_id` (its audit row) did not use one of their agent tokens.
+/// A missing user is not a person. One statement on the write pool.
+pub async fn pusher_is_person(
+    db: &Db,
+    user: UserId,
+    push_request_id: &str,
+) -> Result<bool, ForgeError> {
+    const QUERY: &str = "spec_releases.pusher_is_person";
+    let row: Option<bool> = db
+        .within(QUERY, async {
+            sqlx::query_scalar(
+                "SELECT u.kind = 'human' AND NOT EXISTS ( \
+                   SELECT 1 FROM forge.audit_log a JOIN forge.tokens t ON t.id = a.credential_id \
+                   WHERE a.request_id = $2 AND a.actor_user_id = $1 AND t.is_agent) \
+                 FROM forge.users u WHERE u.id = $1",
+            )
+            .bind(user.get())
+            .bind(push_request_id)
+            .fetch_optional(db.write_pool())
+            .await
+            .map_err(|e| crate::query_error(QUERY, e))
+        })
+        .await?;
+    Ok(row.unwrap_or(false))
 }
 
 /// A release to record.
@@ -139,7 +182,8 @@ pub struct NewRelease {
 }
 
 /// Write the `spec.released` audit row and event (actor `system`). `false`:
-/// the same release was recorded before (a retried job): nothing written.
+/// this version (project, tag) was released before — a retried job, or the
+/// tag re-created at another commit: nothing written.
 pub async fn record_release(
     db: &Db,
     ctx: &ChangeContext,
@@ -177,11 +221,7 @@ pub async fn record_release(
             payload: value,
             dedup_key: Some(DedupKey::new(
                 DEDUP_PREFIX,
-                &[
-                    DedupPart::Id(release.project.get()),
-                    DedupPart::Object(&release.commit),
-                    DedupPart::Hash(&hash),
-                ],
+                &[DedupPart::Id(release.project.get()), DedupPart::Hash(&hash)],
             )?),
         }],
     };

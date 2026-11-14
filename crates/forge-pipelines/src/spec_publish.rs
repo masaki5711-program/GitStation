@@ -7,6 +7,10 @@
 //! `spec.publish` job (one per created tag) then decides, with git and
 //! nothing else, whether the tag publishes a specification:
 //!
+//! 0. (M4 C12 review) a **person** pushed it — not a service account, a
+//!    bot, nor a person's agent token (`pusher_not_a_person`) — and a
+//!    protection rule covers the tag, so only the people the rule allows
+//!    can create one (`tag_not_protected`);
 //! 1. the tag still names the pushed object and peels to a commit;
 //! 2. that commit is on the **default branch** (`merge-base --is-ancestor`
 //!    with its tip): it reached the trunk through review — a tag of an
@@ -17,7 +21,8 @@
 //!
 //! Then one `spec.released` event (integration class: Kanflow reads it from
 //! the feed) with one audit row, actor `system`, the pusher as
-//! `released_by` (`forge_db::spec_releases::record_release`). A decision
+//! `released_by` (`forge_db::spec_releases::record_release`), once per
+//! (project, tag): a version already released is not released again. A decision
 //! not to publish is logged at info with its `reason`; a failure (git,
 //! database) is returned for the job to retry.
 
@@ -26,7 +31,7 @@ use std::time::Duration;
 use forge_core::repo_config::{parse_repo_config, SpecSource, REPO_CONFIG_PATH};
 use forge_core::{ObjectId, ProjectAccessLoader, RepoId, RepositoryState, RequestId};
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::spec_releases::{record_release, NewRelease, PublishRequest};
+use forge_db::spec_releases::{pusher_is_person, record_release, NewRelease, PublishRequest};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{Browser, RepoPath, SmallFile};
@@ -44,7 +49,8 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 pub enum Published {
     /// The event was recorded (`false`: it already was — a retry).
     Released { version: String, recorded: bool },
-    /// No release (`reason`: `project_gone`, `tag_gone`, `tag_moved`,
+    /// No release (`reason`: `project_gone`, `pusher_not_a_person`,
+    /// `tag_not_protected`, `tag_gone`, `tag_moved`,
     /// `not_a_commit`, `no_default_branch`, `not_on_default_branch`,
     /// `no_specification`).
     NotReleased(&'static str),
@@ -146,6 +152,17 @@ impl SpecPublisher {
         let Some(repo) = self.repo(request).await? else {
             return Ok(not_released(request, request_id, "project_gone"));
         };
+        let person = match (request.released_by, request.push_request_id.as_deref()) {
+            (Some(user), Some(push)) => pusher_is_person(&self.db, user, push).await?,
+            _ => false,
+        };
+        if !person {
+            return Ok(not_released(request, request_id, "pusher_not_a_person"));
+        }
+        let rules = forge_db::protected_refs::rules_for(&self.db, request.project).await?;
+        if rules.levels(&request.tag).is_empty() {
+            return Ok(not_released(request, request_id, "tag_not_protected"));
+        }
         // The worker's browser may hold the list from before the push.
         self.browse.invalidate(repo);
         let refs = self.browse.refs(repo).await?;

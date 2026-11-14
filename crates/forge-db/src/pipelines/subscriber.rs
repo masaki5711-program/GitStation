@@ -166,7 +166,12 @@ impl PipelineRequests {
                 project,
                 tag,
                 object,
-                released_by: pusher(event),
+                // M4 C12 review: only a user's push may release (a service
+                // account's never; the job also refuses an agent token).
+                released_by: (event.actor_kind == "user")
+                    .then(|| pusher(event))
+                    .flatten(),
+                push_request_id: Some(event.request_id.clone()), // clone: the job owns it
             };
             // Deduped: a redelivered event enqueues nothing new.
             let _enqueued = enqueue_on(

@@ -2141,7 +2141,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "pipeline schedule update",
-        summary: "Replace a pipeline schedule's settings (a Maintainer, a person): you become its owner. 404 FG-REPO-0005 without it.",
+        summary: "Replace a pipeline schedule's settings (a Maintainer, a person): you become its owner when the branch, rule or offset changes, or after the owner was refused. 404 FG-REPO-0005 without it.",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--schedule", "option", true, "The schedule id."),

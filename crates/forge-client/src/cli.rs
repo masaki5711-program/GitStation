@@ -1809,7 +1809,8 @@ pub enum PipelineScheduleCommand {
         #[command(flatten)]
         settings: ScheduleArgs,
     },
-    /// Replace a schedule's settings; you become its owner.
+    /// Replace a schedule's settings; you become its owner when the branch,
+    /// rule or offset changes (or after its owner was refused).
     Update {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,

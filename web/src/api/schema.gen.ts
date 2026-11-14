@@ -1704,7 +1704,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner; 404 FG-REPO-0005 without it (people only; Maintainer) */
+        /** Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner when the branch, rule or offset changes or after the owner was refused (a description or pause/resume edit keeps the owner); 404 FG-REPO-0005 without it (people only; Maintainer) */
         put: operations["put_api_v1_projects_id_pipeline_schedules_schedule_id"];
         post?: never;
         /** Delete a pipeline schedule: 204; 404 FG-REPO-0005 without it (people only; Maintainer) */
@@ -5510,7 +5510,9 @@ export interface components {
             /**
              * @description What its last run did: `created` (`last_pipeline_id`),
              *     `no_definition`, `ref_missing`, `refused` (FG-CI-0026: the owner may
-             *     not run pipelines now), `failed` (`last_error_code`).
+             *     not run pipelines now: the schedule was stopped), `failed`
+             *     (`last_error_code`), `busy` (its previous pipeline was still
+             *     running), `capped` (the hourly cap, FG-CI-0028).
              */
             last_outcome: string | null;
             /** Format: int64 */
@@ -5521,7 +5523,8 @@ export interface components {
             next_run_at: string | null;
             /**
              * Format: int64
-             * @description The person whose rights it runs with (whoever last saved it).
+             * @description The person whose rights it runs with (who created it or last changed
+             *     its branch, rule or offset).
              */
             owner_id: number;
             /** Format: int64 */

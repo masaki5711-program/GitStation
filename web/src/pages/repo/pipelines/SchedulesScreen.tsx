@@ -91,6 +91,10 @@ export function lastRunSentence(t: TFunction, s: PipelineSchedule, manage: boole
         : t('pipelines.schedules.last.refusedAsk');
     case 'failed':
       return t('pipelines.schedules.last.failed', { id: s.id });
+    case 'busy':
+      return t('pipelines.schedules.last.busy');
+    case 'capped':
+      return t('pipelines.schedules.last.capped');
     default:
       return s.last_outcome;
   }

@@ -1429,6 +1429,12 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         }
         // M4 C12 (ADR-0029 Amendment 2026-11-13): a schedule is a standing
         // delegation of its owner's rights — a Maintainer's, people only.
+        // M4 C12 review: starting a manual job of a protected pipeline
+        // releases protected-branch secrets — a Maintainer's, people only.
+        (Action::PipelinePlayProtected, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
         (Action::PipelineScheduleManage, Resource::Project(p)) => {
             people_only()?;
             need(Role::Maintainer, p.role)
@@ -1556,6 +1562,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::DeployCreate
             | Action::DeployApprove
             | Action::PipelineScheduleManage
+            | Action::PipelinePlayProtected
             | Action::CiArtifactRead
             | Action::JobArtifactUpload
             | Action::JobArtifactDownload

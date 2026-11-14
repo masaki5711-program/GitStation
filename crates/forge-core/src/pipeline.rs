@@ -53,6 +53,15 @@ pub enum PipelineChange {
     },
     /// `pipeline_schedule.deleted` (M4 C12).
     ScheduleDeleted { project: ProjectId, schedule: i64 },
+    /// `pipeline_schedule.deactivated` (M4 C12 review): the worker (actor
+    /// `system`) stopped a schedule whose owner may no longer run
+    /// pipelines (`cause_code`: the refusal's code).
+    ScheduleDeactivated {
+        project: ProjectId,
+        schedule: i64,
+        owner: i64,
+        cause_code: String,
+    },
     /// `pipeline.scheduled` (M4 C12): the worker (actor `system`) started a
     /// schedule's pipeline after deciding `PipelineCreate` for its owner.
     Scheduled {
@@ -88,6 +97,7 @@ impl PipelineChange {
             Self::ScheduleSaved { created: true, .. } => "pipeline_schedule.created",
             Self::ScheduleSaved { created: false, .. } => "pipeline_schedule.updated",
             Self::ScheduleDeleted { .. } => "pipeline_schedule.deleted",
+            Self::ScheduleDeactivated { .. } => "pipeline_schedule.deactivated",
             Self::Scheduled { .. } => "pipeline.scheduled",
             Self::SpecReleased { .. } => "spec.released",
         }
@@ -103,6 +113,7 @@ impl PipelineChange {
             | Self::JobPlayed { .. }
             | Self::ScheduleSaved { .. }
             | Self::ScheduleDeleted { .. }
+            | Self::ScheduleDeactivated { .. }
             | Self::Scheduled { .. } => None,
         }
     }
@@ -168,6 +179,18 @@ impl PipelineChange {
             Self::ScheduleDeleted { project, schedule } => serde_json::json!({
                 "project_id": project.get(),
                 "schedule_id": schedule,
+            }),
+            Self::ScheduleDeactivated {
+                project,
+                schedule,
+                owner,
+                cause_code,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "schedule_id": schedule,
+                "owner_id": owner,
+                "reason": "owner_refused",
+                "cause_code": cause_code,
             }),
             Self::Scheduled {
                 project,

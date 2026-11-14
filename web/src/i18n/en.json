@@ -1400,7 +1400,8 @@
       "runningOperate": "Running. The result will appear on this page. To stop it, press \"Cancel\".",
       "runningAsk": "Running. The result will appear on this page. If it must be stopped, ask a Developer or above of this project.",
       "manualOperate": "Job “{{job}}” starts by hand. Press “Run” when it is ready to go.",
-      "manualAsk": "Job “{{job}}” starts by hand. To run it, ask a Developer or above of this project."
+      "manualAsk": "Job “{{job}}” starts by hand. To run it, ask a Developer or above of this project.",
+      "manualAskProtected": "Job “{{job}}” starts by hand. It runs on a protected branch, so to run it, ask a Maintainer or above of this project."
     },
     "problems": {
       "title": "Mistakes in .forge-ci.yml",
@@ -1474,7 +1475,7 @@
       "cronHelp": "Five fields: minute hour day month weekday. E.g. 0 2 * * * is every day at 2:00, 30 6 * * 1-5 is weekdays at 6:30. At most once every 5 minutes.",
       "offset": "Time zone",
       "activeLabel": "Active",
-      "ownerHelp": "Saving makes you the owner; from then on it runs with your rights.",
+      "ownerHelp": "Changing the branch or the time rule makes you the owner; from then on it runs with your rights. Editing the description or pausing and resuming keeps the owner.",
       "save": "Save",
       "saving": "Saving…",
       "last": {
@@ -1482,9 +1483,11 @@
         "created": "Its last run started a pipeline.",
         "noDefinition": "Its last run started nothing: the branch tip has no .forge-ci.yml. Add the file and push.",
         "refMissing": "Its last run started nothing: branch {{branch}} does not exist. Create it, or choose another branch with “Edit”.",
-        "refusedManage": "Its last run started nothing: the owner may no longer run pipelines. Save it again from “Edit” and it runs with your rights.",
-        "refusedAsk": "Its last run started nothing: the owner may no longer run pipelines. Ask a Maintainer of this project to save it again.",
-        "failed": "Its last run could not create a pipeline. Ask an administrator to look into schedule #{{id}}."
+        "refusedManage": "Stopped: the owner may no longer run pipelines. Make it active from “Edit” and save, and it runs with your rights.",
+        "refusedAsk": "Stopped: the owner may no longer run pipelines. Ask a Maintainer of this project to save it again.",
+        "failed": "Its last run could not create a pipeline. Ask an administrator to look into schedule #{{id}}.",
+        "busy": "Its last run started nothing: the previous pipeline was still running.",
+        "capped": "Its last run started nothing: scheduled pipelines had reached their hourly limit. It runs again at its next time."
       }
     }
   },

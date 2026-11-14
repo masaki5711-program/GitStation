@@ -1084,10 +1084,14 @@ fn play_conflict(
 
 /// Start a `when: manual` job (M4 C12): `manual` → `pending`, and a
 /// finished pipeline is `running` again; one `pipeline.job_played` audit
-/// row, decided again on the locked project and caller (`decide`). The
+/// row, decided again on the locked project and caller (`decide`) and, when
+/// the pipeline is `protected` (its jobs get the project's secrets), once
+/// more on the flag read under the row's lock (`decide_protected`:
+/// forge-pipelines decides `PipelinePlayProtected`, M4 C12 review). The
 /// pipeline row is locked before the job (the lock order of cancel and
 /// completion). Returns the job's name. Errors (nothing written):
-/// `decide`'s, `FG-REPO-0005 resource=pipeline|job` (none in `project`),
+/// `decide`'s, `decide_protected`'s, `FG-REPO-0005 resource=pipeline|job`
+/// (none in `project`),
 /// `FG-CI-0003 operation=play` with `reason` = `not_manual` (the job is not
 /// waiting for a person: started already, or not a manual job),
 /// `pipeline_state` (cancelled, invalid, error) or `needs_not_succeeded`
@@ -1098,16 +1102,18 @@ pub async fn play_job_decided<P>(
     (project, pipeline, job): (ProjectId, i64, i64),
     caller: UserId,
     decide: impl FnOnce(&ProjectUpdateFacts) -> Result<P, ForgeError>,
+    decide_protected: impl FnOnce(&ProjectUpdateFacts) -> Result<(), ForgeError>,
 ) -> Result<(String, P), ForgeError> {
     const QUERY: &str = "pipelines.play_job";
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let decided = decide(&decided_facts(&mut tx, project, caller).await?)?;
-        let status: Option<String> = tx
+        let facts = decided_facts(&mut tx, project, caller).await?;
+        let decided = decide(&facts)?;
+        let found: Option<(String, bool)> = tx
             .step(|c| async move {
-                sqlx::query_scalar(
-                    "SELECT status FROM forge.ci_pipelines WHERE project_id = $1 AND id = $2 \
-                     FOR UPDATE",
+                sqlx::query_as(
+                    "SELECT status, protected FROM forge.ci_pipelines \
+                     WHERE project_id = $1 AND id = $2 FOR UPDATE",
                 )
                 .bind(project.get())
                 .bind(pipeline)
@@ -1116,12 +1122,17 @@ pub async fn play_job_decided<P>(
                 .map_err(|e| query_error(QUERY, e))
             })
             .await?;
-        let status = status.ok_or_else(|| {
+        let (status, protected) = found.ok_or_else(|| {
             ForgeError::new(ErrorCode::NotFound)
                 .with_context("resource", "pipeline")
                 .with_context("reason", "absent")
                 .with_context("pipeline_id", pipeline)
         })?;
+        // M4 C12 review (HIGH): a protected pipeline's jobs are given the
+        // project's secrets and may deploy.
+        if protected {
+            decide_protected(&facts)?;
+        }
         let parsed = PipelineStatus::parse(&status)
             .ok_or_else(|| unreadable("stored_status_invalid", pipeline))?;
         let row: Option<(String, String, bool)> = tx

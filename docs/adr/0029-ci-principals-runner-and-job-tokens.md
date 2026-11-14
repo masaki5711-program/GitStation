@@ -276,6 +276,17 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - **選ばなかった案**: (a) 定期の実行をサービスアカウントで動かす（長命で広い主体を作る。持ち主の降格が反映されない）。
   (b) 保存した時点の権利を記録して使う（降格・無効化の後も動き続ける）。(c) 定期のパイプラインを保護された扱いにしてシークレットを渡す
   （人が見ていない時刻に保護ブランチのシークレットが自動で使われる。必要になったら別の ADR で、`DeployApprove` と同じ人の承認を前提に決める）。
+- **C12 のセキュリティレビュー（2026-11-14）で改めたこと**:
+  - 保護された push のパイプラインの手動のジョブはシークレットを受け取りデプロイもできるので、始めるには `PipelineCreate` に加えて
+    新しい Action `PipelinePlayProtected`（Maintainer 以上、人だけ）を、行のロックの下で読んだ `protected` の印で判定する。
+    Developer・エージェントのトークン・サービスアカウント・ボットは断る（FG-AUTH-0003）。保護されないパイプラインは今までどおり。
+  - 持ち主の判定で断られた定期は止める（`active = false`、`pipeline_schedule.deactivated`、行為者 `system`、`cause_code`）。
+    Maintainer が保存し直すと引き継ぐ。持ち主が変わるのはブランチ・規則・オフセットを変えたとき（と止まった定期の保存）だけで、
+    説明の変更や停止・再開では変わらない。
+  - 同じ定期の前のパイプラインが `pending` / `running` の間は始めない（`busy`）。定期のパイプラインは 1 時間にプロジェクトで 12、
+    全体で 120 まで（超えると `capped`、FG-CI-0028 warn）。
+  - `spec.released` は (プロジェクト, タグ) で 1 回だけ（タグを作り直しても再び出ない）。タグを push したのが**人**（人の
+    アカウントで、エージェントのトークンではない。サービスアカウント・ボットは不可）で、そのタグを覆う保護の規則があるときだけ出す。
 
 ## Error codes and runbooks affected
 
@@ -283,6 +294,6 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
 - 2026-11-12: FG-CI-0015 JobIsolationUnsafe（新規、alert。runbook `ci-runner` の「ジョブの切り離し」）。
 - C6: FG-CI-0016 SecretKeyUnavailable（alert）、FG-CI-0017 SecretOnUnprotectedRef、FG-CI-0018 SecretNotDefined（info）、runbook `ci-secrets`（新規）。FG-CI-0019 ArtifactTooLarge（info）、FG-CI-0020 ArtifactTransferFailed（warn、runbook `ci-runner`）。C6 のレビュー: FG-CI-0021 SecretInArtifact（warn、runbook `ci-secrets`）、FG-CI-0022 ArtifactQuotaExceeded（info）。
-- C12: FG-CI-0026 ScheduleOwnerNotAllowed（warn、runbook `ci-pipelines` の「定期の実行」）、FG-CI-0027 ScheduleLimitReached（info）。FG-CI-0003 に `operation=play`。
+- C12: FG-CI-0026 ScheduleOwnerNotAllowed（warn、runbook `ci-pipelines` の「定期の実行」）、FG-CI-0027 ScheduleLimitReached（info）、FG-CI-0028 ScheduleRateLimited（warn、レビューで追加）。FG-CI-0003 に `operation=play`。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

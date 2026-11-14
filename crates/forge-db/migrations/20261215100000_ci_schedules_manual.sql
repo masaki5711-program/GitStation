@@ -22,11 +22,13 @@
 --                    most once every 5 minutes), at `utc_offset_minutes`
 --                    (fixed offset: Japan and Indonesia keep no DST)
 --   active           false: never fires (next_run_at is NULL)
---   owner_id         the person whose rights it runs with: whoever last
---                    saved it. At each run the worker decides
+--   owner_id         the person whose rights it runs with: who created it,
+--                    or who last changed its branch, rule or offset (or took
+--                    it over after a refusal). At each run the worker decides
 --                    PipelineCreate for the owner as a signed-in person on
 --                    the project and the account as they are then; a refusal
---                    starts nothing (FG-CI-0026). A scheduled pipeline is
+--                    starts nothing and stops the schedule (active = false,
+--                    `pipeline_schedule.deactivated`, FG-CI-0026). A scheduled pipeline is
 --                    never `protected` (ci_pipelines_protected): no secret
 --                    ever reaches its jobs (ADR-0029 obligations 5 and 7)
 --   next_run_at      when it is due (the database's clock decides; the
@@ -34,7 +36,9 @@
 --   last_run_at / last_pipeline_id / last_outcome / last_error_code
 --                    what its last due run did: `created` (a pipeline),
 --                    `no_definition`, `ref_missing`, `refused` (FG-CI-0026),
---                    `failed` (the code). Written by the worker only
+--                    `failed` (the code), `busy` (its previous scheduled
+--                    pipeline was still pending or running), `capped` (the
+--                    hourly cap of scheduled pipelines, FG-CI-0028). Written by the worker only
 --                    (unaudited columns; the run itself is audited as
 --                    `pipeline.scheduled` when it starts a pipeline).
 
@@ -63,7 +67,7 @@ CREATE TABLE forge.ci_pipeline_schedules (
     last_run_at        timestamptz,
     last_pipeline_id   bigint,
     last_outcome       text CONSTRAINT ci_pipeline_schedules_last_outcome CHECK (last_outcome IN
-        ('created', 'no_definition', 'ref_missing', 'refused', 'failed')),
+        ('created', 'no_definition', 'ref_missing', 'refused', 'failed', 'busy', 'capped')),
     last_error_code    text CONSTRAINT ci_pipeline_schedules_last_error_code
         CHECK (last_error_code ~ '^FG-[A-Z]+-[0-9]{4}$'),
     created_at         timestamptz NOT NULL DEFAULT now(),
@@ -76,6 +80,9 @@ CREATE INDEX ci_pipeline_schedules_due ON forge.ci_pipeline_schedules (next_run_
     WHERE active;
 CREATE INDEX ci_pipeline_schedules_owner ON forge.ci_pipeline_schedules (owner_id);
 CREATE INDEX ci_pipeline_schedules_created_by ON forge.ci_pipeline_schedules (created_by);
+-- The hourly caps of scheduled pipelines (per project and on the instance).
+CREATE INDEX ci_pipelines_scheduled ON forge.ci_pipelines (created_at, project_id)
+    WHERE source = 'schedule';
 
 CREATE CONSTRAINT TRIGGER audited_change_present
     AFTER INSERT OR DELETE OR UPDATE OF id, project_id, description, ref, cron,

@@ -195,6 +195,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // M4 C12: pipeline schedules, never a merge's.
         | ErrorCode::ScheduleOwnerNotAllowed
         | ErrorCode::ScheduleLimitReached
+        | ErrorCode::ScheduleRateLimited
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

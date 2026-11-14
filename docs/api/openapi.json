@@ -7264,7 +7264,7 @@
             ]
           },
           "last_outcome": {
-            "description": "What its last run did: `created` (`last_pipeline_id`),\n`no_definition`, `ref_missing`, `refused` (FG-CI-0026: the owner may\nnot run pipelines now), `failed` (`last_error_code`).",
+            "description": "What its last run did: `created` (`last_pipeline_id`),\n`no_definition`, `ref_missing`, `refused` (FG-CI-0026: the owner may\nnot run pipelines now: the schedule was stopped), `failed`\n(`last_error_code`), `busy` (its previous pipeline was still\nrunning), `capped` (the hourly cap, FG-CI-0028).",
             "type": [
               "string",
               "null"
@@ -7293,7 +7293,7 @@
             ]
           },
           "owner_id": {
-            "description": "The person whose rights it runs with (whoever last saved it).",
+            "description": "The person whose rights it runs with (who created it or last changed\nits branch, rule or offset).",
             "format": "int64",
             "minimum": 1,
             "type": "integer"
@@ -18781,7 +18781,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner; 404 FG-REPO-0005 without it (people only; Maintainer)",
+        "summary": "Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner when the branch, rule or offset changes or after the owner was refused (a description or pause/resume edit keeps the owner); 404 FG-REPO-0005 without it (people only; Maintainer)",
         "x-forge-action": "PipelineScheduleManage",
         "x-forge-max-body-bytes": 4096
       }

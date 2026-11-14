@@ -103,6 +103,7 @@
   { "action": "DeployCreate", "allow": 5, "deny": 10, "public": false, "git_operation": false },
   { "action": "DeployApprove", "allow": 6, "deny": 28, "public": false, "git_operation": false },
   { "action": "PipelineScheduleManage", "allow": 5, "deny": 16, "public": false, "git_operation": false },
+  { "action": "PipelinePlayProtected", "allow": 4, "deny": 15, "public": false, "git_operation": false },
   { "action": "JobArtifactUpload", "allow": 1, "deny": 13, "public": false, "git_operation": false },
   { "action": "JobArtifactDownload", "allow": 1, "deny": 12, "public": false, "git_operation": false },
   { "action": "RunnerRegister", "allow": 1, "deny": 10, "public": false, "git_operation": false },

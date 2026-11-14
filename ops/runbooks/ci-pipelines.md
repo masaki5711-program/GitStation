@@ -1,4 +1,4 @@
-# Runbook: ci-pipelines（FG-CI-0002、FG-CI-0003、FG-CI-0026、FG-CI-0027。関連: FG-CI-0001、FG-GIT-0002 / 0003 / 0004、FG-DB-0006、FG-REPO-0016）
+# Runbook: ci-pipelines（FG-CI-0002、FG-CI-0003、FG-CI-0026、FG-CI-0027、FG-CI-0028。関連: FG-CI-0001、FG-GIT-0002 / 0003 / 0004、FG-DB-0006、FG-REPO-0016）
 
 M4 C2（計画 14）の CI のパイプラインの作成（ジョブ `ci.pipeline_create`、購読者 `ci-pipelines`、表 `forge.ci_pipelines` / `forge.ci_jobs`）が
 できない・遅れる・期待と違うとき。
@@ -59,6 +59,8 @@ M4 C2（計画 14）の CI のパイプラインの作成（ジョブ `ci.pipeli
   何も手動のジョブを待たないので、パイプラインは他のジョブで `succeeded` / `failed` になる。手動のジョブだけのパイプラインは `skipped`。
 - 押すと `pending` になり、終わったパイプラインは `running` に戻る（`ci/pipeline` のチェックも書き直される）。監査は `pipeline.job_played`。
 - シークレットはパイプラインの記録どおり（保護された push のパイプラインだけ）。手動で始めても広がらない。
+- **保護された push のパイプラインの手動のジョブ**（シークレットを受け取る）を始められるのは Maintainer 以上の人だけ
+  （`PipelinePlayProtected`）。Developer・エージェントのトークンは 403 FG-AUTH-0003。
 
 ## 定期の実行（C12、FG-CI-0026 / FG-CI-0027）
 
@@ -68,7 +70,9 @@ worker のタスク `ci_schedules`（30 秒ごと）が期限の来た定期を�
 ### Trigger
 
 - `forge worker` のログに `forge.ci.schedule_refused`（warn、`FG-CI-0026`）: 持ち主が無効になった・プロジェクトを抜けた・Reporter 以下に
-  なった・プロジェクトが削除待ち。パイプラインは作られていない（`cause_code` が拒否のコード）。
+  なった・プロジェクトが削除待ち。パイプラインは作られず、**定期は止められた**（`active = false`、監査 `pipeline_schedule.deactivated`）。
+- `forge.ci.schedule_capped`（warn、`FG-CI-0028`）: 定期のパイプラインが 1 時間の上限（プロジェクト 12、全体 120）に達した。
+  前のパイプラインがまだ動いている間の期限は `busy`（コードなし、info の `forge.ci.schedule_not_started`）。
 - `forge.ci.schedule_failed`（warn、`FG-CI-0002` と `cause_code`）: ジョブの最後の試行でも計画できなかった。
 - 利用者から「夜間のパイプラインが動いていない」と問い合わせがあった。画面の定期の一覧に最後の結果（`refused` / `failed` /
   `ref_missing` / `no_definition`）が出る。
@@ -89,8 +93,9 @@ worker のタスク `ci_schedules`（30 秒ごと）が期限の来た定期を�
 
 ### Mitigate（変更は人の承認のあと）
 
-- FG-CI-0026: そのプロジェクトの Maintainer が定期を開いて保存し直す（その人が持ち主になる）。要らなければ消す。元の持ち主の役割を
-  戻しても動く。DB の `owner_id` を直接書き換えない（監査の引き金が断る）。
+- FG-CI-0026: そのプロジェクトの Maintainer が定期を開いて有効にして保存し直す（止まった定期の保存はその人を持ち主にする）。
+  要らなければ消す。DB の `owner_id` や `active` を直接書き換えない（監査の引き金が断る）。
+- FG-CI-0028: 定期の時刻を 1 時間の中で散らす（同じ分に集めない）か、要らない定期を消す。上限はコードの定数。
 - `failed` / `ref_missing` / `no_definition`: 原因を直せば次の期限で動く。すぐ要るなら手動の実行（`gstn pipeline run --project <id> --ref <branch>`）。
 - FG-CI-0027: 使っていない定期を消す。
 

@@ -59,6 +59,12 @@ export function mayOperate(role: string | null | undefined, isAdmin: boolean): b
   return isAdmin || role === 'developer' || role === 'maintainer' || role === 'owner';
 }
 
+/** A role that may start a manual job of a protected pipeline (Maintainer
+ * or above, a person: the server also refuses an agent's token). */
+export function mayPlayProtected(role: string | null | undefined, isAdmin: boolean): boolean {
+  return isAdmin || role === 'maintainer' || role === 'owner';
+}
+
 /** `refs/heads/main` → `main`. */
 export const branchOf = (ref: string) => (ref.startsWith('refs/heads/') ? ref.slice(11) : ref);
 

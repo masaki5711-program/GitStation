@@ -4,8 +4,10 @@
 //! - Managed on a route's proof (`PipelineScheduleManage`: Maintainer and
 //!   above, people only): [`Pipelines::create_schedule`],
 //!   [`Pipelines::update_schedule`], [`Pipelines::delete_schedule`]; read
-//!   with `PipelineRead` ([`Pipelines::schedules`]). Whoever saves one
-//!   becomes its **owner**.
+//!   with `PipelineRead` ([`Pipelines::schedules`]). Its creator is its
+//!   **owner**; an edit of the branch, the rule or the offset (or a save
+//!   after the owner was refused) makes the editor the owner, a description
+//!   or pause/resume edit does not (M4 C12 review).
 //! - Run by `forge worker`: the `ci_schedules` task claims the due ones
 //!   (`forge_db::ci_schedules::claim_due`, one `ci.schedule_fire` job per
 //!   due time) and the job calls [`Pipelines::fire_schedule`]:
@@ -18,8 +20,12 @@
 //!   3. in one transaction: `PipelineCreate` decided for the **owner** as
 //!      a signed-in person on the locked project and account
 //!      ([`owner_decision`]); refused: nothing is written and the schedule
-//!      records `refused` (`FG-CI-0026`, warn); allowed: the pipeline, the
-//!      schedule's last run and one `pipeline.scheduled` audit row.
+//!      is stopped (`active = false`, `pipeline_schedule.deactivated` by
+//!      `system`, `FG-CI-0026`, warn); still busy (its previous pipeline
+//!      pending or running) or past the hourly cap (12 per project, 120 on
+//!      the instance: `FG-CI-0028`): nothing is written, `busy` / `capped`
+//!      recorded; allowed: the pipeline, the schedule's last run and one
+//!      `pipeline.scheduled` audit row.
 //!
 //! A schedule therefore never runs with more rights than its owner has at
 //! that moment, and never with secrets.
@@ -178,7 +184,8 @@ impl Pipelines {
     }
 
     /// `PUT …/pipeline-schedules/{schedule_id}`: replace its settings; the
-    /// caller becomes its owner. Errors: as create, `FG-REPO-0005
+    /// caller becomes its owner when the branch, rule or offset changes or
+    /// the owner was refused. Errors: as create, `FG-REPO-0005
     /// resource=pipeline_schedule`.
     pub async fn update_schedule(
         &self,
@@ -335,6 +342,33 @@ impl Pipelines {
                 Ok(FireResult::Started(pipeline))
             }
             Ok((db::Fired::Skipped(reason), _)) => Ok(FireResult::Skipped(reason)),
+            // M4 C12 review: one scheduled pipeline at a time per schedule.
+            Ok((db::Fired::Busy, _)) => {
+                self.record(request, request_id, LastOutcome::Busy, None)
+                    .await
+            }
+            // M4 C12 review: the hourly caps.
+            Ok((db::Fired::Capped(scope, count), _)) => {
+                tracing::warn!(
+                    target: "forge_pipelines",
+                    event = "forge.ci.schedule_capped",
+                    error_code = ErrorCode::ScheduleRateLimited.id(),
+                    request_id = %request_id,
+                    project_id = request.project.get(),
+                    schedule_id = request.schedule,
+                    scope,
+                    count,
+                    "scheduled pipelines reached their hourly cap; nothing started"
+                );
+                db::record_outcome(
+                    &self.db,
+                    request,
+                    LastOutcome::Capped,
+                    Some(ErrorCode::ScheduleRateLimited),
+                )
+                .await?;
+                Ok(FireResult::Recorded(LastOutcome::Capped))
+            }
             Err(e) if e.code() == ErrorCode::ScheduleOwnerNotAllowed => {
                 tracing::warn!(
                     target: "forge_pipelines",
@@ -345,15 +379,18 @@ impl Pipelines {
                     schedule_id = request.schedule,
                     owner_id = owner.get(),
                     context = ?e.context(),
-                    "the schedule's owner may not run pipelines now; nothing started"
+                    "the schedule's owner may not run pipelines now; nothing started, schedule stopped"
                 );
-                db::record_outcome(
-                    &self.db,
-                    request,
-                    LastOutcome::Refused,
-                    Some(ErrorCode::ScheduleOwnerNotAllowed),
-                )
-                .await?;
+                // M4 C12 review: stop it (audited) so it does not keep
+                // asking; a Maintainer's save takes it over.
+                let cause = e
+                    .context()
+                    .iter()
+                    .find(|(k, _)| *k == "cause_code")
+                    .map(|(_, v)| v.to_string().trim_matches('"').to_owned())
+                    .unwrap_or_default();
+                let ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the context owns it
+                db::deactivate_refused(&self.db, &ctx, request, owner, &cause).await?;
                 Ok(FireResult::Recorded(LastOutcome::Refused))
             }
             Err(e) => Err(e),

@@ -40,6 +40,11 @@ pub const SCHEDULE_FIRE_JOB: &str = "ci.schedule_fire";
 pub const SCHEDULE_FIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 /// The most due schedules one claim takes.
 pub const CLAIM_BATCH: i64 = 20;
+/// At most this many scheduled pipelines per project in an hour (M4 C12
+/// review): a due run past it starts nothing (`capped`, FG-CI-0028).
+pub const MAX_PROJECT_PER_HOUR: i64 = 12;
+/// At most this many scheduled pipelines on the instance in an hour.
+pub const MAX_GLOBAL_PER_HOUR: i64 = 120;
 /// When a stored rule has no next time (never for a rule that passed
 /// [`Rule::parse`] and fired once), it is looked at again after a day.
 const FALLBACK_SECS: i64 = 86_400;
@@ -71,6 +76,11 @@ pub enum LastOutcome {
     Refused,
     /// Planning failed for good (`last_error_code`).
     Failed,
+    /// The previous scheduled pipeline is still pending or running: this
+    /// due time started nothing (M4 C12 review).
+    Busy,
+    /// The hourly cap of scheduled pipelines was reached (`FG-CI-0028`).
+    Capped,
 }
 
 impl LastOutcome {
@@ -81,6 +91,8 @@ impl LastOutcome {
             Self::RefMissing => "ref_missing",
             Self::Refused => "refused",
             Self::Failed => "failed",
+            Self::Busy => "busy",
+            Self::Capped => "capped",
         }
     }
 
@@ -91,6 +103,8 @@ impl LastOutcome {
             "ref_missing" => Some(Self::RefMissing),
             "refused" => Some(Self::Refused),
             "failed" => Some(Self::Failed),
+            "busy" => Some(Self::Busy),
+            "capped" => Some(Self::Capped),
             _ => None,
         }
     }
@@ -366,8 +380,10 @@ fn saved(
     }
 }
 
-/// Replace a schedule's settings; `caller` becomes its owner and its next
-/// time is computed again. One `pipeline_schedule.updated` row. Errors
+/// Replace a schedule's settings and compute its next time again. `caller`
+/// becomes its owner when the branch, the rule or the offset changes, or
+/// when the schedule was stopped because its owner was refused; otherwise
+/// (a description or pause/resume edit) the owner stays (M4 C12 review). One `pipeline_schedule.updated` row. Errors
 /// (nothing written): `decide`'s, `FG-REPO-0005
 /// resource=pipeline_schedule`, `FG-DB-*`.
 pub async fn update_schedule_decided<P>(
@@ -382,17 +398,25 @@ pub async fn update_schedule_decided<P>(
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let decided = decide(&decided_facts(&mut tx, project, caller).await?)?;
-        let updated = tx
+        let owner: Option<i64> = tx
             .step(|c| async move {
                 let now = db_now(&mut *c, QUERY).await?;
                 let next = input
                     .active
                     .then(|| next_time(&input.cron, input.utc_offset_minutes, now));
-                sqlx::query(
+                // M4 C12 review: the caller becomes the owner only when what
+                // runs or when changes (branch, rule, offset) or when taking
+                // over a schedule its owner may no longer run; a description
+                // or pause/resume edit keeps the owner.
+                sqlx::query_scalar(
                     "UPDATE forge.ci_pipeline_schedules SET description = $3, ref = $4, \
-                       cron = $5, utc_offset_minutes = $6, active = $7, owner_id = $8, \
+                       cron = $5, utc_offset_minutes = $6, active = $7, \
+                       owner_id = CASE WHEN ref IS DISTINCT FROM $4 OR cron IS DISTINCT FROM $5 \
+                         OR utc_offset_minutes IS DISTINCT FROM $6 \
+                         OR last_outcome IS NOT DISTINCT FROM 'refused' \
+                         THEN $8 ELSE owner_id END, \
                        next_run_at = to_timestamp($9), updated_at = now() \
-                     WHERE project_id = $1 AND id = $2",
+                     WHERE project_id = $1 AND id = $2 RETURNING owner_id",
                 )
                 .bind(project.get())
                 .bind(schedule)
@@ -403,16 +427,13 @@ pub async fn update_schedule_decided<P>(
                 .bind(input.active)
                 .bind(caller.get())
                 .bind(next)
-                .execute(&mut *c)
+                .fetch_optional(&mut *c)
                 .await
                 .map_err(|e| query_error(QUERY, e))
-                .map(|r| r.rows_affected())
             })
             .await?;
-        if updated == 0 {
-            return Err(not_found(schedule));
-        }
-        let change = saved(project, schedule, false, input, caller);
+        let owner = UserId::new(owner.ok_or_else(|| not_found(schedule))?);
+        let change = saved(project, schedule, false, input, owner);
         Ok(Settle::Commit(record(change, project), decided))
     }
     .await;
@@ -572,7 +593,8 @@ pub async fn record_outcome(
     db.within(QUERY, async {
         sqlx::query(
             "UPDATE forge.ci_pipeline_schedules SET last_run_at = to_timestamp($2), \
-               last_outcome = $3, last_error_code = $4, last_pipeline_id = NULL \
+               last_outcome = $3, last_error_code = $4, \
+               last_pipeline_id = CASE WHEN $3 IN ('busy', 'capped') THEN last_pipeline_id END \
              WHERE id = $1",
         )
         .bind(request.schedule)
@@ -595,6 +617,12 @@ pub enum Fired {
     /// The schedule is gone, inactive, owned by another person or ran this
     /// due time already: nothing written.
     Skipped(&'static str),
+    /// Its previous scheduled pipeline is still pending or running: nothing
+    /// written (the caller records `busy`).
+    Busy,
+    /// The hourly cap (`project` or `instance`) with the count found:
+    /// nothing written (the caller records `capped`, FG-CI-0028).
+    Capped(&'static str, i64),
 }
 
 /// Start the pipeline of one due time: lock the project and the owner's
@@ -646,6 +674,38 @@ pub async fn fire_schedule_decided<P>(
         if let Some(reason) = skip {
             return Ok(Settle::Discard((Fired::Skipped(reason), None)));
         }
+        // M4 C12 review: one scheduled pipeline at a time per schedule, and
+        // an hourly cap per project and on the instance.
+        let (busy, project_hour, global_hour): (bool, i64, i64) = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "SELECT EXISTS (SELECT 1 FROM forge.ci_pipeline_schedules s \
+                       JOIN forge.ci_pipelines p ON p.id = s.last_pipeline_id \
+                       WHERE s.id = $1 AND p.status IN ('pending', 'running')), \
+                     (SELECT count(*) FROM forge.ci_pipelines WHERE source = 'schedule' \
+                       AND project_id = $2 AND created_at > now() - interval '1 hour'), \
+                     (SELECT count(*) FROM forge.ci_pipelines WHERE source = 'schedule' \
+                       AND created_at > now() - interval '1 hour')",
+                )
+                .bind(schedule)
+                .bind(project.get())
+                .fetch_one(c)
+                .await
+                .map_err(|e| query_error(QUERY, e))
+            })
+            .await?;
+        let limited = if busy {
+            Some(Fired::Busy)
+        } else if project_hour >= MAX_PROJECT_PER_HOUR {
+            Some(Fired::Capped("project", project_hour))
+        } else if global_hour >= MAX_GLOBAL_PER_HOUR {
+            Some(Fired::Capped("instance", global_hour))
+        } else {
+            None
+        };
+        if let Some(fired) = limited {
+            return Ok(Settle::Discard((fired, None)));
+        }
         let decided = decide(&facts)?;
         let pipeline = tx
             .step(|c| async move {
@@ -683,6 +743,58 @@ pub async fn fire_schedule_decided<P>(
     }
     .await;
     tx.settle("pipeline.scheduled", outcome).await
+}
+
+/// Stop a schedule whose owner was refused at a due run (M4 C12 review):
+/// `active = false`, no next time, the run's outcome `refused` with
+/// `FG-CI-0026`, and one `pipeline_schedule.deactivated` row (`ctx`: actor
+/// `system`) with the refusal's `cause_code`. `false`: the schedule was
+/// deleted, paused or taken over meanwhile (nothing written).
+pub async fn deactivate_refused(
+    db: &Db,
+    ctx: &ChangeContext,
+    request: &FireRequest,
+    owner: UserId,
+    cause_code: &str,
+) -> Result<bool, ForgeError> {
+    const QUERY: &str = "ci_schedules.deactivate_refused";
+    let project = request.project;
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = async {
+        let schedule = request.schedule;
+        let due = request.due;
+        let changed = tx
+            .step(|c| async move {
+                sqlx::query(
+                    "UPDATE forge.ci_pipeline_schedules SET active = false, next_run_at = NULL, \
+                       last_run_at = to_timestamp($4), last_outcome = 'refused', \
+                       last_error_code = $5, last_pipeline_id = NULL, updated_at = now() \
+                     WHERE project_id = $1 AND id = $2 AND owner_id = $3 AND active",
+                )
+                .bind(project.get())
+                .bind(schedule)
+                .bind(owner.get())
+                .bind(due)
+                .bind(ErrorCode::ScheduleOwnerNotAllowed.id())
+                .execute(c)
+                .await
+                .map_err(|e| query_error(QUERY, e))
+                .map(|r| r.rows_affected())
+            })
+            .await?;
+        if changed == 0 {
+            return Ok(Settle::Discard(false));
+        }
+        let change = PipelineChange::ScheduleDeactivated {
+            project,
+            schedule,
+            owner: owner.get(),
+            cause_code: cause_code.to_owned(),
+        };
+        Ok(Settle::Commit(record(change, project), true))
+    }
+    .await;
+    tx.settle("pipeline_schedule.deactivated", outcome).await
 }
 
 #[cfg(test)]

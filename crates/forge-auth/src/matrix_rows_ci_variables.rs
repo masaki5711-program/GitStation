@@ -78,3 +78,25 @@ pub(crate) const SCHEDULE_ROWS: &[Row] = &[
     on(A::PipelineScheduleManage, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
     on(A::PipelineScheduleManage, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
 ];
+
+/// M4 C12 review: a manual job of a **protected** pipeline (its jobs get
+/// the project's secrets) is started by a Maintainer, people only; on an
+/// unprotected pipeline the route's `PipelineCreate` rows hold (Developer,
+/// agents and service accounts by their membership).
+#[rustfmt::skip]
+pub(crate) const PLAY_PROTECTED_ROWS: &[Row] = &[
+    on(A::PipelinePlayProtected, W::Maintainer, F::PrivateProject, Allow),
+    on(A::PipelinePlayProtected, W::MaintainerTokenApi, F::PrivateProject, Allow),
+    on(A::PipelinePlayProtected, W::Owner, F::PrivateProject, Allow),
+    on(A::PipelinePlayProtected, W::Admin, F::PrivateProject, Allow),
+    on(A::PipelinePlayProtected, W::Developer, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelinePlayProtected, W::DevTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelinePlayProtected, W::Reporter, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelinePlayProtected, W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    on(A::PipelinePlayProtected, W::Maintainer, F::DeletedProject, deny(E::PendingDeletion)),
+    on(A::PipelinePlayProtected, W::MaintainerTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
+    on(A::PipelinePlayProtected, W::AgentMaintainerTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelinePlayProtected, W::AgentOwnerTokenApi, F::PrivateProject, deny(E::Forbidden)),
+    on(A::PipelinePlayProtected, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
+    on(A::PipelinePlayProtected, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+];

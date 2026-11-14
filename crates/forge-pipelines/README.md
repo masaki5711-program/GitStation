@@ -144,6 +144,11 @@ FG-CI-0018 登録の無い名前、FG-CI-0016 鍵）。ログの追記は `log_m
 |---|---|
 | FG-CI-0026 ScheduleOwnerNotAllowed | 定期の持ち主が今は `PipelineCreate` を許されない（warn、runbook `ci-pipelines`） |
 | FG-CI-0027 ScheduleLimitReached | 1 プロジェクト 20 件を超える作成（409） |
+| FG-CI-0028 ScheduleRateLimited | 定期のパイプラインが 1 時間の上限（プロジェクト 12、全体 120）に達した（warn、runbook `ci-pipelines`） |
+
+C12 のセキュリティレビュー: 保護されたパイプラインの手動のジョブは `PipelinePlayProtected`（Maintainer、人だけ）も要る。断られた定期は止める
+（`pipeline_schedule.deactivated`）。前のパイプラインが動いている間は `busy`。`spec.released` は (プロジェクト, タグ) で 1 回、人の push と
+保護されたタグだけ。
 
 ## 依存の向き
 

@@ -21,6 +21,7 @@ fn the_publish_payload_round_trips_and_refuses_anything_else() {
         tag: RefName::parse("refs/tags/v1.5").expect("tag"),
         object: ObjectId::parse(&"d".repeat(40)).expect("sha"),
         released_by: Some(UserId::new(3)),
+        push_request_id: Some("req-push-1".to_owned()),
     };
     let job = publish_job(&request, RequestId::generate(), Some(9)).expect("job");
     assert_eq!(job.kind.as_str(), SPEC_PUBLISH_JOB);
@@ -68,6 +69,39 @@ async fn a_release_is_one_event_and_a_retry_records_nothing_more() {
     assert!(!record_release(&t.db, &ctx("req-release-2"), &release)
         .await
         .expect("again"));
+    // M4 C12 review: a version is released once — the same tag re-created
+    // at another commit records nothing.
+    let moved = NewRelease {
+        commit: ObjectId::parse(&"f".repeat(40)).expect("sha"),
+        ..release.clone()
+    };
+    assert!(!record_release(&t.db, &ctx("req-release-3"), &moved)
+        .await
+        .expect("moved tag"));
+    // The pusher: a person is, an unknown account is not.
+    assert!(pusher_is_person(&t.db, alice.user_id, "req-push-x")
+        .await
+        .expect("person"));
+    assert!(!pusher_is_person(&t.db, UserId::new(999_999), "req-push-x")
+        .await
+        .expect("unknown"));
+    let sa = crate::service_accounts::create(
+        &t.db,
+        &ctx("req-sa"),
+        &crate::service_accounts::NewServiceAccount {
+            username: "release-bot".to_owned(),
+            display_name: "Release bot".to_owned(),
+            owner: alice.user_id,
+            purpose: "synthetic releases".to_owned(),
+        },
+        alice.user_id,
+    )
+    .await
+    .expect("sa")
+    .user_id;
+    assert!(!pusher_is_person(&t.db, sa, "req-push-x")
+        .await
+        .expect("service account"));
     let events: Vec<(String, serde_json::Value)> = sqlx::query_as(
         "SELECT event_type, payload FROM forge.events WHERE event_type = 'spec.released'",
     )

@@ -443,6 +443,9 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
     (Action::SessionCreate, routes::auth::CALLBACK_PATH),
     (Action::SessionContinue, routes::session::PATH),
     (Action::WebhookDeliver, routes::webhooks::COLLECTION),
+    // M4 C12 review: the second decision of a manual job's start when its
+    // pipeline is protected (decided in the transaction).
+    (Action::PipelinePlayProtected, routes::pipelines::PLAY),
 ];
 
 /// The words whose page is the SPA shell on a project (ADR-0015 "ルートの
@@ -649,7 +652,7 @@ fn schedule_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Put,
             s::ONE,
             Action::PipelineScheduleManage,
-            "Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner; 404 FG-REPO-0005 without it (people only; Maintainer)",
+            "Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner when the branch, rule or offset changes or after the owner was refused (a description or pause/resume edit keeps the owner); 404 FG-REPO-0005 without it (people only; Maintainer)",
             s::MAX_BODY,
             s::OF_ONE,
             s::update,

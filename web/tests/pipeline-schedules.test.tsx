@@ -48,7 +48,7 @@ const pipeline = (over: Record<string, unknown> = {}) => ({
   status: 'succeeded',
   error_code: null,
   problems: [],
-  protected: true,
+  protected: false,
   copy_mark: 'open',
   definition_hash: 'h',
   created_at: '2026-11-10T00:00:00Z',
@@ -135,6 +135,27 @@ describe('manual jobs', () => {
   });
 });
 
+describe('manual jobs of a protected pipeline', () => {
+  it('a Developer sees no "run" button and is told to ask a Maintainer; a Maintainer gets it', async () => {
+    const dev = routes({
+      [`GET ${API}/12`]: () => json(200, pipeline({ protected: true })),
+    });
+    await renderApp({ fetch: dev.fetch, path: `${BASE}/12` });
+    const line = await screen.findByTestId('pipeline-manual-line');
+    expect(line.textContent).toContain('Maintainer 以上のメンバーに依頼してください');
+    expect(screen.queryByRole('button', { name: /を実行/ })).toBeNull();
+  });
+
+  it('a Maintainer gets the "run" button', async () => {
+    const server = routes({
+      'GET /api/v1/projects/7': () => json(200, { ...PROJECT, role: 'maintainer' }),
+      [`GET ${API}/12`]: () => json(200, pipeline({ protected: true })),
+    });
+    await renderApp({ fetch: server.fetch, path: `${BASE}/12` });
+    expect(await screen.findByRole('button', { name: 'ジョブ「deploy」を実行' })).toBeTruthy();
+  });
+});
+
 describe('pipeline schedules', () => {
   it('lists schedules with the next run and why the last run started nothing', async () => {
     const server = routes({
@@ -155,7 +176,7 @@ describe('pipeline schedules', () => {
     expect(first.textContent).toContain('Nightly build');
     expect(first.textContent).toContain('0 2 * * *');
     expect(first.textContent).toContain('UTC+09:00 (JST)');
-    expect(first.textContent).toContain('「編集」から保存し直すと、あなたの権限で動きます');
+    expect(first.textContent).toContain('「編集」から有効にして保存すると、あなたの権限で動きます');
     // Codes stay out of the page (contract 3) unless it is a failure to report.
     expect(first.textContent).not.toContain('FG-CI-0026');
     const second = items[1] as HTMLElement;
@@ -213,6 +234,10 @@ describe('pipeline schedules', () => {
     expect(lastRunSentence(t, schedule({ last_outcome: null }) as never, true)).toBe('pipelines.schedules.last.never');
     expect(lastRunSentence(t, schedule({ last_outcome: 'refused' }) as never, false)).toBe(
       'pipelines.schedules.last.refusedAsk',
+    );
+    expect(lastRunSentence(t, schedule({ last_outcome: 'busy' }) as never, true)).toBe('pipelines.schedules.last.busy');
+    expect(lastRunSentence(t, schedule({ last_outcome: 'capped' }) as never, true)).toBe(
+      'pipelines.schedules.last.capped',
     );
   });
 });

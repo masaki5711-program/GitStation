@@ -1400,7 +1400,8 @@
       "runningOperate": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Untuk menghentikannya, tekan \"Batalkan\".",
       "runningAsk": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Jika perlu dihentikan, minta Developer atau lebih tinggi di proyek ini.",
       "manualOperate": "Tugas “{{job}}” dimulai secara manual. Tekan “Jalankan” bila sudah siap.",
-      "manualAsk": "Tugas “{{job}}” dimulai secara manual. Untuk menjalankannya, minta anggota Developer ke atas di proyek ini."
+      "manualAsk": "Tugas “{{job}}” dimulai secara manual. Untuk menjalankannya, minta anggota Developer ke atas di proyek ini.",
+      "manualAskProtected": "Tugas “{{job}}” dimulai secara manual. Tugas ini berjalan pada cabang yang dilindungi, jadi untuk menjalankannya minta Maintainer ke atas di proyek ini."
     },
     "problems": {
       "title": "Kesalahan di .forge-ci.yml",
@@ -1474,7 +1475,7 @@
       "cronHelp": "Lima bagian: menit jam tanggal bulan hari. Contoh: 0 2 * * * setiap hari pukul 2:00, 30 6 * * 1-5 hari kerja pukul 6:30. Paling sering sekali setiap 5 menit.",
       "offset": "Zona waktu",
       "activeLabel": "Aktif",
-      "ownerHelp": "Dengan menyimpan, Anda menjadi pemilik; sejak itu jadwal berjalan dengan hak Anda.",
+      "ownerHelp": "Mengubah cabang atau aturan waktu menjadikan Anda pemilik; sejak itu jadwal berjalan dengan hak Anda. Mengubah deskripsi atau menghentikan dan melanjutkan tidak mengubah pemilik.",
       "save": "Simpan",
       "saving": "Menyimpan…",
       "last": {
@@ -1482,9 +1483,11 @@
         "created": "Jalankan terakhir memulai sebuah pipeline.",
         "noDefinition": "Jalankan terakhir tidak memulai apa pun: ujung cabang tidak memiliki .forge-ci.yml. Tambahkan berkasnya lalu push.",
         "refMissing": "Jalankan terakhir tidak memulai apa pun: cabang {{branch}} tidak ada. Buat cabangnya, atau pilih cabang lain lewat “Ubah”.",
-        "refusedManage": "Jalankan terakhir tidak memulai apa pun: pemilik tidak lagi boleh menjalankan pipeline. Simpan ulang lewat “Ubah” agar berjalan dengan hak Anda.",
-        "refusedAsk": "Jalankan terakhir tidak memulai apa pun: pemilik tidak lagi boleh menjalankan pipeline. Minta Maintainer proyek ini menyimpannya ulang.",
-        "failed": "Jalankan terakhir tidak dapat membuat pipeline. Minta administrator memeriksa jadwal #{{id}}."
+        "refusedManage": "Dihentikan: pemilik tidak lagi boleh menjalankan pipeline. Aktifkan lewat “Ubah” lalu simpan agar berjalan dengan hak Anda.",
+        "refusedAsk": "Dihentikan: pemilik tidak lagi boleh menjalankan pipeline. Minta Maintainer proyek ini menyimpannya ulang.",
+        "failed": "Jalankan terakhir tidak dapat membuat pipeline. Minta administrator memeriksa jadwal #{{id}}.",
+        "busy": "Jalankan terakhir tidak memulai apa pun: pipeline sebelumnya masih berjalan.",
+        "capped": "Jalankan terakhir tidak memulai apa pun: pipeline terjadwal mencapai batas per jam. Jadwal berjalan lagi pada waktu berikutnya."
       }
     }
   },

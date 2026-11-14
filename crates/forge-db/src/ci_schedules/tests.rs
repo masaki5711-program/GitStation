@@ -423,3 +423,136 @@ fn the_fire_payload_round_trips_and_refuses_anything_else() {
         assert!(fire_payload(&bad).is_err(), "{bad}");
     }
 }
+
+/// M4 C12 review: a due run starts nothing while the schedule's previous
+/// pipeline is pending or running (`busy`), nor past the hourly cap of
+/// scheduled pipelines per project (`capped`).
+#[tokio::test]
+async fn a_due_run_is_skipped_while_busy_or_past_the_hourly_cap() {
+    let w = world().await;
+    let id = create(&w, w.alice, "0 2 * * *").await.expect("create");
+    let system = ctx(Actor::System, "req-fire");
+    let at = |due: i64| FireRequest {
+        schedule: id,
+        project: w.web.project_id,
+        due,
+    };
+    let fire = |due: i64| {
+        let db = w.t.db.clone();
+        let system = system.clone();
+        let new = scheduled(&w, w.alice);
+        let alice = w.alice;
+        let request = at(due);
+        async move {
+            fire_schedule_decided(&db, &system, &request, alice, &new, |_| Ok(()))
+                .await
+                .expect("fire")
+                .0
+        }
+    };
+    let Fired::Created(first) = fire(1_794_589_200).await else {
+        panic!("created")
+    };
+    assert_eq!(
+        fire(1_794_589_500).await,
+        Fired::Busy,
+        "the first still pending"
+    );
+    let _ = sqlx::query("UPDATE forge.ci_pipelines SET status = 'succeeded' WHERE id = $1")
+        .bind(first)
+        .execute(&mut w.t.superuser().await)
+        .await
+        .expect("finish");
+    // Eleven more scheduled pipelines of the project in the last hour.
+    for _ in 0..(MAX_PROJECT_PER_HOUR - 1) {
+        let mut done = scheduled(&w, w.alice);
+        done.planned = Planned::Jobs(Vec::new());
+        pipelines::create(&w.t.db, &done).await.expect("scheduled");
+    }
+    assert_eq!(
+        fire(1_794_589_800).await,
+        Fired::Capped("project", MAX_PROJECT_PER_HOUR)
+    );
+    w.t.drop_now().await;
+}
+
+/// M4 C12 review: a refused owner stops the schedule, audited by `system`;
+/// a description or pause/resume edit keeps the owner, a rule change or a
+/// take-over after a refusal makes the editor the owner.
+#[tokio::test]
+async fn a_refused_owner_stops_the_schedule_and_only_a_real_change_moves_the_owner() {
+    let w = world().await;
+    let p = w.web.project_id;
+    let id = create(&w, w.alice, "0 2 * * *").await.expect("create");
+    // A pause by bob keeps alice as the owner.
+    let mut paused = input("0 2 * * *");
+    paused.active = false;
+    paused.description = "nightly (paused)".to_owned();
+    update_schedule_decided(
+        &w.t.db,
+        &ctx(Actor::User(w.bob), "req-pause"),
+        (p, id),
+        w.bob,
+        &paused,
+        |_| Ok(()),
+    )
+    .await
+    .expect("pause");
+    let stored = get(&w.t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(stored.owner, w.alice, "a toggle keeps the owner");
+    // Resumed by alice, then refused at a due run: stopped.
+    update_schedule_decided(
+        &w.t.db,
+        &ctx(Actor::User(w.alice), "req-resume"),
+        (p, id),
+        w.alice,
+        &input("0 2 * * *"),
+        |_| Ok(()),
+    )
+    .await
+    .expect("resume");
+    let request = FireRequest {
+        schedule: id,
+        project: p,
+        due: 1_794_589_200,
+    };
+    let system = ctx(Actor::System, "req-refused");
+    assert!(
+        deactivate_refused(&w.t.db, &system, &request, w.alice, "FG-AUTH-0003")
+            .await
+            .expect("deactivate")
+    );
+    assert!(
+        !deactivate_refused(&w.t.db, &system, &request, w.alice, "FG-AUTH-0003")
+            .await
+            .expect("again"),
+        "already stopped: nothing written"
+    );
+    let stored = get(&w.t.db, p, id).await.expect("get").expect("found");
+    assert!(!stored.active);
+    assert_eq!(stored.next_run_at, None);
+    assert_eq!(stored.last_outcome, Some(LastOutcome::Refused));
+    let rows = audit(&w).await;
+    let stopped: Vec<_> = rows
+        .iter()
+        .filter(|r| r.0 == "pipeline_schedule.deactivated")
+        .collect();
+    assert_eq!(stopped.len(), 1);
+    assert_eq!(stopped[0].1, "system");
+    assert_eq!(stopped[0].3["cause_code"], "FG-AUTH-0003");
+    // bob saves it again (the same settings): he takes it over.
+    update_schedule_decided(
+        &w.t.db,
+        &ctx(Actor::User(w.bob), "req-take-over"),
+        (p, id),
+        w.bob,
+        &input("0 2 * * *"),
+        |_| Ok(()),
+    )
+    .await
+    .expect("take over");
+    let stored = get(&w.t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(stored.owner, w.bob);
+    assert!(stored.active);
+    w.t.drop_now().await;
+}

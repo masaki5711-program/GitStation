@@ -206,6 +206,7 @@ async fn one_push_enqueues_one_job_per_branch_and_a_redelivery_none() {
             tag: RefName::parse("refs/tags/v1").expect("tag"),
             object: sha('c'),
             released_by: Some(alice),
+            push_request_id: Some("req-push-1".to_owned()),
         }]
     );
     let jobs = create_jobs(&t).await;
@@ -904,7 +905,7 @@ async fn playing_a_manual_job_starts_it_once() {
     let play = |r: &'static str, job: i64| {
         let ctx = user(r);
         let db = t.db.clone();
-        async move { play_job_decided(&db, &ctx, (p, id, job), alice, |_| Ok(())).await }
+        async move { play_job_decided(&db, &ctx, (p, id, job), alice, |_| Ok(()), |_| Ok(())).await }
     };
 
     let early = play("req-play-early", deploy).await.expect_err("needs");
@@ -945,9 +946,16 @@ async fn playing_a_manual_job_starts_it_once() {
     let (_, jobs) = get(&t.db, p, other).await.expect("get").expect("found");
     let manual = jobs.iter().find(|j| j.manual).expect("manual");
     let ctx = user("req-play-canceled");
-    let canceled = play_job_decided(&t.db, &ctx, (p, other, manual.id), alice, |_| Ok(()))
-        .await
-        .expect_err("canceled");
+    let canceled = play_job_decided(
+        &t.db,
+        &ctx,
+        (p, other, manual.id),
+        alice,
+        |_| Ok(()),
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("canceled");
     assert_reason_ctx(&canceled, "reason", "pipeline_state");
 
     let rows = pipeline_audit(&t).await;
@@ -959,6 +967,79 @@ async fn playing_a_manual_job_starts_it_once() {
     assert_eq!(
         played[0].3,
         serde_json::json!({"project_id": p.get(), "pipeline_id": id, "job_id": deploy, "name": "deploy"})
+    );
+    t.drop_now().await;
+}
+
+/// M4 C12 review (HIGH): a manual job of a protected pipeline (its jobs get
+/// the project's secrets) is decided once more (`decide_protected`); a
+/// refusal starts nothing and writes no audit row. An unprotected pipeline
+/// never asks.
+#[tokio::test]
+async fn a_protected_pipelines_manual_job_is_decided_again() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let mut protected = new_pipeline(
+        p,
+        Source::Push,
+        Planned::Jobs(vec![a_manual_job("deploy", &[])]),
+    );
+    protected.protected = true;
+    let id = create(&t.db, &protected).await.expect("create").pipeline_id;
+    let (_, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    let job = jobs[0].id;
+    let refused = play_job_decided(
+        &t.db,
+        &by(Actor::User(alice), "req-play-protected"),
+        (p, id, job),
+        alice,
+        |_| Ok(()),
+        |_| Err(ForgeError::new(ErrorCode::Forbidden)),
+    )
+    .await
+    .expect_err("refused");
+    assert_eq!(refused.code(), ErrorCode::Forbidden);
+    let (_, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(jobs[0].status, JobStatus::Manual, "nothing started");
+    let mut asked = false;
+    play_job_decided(
+        &t.db,
+        &by(Actor::User(alice), "req-play-protected-2"),
+        (p, id, job),
+        alice,
+        |_| Ok(()),
+        |_| {
+            asked = true;
+            Ok(())
+        },
+    )
+    .await
+    .expect("allowed");
+    assert!(asked);
+
+    let mut open = new_pipeline(
+        p,
+        Source::Push,
+        Planned::Jobs(vec![a_manual_job("deploy", &[])]),
+    );
+    open.request.git_ref = branch("feature");
+    let open = create(&t.db, &open).await.expect("create").pipeline_id;
+    let (_, jobs) = get(&t.db, p, open).await.expect("get").expect("found");
+    play_job_decided(
+        &t.db,
+        &by(Actor::User(alice), "req-play-open"),
+        (p, open, jobs[0].id),
+        alice,
+        |_| Ok(()),
+        |_| Err(ForgeError::new(ErrorCode::Forbidden)),
+    )
+    .await
+    .expect("an unprotected pipeline never asks");
+    let rows = pipeline_audit(&t).await;
+    assert_eq!(
+        rows.iter().filter(|r| r.0 == "pipeline.job_played").count(),
+        2
     );
     t.drop_now().await;
 }

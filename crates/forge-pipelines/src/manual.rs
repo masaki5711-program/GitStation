@@ -3,12 +3,17 @@
 //! it (`PipelineCreate`: Developer and above — the same right as running a
 //! pipeline by hand). Nothing waits for it (forge-ci), and the pipeline's
 //! state is decided by its other jobs while it waits (`settle_pipeline`).
+//!
+//! M4 C12 review (HIGH): a job of a **protected** pipeline is given the
+//! project's secrets and may deploy, so starting one also needs
+//! `PipelinePlayProtected` (Maintainer, people only), decided in the
+//! transaction on the `protected` flag read under the row's lock.
 
-use forge_auth::{Action, Authorized, ProjectCtx};
+use forge_auth::{prove, Action, Authorized, ProjectCtx};
 use forge_db::pipelines as db;
 use forge_errors::ForgeError;
 
-use crate::{caller, change_context, read_back, reconfirm, require};
+use crate::{caller, change_context, loaded, read_back, reconfirm, require};
 use crate::{ChangeRequest, PipelineDetail, Pipelines};
 
 impl Pipelines {
@@ -37,6 +42,12 @@ impl Pipelines {
             (*proof.id(), pipeline, job),
             user,
             |facts| reconfirm(proof, facts),
+            |facts| {
+                // The same principal, on the project as the transaction
+                // locked it (its account was reconfirmed just before).
+                let fresh = ProjectCtx::new(loaded(&facts.project));
+                prove(proof.principal(), Action::PipelinePlayProtected, fresh).map(drop)
+            },
         )
         .await?;
         tracing::info!(

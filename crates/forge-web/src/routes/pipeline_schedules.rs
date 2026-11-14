@@ -74,7 +74,8 @@ pub struct PipelineScheduleBody {
     pub cron: String,
     pub utc_offset_minutes: i32,
     pub active: bool,
-    /// The person whose rights it runs with (whoever last saved it).
+    /// The person whose rights it runs with (who created it or last changed
+    /// its branch, rule or offset).
     #[schema(minimum = 1)]
     pub owner_id: i64,
     /// When it runs next (RFC 3339, UTC); `null` when inactive.
@@ -85,7 +86,9 @@ pub struct PipelineScheduleBody {
     pub last_run_at: Option<String>,
     /// What its last run did: `created` (`last_pipeline_id`),
     /// `no_definition`, `ref_missing`, `refused` (FG-CI-0026: the owner may
-    /// not run pipelines now), `failed` (`last_error_code`).
+    /// not run pipelines now: the schedule was stopped), `failed`
+    /// (`last_error_code`), `busy` (its previous pipeline was still
+    /// running), `capped` (the hourly cap, FG-CI-0028).
     #[schema(required = true)]
     pub last_outcome: Option<String>,
     #[schema(required = true, minimum = 1)]

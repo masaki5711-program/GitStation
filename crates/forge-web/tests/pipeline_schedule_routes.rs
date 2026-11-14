@@ -169,6 +169,49 @@ impl World {
         }
     }
 
+    /// A push pipeline of one manual job `deploy` at `sha`, protected or not.
+    async fn seed_manual(&self, sha: char, protected: bool) -> i64 {
+        db::create(
+            &self.t.db,
+            &NewPipeline {
+                request: PipelineRequest {
+                    project: self.web,
+                    git_ref: RefName::parse("refs/heads/main").expect("ref"),
+                    sha: ObjectId::parse(&sha.to_string().repeat(40)).expect("sha"),
+                    source: Source::Push,
+                    merge_request: None,
+                    triggered_by: None,
+                },
+                request_id: "req-seed".to_owned(),
+                definition_hash: Some(db::definition_hash(b"version: 1")),
+                protected,
+                copy_mark: CopyMark::Open,
+                planned: Planned::Jobs(vec![NewCiJob {
+                    name: "deploy".to_owned(),
+                    stage: "deploy".to_owned(),
+                    wave: 0,
+                    needs: Vec::new(),
+                    image: format!("registry.internal/rust@sha256:{}", "a".repeat(64)),
+                    timeout_s: 600,
+                    tags: Vec::new(),
+                    secrets: vec!["DEPLOY_KEY".to_owned()],
+                    manual: true,
+                }]),
+            },
+        )
+        .await
+        .expect("seed")
+        .pipeline_id
+    }
+
+    async fn job_of(&self, pipeline: i64) -> i64 {
+        sqlx::query_scalar("SELECT id FROM forge.ci_jobs WHERE pipeline_id = $1")
+            .bind(pipeline)
+            .fetch_one(&mut self.t.superuser().await)
+            .await
+            .expect("job")
+    }
+
     fn list_uri(&self) -> String {
         format!("/api/v1/projects/{}/pipeline-schedules", self.web.get())
     }
@@ -240,37 +283,7 @@ async fn a_maintainer_manages_schedules_and_owns_what_they_save() {
 #[tokio::test]
 async fn a_developer_starts_a_manual_job_once() {
     let w = World::new().await;
-    let pipeline = db::create(
-        &w.t.db,
-        &NewPipeline {
-            request: PipelineRequest {
-                project: w.web,
-                git_ref: RefName::parse("refs/heads/main").expect("ref"),
-                sha: ObjectId::parse(&"a".repeat(40)).expect("sha"),
-                source: Source::Push,
-                merge_request: None,
-                triggered_by: None,
-            },
-            request_id: "req-seed".to_owned(),
-            definition_hash: Some(db::definition_hash(b"version: 1")),
-            protected: false,
-            copy_mark: CopyMark::Open,
-            planned: Planned::Jobs(vec![NewCiJob {
-                name: "deploy".to_owned(),
-                stage: "deploy".to_owned(),
-                wave: 0,
-                needs: Vec::new(),
-                image: format!("registry.internal/rust@sha256:{}", "a".repeat(64)),
-                timeout_s: 600,
-                tags: Vec::new(),
-                secrets: Vec::new(),
-                manual: true,
-            }]),
-        },
-    )
-    .await
-    .expect("seed")
-    .pipeline_id;
+    let pipeline = w.seed_manual('a', false).await;
     let show = w
         .call(
             "GET",
@@ -296,5 +309,37 @@ async fn a_developer_starts_a_manual_job_once() {
     let twice = w.call("POST", &play, token(w.dev), None).await;
     assert_eq!(twice.status, StatusCode::CONFLICT, "{}", twice.json);
     assert_eq!(twice.code(), "FG-CI-0003");
+    w.t.drop_now().await;
+}
+
+/// M4 C12 review (HIGH): a manual job of a protected pipeline (its jobs get
+/// the project's secrets) is a Maintainer's, people only: a Developer and
+/// an agent's token of the owner are refused and nothing starts; the owner
+/// (a person) starts it.
+#[tokio::test]
+async fn only_a_maintainer_starts_a_manual_job_of_a_protected_pipeline() {
+    let w = World::new().await;
+    let pipeline = w.seed_manual('b', true).await;
+    let job = w.job_of(pipeline).await;
+    let play = format!(
+        "/api/v1/projects/{}/pipelines/{pipeline}/jobs/{job}/play",
+        w.web.get()
+    );
+    let dev = w.call("POST", &play, token(w.dev), None).await;
+    assert_eq!(dev.status, StatusCode::FORBIDDEN, "{}", dev.json);
+    assert_eq!(dev.code(), "FG-AUTH-0003");
+    let agent = w
+        .call("POST", &play, token(w.owner).as_agent(true), None)
+        .await;
+    assert_eq!(agent.code(), "FG-AUTH-0003", "{}", agent.json);
+    let still: String = sqlx::query_scalar("SELECT status FROM forge.ci_jobs WHERE id = $1")
+        .bind(job)
+        .fetch_one(&mut w.t.superuser().await)
+        .await
+        .expect("job");
+    assert_eq!(still, "manual", "a refusal starts nothing");
+    let started = w.call("POST", &play, token(w.owner), None).await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.json);
+    assert_eq!(started.json["jobs"][0]["status"], "pending");
     w.t.drop_now().await;
 }
