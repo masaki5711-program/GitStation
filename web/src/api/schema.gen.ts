@@ -916,6 +916,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/deploy/environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's deployment environments (dev, stg, prod) with their approval rule, approval window, freeze windows (and whether one is in force now), automatic rollback and deployment, and their targets with the pinned host key fingerprint; never a key (project readers) */
+        get: operations["get_api_v1_projects_id_deploy_environments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deploy/environments/{tier}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Create or change a deployment environment ({"requires_approval", "auto_rollback", "approval_ttl_minutes"?, "auto_deploy_ref"?, "freeze_windows"?}): 201 created or 200 changed; prod always requires an approval and never rolls back or deploys by itself (400 FG-WEB-0006); audited (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_deploy_environments_tier"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Register or change a deployment target ({"host", "port"?, "user", "host_key_type", "host_key", "script", "enabled"?}): the host key is pinned (StrictHostKeyChecking=yes against it alone) and only the named script runs on the host; 404 FG-REPO-0005 without the environment; audited (people only; administrators) */
+        put: operations["put_api_v1_projects_id_deploy_environments_tier_targets_name"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers) */
+        get: operations["get_api_v1_projects_id_deployments"];
+        put?: never;
+        /** Request a deployment ({"environment": "stg", "sha"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer) */
+        post: operations["post_api_v1_projects_id_deployments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deployments/{deployment_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer) */
+        post: operations["post_api_v1_projects_id_deployments_deployment_id_approve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/doc-lint/migration": {
         parameters: {
             query?: never;
@@ -2588,6 +2674,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/ssh-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's SSH public keys and the SSH server's host and host key fingerprints */
+        get: operations["get_api_v1_user_ssh_keys"];
+        put?: never;
+        /** Add an SSH public key for the caller (web sessions only; Ed25519 / ECDSA) */
+        post: operations["post_api_v1_user_ssh_keys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/ssh-keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete one of the caller's SSH keys */
+        delete: operations["delete_api_v1_user_ssh_keys_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user/tokens": {
         parameters: {
             query?: never;
@@ -2705,6 +2826,16 @@ export interface components {
         AddNote: {
             /** @description Plain text / Markdown, 1 character to 60 KiB. */
             body: string;
+        };
+        /** @description `POST /api/v1/user/ssh-keys`. */
+        AddSshKey: {
+            /**
+             * @description One public key line: `ssh-ed25519 AAAA… [comment]` (Ed25519 or
+             *     ECDSA P-256 / P-384 / P-521).
+             */
+            key: string;
+            /** @description 1..=100 characters; empty or absent = the key's comment. */
+            title?: string | null;
         };
         /**
          * @description One user as the administration sees it (no e-mail or other personal
@@ -3822,6 +3953,44 @@ export interface components {
              */
             next_before: number | null;
         };
+        /** @description A deployment. */
+        DeploymentBody: {
+            approval_expires_at?: string | null;
+            approved_at?: string | null;
+            /** Format: int64 */
+            approved_by?: number | null;
+            commit_author_email?: string | null;
+            commit_author_name?: string | null;
+            /**
+             * @description The commit as git read it at the request (shown to the approver;
+             *     `None` for an automatic request).
+             */
+            commit_subject?: string | null;
+            created_at: string;
+            environment: string;
+            error_code?: string | null;
+            failed_target?: string | null;
+            finished_at?: string | null;
+            /** Format: int64 */
+            id: number;
+            previous_sha?: string | null;
+            /**
+             * Format: int64
+             * @description `None`: the system (an automatic deployment).
+             */
+            requested_by?: number | null;
+            sha: string;
+            started_at?: string | null;
+            /**
+             * @description `pending_approval`, `queued`, `running`, `succeeded`, `failed`,
+             *     `rolled_back`, `rollback_failed`, `blocked`.
+             */
+            status: string;
+        };
+        /** @description `GET …/deployments`. */
+        DeploymentList: {
+            deployments: components["schemas"]["DeploymentBody"][];
+        };
         /** @description The approvals given on the head and target now. */
         DevStatusApprovalsBody: {
             /**
@@ -4307,6 +4476,24 @@ export interface components {
             /** @description `tree`, `blob`, `symlink` or `submodule`. */
             type: string;
         };
+        /** @description An environment and its targets. */
+        EnvironmentBody: {
+            /** Format: int32 */
+            approval_ttl_minutes: number;
+            auto_deploy_ref?: string | null;
+            auto_rollback: boolean;
+            /** @description `<start>/<end>` in UTC. */
+            freeze_windows: string[];
+            frozen_now: boolean;
+            requires_approval: boolean;
+            targets: components["schemas"]["TargetBody"][];
+            tier: string;
+            updated_at: string;
+        };
+        /** @description `GET …/deploy/environments`. */
+        EnvironmentList: {
+            environments: components["schemas"]["EnvironmentBody"][];
+        };
         Error: {
             error_code: string;
             request_id: string;
@@ -4456,6 +4643,11 @@ export interface components {
             provider: string;
             /** @description `PBI-<n>`. */
             ref: string;
+        };
+        /** @description One freeze window `[starts_at, ends_at)`, timestamps with a time zone. */
+        FreezeWindow: {
+            ends_at: string;
+            starts_at: string;
         };
         /** @description One grant: a namespace a service account reports on one project. */
         GrantBody: {
@@ -5143,6 +5335,13 @@ export interface components {
              */
             tombstones: number;
         };
+        /** @description `POST …/deployments`. */
+        NewDeployment: {
+            /** @description `dev`, `stg` or `prod`. */
+            environment: string;
+            /** @description The full commit id (lowercase hex). */
+            sha: string;
+        };
         /** @description `POST …/pipelines`. */
         NewPipelineRun: {
             /** @description The branch: `main` or `refs/heads/main`. */
@@ -5530,6 +5729,26 @@ export interface components {
              */
             warn_until: string;
         };
+        /** @description `PUT …/deploy/environments/{tier}`. */
+        PutEnvironment: {
+            /**
+             * Format: int32
+             * @description How long a request waits for an approval and an approval for the
+             *     worker (1..=1440, default 60).
+             */
+            approval_ttl_minutes?: number | null;
+            /**
+             * @description Deploy the newest succeeded push pipeline of this branch
+             *     (`refs/heads/...`; never for prod).
+             */
+            auto_deploy_ref?: string | null;
+            /** @description Roll every target back when a deployment fails (never for prod). */
+            auto_rollback: boolean;
+            /** @description No deployment is requested or run inside these (at most 50). */
+            freeze_windows?: components["schemas"]["FreezeWindow"][];
+            /** @description A Maintainer approves each deployment (always true for prod). */
+            requires_approval: boolean;
+        };
         /**
          * @description `PUT …/merge-rule` (absent fields: off / 0, except
          *     `require_work_item_link` and `expected_updated_at`: required).
@@ -5592,6 +5811,26 @@ export interface components {
              *     a configuration or CODEOWNERS path).
              */
             reset_approvals_on_push: boolean;
+        };
+        /** @description `PUT …/targets/{name}`. */
+        PutTarget: {
+            /** @description Default true. */
+            enabled?: boolean | null;
+            /** @description A DNS name or an IPv4 address (lowercase). */
+            host: string;
+            /** @description The base64 public key (the last field of a known_hosts line). */
+            host_key: string;
+            /** @description `ssh-ed25519`, `ecdsa-sha2-nistp256|384|521`, `rsa-sha2-512|256`. */
+            host_key_type: string;
+            /**
+             * Format: int32
+             * @description Default 22.
+             */
+            port?: number | null;
+            /** @description The registered script name run on the host. */
+            script: string;
+            /** @description The login user on the host. */
+            user: string;
         };
         /** @description The batch being tested (ADR-0030 §3, §5). */
         QueueBatchBody: {
@@ -6342,6 +6581,38 @@ export interface components {
             /** @description Newest first within a series (`v` / `spec-v`), series by name. */
             versions: components["schemas"]["SpecVersionBody"][];
         };
+        /** @description One key as the API shows it. */
+        SshKeyBody: {
+            algorithm: string;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** @description `SHA256:…` (what `ssh-keygen -l -E sha256 -f <key>.pub` prints). */
+            fingerprint: string;
+            /** Format: int64 */
+            id: number;
+            last_used_at: string | null;
+            /** @description `<algorithm> <base64>` (no comment). */
+            public_key: string;
+            title: string;
+        };
+        /** @description The caller's keys and the SSH server's facts. */
+        SshKeyList: {
+            items: components["schemas"]["SshKeyBody"][];
+            ssh: null | components["schemas"]["SshServerBody"];
+        };
+        /**
+         * @description The SSH server as clients see it (`null` while `git.ssh.enabled` is
+         *     off).
+         */
+        SshServerBody: {
+            /** @description `host:port` of clone URLs: `ssh://git@<clone_host>/<path>.git`. */
+            clone_host: string;
+            /**
+             * @description The host key fingerprints (`SHA256:…`) to compare on the first
+             *     connection.
+             */
+            host_key_fingerprints: string[];
+        };
         /** @description `POST …/discussions`. */
         StartDiscussion: {
             /** @description The first note: plain text / Markdown, 1 character to 60 KiB. */
@@ -6481,6 +6752,19 @@ export interface components {
              *     exists (`false`: `work_item_link_missing`).
              */
             linked: boolean;
+        };
+        /** @description A target (its pin by fingerprint; never a private key). */
+        TargetBody: {
+            enabled: boolean;
+            host: string;
+            host_key_fingerprint: string;
+            host_key_type: string;
+            name: string;
+            /** Format: int32 */
+            port: number;
+            script: string;
+            updated_at: string;
+            user: string;
         };
         /** @description One token as the API shows it (never the secret or its hash). */
         TokenBody: {
@@ -9401,6 +9685,208 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContextWorkItemBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_deploy_environments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_deploy_environments_tier: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                tier: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutEnvironment"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_deploy_environments_tier_targets_name: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                name: string;
+                tier: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutTarget"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TargetBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_deployments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_deployments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewDeployment"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_deployments_deployment_id_approve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deployment_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -13385,6 +13871,97 @@ export interface operations {
             header?: never;
             path: {
                 public_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_ssh_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SshKeyList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_user_ssh_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddSshKey"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SshKeyBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_user_ssh_keys_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
             };
             cookie?: never;
         };
