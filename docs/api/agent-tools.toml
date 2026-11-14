@@ -850,6 +850,10 @@ gstn = "ci plan"
 reason = "Local only: plans .forge-ci.yml in the working tree."
 
 [[not_api]]
+gstn = "agent verify"
+reason = "Local only: checks .claude/ against agent.lock.json and part signatures with local keys (plan 16 A1)."
+
+[[not_api]]
 gstn = "mcp"
 reason = "This server itself."
 

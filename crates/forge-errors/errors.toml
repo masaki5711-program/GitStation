@@ -2853,6 +2853,89 @@ diagnosis = "The log event carries `reason`, `merge_request_id`, `entry_id` (the
 fix = "Nothing on the server: an already queued merge request waits for its turn (remove it first to re-add it); a closed one must be reopened."
 test = "a_merge_request_already_in_the_queue_is_refused"
 
+# ── Plan 16 A1 (ADR-0032): agent parts — forge-agent and `gstn agent verify` ──
+# Numbers follow plan 16 §5; the gaps (0004, 0006, 0008–0012) are registered
+# with the MRs that first raise them (A3–A10).
+
+[[error]]
+code = "FG-AGENT-0001"
+name = "PartManifestInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "エージェントの部品の形が正しくありません（part.toml、ファイルの置き場所、種類、大きさ）。部品を直してください。"
+user_message_en = "The agent part is not well-formed (part.toml, file locations, kind or size). Fix the part."
+user_message_id = "Bagian agen tidak berbentuk benar (part.toml, lokasi berkas, jenis, atau ukuran). Perbaiki bagian tersebut."
+cause = "Plan 16 A1 (ADR-0032 §2): forge-agent's part lint refused a part directory or a lock entry. `reason`: `manifest_missing`, `manifest_syntax` (TOML error or an unknown key — nothing is ignored), `manifest_not_utf8`, `slug_invalid`, `kind_unknown`, `version_invalid` (semver), `require_invalid`, `capability_unknown` (exec / network / permissions / fs-write only), `no_files`, `path_not_allowed` (outside `.claude/` and not `CLAUDE.md` / `.mcp.json`, `..`, `.git`, absolute, a drive letter, a per-checkout file such as `.claude/settings.local.json`), `path_characters` (non-ASCII, backslash, colon, control characters, a trailing dot or space), a path not in the canonical case (`.Claude/`, `claude.md`), `path_length`, `duplicate_file` (also two paths that differ only by letter case), `file_missing` (listed, not in the directory), `file_not_declared` (in the directory, not listed), `not_a_regular_file` (a symlink), `too_many_files` (> 200), `too_large` (> 1 MiB), `hook_not_node` (a script under `.claude/hooks/` that is not .js / .cjs / .mjs), `mcp_file_outside_mcp_part`, `file_not_utf8`, `settings_json_invalid`, `mcp_json_invalid`, `json_invalid`. Nothing was published or written."
+diagnosis = "`gstn agent verify --part <dir> --json` lists every problem with its `reason` and `subject` (the path or field). The part's own `part.toml` and directory listing are the input; nothing on the server is involved."
+fix = "Fix the part: put files only under `.claude/` (or `CLAUDE.md`, `.mcp.json` for an mcp part), list every file in `files`, drop symlinks, keep within 200 files and 1 MiB, use a semver `version`."
+test = "manifest_rejects_path_outside_claude_dir"
+
+[[error]]
+code = "FG-AGENT-0002"
+name = "PartSignatureInvalid"
+http_status = 422
+severity = "alert"
+user_message_ja = "エージェントの部品の署名か要約が合いません。改ざんの疑いがあります。この設定を使わず、管理者に連絡してください。"
+user_message_en = "The agent part's signature or digest does not match. It may have been tampered with. Do not use this configuration and contact the administrator."
+user_message_id = "Tanda tangan atau digest bagian agen tidak cocok. Mungkin telah dirusak. Jangan gunakan konfigurasi ini dan hubungi administrator."
+cause = "Plan 16 §2.2 (ADR-0032 §3–§4): a part's Ed25519 signature over its digest did not verify. `reason`: `digest_mismatch` (the digest recomputed from the lock's manifest fields and file hashes differs from the recorded one — the lock or a file was edited), `bad_signature` (the digest was recomputed too, or the signature or key is wrong), `signature_malformed`, `key_revoked` (the signing key was revoked). Signed parts never change after publication, so every case means the configuration is not what the marketplace published."
+diagnosis = "`gstn agent verify --json` names the part (`slug@version`) and key in `subject`. Compare the repository's `.gitstation/agent.lock.json` and `.claude/` with the last builder merge request (`git log -p -- .gitstation .claude`): who changed them and in which merge request. Runbook agent-supply-chain."
+fix = "Follow runbook agent-supply-chain: do not run Claude Code in the working tree, restore `.claude/` and the lock from the last verified commit or regenerate them with the builder, find who changed them; a revoked key means the parts must be re-published and updated."
+runbook = "agent-supply-chain"
+test = "verify_rejects_one_byte_change"
+
+[[error]]
+code = "FG-AGENT-0003"
+name = "SigningKeyUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "エージェントの部品を確かめる鍵がありません。鍵を更新してからもう一度確かめてください。"
+user_message_en = "The key to verify the agent parts is not available. Update the keys and verify again."
+user_message_id = "Kunci untuk memverifikasi bagian agen tidak tersedia. Perbarui kunci lalu verifikasi lagi."
+cause = "Plan 16 §2.2 (ADR-0032 §4): the key list needed to verify a part signature is missing, unreadable or does not name the part's key. `reason`: `keys_missing` (gstn: no `agent-keys.json` in the gstn configuration directory and no `--keys`), `keys_unreadable`, `keys_invalid` (not the JSON key list, a duplicate or empty kid, a public key that is not 32 bytes of base64), `unknown_key` (the lock names a `key_id` the list does not hold: the local list is older than a key rotation, or the kid is forged), `signing_key_invalid` (a signing seed that is not an Ed25519 seed). The server-side key file (`agent.signing_keys_file`) comes with A3."
+diagnosis = "`gstn agent verify --json`: `reason` and `subject` (the kid). Look at the key list file (`--keys`, or `agent-keys.json` in the gstn configuration directory): which kids it holds and whether it parses. Runbook agent-signing-key."
+fix = "Get the current public keys from the administrator (from A5: `GET /api/v1/agent-keys`) into `agent-keys.json`, then verify again. A kid nobody issued is a tampering sign: runbook agent-supply-chain."
+runbook = "agent-signing-key"
+test = "unknown_key_id_is_signing_key_unavailable"
+
+[[error]]
+code = "FG-AGENT-0005"
+name = "PartCapabilityUndeclared"
+http_status = 422
+severity = "info"
+user_message_ja = "エージェントの部品が、宣言していない能力（コマンドの実行、ネットワーク、権限の設定）を使っているか、検査できない書き方をしています。"
+user_message_en = "The agent part uses a capability it does not declare (running commands, network, permission settings), or code the scan cannot check."
+user_message_id = "Bagian agen menggunakan kemampuan yang tidak dideklarasikan (menjalankan perintah, jaringan, pengaturan izin), atau kode yang tidak dapat diperiksa."
+cause = "Plan 16 §8 (ADR-0032 §5, Amendment 2026-11-14): forge-agent's static scan found, in a part's files: `undeclared_child_process` (`child_process` / `cluster`; a hook command — settings.json `hooks`, another JSON `command`, `hooks:` in Markdown front matter — that is not exactly `node <.claude/… .js of this part>`; a slash command's inline bash `` !` ``; an MCP server with `command`; without the `exec` capability), `undeclared_network` (http / https / net / tls / dgram / dns / undici, `fetch`, `WebSocket`, `XMLHttpRequest`, `EventSource`, an MCP `url`, without `network`), `undeclared_permissions` (`permissions` in settings.json), `undeclared_fs_write` (writeFile, appendFile, createWriteStream, unlink, rename, mkdir, copyFile, symlink, chmod, truncate, rmSync, … without `fs-write`), `settings_key_not_allowed` (a settings.json key other than $schema, hooks, permissions, model, includeCoAuthoredBy, cleanupPeriodDays, outputStyle — statusLine, apiKeyHelper, env … run or change what the scan cannot judge), `hook_target_not_in_part` (a `node` hook naming a script the part does not ship), or `dynamic_code` (code the scan cannot follow: any `\\u` escape; the identifiers eval, Function, Reflect, constructor, binding, _linkedBinding, dlopen, mainModule, createRequire, getBuiltinModule, globalThis, global; `process` not followed by `.`; `import` as a call; a `require` that is not one plain string literal; the modules vm / worker_threads / module / inspector / v8 / wasi). Every file that is not Markdown or JSON is scanned as a script (node runs any extension), as identifiers, so spacing and comments between tokens change nothing. `dynamic_code`, `settings_key_not_allowed` and `hook_target_not_in_part` are refused even when every capability is declared."
+diagnosis = "`gstn agent verify --part <dir> --json`: each problem's `reason` and `subject` (the file; for dynamic_code also the construct)."
+fix = "Declare the capability in part.toml's `capabilities` (the marketplace shows it to everyone who installs the part), or remove the use. For `dynamic_code`, write a plain `require('<name>')`; reword a comment that names a refused construct."
+test = "scan_flags_undeclared_child_process"
+
+[[error]]
+code = "FG-AGENT-0007"
+name = "AgentLockMismatch"
+http_status = 409
+severity = "warn"
+user_message_ja = "リポジトリのエージェントの設定が agent.lock.json と合いません。ビルダーで作り直すか、変更の承認を受けてください。"
+user_message_en = "The repository's agent configuration does not match agent.lock.json. Regenerate it with the builder or get the change approved."
+user_message_id = "Konfigurasi agen repositori tidak cocok dengan agent.lock.json. Buat ulang dengan builder atau minta persetujuan perubahan."
+cause = "Plan 16 §3 (ADR-0032 §6): a managed file (`.claude/**`, `CLAUDE.md`, `.mcp.json`, except per-checkout files) differs from `.gitstation/agent.lock.json`. `reason`: `file_changed` (the file's SHA-256 is not the lock's: edited by hand), `file_missing`, `unmanaged_file` (a managed file the lock does not pin, neither a part's nor `custom`; managed paths match in any letter case — `.Claude/settings.json`, `CLAUDE.MD` — and a tracked per-checkout file such as `.claude/settings.local.json` is managed), `case_collision` (two tracked paths that differ only by letter case), `custom_unverified` (a hand-added `custom` file that can run code — anything but Markdown without hooks or `` !` `` — has no signature or scan; it stays unverified until the builder's approval check, A7), `not_a_regular_file` (a symlink where a managed file is, or a `.claude` that is not a directory), `duplicate_path`, `lock_missing` (managed files without a lock), `lock_unreadable`, `lock_invalid` (not the lock's JSON, an unknown key, a bad hash), `lock_version_unsupported`."
+diagnosis = "`gstn agent verify --json` lists each path with its reason. `git log -p -- <path>` shows who changed it; `git status -- .claude` shows uncommitted edits. Every file is `file_changed` at once after a checkout with `core.autocrlf=true` (LF became CRLF): the check fails closed; check `git config core.autocrlf`."
+fix = "Undo the hand edit (git restore); for line endings set `core.autocrlf=false` (or `.gitattributes` `* -text` for `.claude/`) and check out again; or add the file as `custom` through a builder merge request (a person approves it), or regenerate the configuration with the builder."
+test = "verify_flags_hand_edited_file"
+
+[[error]]
+code = "FG-AGENT-0013"
+name = "McpEndpointNotAllowed"
+http_status = 422
+severity = "info"
+user_message_ja = "MCP の行き先が社内の許可の一覧にありません。社外のサービスにはつなげません。"
+user_message_en = "The MCP endpoint is not on the internal allow-list. External services cannot be connected."
+user_message_id = "Endpoint MCP tidak ada dalam daftar izin internal. Layanan eksternal tidak dapat dihubungkan."
+cause = "Plan 16 §8, contract 8 (on-prem; ADR-0032 §5): a part's `.mcp.json` names an `http(s)://` or `ws(s)://` URL — in `url`, `args`, `env` or anywhere in a server's definition — whose host is not on the allow-list (`mcp_host_not_allowed`; an exact host, or a `.suffix` entry matching a subdomain only). With no list, every URL is refused."
+diagnosis = "`gstn agent verify --part <dir> --mcp-allowed-hosts <a,b> --json`: `subject` is the host refused."
+fix = "Point the MCP server at an internal host on the list, or ask the administrator to add the internal host to the list. External hosts are not allowed."
+test = "mcp_external_host_rejected"
 # ── M4 C11 (plan 14 §4.3, ADR-0031): deployments over SSH ──
 
 [[error]]

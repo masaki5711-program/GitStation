@@ -6664,6 +6664,136 @@
     {
       "args": [
         {
+          "description": "A part directory to check instead of the repository's lock.",
+          "kind": "option",
+          "name": "--part",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The lock (default: .gitstation/agent.lock.json at the root of the repository found upward).",
+          "kind": "option",
+          "name": "--lock",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The public key list (default: agent-keys.json in the gstn configuration directory).",
+          "kind": "option",
+          "name": "--keys",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "With --part: the internal hosts an MCP server may name, comma-separated (an exact host, or .suffix for its subdomains).",
+          "kind": "option",
+          "name": "--mcp-allowed-hosts",
+          "repeatable": true,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn agent verify",
+        "gstn agent verify --json",
+        "gstn agent verify --part parts/format-on-save --mcp-allowed-hosts mcp.corp.internal"
+      ],
+      "name": "agent verify",
+      "output": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "type": "integer"
+          },
+          "keys": {
+            "enum": [
+              "local"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lock": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "part": {
+            "type": "string"
+          },
+          "parts": {
+            "type": "integer"
+          },
+          "problems": {
+            "items": {
+              "properties": {
+                "error_code": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "error_code",
+                "reason",
+                "subject"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "revocation_checked": {
+            "type": "boolean"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "problems"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Check the repository's Claude Code configuration on this computer: every managed file (.claude/, CLAUDE.md, .mcp.json) must match .gitstation/agent.lock.json (FG-AGENT-0007), and every part's digest and Ed25519 signature must verify with the local public keys (FG-AGENT-0002; a missing or stale key list is FG-AGENT-0003). With --part, check one part directory instead: part.toml, install paths (FG-AGENT-0001), the static scan for undeclared commands, network or permissions (FG-AGENT-0005) and MCP hosts outside the list (FG-AGENT-0013), and print its digest. Exit 1 with the most serious problem's code. Local only: revocation is not checked."
+    },
+    {
+      "args": [
+        {
           "description": "The project id.",
           "kind": "option",
           "name": "--project",
