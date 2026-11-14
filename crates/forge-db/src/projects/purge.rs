@@ -644,12 +644,53 @@ async fn finish_steps(
         "projects.purge.finish.ci_variables",
     )
     .await?;
+    // M4 C11: deployments, then targets, then environments (audited on
+    // the project: the project.purged row covers them).
+    for (sql, query) in [
+        (
+            "DELETE FROM forge.deployments WHERE project_id = $1",
+            "projects.purge.finish.deployments",
+        ),
+        (
+            "DELETE FROM forge.deploy_targets WHERE project_id = $1",
+            "projects.purge.finish.deploy_targets",
+        ),
+        (
+            "DELETE FROM forge.deploy_environments WHERE project_id = $1",
+            "projects.purge.finish.deploy_environments",
+        ),
+    ] {
+        delete_rows(tx, sql, project.get(), query).await?;
+    }
     // 2026-11-12: the history import allowance references the repository.
     delete_rows(
         tx,
         "DELETE FROM forge.repository_history_imports WHERE project_id = $1",
         project.get(),
         "projects.purge.finish.repository_history_imports",
+    )
+    .await?;
+    // M4 C8: the merge queue — entries reference the batches, the queues,
+    // the merge requests and the merge attempts; batches the queues.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_queue_entries WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_queue_entries",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_queue_batches WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_queue_batches",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_queues WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_queues",
     )
     .await?;
     delete_rows(

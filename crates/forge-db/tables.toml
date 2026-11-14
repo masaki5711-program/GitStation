@@ -75,6 +75,9 @@ guarded_functions = [
     # M3 X3 review: a binding that resolves work items is its project's only
     # binding (deferred).
     "integration_bindings_resolving_alone",
+    # M4 C11: a deployment's identity never changes; its approval is set
+    # once; it only moves forward.
+    "deployments_guard",
 ]
 
 [tables.events]
@@ -167,6 +170,8 @@ txn_audited_columns = []
 # ── end D1 ──
 
 # ── D2: groups and their members (ADR-0010, ADR-0016 §1) ──
+# Plan 15 MR2: visibility (private / internal) is audited like the other
+# columns (20261214101500 re-creates the trigger).
 [tables.groups]
 guarded = false
 kind = "audited"
@@ -756,6 +761,24 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 
+# ── M4 C8 (20261213100000, ADR-0030): the merge queue — per target branch
+# queues, the batches (trains) tested and the entries; the worker's state,
+# a person's enqueue / dequeue / pause / resume is audited by the command ──
+[tables.merge_queues]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.merge_queue_batches]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.merge_queue_entries]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
 # ── 2026-11-12 (20261210100000, ADR-0008 amendment "history import"): the
 # one-time history import allowance of an empty repository, set by the
 # operator CLI and used up by the first accepted push; audited on the project ──
@@ -794,6 +817,35 @@ txn_audited_columns = []
 guarded = false
 kind = "derived"
 ro_columns = ["job_id", "attempt", "project_id", "name", "key_id", "masked", "created_at"]
+
+# ── M4 C11 (20261214100000, plan 14 §4.1, ADR-0031): deployments. An
+# environment is set by a Maintainer and a target by an administrator (people
+# only), audited on the project (`deploy_environment.*`, `deploy_target.*`;
+# never a key). A deployment is derived state: its request and approval
+# write their audit rows (`deployment.requested` / `.approved`) in the same
+# transaction; the guard deployments_forward keeps its identity and states ──
+[tables.deploy_environments]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.deploy_targets]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.deployments]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
 
 # ── M4 C12 (20261215100000, plan 14 §5 C12): scheduled pipelines, created,
 # changed and deleted by a Maintainer (people only), audited on the project

@@ -1,0 +1,75 @@
+# /etc/systemd/system/forge-serve.service — GitStation HTTP server
+# (web UI, REST API, git Smart HTTP). Runbooks: linux-install, linux-upgrade,
+# server-start-failed. Local changes go in a drop-in
+# (`systemctl edit forge-serve`), never in this file.
+[Unit]
+Description=GitStation server (forge serve)
+Documentation=file:///opt/gitstation/current/share/runbooks/linux-install.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+# A configuration error fails the same way every time: stop retrying after
+# 5 starts in 10 minutes (then `systemctl reset-failed forge-serve`).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=forge
+Group=forge
+UMask=0027
+WorkingDirectory=/var/lib/forge
+Environment=HOME=/var/lib/forge
+Environment=LANG=C.UTF-8
+ExecStart=/opt/gitstation/current/bin/forge --config /etc/forge/forge.toml serve
+
+# Shutdown: SIGTERM to forge only (KillMode=mixed), so a running git
+# receive-pack is not killed under it. forge then drains for up to
+# 30 s (requests) + 30 s (merge) + 90 s (pushes): give it 180 s.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=180
+Restart=on-failure
+RestartSec=5s
+
+# Resources. PLACEHOLDER values: size them from the free RAM the PFS team
+# reports (ops/runbooks/linux-install.md). git upload-pack / pack-objects
+# of a large clone run inside this cgroup.
+MemoryHigh=1536M
+MemoryMax=2G
+TasksMax=1024
+LimitNOFILE=65536
+
+# Hardening. Writable: the state directory only (repositories, push-check
+# run directories). Logs go to journald (stderr), not to files.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+# Other users' processes are invisible, and /proc shows processes only
+# (no /proc/sys etc.).
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/forge
+# The migrate / maint credentials (forgectl, ADR-0018) are never visible here.
+InaccessiblePaths=-/etc/forge/secrets-privileged -/run/forge-admin -/etc/forge/forgectl.env
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

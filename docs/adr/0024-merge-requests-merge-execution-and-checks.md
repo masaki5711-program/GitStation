@@ -2100,3 +2100,23 @@ ADR-0028 §4（proposed）: 承認のフェーズのあるリポジトリでは�
   古い → FG-CI-0013 → 新しい結果で成功 → マージ）、`the_merge_job_refuses_a_check_that_went_stale_after_the_request`、
   `a_head_run_of_ci_pipeline_does_not_count`、`a_conflict_leaves_no_merge_ref`、`a_merge_result_is_written_once_per_pair`、forge-db
   `a_merge_request_pipeline_runs_on_each_merge_result_once`、forge-core の解決の単体テスト。
+
+## Amendment（2026-11-13、`feat/core-mr-people-employee-number`）— MR の `author` と `merged_by` を開発状況と同じ形に
+
+kanflow は新しく開いた MR を一覧（`GET /api/v1/projects/{id}/merge-requests`）と詳細（`…/merge-requests/{iid}`）で読むが、`author` に
+社員番号が無く、次の開発状況の取り直しまで人を突き合わせられなかった。欄を **足した**（消す・変える欄は無い）。
+
+1. MR の答え（一覧・詳細・作成・編集・クローズ・再オープン）の **`author`** は `{id, username, display_name, employee_number}`
+   （開発状況の `docs/api/dev-status.md` と同じ形。`id` を足した。`author_id` は残す）。**`merged_by`** を足した: 適用された
+   マージの試み（終了の新しいもの）を要求した人を同じ形で。`state = merged` でなければ `null`。
+2. **`employee_number` はイベントの履歴・開発状況と同じ判定**（新しいスコープは作らない）: 呼び出しのトークンが
+   `user_employee_number` を持つときだけ。ブラウザーのセッション・スコープの無いトークン（`api`・`admin` も満たさない）・代理（act-as）
+   では欄ごと無い。判定は forge-auth の `Principal::personal_disclosure` の 1 か所（履歴・開発状況・act-as の答えもこれを使う）。
+   社員番号を付けるのは一覧と詳細だけ（書き込みの答えには付けない）。メールは出さない。
+3. **読み方**: マージした人とその名前は MR の行と同じ文の副問い合わせ（`COLUMNS`、`RETURNING` でも有効）。社員番号は読み取りの
+   プールから見えない（ADR-0018 §2）ので、スコープがあるときだけ答えのすべての人を書き込みのプールから 1 回で読む
+   （`feed::personal_facts`。N+1 にしない）。
+
+テスト: forge-web `merge_request_people_disclose_the_employee_number_only_with_the_scope`（一覧と詳細、セッション・`read_api`・
+`api`+`admin` では無い、`user_employee_number` で有る、開いた MR の `merged_by` は `null`）、`merge_request_body_carries_author_name`、
+forge-auth `only_the_personal_scopes_disclose`。

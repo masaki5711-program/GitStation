@@ -114,6 +114,15 @@ connection, mapping driver errors to registered codes, migrations
   (non-bot, active) owner of the personal namespace that is the project's direct
   parent; same query, same cap.
   `load_namespace_roles` on a project namespace gives the same answer.
+  `roles::{load_group_access, load_namespace_access, load_project_access}(&Db, id, UserId)
+  -> Result<ChainAccess, ForgeError>` (plan 15 MR 2, migration `20261214101500`):
+  the same roles plus, in the same statement, `visibility` — the narrowest of
+  `groups.visibility` (`private` / `internal`, default `internal`, audited) on the
+  chain and, for a project, `projects.visibility`; `None` on a personal namespace —
+  and `has_visible_descendant` — the (active) user holds a direct role on a group or
+  a not-deleted project strictly below (walked upwards from the user's memberships,
+  same cap). A stored value outside the two is FG-DB-0018 `unknown_visibility`.
+  Facts only: `authorize()` does not use them until plan 15 MR 3.
 - `projects::create(&Db, &ChangeContext, &NewProject) -> Result<CreatedProject, ForgeError>`
   (step D4 MR2, ADR-0015 Amendment D4): `NewProject::new(segment, parent, display_name,
   creator)` defaults to visibility `private`, kind `system`, an empty description. One

@@ -1,0 +1,14 @@
+# /etc/systemd/system/forge-backup.timer — daily backup at 01:15 local time,
+# before the repository maintenance window (maintenance.window_start 02:00).
+# `forge doctor` backup.last_success alerts after backup.max_age_hours (26).
+[Unit]
+Description=Daily GitStation backup
+
+[Timer]
+OnCalendar=*-*-* 01:15:00
+# A run missed while the server was off starts at the next boot.
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

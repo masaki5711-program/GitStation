@@ -154,6 +154,8 @@ pub mod ci_runners;
 pub mod ci_outputs;
 // M4 C6: CI variables (secrets).
 pub mod ci_variables;
+// M4 C11: deployments (environments, targets, requests, approvals, the worker).
+pub mod deploy;
 // M4 C12: pipeline schedules.
 pub mod ci_schedules;
 // M4 C12: specification releases (plan 04 §6 spec-publish).

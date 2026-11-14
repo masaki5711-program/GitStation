@@ -891,7 +891,7 @@ pub fn finish(
     request_id: &RequestId,
 ) -> Result<String, ForgeError> {
     let prepared = backup::prepare(&cfg.backup)?;
-    let storage = crate::worker::provision::Storage::open(cfg.storage_root()?)?;
+    let storage = crate::worker::provision::Storage::from_config(cfg)?;
     crate::runtime::block_on(async {
         let db = Db::connect(&cfg.database).await?;
         let done = finish_all(

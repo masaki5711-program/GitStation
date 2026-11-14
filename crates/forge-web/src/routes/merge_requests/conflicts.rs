@@ -3,7 +3,10 @@
 //! current predictions — other open merge requests on the same target
 //! (drafts included) whose head conflicts with this one's in a path both
 //! change, or whose pair could not be decided. Read like the merge request
-//! itself (`MergeRequestRead`); never starts a scan.
+//! itself (`MergeRequestRead`); never starts a scan. An AI agent is not
+//! given the paths of confidential documents (plan 06 D-5, ADR-0026 §6):
+//! they are left out of each list, which then says `conflicts_truncated`,
+//! and `withheld` counts them.
 
 use axum::response::Response;
 use forge_auth::MergeRequestCtx;
@@ -17,6 +20,9 @@ use super::versions::{merge_request, proof_ids};
 use crate::app::AppState;
 use crate::registry::Dispatched;
 use crate::routes::browse::{answer, query, Target};
+use crate::routes::context::{
+    audience, marked_files, withheld_logged, without_marked_paths, ContextWithheldBody,
+};
 use crate::routes::write::bounded;
 
 /// The path after `{iid}` of [`CONFLICTS`].
@@ -75,7 +81,8 @@ pub struct ConflictPredictionBody {
     #[schema(required = true)]
     pub reason: Option<String>,
     /// The conflicted paths both change (at most 100;
-    /// `conflicts_truncated` beyond).
+    /// `conflicts_truncated` beyond, or when paths an AI agent is not
+    /// given were left out).
     pub conflicts: Vec<String>,
     pub conflicts_truncated: bool,
     /// UTC, RFC 3339.
@@ -95,6 +102,10 @@ pub struct ConflictsBody {
     /// By the other merge request's number; only pairs whose two heads are
     /// both merge requests' current heads.
     pub predictions: Vec<ConflictPredictionBody>,
+    /// For an AI agent (plan 06 D-5): the conflicted paths of confidential
+    /// documents left out of `predictions` (absent when none was).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<ContextWithheldBody>,
 }
 
 fn scan_body(
@@ -151,6 +162,8 @@ fn prediction_body(p: StoredPrediction) -> ConflictPredictionBody {
 pub async fn conflicts(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
     let ids = proof_ids(&request);
     let review_state = state.clone(); // clone: cheap handles; the closure owns its copy
+    let audience = audience(&request);
+    let ctx = request.ctx().clone(); // clone: the log of what was withheld
     answer(
         state,
         request,
@@ -158,6 +171,7 @@ pub async fn conflicts(state: AppState, request: Dispatched<MergeRequestCtx>) ->
         |t: Target, q| async move {
             let (project, iid) = ids?;
             query(q.as_deref(), &[])?;
+            let audience = audience?;
             let mr = merge_request(&review_state, project, iid).await?;
             let (scan, predictions) = bounded(
                 &review_state,
@@ -176,6 +190,28 @@ pub async fn conflicts(state: AppState, request: Dispatched<MergeRequestCtx>) ->
                 Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => None,
                 Err(e) => return Err(e),
             };
+            let mut predictions: Vec<ConflictPredictionBody> =
+                predictions.into_iter().map(prediction_body).collect();
+            let withheld = if audience.is_agent()
+                && predictions.iter().any(|p| !p.conflicts.is_empty())
+            {
+                // Marked at either head of a pair or at the default tip;
+                // an error refuses the answer (fail closed).
+                let mut commits: Vec<&str> =
+                    predictions.iter().map(|p| p.head_sha.as_str()).collect();
+                commits.extend(mr.head_sha.as_deref());
+                let marked =
+                    marked_files(&t.smart.browse, t.repository.id, &t.principal, &commits).await?;
+                let hidden = predictions
+                    .iter_mut()
+                    .map(|p| {
+                        without_marked_paths(&mut p.conflicts, &mut p.conflicts_truncated, &marked)
+                    })
+                    .sum();
+                withheld_logged(&ctx, "merge_request_conflicts", audience, hidden)
+            } else {
+                None
+            };
             Ok(ConflictsBody {
                 iid,
                 scan: scan_body(
@@ -185,7 +221,8 @@ pub async fn conflicts(state: AppState, request: Dispatched<MergeRequestCtx>) ->
                     tip.as_deref(),
                 ),
                 head_sha: mr.head_sha,
-                predictions: predictions.into_iter().map(prediction_body).collect(),
+                predictions,
+                withheld,
             })
         },
     )

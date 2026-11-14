@@ -916,6 +916,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/deploy/environments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's deployment environments (dev, stg, prod) with their approval rule, approval window, freeze windows (and whether one is in force now), automatic rollback and deployment, and their targets with the pinned host key fingerprint; never a key (project readers) */
+        get: operations["get_api_v1_projects_id_deploy_environments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deploy/environments/{tier}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Create or change a deployment environment ({"requires_approval", "auto_rollback", "approval_ttl_minutes"?, "auto_deploy_ref"?, "freeze_windows"?}): 201 created or 200 changed; prod always requires an approval and never rolls back or deploys by itself (400 FG-WEB-0006); audited (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_deploy_environments_tier"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Register or change a deployment target ({"host", "port"?, "user", "host_key_type", "host_key", "script", "enabled"?}): the host key is pinned (StrictHostKeyChecking=yes against it alone) and only the named script runs on the host; 404 FG-REPO-0005 without the environment; audited (people only; administrators) */
+        put: operations["put_api_v1_projects_id_deploy_environments_tier_targets_name"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers) */
+        get: operations["get_api_v1_projects_id_deployments"];
+        put?: never;
+        /** Request a deployment ({"environment": "stg", "sha"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer) */
+        post: operations["post_api_v1_projects_id_deployments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/deployments/{deployment_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer) */
+        post: operations["post_api_v1_projects_id_deployments_deployment_id_approve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/doc-lint/migration": {
         parameters: {
             query?: never;
@@ -1089,6 +1175,57 @@ export interface paths {
         head?: never;
         /** Change a direct project member's role (Maintainer; never above the caller's role) */
         patch: operations["patch_api_v1_projects_id_members_user_id"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A target branch's merge queue (target required): paused or not, the next batch bound, the batch being tested (base, train, deadline), the live entries in order and the latest merged or removed ones with their reason and code (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_queue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-queue/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause a target branch's merge queue (the emergency stop): no new batch is built and no batch lands until it is resumed; merge requests may still be added (people only; Developer) */
+        post: operations["post_api_v1_projects_id_merge_queue_pause"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-queue/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume a paused merge queue (people only; Maintainer) */
+        post: operations["post_api_v1_projects_id_merge_queue_resume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/projects/{id}/merge-requests": {
@@ -1328,6 +1465,25 @@ export interface paths {
         /** Merge a merge request (people only; the target branch's push role; a token needs merge_execute). Queues the merge job */
         post: operations["post_api_v1_projects_id_merge_requests_iid_merge"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A merge request's latest merge queue entry (null: never queued) with its place among the live entries (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_merge_queue"];
+        put?: never;
+        /** Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target branch's push role; a token needs merge_execute); everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0025 when already queued */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_merge_queue"];
+        /** Take a merge request out of the merge queue (as adding it); 409 FG-CI-0025 when it is not queued */
+        delete: operations["delete_api_v1_projects_id_merge_requests_iid_merge_queue"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3332,7 +3488,8 @@ export interface components {
             checked_at: string;
             /**
              * @description The conflicted paths both change (at most 100;
-             *     `conflicts_truncated` beyond).
+             *     `conflicts_truncated` beyond, or when paths an AI agent is not
+             *     given were left out).
              */
             conflicts: string[];
             conflicts_truncated: boolean;
@@ -3404,6 +3561,7 @@ export interface components {
              */
             predictions: components["schemas"]["ConflictPredictionBody"][];
             scan: components["schemas"]["ConflictScanBody"];
+            withheld?: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description One check run on the head. */
         ContextCheckBody: {
@@ -3581,7 +3739,10 @@ export interface components {
             documents: number;
             /** @description `FG-AUTH-0021`. */
             error_code: string;
-            /** @description Changed files of such documents (a diff's or a merge request's). */
+            /**
+             * @description Changed files of such documents (a diff's or a merge request's),
+             *     or their paths among a merge request's conflicts.
+             */
             files: number;
             /** @description Their requirements. */
             requirements: number;
@@ -3799,6 +3960,44 @@ export interface components {
              * @description Pass as `before` for the next (older) page; `null`: no more.
              */
             next_before: number | null;
+        };
+        /** @description A deployment. */
+        DeploymentBody: {
+            approval_expires_at?: string | null;
+            approved_at?: string | null;
+            /** Format: int64 */
+            approved_by?: number | null;
+            commit_author_email?: string | null;
+            commit_author_name?: string | null;
+            /**
+             * @description The commit as git read it at the request (shown to the approver;
+             *     `None` for an automatic request).
+             */
+            commit_subject?: string | null;
+            created_at: string;
+            environment: string;
+            error_code?: string | null;
+            failed_target?: string | null;
+            finished_at?: string | null;
+            /** Format: int64 */
+            id: number;
+            previous_sha?: string | null;
+            /**
+             * Format: int64
+             * @description `None`: the system (an automatic deployment).
+             */
+            requested_by?: number | null;
+            sha: string;
+            started_at?: string | null;
+            /**
+             * @description `pending_approval`, `queued`, `running`, `succeeded`, `failed`,
+             *     `rolled_back`, `rollback_failed`, `blocked`.
+             */
+            status: string;
+        };
+        /** @description `GET …/deployments`. */
+        DeploymentList: {
+            deployments: components["schemas"]["DeploymentBody"][];
         };
         /** @description The approvals given on the head and target now. */
         DevStatusApprovalsBody: {
@@ -4256,6 +4455,19 @@ export interface components {
             /** @description The languages of its translations, sorted. */
             translations: string[];
         };
+        /** @description `POST …/merge-queue`. */
+        EnqueueMergeRequest: {
+            /**
+             * @description `merge_commit`, `squash` or `fast_forward` (when the project allows
+             *     it); absent: the project's default.
+             */
+            method?: string | null;
+            /**
+             * @description The head commit the requester reviewed (required): another head is
+             *     refused (FG-REVIEW-0008 stale_view).
+             */
+            sha: string;
+        };
         /** @description One tree entry. */
         EntryBody: {
             /** @description The octal mode as git prints it (`100644`, `040000`, …). */
@@ -4271,6 +4483,24 @@ export interface components {
             size: number | null;
             /** @description `tree`, `blob`, `symlink` or `submodule`. */
             type: string;
+        };
+        /** @description An environment and its targets. */
+        EnvironmentBody: {
+            /** Format: int32 */
+            approval_ttl_minutes: number;
+            auto_deploy_ref?: string | null;
+            auto_rollback: boolean;
+            /** @description `<start>/<end>` in UTC. */
+            freeze_windows: string[];
+            frozen_now: boolean;
+            requires_approval: boolean;
+            targets: components["schemas"]["TargetBody"][];
+            tier: string;
+            updated_at: string;
+        };
+        /** @description `GET …/deploy/environments`. */
+        EnvironmentList: {
+            environments: components["schemas"]["EnvironmentBody"][];
         };
         Error: {
             error_code: string;
@@ -4421,6 +4651,11 @@ export interface components {
             provider: string;
             /** @description `PBI-<n>`. */
             ref: string;
+        };
+        /** @description One freeze window `[starts_at, ends_at)`, timestamps with a time zone. */
+        FreezeWindow: {
+            ends_at: string;
+            starts_at: string;
         };
         /** @description One grant: a namespace a service account reports on one project. */
         GrantBody: {
@@ -4830,10 +5065,35 @@ export interface components {
              */
             sha: string;
         };
+        /** @description A target branch's merge queue. */
+        MergeQueueBody: {
+            batch: null | components["schemas"]["QueueBatchBody"];
+            /**
+             * Format: int64
+             * @description The bound of the next batch (4; halved after a red batch).
+             */
+            batch_limit: number;
+            /** @description The live entries (`queued` / `testing`) in order. */
+            entries: components["schemas"]["QueueEntryBody"][];
+            paused: boolean;
+            paused_at: string | null;
+            /** Format: int64 */
+            paused_by: number | null;
+            /** Format: int64 */
+            project_id: number;
+            /** @description The latest merged or removed entries, newest first (at most 20). */
+            recent: components["schemas"]["QueueEntryBody"][];
+            /** @description The target branch without `refs/heads/`. */
+            target_branch: string;
+            viewer: components["schemas"]["QueueViewerBody"];
+        };
         /** @description One merge request as the API shows it. */
         MergeRequestBody: {
-            /** @description The author's names (read with the merge request). */
-            author: components["schemas"]["UserNameBody"];
+            /**
+             * @description The author (read with the merge request); `employee_number` only on
+             *     the list and the detail, for a token holding `user_employee_number`.
+             */
+            author: components["schemas"]["MergeRequestPersonBody"];
             /** Format: int64 */
             author_id: number;
             closed_at?: string | null;
@@ -4853,6 +5113,7 @@ export interface components {
              * @description The project's own number of it.
              */
             iid: number;
+            merged_by: null | components["schemas"]["MergeRequestPersonBody"];
             /** Format: int64 */
             project_id: number;
             /** @description The branch name without `refs/heads/`. */
@@ -4877,6 +5138,22 @@ export interface components {
              * @description Pass as `before` for the next page; `null` on the last page.
              */
             next_before?: number | null;
+        };
+        /**
+         * @description A person a merge request names, in the development status's shape
+         *     (`docs/api/dev-status.md`): no employee number without the caller's
+         *     `user_employee_number` scope (a browser session never sees one).
+         */
+        MergeRequestPersonBody: {
+            display_name: string;
+            /**
+             * @description Only for a token holding `user_employee_number` (absent otherwise,
+             *     and for a person without one).
+             */
+            employee_number?: string | null;
+            /** Format: int64 */
+            id: number;
+            username: string;
         };
         /** @description `GET …/status` (the stable contract, `schema_version` 1). */
         MergeRequestStatusBody: {
@@ -5000,7 +5277,10 @@ export interface components {
             /** @description The head and target tip the last finished check looked at. */
             checked_head_sha: string | null;
             checked_target_sha: string | null;
-            /** @description The conflicted paths (at most 100; `conflicts_truncated` beyond). */
+            /**
+             * @description The conflicted paths (at most 100; `conflicts_truncated` beyond, or
+             *     when paths an AI agent is not given were left out).
+             */
             conflicts: string[];
             conflicts_truncated: boolean;
             /** @description The merge request's current head (`null` before its first version). */
@@ -5024,6 +5304,7 @@ export interface components {
              *     status but the two decisions means "unknown".
              */
             status: string;
+            withheld?: null | components["schemas"]["ContextWithheldBody"];
         };
         /** @description A move as it was written. */
         MoveBody: {
@@ -5061,6 +5342,13 @@ export interface components {
              *     callers who may read the project, a push through it is refused.
              */
             tombstones: number;
+        };
+        /** @description `POST …/deployments`. */
+        NewDeployment: {
+            /** @description `dev`, `stg` or `prod`. */
+            environment: string;
+            /** @description The full commit id (lowercase hex). */
+            sha: string;
         };
         /** @description `POST …/pipelines`. */
         NewPipelineRun: {
@@ -5140,7 +5428,10 @@ export interface components {
             /** @description `refs/heads/…`. */
             ref: string;
             sha: string;
-            /** @description `push`, `merge_request`, `schedule`, `manual`. */
+            /**
+             * @description `push`, `merge_request`, `schedule`, `manual`, `merge_queue` (M4 C8: a
+             *     merge queue's train, on the target branch).
+             */
             source: string;
             /**
              * @description `pending`, `running`, `succeeded`, `failed`, `canceled`, `skipped`,
@@ -5512,6 +5803,26 @@ export interface components {
              */
             warn_until: string;
         };
+        /** @description `PUT …/deploy/environments/{tier}`. */
+        PutEnvironment: {
+            /**
+             * Format: int32
+             * @description How long a request waits for an approval and an approval for the
+             *     worker (1..=1440, default 60).
+             */
+            approval_ttl_minutes?: number | null;
+            /**
+             * @description Deploy the newest succeeded push pipeline of this branch
+             *     (`refs/heads/...`; never for prod).
+             */
+            auto_deploy_ref?: string | null;
+            /** @description Roll every target back when a deployment fails (never for prod). */
+            auto_rollback: boolean;
+            /** @description No deployment is requested or run inside these (at most 50). */
+            freeze_windows?: components["schemas"]["FreezeWindow"][];
+            /** @description A Maintainer approves each deployment (always true for prod). */
+            requires_approval: boolean;
+        };
         /**
          * @description `PUT …/merge-rule` (absent fields: off / 0, except
          *     `require_work_item_link` and `expected_updated_at`: required).
@@ -5574,6 +5885,108 @@ export interface components {
              *     a configuration or CODEOWNERS path).
              */
             reset_approvals_on_push: boolean;
+        };
+        /** @description `PUT …/targets/{name}`. */
+        PutTarget: {
+            /** @description Default true. */
+            enabled?: boolean | null;
+            /** @description A DNS name or an IPv4 address (lowercase). */
+            host: string;
+            /** @description The base64 public key (the last field of a known_hosts line). */
+            host_key: string;
+            /** @description `ssh-ed25519`, `ecdsa-sha2-nistp256|384|521`, `rsa-sha2-512|256`. */
+            host_key_type: string;
+            /**
+             * Format: int32
+             * @description Default 22.
+             */
+            port?: number | null;
+            /** @description The registered script name run on the host. */
+            script: string;
+            /** @description The login user on the host. */
+            user: string;
+        };
+        /** @description The batch being tested (ADR-0030 §3, §5). */
+        QueueBatchBody: {
+            /** @description The target tip the train was built on. */
+            base_sha: string;
+            /** Format: int64 */
+            batch_id: number;
+            created_at: string;
+            /** @description UTC, RFC 3339: tested past it, the batch is reaped (FG-CI-0024). */
+            deadline_at: string;
+            request_id: string;
+            /** Format: int64 */
+            size: number;
+            /** @description `testing` or `landing`. */
+            state: string;
+            /** @description The train's last commit (its pipeline's sha, source `merge_queue`). */
+            train_sha: string;
+        };
+        /** @description One merge request's entry in a merge queue (ADR-0030 §12). */
+        QueueEntryBody: {
+            /**
+             * Format: int64
+             * @description The batch testing it (`testing` only).
+             */
+            batch_id: number | null;
+            created_at: string;
+            /** Format: int64 */
+            enqueued_by: number;
+            /** Format: int64 */
+            entry_id: number;
+            /** @description The code of a removal by the queue (FG-CI-0023, FG-CI-0024, …). */
+            error_code: string | null;
+            finished_at: string | null;
+            head_sha: string;
+            /** Format: int64 */
+            iid: number;
+            /**
+             * @description Why it runs in a batch of its own: `migration`, `risk_stop`,
+             *     `fast_forward` (`null`: may share a batch, or not batched yet).
+             */
+            isolate: string | null;
+            /**
+             * Format: int64
+             * @description The merge attempt that landed it (`merged`).
+             */
+            merge_id: number | null;
+            method: string;
+            /**
+             * Format: int64
+             * @description 1-based among the live entries of the queue (`null` once merged or
+             *     removed).
+             */
+            position: number | null;
+            /**
+             * @description Why it was removed (`dequeued`, `checks_failed`, `conflict`,
+             *     `head_changed`, `stalled`, …).
+             */
+            reason: string | null;
+            /** @description The request that queued it. */
+            request_id: string;
+            /** @description `queued`, `testing`, `merged` or `removed`. */
+            state: string;
+            /** @description The target branch without `refs/heads/`. */
+            target_branch: string;
+            /** @description Its commit in the train (`testing`). */
+            train_sha: string | null;
+        };
+        /** @description `GET …/merge-queue`: the latest entry (`null`: never queued). */
+        QueueEntryStatusBody: {
+            entry: null | components["schemas"]["QueueEntryBody"];
+            /** Format: int64 */
+            iid: number;
+        };
+        /** @description `POST …/merge-queue/pause` and `…/resume`. */
+        QueueTarget: {
+            /** @description The target branch: `main` or `refs/heads/main`. */
+            target: string;
+        };
+        /** @description What the caller could do now (a hint; the routes decide again). */
+        QueueViewerBody: {
+            can_pause: boolean;
+            can_resume: boolean;
         };
         /** @description `POST …/read-all`. */
         ReadAllInput: {
@@ -6381,6 +6794,19 @@ export interface components {
              *     exists (`false`: `work_item_link_missing`).
              */
             linked: boolean;
+        };
+        /** @description A target (its pin by fingerprint; never a private key). */
+        TargetBody: {
+            enabled: boolean;
+            host: string;
+            host_key_fingerprint: string;
+            host_key_type: string;
+            name: string;
+            /** Format: int32 */
+            port: number;
+            script: string;
+            updated_at: string;
+            user: string;
         };
         /** @description One token as the API shows it (never the secret or its hash). */
         TokenBody: {
@@ -9314,6 +9740,208 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_deploy_environments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_deploy_environments_tier: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                tier: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutEnvironment"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_deploy_environments_tier_targets_name: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                name: string;
+                tier: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutTarget"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TargetBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_deployments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_deployments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewDeployment"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_deployments_deployment_id_approve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deployment_id: number;
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_doc_lint_migration: {
         parameters: {
             query?: never;
@@ -9826,6 +10454,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemberBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_queue: {
+        parameters: {
+            query?: {
+                /** @description The target branch (`main` or `refs/heads/main`); required */
+                target?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeQueueBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_queue_pause: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QueueTarget"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeQueueBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_queue_resume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QueueTarget"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeQueueBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -10446,6 +11178,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MergeAttemptBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_merge_queue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueEntryStatusBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_merge_queue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnqueueMergeRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueEntryBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_merge_requests_iid_merge_queue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueEntryBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

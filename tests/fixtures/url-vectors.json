@@ -337,6 +337,17 @@
       }
     },
     {
+      "name": "route word merge-queue",
+      "path": "/g/p/-/merge-queue",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "merge-queue",
+        "rest": []
+      }
+    },
+    {
       "name": "route word edit",
       "path": "/g/p/-/edit/main/docs/spec.md",
       "form": "both",

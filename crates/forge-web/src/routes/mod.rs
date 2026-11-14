@@ -25,6 +25,7 @@ pub mod health;
 pub mod history;
 pub mod lists;
 pub mod members;
+pub mod merge_queue;
 pub mod merge_requests;
 pub mod moves;
 pub mod repo_copy;
@@ -66,6 +67,8 @@ pub mod runners;
 pub mod job_fetch;
 // M4 C6: a project's CI variables (secrets).
 pub mod ci_variables;
+// M4 C11: deployments.
+pub mod deploy;
 // M4 C12: a project's pipeline schedules.
 pub mod pipeline_schedules;
 // M4 C6: CI artifacts (a job's upload, its needs, the project's reads).

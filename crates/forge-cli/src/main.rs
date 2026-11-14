@@ -38,6 +38,7 @@ mod oidc;
 mod restore;
 mod runtime;
 mod serve;
+mod serve_merge_queue;
 mod serve_merges;
 mod state_copy;
 mod worker;
@@ -876,7 +877,7 @@ fn main() -> ExitCode {
                 )
             }
             RestoreCommand::Verify => {
-                let storage = worker::provision::Storage::open(cfg.storage_root()?)?;
+                let storage = worker::provision::Storage::from_config(&cfg)?;
                 admin_token::with_db(&cfg.database, async |db| {
                     restore::verify_command(db, &storage.root, &storage.git, &request_id).await
                 })

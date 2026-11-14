@@ -133,3 +133,8 @@ Smart HTTP の clone / fetch は印を見ていなかった（ファイルを抜
    限界: 見るのは先端だけで、履歴・他のブランチにだけある機密のファイルは見ない — だから 1. が先。
    手順は runbook `smart-http` の「AI エージェントと機密の文書」。
 
+
+**衝突の箇所（2026-11-13）**: MR の衝突の予測（`GET …/merge-requests/{iid}/conflicts`）とマージ可否（`…/mergeability`）の
+`conflicts` もファイルのパスなので、06 D-5 の同じ規則（`forge_checks::confidential`、§6）に従う。AI エージェントの相手には、
+MR の head・相手の MR の head（マージ可否は対象の先端）・既定のブランチの先端のどれかで機密のパスを各一覧から外し、
+行と結果は残して `conflicts_truncated` を立て、外した数を `withheld`（`FG-AUTH-0021`）で返す。測れないときは答えない（フェイルクローズ）。人は変わらない。

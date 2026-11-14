@@ -242,6 +242,7 @@ impl ScopedRoute {
                 RouteWord::Pull => "/{namespace}/-/pull/{*rest}",
                 RouteWord::Documents => "/{namespace}/-/documents/{*rest}",
                 RouteWord::Pipelines => "/{namespace}/-/pipelines/{*rest}",
+                RouteWord::MergeQueue => "/{namespace}/-/merge-queue/{*rest}",
                 RouteWord::Webhooks => "/{namespace}/-/webhooks/{*rest}",
                 RouteWord::Edit => "/{namespace}/-/edit/{*rest}",
                 RouteWord::New => "/{namespace}/-/new/{*rest}",

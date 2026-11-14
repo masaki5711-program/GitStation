@@ -216,6 +216,12 @@ list|set|delete`（値は標準入力から）。Runner の取得は `secrets_al
 上限は 1 ファイル 100 MiB・1 回 512 MiB / 1000 ファイル（FG-CI-0019）、送受の失敗は FG-CI-0020（ジョブは失敗）。worker の `ci_artifact_expiry`
 （30 日、`keep` は残す、消えたプロジェクトのディレクトリも消す）。`keep` を立てるのは C11。
 
+**C11 の注記（2026-11-13、デプロイ）**: クレート `forge-deploy`（機能クレート）、表 `deploy_environments`・`deploy_targets`（監査あり）・
+`deployments`（派生。要求と承認は監査の行、ガード `deployments_forward`）、マイグレーション `20261214100000`。Action `DeployRead`・
+`DeployEnvironmentManage`・`DeployTargetManage`（管理者）・`DeployCreate`・`DeployApprove`（`Resource::Deployment`）、FG-DEPLOY-0001〜0010、
+worker の `deploy_runner`（`deploy.ssh_key_file` があるときだけ）、doctor `deploy.known_hosts`、runbook `deploy`、ADR-0031。
+健全性は `<script> health <sha>`（同じ SSH の経路）、成果物の転送（scp）は後の MR。成功した SHA の CI の成果物に `keep` を立てる。
+`gstn deploy` と画面は後の MR（C-1 は Planned）。
 **C12 の注記（2026-11-13、定期・手動・仕様の公開）**: ブランチ `feat/ci-schedules-manual`。
 **手動のジョブ**: `.forge-ci.yml` の `when: manual`（lint の `when_invalid`・`needs_manual_job`、ステージの壁から外す）。表 `ci_jobs.manual` と状態
 `manual`（マイグレーション `20261215100000`）。何も待たないので、パイプラインは他のジョブで終わり、手動のジョブだけなら `skipped`。ルート

@@ -24,7 +24,7 @@ Git の操作（clone、fetch、push、リポジトリの作成）がすべて�
 
 1. git 2.38 以上をインストールする（Debian 12 / RHEL 9 / Ubuntu 24.04 の標準パッケージで足りる）、または forge の設定の git のパスを正しいものに直す。
    `[MUTATING — needs approval]` ロールバック: 変更前のパッケージのバージョンに戻す（`apt install git=<旧版>` / `dnf downgrade git`）、または設定ファイルを変更前の版に戻す。
-2. forge を再起動する（`systemctl restart forge`）。`[MUTATING — needs approval]` ロールバック: 手順 1 を戻してから再起動する。
+2. forge を再起動する（`systemctl restart forge-serve forge-worker`）。`[MUTATING — needs approval]` ロールバック: 手順 1 を戻してから再起動する。
 
 ## Verify
 

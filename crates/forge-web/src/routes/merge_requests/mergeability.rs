@@ -1,6 +1,9 @@
 //! `GET …/merge-requests/{iid}/mergeability` (M3 R2, ADR-0024 §3): the
 //! stored status of the mergeability check, trusted only while its checked
 //! pair is the current head and the target's live tip (see `versions.rs`).
+//! An AI agent is not given the conflicted paths of confidential documents
+//! (plan 06 D-5, ADR-0026 §6): they are left out, the list says
+//! `conflicts_truncated`, and `withheld` counts them.
 
 use axum::response::Response;
 use forge_auth::MergeRequestCtx;
@@ -14,6 +17,9 @@ use super::versions::{merge_request, proof_ids};
 use crate::app::AppState;
 use crate::registry::Dispatched;
 use crate::routes::browse::{answer, query, Target};
+use crate::routes::context::{
+    audience, marked_files, withheld_logged, without_marked_paths, ContextWithheldBody,
+};
 use crate::routes::write::bounded;
 
 /// What the mergeability check last stored.
@@ -45,9 +51,14 @@ pub struct MergeabilityBody {
     /// UTC, RFC 3339.
     #[schema(required = true)]
     pub checked_at: Option<String>,
-    /// The conflicted paths (at most 100; `conflicts_truncated` beyond).
+    /// The conflicted paths (at most 100; `conflicts_truncated` beyond, or
+    /// when paths an AI agent is not given were left out).
     pub conflicts: Vec<String>,
     pub conflicts_truncated: bool,
+    /// For an AI agent (plan 06 D-5): the conflicted paths of confidential
+    /// documents left out (absent when none was).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<ContextWithheldBody>,
 }
 
 /// The status a reader may trust: a stored result counts only while the
@@ -74,6 +85,7 @@ fn mergeability_body(
             checked_at: None,
             conflicts: Vec::new(),
             conflicts_truncated: false,
+            withheld: None,
         };
     };
     let finished = match s.status {
@@ -101,6 +113,7 @@ fn mergeability_body(
         checked_at: s.checked_at,
         conflicts,
         conflicts_truncated,
+        withheld: None,
     }
 }
 
@@ -109,6 +122,8 @@ fn mergeability_body(
 pub async fn mergeability(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
     let ids = proof_ids(&request);
     let review_state = state.clone(); // clone: cheap handles; the closure owns its copy
+    let audience = audience(&request);
+    let ctx = request.ctx().clone(); // clone: the log of what was withheld
     answer(
         state,
         request,
@@ -116,6 +131,7 @@ pub async fn mergeability(state: AppState, request: Dispatched<MergeRequestCtx>)
         |t: Target, q| async move {
             let (project, iid) = ids?;
             query(q.as_deref(), &[])?;
+            let audience = audience?;
             let stored_mr = merge_request(&review_state, project, iid).await?;
             let stored = bounded(
                 &review_state,
@@ -139,12 +155,25 @@ pub async fn mergeability(state: AppState, request: Dispatched<MergeRequestCtx>)
                 Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => None,
                 Err(e) => return Err(e),
             };
-            Ok(mergeability_body(
-                iid,
-                stored_mr.head_sha,
-                tip.as_deref(),
-                stored,
-            ))
+            let mut body = mergeability_body(iid, stored_mr.head_sha, tip.as_deref(), stored);
+            if audience.is_agent() && !body.conflicts.is_empty() {
+                // Marked at the head, the target tip or the default tip; an
+                // error refuses the answer (fail closed).
+                let commits: Vec<&str> = [body.head_sha.as_deref(), tip.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                let marked =
+                    marked_files(&t.smart.browse, t.repository.id, &t.principal, &commits).await?;
+                let hidden = without_marked_paths(
+                    &mut body.conflicts,
+                    &mut body.conflicts_truncated,
+                    &marked,
+                );
+                body.withheld =
+                    withheld_logged(&ctx, "merge_request_mergeability", audience, hidden);
+            }
+            Ok(body)
         },
     )
     .await

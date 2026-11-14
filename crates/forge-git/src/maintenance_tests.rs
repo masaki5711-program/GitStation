@@ -183,6 +183,17 @@ async fn maintenance_argv_on_git_2_38() {
     assert_eq!(
         argv(&gc),
         [
+            // git.pack.*: the memory caps come first.
+            "-c",
+            "pack.windowMemory=256m",
+            "-c",
+            "pack.threads=2",
+            "-c",
+            "core.deltaBaseCacheLimit=64m",
+            "-c",
+            "core.packedGitLimit=1024m",
+            "-c",
+            "core.packedGitWindowSize=64m",
             "-c",
             "gc.packRefs=false",
             "-c",
@@ -191,6 +202,8 @@ async fn maintenance_argv_on_git_2_38() {
             "repack.writeBitmaps=true",
             "-c",
             "pack.writeBitmapHashCache=true",
+            "-c",
+            "pack.writeBitmapLookupTable=true",
             "-c",
             hooks.as_str(),
             "gc",
@@ -270,6 +283,25 @@ async fn maintenance_argv_on_git_2_38() {
         packs.iter().any(|p| p.ends_with(".bitmap")),
         "gc writes a bitmap: {packs:?}"
     );
+    // upload-pack can serve from it: the bitmap covers the branch tip and
+    // verifies against a full walk (dies otherwise).
+    plumb(
+        &f.path,
+        &["rev-list", "--test-bitmap", "refs/heads/main"],
+        None,
+    );
+    // Header (`BITM`, version u16, options u16, big-endian): the name-hash
+    // cache (0x4) and the lookup table (0x10), so a fetch loads only the
+    // bitmaps it needs.
+    let bitmap = packs
+        .iter()
+        .find(|p| p.ends_with(".bitmap"))
+        .map(|p| std::fs::read(f.path.join("objects/pack").join(p)).expect("bitmap"))
+        .expect("bitmap file");
+    assert_eq!(&bitmap[..4], b"BITM");
+    let options = u16::from_be_bytes([bitmap[6], bitmap[7]]);
+    assert_eq!(options & 0x4, 0x4, "hash cache: {options:#x}");
+    assert_eq!(options & 0x10, 0x10, "lookup table: {options:#x}");
 }
 
 /// A commit only `refs/merge-requests/<iid>/v<n>` reaches (the branch was

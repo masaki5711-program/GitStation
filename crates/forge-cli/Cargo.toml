@@ -29,6 +29,8 @@ forge-integ.workspace = true
 forge-notify.workspace = true
 # M4 C2: CI pipelines (the worker's `ci.pipeline_create` job, serve's routes).
 forge-pipelines.workspace = true
+# M4 C11: the deployment lane of forge worker and doctor deploy.known_hosts.
+forge-deploy.workspace = true
 forge-oidc.workspace = true
 httpdate.workspace = true
 tokio.workspace = true

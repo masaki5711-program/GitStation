@@ -1813,7 +1813,7 @@
             "type": "string"
           },
           "conflicts": {
-            "description": "The conflicted paths both change (at most 100;\n`conflicts_truncated` beyond).",
+            "description": "The conflicted paths both change (at most 100;\n`conflicts_truncated` beyond, or when paths an AI agent is not\ngiven were left out).",
             "items": {
               "type": "string"
             },
@@ -1950,6 +1950,17 @@
           },
           "scan": {
             "$ref": "#/components/schemas/ConflictScanBody"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "For an AI agent (plan 06 D-5): the conflicted paths of confidential\ndocuments left out of `predictions` (absent when none was)."
+              }
+            ]
           }
         },
         "required": [
@@ -2527,7 +2538,7 @@
             "type": "string"
           },
           "files": {
-            "description": "Changed files of such documents (a diff's or a merge request's).",
+            "description": "Changed files of such documents (a diff's or a merge request's),\nor their paths among a merge request's conflicts.",
             "minimum": 0,
             "type": "integer"
           },
@@ -3100,6 +3111,129 @@
         "required": [
           "items",
           "next_before"
+        ],
+        "type": "object"
+      },
+      "DeploymentBody": {
+        "additionalProperties": false,
+        "description": "A deployment.",
+        "properties": {
+          "approval_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approved_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "commit_author_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_author_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_subject": {
+            "description": "The commit as git read it at the request (shown to the approver;\n`None` for an automatic request).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failed_target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "previous_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_by": {
+            "description": "`None`: the system (an automatic deployment).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sha": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`pending_approval`, `queued`, `running`, `succeeded`, `failed`,\n`rolled_back`, `rollback_failed`, `blocked`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "environment",
+          "sha",
+          "status",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "DeploymentList": {
+        "additionalProperties": false,
+        "description": "`GET …/deployments`.",
+        "properties": {
+          "deployments": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "deployments"
         ],
         "type": "object"
       },
@@ -4411,6 +4545,27 @@
         ],
         "type": "object"
       },
+      "EnqueueMergeRequest": {
+        "additionalProperties": false,
+        "description": "`POST …/merge-queue`.",
+        "properties": {
+          "method": {
+            "description": "`merge_commit`, `squash` or `fast_forward` (when the project allows\nit); absent: the project's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "description": "The head commit the requester reviewed (required): another head is\nrefused (FG-REVIEW-0008 stale_view).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "type": "object"
+      },
       "EntryBody": {
         "additionalProperties": false,
         "description": "One tree entry.",
@@ -4450,6 +4605,77 @@
           "mode",
           "oid",
           "size"
+        ],
+        "type": "object"
+      },
+      "EnvironmentBody": {
+        "additionalProperties": false,
+        "description": "An environment and its targets.",
+        "properties": {
+          "approval_ttl_minutes": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "auto_deploy_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_rollback": {
+            "type": "boolean"
+          },
+          "freeze_windows": {
+            "description": "`<start>/<end>` in UTC.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "frozen_now": {
+            "type": "boolean"
+          },
+          "requires_approval": {
+            "type": "boolean"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TargetBody"
+            },
+            "type": "array"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier",
+          "requires_approval",
+          "approval_ttl_minutes",
+          "auto_rollback",
+          "freeze_windows",
+          "frozen_now",
+          "targets",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "EnvironmentList": {
+        "additionalProperties": false,
+        "description": "`GET …/deploy/environments`.",
+        "properties": {
+          "environments": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "environments"
         ],
         "type": "object"
       },
@@ -4858,6 +5084,23 @@
           "provider",
           "project_id",
           "ref"
+        ],
+        "type": "object"
+      },
+      "FreezeWindow": {
+        "additionalProperties": false,
+        "description": "One freeze window `[starts_at, ends_at)`, timestamps with a time zone.",
+        "properties": {
+          "ends_at": {
+            "type": "string"
+          },
+          "starts_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "starts_at",
+          "ends_at"
         ],
         "type": "object"
       },
@@ -5908,13 +6151,92 @@
         ],
         "type": "object"
       },
+      "MergeQueueBody": {
+        "additionalProperties": false,
+        "description": "A target branch's merge queue.",
+        "properties": {
+          "batch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QueueBatchBody"
+              }
+            ]
+          },
+          "batch_limit": {
+            "description": "The bound of the next batch (4; halved after a red batch).",
+            "format": "int64",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "entries": {
+            "description": "The live entries (`queued` / `testing`) in order.",
+            "items": {
+              "$ref": "#/components/schemas/QueueEntryBody"
+            },
+            "type": "array"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "paused_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paused_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "recent": {
+            "description": "The latest merged or removed entries, newest first (at most 20).",
+            "items": {
+              "$ref": "#/components/schemas/QueueEntryBody"
+            },
+            "type": "array"
+          },
+          "target_branch": {
+            "description": "The target branch without `refs/heads/`.",
+            "type": "string"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/QueueViewerBody"
+          }
+        },
+        "required": [
+          "project_id",
+          "target_branch",
+          "paused",
+          "paused_by",
+          "paused_at",
+          "batch_limit",
+          "batch",
+          "entries",
+          "recent",
+          "viewer"
+        ],
+        "type": "object"
+      },
       "MergeRequestBody": {
         "additionalProperties": false,
         "description": "One merge request as the API shows it.",
         "properties": {
           "author": {
-            "$ref": "#/components/schemas/UserNameBody",
-            "description": "The author's names (read with the merge request)."
+            "$ref": "#/components/schemas/MergeRequestPersonBody",
+            "description": "The author (read with the merge request); `employee_number` only on\nthe list and the detail, for a token holding `user_employee_number`."
           },
           "author_id": {
             "format": "int64",
@@ -5957,6 +6279,17 @@
             "minimum": 1,
             "type": "integer"
           },
+          "merged_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MergeRequestPersonBody",
+                "description": "Who merged it (the applied merge's requester); `null` unless merged."
+              }
+            ]
+          },
           "project_id": {
             "format": "int64",
             "minimum": 1,
@@ -5991,6 +6324,7 @@
           "target_branch",
           "author_id",
           "author",
+          "merged_by",
           "created_at",
           "updated_at"
         ],
@@ -6035,6 +6369,36 @@
         },
         "required": [
           "merge_requests"
+        ],
+        "type": "object"
+      },
+      "MergeRequestPersonBody": {
+        "additionalProperties": false,
+        "description": "A person a merge request names, in the development status's shape\n(`docs/api/dev-status.md`): no employee number without the caller's\n`user_employee_number` scope (a browser session never sees one).",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "employee_number": {
+            "description": "Only for a token holding `user_employee_number` (absent otherwise,\nand for a person without one).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
         ],
         "type": "object"
       },
@@ -6330,7 +6694,7 @@
             ]
           },
           "conflicts": {
-            "description": "The conflicted paths (at most 100; `conflicts_truncated` beyond).",
+            "description": "The conflicted paths (at most 100; `conflicts_truncated` beyond, or\nwhen paths an AI agent is not given were left out).",
             "items": {
               "type": "string"
             },
@@ -6365,6 +6729,17 @@
           "status": {
             "description": "`unchecked`, `checking`, `can_be_merged`, `cannot_be_merged` or\n`check_failed`. Only `can_be_merged` lets a merge go ahead; every\nstatus but the two decisions means \"unknown\".",
             "type": "string"
+          },
+          "withheld": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ContextWithheldBody",
+                "description": "For an AI agent (plan 06 D-5): the conflicted paths of confidential\ndocuments left out (absent when none was)."
+              }
+            ]
           }
         },
         "required": [
@@ -6434,6 +6809,25 @@
           "tombstones",
           "projects",
           "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "NewDeployment": {
+        "additionalProperties": false,
+        "description": "`POST …/deployments`.",
+        "properties": {
+          "environment": {
+            "description": "`dev`, `stg` or `prod`.",
+            "type": "string"
+          },
+          "sha": {
+            "description": "The full commit id (lowercase hex).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "sha"
         ],
         "type": "object"
       },
@@ -6649,7 +7043,7 @@
             "type": "string"
           },
           "source": {
-            "description": "`push`, `merge_request`, `schedule`, `manual`.",
+            "description": "`push`, `merge_request`, `schedule`, `manual`, `merge_queue` (M4 C8: a\nmerge queue's train, on the target branch).",
             "type": "string"
           },
           "status": {
@@ -7540,6 +7934,47 @@
         ],
         "type": "object"
       },
+      "PutEnvironment": {
+        "additionalProperties": false,
+        "description": "`PUT …/deploy/environments/{tier}`.",
+        "properties": {
+          "approval_ttl_minutes": {
+            "description": "How long a request waits for an approval and an approval for the\nworker (1..=1440, default 60).",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "auto_deploy_ref": {
+            "description": "Deploy the newest succeeded push pipeline of this branch\n(`refs/heads/...`; never for prod).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_rollback": {
+            "description": "Roll every target back when a deployment fails (never for prod).",
+            "type": "boolean"
+          },
+          "freeze_windows": {
+            "description": "No deployment is requested or run inside these (at most 50).",
+            "items": {
+              "$ref": "#/components/schemas/FreezeWindow"
+            },
+            "type": "array"
+          },
+          "requires_approval": {
+            "description": "A Maintainer approves each deployment (always true for prod).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requires_approval",
+          "auto_rollback"
+        ],
+        "type": "object"
+      },
       "PutMergeRule": {
         "additionalProperties": false,
         "description": "`PUT …/merge-rule` (absent fields: off / 0, except\n`require_work_item_link` and `expected_updated_at`: required).",
@@ -7625,6 +8060,285 @@
           "reset_approvals_on_push",
           "committer_approvals_excluded",
           "expected_updated_at"
+        ],
+        "type": "object"
+      },
+      "PutTarget": {
+        "additionalProperties": false,
+        "description": "`PUT …/targets/{name}`.",
+        "properties": {
+          "enabled": {
+            "description": "Default true.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "host": {
+            "description": "A DNS name or an IPv4 address (lowercase).",
+            "type": "string"
+          },
+          "host_key": {
+            "description": "The base64 public key (the last field of a known_hosts line).",
+            "type": "string"
+          },
+          "host_key_type": {
+            "description": "`ssh-ed25519`, `ecdsa-sha2-nistp256|384|521`, `rsa-sha2-512|256`.",
+            "type": "string"
+          },
+          "port": {
+            "description": "Default 22.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "script": {
+            "description": "The registered script name run on the host.",
+            "type": "string"
+          },
+          "user": {
+            "description": "The login user on the host.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "user",
+          "host_key_type",
+          "host_key",
+          "script"
+        ],
+        "type": "object"
+      },
+      "QueueBatchBody": {
+        "additionalProperties": false,
+        "description": "The batch being tested (ADR-0030 §3, §5).",
+        "properties": {
+          "base_sha": {
+            "description": "The target tip the train was built on.",
+            "type": "string"
+          },
+          "batch_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "deadline_at": {
+            "description": "UTC, RFC 3339: tested past it, the batch is reaped (FG-CI-0024).",
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "maximum": 4,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "description": "`testing` or `landing`.",
+            "type": "string"
+          },
+          "train_sha": {
+            "description": "The train's last commit (its pipeline's sha, source `merge_queue`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "state",
+          "base_sha",
+          "train_sha",
+          "size",
+          "deadline_at",
+          "request_id",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "QueueEntryBody": {
+        "additionalProperties": false,
+        "description": "One merge request's entry in a merge queue (ADR-0030 §12).",
+        "properties": {
+          "batch_id": {
+            "description": "The batch testing it (`testing` only).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "enqueued_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "entry_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "error_code": {
+            "description": "The code of a removal by the queue (FG-CI-0023, FG-CI-0024, …).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "isolate": {
+            "description": "Why it runs in a batch of its own: `migration`, `risk_stop`,\n`fast_forward` (`null`: may share a batch, or not batched yet).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "merge_id": {
+            "description": "The merge attempt that landed it (`merged`).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "position": {
+            "description": "1-based among the live entries of the queue (`null` once merged or\nremoved).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why it was removed (`dequeued`, `checks_failed`, `conflict`,\n`head_changed`, `stalled`, …).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "description": "The request that queued it.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`queued`, `testing`, `merged` or `removed`.",
+            "type": "string"
+          },
+          "target_branch": {
+            "description": "The target branch without `refs/heads/`.",
+            "type": "string"
+          },
+          "train_sha": {
+            "description": "Its commit in the train (`testing`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "entry_id",
+          "iid",
+          "state",
+          "position",
+          "target_branch",
+          "head_sha",
+          "method",
+          "isolate",
+          "batch_id",
+          "train_sha",
+          "merge_id",
+          "reason",
+          "error_code",
+          "enqueued_by",
+          "request_id",
+          "created_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "QueueEntryStatusBody": {
+        "additionalProperties": false,
+        "description": "`GET …/merge-queue`: the latest entry (`null`: never queued).",
+        "properties": {
+          "entry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QueueEntryBody"
+              }
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "iid",
+          "entry"
+        ],
+        "type": "object"
+      },
+      "QueueTarget": {
+        "additionalProperties": false,
+        "description": "`POST …/merge-queue/pause` and `…/resume`.",
+        "properties": {
+          "target": {
+            "description": "The target branch: `main` or `refs/heads/main`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "QueueViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do now (a hint; the routes decide again).",
+        "properties": {
+          "can_pause": {
+            "type": "boolean"
+          },
+          "can_resume": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_pause",
+          "can_resume"
         ],
         "type": "object"
       },
@@ -9926,6 +10640,52 @@
         },
         "required": [
           "linked"
+        ],
+        "type": "object"
+      },
+      "TargetBody": {
+        "additionalProperties": false,
+        "description": "A target (its pin by fingerprint; never a private key).",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "host_key_fingerprint": {
+            "type": "string"
+          },
+          "host_key_type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "script": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "port",
+          "user",
+          "host_key_type",
+          "host_key_fingerprint",
+          "script",
+          "enabled",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -14642,6 +15402,317 @@
         "x-forge-action": "ContextRead"
       }
     },
+    "/api/v1/projects/{id}/deploy/environments": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_deploy_environments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's deployment environments (dev, stg, prod) with their approval rule, approval window, freeze windows (and whether one is in force now), automatic rollback and deployment, and their targets with the pinned host key fingerprint; never a key (project readers)",
+        "x-forge-action": "DeployRead"
+      }
+    },
+    "/api/v1/projects/{id}/deploy/environments/{tier}": {
+      "put": {
+        "operationId": "put_api_v1_projects_id_deploy_environments_tier",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutEnvironment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create or change a deployment environment ({\"requires_approval\", \"auto_rollback\", \"approval_ttl_minutes\"?, \"auto_deploy_ref\"?, \"freeze_windows\"?}): 201 created or 200 changed; prod always requires an approval and never rolls back or deploys by itself (400 FG-WEB-0006); audited (people only; Maintainer)",
+        "x-forge-action": "DeployEnvironmentManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}": {
+      "put": {
+        "operationId": "put_api_v1_projects_id_deploy_environments_tier_targets_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TargetBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Register or change a deployment target ({\"host\", \"port\"?, \"user\", \"host_key_type\", \"host_key\", \"script\", \"enabled\"?}): the host key is pinned (StrictHostKeyChecking=yes against it alone) and only the named script runs on the host; 404 FG-REPO-0005 without the environment; audited (people only; administrators)",
+        "x-forge-action": "DeployTargetManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/deployments": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_deployments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's deployments, newest first (at most 100): environment, sha, status, who requested and approved, the previous version, error code and failed target (project readers)",
+        "x-forge-action": "DeployRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_deployments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewDeployment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Request a deployment ({\"environment\": \"stg\", \"sha\"}): 201 pending_approval (the environment requires an approval; always for prod) or queued; 409 FG-DEPLOY-0002 in a freeze window; 422 FG-DEPLOY-0011 unless a protected branch holds the commit (prod: and its push pipeline succeeded); 404 FG-REPO-0005 without the environment; 400 FG-WEB-0006 without an enabled target (Developer)",
+        "x-forge-action": "DeployCreate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/deployments/{deployment_id}/approve": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_deployments_deployment_id_approve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Approve a deployment waiting for one: 200 queued until approval_expires_at; 403 FG-DEPLOY-0009 for its requester or anyone behind the sha (merge request authors, pushers, the commit author and committer); a web session only (403 FG-AUTH-0002 for a token); 409 FG-DEPLOY-0010 when it is not waiting (people only; Maintainer)",
+        "x-forge-action": "DeployApprove"
+      }
+    },
     "/api/v1/projects/{id}/doc-lint/migration": {
       "delete": {
         "operationId": "delete_api_v1_projects_id_doc_lint_migration",
@@ -15514,6 +16585,160 @@
         },
         "summary": "Change a direct project member's role (Maintainer; never above the caller's role)",
         "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/merge-queue": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The target branch (`main` or `refs/heads/main`); required",
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeQueueBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A target branch's merge queue (target required): paused or not, the next batch bound, the batch being tested (base, train, deadline), the live entries in order and the latest merged or removed ones with their reason and code (as the repository browse API)",
+        "x-forge-action": "MergeQueueRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-queue/pause": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_queue_pause",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeQueueBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Pause a target branch's merge queue (the emergency stop): no new batch is built and no batch lands until it is resumed; merge requests may still be added (people only; Developer)",
+        "x-forge-action": "MergeQueuePause",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/merge-queue/resume": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_queue_resume",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueTarget"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeQueueBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Resume a paused merge queue (people only; Maintainer)",
+        "x-forge-action": "MergeQueueManage",
         "x-forge-max-body-bytes": 1024
       }
     },
@@ -16551,6 +17776,160 @@
         "summary": "Merge a merge request (people only; the target branch's push role; a token needs merge_execute). Queues the merge job",
         "x-forge-action": "MergeRequestMerge",
         "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_merge_requests_iid_merge_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueEntryBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Take a merge request out of the merge queue (as adding it); 409 FG-CI-0025 when it is not queued",
+        "x-forge-action": "MergeQueueDequeue"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_merge_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueEntryStatusBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's latest merge queue entry (null: never queued) with its place among the live entries (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_merge_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnqueueMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueEntryBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add a merge request to its target branch's merge queue (merge when ready): decided as a merge (people only; the target branch's push role; a token needs merge_execute); everything a merge needs must hold now except ci/pipeline, which the queue proves on its train (FG-REVIEW-0007 otherwise); 409 FG-CI-0025 when already queued",
+        "x-forge-action": "MergeQueueEnqueue",
+        "x-forge-max-body-bytes": 1024
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/mergeability": {

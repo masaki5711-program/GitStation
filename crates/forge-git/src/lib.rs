@@ -85,7 +85,7 @@ mod want_check;
 pub use command::{Git, GitCommand, GitConfig, GitOutput};
 pub use metrics::git_spawns;
 pub use push_check::{Ancestry, CommitList, CommitQuery};
-pub use refs::{PipelineRef, RefChange, RefUpdateResult};
+pub use refs::{MergeQueueRef, PipelineRef, RefChange, RefUpdateResult};
 pub use revision::Revision;
 pub use storage::{Provisioned, Removal, StorageRoot};
 pub use stream::{GitStdin, GitStdout, GitStream, StreamEnded, StreamStats};

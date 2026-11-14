@@ -18,7 +18,7 @@ use std::time::Duration;
 use forge_auth::{
     act_as_admission, ActAsBindingConfirmCtx, ActAsConfirmCtx, ActAsCredential, AssertionFacts,
     AssertionSubject, Authorized, Credential, IntegrationFeedCtx, LoadedConfirmIntegration,
-    LoadedIntegrationFeed, Principal, Scope, ViaView,
+    LoadedIntegrationFeed, Principal, ViaView,
 };
 use forge_core::act_as::{ActAsKeys, ActAsTarget, AssertionToken, Intent};
 use forge_core::{IntegrationId, MergeRequestId, ProjectId, RefName, RequestId, UserId};
@@ -395,13 +395,7 @@ impl ActAs {
         let keys = self.keys()?;
         let ctx = context(Actor::ServiceAccount(via), request_id, token_id);
         let claimed = db::claim(&self.db, &ctx, keys, integration, state).await?;
-        let employee = match proof.principal().credential() {
-            Credential::Token(scopes) => scopes.contains(&Scope::UserEmployeeNumber),
-            Credential::Session
-            | Credential::ActAs(_)
-            | Credential::Runner(_)
-            | Credential::Job(_) => false,
-        };
+        let employee = proof.principal().personal_disclosure().employee_number;
         Ok(ClaimAnswer {
             assertion: claimed.token,
             user: claimed.user,

@@ -181,7 +181,8 @@ pub struct ContextWithheldBody {
     pub requirements: usize,
     /// Work items kanflow marked confidential.
     pub work_items: usize,
-    /// Changed files of such documents (a diff's or a merge request's).
+    /// Changed files of such documents (a diff's or a merge request's),
+    /// or their paths among a merge request's conflicts.
     pub files: usize,
 }
 
@@ -350,6 +351,22 @@ pub(crate) fn without_marked(diff: &Diff, marked: &Confidential) -> (Diff, usize
         },
         hidden.len(),
     )
+}
+
+/// `paths` without the `marked` ones (plan 06 D-5: a conflict list names
+/// files too); `truncated` is set when one was left out. How many were.
+pub(crate) fn without_marked_paths(
+    paths: &mut Vec<String>,
+    truncated: &mut bool,
+    marked: &Confidential,
+) -> usize {
+    let before = paths.len();
+    paths.retain(|p| !marked.contains(p));
+    let hidden = before - paths.len();
+    if hidden > 0 {
+        *truncated = true;
+    }
+    hidden
 }
 
 /// The withheld files of a diff answer, logged once (an agent's only).

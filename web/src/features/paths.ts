@@ -51,6 +51,7 @@ export const VIEW_WORDS = [
   'webhooks',
   'docs',
   'pipelines',
+  'merge-queue',
 ] as const;
 
 export function isViewWord(word: string | undefined): boolean {

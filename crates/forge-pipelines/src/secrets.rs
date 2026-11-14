@@ -112,7 +112,7 @@ impl Pipelines {
             masked: input.masked,
         };
         let ctx = change_context(request, proof.principal(), user);
-        let (stored, created) = db::put_decided(&self.db, &ctx, project, &new, |facts| {
+        let (stored, created) = db::put_variable_decided(&self.db, &ctx, project, &new, |facts| {
             reconfirm(proof, facts)
         })
         .await?;
@@ -145,7 +145,7 @@ impl Pipelines {
         check_name(name)?;
         let project = *proof.id();
         let ctx = change_context(request, proof.principal(), user);
-        let deleted = db::delete_decided(&self.db, &ctx, project, name, |facts| {
+        let deleted = db::delete_variable_decided(&self.db, &ctx, project, name, |facts| {
             reconfirm(proof, facts)
         })
         .await?;

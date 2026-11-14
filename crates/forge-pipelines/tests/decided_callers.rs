@@ -15,6 +15,9 @@ fn pipeline_commands() -> Vec<String> {
         "cancel_pipeline",
         "retry_pipeline",
         "run_manual",
+        // M4 C6: CI variables (named so forge-hosting's `delete` needle never matches).
+        "put_variable",
+        "delete_variable",
         "play_job",
         "create_schedule",
         "update_schedule",

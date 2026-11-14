@@ -330,6 +330,72 @@ impl Git {
     }
 }
 
+/// One `refs/merge-queue/<queue_id>/train` of a repository (M4 C8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeQueueRef {
+    pub queue_id: i64,
+    pub name: RefName,
+    pub at: ObjectId,
+}
+
+/// The queue id of `refs/merge-queue/<id>/train`, `None` for any other
+/// name.
+fn queue_id_of(name: &RefName) -> Option<i64> {
+    let id = name
+        .as_str()
+        .strip_prefix(crate::hidden_refs::MERGE_QUEUE_REF_PREFIX)?
+        .strip_suffix("/train")?;
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) || id.starts_with('0') {
+        return None;
+    }
+    id.parse().ok()
+}
+
+impl Git {
+    /// Every merge queue train ref of the repository, by queue id (the
+    /// maintenance sweep). A name under `refs/merge-queue/` that forge did
+    /// not build is `FG-GIT-0003 reason=unexpected_output`.
+    pub async fn merge_queue_refs(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        timeout: Duration,
+    ) -> Result<Vec<MergeQueueRef>, ForgeError> {
+        let pattern =
+            RefName::parse(crate::hidden_refs::MERGE_QUEUE_REF_PREFIX.trim_end_matches('/'))?;
+        let mut refs = Vec::new();
+        for (name, at) in self.read_refs(storage, id, &pattern, timeout).await? {
+            let Some(queue_id) = queue_id_of(&name) else {
+                return Err(unexpected("for-each-ref")
+                    .with_context("repo_id", id.get())
+                    .with_context("ref", name.as_str().to_owned()));
+            };
+            refs.push(MergeQueueRef { queue_id, name, at });
+        }
+        refs.sort_by_key(|r| r.queue_id);
+        Ok(refs)
+    }
+
+    /// Delete `refs` in one transaction, each only if it is still at the
+    /// listed commit (a batch that ended, the maintenance sweep).
+    pub async fn delete_merge_queue_refs(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        refs: &[MergeQueueRef],
+        timeout: Duration,
+    ) -> Result<RefUpdateResult, ForgeError> {
+        let changes: Vec<RefChange> = refs
+            .iter()
+            .map(|r| RefChange::Delete {
+                name: r.name.clone(), // clone: the change owns its name
+                old: r.at.clone(),    // clone: as above
+            })
+            .collect();
+        self.update_refs(storage, id, &changes, timeout).await
+    }
+}
+
 #[cfg(test)]
 #[path = "refs_tests.rs"]
 mod tests;

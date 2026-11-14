@@ -543,6 +543,24 @@ impl FreshDb {
             .unwrap_or_else(|e| panic!("{sql}: {e}"));
     }
 
+    /// `statements` in one superuser transaction (committed at the end), for
+    /// fixtures whose rows must commit together — e.g. events with their
+    /// audit row, where the txn-audited trigger fires at COMMIT. Callers
+    /// outside forge-db never write `BEGIN` themselves
+    /// (`validate-db-write-boundary`).
+    pub async fn exec_superuser_tx(&self, statements: &[String]) {
+        use sqlx::Connection;
+        let mut conn = self.superuser().await;
+        let mut tx = conn.begin().await.expect("begin");
+        for sql in statements {
+            sqlx::raw_sql(sql)
+                .execute(&mut *tx)
+                .await
+                .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        }
+        tx.commit().await.expect("commit");
+    }
+
     pub async fn superuser(&self) -> PgConnection {
         superuser(&self.name).await
     }
@@ -686,6 +704,47 @@ pub async fn issue_session(db: &Db, user: forge_core::UserId) -> crate::sessions
     crate::sessions::issue(db, &ctx, &new)
         .await
         .expect("issue a test session")
+}
+
+/// Records one of forge's own check runs (`forge/risk`, …) on `head` of
+/// `project` as the system, for tests in crates that may not call the check
+/// commands themselves (forge-checks `tests/decided_callers.rs`). Tests only
+/// (feature `test-support`).
+pub async fn record_forge_check(
+    db: &Db,
+    project: forge_core::ProjectId,
+    head: &forge_core::ObjectId,
+    new: &crate::checks::NewCheckRun,
+) -> crate::checks::Reported {
+    let ctx = crate::change::ChangeContext::new(
+        crate::change::Actor::System,
+        forge_core::RequestId::parse("req-test-forge-check").expect("request id"),
+    );
+    crate::checks::record_forge_check_run(db, &ctx, (project, head), new)
+        .await
+        .expect("record a test forge check run")
+}
+
+/// Opens a merge request as `author` without a route's decision (`decide`
+/// accepts everything), for tests in crates that may not call the review
+/// commands themselves (forge-review `tests/decided_callers.rs`). It records
+/// the `Opened` event, so subscribers (work item detection, the feed) see
+/// the merge request as they would a real one. Tests only (feature
+/// `test-support`).
+pub async fn open_merge_request(
+    db: &Db,
+    project: forge_core::ids::ProjectId,
+    author: forge_core::UserId,
+    new: &crate::review::NewMergeRequest,
+) -> crate::review::StoredMergeRequest {
+    let ctx = crate::change::ChangeContext::new(
+        crate::change::Actor::User(author),
+        forge_core::RequestId::parse("req-test-open-mr").expect("request id"),
+    );
+    let (stored, ()) = crate::review::open_mr_decided(db, &ctx, project, author, new, |_| Ok(()))
+        .await
+        .expect("open a test merge request");
+    stored
 }
 
 /// The whole error chain as the log would show it.

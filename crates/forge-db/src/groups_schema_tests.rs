@@ -41,6 +41,8 @@ async fn a_member_change_without_its_audit_row_cannot_commit() {
         "UPDATE forge.group_members SET role = 'guest'",
         "DELETE FROM forge.group_members",
         "UPDATE forge.groups SET display_name = 'Other'",
+        // Plan 15 MR2 (20261214101500): visibility is audited too.
+        "UPDATE forge.groups SET visibility = 'private'",
     ] {
         let table = if change.contains("groups SET") {
             "groups"
@@ -104,6 +106,11 @@ async fn the_d2_constraints_refuse_their_rows() {
         (
             "empty name",
             "INSERT INTO forge.groups (display_name) VALUES ('')",
+            "23514",
+        ),
+        (
+            "unknown visibility",
+            "INSERT INTO forge.groups (display_name, visibility) VALUES ('A', 'public')",
             "23514",
         ),
         (

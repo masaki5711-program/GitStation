@@ -67,6 +67,9 @@ pub enum RouteWord {
     /// A project's CI pipelines (`/-/pipelines`, `/-/pipelines/{id}`;
     /// plan 14 M4, ADR-0029).
     Pipelines,
+    /// A target branch's merge queue (`/-/merge-queue?target=`; M4 C8,
+    /// ADR-0030).
+    MergeQueue,
     /// A project's webhooks (`/-/webhooks`, `/-/webhooks/{id}/deliveries`;
     /// M3 I2, ADR-0016 §8).
     Webhooks,
@@ -96,6 +99,7 @@ impl RouteWord {
         Self::Pull,
         Self::Documents,
         Self::Pipelines,
+        Self::MergeQueue,
         Self::Webhooks,
         Self::Edit,
         Self::New,
@@ -120,6 +124,7 @@ impl RouteWord {
             Self::Pull => "pull",
             Self::Documents => "documents",
             Self::Pipelines => "pipelines",
+            Self::MergeQueue => "merge-queue",
             Self::Webhooks => "webhooks",
             Self::Edit => "edit",
             Self::New => "new",

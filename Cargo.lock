@@ -770,6 +770,7 @@ dependencies = [
  "forge-checks",
  "forge-core",
  "forge-db",
+ "forge-deploy",
  "forge-errors",
  "forge-git",
  "forge-hosting",
@@ -865,6 +866,21 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "forge-deploy"
+version = "0.1.0"
+dependencies = [
+ "forge-auth",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "forge-git",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1052,6 +1068,7 @@ dependencies = [
  "forge-checks",
  "forge-core",
  "forge-db",
+ "forge-deploy",
  "forge-doc",
  "forge-errors",
  "forge-git",

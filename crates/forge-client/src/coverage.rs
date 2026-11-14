@@ -801,6 +801,37 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/pipelines/{pipeline_id}/diagnosis",
         Coverage::Command("pipeline diagnosis"),
     ),
+    // M4 C8 (ADR-0030): the merge queue.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-queue",
+        Coverage::Command("queue list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-queue/pause",
+        Coverage::Command("queue pause"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-queue/resume",
+        Coverage::Command("queue resume"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
+        Coverage::Command("queue add"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
+        Coverage::Command("queue remove"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/merge-queue",
+        Coverage::Command("queue status"),
+    ),
     // M4 C6 (ADR-0029 decision 8): a project's CI variables.
     (
         "GET",
@@ -951,6 +982,37 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "POST",
         "/api/v1/users/{id}/rename",
         Coverage::Command("user rename"),
+    ),
+    // M4 C11 (ADR-0031): deployments (prod is approved in the browser).
+    (
+        "GET",
+        "/api/v1/projects/{id}/deploy/environments",
+        Coverage::Command("deploy envs"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/deploy/environments/{tier}",
+        Coverage::Command("deploy env-set"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}",
+        Coverage::Command("deploy target-set"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/deployments",
+        Coverage::Command("deploy list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/deployments",
+        Coverage::Command("deploy request"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/deployments/{deployment_id}/approve",
+        Coverage::BrowserOnly("a deployment is approved in a web session only (every tier): tokens are refused (FG-AUTH-0002 session_required); runbook deploy"),
     ),
 ];
 

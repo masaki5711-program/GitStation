@@ -232,6 +232,7 @@ fn job(
         | Resource::ProjectEvents { .. }
         | Resource::ActAs(_)
         | Resource::RunnerJob(_)
+        | Resource::Deployment(_)
         | Resource::ActAsConfirm(_) => Err(not_found("job_requires_pinned_copy")),
     }
 }

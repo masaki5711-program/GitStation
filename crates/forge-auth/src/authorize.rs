@@ -857,8 +857,11 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         // too. The direct-push ban of a protected branch (R6) is not read:
         // merge requests are how such a branch changes. Readiness (open,
         // draft, conflicts, …) is `evaluate_merge()`'s, never decided here.
+        // M4 C8 (ADR-0030 §2, §10): adding to and taking out of the merge
+        // queue are decided as the merge itself (the queue merges for the
+        // person who asked; the landing decides MergeRequestMerge again).
         (
-            Action::MergeRequestMerge,
+            Action::MergeRequestMerge | Action::MergeQueueEnqueue | Action::MergeQueueDequeue,
             Resource::MergeRequest {
                 project,
                 source_branch,
@@ -1378,6 +1381,52 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             people_only()?;
             need(Role::Maintainer, p.role)
         }
+        // --- deployments (M4 C11, plan 14 §4.2, ADR-0031) ---
+        (Action::DeployRead, Resource::Project(p)) => need(Role::Reporter, read_role(p)),
+        (Action::DeployEnvironmentManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+        // A target is a host forge's deploy key logs in to: an
+        // administrator's (a token with the `admin` scope), people only.
+        (Action::DeployTargetManage, Resource::Project(_)) => {
+            people_only()?;
+            admin_only()
+        }
+        (Action::DeployCreate, Resource::Project(p)) => need(Role::Developer, p.role),
+        // Approving (ADR-0031 decision 6 and its amendment): a web
+        // session (a token was refused above as session-only); people
+        // only; never the requester nor anyone behind the SHA,
+        // administrators included, before any role; Maintainer and above.
+        (Action::DeployApprove, Resource::Deployment(d)) => {
+            people_only()?;
+            let own = |reason: &'static str| {
+                deny(ErrorCode::DeploySelfApprovalRefused)
+                    .with_context("reason", reason)
+                    .with_context("environment", d.tier.as_str())
+            };
+            if d.requested_by == Some(user) {
+                return Err(own("requester"));
+            }
+            if d.change_authors.contains(&user) {
+                return Err(own("change_author"));
+            }
+            need(Role::Maintainer, d.project.role)
+        }
+
+        // --- merge queue (M4 C8, plan 14 §4.2, ADR-0030) ---
+        // Reading: as RepoBrowse (metadata; an agent audience too).
+        (Action::MergeQueueRead, Resource::Project(p)) => need(Role::Reporter, read_role(p)),
+        // The emergency stop: people only, Developer and above; starting
+        // again: people only, Maintainer and above.
+        (Action::MergeQueuePause, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Developer, p.role)
+        }
+        (Action::MergeQueueManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
         // M4 C12 (ADR-0029 Amendment 2026-11-13): a schedule is a standing
         // delegation of its owner's rights — a Maintainer's, people only.
         (Action::PipelineScheduleManage, Resource::Project(p)) => {
@@ -1495,7 +1544,17 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::MergeQueueRead
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             | Action::CiVariableManage
+            | Action::DeployRead
+            | Action::DeployEnvironmentManage
+            | Action::DeployTargetManage
+            | Action::DeployCreate
+            | Action::DeployApprove
             | Action::PipelineScheduleManage
             | Action::CiArtifactRead
             | Action::JobArtifactUpload
@@ -1540,7 +1599,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::ActAsConfirm(_)
             | Resource::CiOutput { .. }
             | Resource::RunnerJob(_)
-            | Resource::JobSelf(_),
+            | Resource::JobSelf(_)
+            | Resource::Deployment(_),
         ) => wrong_resource(),
     }
 }
@@ -1600,6 +1660,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::CheckRun { project, .. }
         | Resource::CiOutput { project, .. }
         | Resource::ProjectEvents { project, .. } => live(project),
+        // M4 C11: a deployment is seen through its project.
+        Resource::Deployment(d) => live(&d.project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -1676,6 +1738,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::PinnedCopy(_)
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
+        | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }

@@ -444,6 +444,27 @@ actions! {
     PipelineCancel,
     /// `POST …/pipelines/{pipeline_id}/retry`: Developer and above; `api`.
     PipelineRetry,
+    // --- merge queue (M4 C8, plan 14 §4.2, ADR-0030) ---
+    /// `GET /api/v1/projects/{id}/merge-queue?target=`: a queue's entries
+    /// (one merge request's place is `MergeRequestRead` on
+    /// `GET …/merge-requests/{iid}/merge-queue`). As `RepoBrowse` (an agent audience too: the
+    /// queue is metadata); `read_api`.
+    MergeQueueRead,
+    /// `POST …/merge-requests/{iid}/merge-queue`: "merge when ready" — add
+    /// the merge request to its target's queue. Decided as
+    /// `MergeRequestMerge` (people only; the target's push role; a token
+    /// needs `merge_execute`): the queue merges for the person who asked.
+    MergeQueueEnqueue,
+    /// `DELETE …/merge-requests/{iid}/merge-queue`: take it out of the
+    /// queue. As `MergeQueueEnqueue` (who may merge it may stop it).
+    MergeQueueDequeue,
+    /// `POST /api/v1/projects/{id}/merge-queue/pause`: the emergency stop
+    /// of a target's queue (no new batch, no landing). People only,
+    /// Developer and above (plan 14 §4.2); `api`.
+    MergeQueuePause,
+    /// `POST /api/v1/projects/{id}/merge-queue/resume`: start a paused
+    /// queue again. People only, Maintainer and above; `api`.
+    MergeQueueManage,
     /// `GET /api/v1/projects/{id}/ci/variables`, `PUT|DELETE
     /// …/ci/variables/{name}` (M4 C6, plan 14 §4.2): list a project's CI
     /// variables (names and flags, never a value), set or delete one. A
@@ -451,6 +472,36 @@ actions! {
     /// people only (a secret's owner answers for it; an agent never sets or
     /// sees one, ADR-0029 decision 8); `api`.
     CiVariableManage,
+    // --- deployments (M4 C11, plan 14 §4.2, ADR-0031) ---
+    /// `GET /api/v1/projects/{id}/deploy/environments`, `GET
+    /// …/deployments`: a project's environments, targets (with their
+    /// pinned fingerprints, never a key) and deployments. As `RepoBrowse`
+    /// (Reporter, or any signed-in person on an internal project);
+    /// `read_api`.
+    DeployRead,
+    /// `PUT …/deploy/environments/{tier}`: create or change an
+    /// environment (approval rule, approval window, freeze windows,
+    /// automatic rollback and deployment). Maintainer and above, people
+    /// only; `api`.
+    DeployEnvironmentManage,
+    /// `PUT …/deploy/environments/{tier}/targets/{name}`: register or
+    /// change a target (host, port, user, pinned host key, script name).
+    /// Administrators only, people only (a target is a host forge's key
+    /// can log in to); a token needs the `admin` scope.
+    DeployTargetManage,
+    /// `POST …/deployments`: request a deployment of a commit to an
+    /// environment. Developer and above (agents and service accounts by
+    /// their membership: a request deploys nothing where an approval is
+    /// required); `api`.
+    DeployCreate,
+    /// `POST …/deployments/{deployment_id}/approve` (`Resource::Deployment`):
+    /// people only, Maintainer and above, never the requester nor the
+    /// people behind the SHA — merge request authors, pushers, the commit
+    /// author and committer (`FG-DEPLOY-0009`); a web session only on
+    /// every tier (a token is `FG-AUTH-0002 reason=session_required`). An
+    /// agent, a service account (the auto-merge principal included), a
+    /// bot, an act-as request, a runner and a job never approve.
+    DeployApprove,
     /// `POST /api/v1/projects/{id}/pipeline-schedules`, `PUT|DELETE
     /// …/pipeline-schedules/{schedule_id}` (M4 C12): create, change or
     /// delete a timed pipeline. Whoever saves one becomes its owner and the
@@ -587,6 +638,8 @@ impl Action {
                 | Action::ActAsAssertionIssue
                 | Action::RunnerRegister
                 | Action::RunnerManage
+                // M4 C11 review: an approval is a person's in the browser.
+                | Action::DeployApprove
         )
     }
 
@@ -638,8 +691,17 @@ impl Action {
                 | Action::DocLintMigrationManage
                 | Action::RunnerRegister
                 | Action::RunnerManage
+                // M4 C8: the queue merges for a person (ADR-0030 §2, §9).
+                | Action::MergeQueueEnqueue
+                | Action::MergeQueueDequeue
+                | Action::MergeQueuePause
+                | Action::MergeQueueManage
                 // M4 C6: CI secrets are a person's.
                 | Action::CiVariableManage
+                // M4 C11: deploy configuration and approval are a person's.
+                | Action::DeployEnvironmentManage
+                | Action::DeployTargetManage
+                | Action::DeployApprove
                 // M4 C12: a schedule runs with its owner's rights.
                 | Action::PipelineScheduleManage
         )
@@ -685,6 +747,8 @@ impl Action {
             // M4 C6: a job's own artifacts (`ci_rule`: the job's token only).
             | Action::JobArtifactUpload
             | Action::JobArtifactDownload
+            // M4 C11 review: session only.
+            | Action::DeployApprove
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -730,7 +794,9 @@ impl Action {
             | Action::PipelineRead
             | Action::CiLogRead
             | Action::PipelineDiagnosisRead
+            | Action::MergeQueueRead
             | Action::CiArtifactRead
+            | Action::DeployRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -774,11 +840,19 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             | Action::CiVariableManage
+            | Action::DeployEnvironmentManage
+            | Action::DeployTargetManage
+            | Action::DeployCreate
             | Action::PipelineScheduleManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
-            Action::MergeRequestMerge => Some(Scope::MergeExecute),
+            Action::MergeRequestMerge
+            // M4 C8: adding to the queue is the merge, delayed.
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue => Some(Scope::MergeExecute),
             // M3 R5: satisfied by `merge_approve` alone.
             Action::MergeRequestApprove | Action::MergeRequestUnapprove => {
                 Some(Scope::MergeApprove)
@@ -906,8 +980,20 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C8: the merge queue is no act-as action.
+            | Action::MergeQueueRead
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             // M4 C6: nor are CI secrets.
             | Action::CiVariableManage
+            // M4 C11: nor are deployments (an approval is a person's own).
+            | Action::DeployRead
+            | Action::DeployEnvironmentManage
+            | Action::DeployTargetManage
+            | Action::DeployCreate
+            | Action::DeployApprove
             // M4 C12: nor are pipeline schedules.
             | Action::PipelineScheduleManage
             // M4 C3: runners are no act-as action.
@@ -1042,9 +1128,22 @@ impl Action {
             | Action::PipelineCreate
             | Action::PipelineCancel
             | Action::PipelineRetry
+            // M4 C8: a job never reads or changes a merge queue.
+            | Action::MergeQueueRead
+            | Action::MergeQueueEnqueue
+            | Action::MergeQueueDequeue
+            | Action::MergeQueuePause
+            | Action::MergeQueueManage
             // M4 C6: a job never reads or sets a secret through the API
             // (ADR-0029 decision 8: they come with the claim).
             | Action::CiVariableManage
+            // M4 C11: a job never reads, requests or approves a deployment
+            // (ADR-0029 obligation 6: a retried job is no approval).
+            | Action::DeployRead
+            | Action::DeployEnvironmentManage
+            | Action::DeployTargetManage
+            | Action::DeployCreate
+            | Action::DeployApprove
             // M4 C12: nor a schedule.
             | Action::PipelineScheduleManage
             | Action::AuditRead

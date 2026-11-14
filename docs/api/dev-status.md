@@ -87,7 +87,7 @@ gstn: `gstn integration dev-status <id> --ref PBI-<n>` と `gstn integration dev
 | `merge_requests[].link` | `{source: auto / manual, linked_at}` |
 | `merge_requests[].author` | MR を開いた人 `{id, username, display_name, employee_number}`（2026-11-13 追加）。`username`・`display_name` は今の値（MR の API の `author.display_name` と同じ。読めなければ `null`） |
 | `merge_requests[].merged_by` | マージした人（適用されたマージの試みを要求した人）`{id, username, display_name, employee_number}`。マージ済みでなければ `null`（2026-11-13 追加） |
-| `…author.employee_number`・`…merged_by.employee_number` | トークンが **`user_employee_number`** を持つときだけ（イベントの履歴の `actor.user.employee_number` と同じ規則）。持たないとき・値の無い利用者は欄ごと無い。メールはここには出さない。kanflow はマージの履歴の作成者と「自分の止まっている MR」（N10）を、ブランチの名前ではなく社員番号で突き合わせる |
+| `…author.employee_number`・`…merged_by.employee_number` | トークンが **`user_employee_number`** を持つときだけ（イベントの履歴の `actor.user.employee_number` と同じ規則）。持たないとき・値の無い利用者は欄ごと無い。メールはここには出さない。kanflow はマージの履歴の作成者と「自分の止まっている MR」（N10）を、ブランチの名前ではなく社員番号で突き合わせる。MR の一覧・詳細の `author`・`merged_by` も同じ形・同じ規則（ADR-0024 の 2026-11-13 の Amendment） |
 | `merge_requests_truncated` | 100 件を超えるリンクがある |
 
 ## 410 からの復旧と最初の同期

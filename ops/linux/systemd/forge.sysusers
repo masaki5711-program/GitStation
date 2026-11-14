@@ -1,0 +1,4 @@
+# /etc/sysusers.d/forge.conf — the GitStation service account.
+# Apply: systemd-sysusers /etc/sysusers.d/forge.conf
+# A system user without a login shell; its home is the state directory.
+u forge - "GitStation service" /var/lib/forge /usr/sbin/nologin

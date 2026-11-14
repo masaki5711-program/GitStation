@@ -94,7 +94,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     let ci_secret_keys = cfg.ci.secret_keys()?.map(Arc::new);
     let artifact_quota = cfg.ci.artifact_quota_bytes;
     block_on(async {
-        let smart_http = smart_http(storage, &cfg.git_http)?;
+        let smart_http = smart_http(storage, &cfg.git_http, cfg.git_pack)?;
         forge_git::version::detect(&smart_http.git).await?;
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
@@ -115,6 +115,12 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             )
             .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
         );
+        // M4 C8 (ADR-0030 §13): the merge queue's worker, next to the merges
+        // (its landing writes the target branches under the same lock).
+        let queue_tasks = crate::serve_merge_queue::spawn(Arc::new(forge_review::MergeQueue::new(
+            forge_review::Merger::clone(&merger),
+            format!("serve-{}", forge_core::RequestId::generate()),
+        )));
         let merge_tasks = crate::serve_merges::spawn(&db, merger)?;
         let oidc = crate::oidc::service(cfg, &db)?;
         let mut state = app_state(&db, database, cfg.web.session_idle, oidc.as_ref())
@@ -182,6 +188,15 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                     None => pipelines,
                 }
             })
+            // M4 C11: deployments (the routes; the worker runs them).
+            .with_deploy(forge_deploy::Deploy::new(
+                db.clone(), // clone: the pool handle is shared
+                Arc::new(forge_deploy::GitCommits::new(
+                    db.clone(),                // clone: as above
+                    smart_http.browse.clone(), // clone: shares the ref cache
+                )),
+                crate::worker::deploy::target_policy(cfg),
+            ))
             // M3 I1c: the integrations' event feed seals its cursors with
             // the same keys as the lists (another purpose, so neither opens
             // the other's).
@@ -266,6 +281,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // The merge in progress gets its grace, then is released (an
         // `executing` attempt is the reconciliation's after the restart).
         // A task that panicked or did not end in time is logged there.
+        queue_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         merge_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         // A receive-pack whose body was complete runs on in its own task
         // (and records the push afterwards): let it finish before the
@@ -297,8 +313,14 @@ const PUSH_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(9
 /// git for the Smart HTTP routes: `git` from `PATH`, HOME = the storage
 /// root (only forge writes it; no user or shared config applies), stream
 /// pools and timeouts from `git.http.*`.
-fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> Result<SmartHttp, ForgeError> {
+fn smart_http(
+    storage: StorageRoot,
+    limits: &GitHttpConfig,
+    pack: forge_core::config::GitPackConfig,
+) -> Result<SmartHttp, ForgeError> {
     let mut git = GitConfig::new("git", storage.path());
+    // `git.pack.*`: the memory caps of upload-pack / receive-pack.
+    git.pack = pack;
     // u32 → usize: lossless on the supported (32/64-bit) targets.
     git.max_streams = usize::try_from(limits.max_streams).unwrap_or(usize::MAX);
     git.max_streams_per_principal =

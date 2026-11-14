@@ -1604,3 +1604,142 @@ fn ci_secret_keys_file_is_optional_absolute_and_its_namespace_closed() {
         assert_invalid(&e, "ci.artifact_quota_bytes", reason);
     }
 }
+
+/// M4 C11: `[deploy]` — no key file by default (no deployment runs), a set
+/// one is an absolute path, the timeouts are bounded, and an unknown
+/// `FORGE_DEPLOY_*` variable is a typo.
+#[test]
+fn deploy_key_file_is_optional_absolute_and_timeouts_bounded() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert!(cfg.deploy.ssh_key_file.is_none());
+    assert_eq!(cfg.deploy.ssh_program, std::path::PathBuf::from("ssh"));
+    assert_eq!(cfg.deploy.connect_timeout.as_secs(), 10);
+    let key = std::env::temp_dir().join("deploy_key");
+    let key_text = key.display().to_string();
+    let cfg = load(
+        None,
+        &env(&[
+            ("FORGE_DEPLOY_SSH_KEY_FILE", key_text.as_str()),
+            ("FORGE_DEPLOY_HEALTH_TIMEOUT_SECS", "30"),
+        ]),
+    )
+    .expect("set");
+    assert_eq!(cfg.deploy.ssh_key_file.as_deref(), Some(key.as_path()));
+    assert_eq!(cfg.deploy.health_timeout.as_secs(), 30);
+    for (key, value, config_key, reason) in [
+        (
+            "FORGE_DEPLOY_SSH_KEY_FILE",
+            "relative/key",
+            "deploy.ssh_key_file",
+            "not_absolute",
+        ),
+        (
+            "FORGE_DEPLOY_SSH_KEY_FILE",
+            " ",
+            "deploy.ssh_key_file",
+            "empty",
+        ),
+        (
+            "FORGE_DEPLOY_CONNECT_TIMEOUT_SECS",
+            "0",
+            "deploy.connect_timeout_secs",
+            "below_min",
+        ),
+        (
+            "FORGE_DEPLOY_SCRIPT_TIMEOUT_SECS",
+            "9999",
+            "deploy.script_timeout_secs",
+            "above_max",
+        ),
+    ] {
+        let e = load(None, &env(&[(key, value)])).expect_err(key);
+        assert_invalid(&e, config_key, reason);
+    }
+    assert!(load(None, &env(&[("FORGE_DEPLOY_KEY", "/k")])).is_err());
+    let nets = load(
+        None,
+        &env(&[("FORGE_DEPLOY_ALLOWED_NETWORKS", "10.0.0.0/8, fd00::/8")]),
+    )
+    .expect("networks");
+    assert_eq!(nets.deploy.allowed_networks.len(), 2);
+    let e = load(
+        None,
+        &env(&[("FORGE_DEPLOY_ALLOWED_NETWORKS", "10.0.0.0/40")]),
+    )
+    .expect_err("bad");
+    assert_invalid(&e, "deploy.allowed_networks", "invalid");
+}
+
+/// `git.pack.*`: the memory caps of pack-heavy git — defaults, the
+/// `[git.pack]` table, environment overrides, ranges and the window ≤
+/// limit rule (FG-SYS-0002).
+#[test]
+fn git_pack_caps_have_defaults_file_env_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.git_pack, GitPackConfig::DEFAULT);
+    assert_eq!(cfg.git_pack.window_memory_mib, 256);
+    assert_eq!(cfg.git_pack.threads, 2);
+    assert_eq!(cfg.git_pack.delta_base_cache_mib, 64);
+    assert_eq!(cfg.git_pack.packed_git_limit_mib, 1024);
+    assert_eq!(cfg.git_pack.packed_git_window_mib, 64);
+
+    let f = file("[git.pack]\nthreads = 4\nwindow_memory_mib = 128\n");
+    let cfg = load(
+        Some(f.path()),
+        &env(&[
+            ("FORGE_GIT_PACK_DELTA_BASE_CACHE_MIB", "32"),
+            ("FORGE_GIT_PACK_PACKED_GIT_LIMIT_MIB", "512"),
+            ("FORGE_GIT_PACK_PACKED_GIT_WINDOW_MIB", "512"),
+        ]),
+    )
+    .expect("file + env");
+    assert_eq!(
+        cfg.git_pack,
+        GitPackConfig {
+            window_memory_mib: 128,
+            threads: 4,
+            delta_base_cache_mib: 32,
+            packed_git_limit_mib: 512,
+            packed_git_window_mib: 512,
+        }
+    );
+
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_GIT_PACK_THREADS", "0")],
+            "git.pack.threads",
+            "zero",
+        ),
+        (
+            vec![("FORGE_GIT_PACK_THREADS", "65")],
+            "git.pack.threads",
+            "above_max",
+        ),
+        (
+            vec![("FORGE_GIT_PACK_WINDOW_MEMORY_MIB", "4097")],
+            "git.pack.window_memory_mib",
+            "above_max",
+        ),
+        (
+            vec![("FORGE_GIT_PACK_DELTA_BASE_CACHE_MIB", "-1")],
+            "git.pack.delta_base_cache_mib",
+            "invalid",
+        ),
+        (
+            vec![("FORGE_GIT_PACK_PACKED_GIT_LIMIT_MIB", "8")],
+            "git.pack.packed_git_limit_mib",
+            "below_min",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_PACK_PACKED_GIT_LIMIT_MIB", "64"),
+                ("FORGE_GIT_PACK_PACKED_GIT_WINDOW_MIB", "128"),
+            ],
+            "git.pack.packed_git_window_mib",
+            "above_limit",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        assert_invalid(&err, key, reason);
+    }
+}

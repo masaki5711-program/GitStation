@@ -190,15 +190,18 @@ async fn events(t: &FreshDb, project: ProjectId, actor: UserId, events: &[(&str,
             )
         })
         .collect();
-    t.exec_superuser(&format!(
-        "BEGIN; \
-         INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
-           request_id) VALUES ('system', 'probe.activity', 'succeeded', 'project', {p}, 'r-act'); \
-         INSERT INTO forge.events (event_id, event_type, schema_version, aggregate_type, \
-           aggregate_id, project_id, actor_kind, actor_user_id, request_id, payload) VALUES {}; \
-         COMMIT",
-        values.join(", ")
-    ))
+    t.exec_superuser_tx(&[
+        format!(
+            "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+             resource_id, request_id) VALUES ('system', 'probe.activity', 'succeeded', \
+             'project', {p}, 'r-act')"
+        ),
+        format!(
+            "INSERT INTO forge.events (event_id, event_type, schema_version, aggregate_type, \
+             aggregate_id, project_id, actor_kind, actor_user_id, request_id, payload) VALUES {}",
+            values.join(", ")
+        ),
+    ])
     .await;
     sequence(t).await;
 }

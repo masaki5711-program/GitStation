@@ -1,0 +1,120 @@
+# /etc/forge/forge.toml — GitStation (forge) production configuration, Linux.
+#
+# Install: root:forge 0640 (no secret is written in this file; every secret
+# is a separate file under /etc/forge/secrets/, forge:forge 0600, referenced
+# by absolute path). Runbook: ops/runbooks/linux-install.md.
+#
+# Used by: forge-serve.service, forge-worker.service, forge-backup.service
+# and the operator wrapper `forgectl` (which adds the migrate / maint logins
+# through the environment, never through this file: `forge serve` and
+# `forge worker` refuse a configuration that holds those password files —
+# FG-SYS-0002 reason=not_for_this_command, ADR-0018).
+#
+# Every key: crates/forge-core/src/config/keys.rs. An unknown key, a typo or
+# an empty value stops forge (FG-SYS-0002, runbook config-invalid). The
+# environment (`FORGE_<SECTION>_<KEY>`) overrides this file.
+#
+# PLACEHOLDER marks a value to agree with the PFS team before going live
+# (ops/runbooks/linux-install.md "PFS チームに確認すること").
+# crates/forge-cli/tests/linux_package.rs loads this file with the real
+# loader, so keep it valid.
+
+[server]
+# The reverse proxy (nginx, ops/linux/nginx/gitstation.conf) forwards here.
+# Loopback only: TLS is the proxy's job. PLACEHOLDER port — chosen not to
+# collide with PFS (Keycloak often uses 8080, PostgreSQL 5432). Change the
+# nginx upstream together with it.
+bind = "127.0.0.1:18080"
+# Behind the proxy every client is the proxy's address (no trusted-proxy
+# setting): the per-peer cap is the proxy's cap. At most max_connections.
+max_connections = 1024
+max_connections_per_peer = 512
+
+[storage]
+# Bare repositories. A real directory (not a symlink), forge:forge 0750.
+# Put it on the data disk; size it for git.http.push_max_bytes.
+root = "/var/lib/forge/repositories"
+
+[database]
+# The application login (forge_app). PLACEHOLDER host/port: a dedicated
+# PostgreSQL 16 instance for GitStation (recommended) or the PFS cluster
+# with a separate database (ops/linux/postgresql/README.md).
+url = "postgres://forge_app@127.0.0.1:55433/forge"
+password_file = "/etc/forge/secrets/db-app.pw"
+# Loopback to the same host: "disable" is allowed. A remote server needs
+# "verify-full" (the default) and tls_root_cert (the internal CA).
+tls_mode = "disable"
+# tls_root_cert = "/etc/forge/ca/internal-ca.pem"
+#
+# Memory-lean pools. Per process and per pool; serve and worker each open
+# up to write + read connections, so the server needs at least
+# (5 + 5) * 2 + 3 = 23 connections within 80 % of its usable slots
+# (`forge doctor` db.connections, FG-SYS-0002 reason=connection_budget).
+write_max_connections = 5
+read_max_connections = 5
+min_connections = 0
+
+[api]
+cursor_keys_file = "/etc/forge/secrets/cursor-keys"
+
+[audit]
+seal_keys_file = "/etc/forge/secrets/audit-seal-keys"
+
+[git.http]
+# 2 GiB (the default): nginx client_max_body_size must be at least this.
+push_max_bytes = 2147483648
+# One hour (the default): nginx proxy_read_timeout / proxy_send_timeout
+# must be at least this.
+timeout_ms = 3600000
+
+[web]
+# The URL people open (the proxy's https origin). PLACEHOLDER host name.
+base_url = "https://gitstation.example.internal"
+session_key_file = "/etc/forge/secrets/web-session-keys"
+
+[auth.oidc]
+# PFS Keycloak (the company IdP). PLACEHOLDER realm URL: it must equal the
+# discovery document's `issuer` character for character.
+issuer = "https://keycloak.example.internal/realms/pfs"
+client_id = "gitstation"
+client_secret_file = "/etc/forge/secrets/oidc-client-secret"
+# The internal CA that signed Keycloak's certificate (no public roots).
+ca_file = "/etc/forge/ca/internal-ca.pem"
+
+[maintenance]
+# Repository maintenance runs inside this nightly window (Asia/Tokyo).
+# forge-backup.timer runs at 01:15, before it.
+window_start = "02:00"
+window_end = "05:00"
+window_time_zone = "Asia/Tokyo"
+
+[webhook]
+# Kanflow (or other internal receivers), host:port. PLACEHOLDER.
+allowed_targets = "kanflow.example.internal:443"
+secret_keys_file = "/etc/forge/secrets/webhook-secret-keys"
+ca_file = "/etc/forge/ca/internal-ca.pem"
+
+[ci]
+secret_keys_file = "/etc/forge/secrets/ci-secret-keys"
+
+[backup]
+# A different disk than storage.root (PLACEHOLDER mount). forge:forge 0700.
+dir = "/srv/forge-backup"
+# Outside backup.dir; keep a second copy of the key off this server.
+key_file = "/etc/forge/secrets/backup.key"
+# Outside backup.dir (written by forge worker every 5 minutes).
+state_copy_dir = "/var/lib/forge/state-copy"
+generations = 7
+# pgBackRest: see runbook backup-restore "設定". With PostgreSQL in a
+# container, point this at the docker/podman exec wrapper.
+pgbackrest_bin = "/usr/bin/pgbackrest"
+pgbackrest_stanza = "forge"
+max_age_hours = 26
+
+# [notify] — e-mail notifications, off until the company SMTP relay is known
+# (runbook notification-email).
+# enabled = true
+# smtp_host = "smtp.example.internal"
+# smtp_tls = "starttls"
+# smtp_ca_file = "/etc/forge/ca/internal-ca.pem"
+# from_address = "gitstation@example.internal"

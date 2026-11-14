@@ -21,6 +21,12 @@
 //! person's clone never sees them and no push can write them. Only a job's
 //! own fetch (`Git::upload_pack_pinned`) un-hides exactly its pipeline's ref.
 //!
+//! M4 C8 (ADR-0030 §3): the merge queue's train refs
+//! `refs/merge-queue/<queue_id>/train` (the commit a queue tests now) are
+//! hidden the same way ([`MERGE_QUEUE_REF_PREFIX`],
+//! [`MERGE_QUEUE_REF_GLOB`]); a CI job fetches a train through its own
+//! pipeline ref.
+//!
 //! The ref names are built only here, from a positive iid and version
 //! number (or pipeline id), as validated [`RefName`]s.
 
@@ -54,6 +60,31 @@ pub const PIPELINE_REF_PREFIX: &str = pipeline_prefix!();
 
 /// The `--exclude` pattern of the pipeline refs in the want check.
 pub(crate) const PIPELINE_REF_GLOB: &str = concat!(pipeline_prefix!(), "*");
+
+macro_rules! merge_queue_prefix {
+    () => {
+        "refs/merge-queue/"
+    };
+}
+
+/// The merge queue's train refs (M4 C8): hidden from Smart HTTP and left
+/// out of the want check like [`HIDDEN_REF_PREFIX`].
+pub const MERGE_QUEUE_REF_PREFIX: &str = merge_queue_prefix!();
+
+/// The `--exclude` pattern of the train refs in the want check.
+pub(crate) const MERGE_QUEUE_REF_GLOB: &str = concat!(merge_queue_prefix!(), "*");
+
+/// `refs/merge-queue/<queue_id>/train`: the train a queue tests now (one
+/// per queue, moved by every batch). A non-positive id is a forge bug
+/// (`FG-SYS-0001 reason=merge_queue_ref_number`).
+pub fn merge_queue_train_ref(queue_id: i64) -> Result<RefName, ForgeError> {
+    if queue_id <= 0 {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "merge_queue_ref_number")
+            .with_context("what", "queue_id"));
+    }
+    RefName::parse(&format!("{MERGE_QUEUE_REF_PREFIX}{queue_id}/train"))
+}
 
 /// `refs/pipelines/<pipeline_id>/head`: the pinned commit a pipeline's jobs
 /// fetch. A non-positive id is a forge bug (`FG-SYS-0001
@@ -123,11 +154,29 @@ mod tests {
         assert_eq!(HIDDEN_REF_GLOB, format!("{HIDDEN_REF_PREFIX}*"));
         assert_eq!(PIPELINE_REF_PREFIX, "refs/pipelines/");
         assert_eq!(PIPELINE_REF_GLOB, format!("{PIPELINE_REF_PREFIX}*"));
+        assert_eq!(MERGE_QUEUE_REF_PREFIX, "refs/merge-queue/");
+        assert_eq!(MERGE_QUEUE_REF_GLOB, format!("{MERGE_QUEUE_REF_PREFIX}*"));
         // Both services hide exactly the prefixes (one of them alone would
         // leave the refs and their ids in the other's advertisement).
-        let both = [HIDDEN_REF_PREFIX, PIPELINE_REF_PREFIX];
+        let both = [
+            HIDDEN_REF_PREFIX,
+            PIPELINE_REF_PREFIX,
+            MERGE_QUEUE_REF_PREFIX,
+        ];
         assert_eq!(hide_refs(UPLOAD_PACK_CONFIG), both);
         assert_eq!(hide_refs(RECEIVE_PACK_CONFIG), both);
+    }
+
+    #[test]
+    fn merge_queue_train_refs_are_built_from_positive_ids() {
+        assert_eq!(
+            merge_queue_train_ref(7).expect("ref").as_str(),
+            "refs/merge-queue/7/train"
+        );
+        for bad in [0, -2] {
+            let err = merge_queue_train_ref(bad).expect_err("refused");
+            assert_eq!(err.code(), ErrorCode::Internal);
+        }
     }
 
     #[test]

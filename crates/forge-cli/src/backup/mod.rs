@@ -763,7 +763,7 @@ pub fn rotate(dir: &Path, keep: u32) -> Result<Vec<String>, ForgeError> {
 /// `forge backup` with the configured pgBackRest.
 pub fn backup(cfg: &Config, request_id: &RequestId) -> Result<String, ForgeError> {
     let prepared = prepare(&cfg.backup)?;
-    let storage = crate::worker::provision::Storage::open(cfg.storage_root()?)?;
+    let storage = crate::worker::provision::Storage::from_config(cfg)?;
     let tool = PgBackRest {
         bin: cfg.backup.pgbackrest_bin.clone(), // clone: owned by the tool
         stanza: cfg.backup.pgbackrest_stanza.clone(), // clone: owned by the tool

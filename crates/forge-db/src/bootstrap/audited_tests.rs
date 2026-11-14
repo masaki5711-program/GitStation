@@ -102,7 +102,8 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "merge_request_work_items_audited",
             "users_employee_number_kept_when_disabled",
             "act_as_assertions_guard",
-            "integration_bindings_resolving_alone"
+            "integration_bindings_resolving_alone",
+            "deployments_guard",
         ]
     );
 }

@@ -48,7 +48,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::command::Git;
-use crate::hidden_refs::{HIDDEN_REF_GLOB, PIPELINE_REF_GLOB};
+use crate::hidden_refs::{HIDDEN_REF_GLOB, MERGE_QUEUE_REF_GLOB, PIPELINE_REF_GLOB};
 use crate::revision::Revision;
 use crate::storage::StorageRoot;
 use crate::upload_request::is_object_id;
@@ -283,6 +283,7 @@ impl Git {
             .arg("--not")
             .exclude_glob(HIDDEN_REF_GLOB)
             .exclude_glob(PIPELINE_REF_GLOB)
+            .exclude_glob(MERGE_QUEUE_REF_GLOB)
             .arg("--all")
     }
 
@@ -329,6 +330,7 @@ impl Git {
             .arg("--objects")
             .exclude_glob(HIDDEN_REF_GLOB)
             .exclude_glob(PIPELINE_REF_GLOB)
+            .exclude_glob(MERGE_QUEUE_REF_GLOB)
             .arg("--all")
             .arg("--no-object-names")
     }

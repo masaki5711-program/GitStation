@@ -396,7 +396,13 @@ fn is_test(path: &str) -> bool {
         .any(|suffix| stem.ends_with(suffix))
 }
 
-/// A migration file: SQL under a `migrations` or `migrate` directory.
+/// A migration file: SQL under a `migrations` or `migrate` directory (M4
+/// C8: the merge queue runs a merge request that touches one alone,
+/// ADR-0030 §4 — the same rule as `forge/risk`'s).
+pub fn is_migration_path(path: &str) -> bool {
+    is_migration(path)
+}
+
 fn is_migration(path: &str) -> bool {
     let name = basename(path);
     extension(name).is_some_and(|e| e.eq_ignore_ascii_case("sql"))

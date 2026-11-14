@@ -158,15 +158,24 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   loop takes the accepted exit codes and returns the code; a signal is never accepted; `output()` /
   `output_truncated()` are the `[0]` wrappers). Pinned by `merge_tree_exit_codes_on_git_2_38`
   (verified on git 2.53; 2.38 itself not run here).
+- **Memory caps** (`git.pack.*`, `GitConfig::pack: forge_core::config::GitPackConfig`):
+  `Git::command` starts every pack-heavy subcommand (`config::PACK_HEAVY_SUBCOMMANDS`:
+  upload-pack, receive-pack, pack-objects, index-pack, repack, gc, push, fetch, cat-file) with
+  `-c pack.windowMemory -c pack.threads -c core.deltaBaseCacheLimit -c core.packedGitLimit -c
+  core.packedGitWindowSize` (defaults 256m / 2 / 64m / 1024m / 64m), before its own `-c` (which
+  win); `-c` reaches git's children (`pack-objects`, `index-pack`). Pinned by
+  `pack_heavy_subcommands_start_with_the_memory_caps`. Sizing and the measured trade-off:
+  `ops/runbooks/memory-sizing.md`, `ops/bench/git-pack-memory.py`.
 - **Maintenance** (`maintenance`, M3 O3, ADR-0024 "実装で決めたこと（O3）"): the git steps of the
   `repository.maintain` job, each with its own timeout and the **process tree** killed on a
   timeout / overflow / drop (`GitCommand::supervise_tree`, crate-internal; proven by
   `maintenance_timeout_kills_the_process_tree` with a helper that outlives its leader).
   `Git::maintenance_blocker(storage, id) -> Option<Blocked>` (an `objects/tmp_objdir-incoming-*`
   quarantine younger than `QUARANTINE_STALE` 6 h → `Blocked::IncomingPush`; no git runs),
-  `Git::gc_objects(storage, id, prune_grace, timeout) -> GcRun::{Ran, AlreadyRunning}` (`-c
-  gc.packRefs=false -c gc.writeCommitGraph=false -c repack.writeBitmaps=true -c
-  pack.writeBitmapHashCache=true -c core.hooksPath=<empty> gc --cruft
+  `Git::gc_objects(storage, id, prune_grace, timeout) -> GcRun::{Ran, AlreadyRunning}` (the
+  memory caps, then `-c gc.packRefs=false -c gc.writeCommitGraph=false -c
+  repack.writeBitmaps=true -c pack.writeBitmapHashCache=true -c
+  pack.writeBitmapLookupTable=true -c core.hooksPath=<empty> gc --cruft
   --prune=<secs>.seconds.ago --quiet`; a grace below `MIN_PRUNE_GRACE` 24 h is FG-SYS-0002; git's own
   `gc.pid` refusal is `AlreadyRunning`), `Git::pack_refs` (`pack-refs --all --prune`; the caller
   holds the merge lock), `Git::write_commit_graph` (`commit-graph write --reachable

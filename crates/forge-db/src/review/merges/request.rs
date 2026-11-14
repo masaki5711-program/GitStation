@@ -58,7 +58,7 @@ pub struct NewMerge {
 }
 
 /// The live attempt of `mr`, locked (`None`: none).
-pub(super) async fn live_on(
+pub(in crate::review) async fn live_on(
     conn: &mut PgConnection,
     mr: MergeRequestId,
 ) -> Result<Option<StoredMerge>, ForgeError> {
@@ -76,7 +76,7 @@ pub(super) async fn live_on(
 
 /// The facts after [`facts`] (which locked the project, the merge request
 /// and the caller), for `credential` of the caller.
-pub(super) async fn gate(
+pub(in crate::review) async fn gate(
     tx: &mut ChangeTx,
     facts: MergeRequestFacts,
     viewer: UserId,
@@ -204,6 +204,17 @@ pub async fn request_merge_mr_decided<P>(
         if let Some(live) = &gate.live {
             return Err(in_progress(mr.id, Some(live.id), ACTION)
                 .with_context("state", live.state.as_str()));
+        }
+        // M4 C8 review LOW: a merge request in its target's merge queue is
+        // merged by the queue (on a tested train), never by hand meanwhile.
+        let mr_id = mr.id;
+        let queued = tx
+            .step(|c| async move { super::queue::live_entry_on(c, mr_id).await })
+            .await?;
+        if let Some(entry) = queued {
+            return Err(crate::review::merge_queue::refused("already_queued", mr_id)
+                .with_context("entry_id", entry.id)
+                .with_context("action", ACTION));
         }
         let message = new
             .message

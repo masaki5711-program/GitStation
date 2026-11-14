@@ -472,6 +472,12 @@ impl Inner {
         if let Err(e) = self.prune_pipeline_refs(repo, deadline, request_id).await {
             return failed(e, ok);
         }
+        if let Err(e) = self
+            .prune_merge_queue_refs(repo, deadline, request_id)
+            .await
+        {
+            return failed(e, ok);
+        }
         let skipped_step = match self.pack_refs(repo, deadline, request_id).await {
             Ok(skipped) => skipped,
             Err(e) => return failed(e, ok),
@@ -576,6 +582,54 @@ impl Inner {
             deleted = gone.len(),
             kept = live.len(),
             "deleted the refs of finished pipelines"
+        );
+        Ok(())
+    }
+
+    /// M4 C8 (ADR-0030 §3, review MEDIUM): delete every
+    /// `refs/merge-queue/<id>/train` whose queue has no live batch — the
+    /// backstop of the deletion when a batch ends. One `update-ref`
+    /// transaction, each ref only if still at the listed commit (a train
+    /// built meanwhile moved it, so it stays). A failure carries
+    /// `step=merge_queue_refs` and fails the run.
+    async fn prune_merge_queue_refs(
+        &self,
+        repo: RepoId,
+        deadline: &RunDeadline,
+        request_id: &RequestId,
+    ) -> Result<(), ForgeError> {
+        let step = |e: ForgeError| e.with_context("step", "merge_queue_refs");
+        let refs = self
+            .git
+            .merge_queue_refs(&self.root, repo, deadline.step()?)
+            .await
+            .map_err(step)?;
+        if refs.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<i64> = refs.iter().map(|r| r.queue_id).collect();
+        let live = forge_db::review::merge_queue::queues_with_live_batch(&self.db, &ids)
+            .await
+            .map_err(step)?;
+        let gone: Vec<forge_git::MergeQueueRef> = refs
+            .into_iter()
+            .filter(|r| live.binary_search(&r.queue_id).is_err())
+            .collect();
+        if gone.is_empty() {
+            return Ok(());
+        }
+        self.git
+            .delete_merge_queue_refs(&self.root, repo, &gone, deadline.step()?)
+            .await
+            .map_err(step)?;
+        tracing::info!(
+            target: "forge_cli",
+            event = "forge.git.merge_queue_refs_pruned",
+            request_id = %request_id,
+            repo_id = repo.get(),
+            deleted = gone.len(),
+            kept = live.len(),
+            "deleted the train refs of merge queues without a live batch"
         );
         Ok(())
     }

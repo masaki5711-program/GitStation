@@ -258,6 +258,8 @@ fn placeholder_mr() -> StoredMergeRequest {
         updated_at: String::new(),
         closed_at: None,
         closed_by: None,
+        merged_by: None,
+        merged_by_name: None,
     }
 }
 

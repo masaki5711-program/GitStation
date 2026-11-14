@@ -68,12 +68,20 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.act_as_assertions_guard()",
     // ── M3 X3 review: a resolving binding is alone on its project (20261129100000) ──
     "forge.integration_bindings_resolving_alone()",
+    // ── M4 C11: a deployment only moves forward; its approval is set once (20261214100000) ──
+    "forge.deployments_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
 /// each must exist with this exact definition, enabled ALWAYS. Unlike
 /// `GUARDED_TRIGGERS`, the table may have other triggers.
 const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
+    // ── M4 C11: a deployment only moves forward (20261214100000) ──
+    (
+        "deployments",
+        "deployments_forward",
+        "CREATE TRIGGER deployments_forward BEFORE UPDATE ON forge.deployments FOR EACH ROW EXECUTE FUNCTION forge.deployments_guard()",
+    ),
     // ── M2 MR3: a session's revocation is final (20261103100100) ──
     (
         "web_sessions",
@@ -925,6 +933,10 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ),
         // ── M4 C7: merge results (20261207100000) ──
         ("forge.merge_result_refs", operational()),
+        // ── M4 C8: the merge queue (20261213100000) ──
+        ("forge.merge_queues", operational()),
+        ("forge.merge_queue_batches", operational()),
+        ("forge.merge_queue_entries", operational()),
         // ── 2026-11-12: the history import allowance (20261210100000) ──
         ("forge.repository_history_imports", operational()),
         // ── M4 C6: CI variables (20261211100000) ──
@@ -943,6 +955,10 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── M4 C11: deployments (20261214100000) ──
+        ("forge.deploy_environments", operational()),
+        ("forge.deploy_targets", operational()),
+        ("forge.deployments", operational()),
         // ── M4 C12: scheduled pipelines (20261215100000) ──
         (
             "forge.ci_pipeline_schedules",
@@ -1125,6 +1141,10 @@ const LATER_TABLES: &[&str] = &[
     "ci_job_failures",
     // ── M4 C7: merge results (20261207100000) ──
     "merge_result_refs",
+    // ── M4 C8: the merge queue (20261213100000) ──
+    "merge_queues",
+    "merge_queue_batches",
+    "merge_queue_entries",
     // ── 2026-11-12: the history import allowance (20261210100000) ──
     "repository_history_imports",
     // ── M4 C6: CI variables (20261211100000) ──
@@ -1133,6 +1153,10 @@ const LATER_TABLES: &[&str] = &[
     "ci_artifacts",
     // ── M4 C6 review (20261211300000) ──
     "ci_job_secret_snapshots",
+    // ── M4 C11: deployments (20261214100000) ──
+    "deploy_environments",
+    "deploy_targets",
+    "deployments",
     // ── M4 C12: scheduled pipelines (20261215100000) ──
     "ci_pipeline_schedules",
 ];
