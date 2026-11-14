@@ -219,10 +219,27 @@ alike), FG-REPO-0006, FG-REPO-0016 (repository not ready), FG-REPO-0023
 (`param_invalid` with `param=title|description`), FG-GIT-0002 / 0004 (the branch
 lookup), FG-DB-0001 / 0002, FG-SYS-0001 (`proof_action_mismatch`,
 `proof_shape_mismatch`, `proof_without_user`, `reconfirm_target_mismatch`),
-FG-DB-0002 (`merge_request_changed_concurrently`, retryable).
+FG-DB-0002 (`merge_request_changed_concurrently`, retryable). M4 C9 (auto-merge,
+ADR-0017 Amendment 2026-11-13): FG-REVIEW-0026 AutoMergeStopped (info, the stored
+state of a stopped merge request and `forge.auto_merge.stopped` once), 0027
+AutoMergeEmergencyStopped (warn, `forge.auto_merge.emergency_stop`; runbook
+`auto-merge`), 0028 AutoMergeScanFailed (alert, `forge.auto_merge.scan_failed` with
+`cause_code`; runbook `auto-merge`).
+
+**Auto-merge (M4 C9)**: `merges/auto.rs` — `AutoMerger::tick` (run by `forge serve`)
+decides each open merge request of a `conditional` / `full` project with
+`forge_core::auto_merge::decide` and, as the auto-merge principal
+(`forge_auth::Principal::auto_merge`), queues the mergeable ones through
+`Review::enqueue_auto` (the same gate as a person's enqueue, on
+`Resource::AutoMerge`). The queue's landing decides an auto-merge entry with
+`queue::prove_auto`; an emergency stop holds the entries (never removes them).
+`auto_merge_settings.rs`: the mode (Owner, session) and the emergency stops.
+Tests: `tests/merge_queue_git.rs` (`a_full_project_queues_and_lands_…`,
+`every_stop_class_keeps_…`, `a_warning_does_not_stop_auto_merge`,
+`the_emergency_stop_pauses_auto_merge_and_its_queue_entries`, …).
 
 **Runbooks**: `secret-removal` (R1b), `merge-execution` (R4), `codeowners` and
-`merge-blocked` (R5).
+`merge-blocked` (R5), `auto-merge` (M4 C9).
 
 **Tests**: `tests/commands.rs` (the full flow through proofs, a role removed or a
 Maintainer demoted after the proof, missing branches, bad input and mismatched

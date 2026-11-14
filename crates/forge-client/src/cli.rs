@@ -115,6 +115,13 @@ pub enum Command {
         #[command(subcommand)]
         command: QueueCommand,
     },
+    /// Auto-merge (M4 C9): a project's mode and emergency stops, a merge
+    /// request's auto-merge line, and the emergency stop.
+    #[command(disable_help_subcommand = true)]
+    AutoMerge {
+        #[command(subcommand)]
+        command: AutoMergeCommand,
+    },
     /// An integration's event feed (M3 I1c): events, cursor — with the
     /// integration's own service account token.
     #[command(disable_help_subcommand = true)]
@@ -169,6 +176,13 @@ pub enum Command {
     Ci {
         #[command(subcommand)]
         command: CiCommand,
+    },
+    /// Agent configuration (plan 16): verify .claude/ against
+    /// agent.lock.json and the part signatures, on your working tree.
+    #[command(disable_help_subcommand = true)]
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
     },
     /// Deployments (M4 C11): environments, targets, requests and
     /// approvals of a project.
@@ -1621,6 +1635,37 @@ pub enum MirrorCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum AutoMergeCommand {
+    /// A project's auto-merge: its mode and the emergency stops.
+    Status {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// What auto-merge did with a merge request (queued, waiting, held,
+    /// stopped) and why.
+    Mr {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// Emergency stop of the project's auto-merge — Maintainer.
+    Stop {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Resume the project's auto-merge — Maintainer.
+    Resume {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Emergency stop of auto-merge on the whole instance — administrator.
+    InstanceStop,
+    /// Resume auto-merge on the instance — administrator.
+    InstanceResume,
+}
+
+#[derive(Subcommand, Debug)]
 pub enum QueueCommand {
     /// Add a merge request to its target's merge queue: it is merged once
     /// a pipeline on it, together with what is ahead of it, passes (as a
@@ -2126,6 +2171,33 @@ pub enum CiCommand {
     Variable {
         #[command(subcommand)]
         command: CiVariableCommand,
+    },
+}
+
+/// `gstn agent` (plan 16 A1, ADR-0032): the agent configuration's checks
+/// on the working tree. Local only: nothing is sent.
+#[derive(Subcommand, Debug)]
+pub enum AgentCommand {
+    /// Check the repository's managed files (.claude/, CLAUDE.md,
+    /// .mcp.json) against .gitstation/agent.lock.json, and every part's
+    /// digest and signature with the local public keys; or, with --part,
+    /// one part directory (part.toml, paths, static scan, digest).
+    Verify {
+        /// A part directory to check instead of the repository's lock.
+        #[arg(long, value_name = "DIR", conflicts_with_all = ["lock", "keys"])]
+        part: Option<PathBuf>,
+        /// The lock (default: .gitstation/agent.lock.json at the root of
+        /// the repository found upward).
+        #[arg(long, value_name = "FILE")]
+        lock: Option<PathBuf>,
+        /// The public key list (default: agent-keys.json in the gstn
+        /// configuration directory).
+        #[arg(long, value_name = "FILE")]
+        keys: Option<PathBuf>,
+        /// With --part: the internal hosts an MCP server may name (an
+        /// exact host, or .suffix for its subdomains).
+        #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "A,B", requires = "part")]
+        mcp_allowed_hosts: Option<Vec<String>>,
     },
 }
 

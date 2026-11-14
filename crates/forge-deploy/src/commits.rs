@@ -3,7 +3,8 @@
 //! merge request merge or a commit pushed to a protected branch; both
 //! passed the branch protection. Read with git through forge-git's
 //! browse API (argv, the repository path from the id, the browse
-//! timeout): the commit itself (`log -n 1`) and one `merge-base` per
+//! timeout): that a branch or tag reaches the commit (`resolve_ref`), the
+//! commit itself (`log -n 1`) and one `merge-base` per
 //! protected branch tip. Behind [`CommitSource`] so the service is tested
 //! without a repository.
 
@@ -64,6 +65,19 @@ impl GitCommits {
             return Err(ForgeError::new(ErrorCode::RepositoryNotReady)
                 .with_context("repo_id", repo.id.get())
                 .with_context("state", repo.state.as_str()));
+        }
+        // First: a commit a branch or tag of THIS repository reaches. A
+        // missing id or one of another repository would otherwise reach
+        // `git log` and fail as FG-GIT-0003 (a 500 and an alert) instead
+        // of FG-DEPLOY-0011; an undecided check answers like a missing id.
+        match self
+            .browse
+            .resolve_ref(repo.id, sha.as_str(), "deploy")
+            .await
+        {
+            Ok(_) => {}
+            Err(e) if e.code() == ErrorCode::RepositoryPathNotResolved => return Ok(None),
+            Err(e) => return Err(e),
         }
         let page = match self
             .browse

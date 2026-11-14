@@ -44,6 +44,10 @@ pub struct MergeGate {
     /// project's current binding (read only when the target's merge rule
     /// requires one; `false` otherwise — never consulted then).
     pub work_item_linked: bool,
+    /// M4 C9 (review): the head's `forge/risk` run and its summary, read in
+    /// this transaction for the auto-merge principal only (`None` for every
+    /// other credential; `Some((None, None))`: no run yet).
+    pub auto_risk: Option<(Option<forge_core::CheckRun>, Option<String>)>,
 }
 
 /// The merge a request asks for.
@@ -133,7 +137,20 @@ pub(in crate::review) async fn gate(
     } else {
         false
     };
+    // M4 C9 (review): the auto-merge principal decides forge/risk under the
+    // same locks (whatever the merge rule requires).
+    let auto_risk = match (&credential.credential, stored.head_sha.as_deref()) {
+        (super::credential::CredentialState::AutoMerge { .. }, Some(head)) => {
+            let head = head.to_owned();
+            Some(
+                tx.step(|c| async move { risk_run_on(c, project, &head).await })
+                    .await?,
+            )
+        }
+        _ => None,
+    };
     Ok(MergeGate {
+        auto_risk,
         work_item_linked,
         unresolved_discussions,
         check_runs,
@@ -144,6 +161,38 @@ pub(in crate::review) async fn gate(
         credential,
         approvals,
     })
+}
+
+/// The `forge/risk` run of `head` and its summary (`(None, None)`: none).
+async fn risk_run_on(
+    conn: &mut sqlx::PgConnection,
+    project: forge_core::ProjectId,
+    head: &str,
+) -> Result<(Option<forge_core::CheckRun>, Option<String>), ForgeError> {
+    const QUERY: &str = "review.merge_gate_risk";
+    let row: Option<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT status, conclusion, summary FROM forge.check_runs \
+         WHERE project_id = $1 AND head_sha = $2 AND name = $3",
+    )
+    .bind(project.get())
+    .bind(head)
+    .bind(forge_core::checks::RISK_CHECK)
+    .fetch_optional(conn)
+    .await
+    .map_err(|e| crate::query_error(QUERY, e))?;
+    let Some((status, conclusion, summary)) = row else {
+        return Ok((None, None));
+    };
+    let invalid = || {
+        ForgeError::new(forge_errors::ErrorCode::Internal)
+            .with_context("reason", "stored_risk_run_invalid")
+    };
+    let status = forge_core::CheckStatus::parse(&status).ok_or_else(invalid)?;
+    let conclusion = conclusion
+        .map(|c| forge_core::CheckConclusion::parse(&c).ok_or_else(invalid))
+        .transpose()?;
+    let run = forge_core::CheckRun::new(status, conclusion).ok_or_else(invalid)?;
+    Ok((Some(run), Some(summary)))
 }
 
 /// `FG-REVIEW-0011` when merge request `mr` has a live attempt (read under

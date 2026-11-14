@@ -624,6 +624,28 @@
       "removeConfirm": "Remove the conditions",
       "removed": "The merge conditions of {{pattern}} were removed."
     },
+    "autoMerge": {
+      "title": "Auto-merge",
+      "intro": "When a merge request can be merged, GitStation's auto-merge adds it to the merge queue and merges it when the queue's test is green. Approvals and protected branch rules still apply.",
+      "mode": {
+        "off": "Off (people merge)",
+        "reserve": "Reserve only (a person presses \"Merge when ready\")",
+        "conditional": "Conditional (changes to authentication, migrations or configuration wait for a person)",
+        "full": "Fully automatic (the default of new projects)"
+      },
+      "current": "Current mode: {{mode}}",
+      "modeLabel": "Auto-merge mode",
+      "stopsOnly": "Auto-merge stops only when a change may break the program, destroy database data, leak a secret or change code that runs on developers' PCs, and during an emergency stop. A warning does not stop it.",
+      "save": "Save mode",
+      "saved": "The mode is now \"{{mode}}\".",
+      "ownerOnly": "Only the project's Owner can change the mode (signed in on the web).",
+      "stop": "Emergency stop auto-merge",
+      "resume": "Resume auto-merge",
+      "stopped": "Auto-merge is stopped. Queued auto-merge requests wait. People can still merge.",
+      "resumed": "Auto-merge is running again.",
+      "projectStopped": "Auto-merge of this project is under an emergency stop (since {{at}}).",
+      "instanceStopped": "An administrator stopped auto-merge for everyone (since {{at}})."
+    },
     "docLint": {
       "title": "Document checks during a migration",
       "intro": "Broken references between documents are errors in the forge/doc-lint check. While documents are being moved into GitStation, you can treat them as warnings until a date. After that date they are errors again by themselves.",
@@ -1547,6 +1569,42 @@
       "direct": "Your change was committed to {{branch}}.",
       "mrFailed": "The merge request could not be opened: {{message}}",
       "openMr": "Open a merge request"
+    }
+  },
+  "autoMerge": {
+    "label": "Auto-merge:",
+    "why": {
+      "instance_stopped": "an administrator stopped auto-merge for everyone.",
+      "project_stopped": "auto-merge of this project is under an emergency stop.",
+      "data_loss": "stopped: the change may destroy database data ({{detail}}).",
+      "leak": "stopped: the change may leak personal data or a secret ({{detail}}).",
+      "developer_pc": "stopped: the change touches code that runs on developers' PCs (.claude, CLAUDE.md, .mcp.json, submodules) ({{detail}}).",
+      "breakage_check": "stopped: the required check {{detail}} is red.",
+      "breakage_queue": "stopped: this merge request alone was red in the merge queue.",
+      "breakage_risk": "stopped: the change may delete a large part of the code ({{detail}}).",
+      "not_assessed": "stopped: the risk of the change could not be checked (forge/risk).",
+      "draft": "waiting: this is a draft.",
+      "risk_pending": "waiting for the risk check (forge/risk).",
+      "approvals": "waiting for approvals.",
+      "protected_path": "waiting: it touches paths a person decides (authentication, migrations, configuration).",
+      "conflict": "waiting: it conflicts with the target branch.",
+      "waiting": "waiting for the merge conditions.",
+      "held": "a person took it out of the merge queue, so this version is not merged automatically.",
+      "queued": "in the merge queue; it merges when the test is green.",
+      "queued_warning": "in the merge queue with a warning; it merges when the test is green.",
+      "queued_by_person": "a person put it in the merge queue."
+    },
+    "next": {
+      "instance_stopped": "People can still merge; an administrator resumes it.",
+      "project_stopped": "People can still merge; a Maintainer resumes it in the project settings.",
+      "person_decides": "Fix the change, or have a person who checked it press \"Merge when ready\".",
+      "fix_and_push": "Fix it and push; it continues by itself once green.",
+      "draft": "Mark it ready when it is.",
+      "nothing": "Nothing to do.",
+      "approvals": "Ask a reviewer to approve.",
+      "merge_when_ready": "Check it, then press \"Merge when ready\".",
+      "conflict": "Resolve the conflict and push.",
+      "waiting": "See the merge conditions below."
     }
   },
   "mergeQueue": {

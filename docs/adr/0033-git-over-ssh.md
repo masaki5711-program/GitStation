@@ -1,4 +1,4 @@
-# ADR-0032: SSH の git 転送 — `forge serve` の中の SSH サーバー、Smart HTTP の経路への橋渡し
+# ADR-0033: SSH の git 転送 — `forge serve` の中の SSH サーバー、Smart HTTP の経路への橋渡し
 
 **Date**: 2026-11-13
 **Status**: proposed（accepted は C13 `feat/git-ssh-transport` の `git-protocol-reviewer`・`security-reviewer` のレビューで CRITICAL / HIGH が無いとき）

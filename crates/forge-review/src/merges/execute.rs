@@ -198,7 +198,8 @@ pub(super) fn decide(
             scopes.iter().map(|s| s.as_str().to_owned()).collect()
         }
         forge_db::review::merges::CredentialState::Session { .. }
-        | forge_db::review::merges::CredentialState::Missing => Vec::new(),
+        | forge_db::review::merges::CredentialState::Missing
+        | forge_db::review::merges::CredentialState::AutoMerge { .. } => Vec::new(),
     };
     Ok(Decided {
         proof,

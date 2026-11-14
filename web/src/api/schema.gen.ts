@@ -250,6 +250,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/auto-merge/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume auto-merge on the instance (people only; an administrator, a token needs admin); audited */
+        post: operations["post_api_v1_admin_auto_merge_resume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/auto-merge/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Emergency stop of auto-merge on the whole instance (people only; an administrator, a token needs admin); audited */
+        post: operations["post_api_v1_admin_auto_merge_stop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/integrations": {
         parameters: {
             query?: never;
@@ -829,6 +863,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/auto-merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's auto-merge: its merge.auto (off, reserve, conditional, full; a new project is full, projects older than auto-merge start off), the project's and the instance's emergency stop with who and when (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_auto_merge"];
+        /** Change a project's merge.auto (people only; the Owner in a web session); audited */
+        put: operations["put_api_v1_projects_id_auto_merge"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/auto-merge/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume the project's auto-merge after an emergency stop (people only; Maintainer); audited */
+        post: operations["post_api_v1_projects_id_auto_merge_resume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/auto-merge/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Emergency stop of the project's auto-merge: nothing is added to the merge queue automatically and queued auto-merge entries wait; people still merge (people only; Maintainer); audited */
+        post: operations["post_api_v1_projects_id_auto_merge_stop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/ci/variables": {
         parameters: {
             query?: never;
@@ -1309,6 +1395,23 @@ export interface paths {
         put?: never;
         /** Approve a merge request's head (people only; Developer; never the author; a token needs merge_approve) */
         post: operations["post_api_v1_projects_id_merge_requests_iid_approve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/auto-merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What auto-merge did with a merge request: the project's mode, the emergency stop in effect, and its last state (queued, waiting, held, stopped) with the stop class, a stable reason, the forge/risk rule or check behind it and FG-REVIEW-0026 / 0027 (null: none for its current head) (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_auto_merge"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3039,6 +3142,64 @@ export interface components {
         ArtifactList: {
             artifacts: components["schemas"]["ArtifactBody"][];
         };
+        /** @description A project's auto-merge. */
+        AutoMergeBody: {
+            /** @description The auto-merge principal acts in this mode (`conditional` / `full`). */
+            acts: boolean;
+            instance_stop: null | components["schemas"]["AutoMergeStopBody"];
+            /**
+             * @description `off`, `reserve`, `conditional` or `full` (`full`: a new project's
+             *     default; projects older than auto-merge start `off`).
+             */
+            mode: string;
+            mode_at: string | null;
+            /** Format: int64 */
+            mode_by: number | null;
+            /** Format: int64 */
+            project_id: number;
+            project_stop: null | components["schemas"]["AutoMergeStopBody"];
+            viewer: components["schemas"]["AutoMergeViewerBody"];
+        };
+        /** @description The merge request's last auto-merge state. */
+        AutoMergeStateBody: {
+            /** @description UTC, RFC 3339: when it last changed / was last looked at. */
+            changed_at: string;
+            checked_at: string;
+            /**
+             * @description The stop class (`stopped` only): `program_breakage`, `data_loss`,
+             *     `leak`, `developer_pc`, `not_assessed`, `emergency_stop`.
+             */
+            class: string | null;
+            /** @description The forge/risk rule or the check behind it. */
+            detail: string | null;
+            /** @description `FG-REVIEW-0026` (a stop) or `FG-REVIEW-0027` (an emergency stop). */
+            error_code: string | null;
+            /** @description The head it was decided on. */
+            head_sha: string;
+            /**
+             * @description A stable word: `risk_stop`, `required_check_failed`,
+             *     `pipeline_failed`, `merge_queue_checks_failed`, `instance_stopped`,
+             *     `project_stopped`, `draft`, `risk_pending`, `approvals_missing`,
+             *     `protected_path`, `dequeued_by_person`, `queued`, … .
+             */
+            reason: string;
+            /** @description The request id of the decision (the log line of a stop). */
+            request_id: string;
+            /** @description `queued`, `waiting`, `held` or `stopped`. */
+            state: string;
+        };
+        /** @description Who turned an emergency stop on, and when. */
+        AutoMergeStopBody: {
+            /** @description UTC, RFC 3339. */
+            at: string;
+            /** Format: int64 */
+            by: number | null;
+        };
+        /** @description What the caller could do now (a hint; the routes decide again). */
+        AutoMergeViewerBody: {
+            can_change_mode: boolean;
+            can_stop: boolean;
+        };
         /** @description `PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`. */
         BindProject: {
             /**
@@ -4729,6 +4890,10 @@ export interface components {
              */
             next_before: number | null;
         };
+        /** @description The instance's emergency stop. */
+        InstanceAutoMergeBody: {
+            stop: null | components["schemas"]["AutoMergeStopBody"];
+        };
         /** @description The service account an integration acts as. */
         IntegrationAccountBody: {
             /** Format: int64 */
@@ -5078,6 +5243,18 @@ export interface components {
             /** @description The target branch without `refs/heads/`. */
             target_branch: string;
             viewer: components["schemas"]["QueueViewerBody"];
+        };
+        /** @description A merge request's auto-merge. */
+        MergeRequestAutoMergeBody: {
+            /** @description The auto-merge principal acts in this mode. */
+            acts: boolean;
+            auto_merge: null | components["schemas"]["AutoMergeStateBody"];
+            /** Format: int64 */
+            iid: number;
+            /** @description The project's `merge.auto`. */
+            mode: string;
+            /** @description The emergency stop in effect: `instance`, `project` (`null`: none). */
+            stop: string | null;
         };
         /** @description One merge request as the API shows it. */
         MergeRequestBody: {
@@ -5688,6 +5865,11 @@ export interface components {
             target_pattern?: string | null;
             /** @description Usernames who may approve for the rule. */
             users?: string[];
+        };
+        /** @description `PUT …/auto-merge`. */
+        PutAutoMerge: {
+            /** @description `off`, `reserve`, `conditional` or `full`. */
+            mode: string;
         };
         /** @description `PUT …/ci/variables/{name}`. */
         PutCiVariable: {
@@ -7769,6 +7951,64 @@ export interface operations {
             };
         };
     };
+    post_api_v1_admin_auto_merge_resume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceAutoMergeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_auto_merge_stop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceAutoMergeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_admin_integrations: {
         parameters: {
             query?: never;
@@ -9463,6 +9703,134 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_auto_merge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoMergeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_auto_merge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAutoMerge"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoMergeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_auto_merge_resume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoMergeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_auto_merge_stop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoMergeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_ci_variables: {
         parameters: {
             query?: never;
@@ -10764,6 +11132,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApprovalAnswerBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_auto_merge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestAutoMergeBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

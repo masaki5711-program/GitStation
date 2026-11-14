@@ -223,6 +223,9 @@ export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Han
     [`GET ${MR_API}/3/merge`]: () => json(200, { iid: 3, merge: null }),
     // M4 C8: never queued.
     [`GET ${MR_API}/3/merge-queue`]: () => json(200, { iid: 3, entry: null }),
+    // M4 C9: a project that does not use auto-merge (no line).
+    [`GET ${MR_API}/3/auto-merge`]: () =>
+      json(200, { iid: 3, mode: 'off', acts: false, stop: null, auto_merge: null }),
     // The detail under the status: the head's check runs and the predicted conflicts.
     [`GET ${CHECKS_API}`]: () => json(200, checkRuns([])),
     [`GET ${MR_API}/3/conflicts`]: () => json(200, conflicts([])),

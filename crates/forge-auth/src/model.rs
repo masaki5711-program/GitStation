@@ -39,6 +39,13 @@ pub enum Credential {
     /// pinned SHA, the job's lifetime. Built by forge-web's authentication
     /// only ([`Principal::job`]); decided in its own arm (`job.rs`).
     Job(Box<JobCredential>),
+    /// The auto-merge principal (M4 C9, plan 04 M-5, ADR-0017 Amendment
+    /// 2026-11-13): forge's own worker queueing a mergeable merge request
+    /// of a project whose `merge.auto` acts. No person, no token, no
+    /// session; built only by [`Principal::auto_merge`] and decided in its
+    /// own arm (`auto_merge.rs`): `MergeQueueEnqueue` and
+    /// `MergeRequestMerge` on `Resource::AutoMerge`, nothing else.
+    AutoMerge,
 }
 
 /// The scopes an SSH key carries (M4 C13, ADR-0032 §2).
@@ -196,7 +203,8 @@ impl Principal {
             Credential::Session
             | Credential::ActAs(_)
             | Credential::Runner(_)
-            | Credential::Job(_) => PersonalDisclosure::default(),
+            | Credential::Job(_)
+            | Credential::AutoMerge => PersonalDisclosure::default(),
         }
     }
 
@@ -331,7 +339,8 @@ impl Principal {
             Credential::Session
             | Credential::Token(_)
             | Credential::Runner(_)
-            | Credential::Job(_) => None,
+            | Credential::Job(_)
+            | Credential::AutoMerge => None,
         }
     }
 
@@ -349,6 +358,20 @@ impl Principal {
     /// [`Principal::runner`], for a job token.
     pub fn job(credential: JobCredential) -> Self {
         Self::ci(Credential::Job(Box::new(credential)))
+    }
+
+    /// The auto-merge principal (M4 C9): forge-review's auto-merge worker
+    /// and the merge queue's landing of its entries build it, nothing else
+    /// (no route authenticates as it). No person, no administrator rights,
+    /// the kind of no person (`Bot`), never an agent token; `authorize()`
+    /// decides it in `auto_merge.rs` before any other rule.
+    pub fn auto_merge() -> Self {
+        Self::ci(Credential::AutoMerge)
+    }
+
+    /// The auto-merge principal.
+    pub fn is_auto_merge(&self) -> bool {
+        matches!(self.credential, Credential::AutoMerge)
     }
 
     /// No user, active (the credential's own state decides), the kind of
@@ -372,7 +395,10 @@ impl Principal {
             && match &self.credential {
                 Credential::Session => true,
                 Credential::Token(scopes) => scopes.contains(&Scope::Admin),
-                Credential::ActAs(_) | Credential::Runner(_) | Credential::Job(_) => false,
+                Credential::ActAs(_)
+                | Credential::Runner(_)
+                | Credential::Job(_)
+                | Credential::AutoMerge => false,
             }
     }
 
@@ -386,7 +412,7 @@ impl Principal {
             Credential::Token(scopes) => names(scopes),
             Credential::ActAs(c) => names(&c.via_scopes),
             // CI principals hold no scope (ADR-0029: `CiRule` decides).
-            Credential::Runner(_) | Credential::Job(_) => Vec::new(),
+            Credential::Runner(_) | Credential::Job(_) | Credential::AutoMerge => Vec::new(),
         }
     }
 }
@@ -400,6 +426,20 @@ pub struct ProjectView {
     pub role: Option<Role>,
     /// Deleted and inside the grace period.
     pub pending_deletion: bool,
+}
+
+/// What the auto-merge principal is decided on (M4 C9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoMergeTarget {
+    /// The project (the auto-merge principal is no member: `role` is
+    /// `None`; only visibility and the pending deletion are read).
+    pub project: ProjectView,
+    pub source_branch: RefName,
+    pub target_branch: RefName,
+    /// The project's `merge.auto` now.
+    pub mode: forge_core::auto_merge::AutoMergeMode,
+    /// The emergency stop in effect now (the instance's first).
+    pub stop: Option<forge_core::auto_merge::StopScope>,
 }
 
 /// What a push does to one ref.
@@ -758,6 +798,13 @@ pub enum Resource {
         edit: MergeRequestEdit,
         target_protection: Option<RefProtection>,
     },
+    /// A merge request as the auto-merge principal reaches it (M4 C9):
+    /// `MergeQueueEnqueue` (the auto-merge worker) and `MergeRequestMerge`
+    /// (the merge queue's landing of its entry). Read with the project's
+    /// `merge.auto` and the emergency stops in the same transaction as the
+    /// merge request. Every other principal is refused it
+    /// (`reason=auto_merge_resource`).
+    AutoMerge(AutoMergeTarget),
     /// One discussion of a merge request (M3 R3, ADR-0024 §12):
     /// `DiscussionResolve`. `mr_author` is the merge request's author,
     /// `started_by` the author of the thread's first note. The merge
