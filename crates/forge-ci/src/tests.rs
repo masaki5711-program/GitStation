@@ -829,6 +829,117 @@ fn a_job_with_services_keeps_them_in_order() {
     assert!(problems(&one_job(&format!("{}services:\n", base_job()))).is_empty());
 }
 
+// ── the GPU runner (plan 17 P17-1) ──────────────────────────────────────
+
+/// `with_services` with the job's `tags` line in front of the services.
+fn tagged_with_services(tags: &str, body: &str) -> String {
+    let services: String = body
+        .lines()
+        .map(|l| {
+            format!(
+                "  {l}
+"
+            )
+        })
+        .collect();
+    one_job(&format!(
+        "{}{tags}services:
+{services}",
+        base_job()
+    ))
+}
+
+/// A service may only ask for the GPU (`gpu: true`) — never name a device
+/// or a path — and only in a job that asks for the `gpu-eval` runner.
+#[test]
+fn a_gpu_service_needs_the_gpu_eval_tag_and_names_nothing() {
+    let ollama = format!(
+        "- name: ollama
+  image: {}
+  gpu: true
+",
+        image()
+    );
+    let def = check(
+        tagged_with_services(
+            "tags: [gpu-eval]
+",
+            &ollama,
+        )
+        .as_bytes(),
+        &ctx(),
+    )
+    .expect("valid");
+    let job = &def.jobs[0];
+    assert!(job.services()[0].gpu());
+    assert_eq!(job.tags(), [GPU_EVAL_TAG]);
+    // Without the tag (or with another one) the file is refused.
+    for tags in [
+        "",
+        "tags: [linux]
+",
+    ] {
+        assert_eq!(
+            reasons_and_subjects(&tagged_with_services(tags, &ollama)),
+            [("service_gpu_without_tag", Some("a".to_owned()))],
+            "{tags}"
+        );
+    }
+    // Only true / false: a device name or a path is no value of it, and
+    // no other key can name one.
+    for bad in ["gpu: nvidia.com/gpu=all", "gpu: /dev/nvidia0", "gpu: [all]"] {
+        let body = format!(
+            "- name: ollama
+  image: {}
+  {bad}
+",
+            image()
+        );
+        assert_eq!(
+            reasons(&tagged_with_services(
+                "tags: [gpu-eval]
+",
+                &body
+            )),
+            ["field_invalid"],
+            "{bad}"
+        );
+    }
+    for key in [
+        "devices: [nvidia.com/gpu=all]",
+        "volumes: [/srv/models:/models]",
+    ] {
+        let body = format!(
+            "- name: ollama
+  image: {}
+  {key}
+",
+            image()
+        );
+        assert_eq!(
+            reasons(&tagged_with_services(
+                "tags: [gpu-eval]
+",
+                &body
+            )),
+            ["key_unknown"],
+            "{key}"
+        );
+    }
+    // `gpu: false` and no key: no GPU, no tag needed.
+    let off = format!(
+        "- name: ollama
+  image: {}
+  gpu: false
+",
+        image()
+    );
+    let def = check(tagged_with_services("", &off).as_bytes(), &ctx()).expect("valid");
+    assert!(!def.jobs[0].services()[0].gpu());
+    let def = check(with_services(&db("")).as_bytes(), &ctx()).expect("valid");
+    assert!(!def.jobs[0].services()[0].gpu());
+}
+
 #[test]
 fn more_than_two_services_is_too_many_services() {
     let three = format!(

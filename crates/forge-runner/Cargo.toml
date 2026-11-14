@@ -29,7 +29,7 @@ tokio.workspace = true
 zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 tempfile.workspace = true

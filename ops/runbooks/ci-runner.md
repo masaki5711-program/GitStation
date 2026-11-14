@@ -1,4 +1,4 @@
-# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014、FG-CI-0015、FG-CI-0020。関連: FG-CI-0006、FG-CI-0019、FG-AUTH-0001 / 0003、FG-REPO-0005）
+# Runbook: ci-runner（FG-CI-0004、FG-CI-0005、FG-CI-0007〜0012、FG-CI-0014、FG-CI-0015、FG-CI-0020、FG-CI-0029、FG-CI-0030。関連: FG-CI-0006、FG-CI-0019、FG-AUTH-0001 / 0003、FG-REPO-0005）
 
 M4 C3（計画 14、ADR-0029）の Runner の API（Runner の登録、ジョブの取得の long-poll、心拍とリース、ログ、完了、リースの回収）が
 期待どおりに動かないとき。表 `forge.ci_runners`・`forge.ci_job_tokens`・`forge.ci_log_chunks`・`forge.ci_jobs`（`runner_id`・`lease_until`・
@@ -22,6 +22,8 @@ Podman）、ジョブの fetch の経路 `/api/v1/runner/jobs/{job_id}/repo.git`
   起動できない、計画 14 C5s）。ジョブのログの最後の行にも同じコード
 - Runner のホストのログに FG-CI-0015（**alert**）: ジョブのコンテナが Runner から切り離されていることを確かめられず、Runner が
   ジョブを取らない（起動しない、または次の取得の前に止まった。ADR-0029 の追記 2026-11-12）
+- Runner のホストのログに FG-CI-0029（GPU を求めたジョブを GPU の無い Runner が取った）・FG-CI-0030（**alert**、GPU の Runner の
+  モデル置き場がダイジェストと合わない）。計画 17 P17-1、「GPU の Runner とモデル置き場」の節
 
 ## Impact
 
@@ -195,6 +197,73 @@ Runner は準備ができるのを待たない（ジョブのスクリプトが�
 `FORGE_RUNNER_TEST_PG_IMAGE=<postgres:16 のミラー@sha256:…>` も付ける（`a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks`）。
 
 **試験環境**では、Runner を Docker の上のコンテナとして動かせる（`ops/runner/README.md`。本番では使わない: seccomp を外し、ジョブごとのメモリとプロセス数の上限が効かず、外側のコンテナの上限だけになる）。
+
+### GPU の Runner とモデル置き場（計画 17 P17-1、ADR-0029 の追記 2026-11-14、FG-CI-0029 / FG-CI-0030）
+
+評価ベンチ（計画 17 §1.6）のように GPU で Ollama などを動かすジョブのための Runner。**GPU とモデル置き場を渡すのはこの Runner の
+ホストの設定だけ**で、`.forge-ci.yml` はサービスの `gpu: true` で求めるだけ（装置・パスは書けない）。求めてよいのはタグ `gpu-eval` の
+ジョブだけ（lint `service_gpu_without_tag`）。
+
+- **割り当て**: タグ `gpu-eval` の Runner は、`gpu-eval` を求めたジョブ**だけ**を取る（タグの無いジョブ・他のタグだけのジョブは取らない）。
+  他の Runner の割り当ては今と同じ。GPU の Runner が無い・止まっていると GPU のジョブは `pending` のまま（10 分で FG-CI-0005）。
+- **渡すもの**: 求めたサービスのコンテナだけに `--device=<CDI 名>` と `--volume=<path>:<target>:ro,nosuid,nodev,noexec`。
+  ジョブのコンテナと他のサービスには渡さない。ポッドは `--network=none` のまま。
+
+**ホストの準備**（人の承認のあと。GPU の Runner のホストだけ）:
+
+1. NVIDIA のドライバと Container Toolkit を入れ、CDI の仕様を作る: `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`。
+   名前を確かめる: `nvidia-ctk cdi list`（例 `nvidia.com/gpu=all`）。
+   SELinux が有効なら `sudo setsebool -P container_use_devices on`。
+2. モデル置き場を **Runner の利用者以外の持ち物**で作る（例 `root:root`、ディレクトリ 0755・ファイル 0644。グループ・他人が書ける
+   ものは FG-CI-0030 `writable`、Runner の利用者とその subuid の範囲のものは `owner_untrusted`、ハードリンクは `hardlink`）。
+   置き場の**上のディレクトリもすべて root のもの・グループと他人が書けない・リンクでない**こと（`/srv` の下に置く。`/tmp` や
+   利用者のホームの下は `ancestor_unsafe`）。パスにシンボリックリンクを挟まない（Runner は読み込みのときに一度だけ解決し、
+   その後に変わると `not_canonical`）。置き場の持ち主（root）は信頼する前提。中身は `models/models.toml` で承認したモデルだけ（Ollama なら
+   `OLLAMA_MODELS` の `blobs/`・`manifests/` を写す）。シンボリックリンクは置かない（`link`）。SELinux なら一度だけラベルを付ける:
+   `sudo semanage fcontext -a -t container_ro_file_t '/srv/forge-models(/.*)?' && sudo restorecon -R /srv/forge-models`
+   （Runner は再ラベルしない）。
+3. マニフェストを作り、その sha256 を設定に書く:
+   ```sh
+   cd /srv/forge-models && sudo sh -c 'find . -type f ! -name forge-models.sha256 -printf "%P\n" | sort | xargs -d "\n" sha256sum > forge-models.sha256'
+   sha256sum /srv/forge-models/forge-models.sha256
+   ```
+4. `/etc/forge-runner/config.toml` に:
+   ```toml
+   [gpu_eval]
+   devices = ["nvidia.com/gpu=all"]
+   [gpu_eval.model_store]
+   path = "/srv/forge-models"
+   target = "/root/.ollama/models"     # サービスのイメージが読む場所（Ollama の OLLAMA_MODELS）
+   manifest_sha256 = "<3. の sha256>"
+   ```
+   `memory` は Ollama がモデルを載せられる大きさに（ポッド全体の上限）。`forge-runner check` が設定とモデル置き場（全ファイルの
+   sha256、1 時間まで）を確かめる。
+5. 管理者が Runner にタグ `gpu-eval` を付ける（Runner の管理の画面、RunnerManage。この Runner はタグの無いジョブを取らなくなる）。
+
+**プロジェクトの許可**（サーバーの設定、人の承認のあと）: `forge serve` の設定に `ci.gpu_eval_projects = "<プロジェクトの id>,…"`
+（環境変数 `FORGE_CI_GPU_EVAL_PROJECTS`、既定は空 = どのプロジェクトも使えない）と、必要なら `ci.gpu_eval_max_running`
+（`FORGE_CI_GPU_EVAL_MAX_RUNNING`、1 プロジェクトで同時に動く `gpu-eval` のジョブ、既定 1）。一覧に無いプロジェクトの `gpu-eval` の
+ジョブを持つパイプラインは `invalid`（FG-CI-0001 `gpu_eval_not_allowed`、ジョブの名前が出る）。一覧から外したあとに残った
+`pending` のジョブは取られない（10 分で FG-CI-0005。取り消すか、一覧に戻す）。
+
+**確かめ**: Runner は起動のときと、モデル置き場を渡すジョブのたびに（ジョブの `timeout` の中で）、マニフェストの sha256・列挙した
+全ファイルの sha256・列挙の外のファイルが無いこと・書けないことを確かめる（ジョブの `timeout` とは別の期限: ジョブの前は 30 分、
+起動のときは 1 時間。超えたら FG-CI-0030 `reason=deadline`）。ジョブのログに `model store verified: <n> file(s)`。
+
+**FG-CI-0029（warn）**: GPU を求めたジョブを `[gpu_eval]` の無い Runner が取った（タグとホストの設定が食い違う）。ジョブは
+チェックアウトの前に失敗。直し方: その Runner のホストに `[gpu_eval]` を設定して再起動するか、GPU の無い Runner からタグ
+`gpu-eval` を外す。その後パイプラインをやり直す。
+
+**FG-CI-0030（alert）**: モデル置き場がダイジェストと合わない。`reason`（`manifest_digest`・`file_digest`・`unlisted_file`・
+`missing_file`・`link`・`writable`・`not_regular`・`unreadable` など）と `file` を見る。読み取りだけで確かめる:
+`sha256sum /srv/forge-models/forge-models.sha256`、`cd /srv/forge-models && sha256sum -c --quiet forge-models.sha256`、
+`find /srv/forge-models -type l -o ! -type f ! -type d`、`find /srv/forge-models -perm /022 -o -user <Runner の利用者>`。
+**説明の付かない変更はセキュリティの事象として扱う**（`/incident`）。説明が付けば（モデルの更新の手順の漏れ）承認したモデルから
+置き場を戻すかマニフェストを作り直し、`manifest_sha256` を直して Runner を再起動する（人の承認のあと）。
+
+**本物の GPU の試験**は無い（argv の試験だけ: `model_store_mounted_read_only`、`job_container_has_no_gpu`、`pod_still_network_none`、
+`gpu_denied_on_untagged_runner`、`untagged_job_never_assigned_to_gpu_runner`）。GPU のホストを用意したら、`gpu: true` のサービス
+（Ollama）を持つジョブで `nvidia-smi` 相当（`ollama ps` の `PROCESSOR` が `GPU`）を一度確かめる。
 
 ## 成果物（M4 C6、FG-CI-0019 / FG-CI-0020）
 

@@ -55,7 +55,7 @@ pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use auth::{AuthConfig, OidcConfig, OidcSigningAlg};
 pub use backup::{BackupConfig, BackupKey};
-pub use ci::CiConfig;
+pub use ci::{CiConfig, GpuEvalPolicy};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use deploy::{DeployConfig, SSH_KEY_FILE_KEY as DEPLOY_SSH_KEY_FILE_KEY};
 pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};

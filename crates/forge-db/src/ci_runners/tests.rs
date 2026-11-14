@@ -278,6 +278,119 @@ async fn a_claim_needs_runner_tags_covering_the_jobs() {
     w.t.drop_now().await;
 }
 
+/// The GPU runner's policy allowing `project` (one running job at a time).
+fn gpu_policy(project: i64) -> forge_core::config::GpuEvalPolicy {
+    forge_core::config::GpuEvalPolicy {
+        projects: vec![project],
+        max_running_per_project: 1,
+    }
+}
+
+/// Plan 17 P17-1: a runner tagged `gpu-eval` takes only jobs that ask for
+/// it — never an untagged job, nor one with only its other tags — while an
+/// untagged job still goes to any other runner, as before.
+#[tokio::test]
+async fn untagged_job_never_assigned_to_gpu_runner() {
+    let w = world().await;
+    let policy = gpu_policy(w.web.project_id.get());
+    let (gpu, _) = w.runner("gpu", &["gpu-eval", "linux"]).await;
+    let (plain, _) = w.runner("plain", &[]).await;
+    w.pipeline(
+        'b',
+        false,
+        vec![
+            job("untagged", &[], &[], &[]),
+            job("linux", &[], &["linux"], &[]),
+            job("bench", &[], &["gpu-eval"], &[]),
+        ],
+    )
+    .await;
+    // The GPU runner passes over the two older jobs and takes the bench.
+    let c = lease::claim_with(&w.t.db, gpu, &policy)
+        .await
+        .expect("claim")
+        .expect("the bench");
+    assert_eq!(c.name, "bench");
+    assert!(lease::claim_with(&w.t.db, gpu, &policy)
+        .await
+        .expect("claim")
+        .is_none());
+    // The untagged job is the plain runner's, as before; the `linux` job
+    // waits for a runner with that tag that is not exclusive.
+    let c = lease::claim(&w.t.db, plain)
+        .await
+        .expect("claim")
+        .expect("the untagged job");
+    assert_eq!(c.name, "untagged");
+    assert!(lease::claim(&w.t.db, plain).await.expect("claim").is_none());
+    assert_eq!(lease::EXCLUSIVE_RUNNER_TAGS, ["gpu-eval"]);
+    w.t.drop_now().await;
+}
+
+/// Plan 17 P17-1 (review): a `gpu-eval` job is claimed only for a project
+/// of `ci.gpu_eval_projects` (none by default), and at most
+/// `ci.gpu_eval_max_running` of one project run at once.
+#[tokio::test]
+async fn a_gpu_eval_job_needs_its_project_listed_and_a_free_slot() {
+    let w = world().await;
+    let project = w.web.project_id.get();
+    let (gpu, _) = w.runner("gpu", &["gpu-eval"]).await;
+    w.pipeline(
+        'b',
+        false,
+        vec![
+            job("bench-1", &[], &["gpu-eval"], &[]),
+            job("bench-2", &[], &["gpu-eval"], &[]),
+        ],
+    )
+    .await;
+    // Not listed (the default, or another project): never claimed.
+    assert!(lease::claim(&w.t.db, gpu).await.expect("claim").is_none());
+    assert!(lease::claim_with(&w.t.db, gpu, &gpu_policy(project + 1000))
+        .await
+        .expect("claim")
+        .is_none());
+    // Listed: one at a time.
+    let policy = gpu_policy(project);
+    let first = lease::claim_with(&w.t.db, gpu, &policy)
+        .await
+        .expect("claim")
+        .expect("the first bench");
+    assert!(lease::claim_with(&w.t.db, gpu, &policy)
+        .await
+        .expect("claim")
+        .is_none());
+    let two = forge_core::config::GpuEvalPolicy {
+        max_running_per_project: 2,
+        ..policy.clone() // clone: a second policy
+    };
+    let second = lease::claim_with(&w.t.db, gpu, &two)
+        .await
+        .expect("claim")
+        .expect("the second bench, with two slots");
+    assert_ne!(first.job_id, second.job_id);
+    // A finished job frees its slot.
+    lease::complete(
+        &w.t.db,
+        gpu,
+        first.job_id,
+        first.attempt,
+        JobResult::Succeeded,
+    )
+    .await
+    .expect("complete");
+    lease::complete(
+        &w.t.db,
+        gpu,
+        second.job_id,
+        second.attempt,
+        JobResult::Succeeded,
+    )
+    .await
+    .expect("complete");
+    w.t.drop_now().await;
+}
+
 #[tokio::test]
 async fn a_job_token_lives_with_its_job_and_the_pipeline_follows_its_jobs() {
     let w = world().await;

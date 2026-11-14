@@ -168,6 +168,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobImageNotAllowed
         | ErrorCode::JobWorkspaceTooLarge
         | ErrorCode::ServiceStartFailed
+        | ErrorCode::GpuUnavailable
+        | ErrorCode::ModelStoreUnverified
         | ErrorCode::JobIsolationUnsafe
         // M4 C8: the merge queue's own outcomes (its landing never runs
         // the merge job).
