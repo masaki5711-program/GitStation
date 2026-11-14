@@ -3,7 +3,7 @@
 対象のコード: FG-GIT-0035（SSH の接続の上限・認証の時間切れ）、FG-GIT-0036（SSH の層そのものの失敗）。あわせて、利用者から
 見える FG-GIT-0033（git 以外のコマンド）、FG-GIT-0034（プロトコル v2 が要る）、FG-AUTH-0023（SSH 鍵の登録の拒否）、SSH の
 起動を止める FG-SYS-0002（`config_key=git.ssh.*`）と FG-SYS-0004（`listener=ssh`）。
-仕組みは ADR-0032、実装は `crates/forge-web/src/ssh/`（`mod.rs` の待ち受けと接続、`limits.rs` の上限、`handler.rs` の認証と
+仕組みは ADR-0033、実装は `crates/forge-web/src/ssh/`（`mod.rs` の待ち受けと接続、`limits.rs` の上限、`handler.rs` の認証と
 チャネル、`command.rs` のコマンドの解析、`bridge.rs` の Smart HTTP への橋渡し、`host_key.rs` のホスト鍵）、鍵の保存は
 `crates/forge-db/src/ssh_keys/`。git の操作そのもの（権限、保護された ref、pre-receive、push の記録、ストリームの上限・
 時間切れ）は Smart HTTP と同じ経路で動くので、それらのコードは runbook `smart-http` / `push-checks` / `push-record-failed` に従う。
@@ -33,11 +33,29 @@
 | `git.ssh.max_connections_per_peer` | 8 | 接続元ごとの同時の接続（IPv6 は /64 ごと） |
 | `git.ssh.connections_per_minute_per_peer` | 60 | 接続元ごとの 1 分の新しい接続 |
 | `git.ssh.auth_failures_per_minute_per_peer` | 20 | 認証できずに終わった接続がこの数に達した接続元は、その 1 分の残りを断る |
-| `git.ssh.auth_timeout_ms` | 30 000 | SSH の識別子の交換と認証を終えるまで |
+| `git.ssh.max_unauthenticated_connections` | 16（`max_connections` まで） | まだ認証していない接続の総数 |
+| `git.ssh.max_connection_ms` | 3 600 000（`git.http.timeout_ms` 以上） | 1 つの接続の最大の寿命。過ぎると切る（鍵の削除・アカウントの無効化が生きた接続に残らない） |
+| `git.ssh.auth_timeout_ms` | 10 000 | SSH の識別子の交換と認証を終えるまで |
 | `git.ssh.max_auth_attempts` | 6（20 まで） | 1 接続の鍵の試行 |
 | `git.ssh.inactivity_timeout_ms` | 600 000（`git.http.idle_timeout_ms` 以上） | 無通信で切る |
 
-git のストリームの上限と時間切れ（`git.http.max_streams`、`git.http.idle_timeout_ms` など）は SSH にもそのまま効く。
+git のストリームの上限と時間切れ（`git.http.max_streams`、`git.http.idle_timeout_ms` など）は SSH にもそのまま効く。要求や pack を読む間に
+クライアントが `git.http.idle_timeout_ms` の間なにも送らないと、そのコマンドを終える。ルートの本文と全体の時間切れ（`git.http.body_timeout_ms`、
+`git.http.timeout_ms`）はプロセスの中の本文にも HTTP と同じに効く。
+
+ほかの決まり（設定ではない）:
+
+- 鍵はチャネルを開くたび・コマンドのたびに確かめ直す。接続の後で鍵を消した・アカウントを無効にした場合、次のチャネルは開かず接続も切れ、
+  開いていたチャネルのコマンドは `FG-AUTH-0001` / `FG-AUTH-0004` で断る。それでも残る接続は `git.ssh.max_connection_ms` で切れる。
+- チャネルを開いて 30 秒コマンドが来なければ閉じる（ログ `forge.ssh.channel_without_command`）。
+- upload-pack（clone / fetch）はプロトコル v2 だけ。v0 / v1 は `FG-GIT-0034` で断り、代わりの経路は無い（HTTPS を使う）。
+- `push-options` を求める push は `FG-GIT-0033 reason=push_options` で断る（サーバーは広告しない）。
+- 認証の失敗は **接続ごとに 1 回**（どれだけ鍵を試しても）、接続元のアドレスごとに数える。NAT やプロキシの後ろでは全員が 1 つの
+  アドレスを共有するので、`git.ssh.auth_failures_per_minute_per_peer` は人数に合わせて上げる。
+- 鍵の交換は curve25519、暗号は chacha20-poly1305 / AES-GCM だけ（SHA-1・CBC・CTR・RSA は使わない）。古いクライアントは
+  `no matching key exchange method` などで接続できない。
+- ホスト鍵のファイルは Unix では forge の実行ユーザーの持ち物で、グループ・他人が読めないこと（`wrong_owner` /
+  `insecure_permissions`）。Windows（開発機だけ）では ACL を確かめないので、自分のアカウントだけが読めるフォルダーに置く。
 
 ## 初めて有効にする（承認された手順）
 
@@ -68,9 +86,10 @@ git のストリームの上限と時間切れ（`git.http.max_streams`、`git.h
    - `connection_limit` / `peer_limit`: 開いている接続を数える `ss -tn state established '( sport = :2224 )' | wc -l`、接続元ごとに
      `ss -tn state established '( sport = :2224 )' | awk '{print $4}' | cut -d: -f1 | sort | uniq -c | sort -rn | head`。
    - `rate_limit`: CI やスクリプトが短い間に何度も接続している（`peer` で接続元が分かる）。
+   - `unauthenticated_limit`: 認証の途中の接続が多い（走査や遅いクライアント）。`git.ssh.max_unauthenticated_connections`。
    - `auth_failures`: その接続元で認証に失敗した接続が続いている。鍵を何本も試すクライアント（エージェントに多くの鍵）、
      または走査。`suppressed` が大きければ走査を疑う。
-   - `auth_timeout`（info）: 識別子の交換か認証が 30 秒で終わらなかった。走査や止まったクライアントでは普通。
+   - `auth_timeout`（info）: 識別子の交換か認証が 10 秒で終わらなかった。走査や止まったクライアントでは普通。
 5. FG-GIT-0036: `reason` を読む。
    - `accept`: たいていファイル記述子の不足（`cat /proc/$(pidof forge)/limits | grep 'open files'`、`ls /proc/$(pidof forge)/fd | wc -l`）。
    - `server_stopped`: 直前のログ（同じ時刻の FG-GIT-0036 `accept` や panic）を読む。
