@@ -1,0 +1,42 @@
+/* M4 C10: one-step revert of a merged merge request. Tokens only. */
+
+.revert {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-2);
+  margin: var(--gs-space-4) 0;
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-color-text-muted);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--gs-font-size-md);
+  font-weight: bold;
+}
+
+.hint {
+  margin: 0;
+  color: var(--gs-color-text-muted);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  align-items: center;
+}
+
+/* The revert was opened: the next step is to open it. */
+.done {
+  margin: 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-left: 4px solid var(--gs-color-accent-strong);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+  font-weight: bold;
+}

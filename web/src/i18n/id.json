@@ -1040,7 +1040,8 @@
       "mr_approved": "Merge request disetujui",
       "mr_merged": "Merge request digabung",
       "mr_commented": "Komentar pada merge request",
-      "mr_conflict_predicted": "Kemungkinan konflik dengan merge request lain"
+      "mr_conflict_predicted": "Kemungkinan konflik dengan merge request lain",
+      "mr_revert_drafted": "Pipeline gagal setelah merge (draf pembatalan)"
     }
   },
   "inbox": {
@@ -1076,6 +1077,7 @@
       "commented": "{{actor}} mengomentari merge request Anda",
       "commentedBySystem": "Merge request Anda mendapat komentar baru",
       "conflictPredicted": "Merge request Anda kemungkinan berkonflik dengan merge request lain",
+      "revertDrafted": "Pipeline gagal setelah ini di-merge. Periksa draf pembatalannya.",
       "other": "Ada notifikasi baru tentang merge request Anda"
     }
   },
@@ -1559,5 +1561,13 @@
     "recentTitle": "Hasil terbaru",
     "mr": "!{{iid}}",
     "alone": "(diuji sendiri)"
+  },
+  "revert": {
+    "label": "Pembatalan merge",
+    "button": "Batalkan merge ini",
+    "hint": "Membuat merge request yang membatalkan merge ini. Branch tujuan tidak berubah sampai merge request tersebut di-merge.",
+    "pending": "Membuat…",
+    "opened": "Merge request pembatalan !{{iid}} telah dibuat.",
+    "open": "Buka"
   }
 }

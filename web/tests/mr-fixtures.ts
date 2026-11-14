@@ -59,6 +59,7 @@ export function status(
       can_merge: false,
       can_mark_ready: false,
       approved_by_me: false,
+      can_revert: false,
     },
   } satisfies MergeStatus;
 }

@@ -2120,3 +2120,57 @@ kanflow は新しく開いた MR を一覧（`GET /api/v1/projects/{id}/merge-re
 テスト: forge-web `merge_request_people_disclose_the_employee_number_only_with_the_scope`（一覧と詳細、セッション・`read_api`・
 `api`+`admin` では無い、`user_employee_number` で有る、開いた MR の `merged_by` は `null`）、`merge_request_body_carries_author_name`、
 forge-auth `only_the_personal_scopes_disclose`。
+
+## Amendment（2026-11-14、M4 C10 `feat/review-one-step-revert`）— 一手の revert と main の失敗での下書き（計画 04 M-4）
+
+計画 14 §5 の C10。計画 04 M-4 と ADR-0017 Amendment（2026-11-03）が `merge.auto = full` の前提とした「1 つの merge を 1 操作で戻す
+revert の MR」と、「main のパイプラインが失敗したら revert の MR を自動で下書きする」を入れた。§4（マージの実行）・§6（イベント）・§12
+（権限）を次のとおり補う。
+
+- **何を作るか**: マージ済みの MR !N を戻す MR を 1 つ。ソースは新しいブランチ `refs/heads/revert/mr-<N>`（target の今の先端の上に
+  revert のコミットを 1 つ）、ターゲットは !N の target。作った MR は普通の MR として、パイプライン（マージ結果）・承認・マージの規則に
+  従う（自動マージはプロジェクトの `merge.auto` が許すときだけ。ドラフトは人が「準備完了」にするまでマージされない）。
+- **木の計算（作業ツリーなし）**: 適用されたマージの試み（`merge_request_merges` の `applied`）の `expected_old`（マージが積まれた先端）と
+  `new_sha`（マージが作ったコミット）から、`git revert` と同じ三方向マージ（基点 = `new_sha`、こちら = 今の先端、あちら = `expected_old`）。
+  マージコミットは `-m 1`、squash はそのコミット、fast-forward は進めた全体を 1 コミットで戻す。最低の git 2.38 には
+  `merge-tree --merge-base`（2.40）が無いので、どこからも参照されない 3 つのコミット（基点の木だけの親なしコミットと、それを親とする
+  こちら・あちらの木のコミット）を `commit-tree` で作り、`merge-tree --write-tree` でマージする（`forge_git::revert`。git がマージし、
+  forge は木を作らない。argv・`--end-of-options`・時間切れ）。結果の木が今の先端と同じなら「戻すものが無い」。
+- **衝突（決定）**: 取り消しが衝突するときは **何も作らない**（ブランチ・MR・ref の上のコミットなし）。人の操作は **FG-REVIEW-0030**
+  RevertConflict（409、info）、システムの下書きは `outcome=conflicted` を記録して作成者に知らせる。衝突の印を含むコミットを下書きにする案は
+  採らなかった: 壊れた変更がマージを待つ形になり、レビューで見落とすと main をさらに壊す。手元の `git revert` で直してもらう。
+- **その他の拒否**: **FG-REVIEW-0029** RevertRefused（409、info）`reason=not_merged`・`no_applied_merge`・`target_missing`・
+  `nothing_to_revert`・`branch_exists`（`revert/mr-<N>` があれば、取り消しの MR は既にある。表を作らず、ブランチの名前が取り消しと元の MR を
+  結ぶ）。ブランチを作った後に MR を開けなかったとき（ロックの下の拒否・DB）はブランチが残り、次の取り消しは `branch_exists`（そのブランチから
+  手で MR を開ける）。
+- **権限（新しい Action は無い: 計画 14「既存の MR の Action」）**: ルート `POST /api/v1/projects/{id}/merge-requests/{iid}/revert` は、
+  ローダーが **取り消しの MR を開く** `MergeRequestCreate` の文脈（呼び出した本人の、`revert/mr-<N>` → !N の target）を作り、レジストリが
+  それで判定する（Developer 以上、トークンは `api`、エージェントの `api` トークンも可 — MR を開くのは人だけに限らない）。ハンドラーは
+  ブランチの作成を **push として** 判定する（`RepoPush` と `authorize_ref_updates`、push の保護の規則: トークンは `write_repository`、
+  保護した `revert/*` は FG-GIT-0008）。どちらも git が参照の無いオブジェクト以外を書く前。MR を開く書き込みはロックの下で
+  `reconfirm` し直す。権限の表に取り消しの形の行を足した（`matrix_rows_revert.rs`: 許す・断る、他人の名前の取り消しは断る）。
+  状態の答えの `viewer.can_revert`（同じ 2 つの判定の試行）が画面のボタンを出す。
+- **main の失敗で下書き（システム）**: 購読者 `revert-drafts`（forge-db、`independent`）が `check.completed` のうち `ci/pipeline` が
+  `failure` で、そのコミットがプロジェクトの適用されたマージの `new_sha` であるものに、ジョブ `merge_request.revert_draft` を 1 つ積む
+  （dedup `mr_revert_draft:<project>:<sha>`、コミットごとに 1 回）。ジョブは `forge serve` が動かす（作るブランチが無効にする閲覧のキャッシュの
+  隣、マージのジョブと同じ理由）。ジョブは次のときだけ下書きを開く:
+  1. そのコミットの **target ブランチ自身の push のパイプライン** が `failed`（MR のマージ結果や別のブランチのパイプラインではない）。
+  2. マージの前の先端（`expected_old`）の target の push のパイプラインが `failed` **でない**（既に壊れていた main ではマージが原因ではない:
+     M-4「原因のコミット（MR）を特定」）。
+  3. **戻される MR の作成者が自分で取り消せる**（今の役割で、上と同じ `MergeRequestCreate`（`draft: true`）と `RepoPush` の判定。人のセッション
+     相当の権利で、トークンで狭めない）。作成者は MR の作成者、監査の主体は `system`（ラベル `forge-revert`）、revert のコミットの作者・
+     コミッターは `GitStation <revert@gitstation.invalid>`（本人が書いたコミットではないため）。
+  結果は戻される MR の **`merge_request.revert_drafted`**（集約は戻される MR、integration の分類、`outcome` opened / conflicted、
+  `revert_iid`、dedup `merge_request_revert_drafted:<mr_id>:<merge_id>`）に記録し、通知の種類 **`mr_revert_drafted`** で作成者に知らせる
+  （メールとアプリ内。kanflow は integration の分類で受け取る）。通知の種類の CHECK はマイグレーション 20261216100000 で足した
+  （計画 14 の表では C10 のマイグレーションは「—」だったが、通知の種類が要るため足した。新しい表は作らない）。
+  マージキューのバッチで 1 回に複数の MR が入ったときは、先端のコミットを作った MR（バッチの最後）だけが下書きの対象になる（M3 の限界）。
+- **ログ**: `forge.review.reverted`（人の取り消し）、`forge.review.revert_drafted`（ジョブの結果、`outcome`・`reason`）、
+  `forge.review.revert_conflicted`（衝突したパスはログだけ）、`forge.review.revert_refused`、`forge.review.revert_draft_refused`、
+  `forge.review.revert_branch_created`。ブランチの push の記録の失敗は 1 回ログに出す（ブランチは残る）。
+- **入口**: `gstn mr revert --project <id> --iid <n>`、マージ済みの MR の画面の「このマージを取り消す」（`viewer.can_revert` のとき）。
+- テスト（実際の git と開発の DB）: forge-review `a_merge_commit_is_reverted_by_one_revert_merge_request`、`a_squash_merge_is_reverted`、
+  `a_revert_that_conflicts_opens_nothing`、`a_merge_request_that_is_not_merged_cannot_be_reverted`、
+  `only_who_may_open_and_push_the_branch_may_revert`、`a_failed_target_pipeline_drafts_a_revert_once`、
+  `a_draft_conflict_is_recorded_and_unrelated_failures_draft_nothing`、forge-git の `revert_tests`、forge-web
+  `a_merged_merge_request_is_reverted_through_the_route`・`revert_permissions_are_decided_before_anything_is_written`。

@@ -51,6 +51,7 @@ target の保護、頼む変更）で `authorize()` を試しに呼んだ答え�
 | `can_merge` | 真偽 | `POST …/merge` が許される（target の保護の最低のプッシュ役割。保護が無ければ Developer・トークンは `merge_execute`）。**今マージできるかは `mergeable`** |
 | `can_mark_ready` | 真偽 | `PATCH …/{iid}` で `draft: false` が許される（作成者、または他人のドラフトなら Maintainer 以上） |
 | `approved_by_me` | 真偽 | 呼び出した人の生きている承認がある（版が無ければ `false`） |
+| `can_revert` | 真偽 | M4 C10（schema_version 1 のまま足した）: `POST …/revert` が許される（MR がマージ済みで、MR を開ける・ブランチを push できる。Developer 以上・トークンは `api` と `write_repository`）。`revert/*` の保護と、取り消しが衝突するかは取り消しそのものが判定する。代理（act-as）では常に `false` |
 
 - `can_unapprove` は「取り消す権限がある」だけで、取り消す承認があるとは限らない。画面は **`approved_by_me` と組で** 使う
   （`can_unapprove && approved_by_me` のときだけ「承認を取り消す」を出す）。同じく `can_approve && !approved_by_me` で「承認する」。
@@ -128,7 +129,8 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
     "can_unapprove": true,
     "can_merge": true,
     "can_mark_ready": true,
-    "approved_by_me": false
+    "approved_by_me": false,
+    "can_revert": false
   }
 }
 ```
