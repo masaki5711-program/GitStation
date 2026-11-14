@@ -10,7 +10,9 @@
 //! was retried and claimed again — changes nothing (`FG-CI-0004`).
 //!
 //! **Claim** ([`claim`]): one statement picks the oldest `pending` job whose
-//! tags the runner's cover, of a live pipeline and a project not pending
+//! tags the runner's cover — and that asks for each of the runner's
+//! [`EXCLUSIVE_RUNNER_TAGS`] it has (plan 17 P17-1: a `gpu-eval` runner
+//! never takes an untagged job) —, of a live pipeline and a project not pending
 //! deletion, `FOR UPDATE OF job, pipeline SKIP LOCKED` — two runners never
 //! get the same job, and a claim never waits on a cancel or a completion
 //! that holds the pipeline. In the same transaction the job becomes
@@ -49,6 +51,13 @@ use sqlx::PgConnection;
 use super::{revoke_job_tokens, token_failed, Revocation};
 use crate::pipelines::{pipeline_of, PipelineRow, StoredPipeline, PIPELINE_COLUMNS};
 use crate::{query_error, read_query_error, Db};
+
+/// Runner tags that make a runner exclusive (plan 17 P17-1, ADR-0029
+/// amendment 2026-11-14): a runner with one of them claims only jobs that
+/// ask for it, so an untagged job never lands on the GPU runner (whose host
+/// gives a service of a `gpu-eval` job the GPU and the model store).
+/// `gpu-eval` is `forge_ci::GPU_EVAL_TAG` (the lint's side of the rule).
+pub const EXCLUSIVE_RUNNER_TAGS: [&str; 1] = ["gpu-eval"];
 
 /// How long a claim or a heartbeat holds the lease.
 pub const LEASE_S: i64 = 120;
@@ -215,11 +224,14 @@ pub async fn claim(db: &Db, runner: i64) -> Result<Option<Claimed>, ForgeError> 
                  JOIN forge.projects pr ON pr.id = j.project_id \
                  JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = pr.id \
                  WHERE j.status = 'pending' AND j.tags <@ $1::text[] \
+                   AND NOT EXISTS (SELECT 1 FROM unnest($2::text[]) AS x(tag) \
+                     WHERE x.tag = ANY($1::text[]) AND NOT x.tag = ANY(j.tags)) \
                    AND p.status IN ('pending', 'running') AND pr.deleted_at IS NULL \
                  ORDER BY j.id LIMIT 1 \
                  FOR UPDATE OF j, p SKIP LOCKED FOR SHARE OF pr, n SKIP LOCKED",
             )
             .bind(&tags)
+            .bind(&EXCLUSIVE_RUNNER_TAGS[..])
             .fetch_optional(&mut *tx)
             .await
             .map_err(|e| query_error(QUERY, e))?;

@@ -277,6 +277,44 @@ async fn a_claim_needs_runner_tags_covering_the_jobs() {
     w.t.drop_now().await;
 }
 
+/// Plan 17 P17-1: a runner tagged `gpu-eval` takes only jobs that ask for
+/// it — never an untagged job, nor one with only its other tags — while an
+/// untagged job still goes to any other runner, as before.
+#[tokio::test]
+async fn untagged_job_never_assigned_to_gpu_runner() {
+    let w = world().await;
+    let (gpu, _) = w.runner("gpu", &["gpu-eval", "linux"]).await;
+    let (plain, _) = w.runner("plain", &[]).await;
+    w.pipeline(
+        'b',
+        false,
+        vec![
+            job("untagged", &[], &[], &[]),
+            job("linux", &[], &["linux"], &[]),
+            job("bench", &[], &["gpu-eval"], &[]),
+        ],
+    )
+    .await;
+    // The GPU runner passes over the two older jobs and takes the bench.
+    let c = lease::claim(&w.t.db, gpu)
+        .await
+        .expect("claim")
+        .expect("the bench");
+    assert_eq!(c.name, "bench");
+    assert!(lease::claim(&w.t.db, gpu).await.expect("claim").is_none());
+    // The untagged job is the plain runner's, as before; the `linux` job
+    // waits for a runner with that tag that is not exclusive.
+    let c = lease::claim(&w.t.db, plain)
+        .await
+        .expect("claim")
+        .expect("the untagged job");
+    assert_eq!(c.name, "untagged");
+    assert!(lease::claim(&w.t.db, plain).await.expect("claim").is_none());
+    assert!(lease::claim(&w.t.db, gpu).await.expect("claim").is_none());
+    assert_eq!(lease::EXCLUSIVE_RUNNER_TAGS, ["gpu-eval"]);
+    w.t.drop_now().await;
+}
+
 #[tokio::test]
 async fn a_job_token_lives_with_its_job_and_the_pipeline_follows_its_jobs() {
     let w = world().await;
