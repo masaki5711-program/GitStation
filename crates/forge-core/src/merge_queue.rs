@@ -122,6 +122,16 @@ pub enum MergeQueueChange {
         target_branch: String,
         head_sha: String,
     },
+    /// `merge_queue.auto_enqueued` (M4 C9): the auto-merge principal added
+    /// the merge request (actor `system`).
+    AutoEnqueued {
+        project: ProjectId,
+        merge_request: MergeRequestId,
+        iid: i64,
+        entry: i64,
+        target_branch: String,
+        head_sha: String,
+    },
     /// `merge_queue.dequeued`.
     Dequeued {
         project: ProjectId,
@@ -146,6 +156,7 @@ impl MergeQueueChange {
     pub fn action(&self) -> &'static str {
         match self {
             Self::Enqueued { .. } => "merge_queue.enqueued",
+            Self::AutoEnqueued { .. } => "merge_queue.auto_enqueued",
             Self::Dequeued { .. } => "merge_queue.dequeued",
             Self::Paused { .. } => "merge_queue.paused",
             Self::Resumed { .. } => "merge_queue.resumed",
@@ -155,6 +166,7 @@ impl MergeQueueChange {
     pub fn project(&self) -> ProjectId {
         match self {
             Self::Enqueued { project, .. }
+            | Self::AutoEnqueued { project, .. }
             | Self::Dequeued { project, .. }
             | Self::Paused { project, .. }
             | Self::Resumed { project, .. } => *project,
@@ -177,6 +189,22 @@ impl MergeQueueChange {
                 "entry_id": entry,
                 "target_branch": target_branch,
                 "head_sha": head_sha,
+            }),
+            Self::AutoEnqueued {
+                project,
+                merge_request,
+                iid,
+                entry,
+                target_branch,
+                head_sha,
+            } => serde_json::json!({
+                "project_id": project.get(),
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "entry_id": entry,
+                "target_branch": target_branch,
+                "head_sha": head_sha,
+                "by": "auto_merge",
             }),
             Self::Dequeued {
                 project,

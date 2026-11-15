@@ -24,6 +24,7 @@
 
 use std::time::Duration;
 
+use forge_auth::Action;
 use forge_core::merge_queue::{bisected_limit, BatchState, EntryState, Isolation, MAX_REAPS};
 use forge_core::{
     telemetry, CheckConclusion, CheckName, CheckRun, MergeMethod, MergeRequestState, MergeState,
@@ -290,6 +291,39 @@ impl MergeQueue {
                 removed = true;
                 continue;
             }
+            // M4 C9: the auto-merge principal's entry waits while an
+            // emergency stop is on (it stays queued: paused) and leaves when
+            // its project's mode no longer acts. People's entries go on.
+            if entry.credential.is_auto_merge() {
+                let auto =
+                    forge_db::review::auto_merge::settings(&self.merger.db, entry.project_id)
+                        .await?;
+                let decided =
+                    super::auto_proof(&self.merger.db, mr, &auto, Action::MergeRequestMerge).await;
+                if let Err(e) = decided {
+                    match super::auto_merge_paused(&e) {
+                        // The emergency stop holds it: it stays queued.
+                        Some("auto_merge_stopped") => continue,
+                        Some(_) => {
+                            self.drop_queued(
+                                entry,
+                                "auto_merge_off",
+                                ErrorCode::MergeQueueEntryRefused,
+                            )
+                            .await?;
+                            removed = true;
+                            continue;
+                        }
+                        None if is_refusal(&e) => {
+                            let reason = reason_of(&e);
+                            self.drop_queued(entry, &reason, e.code()).await?;
+                            removed = true;
+                            continue;
+                        }
+                        None => return Err(e),
+                    }
+                }
+            }
             let isolate = self.isolation(entry, repo, &base).await?;
             if isolate.is_some() && !members.is_empty() {
                 break;
@@ -406,10 +440,11 @@ impl MergeQueue {
         let risk = CheckName::parse(forge_core::checks::RISK_CHECK).map_err(|_| {
             ForgeError::new(ErrorCode::Internal).with_context("reason", "risk_check_name")
         })?;
-        if runs
-            .run(&entry.head_sha, &risk)
-            .is_some_and(|r| r.conclusion == Some(CheckConclusion::Failure))
-        {
+        // C9 review: a head forge/risk did not clear (a stop, an error, a
+        // warning or a partial assessment) runs alone too.
+        if runs.run(&entry.head_sha, &risk).is_some_and(|r| {
+            r.conclusion.is_some() && r.conclusion != Some(CheckConclusion::Success)
+        }) {
             return Ok(Some(Isolation::RiskStop));
         }
         let git = &self.merger.git;
@@ -954,6 +989,41 @@ impl MergeQueue {
                 }
                 Err(refusal) => {
                     self.end_attempts(&decided, "queue_rebuild").await;
+                    // M4 C9: an emergency stop turned on while the batch
+                    // tested holds the auto-merge entries (back in the
+                    // queue, paused); a mode that no longer acts removes it.
+                    match super::auto_merge_paused(&refusal) {
+                        Some("auto_merge_stopped") => {
+                            return self
+                                .abandon(
+                                    batch,
+                                    BatchState::Landing,
+                                    "auto_merge_stopped",
+                                    Vec::new(),
+                                    None,
+                                    Some(repo),
+                                )
+                                .await;
+                        }
+                        Some(_) => {
+                            let removed = vec![(
+                                entry.id,
+                                "auto_merge_off".to_owned(),
+                                ErrorCode::MergeQueueEntryRefused,
+                            )];
+                            return self
+                                .abandon(
+                                    batch,
+                                    BatchState::Landing,
+                                    "entry_refused",
+                                    removed,
+                                    None,
+                                    Some(repo),
+                                )
+                                .await;
+                        }
+                        None => {}
+                    }
                     if is_refusal(&refusal) {
                         let removed = vec![(entry.id, reason_of(&refusal), refusal.code())];
                         let detail = refusal_context(&refusal);

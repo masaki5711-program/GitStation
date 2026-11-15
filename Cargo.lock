@@ -722,6 +722,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "forge-agent"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "forge-errors",
+ "proptest",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "toml",
+ "url",
+]
+
+[[package]]
 name = "forge-auth"
 version = "0.1.0"
 dependencies = [
@@ -802,6 +817,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "dbus-secret-service-keyring-store",
+ "forge-agent",
  "forge-ci",
  "forge-client",
  "forge-doc",
@@ -881,6 +897,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

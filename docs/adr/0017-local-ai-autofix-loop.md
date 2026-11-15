@@ -1265,3 +1265,99 @@ pub enum SyncTrigger { Schedule, KanflowNotification }
 - ほかの自動マージの範囲は変えない。手動のマージは止めない（`forge/risk` を必須にしたときだけ止まる）。
 - **A7 で扱う残り（2026-11-12 の security レビュー）**: `.claude/settings.json` のフックが呼ぶスクリプトや `CLAUDE.md` の `@` で取り込むファイルが `.claude` の外にあると、その変更は `agent_config` に当たらない。また、評価できなかった target（`no_open_merge_request` など）は `warn` のままで `stop` にならない。どちらも A7（`forge/agent-lock` が参照先も固定する）で閉じる。
 
+
+## Amendment（2026-11-13、M4 C9）: 自動マージの実装で決めた規則
+
+**出どころ**: 計画 14 §5 の C9（`feat/git-auto-merge`）、計画 04 M-5・M-6、利用者の決定（2026-11-03「完全自動化」、2026-11-12「開発者の PC で動くコードの変更」）。ADR-0030（マージキュー）の上に作る。
+
+### A. 方式と既定
+
+- `merge.auto` は表 `forge.project_auto_merge`（プロジェクトごとに 1 行）に置く。値は `off` / `reserve` / `conditional` / `full`。
+- **新しいプロジェクトは `full`**（行が無いプロジェクトは `full`）。**C9 より前からあるプロジェクトは `off`**（移行で `off` の行を入れる）。
+  理由: それらのプロジェクトは今まで何も自動でマージされておらず、それが実効の方式だった。デプロイしたとたんに既存のプロジェクトが勝手にマージを始めないよう、
+  Owner が自分で `full` にする。
+- 方式を変えるのは **プロジェクトの Owner だけ、Web のセッションだけ**（Action `AutoMergeSettingsManage`。2026-11-03 B の案のとおり）。
+  エージェント・サービスアカウント・代理（kanflow）・トークンは変えられない。変更は監査 `auto_merge.mode_changed`。
+- `reserve` は C8 の「準備ができたらマージ」（人が押す）そのもの。自動マージの主体が動くのは `conditional` と `full` だけ。
+- `conditional` の保護するパス: マイグレーション（`forge_core::risk::is_migration_path`）、`.forge/`・`.forge-ci.yml`、`CODEOWNERS`、
+  パスのどこかに `auth` / `authz` / `permissions` / `acl` を含むもの。触れる MR（変更が多すぎて読めない MR も）は人を待つ（`waiting reason=protected_path`）。
+- **実効の段（2026-11-03 C の案）は採らない**: 設定の値をそのまま実効にする。決定的な層（M3 の `forge/risk`）とマージキュー（C8）は動いている。
+  ローカル AI の層（M5）はまだ無く、`combine(…, None)` で決定的な層だけが決める（AI は後から危険を上げることしかできない）。
+  一手の revert（C10）は C9 の後に入る。それまでの revert は人が revert の MR を作る。**この判断は人の確認が要る**（C10 の前に `full` を
+  実効にしてよいか）。確認の結果「待つ」なら、`forge_core::auto_merge::AutoMergeMode::acts` に条件を足すだけで戻せる。
+- インスタンスの許可 `merge.allow_full_auto`（2026-10-30 B）は C9 では作らない。インスタンス全体の緊急停止（C）で代える。
+
+### B. 止める条件（これだけ）
+
+自動マージが止まる（MR の 1 行が `stopped`、`FG-REVIEW-0026`）のは次だけ。`warn` は止めない（`queued_with_warning`）。
+
+| 分類（`class`） | 何で決まるか |
+|---|---|
+| `program_breakage` | 必須チェックが赤（`required_check_failed`）、MR 自身の `ci/pipeline` がマージ結果で赤（`pipeline_failed`）、マージキューでこの MR だけの試験が赤（`merge_queue_checks_failed`。同じ head では再び入れない）、`forge/risk` の `mass_deletion_lines` / `mass_deletion_files` / `too_many_changes` |
+| `data_loss` | `forge/risk` の `applied_migration_changed`、`sql_drop`、`sql_truncate`、`sql_unbounded_write`、`sql_column_change`、`sql_drop_constraint`、`sql_disable_guard`、`deploy_rollback`、`data_lifecycle_job`、`critical_content_unread` |
+| `leak` | `forge/risk` の `secret_file`、`secret_in_content` |
+| `developer_pc` | `forge/risk` の `agent_config`、`submodule_change`（2026-11-12 の Amendment） |
+| `not_assessed` | `forge/risk` が `error` / `action_required`、または `failure` なのに forge の知っている規則を名指ししていない（安全と示せないので止める） |
+| `emergency_stop` | インスタンスかプロジェクトの緊急停止（`FG-REVIEW-0027`） |
+
+- 規則の分類は `forge_core::auto_merge::rule_class`（`forge/risk` の `stop` の規則は必ずどれかの分類に入る: 試験
+  `every_stop_rule_of_forge_risk_has_a_class_and_no_warn_rule_does`）。複数当たったら、戻しにくい順（流出 → DB → 開発者の PC → 破壊）で 1 つを示す。
+- **AI は危険を上げることしかできない**（`combine`）: 決定的な層の `stop` は AI が何と言っても `stop`。AI の `stop` と、応答なし・時間切れ・不正な出力は `stop`。
+- それ以外（下書き、承認待ち、衝突、`forge/risk` の結果待ち、保護するパス）は **止めではなく待ち**（`waiting`）。条件がそろえば自分で進む。
+- 人が自動マージのエントリーをキューから外したら、その head は自動では入れ直さない（`held reason=dequeued_by_person`）。新しい push で判定し直す。
+
+### C. 自動マージの主体
+
+- `Credential::AutoMerge`（`Principal::auto_merge()`: 人ではない、ユーザーも管理者の権利も無い、種類は `bot`、エージェントのトークンでもない）。
+  forge-review の自動マージの worker と、キューの着地だけが作る（ルートは無い）。`authorize()` は最初にこの主体の腕（`forge-auth/src/auto_merge.rs`）で決める。
+- 許すのは **`MergeQueueEnqueue`（キューに入れる）と `MergeRequestMerge`（キューの着地）だけ**、しかも `Resource::AutoMerge`（プロジェクトの方式と
+  緊急停止を同じトランザクションで読んだもの）の上で、方式が `conditional` / `full` で緊急停止が無いときだけ。それ以外の Action はすべて
+  `FG-AUTH-0003 reason=auto_merge_not_allowed`（承認、デプロイ、保護ブランチの規則、緊急停止そのもの、読み取りも）。権限の表に allow と
+  deny の行（`matrix_rows_auto_merge.rs`、全 Action の deny を生成）。他の主体は `Resource::AutoMerge` を断られる（`auto_merge_resource`）。
+- キューに入れるときもマージ（着地）のときも、人の「準備ができたらマージ」と **同じ** `evaluate_merge()` を通る（承認、CODEOWNERS、議論、作業項目、
+  必須チェック。`ci/pipeline` だけはキューが列車で確かめる）。自動マージの方式が保護ブランチの規則を上書きすることはない。
+- 記録: キューのエントリーと試行は `credential_kind = 'auto_merge'`（`credential_id` = プロジェクト）。`enqueued_by` / `requested_by` は
+  **MR の作成者**（その人のためにマージされる: マージコミットの作者・コミッター、`merged_by`）。MR の作成者のアカウントが無効なら着地しない。
+  入れたときの監査は `merge_queue.auto_enqueued`（actor `system`）。決めた主体は常に自動マージの主体で、作成者の資格情報は使わない。
+
+### D. 緊急停止
+
+- プロジェクト: `POST /api/v1/projects/{id}/auto-merge/stop` / `resume`（Action `AutoMergeStopToggle`、Maintainer 以上、人だけ）。
+  インスタンス: `POST /api/v1/admin/auto-merge/stop` / `resume`（Action `AutoMergeInstanceStopToggle`、管理者、人だけ）。
+  どちらも監査（`auto_merge.stopped` / `.resumed`）、入れたときは `FG-REVIEW-0027`（warn）をログに 1 回。
+- 止めている間: 新しく自動でキューに入れない。キューにある自動マージのエントリーはバッチに入らない（待つ。外さない）。試し中のバッチに
+  入っていたら、着地の判定（`MergeRequestMerge` の再判定）で断られ、バッチを捨てて列に戻す（`auto_merge_stopped`）。人のエントリーとマージは止めない。
+  方式が `off` / `reserve` に変わったら、自動マージのエントリーは外す（`auto_merge_off`）。
+- 画面: プロジェクトの設定の「自動マージ」に方式と両方の停止（誰がいつ）、MR の画面の 1 行。
+
+### E. 見え方と観測
+
+- MR の 1 行: `GET …/merge-requests/{iid}/auto-merge`（`MergeRequestRead`）。`state`・`class`・`reason`・`detail`・`error_code`・`request_id`。
+  画面は「なぜ止まったか / 何を押せばよいか」を 1 行で出す（ja / en / id）。コードは出さない。
+- worker（`forge serve` の `auto_merge`、5 秒ごと、1 回 50 件まで、head が変わらない MR は 20 秒ごとに見直す）は表
+  `forge.auto_merge_states` に状態を書き、新しい停止を 1 回だけログに出す（`forge.auto_merge.stopped`、`FG-REVIEW-0026`）。
+  判定の失敗は `FG-REVIEW-0028`（alert、`cause_code`、Runbook `auto-merge`）。
+- kanflow への通知（`merge_request.auto_merge_stopped` などのイベント、dev-status の項目）は C9 では作らない。表 `forge.auto_merge_states` は
+  読み取り用のロールにも見えるので、後の MR で dev-status に足せる。
+
+### 採らなかった案
+
+- **既存のプロジェクトも `full` にする**: 採らない。デプロイの瞬間に、誰も選んでいないプロジェクトで自動マージが始まる。
+- **自動マージ専用のユーザー（bot のアカウント）を作る**: 採らない。名前空間・監査・既存の試験（ユーザーの数・ID）に広く響く。
+  作成者の名前で記録し、主体は資格情報の種類（`auto_merge`）で区別する。
+- **MR 自身のパイプラインが緑になるまで待ってからキューに入れる**: 採らない。キューは前に並ぶ MR を含めたマージ結果で試すので、
+  同じ試験を 2 回回すことになる。赤が分かっていれば先に止める（`pipeline_failed`）。
+
+### F. C9 のレビューで変えた点（2026-11-14、security-reviewer + authz-matrix-auditor）
+
+- **`forge/risk` の `neutral` は、`warn` の規則だけを名指しするときだけ「警告付きで進む」**。`content_not_scanned` など、変更の一部を確かめられなかった
+  規則（`forge_core::auto_merge::NOT_ASSESSED_RULES`）を含むとき、または規則を読めないときは `not_assessed` の停止。
+- **着地でも危険を判定し直す**: 自動マージのエントリーは、着地の判定（`decide_queued`）の中で、その head の `forge/risk` をゲートの
+  トランザクションで読み直す。キューに入れた後に `stop` になったものは着地せず、`FG-REVIEW-0026` で列から外れる。
+  キューの「1 本で走る」も、`forge/risk` が `success` でない head（`failure`・`error`・`neutral`）に広げた。
+- **git を読む前に決める**: 自動マージの worker は、リポジトリの中身（変更されたパス、マージの状態）を読む前に `authorize(MergeQueueEnqueue)`
+  を `Resource::AutoMerge` で決める（`auto_proof`）。キューの組み立ても、自動マージのエントリーを同じ判定で通す（手で方式・停止を見ない）。
+- **作成者の役割**: 自動マージはその MR の作成者のためにマージするので、作成者がプロジェクトの Developer 以上でなければキューに入れず、着地もしない
+  （`reason=author_role`）。
+- **残すこと（M4 の締めで扱う）**: `forge/risk` は head とマージ基点の差分で判定し、キューで前に並ぶ MR を含めたマージ結果の差分では判定しない
+  （前に並ぶ MR もそれぞれ判定され、組み合わせはキューのパイプラインが試す）。インスタンスの許可 `merge.allow_full_auto` も M4 の締めの項目。

@@ -76,6 +76,10 @@ pub enum CredentialRef {
     Session(i64),
     /// A personal access token (`forge.tokens.id`).
     Token(i64),
+    /// The auto-merge principal acting under this project's `merge.auto`
+    /// (M4 C9; stored with `credential_id` = the project). Its state is
+    /// the project's mode and the emergency stops as they are now.
+    AutoMerge(ProjectId),
 }
 
 impl CredentialRef {
@@ -83,13 +87,32 @@ impl CredentialRef {
         match self {
             Self::Session(_) => "session",
             Self::Token(_) => "token",
+            Self::AutoMerge(_) => "auto_merge",
         }
     }
 
     pub fn id(self) -> i64 {
         match self {
             Self::Session(id) | Self::Token(id) => id,
+            Self::AutoMerge(project) => project.get(),
         }
+    }
+
+    /// The stored pair (`credential_kind`, `credential_id`) of a row of
+    /// `project`; `None` for an unknown kind or an auto-merge credential of
+    /// another project.
+    pub(crate) fn stored(kind: &str, id: i64, project: ProjectId) -> Option<Self> {
+        match kind {
+            "session" => Some(Self::Session(id)),
+            "token" => Some(Self::Token(id)),
+            "auto_merge" => (id == project.get()).then_some(Self::AutoMerge(project)),
+            _ => None,
+        }
+    }
+
+    /// Whether the auto-merge principal asked.
+    pub fn is_auto_merge(self) -> bool {
+        matches!(self, Self::AutoMerge(_))
     }
 }
 
@@ -182,11 +205,12 @@ impl MergeRow {
         let oid = |raw: &str| {
             ObjectId::parse(raw).map_err(|_| stored_invalid("stored_merge_sha_invalid", id))
         };
-        let credential = match self.credential_kind.as_str() {
-            "session" => CredentialRef::Session(self.credential_id),
-            "token" => CredentialRef::Token(self.credential_id),
-            _ => return Err(stored_invalid("stored_credential_kind_invalid", id)),
-        };
+        let credential = CredentialRef::stored(
+            &self.credential_kind,
+            self.credential_id,
+            ProjectId::new(self.project_id),
+        )
+        .ok_or_else(|| stored_invalid("stored_credential_kind_invalid", id))?;
         Ok(StoredMerge {
             id,
             merge_request: MergeRequestId::new(self.merge_request_id),

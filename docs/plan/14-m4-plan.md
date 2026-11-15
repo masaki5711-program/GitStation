@@ -45,7 +45,7 @@ R1 の CI の判定（§8）に要る MR に ★ を付ける。★ の無いも
 M4-0 [root] ─▶ ADR-0029 / C0（Job の主体）─▶ C1（定義）─▶ C2（パイプライン）─▶ C3（Runner の API）─▶ C4（forge-runner）
    └▶ C5（ci/pipeline・ログ・指紋）─▶ C7（マージ結果と鮮度）─▶ X（ci/gates からの切り替え）═▶ R1 の CI の判定
    └▶ C6（成果物・シークレット）─▶ C11（デプロイ。ADR-0031）
-   後半: C8（キュー。ADR-0030）→ C9（自動マージ）→ C10（revert）、C12、C13
+   後半: C8（キュー。ADR-0030）→ C9（自動マージ）→ C10（revert）→ C14（自動修正の土台と決定的な修正）、C12、C13
 ```
 
 ## 3. 設計の選択肢と推奨（決定済み）
@@ -134,6 +134,7 @@ M4-0 [root] ─▶ ADR-0029 / C0（Job の主体）─▶ C1（定義）─▶ C
 | **C11★** `feat/deploy-ssh` | `forge-deploy`: forge の worker から SSH（argv、`BatchMode=yes`、`ConnectTimeout`、固定した known_hosts、ターゲットごとのスクリプトだけ）、prod の承認、凍結期間、stg の自動ロールバック | DeployApprove ほか §4.2 | DEPLOY-a〜f | `deploy_*`・`deployments` / prod をエージェント・サービスアカウント・自動マージの主体が承認できない、鍵の不一致で止まる | `deploy-safety-reviewer`、`security-reviewer`、`authz-matrix-auditor` | `deploy`、ADR-0031 |
 | C12 `feat/ci-schedules-manual` | 定期・手動のジョブ、仕様の公開（04 §6 `spec-publish`） | PipelineCreate の手動 | — | — | `rust-reviewer` | — |
 | C13 `feat/git-ssh-transport` | SSH の git 転送（M4 の終盤、R1 の外） | RepoRead / RepoPush の SSH 経路 | GIT-next | — | `git-protocol-reviewer`、`security-reviewer` | `smart-http` 相当 |
+| C14 `feat/ci-autofix-deterministic` | **自動修正の土台と決定的な修正**（ADR-0017 §8 の M4 の段、2026-11-14 に計画の抜けとして追加）: 自動修正の状態機械とテーブル、ボットのコミットの経路（Runner の出力は tree だけを使い、サーバーが `commit-tree`、`diff-tree --raw` で範囲を検査）、`.forge-ci.yml` の `autofix.fixers`（fmt・`clippy --fix` など）、**04 C-5 のロックファイル・生成ファイルの衝突を再生成のコマンドで解消**。LLM による修正と衝突の解消案（04 C-4）は M5（`forge-llm`）で、種類ごとに評価の目標まで既定は無効 | 自動修正のボットの行（承認・保護パス・マージはできない） | GIT / CI-next | 自動修正の表（追記だけ）/ 範囲の外の変更を拒否、衝突は衝突した hunk の中だけ、マイグレーション・バイナリ・保護パスは提案だけ、失敗は MR に理由 | `security-reviewer`、`git-protocol-reviewer` | ADR-0017 Amendment、`autofix` |
 | **C5s★** `feat/ci-job-services` | ジョブの `services`（PostgreSQL など、2 つまで）: `forge-ci` の lint、`forge-runner` のポッド（`--network=none`、ループバックだけを共有）、どの終わり方でもポッドを消す、失敗のときサービスのログの末尾 | — | CI-0014 | — / ポッドの argv、どの経路でもポッドを消す、起動時に残りを消す、本物の Podman で PostgreSQL に 127.0.0.1 で届き外へは出ない | `ci-runner-security-reviewer`、`rust-reviewer` | ADR-0029 追記、`ci-runner` |
 | **X★** `chore/ops-ci-cutover` | `ci/gates` のスクリプトと `ci/pipeline` を並行し、5 回一致したら必須チェックを `ci/pipeline` に替え、`ci/` の割り当てを外す | — | — | — / 5 回の一致の記録 | `ci-runner-security-reviewer` | `checks-reporting` |
 
@@ -224,7 +225,7 @@ worker の `deploy_runner`（`deploy.ssh_key_file` があるときだけ）、do
 `gstn deploy` と画面は後の MR（C-1 は Planned）。
 **C12 の注記（2026-11-13、定期・手動・仕様の公開）**: ブランチ `feat/ci-schedules-manual`。
 **手動のジョブ**: `.forge-ci.yml` の `when: manual`（lint の `when_invalid`・`needs_manual_job`、ステージの壁から外す）。表 `ci_jobs.manual` と状態
-`manual`（マイグレーション `20261215100000`）。何も待たないので、パイプラインは他のジョブで終わり、手動のジョブだけなら `skipped`。ルート
+`manual`（マイグレーション `20261216100000`）。何も待たないので、パイプラインは他のジョブで終わり、手動のジョブだけなら `skipped`。ルート
 `POST …/pipelines/{pid}/jobs/{jid}/play`（`PipelineCreate`、監査 `pipeline.job_played`、FG-CI-0003 `operation=play`）。
 **定期**: 表 `ci_pipeline_schedules`（監査あり、1 プロジェクト 20 件まで: FG-CI-0027）、Action `PipelineScheduleManage`（Maintainer 以上、人だけ）、
 ルート `GET|POST …/pipeline-schedules`・`PUT|DELETE …/{schedule_id}`。5 つの欄の cron を固定の UTC オフセットで（`forge_core::ci_schedule`、5 分より頻繁は不可）。

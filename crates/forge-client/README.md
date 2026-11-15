@@ -152,6 +152,8 @@ gstn mr resolve --project 7 --iid 3 --discussion 12 [--unresolve] # スレッド
 ```
 gstn ci lint [<パス>] [--protected main,release/*] [--json]               # .forge-ci.yml を検査（forge-ci の lint）。問題があれば終了コード 1（FG-CI-0001）
 gstn ci plan [<パス>] --branch <b> [--event push|mr] [--protected …] [--json]  # 動くジョブと順番（wave）を表示。何も実行しない
+gstn agent verify [--lock F] [--keys F] [--json]                       # .claude/ を agent.lock.json と部品の署名で確かめる（手元の鍵、取り消しは見ない。FG-AGENT-*）
+gstn agent verify --part <dir> [--mcp-allowed-hosts a,b]                # 部品のディレクトリ 1 つの lint・静的な検査・要約
 ```
 
 `--protected` を渡さないと、どのブランチも保護されていない扱い（シークレットを持つジョブは `secret_protection_unknown`）。

@@ -35,3 +35,4 @@
 | [0029](0029-ci-principals-runner-and-job-tokens.md) | CI の主体 — Runner と Job の資格情報、CI の信頼の境界 | proposed（accepted は C0 のレビューの後） | 2026-11-10 |
 | [0030](0030-merge-queue.md) | マージキュー — ターゲットごとの列、まとめて試すマージ結果、失敗の二分 | proposed（accepted は C8 のレビューの後） | 2026-11-12 |
 | [0031](0031-deploy-over-ssh.md) | デプロイ — forge の worker から SSH、固定した host key、prod は人の承認 | proposed（accepted は C11 のレビューの後） | 2026-11-13 |
+| [0032](0032-agent-parts-format-digest-and-signature.md) | エージェントの部品の形、要約、署名と手元の確かめ（`forge-agent`、計画 16 A1） | proposed（accepted は A1 のレビューの後） | 2026-11-13 |
