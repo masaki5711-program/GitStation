@@ -139,7 +139,8 @@ pub(crate) const SERVICE_ACCOUNT_ROWS: &[Row] = &[
     row(A::ProjectRead, W::ServiceAccountTokenApi, F::InternalProject, Allow),
     row(A::RepoBrowse, W::ServiceAccountNonMemberTokenReadApi, F::InternalProject, deny(E::NotFound)),
     row(A::PathResolve, W::ServiceAccountNonMemberTokenReadApi, F::ResolvedInternal, deny(E::NotFound)),
-    row(A::PathResolve, W::ServiceAccountNonMemberTokenReadApi, F::ResolvedGroup, Allow),
+    // Plan 15 MR 3: an internal group too, by its roles only (as projects).
+    row(A::PathResolve, W::ServiceAccountNonMemberTokenReadApi, F::ResolvedGroup, deny(E::NotFound)),
     row(A::MergeRequestList, W::ServiceAccountNonMemberTokenReadApi, F::InternalProject, deny(E::NotFound)),
     // S0 review: clone / fetch / raw / archive (RepoRead) and push of an
     // internal project it is no member of: not found; a Guest member

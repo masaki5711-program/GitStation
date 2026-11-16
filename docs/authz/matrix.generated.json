@@ -131,7 +131,7 @@
   { "action": "SessionContinue", "allow": 2, "deny": 12, "public": false, "git_operation": false },
   { "action": "SessionLogout", "allow": 3, "deny": 11, "public": false, "git_operation": false },
   { "action": "OidcBackchannelLogout", "allow": 3, "deny": 5, "public": true, "git_operation": false },
-  { "action": "PathResolve", "allow": 12, "deny": 21, "public": false, "git_operation": false },
+  { "action": "PathResolve", "allow": 11, "deny": 22, "public": false, "git_operation": false },
   { "action": "WebShell", "allow": 3, "deny": 5, "public": true, "git_operation": false },
   { "action": "Health", "allow": 1, "deny": 5, "public": true, "git_operation": false },
   { "action": "Metrics", "allow": 1, "deny": 6, "public": false, "git_operation": false }

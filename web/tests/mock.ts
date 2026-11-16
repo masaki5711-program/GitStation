@@ -111,6 +111,9 @@ export const GROUP = {
   description: 'The plant group',
   created_at: '2026-09-01T00:00:00Z',
   role: 'owner',
+  visibility: 'internal',
+  effective_visibility: 'internal',
+  pass_through: false,
 };
 
 export const LISTED_GROUP = {
@@ -122,6 +125,9 @@ export const LISTED_GROUP = {
   description: 'The plant group',
   created_at: '2026-09-01T00:00:00Z',
   role: 'owner',
+  visibility: 'internal',
+  effective_visibility: 'internal',
+  pass_through: false,
 };
 
 export const RESOLVE_PROJECT = {

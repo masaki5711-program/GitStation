@@ -251,9 +251,10 @@ Context の「リポジトリは種類（`spec` / `system`）を持ち」は、A
   `AuditRead`、パスの解決、移動先のグループ（`TransferTarget::Group` は `sight` を持ち、通り道でしか見えない先は
   `target_not_visible`）。一覧は行ごとに `GroupRead` で決める（SQL では絞らない）。プロジェクト・リポジトリ（clone を含む）は
   実際の可視性の `ProjectView` で今までどおり決まる。
-- **書き込みの中の再判定**: 書き込みのトランザクションは役割だけを読み直し、`GroupSight::ROLE_ONLY`（非公開・下に役割なし）で
-  `reconfirm` する。書き込みはどれもグループの役割（か管理者）を要るので、結果は変わらない（役割を失った直後の競合で 403 が 404 に
-  なるだけ）。
+- **書き込みの中の再判定**: 書き込みのトランザクションは役割だけをロックして読み直し、可視性はルートが読んだもの
+  （`GroupCtx::sight`、プロジェクトの作成は親の `sight`）のまま `reconfirm` する。メンバーと移動の書き込みは
+  `GroupSight::ROLE_ONLY`（非公開・下に役割なし）で決める。書き込みはどれもグループの役割（か管理者）を要るので、許すかどうかは
+  変わらない（競合で役割を失った人への答えが 403 でなく 404 になることがあるだけ）。
 - **新しい Action `GroupVisibilityChange`**（`PATCH /api/v1/groups/{id}/visibility`）: グループの Owner（管理者は通る）、人だけ、
   **web のセッションだけ**（トークンは `FG-AUTH-0002 reason=session_required`、エージェント・サービスアカウント・ボットは
   `FG-AUTH-0003`）。`preview: true` は判定して件数を数えるだけで書かない（画面が狭める前に「n 件のプロジェクトが非公開として

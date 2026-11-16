@@ -289,6 +289,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/groups/{id}/subgroups",
         Coverage::Command("group create"),
     ),
+    // Plan 15 MR 3: who may see a group is decided in a session.
+    (
+        "PATCH",
+        "/api/v1/groups/{id}/visibility",
+        Coverage::BrowserOnly("sessions only: a token never changes a group's visibility (FG-AUTH-0002 session_required); change it in the browser"),
+    ),
     (
         "POST",
         "/api/v1/groups/{id}/transfer",

@@ -347,10 +347,11 @@ impl Hosting {
                     return Err(ForgeError::new(ErrorCode::Internal)
                         .with_context("reason", "parent_facts_missing"));
                 };
+                // The visibility as the route read it; the role re-read.
                 let fresh = GroupCtx::new(LoadedGroup {
                     id: parent.group,
                     role: parent.role,
-                    sight: GroupSight::ROLE_ONLY,
+                    sight: proof.ctx().sight(),
                 });
                 proof.reconfirm(account(facts.account), fresh).map(drop)
             },
@@ -398,7 +399,7 @@ impl Hosting {
                 let fresh = GroupCtx::new(LoadedGroup {
                     id: facts.group.group,
                     role: facts.group.role,
-                    sight: GroupSight::ROLE_ONLY,
+                    sight: proof.ctx().sight(),
                 });
                 proof.reconfirm(account(facts.account), fresh).map(drop)
             })
@@ -432,7 +433,7 @@ impl Hosting {
                 let fresh = GroupCtx::new(LoadedGroup {
                     id: facts.group.group,
                     role: facts.group.role,
-                    sight: GroupSight::ROLE_ONLY,
+                    sight: proof.ctx().sight(),
                 });
                 proof.reconfirm(account(facts.account), fresh).map(drop)
             },
@@ -471,7 +472,11 @@ impl Hosting {
                     group: LoadedGroup {
                         id: group,
                         role,
-                        sight: GroupSight::ROLE_ONLY,
+                        // The visibility as the route read it.
+                        sight: match proof.ctx().parent() {
+                            LoadedParent::Group { group, .. } => group.sight,
+                            LoadedParent::User(_) => GroupSight::ROLE_ONLY,
+                        },
                     },
                 },
                 projects::ParentAccess::User {

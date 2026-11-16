@@ -203,7 +203,11 @@ async fn live_user_group_and_project_resolve_to_their_targets() {
             target: ResolvedTarget::Group {
                 id: api.group_id,
                 viewer_role: Some(Role::Owner),
-                sight: forge_core::GroupSight::INTERNAL,
+                // Plan 15 MR 3: alice also holds roles below acme/api.
+                sight: forge_core::GroupSight {
+                    visibility: forge_core::Visibility::Internal,
+                    descendant: true,
+                },
             },
         }
     );

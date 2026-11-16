@@ -55,6 +55,13 @@ impl GroupCtx {
     pub fn role(&self) -> Option<Role> {
         self.group.role
     }
+
+    /// The group's visibility facts as the route loaded them (plan 15
+    /// MR 3): what a write's in-transaction re-decision keeps, while the
+    /// role is re-read under its lock.
+    pub fn sight(&self) -> GroupSight {
+        self.group.sight
+    }
 }
 
 impl sealed::Sealed for GroupCtx {}
