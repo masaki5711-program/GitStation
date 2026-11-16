@@ -30,7 +30,12 @@ fn mr_text(m: &Value) -> String {
     let Some(a) = m.get("attempt").filter(|a| !a.is_null()) else {
         return format!("!{}: no autofix attempt", text(m, "iid"));
     };
-    let mut line = format!("!{} {} {}", text(m, "iid"), text(a, "state"), text(a, "trigger"));
+    let mut line = format!(
+        "!{} {} {}",
+        text(m, "iid"),
+        text(a, "state"),
+        text(a, "trigger")
+    );
     for key in ["fixer", "reason", "commit_sha", "error_code"] {
         if a.get(key).is_some_and(|v| !v.is_null()) {
             line.push_str(&format!(" {key}:{}", text(a, key)));
@@ -76,7 +81,10 @@ mod tests {
             mr_text(&m),
             "!4 refused pipeline_failed fixer:fmt reason:outside_fixer_paths error_code:FG-GIT-0037"
         );
-        assert_eq!(mr_text(&json!({"iid": 5, "attempt": null})), "!5: no autofix attempt");
+        assert_eq!(
+            mr_text(&json!({"iid": 5, "attempt": null})),
+            "!5: no autofix attempt"
+        );
         assert_eq!(project_text(&json!({"enabled": false})), "autofix: off");
     }
 }

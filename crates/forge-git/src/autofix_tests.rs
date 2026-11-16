@@ -259,7 +259,10 @@ async fn a_runner_bundle_on_the_input_commit_yields_its_tree() {
     assert!(!probe.success(), "the transport commit is quarantined");
     let dir = got.quarantine.dir().to_path_buf();
     let (transport, tree_id) = (got.transport.clone(), got.tree.clone());
-    f.git.migrate_quarantine(got.quarantine).await.expect("migrate");
+    f.git
+        .migrate_quarantine(got.quarantine)
+        .await
+        .expect("migrate");
     assert!(!dir.exists());
     // The transport commit's tree arrived in forge's repository.
     assert_eq!(tree_id, tree(&f.path, &transport));
@@ -280,7 +283,14 @@ async fn a_bundle_on_another_commit_is_a_precondition_mismatch() {
     let elsewhere = runner_bundle(&f, &other, &other, &[("a.txt", "3\n")], "elsewhere");
     let err = f
         .git
-        .import_autofix_bundle(&f.root, f.id, &elsewhere, &sha_of(&elsewhere), &input, limits())
+        .import_autofix_bundle(
+            &f.root,
+            f.id,
+            &elsewhere,
+            &sha_of(&elsewhere),
+            &input,
+            limits(),
+        )
         .await
         .expect_err("refused");
     assert_eq!(err.code(), ErrorCode::AutofixCandidateInvalid);
@@ -374,7 +384,8 @@ async fn tree_changes_carry_kinds_modes_and_ids() {
         .git
         .tree_changes(
             &f.root,
-            f.id, None,
+            f.id,
+            None,
             (&tree(&f.path, &a), &tree(&f.path, &b)),
             10,
             T,
@@ -401,7 +412,8 @@ async fn tree_changes_carry_kinds_modes_and_ids() {
         .git
         .blob_at_most(
             &f.root,
-            f.id, None,
+            f.id,
+            None,
             changes[1].new_id.as_ref().expect("id"),
             100,
             T,
@@ -411,7 +423,14 @@ async fn tree_changes_carry_kinds_modes_and_ids() {
     assert_eq!(blob.as_deref(), Some(b"2\n".as_slice()));
     let capped = f
         .git
-        .blob_at_most(&f.root, f.id, None, changes[1].new_id.as_ref().expect("id"), 1, T)
+        .blob_at_most(
+            &f.root,
+            f.id,
+            None,
+            changes[1].new_id.as_ref().expect("id"),
+            1,
+            T,
+        )
         .await
         .expect("blob");
     assert_eq!(capped, None);
@@ -419,7 +438,8 @@ async fn tree_changes_carry_kinds_modes_and_ids() {
         .git
         .tree_changes(
             &f.root,
-            f.id, None,
+            f.id,
+            None,
             (&tree(&f.path, &a), &tree(&f.path, &b)),
             2,
             T,
@@ -509,7 +529,8 @@ async fn a_root_entry_is_replaced_and_removed() {
         .git
         .tree_with_root_entry(
             &f.root,
-            f.id, None,
+            f.id,
+            None,
             &tree(&f.path, &head),
             ".forge-ci.yml",
             Some(&wanted),
@@ -537,7 +558,8 @@ async fn a_root_entry_is_replaced_and_removed() {
         .git
         .tree_with_root_entry(
             &f.root,
-            f.id, None,
+            f.id,
+            None,
             &tree(&f.path, &head),
             ".forge-ci.yml",
             None,
@@ -560,12 +582,32 @@ async fn a_root_entry_is_replaced_and_removed() {
 #[tokio::test]
 async fn a_refused_import_leaves_no_new_objects() {
     let f = fixture().await;
-    let input = commit(&f.path, &[("a.txt", "1
-")], &[]);
-    let other = commit(&f.path, &[("a.txt", "2
-")], &[]);
-    let two = runner_bundle(&f, &other, &other, &[("a.txt", "3
-")], "refused");
+    let input = commit(
+        &f.path,
+        &[(
+            "a.txt", "1
+",
+        )],
+        &[],
+    );
+    let other = commit(
+        &f.path,
+        &[(
+            "a.txt", "2
+",
+        )],
+        &[],
+    );
+    let two = runner_bundle(
+        &f,
+        &other,
+        &other,
+        &[(
+            "a.txt", "3
+",
+        )],
+        "refused",
+    );
     let before = object_files(&f.path);
     let err = f
         .git
@@ -575,8 +617,16 @@ async fn a_refused_import_leaves_no_new_objects() {
     assert_eq!(err.code(), ErrorCode::AutofixCandidateInvalid);
     assert_eq!(object_files(&f.path), before);
     // A wrong digest is refused before git reads the bundle.
-    let ok = runner_bundle(&f, &input, &input, &[("a.txt", "4
-")], "digest");
+    let ok = runner_bundle(
+        &f,
+        &input,
+        &input,
+        &[(
+            "a.txt", "4
+",
+        )],
+        "digest",
+    );
     let err = f
         .git
         .import_autofix_bundle(&f.root, f.id, &ok, &"0".repeat(64), &input, limits())
@@ -591,8 +641,14 @@ async fn a_refused_import_leaves_no_new_objects() {
 #[tokio::test]
 async fn an_oversized_unpacked_blob_is_refused() {
     let f = fixture().await;
-    let input = commit(&f.path, &[("a.txt", "1
-")], &[]);
+    let input = commit(
+        &f.path,
+        &[(
+            "a.txt", "1
+",
+        )],
+        &[],
+    );
     let big = "x".repeat(4096);
     let bundle = runner_bundle(&f, &input, &input, &[("a.txt", big.as_str())], "bomb");
     let before = object_files(&f.path);

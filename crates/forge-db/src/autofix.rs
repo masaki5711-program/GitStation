@@ -1,5 +1,5 @@
 //! The deterministic autofix's rows (M4 C14, ADR-0017 Amendment C14;
-//! migration 20261221100000): `forge.project_autofix` (a project's switch;
+//! migration 20261223100000): `forge.project_autofix` (a project's switch;
 //! no row = off) and `forge.autofix_attempts` (one fixer run for one merge
 //! request at one head). Every decision is forge-review's (`Autofixer`).
 //!

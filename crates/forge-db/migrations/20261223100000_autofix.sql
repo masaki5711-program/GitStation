@@ -125,4 +125,4 @@ ALTER TABLE forge.ci_pipelines RENAME CONSTRAINT ci_pipelines_source_c14 TO ci_p
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261221100000, "guarded_changes": []}');
+    '{"version": 20261223100000, "guarded_changes": []}');

@@ -482,7 +482,14 @@ impl Git {
             .map_err(|e| {
                 ForgeError::new(ErrorCode::StorageIoFailed)
                     .with_context("operation", "autofix_migrate")
-                    .with_context("reason", if e.is_panic() { "panicked" } else { "cancelled" })
+                    .with_context(
+                        "reason",
+                        if e.is_panic() {
+                            "panicked"
+                        } else {
+                            "cancelled"
+                        },
+                    )
             })??;
         q.migrated = true;
         tokio::fs::remove_dir_all(&q.dir).await.map_err(|e| {
@@ -633,6 +640,7 @@ impl Git {
 
     /// Tree `tree` with its root entry `name` replaced by `entry` (`None`:
     /// removed): `ls-tree -z` of the root, then `mktree -z`.
+    #[allow(clippy::too_many_arguments)] // the repository, the quarantine and the edit
     pub async fn tree_with_root_entry(
         &self,
         storage: &StorageRoot,
@@ -785,7 +793,10 @@ fn migrate_objects(dir: &Path, objects: &Path) -> Result<(), ForgeError> {
         std::fs::create_dir_all(&target).map_err(|e| storage_io("autofix_migrate", e))?;
         let mut files: Vec<PathBuf> = std::fs::read_dir(&pack)
             .map_err(|e| storage_io("autofix_migrate", e))?
-            .map(|e| e.map(|e| e.path()).map_err(|e| storage_io("autofix_migrate", e)))
+            .map(|e| {
+                e.map(|e| e.path())
+                    .map_err(|e| storage_io("autofix_migrate", e))
+            })
             .collect::<Result<_, _>>()?;
         // The index last: git uses a pack once its .idx is there.
         files.sort_by_key(|p| p.extension().is_some_and(|x| x == "idx"));
