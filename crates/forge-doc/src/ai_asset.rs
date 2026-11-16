@@ -223,7 +223,10 @@ fn ipv4_at(b: &[u8], at: usize) -> usize {
 /// with `::` or at least five colons (a time `08:15:00` is neither).
 fn ipv6_at(b: &[u8], at: usize) -> usize {
     let mut i = at;
-    while b.get(i).is_some_and(|c| c.is_ascii_hexdigit() || *c == b':') {
+    while b
+        .get(i)
+        .is_some_and(|c| c.is_ascii_hexdigit() || *c == b':')
+    {
         i += 1;
     }
     let Some(token) = b.get(at..i) else {
@@ -490,7 +493,9 @@ fn case_object(value: &serde_json::Value, text: &str, base_line: usize, out: &mu
             kind: "provenance",
         });
     }
-    let classification = map.get("classification").and_then(serde_json::Value::as_str);
+    let classification = map
+        .get("classification")
+        .and_then(serde_json::Value::as_str);
     if classification.is_some_and(|c| c.eq_ignore_ascii_case("confidential")) {
         out.push(RawData {
             line: at("classification"),

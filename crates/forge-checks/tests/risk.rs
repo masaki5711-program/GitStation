@@ -1090,10 +1090,24 @@ async fn a_head_assessed_with_the_setting_off_stops_once_it_is_turned_on() {
     let (w, base) = world_with_main().await;
     let head = w.commit(&ai_asset_files(), Some(&base));
     let off = w.assess(&head).await;
-    assert_eq!(off.conclusion, Some(CheckConclusion::Success), "{}", off.summary);
+    assert_eq!(
+        off.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        off.summary
+    );
     enable_ai_assets(&w, true).await;
     let on = w.assess(&head).await;
-    assert_eq!(on.conclusion, Some(CheckConclusion::Failure), "{}", on.summary);
-    assert!(on.summary.contains("- stop ai_case_raw_data"), "{}", on.summary);
+    assert_eq!(
+        on.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        on.summary
+    );
+    assert!(
+        on.summary.contains("- stop ai_case_raw_data"),
+        "{}",
+        on.summary
+    );
     w.t.drop_now().await;
 }

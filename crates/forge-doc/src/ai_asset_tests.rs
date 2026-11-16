@@ -321,7 +321,9 @@ fn synthetic_plant_codes_relative_times_and_version_numbers_are_not_raw_data() {
 #[test]
 fn a_case_without_a_synthetic_provenance_or_no_json_cannot_be_shown_safe() {
     let real = CASE.replace("\"replica\"", "\"production\"");
-    assert!(case_raw_data(P, &real).iter().any(|r| r.kind == "provenance"));
+    assert!(case_raw_data(P, &real)
+        .iter()
+        .any(|r| r.kind == "provenance"));
     let missing = CASE.replace("\"provenance\": \"replica\",", "");
     assert!(case_raw_data(P, &missing)
         .iter()
@@ -329,7 +331,9 @@ fn a_case_without_a_synthetic_provenance_or_no_json_cannot_be_shown_safe() {
     assert!(case_raw_data(P, "not json")
         .iter()
         .any(|r| r.kind == "not_json"));
-    assert!(case_raw_data(P, "[1, 2]").iter().any(|r| r.kind == "not_json"));
+    assert!(case_raw_data(P, "[1, 2]")
+        .iter()
+        .any(|r| r.kind == "not_json"));
     // A second key a reader would keep cannot hide the first.
     let twice = CASE.replace(
         "\"provenance\": \"replica\",",
@@ -446,7 +450,10 @@ fn asset_paths_are_recognised_and_ordinary_paths_are_not() {
 // ── review (MEDIUM 1, 2): evasion of the raw-data scan, case paths ──
 
 fn kinds(path: &str, text: &str) -> Vec<&'static str> {
-    case_raw_data(path, text).into_iter().map(|r| r.kind).collect()
+    case_raw_data(path, text)
+        .into_iter()
+        .map(|r| r.kind)
+        .collect()
 }
 
 const CLEAN: &str = "{\"id\": \"c1\", \"provenance\": \"synthetic\", \"expected\": {}";
@@ -461,20 +468,24 @@ fn escaped_and_reformatted_values_are_still_raw_data() {
         (r#""at": "2026-11-16""#, "absolute_timestamp"),
         (r#""at": "2026\/11\/16""#, "absolute_timestamp"),
         (r#""at": "2026/11/16 08:00""#, "absolute_timestamp"),
-        (r#""at": "2026-11-16""#, "absolute_timestamp"),
+        (r#""at": "\u0032026-11-16""#, "absolute_timestamp"),
         (r#""event_time": 1763251200"#, "absolute_timestamp"),
         (r#""started_at": "1763251200000""#, "absolute_timestamp"),
         (r#""host": "fe80::1ff:fe23:4567:890a""#, "ip_address"),
         (r#""host": "2001:db8::8a2e:370:7334""#, "ip_address"),
-        (r#""plant": "P104""#, "plant_code"),
+        (r#""plant": "\u0050104""#, "plant_code"),
         (r#""feedback": "x""#, "free_text"),
-        (r#""feedback": "x""#, "free_text"),
+        (r#""\u0066eedback": "x""#, "free_text"),
         (r#""FEEDBACK": "x""#, "free_text"),
         (r#""Staff-ID": "x""#, "person"),
         (r#""Operator_Name": "x""#, "person"),
     ] {
         let text = with_field(field);
-        assert!(kinds(P, &text).contains(&want), "{field}: {:?}", kinds(P, &text));
+        assert!(
+            kinds(P, &text).contains(&want),
+            "{field}: {:?}",
+            kinds(P, &text)
+        );
     }
 }
 
@@ -496,8 +507,15 @@ fn times_offsets_and_hashes_are_not_raw_data() {
 fn a_duplicate_key_anywhere_or_an_unreadable_case_fails_closed() {
     let nested = with_field(r#""expected2": {"a": 1, "a": 2}"#);
     assert!(kinds(P, &nested).contains(&"duplicate_key"));
-    let escaped = CLEAN.replace("\"provenance\": \"synthetic\"", "\"provenance\": \"production\", \"\u0070rovenance\": \"synthetic\"") + "}";
-    assert!(kinds(P, &escaped).contains(&"duplicate_key"), "{:?}", kinds(P, &escaped));
+    let escaped = CLEAN.replace(
+        "\"provenance\": \"synthetic\"",
+        "\"provenance\": \"production\", \"\\u0070rovenance\": \"synthetic\"",
+    ) + "}";
+    assert!(
+        kinds(P, &escaped).contains(&"duplicate_key"),
+        "{:?}",
+        kinds(P, &escaped)
+    );
     assert!(kinds(P, "{\"id\": ").contains(&"not_json"));
 }
 
@@ -513,13 +531,25 @@ fn every_file_under_evals_is_a_case_but_docs_and_baselines() {
     ] {
         assert!(is_case_path(path), "{path}");
     }
-    for path in ["evals/README.md", "evals/cases/NOTES.MD", "evals/baselines/m.json", "evals/.gitkeep", "src/evals.json"] {
+    for path in [
+        "evals/README.md",
+        "evals/cases/NOTES.MD",
+        "evals/baselines/m.json",
+        "evals/.gitkeep",
+        "src/evals.json",
+    ] {
         assert!(!is_case_path(path), "{path}");
     }
     // A misplaced case is still scanned, and the lint names the path.
-    let problems = run(&[("evals/case/a.json", r#"{"id": "a", "provenance": "synthetic", "at": "2026-11-16"}"#)]);
+    let problems = run(&[(
+        "evals/case/a.json",
+        r#"{"id": "a", "provenance": "synthetic", "at": "2026-11-16"}"#,
+    )]);
     let got = rules(&problems);
-    assert!(got.contains(&"case_path_invalid") && got.contains(&"case_raw_data"), "{problems:#?}");
+    assert!(
+        got.contains(&"case_path_invalid") && got.contains(&"case_raw_data"),
+        "{problems:#?}"
+    );
     let upper = run(&[("evals/cases/x.JSON", "{}")]);
     assert!(rules(&upper).contains(&"case_path_invalid"), "{upper:#?}");
 }
@@ -532,14 +562,20 @@ fn a_jsonl_case_is_one_object_per_line() {
 ";
     assert_eq!(kinds(path, ok), Vec::<&str>::new());
     let bad = "{\"id\": \"a\", \"provenance\": \"synthetic\"}
-{\"id\": \"b\", \"provenance\": \"real\", \"at\": \"2026\/11\/16\"}
+{\"id\": \"b\", \"provenance\": \"real\", \"at\": \"2026\\/11\\/16\"}
 ";
     let raw = case_raw_data(path, bad);
     assert!(raw.iter().all(|r| r.line == 2), "{raw:?}");
     let got: Vec<&str> = raw.iter().map(|r| r.kind).collect();
-    assert!(got.contains(&"provenance") && got.contains(&"absolute_timestamp"), "{raw:?}");
+    assert!(
+        got.contains(&"provenance") && got.contains(&"absolute_timestamp"),
+        "{raw:?}"
+    );
     // Not JSON lines: fail closed.
-    assert!(kinds(path, "a,b
-").contains(&"not_json"));
+    assert!(kinds(
+        path, "a,b
+"
+    )
+    .contains(&"not_json"));
     assert!(kinds(path, "").contains(&"not_json"));
 }

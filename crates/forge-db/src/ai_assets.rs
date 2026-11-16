@@ -190,13 +190,12 @@ async fn reassess(
     project: ProjectId,
     origin: forge_core::RequestId,
 ) -> Result<usize, ForgeError> {
-    let version: i64 = sqlx::query_scalar(
-        "SELECT version FROM forge.project_ai_assets WHERE project_id = $1",
-    )
-    .bind(project.get())
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(|e| query_error("ai_assets.version", e))?;
+    let version: i64 =
+        sqlx::query_scalar("SELECT version FROM forge.project_ai_assets WHERE project_id = $1")
+            .bind(project.get())
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|e| query_error("ai_assets.version", e))?;
     let heads: Vec<(i64, String)> = sqlx::query_as(
         "SELECT id, head_sha FROM forge.merge_requests \
          WHERE project_id = $1 AND state = 'open' AND head_sha IS NOT NULL \
