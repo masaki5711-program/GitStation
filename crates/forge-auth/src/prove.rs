@@ -344,8 +344,13 @@ impl ResourceCtx for ProjectCtx {
 pub enum LoadedTarget {
     /// A personal namespace and its user.
     User(UserId),
-    /// A group and the caller's effective role on it.
-    Group { id: GroupId, role: Option<Role> },
+    /// A group, the caller's effective role on it and how it is seen
+    /// (plan 15 MR 3).
+    Group {
+        id: GroupId,
+        role: Option<Role>,
+        sight: forge_core::GroupSight,
+    },
     /// A project and the caller's access facts.
     Project(LoadedProject),
 }
@@ -355,7 +360,7 @@ impl LoadedTarget {
     pub fn view(&self) -> NamespaceView {
         match *self {
             LoadedTarget::User(_) => NamespaceView::User,
-            LoadedTarget::Group { role, .. } => NamespaceView::Group { role },
+            LoadedTarget::Group { role, sight, .. } => NamespaceView::Group { role, sight },
             LoadedTarget::Project(p) => NamespaceView::Project(ProjectView {
                 visibility: p.visibility,
                 role: p.role,

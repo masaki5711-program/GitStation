@@ -41,6 +41,7 @@ async fn group(
     owner: UserId,
 ) -> CreatedGroup {
     let new = NewGroup {
+        visibility: forge_core::Visibility::Internal,
         segment: segment.to_owned(),
         parent: parent.map(|p| p.namespace_id),
         display_name: format!("Group {segment}"),
@@ -88,7 +89,10 @@ async fn manage_members(
         forge_auth::AccountKind::Human,
     );
     let resource = Resource::Membership {
-        scope: MembershipScope::Group { role: roles.native },
+        scope: MembershipScope::Group {
+            role: roles.native,
+            sight: forge_core::GroupSight::INTERNAL,
+        },
         change,
         removes_last_owner: false,
     };

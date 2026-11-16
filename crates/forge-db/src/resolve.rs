@@ -28,12 +28,15 @@
 use forge_core::ids::{GroupId, NamespaceId, ProjectId, TombstoneId, UserId};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    LookupPath, NamespaceKind, NamespacePath, ProjectAccess, ProjectRecord, ProjectRepository,
-    RepoId, RepositoryState, Resolution, Resolved, ResolvedTarget, Visibility,
+    GroupSight, LookupPath, NamespaceKind, NamespacePath, ProjectAccess, ProjectRecord,
+    ProjectRepository, RepoId, RepositoryState, Resolution, Resolved, ResolvedTarget, Visibility,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::roles::{chain_cte, chain_role_columns, fold_chain, MemberRoles, CAP};
+use crate::roles::{
+    chain_cte, chain_private_agg, chain_private_column, chain_role_columns, fold_chain,
+    viewer_above_cte, MemberRoles, CAP,
+};
 use crate::{read_query_error, Db};
 
 /// `$1` the folded path (`LookupPath::full_path`), `$2` the viewer (NULL =
@@ -44,7 +47,11 @@ use crate::{read_query_error, Db};
 ///   (`old_path` unique) — never a prefix, never a chain of tombstones.
 /// - `target`: the live namespace, else a `moved` tombstone's namespace.
 /// - `chain` / `steps`: the target's parent chain with the viewer's role at
-///   each step (the role loaders' CTE).
+///   each step (the role loaders' CTE) and whether the step is a private
+///   group (plan 15 MR 3, `chain_private`: the effective visibility).
+/// - `member_ns` / `above`: the viewer's memberships and their ancestors
+///   (`roles::viewer_above_cte!`), read only for a group target
+///   (`has_visible_descendant`, plan 15 MR 3).
 /// - `agg`: one row — the steps, their roles, and the target's path
 ///   rebuilt from the segments (top first); `reaches_top` = the chain ends
 ///   at a top-level namespace.
@@ -64,18 +71,24 @@ pub(crate) const RESOLVE_SQL: &str = concat!(
     chain_cte!("id = (SELECT id FROM target)"),
     ", steps AS (SELECT c.segment, c.parent_id AS up, ",
     chain_role_columns!(),
+    ", ",
+    chain_private_column!(),
     " FROM chain c), \
        agg AS (SELECT array_agg(step ORDER BY step) AS steps, \
          array_agg(truncated ORDER BY step) AS truncs, \
-         array_agg(role ORDER BY step) AS roles, \
-         string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
+         array_agg(role ORDER BY step) AS roles, ",
+    chain_private_agg!(),
+    ", string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
          coalesce(bool_or(truncated), false) AS truncated, \
-         coalesce(bool_or(up IS NULL), false) AS reaches_top FROM steps) \
-     SELECT l.id AS live_id, tb.id AS tombstone_id, tb.kind AS tombstone_kind, \
+         coalesce(bool_or(up IS NULL), false) AS reaches_top FROM steps), ",
+    viewer_above_cte!(),
+    " SELECT l.id AS live_id, tb.id AS tombstone_id, tb.kind AS tombstone_kind, \
        n.id AS target_id, n.kind AS target_kind, n.owner_id AS target_owner, \
        p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
        r.id AS repository_id, r.state AS repository_state, \
-       a.steps, a.truncs, a.roles, a.rebuilt, \
+       a.steps, a.truncs, a.roles, a.chain_private, a.rebuilt, \
+       (n.kind = 'group' AND EXISTS (SELECT 1 FROM above ab WHERE ab.parent_id = n.id)) \
+         AS has_visible_descendant, \
        (NOT a.truncated AND a.reaches_top AND EXISTS (SELECT 1 FROM forge.namespaces x \
          WHERE x.full_path = a.rebuilt AND x.id = n.id)) AS confirmed \
      FROM agg a \
@@ -99,15 +112,18 @@ pub(crate) const PROJECT_ACCESS_SQL: &str = concat!(
     chain_cte!("kind = 'project' AND owner_id = $1"),
     ", steps AS (SELECT c.segment, c.parent_id AS up, ",
     chain_role_columns!(),
+    ", ",
+    chain_private_column!(),
     " FROM chain c), \
        agg AS (SELECT array_agg(step ORDER BY step) AS steps, \
          array_agg(truncated ORDER BY step) AS truncs, \
-         array_agg(role ORDER BY step) AS roles, \
-         string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
+         array_agg(role ORDER BY step) AS roles, ",
+    chain_private_agg!(),
+    ", string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
          coalesce(bool_or(truncated), false) AS truncated, \
          coalesce(bool_or(up IS NULL), false) AS reaches_top FROM steps) \
      SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
-       a.steps, a.truncs, a.roles, \
+       a.steps, a.truncs, a.roles, a.chain_private, \
        n.id AS namespace_id, n.full_path, \
        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
        p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state, \
@@ -134,6 +150,9 @@ struct ResolveRow {
     chain: ChainRoles,
     rebuilt: Option<String>,
     confirmed: Option<bool>,
+    /// A group target: the viewer holds a role strictly below it (plan 15
+    /// MR 3); NULL / false otherwise.
+    has_visible_descendant: Option<bool>,
 }
 
 /// The project columns (NULL when the target is not a project or absent).
@@ -145,12 +164,14 @@ struct ProjectFacts {
 }
 
 /// The chain, one array element per step in step order (NULL arrays when
-/// there is no target).
+/// there is no target), and whether a group on it is private
+/// (`roles::chain_private_agg!`, plan 15 MR 3).
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct ChainRoles {
     steps: Option<Vec<i32>>,
     truncs: Option<Vec<bool>>,
     roles: Option<Vec<Option<String>>>,
+    chain_private: Option<bool>,
 }
 
 /// The one row of [`PROJECT_ACCESS_SQL`] (also one row of a project page,
@@ -197,6 +218,16 @@ impl ChainRoles {
         self.steps.as_ref().is_none_or(Vec::is_empty)
     }
 
+    /// The widest visibility the chain allows (plan 15 MR 3, "narrowest
+    /// wins"): `Private` when a group on it is private — and when the
+    /// aggregate is missing (fail closed) — else `Internal`.
+    pub(crate) fn ceiling(&self) -> Visibility {
+        match self.chain_private {
+            Some(false) => Visibility::Internal,
+            Some(true) | None => Visibility::Private,
+        }
+    }
+
     /// The viewer's roles over the chain ([`fold_chain`]: `FG-DB-0018` on a
     /// truncated chain or an unknown role). An empty chain has no role.
     pub(crate) fn fold(
@@ -226,8 +257,13 @@ impl ChainRoles {
 
 impl ProjectFacts {
     /// The project's access facts with the viewer's `role`; `None` when the
-    /// projects row is absent.
-    fn access(self, role: Option<forge_core::Role>) -> Result<Option<ProjectAccess>, ForgeError> {
+    /// projects row is absent. The visibility is the effective one: the
+    /// stored value narrowed by the chain's `ceiling` (plan 15 MR 3).
+    fn access(
+        self,
+        role: Option<forge_core::Role>,
+        ceiling: Visibility,
+    ) -> Result<Option<ProjectAccess>, ForgeError> {
         let Some(project_id) = self.project_id else {
             return Ok(None);
         };
@@ -238,7 +274,7 @@ impl ProjectFacts {
                 .with_context("raw", bounded(&raw)));
         };
         Ok(Some(ProjectAccess {
-            visibility,
+            visibility: narrowest(visibility, ceiling),
             role,
             pending_deletion: self.pending_deletion.unwrap_or(false),
         }))
@@ -281,6 +317,15 @@ impl RepositoryColumns {
     }
 }
 
+/// The narrower of two visibilities (`private` < `internal`).
+pub(crate) fn narrowest(a: Visibility, b: Visibility) -> Visibility {
+    match (a, b) {
+        (Visibility::Internal, Visibility::Internal) => Visibility::Internal,
+        _ => Visibility::Private,
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // one statement's columns, read together
 fn resolved(
     namespace_id: i64,
     kind: Option<String>,
@@ -288,6 +333,7 @@ fn resolved(
     project: ProjectFacts,
     repository: RepositoryColumns,
     chain: ChainRoles,
+    descendant: Option<bool>,
     viewer: Option<UserId>,
 ) -> Result<Resolved, ForgeError> {
     let raw = kind.unwrap_or_default();
@@ -302,15 +348,20 @@ fn resolved(
             .with_context("reason", "namespace_row_incomplete")
             .with_context("namespace_id", namespace_id)
     })?;
+    let ceiling = chain.ceiling();
     let roles = chain.fold("namespace", namespace_id, viewer)?;
     let target = match kind {
         NamespaceKind::User => ResolvedTarget::User(UserId::new(owner)),
         NamespaceKind::Group => ResolvedTarget::Group {
             id: GroupId::new(owner),
             viewer_role: roles.native,
+            sight: GroupSight {
+                visibility: ceiling,
+                descendant: descendant.unwrap_or(false),
+            },
         },
         NamespaceKind::Project => {
-            let access = project.access(roles.native)?.ok_or_else(|| {
+            let access = project.access(roles.native, ceiling)?.ok_or_else(|| {
                 invalid("namespace_without_project")
                     .with_context("namespace_id", namespace_id)
                     .with_context("project_id", owner)
@@ -348,6 +399,7 @@ fn interpret(row: ResolveRow, viewer: Option<UserId>) -> Result<Resolution, Forg
                 state: row.repository_state,
             },
             row.chain,
+            row.has_visible_descendant,
             viewer,
         )?;
         return Ok(Resolution::Live(resolved));
@@ -378,6 +430,7 @@ fn interpret(row: ResolveRow, viewer: Option<UserId>) -> Result<Resolution, Forg
                     state: row.repository_state,
                 },
                 row.chain,
+                row.has_visible_descendant,
                 viewer,
             )?;
             let (Some(true), Some(rebuilt)) = (row.confirmed, row.rebuilt) else {
@@ -484,8 +537,9 @@ pub(crate) fn interpret_project(
     if row.chain.is_empty() {
         return Err(invalid("project_without_namespace").with_context("project_id", id));
     }
+    let ceiling = row.chain.ceiling();
     let roles = row.chain.fold("project", id, viewer)?;
-    let Some(access) = row.project.access(roles.native)? else {
+    let Some(access) = row.project.access(roles.native, ceiling)? else {
         return Ok(None);
     };
     if row.confirmed != Some(true) {
@@ -544,11 +598,19 @@ const PARENT_SQL: &str = concat!(
     chain_cte!("id = $1"),
     ", steps AS (SELECT ",
     chain_role_columns!(),
+    ", ",
+    chain_private_column!(),
     " FROM chain c), \
        agg AS (SELECT array_agg(step ORDER BY step) AS steps, \
          array_agg(truncated ORDER BY step) AS truncs, \
-         array_agg(role ORDER BY step) AS roles FROM steps) \
-     SELECT n.kind, n.owner_id, u.kind AS owner_kind, a.steps, a.truncs, a.roles \
+         array_agg(role ORDER BY step) AS roles, ",
+    chain_private_agg!(),
+    " FROM steps), ",
+    viewer_above_cte!(),
+    " SELECT n.kind, n.owner_id, u.kind AS owner_kind, a.steps, a.truncs, a.roles, \
+       a.chain_private, \
+       (n.kind = 'group' AND EXISTS (SELECT 1 FROM above ab WHERE ab.parent_id = n.id)) \
+         AS has_visible_descendant \
      FROM agg a LEFT JOIN forge.namespaces n ON n.id = $1 \
      LEFT JOIN forge.users u ON n.kind = 'user' AND u.id = n.owner_id"
 );
@@ -561,16 +623,19 @@ struct ParentRow {
     owner_kind: Option<String>,
     #[sqlx(flatten)]
     chain: ChainRoles,
+    has_visible_descendant: Option<bool>,
 }
 
 /// The namespace a project would be created under, as `viewer` sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParentRecord {
-    /// A group namespace and the viewer's native role on the group.
+    /// A group namespace, the viewer's native role on the group and its
+    /// visibility facts (plan 15 MR 3).
     Group {
         namespace: NamespaceId,
         group: GroupId,
         role: Option<forge_core::Role>,
+        sight: GroupSight,
     },
     /// A personal namespace, its owner and the owner's `users.kind`.
     User {
@@ -608,13 +673,19 @@ pub async fn load_parent(
     let id = namespace.get();
     match NamespaceKind::parse(&kind) {
         Some(NamespaceKind::Group) => {
+            let visibility = row.chain.ceiling();
             let roles = row.chain.fold("namespace", id, viewer)?;
             Ok(Some(ParentRecord::Group {
                 namespace,
                 group: GroupId::new(owner),
                 role: roles.native,
+                sight: GroupSight {
+                    visibility,
+                    descendant: row.has_visible_descendant.unwrap_or(false),
+                },
             }))
         }
+
         Some(NamespaceKind::User) => {
             let raw = row.owner_kind.ok_or_else(|| {
                 invalid("namespace_owner_missing").with_context("namespace_id", id)

@@ -25,7 +25,7 @@ use crate::change::{
 };
 use crate::jobs::{Enqueued, JobId};
 use crate::namespaces::{check_parent_path, is_tombstoned, lock_path, path_taken};
-use crate::roles::{lock_roles, RoleAnchor};
+use crate::roles::{chain_private_on, lock_roles, RoleAnchor};
 use crate::{query_error, repositories, Db};
 
 mod delete;
@@ -457,6 +457,13 @@ where
         return Err(path_taken("tombstoned"));
     }
     let visibility = new.visibility;
+    // Never wider than the parent's chain (plan 15 MR 3, "narrowest
+    // wins"): the parent namespace is locked `FOR SHARE` by `place`.
+    if visibility == Visibility::Internal && tx.step(|c| chain_private_on(c, parent_ns)).await? {
+        return Err(ForgeError::new(ErrorCode::VisibilityAboveParent)
+            .with_context("reason", "project_above_private")
+            .with_context("parent_namespace_id", parent_ns.get()));
+    }
     // created_by (plan 15 MR5): the creator, on every creation path (all
     // of them reach this one statement).
     let creator = new.creator;

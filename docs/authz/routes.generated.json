@@ -540,6 +540,15 @@
     "word": "fixed"
   },
   {
+    "action": "GroupVisibilityChange",
+    "method": "PATCH",
+    "path": "/api/v1/groups/{id}/visibility",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ActAsAssertionClaim",
     "method": "POST",
     "path": "/api/v1/integrations/{id}/act-as/claim",

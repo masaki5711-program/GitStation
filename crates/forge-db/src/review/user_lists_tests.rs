@@ -58,6 +58,7 @@ async fn every_scope_statement_runs_and_reads_its_candidates() {
         &t.db,
         &system("req-acme"),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "acme".into(),
             parent: None,
             display_name: "Acme".into(),

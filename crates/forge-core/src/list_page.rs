@@ -32,6 +32,10 @@ pub struct GroupListing {
     pub description: String,
     /// `groups.created_at` in UTC, RFC 3339.
     pub created_at: String,
+    /// The group's own stored `groups.visibility` (plan 15 MR 3).
+    pub own_visibility: crate::Visibility,
+    /// The effective visibility and the viewer's roles below.
+    pub sight: crate::GroupSight,
 }
 
 /// Projects in id order, for `GET /api/v1/projects`.

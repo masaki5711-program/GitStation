@@ -37,6 +37,7 @@ async fn the_operator_moves_past_the_rate_limit_as_system() {
         &t.db,
         &system("req-cli-acme"),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "acme".into(),
             parent: None,
             display_name: "acme".into(),

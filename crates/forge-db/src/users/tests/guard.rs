@@ -57,6 +57,7 @@ pub(super) async fn group_under(
         &t.db,
         &ctx(&format!("req-group-{segment}")),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: segment.to_owned(),
             parent: parent.map(|p| p.namespace_id),
             display_name: format!("Group {segment}"),

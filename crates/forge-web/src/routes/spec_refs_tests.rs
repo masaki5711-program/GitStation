@@ -135,6 +135,7 @@ impl forge_core::NamespaceResolver for World {
                 target: ResolvedTarget::Group {
                     id: GroupId::new(2),
                     viewer_role: Some(Role::Owner),
+                    sight: forge_core::GroupSight::INTERNAL,
                 },
             }),
             other => known(other).map_or(Resolution::Absent, |k| Resolution::Live(live(k))),

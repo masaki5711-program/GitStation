@@ -136,6 +136,7 @@ fn script() -> Script {
             target: ResolvedTarget::Group {
                 id: GroupId::new(3),
                 viewer_role: None,
+                sight: forge_core::GroupSight::INTERNAL,
             },
         }),
     );

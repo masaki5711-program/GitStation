@@ -41,6 +41,7 @@ mod matrix_rows_conditions;
 mod matrix_rows_dev_status;
 mod matrix_rows_discussion;
 mod matrix_rows_feed;
+mod matrix_rows_group_visibility;
 mod matrix_rows_integrations;
 mod matrix_rows_merge;
 mod matrix_rows_people;
@@ -89,7 +90,7 @@ mod spec_ref;
 pub use act_as::{act_as_admission, act_as_route};
 pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmIntegration};
 pub use action::{ActAsRule, Action, CiRule};
-pub use authorize::authorize;
+pub use authorize::{authorize, group_seen, GroupSeen};
 pub use auto_merge::{auto_merge_may, AutoMergeCtx};
 pub use autofix::{autofix_may, AutofixCtx};
 pub use ci_output::{authorize_ci_artifact, authorize_ci_output, CiOutputAllowed};
@@ -101,11 +102,11 @@ pub use job::authorize_pinned_copy;
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
-    AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject,
-    CodeownersToggle, CopyMark, Credential, DeploymentView, IntegrationFeedView, JobCredential,
-    JobTokenState, MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState,
-    NamespaceView, PersonalDisclosure, PinnedCopy, Principal, ProjectView, RefKind, RefProtection,
-    RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView,
+    AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject, CodeownersToggle, CopyMark,
+    Credential, DeploymentView, GroupSight, IntegrationFeedView, JobCredential, JobTokenState,
+    MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView,
+    PersonalDisclosure, PinnedCopy, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
+    ResolvedVia, Resource, Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView,
     TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility, SSH_KEY_SCOPES,
 };
 pub use prove::{

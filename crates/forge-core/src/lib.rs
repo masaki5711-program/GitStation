@@ -140,7 +140,7 @@ pub use ref_pattern::RefPattern;
 pub use ref_protection::{ProtectionLoader, ProtectionRule, ProtectionRules};
 pub use repository::RepositoryState;
 pub use request_id::RequestId;
-pub use role::{Role, Visibility};
+pub use role::{GroupSight, Role, Visibility};
 pub use scope::Scope;
 pub use user_kind::UserKind;
 pub use web_path::{
