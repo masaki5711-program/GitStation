@@ -646,6 +646,19 @@
       "projectStopped": "Auto-merge of this project is under an emergency stop (since {{at}}).",
       "instanceStopped": "An administrator stopped auto-merge for everyone (since {{at}})."
     },
+    "aiAssets": {
+      "title": "AI assets",
+      "intro": "Turn this on only when this repository holds the PFS central AI's assets (skills, playbooks, models, evaluation cases). Then the asset lint, the rule that stops auto-merge when an evaluation case holds raw data, the rule that shows an asset change on the merge request as \"AI asset change\", and asset releases apply to this project. No other project changes.",
+      "on": "AI asset checks and rules: on",
+      "off": "AI asset checks and rules: off (default)",
+      "changedAt": "Last changed: {{at}}",
+      "turnOn": "Turn AI asset checks on",
+      "turnOff": "Turn AI asset checks off",
+      "turnedOn": "AI asset checks and rules are on.",
+      "turnedOff": "AI asset checks and rules are off.",
+      "maintainerOnly": "Only a Maintainer or above can change this, signed in on the web (never an agent, a bot or a service account).",
+      "offKeeps": "Turning it off keeps the history, past releases, signatures and deployment records; only the checks, the rules and new releases stop."
+    },
     "docLint": {
       "title": "Document checks during a migration",
       "intro": "Broken references between documents are errors in the forge/doc-lint check. While documents are being moved into GitStation, you can treat them as warnings until a date. After that date they are errors again by themselves.",
@@ -1592,6 +1605,7 @@
       "held": "a person took it out of the merge queue, so this version is not merged automatically.",
       "queued": "in the merge queue; it merges when the test is green.",
       "queued_warning": "in the merge queue with a warning; it merges when the test is green.",
+      "queued_ai_asset": "in the merge queue with a warning: it changes AI assets. It merges when the test is green.",
       "queued_by_person": "a person put it in the merge queue."
     },
     "next": {

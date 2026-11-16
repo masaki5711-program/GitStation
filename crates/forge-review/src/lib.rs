@@ -48,6 +48,7 @@ pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, UserNa
 
 pub mod activity;
 mod after_version;
+mod ai_assets_settings;
 pub mod approvals;
 mod auto_merge_settings;
 pub mod conflicts;
@@ -73,6 +74,7 @@ pub use activity::{
     MAX_INVOLVED_PROJECTS, SHOWN_TYPES,
 };
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
+pub use forge_db::ai_assets::AiAssetsSetting;
 pub use forge_db::review::auto_merge::{
     AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, StopMark, StoredState as AutoMergeState,
 };

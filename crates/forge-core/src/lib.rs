@@ -3,6 +3,7 @@
 
 pub mod act_as;
 // Plan 17 P17-2 (ADR-0034): the AI evaluation report and its gates.
+pub mod ai_assets;
 pub mod ai_eval;
 pub mod approval;
 pub mod audit_details;

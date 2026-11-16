@@ -5,7 +5,9 @@
 //! a database or the network.
 
 /// Every dependency forge-doc may have (normal and build).
-const ALLOWED: &[&str] = &["forge-errors", "yaml-rust2", "regex"];
+/// `toml` and `serde_json`: the AI assets' formats (plan 17 P17-3,
+/// ADR-0035), pure parsers.
+const ALLOWED: &[&str] = &["forge-errors", "yaml-rust2", "regex", "toml", "serde_json"];
 
 fn names(table: Option<&toml::Value>) -> Vec<String> {
     table

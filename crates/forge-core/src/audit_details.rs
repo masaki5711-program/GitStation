@@ -1,6 +1,7 @@
 //! Typed `audit_log.details` (ADR-0016 §9). Variants carry no personal data
 //! (no email, employee number, external id, display name, IP).
 
+use crate::ai_assets::AiAssetsChange;
 use crate::approval::ApprovalRuleChange;
 use crate::auto_merge::AutoMergeChange;
 use crate::checks::CheckRunChange;
@@ -433,6 +434,10 @@ pub enum AuditDetails {
     /// project or the instance, no event). Shapes:
     /// [`AutoMergeChange::to_value`].
     AutoMerge(AutoMergeChange),
+    /// Plan 17 P17-3: a person turned the project's `ai_assets.enabled` on
+    /// or off (resource the project, no event). Shape:
+    /// [`AiAssetsChange::to_value`].
+    AiAssets(AiAssetsChange),
     /// M4 C6: a Maintainer set or deleted a CI variable (resource the
     /// project, no event; never the value). Shapes:
     /// [`CiVariableChange::to_value`].
@@ -617,6 +622,7 @@ impl AuditDetails {
             Self::Runner(change) => change.action(),
             Self::MergeQueue(change) => change.action(),
             Self::AutoMerge(change) => change.action(),
+            Self::AiAssets(change) => change.action(),
             Self::CiVariable(change) => change.action(),
             Self::Deploy(change) => change.action(),
         }
@@ -684,6 +690,7 @@ impl AuditDetails {
             | Self::Runner(_)
             | Self::MergeQueue(_)
             | Self::AutoMerge(_)
+            | Self::AiAssets(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => None,
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
@@ -1133,6 +1140,7 @@ impl AuditDetails {
             Self::Runner(change) => change.to_value(),
             Self::MergeQueue(change) => change.to_value(),
             Self::AutoMerge(change) => change.to_value(),
+            Self::AiAssets(change) => change.to_value(),
             Self::CiVariable(change) => change.to_value(),
             Self::Deploy(change) => change.to_value(),
         }
@@ -1224,6 +1232,7 @@ impl AuditDetails {
             | Self::Runner(_)
             | Self::MergeQueue(_)
             | Self::AutoMerge(_)
+            | Self::AiAssets(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => self.to_value(),
         }

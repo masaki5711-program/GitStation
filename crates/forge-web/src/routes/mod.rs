@@ -8,6 +8,7 @@ pub mod act_as;
 pub mod assets;
 pub mod auth;
 // M4 C9: auto-merge's mode and emergency stops.
+pub mod ai_assets;
 pub mod auto_merge;
 pub mod browse;
 pub mod checks;

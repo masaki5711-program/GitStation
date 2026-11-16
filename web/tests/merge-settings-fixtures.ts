@@ -51,6 +51,18 @@ export function docLintMigration(over: Record<string, unknown> = {}) {
   };
 }
 
+/** A project's ai_assets.enabled (plan 17 P17-3) as the API answers it: off. */
+export function aiAssets(over: Record<string, unknown> = {}) {
+  return {
+    project_id: 7,
+    enabled: false,
+    changed_by: null,
+    changed_at: null,
+    viewer: { can_change: false },
+    ...over,
+  };
+}
+
 export function settingsRoutes(over: Record<string, Handler> = {}): Record<string, Handler> {
   return {
     ...signedIn(),
@@ -63,6 +75,8 @@ export function settingsRoutes(over: Record<string, Handler> = {}): Record<strin
     [`GET ${API}/integration-bindings`]: () => json(200, { items: [] }),
     // Plan 13 Q13: the document lint migration (none).
     [`GET ${API}/doc-lint/migration`]: () => json(200, docLintMigration({ viewer: { can_manage: true } })),
+    // Plan 17 P17-3: ai_assets.enabled (off).
+    [`GET ${API}/ai-assets`]: () => json(200, aiAssets({ viewer: { can_change: true } })),
     // The rules name their approvers: no member list is read for them.
     'GET /api/v1/groups': () =>
       page([

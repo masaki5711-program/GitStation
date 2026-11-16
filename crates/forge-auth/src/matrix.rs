@@ -1276,6 +1276,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_pipelines::PIPELINE_ROWS.as_slice(),
         crate::matrix_rows_merge_queue::MERGE_QUEUE_ROWS.as_slice(),
         crate::matrix_rows_auto_merge::AUTO_MERGE_ROWS.as_slice(),
+        crate::matrix_rows_ai_assets::AI_ASSETS_ROWS,
         &crate::matrix_rows_auto_merge::generated_denies(),
         crate::matrix_rows_ci_outputs::CI_OUTPUT_ROWS.as_slice(),
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,

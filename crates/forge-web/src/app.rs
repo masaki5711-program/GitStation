@@ -610,7 +610,7 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    auto_merge_routes(deploy_routes(user_activity_routes(
+    ai_assets_routes(auto_merge_routes(deploy_routes(user_activity_routes(
         user_merge_request_routes(runner_routes(pipeline_routes(merge_queue_routes(
             doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
                 webhook_routes(notification_routes(check_routes(dev_status_routes(
@@ -622,7 +622,32 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
                 )))),
             )))),
         )))),
-    )))
+    ))))
+}
+
+/// A project's `ai_assets.enabled` (plan 17 P17-3, ADR-0035).
+fn ai_assets_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::ai_assets as a;
+    registry
+        .route_with(
+            Verb::Get,
+            a::ONE,
+            Action::ProjectRead,
+            "A project's ai_assets.enabled: whether the AI asset lint, the forge/risk rules ai_case_raw_data (stop) and ai_asset (warn) and asset releases apply (off by default), who changed it last and when",
+            a::AiAssetsOf,
+            a::read,
+        )
+        .responds::<a::AiAssetsBody>(Verb::Get, a::ONE)
+        .route_with_body(
+            Verb::Put,
+            a::ONE,
+            Action::AiAssetsSettingManage,
+            "Turn a project's ai_assets.enabled on or off (people only; Maintainer and above in a web session, never an agent, a bot, a service account or the auto-merge principal); audited. Off stops the lint, the two rules and new releases only",
+            a::MAX_BODY,
+            a::AiAssetsOf,
+            a::put,
+        )
+        .responds::<a::AiAssetsBody>(Verb::Put, a::ONE)
 }
 
 /// Auto-merge (M4 C9, ADR-0017 Amendment 2026-11-13): a project's

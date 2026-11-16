@@ -385,3 +385,41 @@ fn a_partly_assessed_head_is_not_assessed_never_a_warning() {
         );
     }
 }
+
+/// Plan 17 §1.7 (P17-3): raw data in an AI evaluation case stops auto-merge
+/// as a leak (no new class); an AI asset change only warns.
+#[test]
+fn ai_case_raw_data_is_a_leak_stop_and_ai_asset_only_warns() {
+    assert_eq!(rule_class("ai_case_raw_data"), Some(StopClass::Leak));
+    assert_eq!(rule_class("ai_asset"), None);
+    let facts = Facts {
+        risk: risk_failure("ai_case_raw_data"),
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&facts),
+        Verdict::Stopped(Stop {
+            class: StopClass::Leak,
+            reason: "risk_stop",
+            detail: Some("ai_case_raw_data".to_owned()),
+        })
+    );
+    // A secret beside it still shows the same class.
+    let summary = "STOP: 2 stop, 1 warn.\n- stop ai_case_raw_data evals/cases/a/b.json:3 — r\n- stop agent_config .claude/x — r\n- warn ai_asset evals/cases/a/b.json — r";
+    assert_eq!(
+        deterministic_layer(run(CheckConclusion::Failure), Some(summary)),
+        RiskVerdict::Stop {
+            class: StopClass::Leak,
+            rule: Some("ai_case_raw_data"),
+        }
+    );
+    let warned = "WARN: 0 stop, 1 warn [FG-REVIEW-0024].\n- warn ai_asset skills/pe-x.md — r [FG-REVIEW-0024]";
+    let risk = deterministic_layer(run(CheckConclusion::Neutral), Some(warned));
+    assert_eq!(risk, RiskVerdict::Clear { warned: true });
+    let facts = Facts {
+        risk,
+        ..clear_facts()
+    };
+    assert_eq!(decide(&facts), Verdict::Enqueue { warned: true });
+    assert!(!NOT_ASSESSED_RULES.contains(&"ai_asset"));
+}

@@ -14,6 +14,11 @@
 //! [`assess`] turns that into the run; `forge_db::checks::record_forge_check_run`
 //! writes it (no reporter: forge's own worker).
 //!
+//! The AI asset rules (`ai_case_raw_data` stop, `ai_asset` warn; plan 17
+//! §1.7, ADR-0035) run only for a project whose `ai_assets.enabled` is on,
+//! read once per run: any other project's `evals/` or `skills/` is never
+//! matched, and its runs are exactly what they were.
+//!
 //! Conclusions: `success` — nothing found; `neutral` — only `warn` findings,
 //! or part of the head could not be assessed (`FG-REVIEW-0024` /
 //! `FG-REVIEW-0025`: never a `success`); `failure` — a `stop` rule
@@ -30,9 +35,9 @@ use forge_core::checks::{
 };
 use forge_core::namespace_resolver::ProjectAccessLoader;
 use forge_core::risk::{
-    content_findings, content_kind, level, mass_deletion, path_findings, sort_findings,
-    symlink_findings, ChangeStatus, ChangedFile, ContentKind, Finding, RiskLevel,
-    MASS_DELETE_FILES, MASS_DELETE_LINES, MAX_CHANGED_FILES,
+    ai_asset_path_findings, ai_case_content_kind, content_findings, content_kind, level,
+    mass_deletion, path_findings, sort_findings, symlink_findings, ChangeStatus, ChangedFile,
+    ContentKind, Finding, RiskLevel, MASS_DELETE_FILES, MASS_DELETE_LINES, MAX_CHANGED_FILES,
 };
 use forge_core::{CheckName, ObjectId, RefName, RepoId, RepositoryState, RequestId};
 use forge_db::change::{Actor, ChangeContext};
@@ -459,6 +464,20 @@ impl Risk {
                 .with_context("project_id", project.get())
                 .with_context("state", repo.state.as_str()));
         }
+        // Plan 17 §0.4: the AI asset rules only for an opted-in project.
+        let ai_assets = match tokio::time::timeout(
+            LOOKUP_TIMEOUT,
+            forge_db::ai_assets::setting(&self.db, project),
+        )
+        .await
+        {
+            Ok(setting) => setting?.enabled,
+            Err(_) => {
+                return Err(ForgeError::new(ErrorCode::RequestTimeout)
+                    .with_context("operation", "ai_assets_setting")
+                    .with_context("timeout_ms", LOOKUP_TIMEOUT.as_millis()))
+            }
+        };
         let mut evaluation = Evaluation {
             targets: Vec::with_capacity(targets.targets.len()),
             general: Vec::new(),
@@ -470,19 +489,22 @@ impl Risk {
             evaluation.general.push(rule("targets_not_assessed")?);
         }
         for target in &targets.targets {
-            evaluation
-                .targets
-                .push(self.target(repo.id, target, &request.head).await?);
+            evaluation.targets.push(
+                self.target(repo.id, target, &request.head, ai_assets)
+                    .await?,
+            );
         }
         Ok(Some(evaluation))
     }
 
-    /// One target branch: the head's diff from the merge base.
+    /// One target branch: the head's diff from the merge base (`ai_assets`:
+    /// the project's `ai_assets.enabled`, module docs).
     async fn target(
         &self,
         repo: RepoId,
         target: &RefName,
         head: &ObjectId,
+        ai_assets: bool,
     ) -> Result<TargetFindings, ForgeError> {
         let short = target
             .as_str()
@@ -540,6 +562,9 @@ impl Risk {
         found.files = files.len();
         for file in &files {
             found.findings.extend(path_findings(file));
+            if ai_assets {
+                found.findings.extend(ai_asset_path_findings(file));
+            }
         }
         found
             .findings
@@ -549,7 +574,7 @@ impl Risk {
         }
         found
             .findings
-            .extend(self.contents(repo, head, &files).await?);
+            .extend(self.contents(repo, head, &files, ai_assets).await?);
         sort_findings(&mut found.findings);
         found.findings.dedup();
         found.findings.truncate(MAX_FINDINGS_PER_TARGET);
@@ -650,6 +675,7 @@ impl Risk {
         repo: RepoId,
         head: &ObjectId,
         files: &[ChangedFile],
+        ai_assets: bool,
     ) -> Result<Vec<Finding>, ForgeError> {
         // Migrations and deploy files first, then every other file that
         // gained lines. A binary file (git prints `-`: one NUL byte is
@@ -661,25 +687,41 @@ impl Risk {
                     && f.status != ChangeStatus::Deleted
                     && f.added != Some(0)
             })
-            .map(|f| (f, content_kind(f)))
+            .map(|f| {
+                let kind = content_kind(f).or_else(|| {
+                    if ai_assets {
+                        ai_case_content_kind(f)
+                    } else {
+                        None
+                    }
+                });
+                (f, kind)
+            })
             .collect();
         candidates.sort_by_key(|(_, kind)| match kind {
             Some(ContentKind::Sql) => 0,
             Some(ContentKind::Deploy) => 1,
-            None => 2,
+            Some(ContentKind::AiCase) => 2,
+            None => 3,
         });
         let mut found = Vec::new();
         let mut unread = 0usize;
         let mut unread_critical = 0usize;
         for (index, (file, kind)) in candidates.into_iter().enumerate() {
             // A file that cannot be shown safe: a new migration or a CI /
-            // deploy file is a `stop`, any other is only counted.
+            // deploy file is a `stop`, an AI evaluation case one too (it
+            // cannot be shown free of raw data), any other is only counted.
             let mut unread_file = |found: &mut Vec<Finding>| -> Result<(), ForgeError> {
-                if kind.is_some() {
-                    unread_critical += 1;
-                    found.push(rule("critical_content_unread")?.at(&file.path));
-                } else {
-                    unread += 1;
+                match kind {
+                    Some(ContentKind::AiCase) => {
+                        unread_critical += 1;
+                        found.push(rule("ai_case_raw_data")?.at(&file.path));
+                    }
+                    Some(ContentKind::Sql | ContentKind::Deploy) => {
+                        unread_critical += 1;
+                        found.push(rule("critical_content_unread")?.at(&file.path));
+                    }
+                    None => unread += 1,
                 }
                 Ok(())
             };

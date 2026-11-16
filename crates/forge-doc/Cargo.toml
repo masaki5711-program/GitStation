@@ -12,9 +12,12 @@ publish.workspace = true
 [dependencies]
 yaml-rust2.workspace = true
 regex.workspace = true
+# Plan 17 P17-3 (ADR-0035): the AI assets are TOML and JSON. Both are pure
+# parsers already in the tree (no I/O).
+toml.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-toml.workspace = true
 proptest.workspace = true
 
 [lints]

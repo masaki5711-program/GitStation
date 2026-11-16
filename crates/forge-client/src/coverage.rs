@@ -828,6 +828,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/auto-merge",
         Coverage::Command("auto-merge status"),
     ),
+    // Plan 17 P17-3 (ADR-0035): a project's ai_assets.enabled.
+    (
+        "GET",
+        "/api/v1/projects/{id}/ai-assets",
+        Coverage::Command("ai-asset status"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/ai-assets",
+        Coverage::BrowserOnly("sessions only: a Maintainer turns ai_assets.enabled on or off in the browser (FG-AUTH-0002 session_required for a token)"),
+    ),
     (
         "PUT",
         "/api/v1/projects/{id}/auto-merge",
@@ -1068,6 +1079,10 @@ pub const LOCAL_COMMANDS: &[(&str, &str)] = &[
     (
         "ci plan",
         "plan 14 C1: the execution plan of the working tree's .forge-ci.yml with forge-ci; nothing is sent",
+    ),
+    (
+        "ai-asset lint",
+        "plan 17 P17-3: the AI asset lint on the working tree with forge-doc; nothing is sent",
     ),
     (
         "agent verify",

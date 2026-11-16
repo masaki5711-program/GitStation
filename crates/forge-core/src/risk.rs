@@ -26,6 +26,14 @@
 //!   submodule, an object dropped or a privilege changed in SQL. The merge
 //!   proceeds; the warning stays on the commit.
 //!
+//! Two rules apply only to a project whose `ai_assets.enabled` is on (plan
+//! 17 §0.4, §1.7, ADR-0035); the caller asks for them
+//! ([`ai_asset_path_findings`], [`ai_case_content_kind`]), so an ordinary
+//! repository's `evals/` or `skills/` is never matched: `ai_case_raw_data`
+//! (`stop`, in the leak class — no new stop class) for an evaluation case
+//! holding data a synthetic replica never has, and `ai_asset` (`warn`, "AI
+//! 資産の変更") for any change of an AI asset.
+//!
 //! A finding names the rule, the path and (for text) the line — **never the
 //! matched text** (a secret or a table name must not be copied into a run
 //! every reader of the project can see). Each rule is a row of [`RULES`]
@@ -139,6 +147,11 @@ pub const RULES: &[Rule] = &[
         "a backup, restore or retention job is changed",
     ),
     rule(
+        "ai_case_raw_data",
+        RiskLevel::Stop,
+        "an AI evaluation case holds data a synthetic replica never has (an absolute date or time, an IP address, a real plant code, a person, free text, no synthetic provenance, confidential), or it could not be read to show it does not",
+    ),
+    rule(
         "agent_config",
         RiskLevel::Stop,
         "a Claude Code configuration (.claude, CLAUDE.md, .mcp.json or .gitstation) changed; it runs on developers' PCs, so a person reviews it",
@@ -202,6 +215,11 @@ pub const RULES: &[Rule] = &[
         "special_entry",
         RiskLevel::Warn,
         "a symbolic link or a submodule was added or changed",
+    ),
+    rule(
+        "ai_asset",
+        RiskLevel::Warn,
+        "AI 資産の変更: an AI asset changed (a skill, playbook, agent, tool, model, bench setting, threshold proposal, evaluation case or CODEOWNERS); the merge proceeds and a person sees it",
     ),
     rule(
         "no_open_merge_request",
@@ -716,6 +734,48 @@ pub enum ContentKind {
     Sql,
     /// A CI / deploy / infrastructure file: a database rollback.
     Deploy,
+    /// An AI evaluation case (only with `ai_assets.enabled`): raw data.
+    AiCase,
+}
+
+/// The `ai_asset` finding of one changed entry (module docs: only for a
+/// project whose `ai_assets.enabled` is on). A deletion or a rename out of
+/// an asset directory is a change of the assets too.
+pub fn ai_asset_path_findings(file: &ChangedFile) -> Vec<Finding> {
+    let asset = forge_doc::ai_asset::is_asset_path(&file.path)
+        || file
+            .old_path
+            .as_deref()
+            .is_some_and(forge_doc::ai_asset::is_asset_path);
+    if asset {
+        vec![Finding::of("ai_asset").at(&file.path)]
+    } else {
+        Vec::new()
+    }
+}
+
+/// [`ContentKind::AiCase`] for an evaluation case added or changed (module
+/// docs: only for a project whose `ai_assets.enabled` is on).
+pub fn ai_case_content_kind(file: &ChangedFile) -> Option<ContentKind> {
+    let present = !matches!(
+        file.status,
+        ChangeStatus::Deleted | ChangeStatus::TypeChanged
+    );
+    (present && forge_doc::ai_asset::is_case_path(&file.path)).then_some(ContentKind::AiCase)
+}
+
+/// The `ai_case_raw_data` findings of a case's text: one per line that
+/// holds raw data ([`forge_doc::ai_asset::case_raw_data`]), never the text.
+fn ai_case_findings(path: &str, content: &str) -> Vec<Finding> {
+    let mut found: Vec<Finding> = Vec::new();
+    for raw in forge_doc::ai_asset::case_raw_data(content) {
+        let line = u32::try_from(raw.line).unwrap_or(u32::MAX);
+        let f = Finding::of("ai_case_raw_data").at(path).on_line(line);
+        if !found.contains(&f) {
+            found.push(f);
+        }
+    }
+    found
 }
 
 /// Whether (and for what) `file`'s text at the head is read. A modified
@@ -736,6 +796,7 @@ pub fn content_findings(kind: ContentKind, path: &str, content: &str) -> Vec<Fin
     let mut found = match kind {
         ContentKind::Sql => sql_findings(path, content),
         ContentKind::Deploy => deploy_findings(path, content),
+        ContentKind::AiCase => ai_case_findings(path, content),
     };
     found.truncate(MAX_FINDINGS_PER_FILE);
     found

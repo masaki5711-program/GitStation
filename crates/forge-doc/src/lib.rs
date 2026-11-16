@@ -5,6 +5,7 @@
 //! Dependency direction (CLAUDE.md contract 9): `forge-core → forge-doc →
 //! forge-errors`, and `forge-client → forge-doc`.
 
+pub mod ai_asset;
 pub mod doctype;
 pub mod document;
 pub mod fmt;
