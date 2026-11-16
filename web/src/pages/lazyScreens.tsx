@@ -18,6 +18,7 @@ const loaders = {
   pipelines: () => import('./repo/pipelines/PipelinesScreen'),
   pipeline: () => import('./repo/pipelines/PipelineScreen'),
   mergeQueue: () => import('./repo/mr/MergeQueueScreen'),
+  schedules: () => import('./repo/pipelines/SchedulesScreen'),
   editor: () => import('./repo/editor/EditorScreen'),
   actAs: () => import('./confirm/ActAsConfirm'),
   actAsBinding: () => import('./confirm/ActAsBindingConfirm'),
@@ -59,6 +60,7 @@ export const DeliveriesScreen = screen(() => loaders.deliveries().then((m) => m.
 export const PipelinesScreen = screen(() => loaders.pipelines().then((m) => m.PipelinesScreen));
 export const PipelineScreen = screen(() => loaders.pipeline().then((m) => m.PipelineScreen));
 export const MergeQueueScreen = screen(() => loaders.mergeQueue().then((m) => m.MergeQueueScreen));
+export const SchedulesScreen = screen(() => loaders.schedules().then((m) => m.SchedulesScreen));
 export const EditorScreen = screen(() => loaders.editor().then((m) => m.EditorScreen));
 export const ActAsConfirm = screen(() => loaders.actAs().then((m) => m.ActAsConfirm));
 export const ActAsBindingConfirm = screen(() => loaders.actAsBinding().then((m) => m.ActAsBindingConfirm));

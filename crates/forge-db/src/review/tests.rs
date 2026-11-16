@@ -586,6 +586,29 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                 .expect("unapprove");
                 assert_eq!(done, ApproveOutcome::Withdrawn);
             }
+            // M4 C10: the system's revert draft after a failed pipeline
+            // (recorded on the reverted merge request).
+            MergeRequestTransition::RevertDraft => {
+                let change = forge_core::MergeRequestChange::RevertDrafted {
+                    merge_request: drafted.id,
+                    iid: drafted.iid,
+                    merge_id: 1,
+                    target_branch: branch("main"),
+                    merged_sha: forge_core::ObjectId::parse(&"b".repeat(40)).expect("oid"),
+                    outcome: forge_core::RevertDraftOutcome::Conflicted,
+                    revert_iid: None,
+                    conflict_files: 1,
+                };
+                let recorded = crate::review::reverts::record_revert_drafted(
+                    &t.db,
+                    &system(&request),
+                    p,
+                    change,
+                )
+                .await
+                .expect("revert drafted");
+                assert!(recorded);
+            }
         }
         let events = events_of(&t, &request).await;
         // M3 R4: a merge and a source deletion also record the ref update

@@ -232,6 +232,12 @@ pub struct StatusViewerBody {
     pub can_mark_ready: bool,
     /// The caller has a live approval of the merge request.
     pub approved_by_me: bool,
+    /// M4 C10 (added within `schema_version` 1): `POST …/revert` would be
+    /// allowed — the merge request is merged and the caller may open a
+    /// merge request and push a branch (a protection of `revert/*`, and
+    /// whether the revert conflicts, are decided by the revert itself).
+    /// Always `false` when acting for a person.
+    pub can_revert: bool,
     /// M3 S2 (ADR-0025 §9; added within `schema_version` 1): only when a
     /// service account acts for a person (`Forge-Act-As`) — what the person
     /// could do through it with a confirmation (`can_*` above are then all
@@ -408,6 +414,7 @@ pub(super) fn status_body(
             can_merge: viewer.can_merge,
             can_mark_ready: viewer.can_mark_ready,
             approved_by_me,
+            can_revert: false,
             act_as: act_as.map(|a| StatusActAsViewerBody {
                 can_approve: trial_body(a.can_approve),
                 can_unapprove: trial_body(a.can_unapprove),
@@ -417,10 +424,38 @@ pub(super) fn status_body(
     }
 }
 
+/// M4 C10: whether the caller's revert of this merge request would be
+/// allowed (trial `prove()` calls of the revert route's two decisions).
+fn can_revert(
+    principal: &forge_auth::Principal,
+    ctx: &MergeRequestCtx,
+    record: Option<&forge_core::ProjectRecord>,
+    iid: i64,
+) -> bool {
+    let mr = ctx.merge_request();
+    let (Some(me), Some(record)) = (principal.user(), record) else {
+        return false;
+    };
+    if mr.state != forge_core::MergeRequestState::Merged || principal.act_as_credential().is_some()
+    {
+        return false;
+    }
+    let project = crate::routes::projects::loaded(record);
+    let create = forge_review::revert_ctx(project, (iid, &mr.target_branch), me, false)
+        .and_then(|c| forge_auth::prove(principal, forge_auth::Action::MergeRequestCreate, c));
+    let push = forge_auth::prove(
+        principal,
+        forge_auth::Action::RepoPush,
+        forge_auth::ProjectCtx::new(project),
+    );
+    create.is_ok() && push.is_ok()
+}
+
 /// `GET …/status` → `200` the merge status now.
 pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
     // Owned before the first await: the request (its body) is not `Sync`.
     let repo = repository(&request);
+    let record = request.project().cloned();
     let w = request.into_write();
     let built = async {
         let (project, iid) = *w.proof.id();
@@ -452,7 +487,9 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
             w.proof.ctx().viewer(principal, p)
         });
         let act_as = w.proof.ctx().act_as_viewer(principal);
-        json(status_body(iid, &answer, viewer, principal.user(), act_as))
+        let mut body = status_body(iid, &answer, viewer, principal.user(), act_as);
+        body.viewer.can_revert = can_revert(principal, w.proof.ctx(), record.as_ref(), iid);
+        json(body)
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)

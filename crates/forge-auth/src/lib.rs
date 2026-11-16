@@ -67,6 +67,8 @@ mod matrix_rows_auto_merge;
 // M4 C13: the SSH git transport and SSH keys (ADR-0033).
 mod matrix_rows_pipelines;
 mod matrix_rows_ssh;
+// M4 C10: one-step revert (existing actions, revert-shaped rows).
+mod matrix_rows_revert;
 // M4 C5: CI outputs.
 mod matrix_rows_ci_outputs;
 // M4 C6: CI variables.

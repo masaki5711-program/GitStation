@@ -15,7 +15,9 @@
 //! `approvals.rs`) `POST …/{iid}/approve`, `…/unapprove`, `GET …/approvals`
 //! and the project's `…/approval-rules[/{name}]`, and (M3 I1b,
 //! `work_items.rs`) `GET …/{iid}/work-items` (`MergeRequestRead`) and
-//! `PUT|DELETE …/{iid}/work-items/{ref}` (`WorkItemLink`). Reading and listing are
+//! `PUT|DELETE …/{iid}/work-items/{ref}` (`WorkItemLink`), and (M4 C10,
+//! `revert.rs`) `POST …/{iid}/revert` (decided as `MergeRequestCreate` of
+//! the revert merge request and `RepoPush` of its branch). Reading and listing are
 //! decided like the repository browse API (`MergeRequestRead`,
 //! `MergeRequestList`); opening is Developer and above (`MergeRequestCreate`);
 //! an update, a close and a reopen are the author's or a Developer's (another's
@@ -59,6 +61,7 @@ mod loaders;
 mod mergeability;
 mod merges;
 mod queue;
+mod revert;
 mod settings;
 mod status;
 mod versions;
@@ -102,6 +105,7 @@ pub use queue::{
     QueueEntryOf, QueueEntryStatusBody, QUEUE as MERGE_QUEUE,
     QUEUE_MAX_BODY as MERGE_QUEUE_MAX_BODY,
 };
+pub use revert::{revert, MergeRequestToRevert, RevertBody, REVERT};
 pub use settings::{
     get_settings as merge_settings, put_codeowners as put_codeowners_enforcement,
     put_settings as put_merge_settings, CodeownersEnforcementBody, CodeownersOf, MergeSettingsBody,

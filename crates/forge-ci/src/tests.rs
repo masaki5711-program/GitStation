@@ -470,8 +470,8 @@ fn an_empty_or_non_mapping_file_is_refused() {
 fn unknown_keys_are_refused_at_every_level() {
     let top = format!("{}variables: {{}}\n", valid());
     assert_eq!(reasons(&top), ["key_unknown"]);
-    let job = one_job(&format!("{}when: always\n", base_job()));
-    assert_eq!(problems(&job)[0].subject.as_deref(), Some("when"));
+    let job = one_job(&format!("{}retry: 2\n", base_job()));
+    assert_eq!(problems(&job)[0].subject.as_deref(), Some("retry"));
     let rules = one_job(&format!("{}rules:\n  tags: [x]\n", base_job()));
     assert_eq!(reasons(&rules), ["key_unknown"]);
     let artifacts = one_job(&format!("{}artifacts:\n  expire: 1d\n", base_job()));
@@ -1141,4 +1141,79 @@ fn a_root_service_user_is_a_warning_not_a_problem() {
     }
     let def = check(with_services(&db("")).as_bytes(), &ctx()).expect("valid");
     assert!(def.warnings().is_empty());
+}
+
+// ── plan 14 C12: manual jobs ───────────────────────────────────────────
+
+/// `valid()` with a manual `release` job in `deploy` and a `notify` stage
+/// after it.
+fn with_manual() -> String {
+    valid()
+        .replace(
+            "stages: [build, test, deploy]",
+            "stages: [build, test, deploy, notify]",
+        )
+        .replace(
+            "    script: [./deploy.sh]\n",
+            "    script: [./deploy.sh]\n    when: manual\n",
+        )
+        + &format!(
+            "  announce:\n    stage: notify\n    image: {}\n    timeout: 1m\n    script: [echo done]\n",
+            image()
+        )
+}
+
+#[test]
+fn when_manual_marks_a_job_that_a_person_starts() {
+    let def = check(with_manual().as_bytes(), &ctx()).expect("valid");
+    let deploy = def
+        .jobs()
+        .iter()
+        .find(|j| j.name() == "deploy")
+        .expect("deploy");
+    assert!(deploy.manual());
+    assert!(def
+        .jobs()
+        .iter()
+        .filter(|j| j.name() != "deploy")
+        .all(|j| !j.manual()));
+    let explicit = valid().replace(
+        "    script: [./deploy.sh]\n",
+        "    script: [./deploy.sh]\n    when: on_success\n",
+    );
+    let def = check(explicit.as_bytes(), &ctx()).expect("valid");
+    assert!(def.jobs().iter().all(|j| !j.manual()));
+}
+
+#[test]
+fn a_when_other_than_on_success_or_manual_is_when_invalid() {
+    let text = one_job(&format!("{}when: always\n", base_job()));
+    assert_eq!(reasons(&text), ["when_invalid"]);
+    assert_eq!(problems(&text)[0].subject.as_deref(), Some("always"));
+}
+
+#[test]
+fn a_job_may_not_need_a_manual_job() {
+    let text = valid().replace(
+        "  unit:\n    stage: test\n",
+        "  unit:\n    stage: test\n    when: manual\n",
+    );
+    assert_eq!(reasons(&text), ["needs_manual_job"]);
+    assert_eq!(problems(&text)[0].subject.as_deref(), Some("unit"));
+}
+
+#[test]
+fn a_manual_job_waits_for_its_stage_but_holds_up_no_later_stage() {
+    let p = plan_for(&with_manual(), Event::Push, "main").expect("plan");
+    let deploy = p.jobs.iter().find(|j| j.name == "deploy").expect("deploy");
+    assert!(deploy.manual);
+    assert_eq!(deploy.after, ["integration", "unit"]);
+    let announce = p
+        .jobs
+        .iter()
+        .find(|j| j.name == "announce")
+        .expect("announce");
+    assert!(!announce.manual);
+    // The barrier skips the manual stage: the last automatic stage is test.
+    assert_eq!(announce.after, ["integration", "unit"]);
 }

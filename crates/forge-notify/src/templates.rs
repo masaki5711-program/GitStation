@@ -72,6 +72,15 @@ fn headline(kind: NotificationKind, lang: Lang) -> &'static str {
         (Lang::Id, NotificationKind::MergeRequestConflictPredicted) => {
             "kemungkinan berkonflik dengan merge request lain"
         }
+        (Lang::Ja, NotificationKind::MergeRequestRevertDrafted) => {
+            "のマージの後にパイプラインが失敗しました"
+        }
+        (Lang::En, NotificationKind::MergeRequestRevertDrafted) => {
+            "was followed by a failed pipeline"
+        }
+        (Lang::Id, NotificationKind::MergeRequestRevertDrafted) => {
+            "diikuti pipeline yang gagal setelah di-merge"
+        }
     }
 }
 
@@ -148,6 +157,24 @@ fn sentence(kind: NotificationKind, lang: Lang, actor: Option<&str>, title: &str
                 "Permintaan merge Anda \"{title}\" kemungkinan berkonflik dengan merge request lain yang terbuka pada branch yang sama. Lihat merge request atau `gstn conflicts` untuk mengetahui yang mana dan di mana."
             )
         }
+        // M4 C10: the system acts after the target's pipeline failed (no
+        // actor); whether a draft revert was opened shows on the merge
+        // request.
+        (Lang::Ja, NotificationKind::MergeRequestRevertDrafted, _) => {
+            format!(
+                "あなたのマージリクエスト「{title}」をマージした後、マージ先のブランチのパイプラインが失敗しました。このマージを取り消す下書きのマージリクエストを用意しました（取り消しが衝突するときは用意できません）。マージリクエストの画面で失敗の理由を確かめ、取り消すか直すかを決めてください。"
+            )
+        }
+        (Lang::En, NotificationKind::MergeRequestRevertDrafted, _) => {
+            format!(
+                "The pipeline of the target branch failed after your merge request \"{title}\" was merged. A draft merge request that reverts the merge was prepared (unless the revert conflicts). Check why the pipeline failed on the merge request, then revert or fix."
+            )
+        }
+        (Lang::Id, NotificationKind::MergeRequestRevertDrafted, _) => {
+            format!(
+                "Pipeline pada branch tujuan gagal setelah permintaan merge Anda \"{title}\" di-merge. Draf merge request yang membatalkan merge tersebut telah disiapkan (kecuali pembatalannya berkonflik). Periksa penyebab kegagalan pada merge request, lalu batalkan atau perbaiki."
+            )
+        }
     }
 }
 
@@ -217,6 +244,9 @@ mod tests {
                     // The scan acted, never a person: no name in the mail.
                     assert!(!body.contains("Bob"), "{lang:?} {kind:?}: {body}");
                     assert!(body.contains("gstn conflicts"), "where to look: {body}");
+                } else if *kind == NotificationKind::MergeRequestRevertDrafted {
+                    // M4 C10: the system acted after a failed pipeline.
+                    assert!(!body.contains("Bob"), "{lang:?} {kind:?}: {body}");
                 } else {
                     assert!(body.contains("Bob"), "{lang:?} {kind:?}: {body}");
                 }

@@ -937,7 +937,7 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ("forge.merge_queues", operational()),
         ("forge.merge_queue_batches", operational()),
         ("forge.merge_queue_entries", operational()),
-        // ── M4 C9: auto-merge (20261215100000) ──
+        // ── M4 C9: auto-merge (20261219100000) ──
         ("forge.project_auto_merge", operational()),
         ("forge.auto_merge_instance", operational()),
         ("forge.auto_merge_states", operational()),
@@ -973,6 +973,11 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ("forge.deploy_environments", operational()),
         ("forge.deploy_targets", operational()),
         ("forge.deployments", operational()),
+        // ── M4 C12: scheduled pipelines (20261219100000) ──
+        (
+            "forge.ci_pipeline_schedules",
+            [dml("forge_app"), ro("ci_pipeline_schedules")?].concat(),
+        ),
     ])
 }
 
@@ -1154,7 +1159,7 @@ const LATER_TABLES: &[&str] = &[
     "merge_queues",
     "merge_queue_batches",
     "merge_queue_entries",
-    // ── M4 C9: auto-merge (20261215100000) ──
+    // ── M4 C9: auto-merge (20261219100000) ──
     "project_auto_merge",
     "auto_merge_instance",
     "auto_merge_states",
@@ -1172,6 +1177,8 @@ const LATER_TABLES: &[&str] = &[
     "deploy_environments",
     "deploy_targets",
     "deployments",
+    // ── M4 C12: scheduled pipelines (20261219100000) ──
+    "ci_pipeline_schedules",
 ];
 
 /// Every table the first migration creates.

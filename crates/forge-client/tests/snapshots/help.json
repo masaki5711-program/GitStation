@@ -3843,6 +3843,56 @@
           "required": true
         },
         {
+          "description": "The merged merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr revert --project 7 --iid 3"
+      ],
+      "name": "mr revert",
+      "output": {
+        "properties": {
+          "merge_request": {
+            "required": [
+              "iid",
+              "source_branch",
+              "target_branch",
+              "draft"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "merge_request",
+          "reverted_iid",
+          "commit_sha",
+          "parent_sha"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/revert"
+      ],
+      "scopes": [
+        "api",
+        "write_repository"
+      ],
+      "summary": "Revert a merged merge request in one step: opens a merge request from the new branch revert/mr-<iid> (one revert commit on the target's tip; git revert -m 1 of a merge commit, the squash commit, or a whole fast-forward) into its target. Decided as opening a merge request and pushing the branch (Developer). A revert that conflicts opens nothing (FG-REVIEW-0030); not merged, an existing revert branch or nothing left to revert is FG-REVIEW-0029."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
           "description": "The merge request's number in the project.",
           "kind": "option",
           "name": "--iid",
@@ -7504,7 +7554,8 @@
         "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes",
         "POST /api/v1/projects/{id}/pipelines",
         "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/cancel",
-        "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/retry"
+        "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/retry",
+        "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play"
       ],
       "scopes": [
         "read_api",
@@ -11209,6 +11260,295 @@
         "read_api"
       ],
       "summary": "Download one CI artifact to a file (--output; never over an existing file) and check its sha256 (X-Forge-Sha256). 403 FG-AUTH-0022 as for pipeline artifacts."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The pipeline id.",
+          "kind": "option",
+          "name": "--pipeline",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The job id (pipeline show).",
+          "kind": "option",
+          "name": "--job",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn pipeline play --project 7 --pipeline 42 --job 9"
+      ],
+      "name": "pipeline play",
+      "output": {
+        "required": [
+          "id",
+          "project_id",
+          "ref",
+          "sha",
+          "source",
+          "merge_request_id",
+          "triggered_by",
+          "status",
+          "error_code",
+          "problems",
+          "copy_mark",
+          "definition_hash",
+          "created_at",
+          "updated_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Start a when: manual job (Developer): it becomes pending for a runner and a finished pipeline runs again. It gets secrets only as its pipeline allows (a push to a protected branch). 409 FG-CI-0003 operation=play when it is not waiting (not_manual), the pipeline is cancelled, invalid or error (pipeline_state), or a job it needs has not succeeded (needs_not_succeeded)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn pipeline schedule list --project 7 --json"
+      ],
+      "name": "pipeline schedule list",
+      "output": {
+        "properties": {
+          "schedules": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "schedules"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/pipeline-schedules"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's pipeline schedules (project readers): branch, cron and UTC offset, active, owner (whose rights it runs with), next run, the last run's outcome (created, no_definition, ref_missing, refused, failed)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "What it is for (one line, at most 255 bytes).",
+          "kind": "option",
+          "name": "--description",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The branch (main or refs/heads/main).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Five-field cron (minute hour day month weekday), at most once every 5 minutes.",
+          "kind": "option",
+          "name": "--cron",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The UTC offset in minutes the rule is read at (540 = JST, 420 = WIB).",
+          "kind": "option",
+          "name": "--utc-offset",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Save it paused.",
+          "kind": "flag",
+          "name": "--inactive",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn pipeline schedule create --project 7 --description Nightly --ref main --cron '0 2 * * *' --utc-offset 540"
+      ],
+      "name": "pipeline schedule create",
+      "output": {
+        "required": [
+          "id",
+          "project_id",
+          "description",
+          "ref",
+          "cron",
+          "utc_offset_minutes",
+          "active",
+          "owner_id",
+          "next_run_at",
+          "last_run_at",
+          "last_outcome",
+          "last_pipeline_id",
+          "last_error_code",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/pipeline-schedules"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create a pipeline schedule (a Maintainer, a person): you become its owner and it runs with your rights at each run, never with secrets. 400 FG-WEB-0006 (param, reason) for a bad value; 409 FG-CI-0027 past 20 per project."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The schedule id.",
+          "kind": "option",
+          "name": "--schedule",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "What it is for (one line, at most 255 bytes).",
+          "kind": "option",
+          "name": "--description",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The branch (main or refs/heads/main).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Five-field cron (minute hour day month weekday), at most once every 5 minutes.",
+          "kind": "option",
+          "name": "--cron",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The UTC offset in minutes the rule is read at (540 = JST, 420 = WIB).",
+          "kind": "option",
+          "name": "--utc-offset",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Save it paused.",
+          "kind": "flag",
+          "name": "--inactive",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn pipeline schedule update --project 7 --schedule 3 --description Nightly --ref main --cron '30 2 * * *' --utc-offset 540"
+      ],
+      "name": "pipeline schedule update",
+      "output": {
+        "required": [
+          "id",
+          "project_id",
+          "description",
+          "ref",
+          "cron",
+          "utc_offset_minutes",
+          "active",
+          "owner_id",
+          "next_run_at",
+          "last_run_at",
+          "last_outcome",
+          "last_pipeline_id",
+          "last_error_code",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/pipeline-schedules/{schedule_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Replace a pipeline schedule's settings (a Maintainer, a person): you become its owner when the branch, rule or offset changes, or after the owner was refused. 404 FG-REPO-0005 without it."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The schedule id.",
+          "kind": "option",
+          "name": "--schedule",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn pipeline schedule delete --project 7 --schedule 3 --yes"
+      ],
+      "name": "pipeline schedule delete",
+      "output": {
+        "type": "null"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/pipeline-schedules/{schedule_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Delete a pipeline schedule (a Maintainer, a person; 404 FG-REPO-0005 without it). Needs --yes."
     },
     {
       "args": [

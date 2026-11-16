@@ -1626,6 +1626,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revert a merged merge request in one step: opens a merge request from the new branch revert/mr-<iid> (one revert commit on the target's tip) into the target. Decided as opening a merge request (Developer; a token needs api) and pushing the branch (a token needs write_repository; a protected revert/* refuses, FG-GIT-0008). 409 FG-REVIEW-0029 (not merged, branch exists, nothing to revert) or FG-REVIEW-0030 (the revert conflicts: nothing is opened) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_revert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/status": {
         parameters: {
             query?: never;
@@ -1781,6 +1798,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/pipeline-schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's pipeline schedules (at most 20): branch, cron and UTC offset, active, owner (whose rights it runs with), next time, last run and its outcome (project readers) */
+        get: operations["get_api_v1_projects_id_pipeline_schedules"];
+        put?: never;
+        /** Create a pipeline schedule ({"description", "ref", "cron", "utc_offset_minutes", "active"?}): 201; the caller becomes its owner and it runs with the owner's rights at each run, never with secrets; 400 FG-WEB-0006 (param, reason) for a bad value; 409 FG-CI-0027 past 20 per project (people only; Maintainer) */
+        post: operations["post_api_v1_projects_id_pipeline_schedules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipeline-schedules/{schedule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner when the branch, rule or offset changes or after the owner was refused (a description or pause/resume edit keeps the owner); 404 FG-REPO-0005 without it (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_pipeline_schedules_schedule_id"];
+        post?: never;
+        /** Delete a pipeline schedule: 204; 404 FG-REPO-0005 without it (people only; Maintainer) */
+        delete: operations["delete_api_v1_projects_id_pipeline_schedules_schedule_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/pipelines": {
         parameters: {
             query?: never;
@@ -1895,6 +1948,23 @@ export interface paths {
         get: operations["get_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_log"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a `when: manual` job: 200 the pipeline (the job pending for a runner, a finished pipeline running again); 404 FG-REPO-0005 without the pipeline or job; 409 FG-CI-0003 operation=play when the job is not waiting for a person (not_manual), the pipeline is cancelled, invalid or error (pipeline_state), or a job it needs has not succeeded (needs_not_succeeded). Secrets reach it only as its pipeline allows (Developer) */
+        post: operations["post_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_play"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5621,6 +5691,11 @@ export interface components {
             /** Format: int64 */
             id: number;
             image: string;
+            /**
+             * @description `when: manual` in `.forge-ci.yml` (M4 C12): started by a person;
+             *     stays `true` after it was started.
+             */
+            manual: boolean;
             name: string;
             /** @description The jobs it waits for. */
             needs: string[];
@@ -5628,7 +5703,10 @@ export interface components {
             secrets: string[];
             stage: string;
             started_at: string | null;
-            /** @description `created`, `pending`, `running`, `succeeded`, `failed`, `canceled`. */
+            /**
+             * @description `created`, `pending`, `running`, `succeeded`, `failed`,
+             *     `canceled`, `manual` (waits for a person: `…/play`).
+             */
             status: string;
             tags: string[];
             /** Format: int32 */
@@ -5658,6 +5736,67 @@ export interface components {
             /** @description The stable reason (crates/forge-ci/README.md). */
             reason: string;
             subject: string | null;
+        };
+        /** @description A schedule. */
+        PipelineScheduleBody: {
+            active: boolean;
+            created_at: string;
+            cron: string;
+            description: string;
+            /** Format: int64 */
+            id: number;
+            last_error_code: string | null;
+            /**
+             * @description What its last run did: `created` (`last_pipeline_id`),
+             *     `no_definition`, `ref_missing`, `refused` (FG-CI-0026: the owner may
+             *     not run pipelines now: the schedule was stopped), `failed`
+             *     (`last_error_code`), `busy` (its previous pipeline was still
+             *     running), `capped` (the hourly cap, FG-CI-0028).
+             */
+            last_outcome: string | null;
+            /** Format: int64 */
+            last_pipeline_id: number | null;
+            /** @description The due time of its last run. */
+            last_run_at: string | null;
+            /** @description When it runs next (RFC 3339, UTC); `null` when inactive. */
+            next_run_at: string | null;
+            /**
+             * Format: int64
+             * @description The person whose rights it runs with (who created it or last changed
+             *     its branch, rule or offset).
+             */
+            owner_id: number;
+            /** Format: int64 */
+            project_id: number;
+            /** @description `refs/heads/…`. */
+            ref: string;
+            updated_at: string;
+            /** Format: int32 */
+            utc_offset_minutes: number;
+        };
+        /** @description `POST …/pipeline-schedules`, `PUT …/{schedule_id}`. */
+        PipelineScheduleInput: {
+            /** @description Default `true`; `false` never runs. */
+            active?: boolean | null;
+            /**
+             * @description Five-field cron (`minute hour day-of-month month day-of-week`), at
+             *     most once every 5 minutes.
+             */
+            cron: string;
+            /** @description What it is for (1..=255 bytes, one line). */
+            description: string;
+            /** @description The branch: `main` or `refs/heads/main`. */
+            ref: string;
+            /**
+             * Format: int32
+             * @description The fixed UTC offset the rule is read at, in minutes (540 = JST,
+             *     420 = WIB); a quarter hour within −720..=840.
+             */
+            utc_offset_minutes: number;
+        };
+        /** @description `GET …/pipeline-schedules`. */
+        PipelineScheduleList: {
+            schedules: components["schemas"]["PipelineScheduleBody"][];
         };
         /**
          * @description Where an inline discussion sits: a line of one side of one version's
@@ -6324,6 +6463,23 @@ export interface components {
             /** @description `branch`, `tag` or `commit` (a full commit id was given). */
             type: string;
         };
+        /** @description The revert merge request as opened. */
+        RevertBody: {
+            /** @description The revert commit (the new branch's tip). */
+            commit_sha: string;
+            /**
+             * @description The merge request that reverts `reverted_iid` (source
+             *     `revert/mr-<iid>`, target the reverted one's target).
+             */
+            merge_request: components["schemas"]["MergeRequestBody"];
+            /** @description The target's tip it was built on. */
+            parent_sha: string;
+            /**
+             * Format: int64
+             * @description The merged merge request it reverts.
+             */
+            reverted_iid: number;
+        };
         /**
          * @description A role in a request.
          * @enum {string}
@@ -6921,6 +7077,14 @@ export interface components {
              *     whether the merge request may merge now is `mergeable`).
              */
             can_merge: boolean;
+            /**
+             * @description M4 C10 (added within `schema_version` 1): `POST …/revert` would be
+             *     allowed — the merge request is merged and the caller may open a
+             *     merge request and push a branch (a protection of `revert/*`, and
+             *     whether the revert conflicts, are decided by the revert itself).
+             *     Always `false` when acting for a person.
+             */
+            can_revert: boolean;
             /**
              * @description `POST …/unapprove` would be allowed (pair it with `approved_by_me`:
              *     there may be nothing to withdraw).
@@ -11713,6 +11877,38 @@ export interface operations {
             };
         };
     };
+    post_api_v1_projects_id_merge_requests_iid_revert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevertBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_merge_requests_iid_status: {
         parameters: {
             query?: never;
@@ -12075,6 +12271,138 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_pipeline_schedules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineScheduleList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_pipeline_schedules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineScheduleInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineScheduleBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_pipeline_schedules_schedule_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                schedule_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PipelineScheduleInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineScheduleBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_pipeline_schedules_schedule_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                schedule_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_pipelines: {
         parameters: {
             query?: {
@@ -12327,6 +12655,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobLogPage"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_play: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                job_id: number;
+                pipeline_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

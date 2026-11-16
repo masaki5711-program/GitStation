@@ -199,6 +199,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DeployCommitNotAllowed
         | ErrorCode::DeploymentAbandoned
         | ErrorCode::DeployTargetNotAllowed
+        // M4 C12: pipeline schedules, never a merge's.
+        | ErrorCode::ScheduleOwnerNotAllowed
+        | ErrorCode::ScheduleLimitReached
+        | ErrorCode::ScheduleRateLimited
         // Plan 17 P17-2: the forge/ai-eval check's codes (never a merge's).
         | ErrorCode::BenchUnavailable
         | ErrorCode::BaselineMissing
@@ -345,6 +349,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::SshProtocolV2Required
         | ErrorCode::SshConnectionRefused
         | ErrorCode::SshTransportFailed
+        // M4 C10: a revert's own outcomes, never a merge's.
+        | ErrorCode::RevertRefused
+        | ErrorCode::RevertConflict
         // M3 N1: the mail job's own code never reaches a merge.
         | ErrorCode::SmtpUnavailable
         // Plan 16 A1: agent parts are verified by gstn (and, from A5/A7,

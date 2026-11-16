@@ -316,7 +316,8 @@ pub async fn build(
         Some(JobStatus::Canceled) => {
             return error(t, ErrorCode::BenchUnavailable, "job_canceled", None)
         }
-        Some(JobStatus::Created | JobStatus::Pending | JobStatus::Running) | None => {
+        Some(JobStatus::Created | JobStatus::Pending | JobStatus::Running | JobStatus::Manual)
+        | None => {
             let reason = format!("pipeline_{}", t.status.as_str());
             return error(t, ErrorCode::BenchUnavailable, "job_not_run", Some(reason));
         }

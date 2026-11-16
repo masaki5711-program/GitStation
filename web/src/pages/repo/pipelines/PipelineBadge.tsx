@@ -20,6 +20,7 @@ export function pipelineTone(status: string): PipelineTone {
       return 'running';
     case 'canceled':
     case 'skipped':
+    case 'manual':
       return 'neutral';
     default:
       return 'pending';

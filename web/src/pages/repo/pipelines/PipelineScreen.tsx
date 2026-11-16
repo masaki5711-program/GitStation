@@ -14,6 +14,7 @@ import { useApi } from '../../../api/context';
 import {
   branchOf,
   mayOperate,
+  mayPlayProtected,
   parseId,
   useDiagnosis,
   usePipeline,
@@ -100,6 +101,11 @@ function PipelineView({
       call(() => api.GET('/api/v1/projects/{id}', { signal, params: { path: { id: projectId } } })),
   });
   const operate = info.isSuccess && mayOperate(info.data.role, session.user.is_admin);
+  // M4 C12 review: a protected pipeline's manual job (it gets secrets) is a
+  // Maintainer's; the server decides again (PipelinePlayProtected).
+  const play = p.protected
+    ? info.isSuccess && mayPlayProtected(info.data.role, session.user.is_admin)
+    : operate;
   const failed = p.status === 'failed';
   const diagnosis = useDiagnosis(projectId, p.id, failed);
   const jobs = p.jobs ?? [];
@@ -144,7 +150,7 @@ function PipelineView({
         </time>
       </p>
 
-      <StatusLine p={p} jobs={jobs} operate={operate} project={project} />
+      <StatusLine p={p} jobs={jobs} operate={operate} play={play} project={project} />
       {operate && <PipelineActions projectId={projectId} p={p} />}
 
       {p.status === 'invalid' && p.problems.length > 0 && (
@@ -202,7 +208,14 @@ function PipelineView({
         {jobs.length === 0 ? (
           <p className={styles.hint}>{t('pipelines.jobs.none')}</p>
         ) : (
-          <Stages jobs={jobs} project={project} pipelineId={p.id} openJob={openJob?.id ?? null} />
+          <Stages
+            jobs={jobs}
+            project={project}
+            projectId={projectId}
+            pipelineId={p.id}
+            openJob={openJob?.id ?? null}
+            operate={play}
+          />
         )}
       </section>
 
@@ -219,15 +232,20 @@ function StatusLine({
   p,
   jobs,
   operate,
+  play,
   project,
 }: {
   p: Pipeline;
   jobs: PipelineJob[];
   operate: boolean;
+  /** May start a manual job of this pipeline. */
+  play: boolean;
   project: string;
 }) {
   const { t } = useTranslation();
   const failedJob = jobs.find((j) => j.status === 'failed');
+  // M4 C12: a manual job waiting for a person, named in its own line.
+  const waiting = jobs.find((j) => j.status === 'manual');
   const tone =
     p.status === 'failed' || p.status === 'invalid' || p.status === 'error'
       ? styles.statusFailed
@@ -239,6 +257,15 @@ function StatusLine({
   return (
     <div className={`${styles.statusLine ?? ''} ${tone ?? ''}`} data-testid="pipeline-status-line">
       <p>{statusSentence(t, p, failedJob?.name ?? null, operate)}</p>
+      {waiting !== undefined && (
+        <p data-testid="pipeline-manual-line">
+          {play
+            ? t('pipelines.line.manualOperate', { job: waiting.name })
+            : p.protected
+              ? t('pipelines.line.manualAskProtected', { job: waiting.name })
+              : t('pipelines.line.manualAsk', { job: waiting.name })}
+        </p>
+      )}
       {failedJob !== undefined && (
         <p>
           <Link to={pipelineUrl(project, p.id, failedJob.id)}>

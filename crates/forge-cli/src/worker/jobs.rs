@@ -30,12 +30,14 @@ use forge_db::Db;
 use forge_errors::ForgeError;
 use tokio::sync::watch;
 
+use super::ci_schedules::ScheduleFireHandler;
 use super::pipelines::PipelineHandler;
 use super::provision::{ProvisionHandler, Storage};
 use super::review::{ConflictScanHandler, MergeabilityHandler, RefreshHandler};
 use super::risk::RiskHandler;
 use super::spec_drift::SpecDriftHandler;
 use super::spec_index::SpecIndexHandler;
+use super::spec_publish::SpecPublishHandler;
 use super::supervise::Next;
 use super::work_items::RelinkHandler;
 
@@ -66,6 +68,10 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
     let spec_index = SpecIndexHandler::new(db, storage)?;
     // M4 C2: `ci.pipeline_create` (CI pipelines from pushes and versions).
     let pipelines = PipelineHandler::new(db, storage)?;
+    // M4 C12: `ci.schedule_fire` (one due time of a pipeline schedule).
+    let schedules = ScheduleFireHandler::new(db, storage)?;
+    // M4 C12: `spec.publish` (plan 04 §6: a version tag publishes a spec).
+    let spec_publish = SpecPublishHandler::new(db, storage)?;
     // ADR-0016 Amendment 2026-11-12: detect merge requests again after a binding.
     let relink = RelinkHandler::new(db)?;
     Ok(vec![
@@ -77,6 +83,8 @@ pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHand
         Arc::new(risk),
         Arc::new(spec_index),
         Arc::new(pipelines),
+        Arc::new(schedules),
+        Arc::new(spec_publish),
         Arc::new(relink),
     ])
 }

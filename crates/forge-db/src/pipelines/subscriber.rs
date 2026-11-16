@@ -11,6 +11,12 @@
 //!   (`forge.ci.push_refs_not_planned`, with the counts): never dropped
 //!   silently. The pusher (a person's or a service account's event) is
 //!   `triggered_by`.
+//! - A push that **created** version-shaped tags (`refs/tags/v1.5`,
+//!   `forge_core::spec_version`; M4 C12, plan 04 §6 `spec-publish`): one
+//!   `spec.publish` job each (at most
+//!   [`crate::spec_releases::MAX_PUSH_RELEASES`]; the rest are logged with
+//!   the same warn event), which decides with git whether it publishes a
+//!   specification version (`spec.released`).
 //! - A merge request version: nothing here (M4 C7, ADR-0024 Amendment
 //!   2026-11-11). The merge request pipeline runs on the merge RESULT — the
 //!   mergeability job writes `refs/merge-requests/<iid>/merge` and enqueues
@@ -53,6 +59,37 @@ fn pusher(event: &SourceEvent) -> Option<UserId> {
         "user" | "service_account" => event.actor_user_id.filter(|id| *id > 0).map(UserId::new),
         _ => None,
     }
+}
+
+/// The version-shaped tags a push created, with what they point at.
+fn created_version_tags(event: &SourceEvent) -> Result<Vec<(RefName, ObjectId)>, ForgeError> {
+    let refs = event
+        .payload
+        .get("refs")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| bad_payload(event, "refs"))?;
+    let mut out = Vec::new();
+    for entry in refs {
+        let name = entry.get("ref").and_then(serde_json::Value::as_str);
+        let kind = entry.get("kind").and_then(serde_json::Value::as_str);
+        let (Some(name), Some("create")) = (name, kind) else {
+            continue;
+        };
+        let Some(short) = name.strip_prefix("refs/tags/") else {
+            continue;
+        };
+        if forge_core::spec_version::SpecVersion::parse(short).is_none() {
+            continue;
+        }
+        let git_ref = RefName::parse(name).map_err(|_| bad_payload(event, "refs.ref"))?;
+        let new = entry
+            .get("new")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|raw| ObjectId::parse(raw).ok())
+            .ok_or_else(|| bad_payload(event, "refs.new"))?;
+        out.push((git_ref, new));
+    }
+    Ok(out)
 }
 
 /// The branches a push created or moved, with their new commits, and how
@@ -115,6 +152,46 @@ impl PipelineRequests {
                 &create_job(&request, origin.clone(), Some(event.seq))?, // clone: each job owns its id
             )
             .await?;
+        }
+        // M4 C12: the specification versions this push may publish.
+        let tags = created_version_tags(event)?;
+        let tags_over = tags
+            .len()
+            .saturating_sub(crate::spec_releases::MAX_PUSH_RELEASES);
+        for (tag, object) in tags
+            .into_iter()
+            .take(crate::spec_releases::MAX_PUSH_RELEASES)
+        {
+            let request = crate::spec_releases::PublishRequest {
+                project,
+                tag,
+                object,
+                // M4 C12 review: only a user's push may release (a service
+                // account's never; the job also refuses an agent token).
+                released_by: (event.actor_kind == "user")
+                    .then(|| pusher(event))
+                    .flatten(),
+                push_request_id: Some(event.request_id.clone()), // clone: the job owns it
+            };
+            // Deduped: a redelivered event enqueues nothing new.
+            let _enqueued = enqueue_on(
+                tx.conn(),
+                &crate::spec_releases::publish_job(&request, origin.clone(), Some(event.seq))?, // clone: each job owns its id
+            )
+            .await?;
+        }
+        if tags_over > 0 {
+            tracing::warn!(
+                target: "forge_db",
+                event = "forge.ci.push_refs_not_planned",
+                request_id = %event.request_id,
+                source_seq = event.seq,
+                project_id = project.get(),
+                over_cap = tags_over,
+                cap = crate::spec_releases::MAX_PUSH_RELEASES,
+                kind = "spec_release",
+                "some version tags of a push were not considered for a specification release"
+            );
         }
         if over > 0 || unlisted > 0 {
             tracing::warn!(
@@ -198,7 +275,9 @@ impl Subscriber for PipelineRequests {
                 | EventType::WorkItemUnlinked
                 | EventType::MergeRequestWorkItemsChanged
                 | EventType::MergeRequestRelinkRequested
-                | EventType::WebhookDisabled => Ok(()),
+                | EventType::WebhookDisabled
+                | EventType::SpecReleased
+                | EventType::MergeRequestRevertDrafted => Ok(()),
             }
         })
     }

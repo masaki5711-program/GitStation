@@ -217,12 +217,33 @@ list|set|delete`（値は標準入力から）。Runner の取得は `secrets_al
 上限は 1 ファイル 100 MiB・1 回 512 MiB / 1000 ファイル（FG-CI-0019）、送受の失敗は FG-CI-0020（ジョブは失敗）。worker の `ci_artifact_expiry`
 （30 日、`keep` は残す、消えたプロジェクトのディレクトリも消す）。`keep` を立てるのは C11。
 
+**C10 の注記（2026-11-14、一手の revert）**: ブランチは計画の名前 `feat/review-one-step-revert`。新しい Action は無い: ルート
+`POST …/merge-requests/{iid}/revert` は取り消しの MR を開く `MergeRequestCreate` と、ブランチ `revert/mr-<iid>` の作成の `RepoPush`
+（`authorize_ref_updates`）で判定する（権限の表に取り消しの形の行）。木は `forge_git::revert`（作業ツリーなし、git 2.38 で動く
+`commit-tree` と `merge-tree` の組み立て）。**衝突したら何も作らない**（FG-REVIEW-0030）、その他の拒否は FG-REVIEW-0029。main の失敗での
+下書き: 購読者 `revert-drafts` → ジョブ `merge_request.revert_draft`（`forge serve`）。target 自身の push のパイプラインが失敗し、マージの前は
+失敗していなかったときだけ、戻される MR の作成者の名前と権限で **下書き** を開き、イベント `merge_request.revert_drafted` と通知の種類
+`mr_revert_drafted` で知らせる。通知の種類のためにマイグレーション `20261220100000`（CHECK の置き換えだけ）を足した。`gstn mr revert`、
+MR の画面のボタン（`viewer.can_revert`）。詳細は ADR-0024 Amendment（2026-11-14）。
+
 **C11 の注記（2026-11-13、デプロイ）**: クレート `forge-deploy`（機能クレート）、表 `deploy_environments`・`deploy_targets`（監査あり）・
 `deployments`（派生。要求と承認は監査の行、ガード `deployments_forward`）、マイグレーション `20261214100000`。Action `DeployRead`・
 `DeployEnvironmentManage`・`DeployTargetManage`（管理者）・`DeployCreate`・`DeployApprove`（`Resource::Deployment`）、FG-DEPLOY-0001〜0010、
 worker の `deploy_runner`（`deploy.ssh_key_file` があるときだけ）、doctor `deploy.known_hosts`、runbook `deploy`、ADR-0031。
 健全性は `<script> health <sha>`（同じ SSH の経路）、成果物の転送（scp）は後の MR。成功した SHA の CI の成果物に `keep` を立てる。
 `gstn deploy` と画面は後の MR（C-1 は Planned）。
+**C12 の注記（2026-11-13、定期・手動・仕様の公開）**: ブランチ `feat/ci-schedules-manual`。
+**手動のジョブ**: `.forge-ci.yml` の `when: manual`（lint の `when_invalid`・`needs_manual_job`、ステージの壁から外す）。表 `ci_jobs.manual` と状態
+`manual`（マイグレーション `20261219100000`）。何も待たないので、パイプラインは他のジョブで終わり、手動のジョブだけなら `skipped`。ルート
+`POST …/pipelines/{pid}/jobs/{jid}/play`（`PipelineCreate`、監査 `pipeline.job_played`、FG-CI-0003 `operation=play`）。
+**定期**: 表 `ci_pipeline_schedules`（監査あり、1 プロジェクト 20 件まで: FG-CI-0027）、Action `PipelineScheduleManage`（Maintainer 以上、人だけ）、
+ルート `GET|POST …/pipeline-schedules`・`PUT|DELETE …/{schedule_id}`。5 つの欄の cron を固定の UTC オフセットで（`forge_core::ci_schedule`、5 分より頻繁は不可）。
+worker のタスク `ci_schedules`（30 秒）が期限の来たものを取り、ジョブ `ci.schedule_fire` が**持ち主の今の権利**で `PipelineCreate` を判定してから
+`source = schedule` のパイプラインを書く（`pipeline.scheduled`、行為者 `system`）。拒否は FG-CI-0026（warn、runbook `ci-pipelines`）。
+手動・定期のパイプラインは保護されない（シークレットは渡らない）。ADR-0029 Amendment 2026-11-13。
+**仕様の公開**（04 §6 `spec-publish`）: 版の形のタグを作る push で `ci-pipelines` 購読者がジョブ `spec.publish` を積み、タグのコミットが既定のブランチの
+上にあり自身の仕様のディレクトリを持つとき、イベント `spec.released`（連携の分類、`docs/api/integration-feed.md`）を 1 回出す。
+**分けたもの**: `gstn pipeline play` / `schedule …`（C12b、それまでは `gstn api`）、`spec.released` の未決定の項目の数（07 W12 のゲートと一緒に）。
 
 ## 6. 運用で足すもの
 

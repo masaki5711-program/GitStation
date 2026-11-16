@@ -534,6 +534,23 @@ actions! {
     /// agent, a service account (the auto-merge principal included), a
     /// bot, an act-as request, a runner and a job never approve.
     DeployApprove,
+    /// `POST /api/v1/projects/{id}/pipeline-schedules`, `PUT|DELETE
+    /// …/pipeline-schedules/{schedule_id}` (M4 C12): create, change or
+    /// delete a timed pipeline. Whoever saves one becomes its owner and the
+    /// schedule runs with the owner's rights as they are at each run
+    /// (ADR-0029 Amendment 2026-11-13). Maintainer and above, people only
+    /// (a standing delegation is a person's decision; an agent's token, a
+    /// service account and a bot are refused); `api`. Listing them is
+    /// `PipelineRead`.
+    PipelineScheduleManage,
+    /// The second decision of `POST …/pipelines/{pipeline_id}/jobs/{job_id}/play`
+    /// (M4 C12 security review) when the job's pipeline is **protected** (a
+    /// push to a protected branch: its jobs get the project's secrets and
+    /// may deploy). Maintainer and above, people only — a Developer, an
+    /// agent's token, a service account and a bot are refused. The route
+    /// itself is `PipelineCreate`; a manual job of an unprotected pipeline
+    /// needs nothing more. Decided in the transaction on the locked flag.
+    PipelinePlayProtected,
     /// `PUT /api/v1/runner/jobs/{job_id}/artifacts?path=` (M4 C6): a job
     /// uploads one file of its artifacts — its own token, its own job,
     /// while it runs (`CiRule::Job`, `Resource::JobSelf`).
@@ -735,6 +752,10 @@ impl Action {
                 | Action::DeployEnvironmentManage
                 | Action::DeployTargetManage
                 | Action::DeployApprove
+                // M4 C12: a schedule runs with its owner's rights.
+                | Action::PipelineScheduleManage
+                // M4 C12 review: a protected job gets secrets.
+                | Action::PipelinePlayProtected
         )
     }
 
@@ -885,6 +906,8 @@ impl Action {
             | Action::DeployEnvironmentManage
             | Action::DeployTargetManage
             | Action::DeployCreate
+            | Action::PipelineScheduleManage
+            | Action::PipelinePlayProtected
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge
@@ -1040,6 +1063,9 @@ impl Action {
             | Action::DeployTargetManage
             | Action::DeployCreate
             | Action::DeployApprove
+            // M4 C12: nor are pipeline schedules.
+            | Action::PipelineScheduleManage
+            | Action::PipelinePlayProtected
             // M4 C3: runners are no act-as action.
             | Action::RunnerRegister
             | Action::RunnerManage
@@ -1196,6 +1222,9 @@ impl Action {
             | Action::DeployTargetManage
             | Action::DeployCreate
             | Action::DeployApprove
+            // M4 C12: nor a schedule, nor a protected manual job.
+            | Action::PipelineScheduleManage
+            | Action::PipelinePlayProtected
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead

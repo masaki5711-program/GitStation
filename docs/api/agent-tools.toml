@@ -485,6 +485,21 @@ params = [
   { name = "pipeline_id", in = "path", type = "integer", required = true, description = "The pipeline id (list_pipelines)." },
 ]
 
+[[tool]]
+name = "play_pipeline_job"
+gstn = "pipeline play"
+read_only = false
+destructive = false
+idempotent = false
+method = "POST"
+path = "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play"
+description = "Start a when: manual job of a pipeline (it gets secrets only as its pipeline allows; a deploy still needs a person's approval)."
+params = [
+  { name = "project_id", in = "path", wire = "id", type = "integer", required = true, description = "The GitStation project id (gstn project list)." },
+  { name = "pipeline_id", in = "path", type = "integer", required = true, description = "The pipeline id (list_pipelines)." },
+  { name = "job_id", in = "path", type = "integer", required = true, description = "The manual job's id (get_pipeline)." },
+]
+
 # ── kept for people: never a tool (plan 06 §4.5, plan 01 §3.11 C-9, ADR-0017 §4.0, ADR-0025 §4) ──
 # `gstn` names a command; `action` an authz action with no command yet. The
 # gate also refuses a tool on any route of an excluded command (unless a
@@ -770,6 +785,22 @@ reason = "The integration account's own read; the server refuses an agent token.
 [[excluded]]
 gstn = "integration dev-status-list"
 reason = "The integration account's own read; the server refuses an agent token."
+
+[[excluded]]
+gstn = "pipeline schedule list"
+reason = "Pipeline schedules are a Maintainer's standing delegation (M4 C12, ADR-0029 Amendment 2026-11-13); their management is people_only, the list is read on the web."
+
+[[excluded]]
+gstn = "pipeline schedule create"
+reason = "Creates a standing delegation of the caller's rights: people_only (ADR-0029 Amendment 2026-11-13)."
+
+[[excluded]]
+gstn = "pipeline schedule update"
+reason = "Makes the caller a schedule's owner: people_only (ADR-0029 Amendment 2026-11-13)."
+
+[[excluded]]
+gstn = "pipeline schedule delete"
+reason = "Removes a schedule: people_only (ADR-0029 Amendment 2026-11-13)."
 
 [[excluded]]
 gstn = "ci variable list"
@@ -1066,3 +1097,7 @@ reason = "Deployment environments (approval, freeze, rollback) are a Maintainer'
 [[excluded]]
 gstn = "deploy target-set"
 reason = "Deployment targets are an administrator's: people_only (ADR-0031)."
+
+[[deferred]]
+gstn = "mr revert"
+reason = "M4 C10: opening a revert merge request is opening a merge request (an agent may); a tool comes with the agent's main-broken flow (plan 04 M-4)."
