@@ -20,12 +20,18 @@
 
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    GroupId, GroupListing, NamespaceId, NamespacePath, ProjectId, ProjectRecord, UserId,
+    GroupId, GroupListing, GroupSight, NamespaceId, NamespacePath, ProjectId, ProjectRecord,
+    UserId, Visibility,
 };
+
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::resolve::{interpret_project, invalid, parse_rule, ChainRoles, ProjectAccessRow};
-use crate::roles::{chain_role_columns, CAP};
+use crate::resolve::{
+    bounded, interpret_project, invalid, parse_rule, ChainRoles, ProjectAccessRow,
+};
+use crate::roles::{
+    chain_private_agg, chain_private_column, chain_role_columns, viewer_above_cte, CAP,
+};
 use crate::{read_query_error, Db};
 
 /// The largest page a caller may scan in one statement (forge-web asks for
@@ -65,11 +71,14 @@ macro_rules! page_scan {
                  WHERE c.step < $3), \
                steps AS (SELECT c.anchor, c.segment, c.parent_id AS up, ",
             chain_role_columns!(),
+            ", ",
+            chain_private_column!(),
             " FROM chain c), \
                agg AS (SELECT anchor, array_agg(step ORDER BY step) AS steps, \
                  array_agg(truncated ORDER BY step) AS truncs, \
-                 array_agg(role ORDER BY step) AS roles, \
-                 string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
+                 array_agg(role ORDER BY step) AS roles, ",
+            chain_private_agg!(),
+            ", string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
                  coalesce(bool_or(truncated), false) AS truncated, \
                  coalesce(bool_or(up IS NULL), false) AS reaches_top \
                  FROM steps GROUP BY anchor) "
@@ -82,7 +91,7 @@ macro_rules! page_scan {
 macro_rules! project_page_select {
     () => {
         "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
-           a.steps, a.truncs, a.roles, \
+           a.steps, a.truncs, a.roles, a.chain_private, \
            n.id AS namespace_id, n.full_path, \
            (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
            p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state, \
@@ -135,7 +144,7 @@ pub(crate) const PROJECT_SEARCH_SQL: &str = concat!(
         "project"
     ),
     "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
-       a.steps, a.truncs, a.roles, \
+       a.steps, a.truncs, a.roles, a.chain_private, \
        n.id AS namespace_id, n.full_path, \
        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
        p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state, \
@@ -157,7 +166,7 @@ pub(crate) const PROJECT_IDS_SQL: &str = concat!(
         @page ["page AS (SELECT DISTINCT x AS id FROM unnest($1::bigint[]) AS x), "],
         "project"
     ),
-    "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion,        a.steps, a.truncs, a.roles,        n.id AS namespace_id, n.full_path,        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed,        p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state,        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at      FROM page pg JOIN forge.projects p ON p.id = pg.id      LEFT JOIN agg a ON a.anchor = p.id      LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id      LEFT JOIN forge.repositories r ON r.project_id = p.id      ORDER BY p.id DESC"
+    "SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion,        a.steps, a.truncs, a.roles, a.chain_private,        n.id AS namespace_id, n.full_path,        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed,        p.display_name, p.description, p.created_by, r.id AS repository_id, r.state AS repository_state,        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at      FROM page pg JOIN forge.projects p ON p.id = pg.id      LEFT JOIN agg a ON a.anchor = p.id      LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id      LEFT JOIN forge.repositories r ON r.project_id = p.id      ORDER BY p.id DESC"
 );
 
 /// The most ids [`project_records`] reads in one statement.
@@ -276,13 +285,18 @@ fn records(rows: Vec<ProjectAccessRow>, viewer: UserId) -> Result<Vec<ProjectRec
 }
 
 /// As [`PROJECT_PAGE_SQL`], for groups: the group's row, its namespace and
-/// the viewer's chain.
+/// the viewer's chain, its stored visibility and (plan 15 MR 3) whether the
+/// viewer holds a role strictly below it (`roles::viewer_above_cte!`: the
+/// viewer's memberships walked upwards once per statement, not per row).
 pub(crate) const GROUP_PAGE_SQL: &str = concat!(
     page_scan!("forge.groups", "group"),
-    "SELECT g.id AS group_id, a.steps, a.truncs, a.roles, \
+    ", ",
+    viewer_above_cte!(),
+    " SELECT g.id AS group_id, a.steps, a.truncs, a.roles, a.chain_private, \
        n.id AS namespace_id, n.full_path, \
        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
-       g.display_name, g.description, \
+       g.display_name, g.description, g.visibility AS own_visibility, \
+       EXISTS (SELECT 1 FROM above ab WHERE ab.parent_id = n.id) AS has_visible_descendant, \
        to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
      FROM page pg JOIN forge.groups g ON g.id = pg.id \
      LEFT JOIN agg a ON a.anchor = g.id \
@@ -302,6 +316,8 @@ struct GroupPageRow {
     display_name: String,
     description: String,
     created_at: String,
+    own_visibility: String,
+    has_visible_descendant: bool,
 }
 
 /// `$1`: the position after which the page starts (ids are positive).
@@ -394,12 +410,18 @@ fn interpret_group(row: GroupPageRow, viewer: UserId) -> Result<GroupListing, Fo
     if row.chain.is_empty() {
         return Err(invalid("group_without_namespace").with_context("group_id", id));
     }
+    let ceiling = row.chain.ceiling();
     let roles = row.chain.fold("group", id, Some(viewer))?;
     if row.confirmed != Some(true) {
         return Err(invalid("group_path_unconfirmed")
             .with_context("group_id", id)
             .with_context("namespace_id", namespace_id));
     }
+    let own_visibility = Visibility::parse(&row.own_visibility).ok_or_else(|| {
+        invalid("unknown_visibility")
+            .with_context("group_id", id)
+            .with_context("raw", bounded(&row.own_visibility))
+    })?;
     let path = NamespacePath::parse(&full_path).map_err(|e| {
         invalid("stored_path_invalid")
             .with_context("group_id", id)
@@ -414,6 +436,11 @@ fn interpret_group(row: GroupPageRow, viewer: UserId) -> Result<GroupListing, Fo
         display_name: row.display_name,
         description: row.description,
         created_at: row.created_at,
+        own_visibility,
+        sight: GroupSight {
+            visibility: ceiling,
+            descendant: row.has_visible_descendant,
+        },
     })
 }
 

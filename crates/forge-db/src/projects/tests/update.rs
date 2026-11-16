@@ -302,6 +302,7 @@ async fn group_create_and_update_decided_and_the_group_record() {
     let alice = user(&t, "alice").await;
     let bob = user(&t, "bob").await;
     let fields = GroupFields {
+        visibility: forge_core::Visibility::Internal,
         segment: "acme".into(),
         display_name: "Acme".into(),
         description: String::new(),
@@ -319,6 +320,7 @@ async fn group_create_and_update_decided_and_the_group_record() {
     assert_eq!(facts.parent, None);
     assert!(facts.account.active);
     let sub = GroupFields {
+        visibility: forge_core::Visibility::Internal,
         segment: "web".into(),
         display_name: "Web".into(),
         description: "synthetic".into(),
@@ -426,7 +428,8 @@ async fn load_parent_names_groups_users_and_refuses_projects() {
         Some(ParentRecord::Group {
             namespace: acme.namespace_id,
             group: acme.group_id,
-            role: Some(Role::Owner)
+            role: Some(Role::Owner),
+            sight: forge_core::GroupSight::INTERNAL,
         })
     );
     assert_eq!(

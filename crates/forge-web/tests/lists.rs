@@ -153,6 +153,7 @@ async fn group(t: &FreshDb, segment: &str, owner: UserId) -> CreatedGroup {
         &t.db,
         &ctx(&format!("req-group-{segment}")),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: segment.to_owned(),
             parent: None,
             display_name: segment.to_owned(),

@@ -64,3 +64,35 @@ impl Visibility {
             .find(|v| v.as_str() == raw)
     }
 }
+
+/// How a group can be seen by one viewer (plan 15 MR 3, ADR-0010
+/// Amendment "グループの可視性"): facts the loaders read in the same
+/// statement as the role; `authorize()` decides with them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupSight {
+    /// The effective visibility: the narrowest `groups.visibility` on the
+    /// chain from the group up to the top level ("narrowest wins").
+    pub visibility: Visibility,
+    /// The viewer holds a direct role on a group or a live project strictly
+    /// below: the group may be shown as a pass-through (its name and path
+    /// only) even where it is hidden otherwise.
+    pub descendant: bool,
+}
+
+impl GroupSight {
+    /// An internal chain, nothing below (the facts every group had before
+    /// plan 15 MR 3).
+    pub const INTERNAL: Self = Self {
+        visibility: Visibility::Internal,
+        descendant: false,
+    };
+
+    /// What a write transaction that re-reads only the caller's role
+    /// decides on: private, nothing below — a write needs a role on the
+    /// group (or administrator rights), and a role holder sees the group
+    /// whatever its visibility. Never used for a read.
+    pub const ROLE_ONLY: Self = Self {
+        visibility: Visibility::Private,
+        descendant: false,
+    };
+}

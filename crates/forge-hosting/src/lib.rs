@@ -46,8 +46,8 @@ use forge_auth::{
     ResourceCtx, VisibilityChangeCtx,
 };
 use forge_core::{
-    GroupId, GroupRecord, NamespaceId, ProjectId, ProjectRecord, ProtectedRefId, RefPattern,
-    RequestId, Role, UserId, Visibility,
+    GroupId, GroupRecord, GroupSight, NamespaceId, ProjectId, ProjectRecord, ProtectedRefId,
+    RefPattern, RequestId, Role, UserId, Visibility,
 };
 use forge_db::access::Account;
 use forge_db::change::{Actor, ChangeContext};
@@ -86,6 +86,9 @@ pub struct NewGroupFields {
     pub path: String,
     pub display_name: String,
     pub description: String,
+    /// Always written explicitly (plan 15 MR 3; the API's default is
+    /// `private`).
+    pub visibility: Visibility,
 }
 
 /// A new project's fields (`POST /api/v1/projects`); the parent is the
@@ -347,6 +350,7 @@ impl Hosting {
                 let fresh = GroupCtx::new(LoadedGroup {
                     id: parent.group,
                     role: parent.role,
+                    sight: GroupSight::ROLE_ONLY,
                 });
                 proof.reconfirm(account(facts.account), fresh).map(drop)
             },
@@ -368,6 +372,7 @@ impl Hosting {
             segment: fields.path.clone(), // clone: forge-db owns its request
             display_name: fields.display_name.clone(),
             description: fields.description.clone(),
+            visibility: fields.visibility,
         };
         let (created, ()) =
             groups::create_decided(&self.db, &ctx, parent, &fields, user, decide).await?;
@@ -393,11 +398,47 @@ impl Hosting {
                 let fresh = GroupCtx::new(LoadedGroup {
                     id: facts.group.group,
                     role: facts.group.role,
+                    sight: GroupSight::ROLE_ONLY,
                 });
                 proof.reconfirm(account(facts.account), fresh).map(drop)
             })
             .await?;
         Ok(updated)
+    }
+
+    /// `PATCH /api/v1/groups/{id}/visibility` (`GroupVisibilityChange`,
+    /// plan 15 MR 3): set the group's stored visibility to `to`, decided
+    /// again inside the transaction on the locked role and account;
+    /// `preview` decides and counts without writing (the narrowing
+    /// confirmation). `FG-REPO-0033` for `internal` below a private group.
+    pub async fn change_group_visibility(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<GroupCtx>,
+        to: Visibility,
+        preview: bool,
+    ) -> Result<groups::GroupVisibilityOutcome, ForgeError> {
+        require(proof.action(), Action::GroupVisibilityChange)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (outcome, ()) = groups::change_visibility_decided(
+            &self.db,
+            &ctx,
+            *proof.id(),
+            user,
+            to,
+            preview,
+            |facts| {
+                let fresh = GroupCtx::new(LoadedGroup {
+                    id: facts.group.group,
+                    role: facts.group.role,
+                    sight: GroupSight::ROLE_ONLY,
+                });
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            },
+        )
+        .await?;
+        Ok(outcome)
     }
 
     /// `POST /api/v1/projects` (`ProjectCreate`): a project under the
@@ -427,7 +468,11 @@ impl Hosting {
                     role,
                 } => LoadedParent::Group {
                     namespace,
-                    group: LoadedGroup { id: group, role },
+                    group: LoadedGroup {
+                        id: group,
+                        role,
+                        sight: GroupSight::ROLE_ONLY,
+                    },
                 },
                 projects::ParentAccess::User {
                     namespace,
@@ -643,6 +688,7 @@ impl Hosting {
                 LoadedGroup {
                     id: facts.group,
                     role: facts.role,
+                    sight: GroupSight::ROLE_ONLY,
                 },
                 membership(
                     member,
@@ -676,6 +722,7 @@ impl Hosting {
                     LoadedGroup {
                         id: facts.group,
                         role: facts.role,
+                        sight: GroupSight::ROLE_ONLY,
                     },
                     membership(member, change, facts.removes_last_owner),
                 );
@@ -701,6 +748,7 @@ impl Hosting {
                 LoadedGroup {
                     id: facts.group,
                     role: facts.role,
+                    sight: GroupSight::ROLE_ONLY,
                 },
                 membership(member, removed(facts.member_role), facts.removes_last_owner),
             );

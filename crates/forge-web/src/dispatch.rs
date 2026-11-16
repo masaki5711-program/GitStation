@@ -507,9 +507,14 @@ pub(crate) fn loaded_project(id: forge_core::ProjectId, access: ProjectAccess) -
 pub(crate) fn loaded_namespace(resolved: &Resolved, via: ResolvedVia) -> LoadedNamespace {
     let target = match resolved.target {
         ResolvedTarget::User(id) => LoadedTarget::User(id),
-        ResolvedTarget::Group { id, viewer_role } => LoadedTarget::Group {
+        ResolvedTarget::Group {
+            id,
+            viewer_role,
+            sight,
+        } => LoadedTarget::Group {
             id,
             role: viewer_role,
+            sight,
         },
         ResolvedTarget::Project { id, access, .. } => {
             LoadedTarget::Project(loaded_project(id, access))

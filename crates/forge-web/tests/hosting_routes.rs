@@ -119,7 +119,8 @@ async fn groups_are_created_read_and_updated_through_the_routes() {
     let as_bob = session(bob.user_id, false);
     let r = || router(&t.db);
 
-    let body = json!({"path": "acme", "display_name": "Acme"});
+    // Plan 15 MR 3: a new group is private unless asked; this one is internal.
+    let body = json!({"path": "acme", "display_name": "Acme", "visibility": "internal"});
     let denied = call(
         r(),
         "POST",

@@ -175,6 +175,7 @@ async fn world() -> World {
         &t.db,
         &ctx("req-acme"),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "acme".into(),
             parent: None,
             display_name: "Acme".into(),

@@ -84,6 +84,7 @@ async fn credentials(t: &FreshDb) -> Callers {
         &t.db,
         &ctx("req-acme"),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "acme".into(),
             parent: None,
             display_name: "acme".into(),

@@ -157,6 +157,7 @@ async fn web(t: &FreshDb, owner: UserId, members: &[(UserId, Role)]) -> CreatedP
         &t.db,
         &ctx("req-acme"),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "acme".into(),
             parent: None,
             display_name: "Acme".into(),

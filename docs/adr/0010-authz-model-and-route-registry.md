@@ -232,3 +232,39 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
 
 Context の「リポジトリは種類（`spec` / `system`）を持ち」は、ADR-0023 で置き換えた。リポジトリに種類の区別はない（`repositories.kind` の列は残るが使わない）。
 プロジェクトが 1 つの主リポジトリを持つ構造は変わらない。
+
+## Amendment（2026-11-15、計画 15 MR 3: グループの可視性、一番狭いものを取る規則）
+
+- **実際に効く可視性**: グループは `groups.visibility`（`private` / `internal`、計画 15 MR 2 の列）を持つ。グループとプロジェクトに効く
+  可視性は、自分から最上位までの鎖で**一番狭いもの**（`internal` のグループやプロジェクトも、上に `private` のグループがあれば非公開）。
+  読み込みの層（`forge_db::resolve` / `lists` / `groups::load` / プロジェクトの親、書き込みのトランザクションのロック）が鎖を 1 文で
+  たどり、forge-core の `ProjectAccess::visibility`（実際の値）と `GroupSight { visibility, descendant }` を返す。判定は
+  `authorize()` だけ。鎖の値が読めない・グループの行がないときは非公開とみなす（漏らさない側に倒す）。
+- **見える人**: 鎖のどこかで役割を持つ人（直接・継承）、管理者、実際の可視性が `internal` ならサインインした人とボット（サービス
+  アカウントは役割があるときだけ。プロジェクトの `sees_internal` と同じ。今まで全員に見えていた internal のグループも、役割のない
+  サービスアカウントには見えなくなった）。判定は `authorize::group_seen`（`Full` / `PassThrough` / `Hidden`）の 1 か所。
+- **通り道**: ほかに見えないが、下のグループか削除されていないプロジェクトに直接の役割を持つ人には、名前とパスだけ見せる
+  （`GroupRead` と、そのパスの `PathResolve` だけ。本文は `pass_through: true`、説明は空）。メンバー、ほかの子、書き込みは
+  見えないものと同じ 404。
+- **見えないとき**: 見えないプロジェクトと同じ `FG-REPO-0005`（404、`reason=group_not_visible` / `group_pass_through` /
+  `service_account_not_member`）。`GroupRead`、`MemberList`、`MemberManage`、`SubgroupCreate`、`ProjectCreate`、`GroupUpdate`、
+  `AuditRead`、パスの解決、移動先のグループ（`TransferTarget::Group` は `sight` を持ち、通り道でしか見えない先は
+  `target_not_visible`）。一覧は行ごとに `GroupRead` で決める（SQL では絞らない）。プロジェクト・リポジトリ（clone を含む）は
+  実際の可視性の `ProjectView` で今までどおり決まる。
+- **書き込みの中の再判定**: 書き込みのトランザクションは役割だけを読み直し、`GroupSight::ROLE_ONLY`（非公開・下に役割なし）で
+  `reconfirm` する。書き込みはどれもグループの役割（か管理者）を要るので、結果は変わらない（役割を失った直後の競合で 403 が 404 に
+  なるだけ）。
+- **新しい Action `GroupVisibilityChange`**（`PATCH /api/v1/groups/{id}/visibility`）: グループの Owner（管理者は通る）、人だけ、
+  **web のセッションだけ**（トークンは `FG-AUTH-0002 reason=session_required`、エージェント・サービスアカウント・ボットは
+  `FG-AUTH-0003`）。`preview: true` は判定して件数を数えるだけで書かない（画面が狭める前に「n 件のプロジェクトが非公開として
+  扱われます」と確かめる）。書いたら `group.visibility_changed` の監査の行（`from` / `to` / `affected_projects`、イベントなし）。
+  狭めても下の行は書き換えない。
+- **親より広げない**: 鎖の上が非公開のところに `internal` を求める変更（グループの可視性、`internal` のサブグループ・プロジェクトの
+  作成、プロジェクトの可視性）は、書き込みのトランザクションの中で判定のあとに `FG-REPO-0033`（VisibilityAboveParent、409、
+  操作の誤りで runbook なし）で断る。
+- **作成**: グループを作るときは `visibility` を必ず明示して書く（列の既定 `internal` は広いほうなので頼らない）。API の既定は
+  `private`（計画 15 §6 の 2）。
+- **運用**: `forge doctor` `groups.visibility`（info、FG コードなし）が、非公開のグループの下に `internal` で保存された
+  グループと生きているプロジェクトの数を出す（上を広げると一度に見えるようになる）。
+- 権限の表: `matrix_rows_group_visibility.rs`（private / 通り道 / internal のサービスアカウント、各 Action の許可と拒否、
+  `GroupVisibilityChange` の Owner・管理者・Maintainer・トークン・エージェント・サービスアカウント・ボット）。

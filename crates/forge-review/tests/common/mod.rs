@@ -127,6 +127,7 @@ pub async fn project(t: &FreshDb, owner: UserId, members: &[(UserId, Role)]) -> 
         &t.db,
         &system("req-group"),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "acme".to_owned(),
             parent: None,
             display_name: "Acme".to_owned(),

@@ -129,6 +129,7 @@ async fn acme(t: &FreshDb, owner: UserId) -> CreatedGroup {
         &t.db,
         &ctx("req-acme"),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "acme".into(),
             parent: None,
             display_name: "Acme".into(),

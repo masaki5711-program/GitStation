@@ -70,7 +70,9 @@ use axum::http::header::{CACHE_CONTROL, RETRY_AFTER, VARY};
 use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use forge_auth::{authorize, prove, Action, InstanceCtx, Principal, ProjectCtx, Resource};
+use forge_auth::{
+    authorize, group_seen, prove, Action, GroupSeen, InstanceCtx, Principal, ProjectCtx, Resource,
+};
 use forge_core::config::ApiConfig;
 use forge_core::{
     parse_positive_id, CursorKeys, GroupId, GroupListing, GroupPageLoader, ProjectId,
@@ -358,6 +360,13 @@ pub struct ListedGroup {
     /// The caller's effective role (`guest` … `owner`); `null` without one.
     #[schema(required = true)]
     pub role: Option<String>,
+    /// The group's own setting, `private` or `internal` (plan 15 MR 3).
+    pub visibility: String,
+    /// What applies: the narrowest on the chain to the top level.
+    pub effective_visibility: String,
+    /// Shown only because the caller holds a role below it: the name and
+    /// path only (the description is empty).
+    pub pass_through: bool,
 }
 
 /// A page of groups.
@@ -767,12 +776,16 @@ async fn group_page(
         |group| {
             let resource = Resource::Group {
                 role: group.viewer_role,
+                sight: group.sight,
             };
             match authorize(principal, Action::GroupRead, &resource) {
                 // `membership=true`: after the decision, only where the
                 // caller holds a role.
                 Ok(()) if filter.membership && group.viewer_role.is_none() => Ok(None),
-                Ok(()) => Ok(Some(group_view(group))),
+                Ok(()) => Ok(Some(group_view(
+                    group,
+                    group_seen(principal, group.viewer_role, group.sight),
+                ))),
                 Err(e) => denied_or_failed(e).map(|()| None),
             }
         },
@@ -784,8 +797,10 @@ async fn group_page(
     })
 }
 
-/// A group's list item (shown only after `authorize(GroupRead)` allowed).
-fn group_view(group: &GroupListing) -> ListedGroup {
+/// A group's list item (shown only after `authorize(GroupRead)` allowed);
+/// a pass-through group shows its name and path only (plan 15 MR 3).
+fn group_view(group: &GroupListing, seen: GroupSeen) -> ListedGroup {
+    let pass_through = seen != GroupSeen::Full;
     ListedGroup {
         id: group.id.get(),
         namespace_id: group.namespace_id.get(),
@@ -797,9 +812,16 @@ fn group_view(group: &GroupListing) -> ListedGroup {
             .map(|s| s.as_str().to_owned())
             .unwrap_or_default(),
         display_name: group.display_name.clone(), // clone: the row is borrowed
-        description: group.description.clone(),
+        description: if pass_through {
+            String::new()
+        } else {
+            group.description.clone()
+        },
         created_at: group.created_at.clone(),
         role: group.viewer_role.map(|r| Role::as_str(r).to_owned()),
+        visibility: group.own_visibility.as_str().to_owned(),
+        effective_visibility: group.sight.visibility.as_str().to_owned(),
+        pass_through,
     }
 }
 

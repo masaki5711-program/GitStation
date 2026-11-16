@@ -77,6 +77,7 @@ async fn group(
     owner: UserId,
 ) -> CreatedGroup {
     let new = NewGroup {
+        visibility: forge_core::Visibility::Internal,
         segment: segment.to_owned(),
         parent,
         display_name: format!("Group {segment}"),

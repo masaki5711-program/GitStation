@@ -66,6 +66,8 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    subscribers.dead_letters",
         // D3 MR2: no users yet is not orphaned, but it is not hidden either.
         "warn  users.administration no users yet",
+        // Plan 15 MR 3: no group yet, nothing stored wider than its parent.
+        "ok    groups.visibility no group or project is stored wider",
         // D4 MR3b: nothing provisioning, no ready repository to look for.
         "ok    repositories.provisioning 0 provisioning, none stuck",
         "ok    repositories.storage 0 ready repositories have their directory",

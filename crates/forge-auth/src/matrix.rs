@@ -12,8 +12,9 @@ use crate::model::{AdmissionAccount, MembershipChange, RefKind, RefUpdate, Role}
 // Turning rows into principals and resources is only needed by the tests.
 #[cfg(test)]
 use crate::model::{
-    AccountKind, Credential, MembershipScope, NamespaceView, Principal, ProjectView, RefProtection,
-    ResolvedVia, Resource, Scope, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    AccountKind, Credential, GroupSight, MembershipScope, NamespaceView, Principal, ProjectView,
+    RefProtection, ResolvedVia, Resource, Scope, TombstoneRelease, TransferTarget,
+    UnresolvedReason, Visibility,
 };
 #[cfg(test)]
 use forge_core::UserId;
@@ -237,7 +238,30 @@ pub(crate) enum Fixture {
     InternalRef,
     /// A branch fast-forward on a project pending deletion.
     DeletedRef,
+    /// A group whose chain is internal (every group before plan 15 MR 3).
     Group,
+    /// A group whose effective visibility is private (plan 15 MR 3: the
+    /// group itself or one above it — the loader folds the chain, so an
+    /// internal group below a private one is this fixture too); the
+    /// caller holds no role below it.
+    PrivateGroup,
+    /// The same, the caller holding a role strictly below it: the
+    /// pass-through view (plan 15 §3.2).
+    PrivateGroupPassThrough,
+    /// A private group's path resolved (plan 15 MR 3); `descendant` = the
+    /// caller holds a role below it.
+    ResolvedPrivateGroup {
+        descendant: bool,
+    },
+    /// A membership change on a private group (plan 15 MR 3).
+    PrivateGroupMember(MembershipChange),
+    /// Moving a private project to a private group where the caller has
+    /// `target` (plan 15 MR 3: a target seen no more than as a
+    /// pass-through is the hidden target's 404).
+    TransferPrivateTarget {
+        target: Option<Role>,
+        descendant: bool,
+    },
     OwnNamespace,
     ForeignNamespace,
     /// Another user's personal namespace whose owner is a service account
@@ -269,6 +293,9 @@ pub(crate) enum Fixture {
     },
     /// Moving a group to a group the caller cannot see.
     GroupTransferHiddenTarget,
+    /// Renaming a private group the caller holds the actor's role on
+    /// (plan 15 MR 3).
+    GroupTransferPrivateSource,
     /// Moving a group to the top level.
     GroupTransferToTopLevel,
     /// Moving a group into the caller's own personal namespace (never).
@@ -808,11 +835,21 @@ impl Fixture {
         let transfer = |source, target| Resource::Transfer { source, target };
         let group_transfer = |target| Resource::GroupTransfer {
             source_role: role,
+            source_sight: GroupSight::INTERNAL,
             target,
         };
         let hidden = TransferTarget::Group {
             role: None,
             visible: false,
+            sight: GroupSight::ROLE_ONLY,
+        };
+        let private_group = GroupSight {
+            visibility: Visibility::Private,
+            descendant: false,
+        };
+        let pass_through = GroupSight {
+            descendant: true,
+            ..private_group
         };
         let branch_ff = |project| Resource::Ref {
             project,
@@ -900,7 +937,48 @@ impl Fixture {
             },
             Fixture::InternalRef => branch_ff(internal),
             Fixture::DeletedRef => branch_ff(deleted),
-            Fixture::Group => Resource::Group { role },
+            Fixture::Group => Resource::Group {
+                role,
+                sight: GroupSight::INTERNAL,
+            },
+            Fixture::PrivateGroup => Resource::Group {
+                role,
+                sight: private_group,
+            },
+            Fixture::PrivateGroupPassThrough => Resource::Group {
+                role,
+                sight: pass_through,
+            },
+            Fixture::ResolvedPrivateGroup { descendant } => resolved(
+                ResolvedVia::Live,
+                NamespaceView::Group {
+                    role,
+                    sight: if descendant {
+                        pass_through
+                    } else {
+                        private_group
+                    },
+                },
+            ),
+            Fixture::PrivateGroupMember(change) => member(
+                MembershipScope::Group {
+                    role,
+                    sight: private_group,
+                },
+                change,
+            ),
+            Fixture::TransferPrivateTarget { target, descendant } => transfer(
+                private,
+                TransferTarget::Group {
+                    role: target,
+                    visible: true,
+                    sight: if descendant {
+                        pass_through
+                    } else {
+                        private_group
+                    },
+                },
+            ),
             Fixture::OwnNamespace => Resource::Namespace {
                 owner: ME,
                 owner_kind: actor.kind(),
@@ -925,6 +1003,7 @@ impl Fixture {
                 TransferTarget::Group {
                     role: target,
                     visible: true,
+                    sight: GroupSight::INTERNAL,
                 },
             ),
             Fixture::TransferHiddenTarget => transfer(private, hidden),
@@ -948,13 +1027,20 @@ impl Fixture {
                 TransferTarget::Group {
                     role: Some(Role::Owner),
                     visible: true,
+                    sight: GroupSight::INTERNAL,
                 },
             ),
             Fixture::GroupTransfer { target } => group_transfer(TransferTarget::Group {
                 role: target,
                 visible: true,
+                sight: GroupSight::INTERNAL,
             }),
             Fixture::GroupTransferHiddenTarget => group_transfer(hidden),
+            Fixture::GroupTransferPrivateSource => Resource::GroupTransfer {
+                source_role: role,
+                source_sight: private_group,
+                target: TransferTarget::CurrentParent { top_level: false },
+            },
             Fixture::GroupTransferToTopLevel => group_transfer(TransferTarget::TopLevel),
             Fixture::GroupTransferToNamespace => {
                 group_transfer(TransferTarget::PersonalNamespace {
@@ -1001,9 +1087,18 @@ impl Fixture {
             Fixture::DeletedProjectMember(change) => {
                 member(MembershipScope::Project(deleted), change)
             }
-            Fixture::GroupMember(change) => member(MembershipScope::Group { role }, change),
+            Fixture::GroupMember(change) => member(
+                MembershipScope::Group {
+                    role,
+                    sight: GroupSight::INTERNAL,
+                },
+                change,
+            ),
             Fixture::GroupLastOwnerRemoval => Resource::Membership {
-                scope: MembershipScope::Group { role },
+                scope: MembershipScope::Group {
+                    role,
+                    sight: GroupSight::INTERNAL,
+                },
                 change: MembershipChange::Remove { from: Role::Owner },
                 removes_last_owner: true,
             },
@@ -1021,7 +1116,10 @@ impl Fixture {
                 removes_last_owner: true,
             },
             Fixture::GroupLastOwnerDemotion => Resource::Membership {
-                scope: MembershipScope::Group { role },
+                scope: MembershipScope::Group {
+                    role,
+                    sight: GroupSight::INTERNAL,
+                },
                 change: MembershipChange::Change {
                     from: Role::Owner,
                     to: Role::Maintainer,
@@ -1033,11 +1131,17 @@ impl Fixture {
                 MembershipChange::Missing { to },
             ),
             Fixture::GroupMissingMember(to) => member(
-                MembershipScope::Group { role },
+                MembershipScope::Group {
+                    role,
+                    sight: GroupSight::INTERNAL,
+                },
                 MembershipChange::Missing { to },
             ),
             Fixture::SubgroupLastDirectOwner(to) => member(
-                MembershipScope::Group { role },
+                MembershipScope::Group {
+                    role,
+                    sight: GroupSight::INTERNAL,
+                },
                 match to {
                     None => MembershipChange::Remove { from: Role::Owner },
                     Some(to) => MembershipChange::Change {
@@ -1109,7 +1213,13 @@ impl Fixture {
                 resolved(ResolvedVia::Live, NamespaceView::Project(deleted))
             }
             Fixture::MovedPrivate => resolved(ResolvedVia::Moved, NamespaceView::Project(private)),
-            Fixture::ResolvedGroup => resolved(ResolvedVia::Live, NamespaceView::Group { role }),
+            Fixture::ResolvedGroup => resolved(
+                ResolvedVia::Live,
+                NamespaceView::Group {
+                    role,
+                    sight: GroupSight::INTERNAL,
+                },
+            ),
             Fixture::ResolvedUser => resolved(ResolvedVia::Live, NamespaceView::User),
             Fixture::Absent => Resource::Unresolved(UnresolvedReason::Absent),
             Fixture::DeletedTombstone => Resource::Unresolved(UnresolvedReason::TombstoneDeleted),
@@ -1271,6 +1381,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_ci_variables::CI_VARIABLE_ROWS,
         crate::matrix_rows_deploy::DEPLOY_ROWS,
         crate::matrix_rows_activity::ACTIVITY_ROWS,
+        crate::matrix_rows_group_visibility::GROUP_VISIBILITY_ROWS,
         crate::matrix_rows_mirror::MIRROR_ROWS.as_slice(),
         crate::matrix_rows_doc_lint::DOC_LINT_ROWS,
         crate::matrix_rows_pipelines::PIPELINE_ROWS.as_slice(),

@@ -17,7 +17,8 @@
 //! ```
 
 use forge_core::{
-    GroupId, NamespaceId, ProjectId, ProtectedRefId, TombstoneId, UserId, VisibilityClass,
+    GroupId, GroupSight, NamespaceId, ProjectId, ProtectedRefId, TombstoneId, UserId,
+    VisibilityClass,
 };
 
 use crate::model::{
@@ -33,6 +34,10 @@ pub struct LoadedGroup {
     /// The caller's effective role (direct or from an ancestor group;
     /// `None` = no role).
     pub role: Option<Role>,
+    /// The group's effective visibility and the caller's roles below, read
+    /// in the same row (plan 15 MR 3). A write transaction that re-reads
+    /// only the role passes [`GroupSight::ROLE_ONLY`].
+    pub sight: GroupSight,
 }
 
 /// A group (`GroupRead`, `GroupUpdate`, `SubgroupCreate`).
@@ -59,6 +64,7 @@ impl ResourceCtx for GroupCtx {
     fn resource(&self) -> Resource {
         Resource::Group {
             role: self.group.role,
+            sight: self.group.sight,
         }
     }
     fn id(&self) -> GroupId {
@@ -141,7 +147,10 @@ impl ResourceCtx for ParentCtx {
     type Id = NamespaceId;
     fn resource(&self) -> Resource {
         match self.parent {
-            LoadedParent::Group { group, .. } => Resource::Group { role: group.role },
+            LoadedParent::Group { group, .. } => Resource::Group {
+                role: group.role,
+                sight: group.sight,
+            },
             LoadedParent::User(ns) => Resource::Namespace {
                 owner: ns.owner,
                 owner_kind: ns.owner_kind,
@@ -284,6 +293,7 @@ impl ResourceCtx for GroupMemberCtx {
         Resource::Membership {
             scope: MembershipScope::Group {
                 role: self.group.role,
+                sight: self.group.sight,
             },
             change: self.membership.change,
             removes_last_owner: self.membership.removes_last_owner,
@@ -369,6 +379,7 @@ impl LoadedTransferTarget {
             LoadedTransferTarget::Group { group, .. } => TransferTarget::Group {
                 role: group.role,
                 visible: true,
+                sight: group.sight,
             },
             LoadedTransferTarget::User(ns) => TransferTarget::PersonalNamespace {
                 owner: ns.owner,
@@ -378,6 +389,7 @@ impl LoadedTransferTarget {
             LoadedTransferTarget::NotVisible => TransferTarget::Group {
                 role: None,
                 visible: false,
+                sight: GroupSight::ROLE_ONLY,
             },
             LoadedTransferTarget::CurrentParent { namespace } => TransferTarget::CurrentParent {
                 top_level: namespace.is_none(),
@@ -456,6 +468,7 @@ impl ResourceCtx for GroupTransferCtx {
     fn resource(&self) -> Resource {
         Resource::GroupTransfer {
             source_role: self.group.role,
+            source_sight: self.group.sight,
             target: self.target.target(),
         }
     }

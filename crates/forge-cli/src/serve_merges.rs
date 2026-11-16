@@ -140,6 +140,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DocLintMigrationUntilInvalid
         // M3 X5: answers of the context API (never a merge's).
         | ErrorCode::RequirementNotFound
+        | ErrorCode::VisibilityAboveParent
         | ErrorCode::ContextWithheld
         // Plan 06 D-5 safety net: a whole copy refused to an agent (git
         // routes; never a merge's).

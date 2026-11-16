@@ -56,6 +56,7 @@ async fn an_owner_demoted_while_a_move_waits_is_refused_and_nothing_is_written()
         group: LoadedGroup {
             id: beta.group_id,
             role: Some(Role::Maintainer),
+            sight: forge_core::GroupSight::INTERNAL,
         },
     };
     let proof = prove(

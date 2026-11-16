@@ -485,6 +485,19 @@ fn update_details_name_fields_only_and_the_visibility_change_is_a_maintainer_eve
     // project.updated / group.updated are audit-only in M1 (phase 8b plan).
     assert_eq!(project.event_type(), None);
     assert_eq!(group.event_type(), None);
+    // Plan 15 MR 3: a group's visibility change is audit-only.
+    let group_visibility = AuditDetails::GroupVisibilityChanged {
+        group_id: GroupId::new(4),
+        from: Visibility::Internal,
+        to: Visibility::Private,
+        affected_projects: 3,
+    };
+    assert_eq!(group_visibility.action(), "group.visibility_changed");
+    assert_eq!(group_visibility.event_type(), None);
+    assert_eq!(
+        group_visibility.to_value(),
+        json!({"group_id": 4, "from": "internal", "to": "private", "affected_projects": 3})
+    );
     assert_eq!(
         visibility.event_type(),
         Some(EventType::ProjectVisibilityChanged)

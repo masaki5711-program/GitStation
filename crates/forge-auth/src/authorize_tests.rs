@@ -150,6 +150,7 @@ fn invisible_private_project_is_not_found() {
                 target: TransferTarget::Group {
                     role: Some(Role::Owner),
                     visible: true,
+                    sight: forge_core::GroupSight::INTERNAL,
                 },
             },
         ),
@@ -679,6 +680,7 @@ fn an_agent_token_is_refused_member_and_protection_changes() {
     let group_add = Resource::Membership {
         scope: MembershipScope::Group {
             role: Some(Role::Owner),
+            sight: forge_core::GroupSight::INTERNAL,
         },
         change: MembershipChange::Add(Role::Developer),
         removes_last_owner: false,
@@ -824,6 +826,7 @@ fn project_transfer_to_top_level_is_denied_for_admins() {
         TransferTarget::Group {
             role: None,
             visible: true,
+            sight: forge_core::GroupSight::INTERNAL,
         },
         TransferTarget::PersonalNamespace {
             owner: crate::matrix::OTHER,
@@ -837,6 +840,7 @@ fn project_transfer_to_top_level_is_denied_for_admins() {
     let hidden = to(TransferTarget::Group {
         role: None,
         visible: false,
+        sight: forge_core::GroupSight::INTERNAL,
     });
     for caller in [session(), admin_session()] {
         let err = authorize(&caller, Action::ProjectTransfer, &hidden).expect_err("hidden");
@@ -855,9 +859,11 @@ fn project_transfer_to_top_level_is_denied_for_admins() {
 fn group_transfer_needs_owner_on_both_sides() {
     let group = |source: Role, target: Option<Role>| Resource::GroupTransfer {
         source_role: Some(source),
+        source_sight: forge_core::GroupSight::INTERNAL,
         target: TransferTarget::Group {
             role: target,
             visible: true,
+            sight: forge_core::GroupSight::INTERNAL,
         },
     };
     assert!(authorize(
@@ -878,6 +884,7 @@ fn group_transfer_needs_owner_on_both_sides() {
     }
     let top = Resource::GroupTransfer {
         source_role: Some(Role::Owner),
+        source_sight: forge_core::GroupSight::INTERNAL,
         target: TransferTarget::TopLevel,
     };
     let err = authorize(&session(), Action::GroupTransfer, &top).expect_err("owner");
@@ -885,6 +892,7 @@ fn group_transfer_needs_owner_on_both_sides() {
     assert!(authorize(&admin_session(), Action::GroupTransfer, &top).is_ok());
     let personal = Resource::GroupTransfer {
         source_role: Some(Role::Owner),
+        source_sight: forge_core::GroupSight::INTERNAL,
         target: TransferTarget::PersonalNamespace {
             owner: ME,
             owner_kind: crate::AccountKind::Human,
@@ -1011,6 +1019,7 @@ fn agent_token_cannot_delete_transfer_or_release() {
                 target: TransferTarget::Group {
                     role: Some(Role::Owner),
                     visible: true,
+                    sight: forge_core::GroupSight::INTERNAL,
                 },
             },
         ),
@@ -1018,9 +1027,11 @@ fn agent_token_cannot_delete_transfer_or_release() {
             Action::GroupTransfer,
             Resource::GroupTransfer {
                 source_role: Some(Role::Owner),
+                source_sight: forge_core::GroupSight::INTERNAL,
                 target: TransferTarget::Group {
                     role: Some(Role::Owner),
                     visible: true,
+                    sight: forge_core::GroupSight::INTERNAL,
                 },
             },
         ),

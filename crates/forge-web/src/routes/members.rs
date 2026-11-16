@@ -211,6 +211,7 @@ async fn group_of(
     Ok(Some(LoadedGroup {
         id: record.id,
         role: record.role,
+        sight: record.sight,
     }))
 }
 

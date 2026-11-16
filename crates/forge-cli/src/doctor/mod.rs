@@ -46,6 +46,8 @@ mod ci_runners;
 mod ci_secrets;
 // M4 C11: deployment targets, pins and the deploy key.
 mod deploy;
+// Plan 15 MR 3: groups stored wider than their parent (info).
+mod groups;
 // M3 I1c: the integrations' event feed.
 mod integrations;
 // M3 O3: FG-GIT-0018, FG-GIT-0019, the ref count.
@@ -94,7 +96,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 40] = [
+const DB_CHECKS: [&str; 41] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -114,6 +116,8 @@ const DB_CHECKS: [&str; 40] = [
     // ── end C5 ──
     // D3 MR2: FG-AUTH-0010.
     "users.administration",
+    // Plan 15 MR 3: rows stored wider than the group above (info).
+    groups::NAME,
     // ── D4 MR3b: FG-REPO-0012, FG-REPO-0002 ──
     "repositories.provisioning",
     "repositories.storage",
@@ -292,6 +296,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let [subscriber_lag, dead_letters] = subscribers::subscriber_checks(db).await;
     // ── end C5 ──
     let administration = users::administration_check(db).await;
+    let group_visibility = groups::visibility_check(db).await;
     // ── D4 MR3b ──
     let [provisioning, storage] =
         repositories::repository_checks(db, root, forge_db::repositories::PROVISIONING_STUCK_AFTER)
@@ -328,6 +333,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         subscriber_lag,
         dead_letters,
         administration,
+        group_visibility,
         provisioning,
         storage,
         mergeability,

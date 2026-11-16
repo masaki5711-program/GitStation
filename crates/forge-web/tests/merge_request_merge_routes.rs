@@ -1729,6 +1729,7 @@ async fn the_approval_rule_get_names_its_approvers() {
         &w.t.db,
         &ctx("req-group-qa"),
         &forge_db::groups::NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "qa".to_owned(),
             parent: None,
             display_name: "Quality".to_owned(),
@@ -1885,6 +1886,7 @@ async fn a_group_without_its_namespace_row_never_blocks_the_merge_decision() {
         &w.t.db,
         &ctx("req-group-qa"),
         &forge_db::groups::NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "qa".to_owned(),
             parent: None,
             display_name: "Quality".to_owned(),
