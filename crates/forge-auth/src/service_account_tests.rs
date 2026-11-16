@@ -220,7 +220,8 @@ fn service_account_cannot_create_project_in_own_namespace() {
         &creator,
         Action::ProjectCreate,
         &Resource::Group {
-            role: Some(Role::Maintainer)
+            role: Some(Role::Maintainer),
+            sight: forge_core::GroupSight::INTERNAL,
         }
     )
     .is_ok());

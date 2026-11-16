@@ -18,7 +18,8 @@ use forge_errors::ForgeError;
 
 use crate::namespace_path::{LookupPath, NamespacePath};
 use crate::{
-    GroupId, NamespaceId, ProjectId, RepoId, RepositoryState, Role, TombstoneId, UserId, Visibility,
+    GroupId, GroupSight, NamespaceId, ProjectId, RepoId, RepositoryState, Role, TombstoneId,
+    UserId, Visibility,
 };
 
 /// The future these traits return (boxed: they are stored as trait objects).
@@ -82,6 +83,9 @@ impl NamespaceOwner {
 /// What forge-auth's project view needs for one viewer and one project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectAccess {
+    /// The **effective** visibility (plan 15 MR 3): `private` when the
+    /// project or any group above it is private ("narrowest wins"), else
+    /// the project's own `internal`.
     pub visibility: Visibility,
     /// The viewer's native effective role (direct, ancestor groups, owner
     /// of the personal namespace); `None` = no role or no viewer.
@@ -111,6 +115,9 @@ pub enum ResolvedTarget {
     Group {
         id: GroupId,
         viewer_role: Option<Role>,
+        /// The group's effective visibility and the viewer's roles below
+        /// (plan 15 MR 3).
+        sight: GroupSight,
     },
     /// A project, the viewer's access facts and its repository (one
     /// statement; the repository is not an authorization input).
@@ -235,7 +242,7 @@ pub trait ProjectAccessLoader: Send + Sync {
 }
 
 /// One group by id, as one row (M1 phase 8b MR7a): the viewer's role
-/// (decided by `authorize()`; groups are visible to every signed-in user)
+/// and the group's visibility facts (decided by `authorize()`, plan 15 MR 3)
 /// and what the group routes show. One statement, as for
 /// [`ProjectRecord`], so the id, the role and the details belong together.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,4 +261,8 @@ pub struct GroupRecord {
     pub description: String,
     /// `groups.created_at` in UTC, RFC 3339.
     pub created_at: String,
+    /// The group's own stored `groups.visibility` (plan 15 MR 3).
+    pub own_visibility: Visibility,
+    /// The effective visibility and the viewer's roles below.
+    pub sight: GroupSight,
 }

@@ -43,6 +43,7 @@ pub async fn group(t: &FreshDb, segment: &str, owner: UserId) -> CreatedGroup {
         &t.db,
         &system(&format!("req-group-{segment}")),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: segment.to_owned(),
             parent: None,
             display_name: format!("Group {segment}"),
@@ -103,6 +104,7 @@ pub async fn group_proof(
         GroupCtx::new(LoadedGroup {
             id: record.id,
             role: record.role,
+            sight: forge_core::GroupSight::INTERNAL,
         }),
     )
     .expect("allowed before the race")
@@ -161,9 +163,14 @@ pub async fn parent_proof(
             namespace,
             group,
             role,
+            sight,
         } => LoadedParent::Group {
             namespace,
-            group: LoadedGroup { id: group, role },
+            group: LoadedGroup {
+                id: group,
+                role,
+                sight,
+            },
         },
         forge_hosting::Parent::User {
             namespace,
@@ -183,6 +190,7 @@ pub async fn parent_proof(
 
 pub fn group_fields(path: &str) -> NewGroupFields {
     NewGroupFields {
+        visibility: forge_core::Visibility::Internal,
         path: path.to_owned(),
         display_name: format!("Group {path}"),
         description: String::new(),
@@ -258,6 +266,7 @@ pub async fn group_member_proof(
             LoadedGroup {
                 id: record.id,
                 role: record.role,
+                sight: forge_core::GroupSight::INTERNAL,
             },
             LoadedMembership {
                 member,

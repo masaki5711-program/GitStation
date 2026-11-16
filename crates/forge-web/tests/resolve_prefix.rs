@@ -71,6 +71,7 @@ impl forge_core::NamespaceResolver for Fake {
                 target: ResolvedTarget::Group {
                     id: GroupId::new(1),
                     viewer_role: None,
+                    sight: forge_core::GroupSight::INTERNAL,
                 },
             }),
             "acme/web" => project(1, Visibility::Internal, None, false),

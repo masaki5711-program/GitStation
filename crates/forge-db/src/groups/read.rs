@@ -4,32 +4,42 @@
 //! chain, the details from the same row).
 
 use forge_core::ids::{GroupId, NamespaceId, UserId};
-use forge_core::{GroupRecord, NamespacePath};
+use forge_core::{GroupRecord, GroupSight, NamespacePath, Visibility};
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::roles::{chain_cte, chain_role_columns, fold_chain, CAP};
+use crate::roles::{
+    chain_cte, chain_private_agg, chain_private_column, chain_role_columns, fold_chain,
+    viewer_above_cte, CAP,
+};
 use crate::{read_query_error, Db};
 
 /// `$1` the group id, `$2` the viewer (NULL = anonymous), `$3` the chain
-/// cap. One row: the chain's roles and rebuilt path (aggregates), the
-/// group row, its namespace and the parent namespace's owner (the parent
-/// group), all `LEFT JOIN`ed.
+/// cap. One row: the chain's roles, rebuilt path and whether a group on it
+/// is private (aggregates), the group row (with its stored visibility), its
+/// namespace, the parent namespace's owner (the parent group) and whether
+/// the viewer holds a role strictly below the group (plan 15 MR 3,
+/// `roles::viewer_above_cte!`), all `LEFT JOIN`ed.
 const GROUP_SQL: &str = concat!(
     "WITH RECURSIVE ",
     chain_cte!("kind = 'group' AND owner_id = $1"),
     ", steps AS (SELECT c.segment, c.parent_id AS up, ",
     chain_role_columns!(),
+    ", ",
+    chain_private_column!(),
     " FROM chain c), \
        agg AS (SELECT array_agg(step ORDER BY step) AS steps, \
          array_agg(truncated ORDER BY step) AS truncs, \
-         array_agg(role ORDER BY step) AS roles, \
-         string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
+         array_agg(role ORDER BY step) AS roles, ",
+    chain_private_agg!(),
+    ", string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
          coalesce(bool_or(truncated), false) AS truncated, \
-         coalesce(bool_or(up IS NULL), false) AS reaches_top FROM steps) \
-     SELECT g.id AS group_id, a.steps, a.truncs, a.roles, \
+         coalesce(bool_or(up IS NULL), false) AS reaches_top FROM steps), ",
+    viewer_above_cte!(),
+    " SELECT g.id AS group_id, a.steps, a.truncs, a.roles, a.chain_private, \
        n.id AS namespace_id, n.full_path, pn.kind AS parent_kind, pn.owner_id AS parent_owner, \
        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
-       g.display_name, g.description, \
+       g.display_name, g.description, g.visibility AS own_visibility, \
+       EXISTS (SELECT 1 FROM above ab WHERE ab.parent_id = n.id) AS has_visible_descendant, \
        to_char(g.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
      FROM agg a LEFT JOIN forge.groups g ON g.id = $1 \
      LEFT JOIN forge.namespaces n ON g.id IS NOT NULL AND n.kind = 'group' AND n.owner_id = $1 \
@@ -42,6 +52,7 @@ struct GroupRow {
     steps: Option<Vec<i32>>,
     truncs: Option<Vec<bool>>,
     roles: Option<Vec<Option<String>>>,
+    chain_private: Option<bool>,
     namespace_id: Option<i64>,
     full_path: Option<String>,
     parent_kind: Option<String>,
@@ -50,6 +61,8 @@ struct GroupRow {
     display_name: Option<String>,
     description: Option<String>,
     created_at: Option<String>,
+    own_visibility: Option<String>,
+    has_visible_descendant: Option<bool>,
 }
 
 /// `FG-DB-0021` (the resolver's code for stored namespace data it cannot
@@ -110,6 +123,12 @@ fn interpret(
         .zip(roles)
         .map(|((s, t), r)| (s, t, r));
     let roles = fold_chain(chain, "group", id, viewer)?;
+    // The narrowest on the chain (plan 15 MR 3); a missing aggregate is
+    // private (fail closed).
+    let effective = match row.chain_private {
+        Some(false) => Visibility::Internal,
+        Some(true) | None => Visibility::Private,
+    };
     if row.confirmed != Some(true) {
         return Err(invalid("group_path_unconfirmed", id));
     }
@@ -120,13 +139,20 @@ fn interpret(
         (Some("group"), Some(owner)) => Some(GroupId::new(owner)),
         (Some(_), _) => return Err(invalid("group_parent_not_group", id)),
     };
-    let (Some(display_name), Some(description), Some(created_at)) =
-        (row.display_name, row.description, row.created_at)
-    else {
+    let (Some(display_name), Some(description), Some(created_at), Some(raw_visibility)) = (
+        row.display_name,
+        row.description,
+        row.created_at,
+        row.own_visibility,
+    ) else {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "group_row_incomplete")
             .with_context("group_id", id));
     };
+    let own_visibility = Visibility::parse(&raw_visibility).ok_or_else(|| {
+        invalid("unknown_visibility", id)
+            .with_context("raw", raw_visibility.chars().take(32).collect::<String>())
+    })?;
     Ok(Some(GroupRecord {
         id: group,
         role: roles.native,
@@ -136,5 +162,10 @@ fn interpret(
         display_name,
         description,
         created_at,
+        own_visibility,
+        sight: GroupSight {
+            visibility: effective,
+            descendant: row.has_visible_descendant.unwrap_or(false),
+        },
     }))
 }

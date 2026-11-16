@@ -2767,6 +2767,17 @@ fn hosting_routes(registry: Registry<AppState>) -> Registry<AppState> {
             groups::update,
         )
         .responds::<groups::GroupBody>(Verb::Patch, groups::ONE)
+        // Plan 15 MR 3: who may see a group (its Owner, in a session).
+        .route_with_body(
+            Verb::Patch,
+            groups::VISIBILITY,
+            Action::GroupVisibilityChange,
+            "Change (or preview) a group's visibility (group Owner, web session)",
+            groups::MAX_BODY,
+            groups::GroupForVisibility,
+            groups::change_visibility,
+        )
+        .responds::<groups::GroupVisibilityBody>(Verb::Patch, groups::VISIBILITY)
         .route_with_body(
             Verb::Post,
             pw::COLLECTION,

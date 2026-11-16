@@ -37,6 +37,7 @@ async fn project(t: &FreshDb, group: &str, owner: UserId) -> (ProjectId, forge_c
         &t.db,
         &system(&format!("req-{group}")),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: group.into(),
             parent: None,
             display_name: group.into(),

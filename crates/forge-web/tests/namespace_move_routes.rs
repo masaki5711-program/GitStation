@@ -80,6 +80,7 @@ async fn group(
         &t.db,
         &ctx(&format!("req-group-{segment}")),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: segment.to_owned(),
             parent,
             display_name: segment.to_owned(),

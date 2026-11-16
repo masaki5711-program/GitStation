@@ -636,6 +636,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/groups/{id}/visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change (or preview) a group's visibility (group Owner, web session) */
+        patch: operations["patch_api_v1_groups_id_visibility"];
+        trace?: never;
+    };
     "/api/v1/integrations/{id}/act-as/claim": {
         parameters: {
             query?: never;
@@ -4006,6 +4023,7 @@ export interface components {
              *     reserved).
              */
             path: string;
+            visibility?: null | components["schemas"]["VisibilityName"];
         };
         /** @description `POST /api/v1/admin/integrations`. */
         CreateIntegration: {
@@ -4893,6 +4911,8 @@ export interface components {
             created_at: string;
             description: string;
             display_name: string;
+            /** @description What applies: the narrowest on the chain to the top level. */
+            effective_visibility: string;
             /** Format: int64 */
             id: number;
             /** @description The path's last segment. */
@@ -4904,10 +4924,22 @@ export interface components {
              * @description The parent group; `null` at the top level.
              */
             parent_id: number | null;
+            /**
+             * @description Shown only because the caller holds a role below it: its identity
+             *     (ids, parent, path, names, visibility, creation time) with an empty
+             *     description and no role; its members and other subgroups stay
+             *     hidden.
+             */
+            pass_through: boolean;
             /** @description The current full path (`group/sub`). */
             path: string;
-            /** @description The caller's effective role (`guest` … `owner`); `null` without one. */
+            /**
+             * @description The caller's effective role (`guest` … `owner`); `null` without
+             *     one. (This is the viewer's role of plan 15 MR 3.)
+             */
             role: string | null;
+            /** @description The group's own setting, `private` or `internal` (plan 15 MR 3). */
+            visibility: string;
         };
         /** @description A page of groups. */
         GroupPage: {
@@ -4919,6 +4951,20 @@ export interface components {
             items: components["schemas"]["ListedGroup"][];
             /** @description Pass as `cursor` for the next page; `null` on the last one. */
             next_cursor: string | null;
+        };
+        /**
+         * @description `PATCH /api/v1/groups/{id}/visibility` → the group as it is now and
+         *     what the change did (or, with `preview`, would do).
+         */
+        GroupVisibilityBody: {
+            /**
+             * Format: int64
+             * @description The live projects below whose effective visibility changes with it.
+             */
+            affected_projects: number;
+            /** @description Written (`false` for a preview or when nothing changed). */
+            changed: boolean;
+            group: components["schemas"]["GroupBody"];
         };
         /** @description The answer of a heartbeat. */
         HeartbeatAnswer: {
@@ -5174,16 +5220,26 @@ export interface components {
             created_at: string;
             description: string;
             display_name: string;
+            /** @description What applies: the narrowest on the chain to the top level. */
+            effective_visibility: string;
             /** Format: int64 */
             id: number;
             /** @description The path's last segment. */
             name: string;
             /** Format: int64 */
             namespace_id: number;
+            /**
+             * @description Shown only because the caller holds a role below it: its identity
+             *     (ids, path, names, visibility, creation time) with an empty
+             *     description and no role.
+             */
+            pass_through: boolean;
             /** @description The current full path (`group/sub`). */
             path: string;
             /** @description The caller's effective role (`guest` … `owner`); `null` without one. */
             role: string | null;
+            /** @description The group's own setting, `private` or `internal` (plan 15 MR 3). */
+            visibility: string;
         };
         /** @description The answer of a log append. */
         LogAnswer: {
@@ -6635,6 +6691,15 @@ export interface components {
             revoked_sessions: number;
             /** Format: int64 */
             user_id: number;
+        };
+        /** @description `PATCH /api/v1/groups/{id}/visibility` (plan 15 MR 3). */
+        SetGroupVisibility: {
+            /**
+             * @description Decide and count without writing: what the screen shows before a
+             *     narrowing is confirmed (`affected_projects`).
+             */
+            preview?: boolean;
+            visibility: components["schemas"]["VisibilityName"];
         };
         /** @description `PUT …/push-mirror`. */
         SetPushMirror: {
@@ -9208,6 +9273,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MoveBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    patch_api_v1_groups_id_visibility: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetGroupVisibility"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupVisibilityBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

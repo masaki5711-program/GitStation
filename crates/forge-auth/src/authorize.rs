@@ -75,11 +75,50 @@ use crate::action::Action;
 use forge_core::merge_conditions::MAX_CODEOWNERS_SUSPENSION_MINUTES;
 
 use crate::model::{
-    AccountKind, AdmissionAccount, CodeownersToggle, CopyMark, Credential, MembershipChange,
-    MembershipScope, MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefUpdate,
-    ResolvedVia, Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget,
-    UnresolvedReason, Visibility,
+    AccountKind, AdmissionAccount, CodeownersToggle, CopyMark, Credential, GroupSight,
+    MembershipChange, MembershipScope, MergeRequestState, NamespaceView, Principal, ProjectView,
+    RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, ServiceAccountView, TombstoneRelease,
+    TransferTarget, UnresolvedReason, Visibility,
 };
+
+/// How the caller sees a group (plan 15 MR 3, ADR-0010 Amendment
+/// "グループの可視性"). The one place it is computed: `authorize()` decides
+/// with it, and the group routes show a pass-through group's name and path
+/// only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupSeen {
+    /// Administrators, a role on the group's chain, or an internal chain
+    /// for a signed-in person or bot (a service account only by its roles,
+    /// as for internal projects).
+    Full,
+    /// Hidden otherwise, but the caller holds a role strictly below: the
+    /// name and path only (`GroupRead` and resolving its path; no members,
+    /// no other children, no writes).
+    PassThrough,
+    /// The invisible project's 404 (`FG-REPO-0005`).
+    Hidden,
+}
+
+/// [`GroupSeen`] for `principal` with `role` on a group seen as `sight`.
+pub fn group_seen(principal: &Principal, role: Option<Role>, sight: GroupSight) -> GroupSeen {
+    seen(
+        principal.admin_rights(),
+        principal.account_kind(),
+        role,
+        sight,
+    )
+}
+
+fn seen(admin: bool, kind: AccountKind, role: Option<Role>, sight: GroupSight) -> GroupSeen {
+    if admin || role.is_some() || (sight.visibility == Visibility::Internal && sees_internal(kind))
+    {
+        GroupSeen::Full
+    } else if sight.descendant {
+        GroupSeen::PassThrough
+    } else {
+        GroupSeen::Hidden
+    }
+}
 
 /// Decide whether `principal` may perform `action` on `resource`.
 /// `Ok(())` = allowed; `Err` carries the code and safe context for the log.
@@ -240,12 +279,34 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             return Err(deny(ErrorCode::PendingDeletion));
         }
     }
+    // A group's effective visibility (plan 15 MR 3), like a project's:
+    // before anything else that could reveal it, the same 404. A
+    // pass-through group is shown (name and path) and its path resolved,
+    // nothing more.
+    if let Some((role, sight)) = group_of(resource) {
+        match seen(admin, kind, role, sight) {
+            GroupSeen::Full => {}
+            GroupSeen::PassThrough if matches!(action, Action::GroupRead | Action::PathResolve) => {
+            }
+            GroupSeen::PassThrough => {
+                return Err(deny(ErrorCode::NotFound).with_context("reason", "group_pass_through"));
+            }
+            GroupSeen::Hidden => {
+                let reason = if seen(false, AccountKind::Human, role, sight) == GroupSeen::Full {
+                    "service_account_not_member"
+                } else {
+                    "group_not_visible"
+                };
+                return Err(deny(ErrorCode::NotFound).with_context("reason", reason));
+            }
+        }
+    }
     // The other side of a move, or a moved tombstone's target, the caller
     // cannot see (or that does not exist): the same 404 (ADR-0015).
     // Administrators too: the loader shows them every target, so for them
     // `visible: false` means "absent" — never a pass to a missing parent.
     // Before the scope and agent checks, so every caller gets the same 404.
-    if let Some(reason) = hidden_target(resource, admin) {
+    if let Some(reason) = hidden_target(resource, admin, kind) {
         return Err(deny(ErrorCode::NotFound).with_context("reason", reason));
     }
 
@@ -329,8 +390,9 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         ) => Ok(()),
 
         // Visibility (can see, not a read role: a Guest on a private project
-        // resolves it) and pending deletion were decided above; groups and
-        // personal namespaces are visible to every signed-in user.
+        // resolves it) and pending deletion were decided above, a group's
+        // too (plan 15 MR 3: a pass-through group resolves); personal
+        // namespaces are visible to every signed-in user.
         (Action::PathResolve, Resource::Resolved { .. }) => Ok(()),
         // Returned above for every non-public action; kept for exhaustiveness.
         (_, Resource::Unresolved(reason)) => unresolved(*reason),
@@ -414,7 +476,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             }
         }
 
-        (Action::ProjectCreate, Resource::Group { role }) => need(Role::Maintainer, *role),
+        (Action::ProjectCreate, Resource::Group { role, .. }) => need(Role::Maintainer, *role),
         (Action::ProjectCreate, Resource::Namespace { owner, owner_kind }) => {
             // M3 S0 (and its review): the personal namespace of a service
             // account or a bot holds no projects, whoever creates them —
@@ -446,7 +508,8 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         (Action::MemberList | Action::ProtectedRefList, Resource::Project(p)) => {
             need(Role::Reporter, read_role(p))
         }
-        // A group's members, like the group, are visible to every signed-in user.
+        // A group's members are visible to whoever sees the group (plan 15
+        // MR 3: decided above; a pass-through view shows no members).
         (Action::MemberList, Resource::Group { .. }) => Ok(()),
 
         (Action::ProtectedRefManage, Resource::RefProtectionChange { project, from, to }) => {
@@ -506,6 +569,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             Resource::GroupTransfer {
                 source_role,
                 target,
+                ..
             },
         ) => {
             people_only()?;
@@ -596,7 +660,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             people_only()?;
             let caller = match scope {
                 MembershipScope::Project(p) => p.role,
-                MembershipScope::Group { role } => *role,
+                MembershipScope::Group { role, .. } => *role,
             };
             need(Role::Maintainer, caller)?;
             // Nobody acts on a role above their own: neither the role being
@@ -622,10 +686,18 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             Ok(())
         }
 
-        // Groups are visible to every signed-in user (internal).
+        // Whoever sees the group reads it (plan 15 MR 3: its effective
+        // visibility and the pass-through view were decided above).
         (Action::GroupRead, Resource::Group { .. }) => Ok(()),
         (Action::GroupCreateTopLevel, Resource::Instance) => admin_only(),
-        (Action::SubgroupCreate | Action::GroupUpdate, Resource::Group { role }) => {
+        (Action::SubgroupCreate | Action::GroupUpdate, Resource::Group { role, .. }) => {
+            need(Role::Owner, *role)
+        }
+        // Who may see a group is its Owner's decision, a person's (plan 15
+        // MR 3; a session only: tokens were refused above). A value wider
+        // than the chain above is refused inside the write (FG-REPO-0033).
+        (Action::GroupVisibilityChange, Resource::Group { role, .. }) => {
+            people_only()?;
             need(Role::Owner, *role)
         }
 
@@ -1479,7 +1551,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         }
 
         (Action::AuditRead, Resource::Instance) => admin_only(),
-        (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
+        (Action::AuditRead, Resource::Group { role, .. }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
 
         // Every other combination: the resource does not fit the action.
@@ -1509,6 +1581,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::GroupCreateTopLevel
             | Action::SubgroupCreate
             | Action::GroupUpdate
+            | Action::GroupVisibilityChange
             | Action::GroupTransfer
             | Action::NamespaceTombstoneRelease
             | Action::UserRename
@@ -1758,14 +1831,48 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
     }
 }
 
+/// The group a resource is (or is reached through) and how it is seen, for
+/// the group visibility check (plan 15 MR 3).
+fn group_of(resource: &Resource) -> Option<(Option<Role>, GroupSight)> {
+    if let Resource::Group { role, sight }
+    | Resource::Resolved {
+        view: NamespaceView::Group { role, sight },
+        ..
+    }
+    | Resource::Membership {
+        scope: MembershipScope::Group { role, sight },
+        ..
+    }
+    | Resource::GroupTransfer {
+        source_role: role,
+        source_sight: sight,
+        ..
+    } = resource
+    {
+        Some((*role, *sight))
+    } else {
+        None
+    }
+}
+
 /// The log `reason` when the far side of a resource is hidden from the
-/// caller: a transfer's target group, or a moved tombstone's target.
-fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
+/// caller: a transfer's target group (absent, or a group the caller sees
+/// no more than as a pass-through, plan 15 MR 3), or a moved tombstone's
+/// target.
+fn hidden_target(resource: &Resource, admin: bool, kind: AccountKind) -> Option<&'static str> {
     if let Resource::Transfer { target, .. } | Resource::GroupTransfer { target, .. } = resource {
-        if matches!(target, TransferTarget::Group { visible: false, .. }) {
-            return Some("target_not_visible");
+        if let TransferTarget::Group {
+            role,
+            visible,
+            sight,
+        } = *target
+        {
+            if !visible || seen(admin, kind, role, sight) != GroupSeen::Full {
+                return Some("target_not_visible");
+            }
         }
     }
+
     match resource {
         Resource::Tombstone(TombstoneRelease::Moved {
             target_visible: false,

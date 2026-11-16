@@ -646,6 +646,7 @@ async fn an_http_disable_never_passes_the_administration_guard() {
         &t.db,
         &ctx("req-group"),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: "acme".to_owned(),
             parent: None,
             display_name: "Acme".to_owned(),

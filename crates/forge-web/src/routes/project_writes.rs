@@ -65,7 +65,7 @@ pub enum VisibilityName {
 }
 
 impl VisibilityName {
-    fn visibility(self) -> Visibility {
+    pub(crate) fn visibility(self) -> Visibility {
         match self {
             Self::Private => Visibility::Private,
             Self::Internal => Visibility::Internal,
@@ -156,9 +156,14 @@ impl BodyLoader<AppState, CreateProject> for Parent {
                     namespace,
                     group,
                     role,
+                    sight,
                 }) => LoadedParent::Group {
                     namespace,
-                    group: LoadedGroup { id: group, role },
+                    group: LoadedGroup {
+                        id: group,
+                        role,
+                        sight,
+                    },
                 },
                 Some(HostedParent::User {
                     namespace,

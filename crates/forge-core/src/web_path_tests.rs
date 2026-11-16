@@ -721,6 +721,7 @@ fn namespace_kinds_and_owners() {
             ResolvedTarget::Group {
                 id: GroupId::new(2),
                 viewer_role: None,
+                sight: crate::GroupSight::INTERNAL,
             },
             NamespaceOwner::Group(GroupId::new(2)),
             NamespaceKind::Group,

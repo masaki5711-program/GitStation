@@ -189,6 +189,11 @@ actions! {
     GroupCreateTopLevel,
     SubgroupCreate,
     GroupUpdate,
+    /// `PATCH /api/v1/groups/{id}/visibility` (plan 15 MR 3, ADR-0010
+    /// Amendment "グループの可視性"): a group's stored visibility. The
+    /// group's Owner, a person in a web session only (a token, an agent, a
+    /// service account and a bot are refused whatever their role).
+    GroupVisibilityChange,
     /// Move or rename a group (`Resource::GroupTransfer`, ADR-0015, D5).
     GroupTransfer,
     /// Release a namespace tombstone (`Resource::Tombstone`, ADR-0015, D5).
@@ -678,6 +683,8 @@ impl Action {
                 | Action::AutoMergeSettingsManage
                 // M4 C11 review: an approval is a person's in the browser.
                 | Action::DeployApprove
+                // Plan 15 MR 3: who may see a group is decided in a session.
+                | Action::GroupVisibilityChange
         )
     }
 
@@ -691,6 +698,7 @@ impl Action {
         matches!(
             self,
             Action::ProjectVisibilityChange
+                | Action::GroupVisibilityChange
                 | Action::ProtectedRefManage
                 | Action::ProjectTransfer
                 | Action::GroupTransfer
@@ -795,6 +803,8 @@ impl Action {
             | Action::JobArtifactDownload
             // M4 C11 review: session only.
             | Action::DeployApprove
+            // Plan 15 MR 3: a session only (see `is_session_only`).
+            | Action::GroupVisibilityChange
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -974,6 +984,7 @@ impl Action {
             | Action::GroupCreateTopLevel
             | Action::SubgroupCreate
             | Action::GroupUpdate
+            | Action::GroupVisibilityChange
             | Action::GroupTransfer
             | Action::NamespaceTombstoneRelease
             | Action::TokenCreate
@@ -1135,6 +1146,7 @@ impl Action {
             | Action::GroupCreateTopLevel
             | Action::SubgroupCreate
             | Action::GroupUpdate
+            | Action::GroupVisibilityChange
             | Action::GroupTransfer
             | Action::NamespaceTombstoneRelease
             | Action::TokenCreate
