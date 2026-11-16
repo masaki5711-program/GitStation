@@ -537,6 +537,82 @@ pub(crate) async fn chain_private_on(
         .map_err(|e| query_error("roles.chain_private", e))
 }
 
+/// [`chain_private_on`] after locking the groups rows of that chain
+/// `FOR SHARE`, in id order (review of plan 15 MR 3): a concurrent
+/// narrowing of a group above (its row `FOR UPDATE`) waits until this
+/// write commits, or commits first and is seen — so an `internal` value
+/// is never written below a group that has just become private. The
+/// caller holds no lock on a group above before this (it locked its own
+/// row only), and a narrowing locks only its own row, so the two never
+/// wait on each other in a cycle.
+pub(crate) async fn chain_private_locked_on(
+    conn: &mut PgConnection,
+    namespace: NamespaceId,
+) -> Result<bool, ForgeError> {
+    const LOCK: &str = "WITH RECURSIVE c (id, parent_id, kind, owner_id, step) AS ( \
+           SELECT id, parent_id, kind, owner_id, 1 FROM forge.namespaces WHERE id = $1 \
+           UNION ALL \
+           SELECT n.id, n.parent_id, n.kind, n.owner_id, c.step + 1 \
+           FROM forge.namespaces n JOIN c ON n.id = c.parent_id WHERE c.step < $2) \
+         SELECT g.id FROM forge.groups g \
+         WHERE g.id IN (SELECT owner_id FROM c WHERE kind = 'group') \
+         ORDER BY g.id FOR SHARE OF g";
+    let _locked: Vec<i64> = sqlx::query_scalar(LOCK)
+        .bind(namespace.get())
+        .bind(CAP)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.chain_lock", e))?;
+    chain_private_on(conn, namespace).await
+}
+
+/// What a move narrows (review of plan 15 MR 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MovedRow {
+    Group(GroupId),
+    Project(ProjectId),
+}
+
+/// Before a group or project leaves `old_parent` for `new_parent`: when the
+/// old chain is private, its stored visibility is narrowed to `private`
+/// (its effective value there), so the move never widens it — an
+/// `internal` row below a private group is private in effect, and would
+/// otherwise become internal under an internal parent. Its descendants keep
+/// their stored values: below a private row they stay private in effect
+/// ("narrowest wins"). A rename (same parent) changes nothing. Returns
+/// whether the row was narrowed.
+pub(crate) async fn narrow_before_move(
+    conn: &mut PgConnection,
+    row: MovedRow,
+    old_parent: Option<NamespaceId>,
+    new_parent: Option<NamespaceId>,
+) -> Result<bool, ForgeError> {
+    let Some(old) = old_parent else {
+        return Ok(false);
+    };
+    if new_parent == Some(old) || !chain_private_on(conn, old).await? {
+        return Ok(false);
+    }
+    let (sql, id) = match row {
+        MovedRow::Group(g) => (
+            "UPDATE forge.groups SET visibility = 'private', updated_at = now() \
+             WHERE id = $1 AND visibility <> 'private'",
+            g.get(),
+        ),
+        MovedRow::Project(p) => (
+            "UPDATE forge.projects SET visibility = 'private', updated_at = now() \
+             WHERE id = $1 AND visibility <> 'private'",
+            p.get(),
+        ),
+    };
+    let done = sqlx::query(sql)
+        .bind(id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.narrow_before_move", e))?;
+    Ok(done.rows_affected() > 0)
+}
+
 // ── end plan 15 MR 3 ──
 
 /// The native role of each of `users` on `project`, read on `conn`

@@ -4925,9 +4925,10 @@ export interface components {
              */
             parent_id: number | null;
             /**
-             * @description Shown only because the caller holds a role below it: the name and
-             *     path only (the description is empty; members and other subgroups
-             *     stay hidden).
+             * @description Shown only because the caller holds a role below it: its identity
+             *     (ids, parent, path, names, visibility, creation time) with an empty
+             *     description and no role; its members and other subgroups stay
+             *     hidden.
              */
             pass_through: boolean;
             /** @description The current full path (`group/sub`). */
@@ -5228,8 +5229,9 @@ export interface components {
             /** Format: int64 */
             namespace_id: number;
             /**
-             * @description Shown only because the caller holds a role below it: the name and
-             *     path only (the description is empty).
+             * @description Shown only because the caller holds a role below it: its identity
+             *     (ids, path, names, visibility, creation time) with an empty
+             *     description and no role.
              */
             pass_through: boolean;
             /** @description The current full path (`group/sub`). */

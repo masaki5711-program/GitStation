@@ -364,8 +364,9 @@ pub struct ListedGroup {
     pub visibility: String,
     /// What applies: the narrowest on the chain to the top level.
     pub effective_visibility: String,
-    /// Shown only because the caller holds a role below it: the name and
-    /// path only (the description is empty).
+    /// Shown only because the caller holds a role below it: its identity
+    /// (ids, path, names, visibility, creation time) with an empty
+    /// description and no role.
     pub pass_through: bool,
 }
 
@@ -798,7 +799,8 @@ async fn group_page(
 }
 
 /// A group's list item (shown only after `authorize(GroupRead)` allowed);
-/// a pass-through group shows its name and path only (plan 15 MR 3).
+/// a pass-through group shows its identity without its description (plan
+/// 15 MR 3).
 fn group_view(group: &GroupListing, seen: GroupSeen) -> ListedGroup {
     let pass_through = seen != GroupSeen::Full;
     ListedGroup {

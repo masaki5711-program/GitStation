@@ -10,9 +10,9 @@
 //!   everyone else gets the invisible project's 404 (`FG-REPO-0005`), a
 //!   service account too — and on an internal group a service account
 //!   without a role as well (it sees what it is a member of, M3 S0);
-//! - a caller with a role strictly below sees it as a pass-through:
-//!   `GroupRead` and resolving its path only, never its members, never a
-//!   write (404);
+//! - a caller with a role strictly below sees it as a pass-through
+//!   (its identity without its description): `GroupRead` and resolving
+//!   its path only, never its members, never a write (404);
 //! - creating in, changing, auditing, moving or moving into a group the caller
 //!   cannot see is the same 404, never a 403;
 //! - `GroupVisibilityChange`: the group's Owner (administrators pass), a
@@ -109,6 +109,9 @@ pub(crate) const GROUP_VISIBILITY_ROWS: &[Row] = &[
     row(A::GroupVisibilityChange, W::Maintainer, F::Group, deny(E::Forbidden)),
     row(A::GroupVisibilityChange, W::Maintainer, PRIVATE, deny(E::Forbidden)),
     row(A::GroupVisibilityChange, W::Guest, F::Group, deny(E::Forbidden)),
+    row(A::GroupVisibilityChange, W::Guest, PRIVATE, deny(E::Forbidden)),
+    // A token is refused before the group is looked at, even a hidden one.
+    row(A::GroupVisibilityChange, W::NonMemberTokenReadApi, PASS, deny(E::InsufficientScope)),
     row(A::GroupVisibilityChange, W::NonMember, F::Group, deny(E::Forbidden)),
     row(A::GroupVisibilityChange, W::NonMember, PRIVATE, deny(E::NotFound)),
     row(A::GroupVisibilityChange, W::NonMember, PASS, deny(E::NotFound)),

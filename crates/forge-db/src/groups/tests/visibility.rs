@@ -256,3 +256,105 @@ async fn a_preview_counts_without_writing_and_widening_below_private_is_refused(
     // team (internal below acme), a and b (internal below acme).
     assert_eq!((wider.groups, wider.projects), (1, 2));
 }
+
+fn as_user(user: UserId, request: &str) -> ChangeContext {
+    ChangeContext::new(
+        crate::change::Actor::User(user),
+        RequestId::parse(request).expect("request id"),
+    )
+}
+
+fn options() -> crate::namespaces::MoveOptions {
+    crate::namespaces::MoveOptions {
+        reclaim: false,
+        rate_limit: crate::namespaces::RateLimit::Enforce,
+    }
+}
+
+/// Review of plan 15 MR 3: a move out of a private group never widens —
+/// the moved row is narrowed to its effective visibility first.
+#[tokio::test]
+async fn moving_out_of_a_private_group_lands_private() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let acme = create_ok(&t, &group("acme", None, alice)).await;
+    let open = create_ok(&t, &group("open", None, alice)).await;
+    let team = create_ok(&t, &group("team", Some(acme.namespace_id), alice)).await;
+    let app = projects::create(
+        &t.db,
+        &ctx("req-app"),
+        &NewProject {
+            visibility: Visibility::Internal,
+            ..NewProject::new("app", acme.namespace_id, "app", alice)
+        },
+    )
+    .await
+    .expect("app");
+    let (narrowed, ()) = change_visibility_decided(
+        &t.db,
+        &ctx("req-narrow"),
+        acme.group_id,
+        alice,
+        Visibility::Private,
+        false,
+        allow,
+    )
+    .await
+    .expect("narrow");
+    assert!(narrowed.changed);
+
+    let to_open = |segment: &str| crate::namespaces::Destination {
+        parent: Some(open.namespace_id),
+        segment: segment.to_owned(),
+    };
+    projects::move_decided(
+        &t.db,
+        &as_user(alice, "req-move-app"),
+        app.project_id,
+        alice,
+        &to_open("app"),
+        options(),
+        |_| Ok(()),
+    )
+    .await
+    .expect("move app");
+    move_decided(
+        &t.db,
+        &as_user(alice, "req-move-team"),
+        team.group_id,
+        alice,
+        &to_open("team"),
+        options(),
+        |_| Ok(()),
+    )
+    .await
+    .expect("move team");
+
+    let mut su = t.superuser().await;
+    let project: String = sqlx::query_scalar("SELECT visibility FROM forge.projects WHERE id = $1")
+        .bind(app.project_id.get())
+        .fetch_one(&mut su)
+        .await
+        .expect("project");
+    let group_row: String = sqlx::query_scalar("SELECT visibility FROM forge.groups WHERE id = $1")
+        .bind(team.group_id.get())
+        .fetch_one(&mut su)
+        .await
+        .expect("group");
+    assert_eq!(
+        (project.as_str(), group_row.as_str()),
+        ("private", "private")
+    );
+    // Under the internal `open` they stay private in effect too.
+    let bob = user(&t, "bob").await;
+    let record = crate::resolve::load_project(&t.db, app.project_id, Some(bob))
+        .await
+        .expect("load")
+        .expect("app");
+    assert_eq!(record.access.visibility, Visibility::Private);
+    let moved_team = load(&t.db, team.group_id, Some(bob))
+        .await
+        .expect("load")
+        .expect("team");
+    assert_eq!(moved_team.sight.visibility, Visibility::Private);
+}

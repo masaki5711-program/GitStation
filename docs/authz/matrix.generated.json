@@ -41,7 +41,7 @@
   { "action": "GroupCreateTopLevel", "allow": 3, "deny": 14, "public": false, "git_operation": false },
   { "action": "SubgroupCreate", "allow": 5, "deny": 20, "public": false, "git_operation": false },
   { "action": "GroupUpdate", "allow": 5, "deny": 17, "public": false, "git_operation": false },
-  { "action": "GroupVisibilityChange", "allow": 4, "deny": 18, "public": false, "git_operation": false },
+  { "action": "GroupVisibilityChange", "allow": 4, "deny": 20, "public": false, "git_operation": false },
   { "action": "GroupTransfer", "allow": 9, "deny": 30, "public": false, "git_operation": false },
   { "action": "NamespaceTombstoneRelease", "allow": 8, "deny": 30, "public": false, "git_operation": false },
   { "action": "TokenCreate", "allow": 3, "deny": 15, "public": false, "git_operation": false },

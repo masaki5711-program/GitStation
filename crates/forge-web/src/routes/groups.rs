@@ -9,7 +9,8 @@
 //! A group's effective visibility is the narrowest on its chain (ADR-0010
 //! Amendment "グループの可視性"): a group the caller cannot see is the same
 //! `FG-REPO-0005` as an absent one, and one seen only because the caller
-//! holds a role below it shows its name and path only (`pass_through`).
+//! holds a role below it shows its identity without its description
+//! (`pass_through`).
 //!
 //! The registry authenticates, reads the strict JSON body (write routes),
 //! loads the group with **one** `forge_hosting::Hosting::group` call (the
@@ -120,9 +121,10 @@ pub struct GroupBody {
     pub visibility: String,
     /// What applies: the narrowest on the chain to the top level.
     pub effective_visibility: String,
-    /// Shown only because the caller holds a role below it: the name and
-    /// path only (the description is empty; members and other subgroups
-    /// stay hidden).
+    /// Shown only because the caller holds a role below it: its identity
+    /// (ids, parent, path, names, visibility, creation time) with an empty
+    /// description and no role; its members and other subgroups stay
+    /// hidden.
     pub pass_through: bool,
 }
 

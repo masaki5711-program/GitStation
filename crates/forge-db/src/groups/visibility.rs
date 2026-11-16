@@ -16,7 +16,7 @@ use sqlx::postgres::PgConnection;
 use super::{not_found, GroupAccess, GroupUpdateFacts, RESOURCE};
 use crate::access::lock_account;
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
-use crate::roles::{chain_private_on, lock_roles, RoleAnchor, CAP};
+use crate::roles::{chain_private_locked_on, lock_roles, RoleAnchor, CAP};
 use crate::{query_error, read_query_error, Db};
 
 /// What a visibility change did (or, for a preview, would do).
@@ -116,7 +116,9 @@ pub async fn change_visibility_decided<P>(
         })?;
         let above_private = match parent {
             Some(parent) => {
-                tx.step(|c| chain_private_on(c, NamespaceId::new(parent)))
+                // The groups above locked `FOR SHARE` (review): a concurrent
+                // narrowing above waits, or is seen.
+                tx.step(|c| chain_private_locked_on(c, NamespaceId::new(parent)))
                     .await?
             }
             None => false,

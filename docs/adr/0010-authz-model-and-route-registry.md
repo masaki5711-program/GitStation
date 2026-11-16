@@ -243,9 +243,9 @@ Context の「リポジトリは種類（`spec` / `system`）を持ち」は、A
 - **見える人**: 鎖のどこかで役割を持つ人（直接・継承）、管理者、実際の可視性が `internal` ならサインインした人とボット（サービス
   アカウントは役割があるときだけ。プロジェクトの `sees_internal` と同じ。今まで全員に見えていた internal のグループも、役割のない
   サービスアカウントには見えなくなった）。判定は `authorize::group_seen`（`Full` / `PassThrough` / `Hidden`）の 1 か所。
-- **通り道**: ほかに見えないが、下のグループか削除されていないプロジェクトに直接の役割を持つ人には、名前とパスだけ見せる
-  （`GroupRead` と、そのパスの `PathResolve` だけ。本文は `pass_through: true`、説明は空）。メンバー、ほかの子、書き込みは
-  見えないものと同じ 404。
+- **通り道**: ほかに見えないが、下のグループか削除されていないプロジェクトに直接の役割を持つ人には、グループの身元だけ見せる
+  （`GroupRead` と、そのパスの `PathResolve` だけ。本文は `pass_through: true` で、id・親・パス・名前・可視性・作成日時は出し、
+  説明は空、役割は null）。メンバー、ほかの子、書き込みは見えないものと同じ 404。
 - **見えないとき**: 見えないプロジェクトと同じ `FG-REPO-0005`（404、`reason=group_not_visible` / `group_pass_through` /
   `service_account_not_member`）。`GroupRead`、`MemberList`、`MemberManage`、`SubgroupCreate`、`ProjectCreate`、`GroupUpdate`、
   `AuditRead`、パスの解決、移動先のグループ（`TransferTarget::Group` は `sight` を持ち、通り道でしか見えない先は
@@ -263,6 +263,15 @@ Context の「リポジトリは種類（`spec` / `system`）を持ち」は、A
 - **親より広げない**: 鎖の上が非公開のところに `internal` を求める変更（グループの可視性、`internal` のサブグループ・プロジェクトの
   作成、プロジェクトの可視性）は、書き込みのトランザクションの中で判定のあとに `FG-REPO-0033`（VisibilityAboveParent、409、
   操作の誤りで runbook なし）で断る。
+- **移動で広げない**（レビューの指摘）: プロジェクトかグループが親を変えるとき、元の鎖が非公開なら、動かす行の保存値を
+  移動の前に `private` に狭める（`roles::narrow_before_move`、元の鎖での実際の値）。そうしないと、非公開のグループの下に
+  `internal` で保存された行が、internal の親へ移ると急に見えるようになる。下の子孫は保存値のまま（狭めた行の下なので、
+  一番狭いものを取る規則で非公開のまま）。名前だけの変更（親が同じ）は何も変えない。
+- **上の鎖のロック**（レビューの指摘）: グループとプロジェクトの可視性の変更は、`internal` を書く前に上のグループの行を
+  `FOR SHARE` でロックしてから鎖を読む（`roles::chain_private_locked_on`）。上を狭める変更（その行の `FOR UPDATE`）と
+  同時に走っても、待つか先の結果を見るので、非公開の親の下に `internal` の子が新しく書かれることはない。サブグループと
+  プロジェクトの作成は親の名前空間を `FOR SHARE` でロックするだけで、上のグループの行はロックしない（同時に親を狭めたとき、
+  作成した行が親より広く保存されることがある。実際の値は非公開のままで、`forge doctor groups.visibility` が数える）。
 - **作成**: グループを作るときは `visibility` を必ず明示して書く（列の既定 `internal` は広いほうなので頼らない）。API の既定は
   `private`（計画 15 §6 の 2）。
 - **運用**: `forge doctor` `groups.visibility`（info、FG コードなし）が、非公開のグループの下に `internal` で保存された

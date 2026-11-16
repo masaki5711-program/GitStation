@@ -19,7 +19,7 @@ use super::{evented_record, not_found, request_invalid, RESOURCE};
 use crate::access::{lock_account, Account};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::groups::{changed_fields, check_fields, Updated};
-use crate::roles::{chain_private_column, lock_roles, RoleAnchor, CAP};
+use crate::roles::{chain_private_column, chain_private_locked_on, lock_roles, RoleAnchor, CAP};
 use crate::{query_error, Db};
 
 /// Whether a group above project `$1` (its chain capped at `$2` steps, as
@@ -151,6 +151,24 @@ async fn lock_with(
     })
 }
 
+/// Whether a group above `project` is private, after locking the groups
+/// above `FOR SHARE` (`roles::chain_private_locked_on`).
+async fn above_private_locked(tx: &mut ChangeTx, project: ProjectId) -> Result<bool, ForgeError> {
+    let namespace: i64 = tx
+        .step(|c| async move {
+            sqlx::query_scalar(
+                "SELECT id FROM forge.namespaces WHERE kind = 'project' AND owner_id = $1",
+            )
+            .bind(project.get())
+            .fetch_one(c)
+            .await
+            .map_err(|e| query_error("projects.visibility.namespace", e))
+        })
+        .await?;
+    tx.step(|c| chain_private_locked_on(c, forge_core::NamespaceId::new(namespace)))
+        .await
+}
+
 /// The facts `decide` sees: the locked row, then the roles (membership
 /// rows `FOR SHARE`), then the account row.
 pub(crate) async fn facts(
@@ -270,7 +288,9 @@ pub async fn change_visibility_decided<P>(
         let decided = decide(&facts(&mut tx, project, viewer, &locked).await?)?;
         // Never wider than the chain above (plan 15 MR 3): an internal
         // project below a private group would still be private.
-        if to == Visibility::Internal && locked.above_private {
+        // The groups above locked `FOR SHARE` first (review): a concurrent
+        // narrowing above waits until this change commits, or is seen.
+        if to == Visibility::Internal && above_private_locked(&mut tx, project).await? {
             return Err(ForgeError::new(ErrorCode::VisibilityAboveParent)
                 .with_context("reason", "project_above_private")
                 .with_context("project_id", project.get()));

@@ -5369,7 +5369,7 @@
             ]
           },
           "pass_through": {
-            "description": "Shown only because the caller holds a role below it: the name and\npath only (the description is empty; members and other subgroups\nstay hidden).",
+            "description": "Shown only because the caller holds a role below it: its identity\n(ids, parent, path, names, visibility, creation time) with an empty\ndescription and no role; its members and other subgroups stay\nhidden.",
             "type": "boolean"
           },
           "path": {
@@ -6129,7 +6129,7 @@
             "type": "integer"
           },
           "pass_through": {
-            "description": "Shown only because the caller holds a role below it: the name and\npath only (the description is empty).",
+            "description": "Shown only because the caller holds a role below it: its identity\n(ids, path, names, visibility, creation time) with an empty\ndescription and no role.",
             "type": "boolean"
           },
           "path": {
