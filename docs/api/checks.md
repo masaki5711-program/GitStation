@@ -144,6 +144,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 
 - `stop`（どの方式の自動マージでも止める。M4 の自動マージは `failure` の head をマージしない）: 適用済みの migration の変更・削除・改名、migration の `DROP TABLE|COLUMN|SCHEMA|DATABASE`・`TRUNCATE`・`WHERE` のない `DELETE` / `UPDATE`・列の型の変更・`RENAME`・制約の削除・`DISABLE TRIGGER`、CI・デプロイのファイルの `migrate revert` など、認証情報のファイル名（`.env`、`id_rsa`、`.p12` など）、秘密鍵・トークンらしき本文（push の検査 X8 と同じ規則）、backup / restore / retention のジョブ、大量削除（削除 500 行以上かつ target の text 行の 30 % 以上、または削除 20 ファイル以上かつ 30 % 以上）、5000 ファイルを超える変更。
 - `warn`（進む。警告が残る）: 新しい migration、`DROP INDEX` など、`GRANT` / `REVOKE`、認証・権限のコード（パスの語）、CI・デプロイ・インフラの設定、依存の定義・ロックファイル、シンボリックリンク・サブモジュール。
+- AI 資産の 2 つの規則（計画 17 P17-3、ADR-0035）は **プロジェクトの設定 `ai_assets.enabled` が `true` のときだけ** 動く（既定はオフ。普通のリポジトリの `evals/`・`skills/` には当たらない）: `ai_case_raw_data`（`stop`、流出の分類）— 追加・変更した `evals/cases/**.json` に絶対の日付・時刻、IP、実在の工場コード（`P9xx` 以外）、人・自由記述のキー、`provenance` が replica / synthetic でない、`confidential`、または読めなかった。`ai_asset`（`warn`、理由は「AI 資産の変更: …」）— `skills/`・`playbooks/`・`agents/`・`tools/`・`models/`・`bench/`・`evals/`・`thresholds/`・`CODEOWNERS` の変更。設定は `GET|PUT /api/v1/projects/{id}/ai-assets`（変えるのは Maintainer 以上の人の Web のセッションだけ）。
 - 要約と注釈には **規則の id・パス・行・固定の理由・コード** だけを出す。一致した文字列（秘密、表名）は書かない。注釈は最悪のものから 50 件まで。`reported_by` は `null`。
 - 本文を読むのは 60 ファイル、1 ファイル 256 KiB まで。残りの数は `content_not_scanned`（`neutral`）に出す。評価の締め切りは 45 秒。
 - 必須のチェックにすると `neutral` も `failure` も満たさない（ADR-0024 §10）。必須にしなければ手動のマージは止めない。ローカル AI の層（層 2）と `.forge/risk.yml` は含まない（ADR-0023 Amendment X7）。

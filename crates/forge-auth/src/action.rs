@@ -497,6 +497,15 @@ actions! {
     /// emergency stop of auto-merge. People only, administrators (a token
     /// needs `admin`); `api`.
     AutoMergeInstanceStopToggle,
+    // --- AI assets (plan 17 P17-3, ADR-0035) ---
+    /// `PUT /api/v1/projects/{id}/ai-assets`: turn the project's
+    /// `ai_assets.enabled` on or off (the opt-in of the AI asset lint, the
+    /// `forge/risk` rules `ai_case_raw_data` / `ai_asset` and asset
+    /// releases). People only (never an agent, a bot — `pfs-ai-bot`
+    /// included —, a service account or the auto-merge principal), a web
+    /// session only, Maintainer and above; audited. Read with `GET
+    /// …/ai-assets` (`ProjectRead`).
+    AiAssetsSettingManage,
     /// `GET /api/v1/projects/{id}/ci/variables`, `PUT|DELETE
     /// …/ci/variables/{name}` (M4 C6, plan 14 §4.2): list a project's CI
     /// variables (names and flags, never a value), set or delete one. A
@@ -681,6 +690,7 @@ impl Action {
                 | Action::RunnerManage
                 // M4 C9: the auto-merge mode is the Owner's choice in a session.
                 | Action::AutoMergeSettingsManage
+                | Action::AiAssetsSettingManage
                 // M4 C11 review: an approval is a person's in the browser.
                 | Action::DeployApprove
                 // Plan 15 MR 3: who may see a group is decided in a session.
@@ -746,6 +756,7 @@ impl Action {
                 | Action::CiVariableManage
                 // M4 C9: auto-merge's mode and emergency stops are a person's.
                 | Action::AutoMergeSettingsManage
+                | Action::AiAssetsSettingManage
                 | Action::AutoMergeStopToggle
                 | Action::AutoMergeInstanceStopToggle
                 // M4 C11: deploy configuration and approval are a person's.
@@ -792,6 +803,7 @@ impl Action {
             | Action::RunnerRegister
             | Action::RunnerManage
             | Action::AutoMergeSettingsManage
+                | Action::AiAssetsSettingManage
             // M4 C3: the runner API is a runner's (`ci_rule`); no person's
             // token reaches it (`authorize()`: `runner_only`).
             | Action::RunnerJobRequest
@@ -1053,6 +1065,7 @@ impl Action {
             | Action::MergeQueueManage
             // M4 C9: nor is auto-merge.
             | Action::AutoMergeSettingsManage
+                | Action::AiAssetsSettingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
             // M4 C6: nor are CI secrets.
@@ -1210,6 +1223,7 @@ impl Action {
             | Action::MergeQueueManage
             // M4 C9: nor auto-merge.
             | Action::AutoMergeSettingsManage
+                | Action::AiAssetsSettingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
             // M4 C6: a job never reads or sets a secret through the API

@@ -209,6 +209,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::EvalRegression
         | ErrorCode::CaseNotReproducing
         | ErrorCode::EvalReportInvalid
+        // Plan 17 P17-3: the AI asset lint's (gstn, never a merge's).
+        | ErrorCode::AiAssetInvalid
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden

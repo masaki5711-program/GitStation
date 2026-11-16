@@ -31,6 +31,7 @@ export type LineKind =
   | 'held'
   | 'queued'
   | 'queued_warning'
+  | 'queued_ai_asset'
   | 'queued_by_person';
 
 /** The line for a merge request (null: auto-merge says nothing). */
@@ -65,7 +66,9 @@ export function stateKind(s: AutoMergeState): LineKind {
       return 'held';
     case 'queued':
       if (s.reason === 'queued_by_person') return 'queued_by_person';
-      return s.reason === 'queued_with_warning' ? 'queued_warning' : 'queued';
+      if (s.reason !== 'queued_with_warning') return 'queued';
+      // Plan 17 P17-3: an AI asset change is named ("AI 資産の変更").
+      return s.detail === 'ai_asset' ? 'queued_ai_asset' : 'queued_warning';
     default:
       switch (s.reason) {
         case 'draft':
@@ -125,6 +128,8 @@ export function whyText(t: TFunction, kind: LineKind, detail: string): string {
       return t('autoMerge.why.queued');
     case 'queued_warning':
       return t('autoMerge.why.queued_warning');
+    case 'queued_ai_asset':
+      return t('autoMerge.why.queued_ai_asset');
     case 'queued_by_person':
       return t('autoMerge.why.queued_by_person');
   }
@@ -151,6 +156,7 @@ export function nextText(t: TFunction, kind: LineKind): string {
     case 'risk_pending':
     case 'queued':
     case 'queued_warning':
+    case 'queued_ai_asset':
     case 'queued_by_person':
       return t('autoMerge.next.nothing');
     case 'approvals':

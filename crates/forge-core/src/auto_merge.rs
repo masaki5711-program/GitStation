@@ -142,7 +142,9 @@ pub fn rule_class(rule: &str) -> Option<StopClass> {
         | "deploy_rollback"
         | "data_lifecycle_job"
         | "critical_content_unread" => StopClass::DataLoss,
-        "secret_file" | "secret_in_content" => StopClass::Leak,
+        // Plan 17 §1.7: raw data in an AI evaluation case is a leak (the
+        // third class; no new stop class).
+        "secret_file" | "secret_in_content" | "ai_case_raw_data" => StopClass::Leak,
         "agent_config" | "submodule_change" => StopClass::DeveloperPc,
         _ => return None,
     };

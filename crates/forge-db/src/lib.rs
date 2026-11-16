@@ -166,6 +166,8 @@ pub mod spec_releases;
 pub mod ci_artifacts;
 // Plan 17 P17-2: the forge/ai-eval check (ADR-0034).
 pub mod ci_ai_eval;
+// Plan 17 P17-3 (ADR-0035): a project's ai_assets.enabled.
+pub mod ai_assets;
 // ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

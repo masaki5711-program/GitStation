@@ -798,6 +798,13 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 
+# ── Plan 17 P17-3 (20261222100000, ADR-0035): a project's ai_assets.enabled
+# (no row = off); a person's change is audited by the command ──
+[tables.project_ai_assets]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
 # ── 2026-11-12 (20261210100000, ADR-0008 amendment "history import"): the
 # one-time history import allowance of an empty repository, set by the
 # operator CLI and used up by the first accepted push; audited on the project ──

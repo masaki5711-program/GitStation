@@ -1257,6 +1257,25 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &[],
         output: r#"{"type":"object","required":["problems"],"properties":{"lock":{"type":["string","null"]},"parts":{"type":"integer"},"files":{"type":"integer"},"keys":{"enum":["local"]},"revocation_checked":{"type":"boolean"},"part":{"type":"string"},"slug":{"type":["string","null"]},"kind":{"type":["string","null"]},"version":{"type":["string","null"]},"capabilities":{"type":["array","null"],"items":{"type":"string"}},"digest":{"type":["string","null"]},"problems":{"type":"array","items":{"type":"object","required":["error_code","reason","subject"],"properties":{"error_code":{"type":"string"},"reason":{"type":"string"},"subject":{"type":["string","null"]}}}}}}"#,
     },
+    // Plan 17 P17-3 (ADR-0035): the AI asset lint, local only.
+    CommandSpec {
+        name: "ai-asset lint",
+        summary: "Check the AI assets of the working tree (plan 17): skill front matter (pe-*.md keys, profile, date), playbooks against the skills, the agents' tool allowlists, the tool registry and the edge profiles, models pinned as name:tag@sha256 (never latest), bench images pinned, evaluation cases (id, anomaly class, kind, provenance replica / synthetic with source_hash, never confidential) and raw data in them (absolute times, IP addresses, real plant codes, people, free text), thresholds only under thresholds/proposals. Exit 1 with FG-AIASSET-0001 and every problem's path, line and rule. Local only: nothing is sent to the server.",
+        args: &[arg("--dir", "option", false, "The asset repository (default: the repository found upward).")],
+        examples: &["gstn ai-asset lint", "gstn ai-asset lint --json", "gstn ai-asset lint --dir ../pfs-ai-assets"],
+        scopes: &[],
+        routes: &[],
+        output: r#"{"type":"object","required":["files","problems"],"properties":{"files":{"type":"integer"},"problems":{"type":"array","items":{"type":"object","required":["path","line","rule","subject"],"properties":{"path":{"type":"string"},"line":{"type":"integer"},"rule":{"type":"string"},"subject":{"type":["string","null"]}}}}}}"#,
+    },
+    CommandSpec {
+        name: "ai-asset status",
+        summary: "Whether a project's ai_assets.enabled is on (plan 17): the AI asset lint, the forge/risk rules ai_case_raw_data (stop) and ai_asset (warn) and asset releases apply only then; who changed it last. Changing it is a Maintainer's in the browser.",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn ai-asset status --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/ai-assets"],
+        output: r#"{"type":"object","required":["project_id","enabled","changed_by","changed_at","viewer"]}"#,
+    },
     CommandSpec {
         name: "deploy envs",
         summary: "A project's deployment environments (dev, stg, prod): approval rule and window, freeze windows, automatic rollback and deployment, and their targets with the pinned host key fingerprint (project readers).",

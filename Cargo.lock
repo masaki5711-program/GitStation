@@ -1253,6 +1253,8 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "regex",
+ "serde",
+ "serde_json",
  "toml",
  "yaml-rust2",
 ]

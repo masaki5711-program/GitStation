@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-The check `forge/risk` (M3 X7, plan 04 M-6) found only rules of class `warn` in the diff: authentication / permission code or files by path, CI or deploy configuration, a dependency manifest or lock file, a new migration, a symlink or submodule, an index or object dropped in a migration, a GRANT or REVOKE. The run concludes `neutral`; the merge proceeds as the merge method allows (a `warn` never stops auto-merge), and the warning stays on the commit.
+The check `forge/risk` (M3 X7, plan 04 M-6) found only rules of class `warn` in the diff: authentication / permission code or files by path, CI or deploy configuration, a dependency manifest or lock file, a new migration, a symlink or submodule, an index or object dropped in a migration, a GRANT or REVOKE, an AI asset changed (`ai_asset`, 「AI 資産の変更」, only for a project whose `ai_assets.enabled` is on: plan 17 P17-3). The run concludes `neutral`; the merge proceeds as the merge method allows (a `warn` never stops auto-merge), and the warning stays on the commit.
 
 ## 調べ方 (diagnosis)
 

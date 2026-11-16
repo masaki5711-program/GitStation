@@ -12,6 +12,7 @@
 | `document` | 計画 13 の形式の文書の解析（前付けをそのまま、見出し、ブロックと引用符の値、`[[ ]]` の参照、HTML の禁止）。分類は閉じる側に倒す |
 | `legacy` | 旧い形式（`spec:` の前付け）を新しい解析で読む: 型 `spec.system`、ID は `spec` の値、要件は `spec_doc` と同じ答え（生成した文書で両方の答えを比べる試験） |
 | `lint` | 型と他の文書に照らした検査（必須の項目と見出し、ID の形と重複、壊れた参照、型の規則）。合成の例の README の期待値と完全に一致 |
+| `ai_asset` | 計画 17 P17-3（ADR-0035）: AI 資産の lint（スキルの前付け、プレイブック ↔ スキル ↔ 許可リスト ↔ プロファイル、モデルのダイジェスト固定と `latest` の拒否、ケースの形と `provenance`、`thresholds/` は提案だけ）と、ケースの生のデータの検査 `case_raw_data`（`gstn ai-asset lint` と `forge/risk` の `ai_case_raw_data` が同じ関数を使う）。リリースの一覧の検査 `release_problems`。doctype ではない |
 | `fmt` | 整形（1 文 1 行、前付けの項目の順、ブロックの属性の順）。冪等。旧い形式・`doctype` の無いファイルは整形しない |
 
 ## 使う側（段 2 の MR3）
@@ -30,7 +31,7 @@
   サーバー側の「移行中は警告」のリポジトリ設定（期限つき、DB、`authorize()`）は **まだ作っていない**。
 
 依存の向き（CLAUDE.md の契約 9）: `forge-core → forge-doc → forge-errors`、`forge-client → forge-doc`。依存してよいのは `forge-errors` と
-純粋な部品（今は `yaml-rust2`）だけで、`tests/purity.rs` が確かめる。
+純粋な部品（`yaml-rust2`・`regex`、AI 資産のための `toml`・`serde_json`）だけで、`tests/purity.rs` が確かめる。
 
 段 2 の MR1 は **移動だけ**（振る舞いを変えない）。MR2a で型の定義・新しい形式の解析・lint を足した。
 MR2b で `fmt`、MR2c で旧い形式の読み替え（`legacy`）を足した。

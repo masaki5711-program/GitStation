@@ -695,6 +695,24 @@
   {
     "action": "ProjectRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/ai-assets",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AiAssetsSettingManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/ai-assets",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/approval-rules",
     "people_only": false,
     "public": false,

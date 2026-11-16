@@ -845,6 +845,24 @@ export interface paths {
         patch: operations["patch_api_v1_projects_id"];
         trace?: never;
     };
+    "/api/v1/projects/{id}/ai-assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's ai_assets.enabled: whether the AI asset lint, the forge/risk rules ai_case_raw_data (stop) and ai_asset (warn) and asset releases apply (off by default), who changed it last and when */
+        get: operations["get_api_v1_projects_id_ai_assets"];
+        /** Turn a project's ai_assets.enabled on or off (people only; Maintainer and above in a web session, never an agent, a bot, a service account or the auto-merge principal); audited. Off stops the lint, the two rules and new releases only */
+        put: operations["put_api_v1_projects_id_ai_assets"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/approval-rules": {
         parameters: {
             query?: never;
@@ -3049,6 +3067,25 @@ export interface components {
             has_more: boolean;
             items: components["schemas"]["AdminUser"][];
             next_cursor: string | null;
+        };
+        /** @description A project's `ai_assets.enabled`. */
+        AiAssetsBody: {
+            /** @description UTC, RFC 3339 (`null`: never changed). */
+            changed_at: string | null;
+            /** Format: int64 */
+            changed_by: number | null;
+            /**
+             * @description On: the AI asset lint, `forge/risk`'s `ai_case_raw_data` (stop) and
+             *     `ai_asset` (warn) and asset releases apply. Off (the default): none.
+             */
+            enabled: boolean;
+            /** Format: int64 */
+            project_id: number;
+            viewer: components["schemas"]["AiAssetsViewerBody"];
+        };
+        /** @description What the caller could do now (a hint; the route decides again). */
+        AiAssetsViewerBody: {
+            can_change: boolean;
         };
         /** @description One annotation as stored. */
         AnnotationBody: {
@@ -6032,6 +6069,10 @@ export interface components {
              *     there.
              */
             queued: boolean;
+        };
+        /** @description `PUT …/ai-assets`. */
+        PutAiAssets: {
+            enabled: boolean;
         };
         /** @description `PUT …/approval-rules/{name}`. */
         PutApprovalRule: {
@@ -9857,6 +9898,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_ai_assets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiAssetsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_ai_assets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAiAssets"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiAssetsBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

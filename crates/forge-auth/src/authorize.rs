@@ -1549,6 +1549,13 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             people_only()?;
             admin_only()
         }
+        // Plan 17 P17-3: `ai_assets.enabled`, a Maintainer's in a session
+        // (`is_session_only`; people only: never an agent, a bot or a
+        // service account; the auto-merge principal never reaches here).
+        (Action::AiAssetsSettingManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
 
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role, .. }) => need(Role::Owner, *role),
@@ -1672,6 +1679,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::AutoMergeSettingsManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
+            | Action::AiAssetsSettingManage
             | Action::CiVariableManage
             | Action::DeployRead
             | Action::DeployEnvironmentManage

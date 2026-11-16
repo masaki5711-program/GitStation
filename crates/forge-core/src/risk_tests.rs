@@ -755,3 +755,78 @@ fn the_rules_the_a2_review_added_are_stops() {
         );
     }
 }
+
+// ── plan 17 P17-3: the AI asset rules (asked for only with ai_assets.enabled) ──
+
+#[test]
+fn the_always_on_rules_never_name_the_ai_asset_rules() {
+    for path in [
+        "evals/cases/defect_rate_up/c1.json",
+        "skills/pe-quality-spc.md",
+        "playbooks/global.toml",
+        "models/models.toml",
+    ] {
+        let found = path_findings(&file(path, ChangeStatus::Added));
+        assert!(
+            found.iter().all(|f| !f.rule.starts_with("ai_")),
+            "{path}: {found:?}"
+        );
+        assert_eq!(
+            content_kind(&file(path, ChangeStatus::Added)),
+            None,
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn an_ai_asset_change_is_a_warn_and_other_paths_are_nothing() {
+    for path in [
+        "skills/pe-quality-spc.md",
+        "playbooks/global.toml",
+        "agents/4m-correlator.toml",
+        "models/models.toml",
+        "bench/bench.toml",
+        "evals/baselines/qwen3.json",
+        "thresholds/proposals/a1.md",
+        "CODEOWNERS",
+    ] {
+        assert_eq!(
+            rules(&ai_asset_path_findings(&file(path, ChangeStatus::Modified))),
+            vec![("ai_asset", RiskLevel::Warn)],
+            "{path}"
+        );
+    }
+    let mut moved = file("archive/old.md", ChangeStatus::Renamed);
+    moved.old_path = Some("skills/pe-old.md".to_owned());
+    assert_eq!(
+        rules(&ai_asset_path_findings(&moved)),
+        vec![("ai_asset", RiskLevel::Warn)]
+    );
+    assert!(ai_asset_path_findings(&file("src/main.rs", ChangeStatus::Modified)).is_empty());
+}
+
+#[test]
+fn case_with_absolute_timestamp_stops() {
+    let case = file("evals/cases/defect_rate_up/c1.json", ChangeStatus::Added);
+    assert_eq!(ai_case_content_kind(&case), Some(ContentKind::AiCase));
+    assert_eq!(
+        ai_case_content_kind(&file(
+            "evals/cases/defect_rate_up/c1.json",
+            ChangeStatus::Deleted
+        )),
+        None
+    );
+    assert_eq!(
+        ai_case_content_kind(&file("evals/baselines/m.json", ChangeStatus::Added)),
+        None
+    );
+    let text = "{\n  \"id\": \"c1\",\n  \"provenance\": \"replica\",\n  \"at\": \"2026-10-01T08:15:00Z\"\n}\n";
+    let found = content_findings(ContentKind::AiCase, &case.path, text);
+    assert_eq!(rules(&found), vec![("ai_case_raw_data", RiskLevel::Stop)]);
+    assert_eq!(found[0].line, Some(4));
+    assert_eq!(level(&found), RiskLevel::Stop);
+    // A synthetic case with relative times is clean.
+    let clean = "{\"id\": \"c1\", \"provenance\": \"synthetic\", \"offset_seconds\": -60}";
+    assert!(content_findings(ContentKind::AiCase, &case.path, clean).is_empty());
+}
