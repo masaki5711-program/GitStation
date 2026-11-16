@@ -197,6 +197,7 @@ impl World {
                     secrets: vec!["DEPLOY_KEY".to_owned()],
                     manual: true,
                 }]),
+                ai_eval_job: None,
             },
         )
         .await

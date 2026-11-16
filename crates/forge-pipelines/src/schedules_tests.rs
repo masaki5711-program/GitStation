@@ -195,7 +195,7 @@ fn a_scheduled_run_on_a_protected_branch_is_not_protected() {
         "version: 1\nstages: [deploy]\njobs:\n  deploy:\n    stage: deploy\n    image: registry.internal/x@sha256:{}\n    timeout: 1m\n    script: [x]\n    secrets: [KEY]\n    rules:\n      branches: [main]\n      merge_requests: false\n",
         "a".repeat(64)
     );
-    match Pipelines::plan(&request, text.as_bytes(), &rules).expect("plan") {
+    match Pipelines::plan(&request, text.as_bytes(), &rules).expect("plan").0 {
         forge_db::pipelines::Planned::Invalid(problems) => {
             assert_eq!(problems[0].reason, "secret_on_unprotected_ref");
         }

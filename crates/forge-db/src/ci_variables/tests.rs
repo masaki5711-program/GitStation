@@ -106,6 +106,7 @@ impl World {
 
     async fn pipeline(&self, protected: bool, source: Source, secrets: &[&str]) -> (i64, i64) {
         let new = NewPipeline {
+            ai_eval_job: None,
             request: PipelineRequest {
                 project: self.web.project_id,
                 git_ref: forge_core::RefName::parse("refs/heads/main").expect("ref"),

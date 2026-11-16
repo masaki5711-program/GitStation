@@ -50,7 +50,18 @@ pub const FORGE_REPORTED_CHECKS: &[&str] = &[
     SPEC_TRACE_CHECK,
     DOC_LINT_CHECK,
     CI_LINT_CHECK,
+    AI_EVAL_CHECK,
 ];
+
+/// `forge/ai-eval` (plan 17 P17-2, ADR-0034): the AI evaluation bench's
+/// report (`eval-report.json`, [`crate::ai_eval`]) compared with the
+/// baseline in the repository — `success` when every gate holds, `failure`
+/// for a regression, a safety case or a metric past its delta, `error`
+/// when the report or the baseline is missing or invalid (never success).
+/// Written by forge's worker only for a pipeline whose job declares the
+/// report; every other pipeline has no such run. Never over HTTP (a
+/// `forge/` name), never by a CI job (ADR-0029 decision 8).
+pub const AI_EVAL_CHECK: &str = "forge/ai-eval";
 
 /// `forge/spec-lint` (M3 X4, plan 03 §5.4): whether the commit's own
 /// specification documents and the `@req` tags of its families keep the
@@ -97,6 +108,7 @@ pub const SYSTEM_REPORTED_CHECKS: &[&str] = &[
     SPEC_TRACE_CHECK,
     DOC_LINT_CHECK,
     CI_LINT_CHECK,
+    AI_EVAL_CHECK,
     CI_PIPELINE_CHECK,
 ];
 

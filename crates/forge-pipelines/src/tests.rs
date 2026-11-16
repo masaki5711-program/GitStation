@@ -33,6 +33,46 @@ fn request(branch: &str, source: Source) -> PipelineRequest {
     }
 }
 
+/// Plan 17 P17-1 (review): a `gpu-eval` job of a project the policy does
+/// not list makes the pipeline `invalid` (`gpu_eval_not_allowed`, the job
+/// named); a listed project, or a plan without such a job, is unchanged.
+#[test]
+fn a_gpu_eval_job_of_an_unlisted_project_is_an_invalid_pipeline() {
+    let job = |name: &str, tags: &[&str]| db::NewCiJob {
+        name: name.to_owned(),
+        stage: "test".to_owned(),
+        wave: 0,
+        needs: Vec::new(),
+        image: image(),
+        timeout_s: 600,
+        tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+        secrets: Vec::new(),
+        manual: false,
+    };
+    let planned = || db::Planned::Jobs(vec![job("unit", &[]), job("bench", &["gpu-eval"])]);
+    let none = forge_core::config::GpuEvalPolicy::default();
+    match gpu_eval_refused(planned(), 7, &none) {
+        db::Planned::Invalid(problems) => {
+            assert_eq!(problems.len(), 1);
+            assert_eq!(problems[0].reason, "gpu_eval_not_allowed");
+            assert_eq!(problems[0].subject.as_deref(), Some("bench"));
+        }
+        other @ (db::Planned::Jobs(_) | db::Planned::Error) => panic!("{other:?}"),
+    }
+    let listed = forge_core::config::GpuEvalPolicy {
+        projects: vec![7],
+        max_running_per_project: 1,
+    };
+    assert!(
+        matches!(gpu_eval_refused(planned(), 7, &listed), db::Planned::Jobs(j) if j.len() == 2)
+    );
+    let plain = db::Planned::Jobs(vec![job("unit", &["linux"])]);
+    assert!(matches!(
+        gpu_eval_refused(plain, 7, &none),
+        db::Planned::Jobs(_)
+    ));
+}
+
 fn image() -> String {
     format!("registry.internal/rust@sha256:{}", "a".repeat(64))
 }
@@ -51,7 +91,7 @@ fn definition(with_deploy: bool) -> Vec<u8> {
     text.into_bytes()
 }
 
-fn jobs(planned: db::Planned) -> Vec<(String, i32, Vec<String>)> {
+fn jobs((planned, _): (db::Planned, Option<String>)) -> Vec<(String, i32, Vec<String>)> {
     match planned {
         db::Planned::Jobs(jobs) => jobs
             .into_iter()
@@ -61,7 +101,7 @@ fn jobs(planned: db::Planned) -> Vec<(String, i32, Vec<String>)> {
     }
 }
 
-fn reasons(planned: db::Planned) -> Vec<String> {
+fn reasons((planned, _): (db::Planned, Option<String>)) -> Vec<String> {
     match planned {
         db::Planned::Invalid(problems) => problems.into_iter().map(|p| p.reason).collect(),
         other @ (db::Planned::Jobs(_) | db::Planned::Error) => panic!("not invalid: {other:?}"),
@@ -163,4 +203,30 @@ fn a_definition_with_a_cycle_is_invalid() {
     let planned = Pipelines::plan(&request("main", Source::Push), text.as_bytes(), &rules(&[]))
         .expect("plan");
     assert!(reasons(planned).iter().all(|r| r == "needs_cycle"));
+}
+
+/// Plan 17 P17-2 (ADR-0034): the job that declares `eval-report.json` is
+/// recorded with the pipeline; a definition without it records none (no
+/// `forge/ai-eval` for that pipeline).
+#[test]
+fn the_job_declaring_the_eval_report_is_planned_with_the_pipeline() {
+    let (_, none) = Pipelines::plan(
+        &request("feature", Source::MergeRequest),
+        &definition(false),
+        &rules(&[]),
+    )
+    .expect("plan");
+    assert_eq!(none, None);
+    let text = String::from_utf8(definition(false)).expect("utf8").replace(
+        "script: [cargo build]\n",
+        "script: [cargo build]\n    artifacts:\n      paths: [eval-report.json]\n",
+    );
+    let (planned, job) = Pipelines::plan(
+        &request("feature", Source::MergeRequest),
+        text.as_bytes(),
+        &rules(&[]),
+    )
+    .expect("plan");
+    assert_eq!(job.as_deref(), Some("build"));
+    assert_eq!(jobs((planned, job)), [("build".to_owned(), 0, vec![])]);
 }

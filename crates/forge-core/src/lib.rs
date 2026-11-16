@@ -2,6 +2,8 @@
 //! server-side crate. Depends only on `forge-errors` (CLAUDE.md §3.9).
 
 pub mod act_as;
+// Plan 17 P17-2 (ADR-0034): the AI evaluation report and its gates.
+pub mod ai_eval;
 pub mod approval;
 pub mod audit_details;
 pub mod authenticator;
@@ -55,6 +57,8 @@ pub mod role;
 pub mod scope;
 pub mod session_token;
 pub mod spec_version;
+// M4 C13: people's SSH public keys (ADR-0033 §2).
+pub mod ssh_key;
 // ── M3 X4: requirement blocks, `@req` tags, the index, spec-lint and spec-trace ──
 pub mod req_tags;
 // Moved to forge-doc (plan 13 stage 2 MR1); the path stays for every caller.
@@ -85,7 +89,7 @@ pub use audit_details::{
 };
 pub use authenticator::{
     Authenticator, CiAuthFuture, CiIdentity, CiJobTokenState, SessionAuthenticator,
-    SessionIdentity, TokenIdentity,
+    SessionIdentity, SshKeyAuthFuture, SshKeyIdentity, TokenIdentity,
 };
 pub use checks::{
     CheckConclusion, CheckResultsSource, CheckRun, CheckRunsOnHead, CheckStatus,

@@ -613,6 +613,7 @@ async fn runner_job_and_act_as_credentials_are_refused() {
     let _pipeline = pipelines::create(
         &t.db,
         &NewPipeline {
+            ai_eval_job: None,
             request: PipelineRequest {
                 project: web,
                 git_ref: RefName::parse("refs/heads/main").expect("ref"),

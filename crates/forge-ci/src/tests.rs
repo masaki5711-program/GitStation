@@ -703,6 +703,52 @@ fn a_plan_is_the_same_for_the_same_input() {
     assert_eq!(a, b);
 }
 
+/// `valid()` with `artifacts: { paths: [<paths>] }` added to job `job`
+/// (whose stage line follows its name).
+fn with_artifacts(text: &str, job: &str, stage: &str, paths: &str) -> String {
+    let at = format!("  {job}:\n    stage: {stage}\n");
+    text.replace(
+        &at,
+        &format!("{at}    artifacts:\n      paths: [{paths}]\n"),
+    )
+}
+
+/// Plan 17 P17-2 (ADR-0034): only the exact root path `eval-report.json`
+/// declares the AI evaluation report; a pipeline without it has no
+/// declaring job (and so no `forge/ai-eval`).
+#[test]
+fn only_the_root_eval_report_path_declares_the_ai_eval_report() {
+    let p = plan_for(&valid(), Event::Push, "main").expect("plan");
+    assert_eq!(p.eval_report_job(), None);
+    assert!(p.jobs.iter().all(|j| !j.eval_report));
+    let declared = with_artifacts(&valid(), "unit", "test", "eval-report.json, out/log.txt");
+    let p = plan_for(&declared, Event::MergeRequest, "feature-x").expect("plan");
+    assert_eq!(p.eval_report_job(), Some("unit"));
+    for other in [
+        "out/eval-report.json",
+        "eval-report.json.bak",
+        "Eval-Report.json",
+    ] {
+        let text = with_artifacts(&valid(), "unit", "test", other);
+        let p = plan_for(&text, Event::Push, "main").expect("plan");
+        assert_eq!(p.eval_report_job(), None, "{other}");
+    }
+}
+
+/// Two selected jobs declaring the report make the plan invalid; a
+/// trigger that selects only one of them is fine.
+#[test]
+fn two_jobs_declaring_the_eval_report_are_refused() {
+    let one = with_artifacts(&valid(), "unit", "test", "eval-report.json");
+    let text = with_artifacts(&one, "deploy", "deploy", "eval-report.json");
+    let err = plan_for(&text, Event::Push, "main").expect_err("two reports");
+    assert_eq!(err[0].reason, "eval_report_declared_twice");
+    assert_eq!(err[0].subject.as_deref(), Some("unit"));
+    // A merge request runs no `deploy`: one report.
+    let p = plan_for(&text, Event::MergeRequest, "feature-x").expect("plan");
+    assert_eq!(p.eval_report_job(), Some("unit"));
+}
+
 #[test]
 fn events_parse_and_print() {
     assert_eq!(Event::parse("push"), Some(Event::Push));
@@ -781,6 +827,117 @@ fn a_job_with_services_keeps_them_in_order() {
     let plain = check(one_job(&base_job()).as_bytes(), &ctx()).expect("valid");
     assert!(plain.jobs[0].services().is_empty());
     assert!(problems(&one_job(&format!("{}services:\n", base_job()))).is_empty());
+}
+
+// ── the GPU runner (plan 17 P17-1) ──────────────────────────────────────
+
+/// `with_services` with the job's `tags` line in front of the services.
+fn tagged_with_services(tags: &str, body: &str) -> String {
+    let services: String = body
+        .lines()
+        .map(|l| {
+            format!(
+                "  {l}
+"
+            )
+        })
+        .collect();
+    one_job(&format!(
+        "{}{tags}services:
+{services}",
+        base_job()
+    ))
+}
+
+/// A service may only ask for the GPU (`gpu: true`) — never name a device
+/// or a path — and only in a job that asks for the `gpu-eval` runner.
+#[test]
+fn a_gpu_service_needs_the_gpu_eval_tag_and_names_nothing() {
+    let ollama = format!(
+        "- name: ollama
+  image: {}
+  gpu: true
+",
+        image()
+    );
+    let def = check(
+        tagged_with_services(
+            "tags: [gpu-eval]
+",
+            &ollama,
+        )
+        .as_bytes(),
+        &ctx(),
+    )
+    .expect("valid");
+    let job = &def.jobs[0];
+    assert!(job.services()[0].gpu());
+    assert_eq!(job.tags(), [GPU_EVAL_TAG]);
+    // Without the tag (or with another one) the file is refused.
+    for tags in [
+        "",
+        "tags: [linux]
+",
+    ] {
+        assert_eq!(
+            reasons_and_subjects(&tagged_with_services(tags, &ollama)),
+            [("service_gpu_without_tag", Some("a".to_owned()))],
+            "{tags}"
+        );
+    }
+    // Only true / false: a device name or a path is no value of it, and
+    // no other key can name one.
+    for bad in ["gpu: nvidia.com/gpu=all", "gpu: /dev/nvidia0", "gpu: [all]"] {
+        let body = format!(
+            "- name: ollama
+  image: {}
+  {bad}
+",
+            image()
+        );
+        assert_eq!(
+            reasons(&tagged_with_services(
+                "tags: [gpu-eval]
+",
+                &body
+            )),
+            ["field_invalid"],
+            "{bad}"
+        );
+    }
+    for key in [
+        "devices: [nvidia.com/gpu=all]",
+        "volumes: [/srv/models:/models]",
+    ] {
+        let body = format!(
+            "- name: ollama
+  image: {}
+  {key}
+",
+            image()
+        );
+        assert_eq!(
+            reasons(&tagged_with_services(
+                "tags: [gpu-eval]
+",
+                &body
+            )),
+            ["key_unknown"],
+            "{key}"
+        );
+    }
+    // `gpu: false` and no key: no GPU, no tag needed.
+    let off = format!(
+        "- name: ollama
+  image: {}
+  gpu: false
+",
+        image()
+    );
+    let def = check(tagged_with_services("", &off).as_bytes(), &ctx()).expect("valid");
+    assert!(!def.jobs[0].services()[0].gpu());
+    let def = check(with_services(&db("")).as_bytes(), &ctx()).expect("valid");
+    assert!(!def.jobs[0].services()[0].gpu());
 }
 
 #[test]

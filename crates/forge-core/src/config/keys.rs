@@ -162,6 +162,41 @@ pub const KEYS: &[Key] = &[
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",
     ),
+    // M4 C13: the SSH git transport (ADR-0033).
+    boolean("git.ssh.enabled", "FORGE_GIT_SSH_ENABLED"),
+    text("git.ssh.bind", "FORGE_GIT_SSH_BIND"),
+    text("git.ssh.host_key_file", "FORGE_GIT_SSH_HOST_KEY_FILE"),
+    text("git.ssh.clone_host", "FORGE_GIT_SSH_CLONE_HOST"),
+    number("git.ssh.max_connections", "FORGE_GIT_SSH_MAX_CONNECTIONS"),
+    number(
+        "git.ssh.max_connections_per_peer",
+        "FORGE_GIT_SSH_MAX_CONNECTIONS_PER_PEER",
+    ),
+    number(
+        "git.ssh.connections_per_minute_per_peer",
+        "FORGE_GIT_SSH_CONNECTIONS_PER_MINUTE_PER_PEER",
+    ),
+    number(
+        "git.ssh.auth_failures_per_minute_per_peer",
+        "FORGE_GIT_SSH_AUTH_FAILURES_PER_MINUTE_PER_PEER",
+    ),
+    number("git.ssh.auth_timeout_ms", "FORGE_GIT_SSH_AUTH_TIMEOUT_MS"),
+    number(
+        "git.ssh.max_unauthenticated_connections",
+        "FORGE_GIT_SSH_MAX_UNAUTHENTICATED_CONNECTIONS",
+    ),
+    number(
+        "git.ssh.max_connection_ms",
+        "FORGE_GIT_SSH_MAX_CONNECTION_MS",
+    ),
+    number(
+        "git.ssh.max_auth_attempts",
+        "FORGE_GIT_SSH_MAX_AUTH_ATTEMPTS",
+    ),
+    number(
+        "git.ssh.inactivity_timeout_ms",
+        "FORGE_GIT_SSH_INACTIVITY_TIMEOUT_MS",
+    ),
     // The memory caps of pack-heavy git (`config/git_pack.rs`).
     number(
         "git.pack.window_memory_mib",
@@ -291,6 +326,9 @@ pub const KEYS: &[Key] = &[
     // M4 C6: the CI variables' keys (ADR-0013).
     text("ci.secret_keys_file", "FORGE_CI_SECRET_KEYS_FILE"),
     number("ci.artifact_quota_bytes", "FORGE_CI_ARTIFACT_QUOTA_BYTES"),
+    // Plan 17 P17-1: the GPU runner's projects and per-project limit.
+    text("ci.gpu_eval_projects", "FORGE_CI_GPU_EVAL_PROJECTS"),
+    number("ci.gpu_eval_max_running", "FORGE_CI_GPU_EVAL_MAX_RUNNING"),
     // M4 C11: deployments over SSH (ADR-0031).
     text("deploy.ssh_key_file", "FORGE_DEPLOY_SSH_KEY_FILE"),
     text("deploy.ssh_program", "FORGE_DEPLOY_SSH_PROGRAM"),

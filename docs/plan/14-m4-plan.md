@@ -225,7 +225,7 @@ worker の `deploy_runner`（`deploy.ssh_key_file` があるときだけ）、do
 `gstn deploy` と画面は後の MR（C-1 は Planned）。
 **C12 の注記（2026-11-13、定期・手動・仕様の公開）**: ブランチ `feat/ci-schedules-manual`。
 **手動のジョブ**: `.forge-ci.yml` の `when: manual`（lint の `when_invalid`・`needs_manual_job`、ステージの壁から外す）。表 `ci_jobs.manual` と状態
-`manual`（マイグレーション `20261216100000`）。何も待たないので、パイプラインは他のジョブで終わり、手動のジョブだけなら `skipped`。ルート
+`manual`（マイグレーション `20261219100000`）。何も待たないので、パイプラインは他のジョブで終わり、手動のジョブだけなら `skipped`。ルート
 `POST …/pipelines/{pid}/jobs/{jid}/play`（`PipelineCreate`、監査 `pipeline.job_played`、FG-CI-0003 `operation=play`）。
 **定期**: 表 `ci_pipeline_schedules`（監査あり、1 プロジェクト 20 件まで: FG-CI-0027）、Action `PipelineScheduleManage`（Maintainer 以上、人だけ）、
 ルート `GET|POST …/pipeline-schedules`・`PUT|DELETE …/{schedule_id}`。5 つの欄の cron を固定の UTC オフセットで（`forge_core::ci_schedule`、5 分より頻繁は不可）。

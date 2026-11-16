@@ -85,6 +85,8 @@ pub mod roles;
 // ── end D2 ──
 // ── D3: personal access tokens ──
 pub mod tokens;
+// M4 C13: people's SSH public keys (ADR-0033 §2).
+pub mod ssh_keys;
 // ── end D3 ──
 // ── M3 S0: service accounts (ADR-0019 Addendum S0) ──
 pub mod service_accounts;
@@ -162,6 +164,8 @@ pub mod ci_schedules;
 pub mod spec_releases;
 // M4 C6: CI artifacts (the rows; the files are forge-pipelines').
 pub mod ci_artifacts;
+// Plan 17 P17-2: the forge/ai-eval check (ADR-0034).
+pub mod ci_ai_eval;
 // ── end M3 O1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

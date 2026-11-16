@@ -937,7 +937,7 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         ("forge.merge_queues", operational()),
         ("forge.merge_queue_batches", operational()),
         ("forge.merge_queue_entries", operational()),
-        // ── M4 C9: auto-merge (20261216100000) ──
+        // ── M4 C9: auto-merge (20261219100000) ──
         ("forge.project_auto_merge", operational()),
         ("forge.auto_merge_instance", operational()),
         ("forge.auto_merge_states", operational()),
@@ -959,11 +959,21 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── M4 C13: SSH keys (20261218100000): UPDATE of last_used_at only ──
+        (
+            "forge.user_ssh_keys",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                columns("forge_app", "UPDATE", &["last_used_at"]),
+                ro("user_ssh_keys")?,
+            ]
+            .concat(),
+        ),
         // ── M4 C11: deployments (20261214100000) ──
         ("forge.deploy_environments", operational()),
         ("forge.deploy_targets", operational()),
         ("forge.deployments", operational()),
-        // ── M4 C12: scheduled pipelines (20261216100000) ──
+        // ── M4 C12: scheduled pipelines (20261219100000) ──
         (
             "forge.ci_pipeline_schedules",
             [dml("forge_app"), ro("ci_pipeline_schedules")?].concat(),
@@ -1149,7 +1159,7 @@ const LATER_TABLES: &[&str] = &[
     "merge_queues",
     "merge_queue_batches",
     "merge_queue_entries",
-    // ── M4 C9: auto-merge (20261216100000) ──
+    // ── M4 C9: auto-merge (20261219100000) ──
     "project_auto_merge",
     "auto_merge_instance",
     "auto_merge_states",
@@ -1161,11 +1171,13 @@ const LATER_TABLES: &[&str] = &[
     "ci_artifacts",
     // ── M4 C6 review (20261211300000) ──
     "ci_job_secret_snapshots",
+    // ── M4 C13: SSH keys (20261218100000) ──
+    "user_ssh_keys",
     // ── M4 C11: deployments (20261214100000) ──
     "deploy_environments",
     "deploy_targets",
     "deployments",
-    // ── M4 C12: scheduled pipelines (20261216100000) ──
+    // ── M4 C12: scheduled pipelines (20261219100000) ──
     "ci_pipeline_schedules",
 ];
 

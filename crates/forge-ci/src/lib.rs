@@ -22,11 +22,11 @@ mod graph;
 pub mod plan;
 
 pub use definition::{
-    Definition, Job, Rules, Service, MAX_ARTIFACT_PATHS, MAX_BRANCHES, MAX_BYTES, MAX_JOBS,
-    MAX_NEEDS, MAX_SCRIPT_LINES, MAX_SCRIPT_LINE_BYTES, MAX_SECRETS, MAX_SERVICES, MAX_SERVICE_ENV,
-    MAX_SERVICE_TMPFS, MAX_STAGES, MAX_TAGS, MAX_TIMEOUT_SECS,
+    Definition, Job, Rules, Service, GPU_EVAL_TAG, MAX_ARTIFACT_PATHS, MAX_BRANCHES, MAX_BYTES,
+    MAX_JOBS, MAX_NEEDS, MAX_SCRIPT_LINES, MAX_SCRIPT_LINE_BYTES, MAX_SECRETS, MAX_SERVICES,
+    MAX_SERVICE_ENV, MAX_SERVICE_TMPFS, MAX_STAGES, MAX_TAGS, MAX_TIMEOUT_SECS,
 };
-pub use plan::{plan, Event, Plan, PlannedJob, Trigger};
+pub use plan::{plan, Event, Plan, PlannedJob, Trigger, EVAL_REPORT_PATH};
 
 use std::fmt;
 

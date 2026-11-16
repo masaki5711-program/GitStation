@@ -36,6 +36,10 @@ forge-integ.workspace = true
 forge-notify.workspace = true
 # M4 C2: CI pipelines (the routes; the SQL is forge-db's, behind it).
 forge-pipelines.workspace = true
+# M4 C13: the SSH git transport (ADR-0033).
+russh.workspace = true
+# M4 C13: the SSH host key's seed (OS RNG).
+getrandom.workspace = true
 # M4 C11: the deployment routes.
 forge-deploy.workspace = true
 url.workspace = true
@@ -56,6 +60,10 @@ tracing.workspace = true
 # SHA-256 of its index.html for `forge doctor`. Only with `embed-ui`.
 rust-embed = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+# M4 C13: the SSH host key file must belong to the account forge runs as.
+rustix.workspace = true
 
 [features]
 # `app::with_registry` for the integration tests' own guarded routes

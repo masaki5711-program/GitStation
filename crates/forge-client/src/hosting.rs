@@ -13,7 +13,7 @@
 use crate::app::{config_for, emit, require_token, usage, EnvFn, Io};
 use crate::cli::{
     Cli, GroupCommand, ListArgs, MemberCommand, MemberTarget, NamespaceCommand, ProjectCommand,
-    ProtectedRefCommand, TokenCommand, UserCommand,
+    ProtectedRefCommand, SshKeyCommand, TokenCommand, UserCommand,
 };
 use crate::error::{sanitize, ClientError, Result};
 use crate::http::{ApiClient, Method, PageLimits, PageShape, LIST_PAGES, MEMBER_PAGES};
@@ -640,6 +640,38 @@ pub fn token(cli: &Cli, cmd: &TokenCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> 
                 cli,
                 json!({"id": id, "revoked": true}),
                 &format!("Revoked token {id}"),
+            )
+        }
+    }
+}
+
+// ── ssh-key (M4 C13) ───────────────────────────────────────────────────
+
+const SSH_KEY_KEYS: [&str; 5] = ["id", "title", "fingerprint", "created_at", "last_used_at"];
+
+pub fn ssh_key(cli: &Cli, cmd: &SshKeyCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
+    match cmd {
+        SshKeyCommand::List => {
+            let c = client(cli, env, io)?;
+            let body = call(&c, Method::Get, "/api/v1/user/ssh-keys", &[], None)?;
+            let human = list_human(&body, "items", "-", "", &SSH_KEY_KEYS);
+            emit(io, cli, body, &human)
+        }
+        SshKeyCommand::Delete { id, yes } => {
+            confirm(*yes, "deleting an SSH key")?;
+            let c = client(cli, env, io)?;
+            call(
+                &c,
+                Method::Delete,
+                &format!("/api/v1/user/ssh-keys/{id}"),
+                &[],
+                None,
+            )?;
+            emit(
+                io,
+                cli,
+                json!({"id": id, "deleted": true}),
+                &format!("Deleted SSH key {id}"),
             )
         }
     }

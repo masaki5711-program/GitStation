@@ -18,8 +18,10 @@ use forge_auth::{
     Action, Authorized, InstanceCtx, SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx,
     UserTargetCtx,
 };
+use forge_core::ssh_key::SshPublicKey;
 use forge_core::{SessionRevokeReason, UserId};
 use forge_db::sessions;
+use forge_db::ssh_keys::{self, NewSshKey};
 use forge_db::tokens::{self, NewToken};
 use forge_db::users;
 use forge_errors::{ErrorCode, ForgeError};
@@ -29,6 +31,9 @@ use crate::{caller, change_context, require, Hosting, WriteRequest};
 pub use forge_db::sessions::{
     is_public_id as is_session_public_id, RevokeOutcome as SessionRevokeOutcome, SessionInfo,
     SessionList, MAX_LISTED as MAX_LISTED_SESSIONS,
+};
+pub use forge_db::ssh_keys::{
+    DeleteOutcome as SshKeyDeleteOutcome, SshKeyInfo, MAX_KEYS_PER_USER as MAX_SSH_KEYS_PER_USER,
 };
 pub use forge_db::tokens::{
     Issued as IssuedToken, RevokeOutcome as TokenRevokeOutcome, TokenInfo, DEFAULT_EXPIRY,
@@ -100,6 +105,63 @@ impl Hosting {
         require(proof.action(), Action::TokenRevoke)?;
         let user = caller(proof)?;
         tokens::revoke(
+            &self.db,
+            &change_context(request, proof.principal(), user),
+            *proof.id(),
+        )
+        .await
+    }
+
+    // ── SSH keys (M4 C13, ADR-0033 §2) ──
+
+    /// The SSH keys of the proof's owner (`SshKeyList`), newest first.
+    pub async fn ssh_keys(
+        &self,
+        proof: &Authorized<TokenOwnerCtx>,
+    ) -> Result<Vec<SshKeyInfo>, ForgeError> {
+        require(proof.action(), Action::SshKeyList)?;
+        ssh_keys::list(&self.db, *proof.id()).await
+    }
+
+    /// The owner of SSH key `id` for the delete route's loader (`None`:
+    /// absent).
+    pub async fn ssh_key_owner(&self, id: i64) -> Result<Option<UserId>, ForgeError> {
+        ssh_keys::owner(&self.db, id).await
+    }
+
+    /// Add `key` for the proof's owner (`SshKeyAdd`; one `ssh_key.added`
+    /// audit row).
+    pub async fn add_ssh_key(
+        &self,
+        proof: &Authorized<TokenOwnerCtx>,
+        request: &WriteRequest,
+        title: String,
+        key: SshPublicKey,
+    ) -> Result<SshKeyInfo, ForgeError> {
+        require(proof.action(), Action::SshKeyAdd)?;
+        let user = caller(proof)?;
+        let new = NewSshKey {
+            user: *proof.id(),
+            title,
+            key,
+        };
+        ssh_keys::add(
+            &self.db,
+            &change_context(request, proof.principal(), user),
+            &new,
+        )
+        .await
+    }
+
+    /// Delete the proof's SSH key (`SshKeyDelete`).
+    pub async fn delete_ssh_key(
+        &self,
+        proof: &Authorized<TokenCtx>,
+        request: &WriteRequest,
+    ) -> Result<SshKeyDeleteOutcome, ForgeError> {
+        require(proof.action(), Action::SshKeyDelete)?;
+        let user = caller(proof)?;
+        ssh_keys::delete(
             &self.db,
             &change_context(request, proof.principal(), user),
             *proof.id(),

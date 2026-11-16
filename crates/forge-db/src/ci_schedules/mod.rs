@@ -1,4 +1,4 @@
-//! Pipeline schedules (M4 C12, plan 14 §5 C12; migration 20261216100000):
+//! Pipeline schedules (M4 C12, plan 14 §5 C12; migration 20261219100000):
 //! the typed commands and reads of `forge.ci_pipeline_schedules`.
 //!
 //! - [`create_schedule_decided`] / [`update_schedule_decided`] / [`delete_schedule_decided`]: a

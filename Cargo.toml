@@ -119,6 +119,13 @@ httpdate = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 # ── end M3 N1 ──
+# ── M4 C13: the SSH git transport (ADR-0032) ──
+# The in-process SSH server of `forge serve` (git over SSH only). Apache-2.0;
+# only the ring backend (no aws-lc-rs: no C toolchain, ring is already in the
+# tree) and no `rsa` feature (RUSTSEC-2023-0071; Ed25519 / ECDSA keys only).
+# >= 0.65.1: every published advisory fixed (ADR-0032 §5).
+russh = { version = "0.65.1", default-features = false, features = ["ring"] }
+# ── end M4 C13 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

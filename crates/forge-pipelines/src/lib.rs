@@ -163,6 +163,38 @@ fn stored(problems: &[Problem]) -> Vec<StoredProblem> {
         .collect()
 }
 
+/// Plan 17 P17-1: a plan with a job that asks for the `gpu-eval` runner,
+/// of a project `ci.gpu_eval_projects` does not list, is `invalid` with
+/// `gpu_eval_not_allowed` (subject: the job) — the clear reason on the
+/// pipeline; the claim never hands such a job out either.
+fn gpu_eval_refused(
+    planned: db::Planned,
+    project: i64,
+    policy: &forge_core::config::GpuEvalPolicy,
+) -> db::Planned {
+    let db::Planned::Jobs(jobs) = &planned else {
+        return planned;
+    };
+    if policy.allows(project) {
+        return planned;
+    }
+    let refused: Vec<StoredProblem> = jobs
+        .iter()
+        .filter(|j| j.tags.iter().any(|t| t == forge_ci::GPU_EVAL_TAG))
+        .take(db::MAX_STORED_PROBLEMS)
+        .map(|j| StoredProblem {
+            line: 0,
+            reason: "gpu_eval_not_allowed".to_owned(),
+            subject: Some(j.name.clone()), // clone: the row owns it
+        })
+        .collect();
+    if refused.is_empty() {
+        planned
+    } else {
+        db::Planned::Invalid(refused)
+    }
+}
+
 /// The jobs of a plan as the table stores them.
 fn jobs_of(plan: &forge_ci::Plan) -> Result<Vec<db::NewCiJob>, ForgeError> {
     plan.jobs
@@ -224,6 +256,9 @@ pub struct Pipelines {
     secret_keys: Option<Arc<forge_core::ci_secret::CiSecretKeys>>,
     /// Where the CI artifacts' files live (M4 C6, `forge serve`).
     artifacts: Option<artifacts::ArtifactStore>,
+    /// Plan 17 P17-1: the projects that may use the `gpu-eval` runner and
+    /// their running limit (`ci.gpu_eval_*`; default: none).
+    gpu_eval: forge_core::config::GpuEvalPolicy,
 }
 
 impl std::fmt::Debug for Pipelines {
@@ -240,7 +275,16 @@ impl Pipelines {
             marks,
             secret_keys: None,
             artifacts: None,
+            gpu_eval: forge_core::config::GpuEvalPolicy::default(),
         }
+    }
+
+    /// The GPU runner's policy (`ci.gpu_eval_projects`,
+    /// `ci.gpu_eval_max_running`; plan 17 P17-1, `forge serve`).
+    #[must_use]
+    pub fn with_gpu_eval(mut self, policy: forge_core::config::GpuEvalPolicy) -> Self {
+        self.gpu_eval = policy;
+        self
     }
 
     /// The CI artifacts' store under the storage root (M4 C6).
@@ -341,16 +385,26 @@ impl Pipelines {
             SmallFile::Found(bytes) => (bytes, None),
         };
         let rules = forge_db::protected_refs::rules_for(&self.db, project).await?;
-        let planned = match unreadable {
-            Some(reason) => db::Planned::Invalid(vec![StoredProblem {
-                line: 0,
-                reason: reason.to_owned(),
-                subject: None,
-            }]),
-            None => Self::plan(request, &bytes, &rules)?,
+        let (planned, ai_eval_job) = match unreadable {
+            Some(reason) => (
+                db::Planned::Invalid(vec![StoredProblem {
+                    line: 0,
+                    reason: reason.to_owned(),
+                    subject: None,
+                }]),
+                None,
+            ),
+            None => {
+                let (planned, eval_job) = Self::plan(request, &bytes, &rules)?;
+                (
+                    gpu_eval_refused(planned, request.project.get(), &self.gpu_eval),
+                    eval_job,
+                )
+            }
         };
         let copy_mark = self.marks.measure(repo.id, &request.sha).await;
         Ok(Ok(db::NewPipeline {
+            ai_eval_job,
             request: request.clone(), // clone: the row owns it
             request_id: request_id.to_string(),
             definition_hash: unreadable.is_none().then(|| db::definition_hash(&bytes)),
@@ -360,16 +414,18 @@ impl Pipelines {
         }))
     }
 
-    /// Lint and plan `bytes` for `request` (pure).
+    /// Lint and plan `bytes` for `request` (pure), with the planned job
+    /// that declares the AI evaluation report (plan 17 P17-2:
+    /// `forge_ci::EVAL_REPORT_PATH`), if any.
     fn plan(
         request: &PipelineRequest,
         bytes: &[u8],
         rules: &ProtectionRules,
-    ) -> Result<db::Planned, ForgeError> {
+    ) -> Result<(db::Planned, Option<String>), ForgeError> {
         let ctx = LintContext::with_protected_branches(branch_patterns(rules));
         let def = match forge_ci::check(bytes, &ctx) {
             Ok(def) => def,
-            Err(problems) => return Ok(db::Planned::Invalid(stored(&problems))),
+            Err(problems) => return Ok((db::Planned::Invalid(stored(&problems)), None)),
         };
         let branch = request
             .git_ref
@@ -387,8 +443,11 @@ impl Pipelines {
             protected: protected_push(request, rules),
         };
         match forge_ci::plan(&def, &trigger) {
-            Ok(plan) => Ok(db::Planned::Jobs(jobs_of(&plan)?)),
-            Err(problems) => Ok(db::Planned::Invalid(stored(&problems))),
+            Ok(plan) => Ok((
+                db::Planned::Jobs(jobs_of(&plan)?),
+                plan.eval_report_job().map(str::to_owned),
+            )),
+            Err(problems) => Ok((db::Planned::Invalid(stored(&problems)), None)),
         }
     }
 
@@ -445,6 +504,7 @@ impl Pipelines {
         cause: &ForgeError,
     ) -> Result<(), ForgeError> {
         let new = db::NewPipeline {
+            ai_eval_job: None,
             request: request.clone(), // clone: the row owns it
             request_id: request_id.to_string(),
             definition_hash: None,
@@ -758,6 +818,8 @@ mod manual;
 pub mod schedules;
 // M4 C12: the specification pipeline's spec-publish (plan 04 §6).
 pub mod spec_publish;
+// Plan 17 P17-2: the forge/ai-eval check from the bench's eval-report.json.
+pub mod ai_eval;
 
 #[cfg(test)]
 mod tests;
