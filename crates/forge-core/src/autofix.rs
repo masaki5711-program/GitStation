@@ -51,6 +51,9 @@ pub const MAX_CHANGED_FILES: usize = 100;
 pub const MAX_BLOB_BYTES: usize = 1024 * 1024;
 /// The largest bundle the server imports.
 pub const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
+/// Everything one bundle brings, unpacked (a delta bomb is refused in the
+/// quarantine, before anything reaches the repository).
+pub const MAX_UNPACKED_BYTES: u64 = 128 * 1024 * 1024;
 /// Attempts that ran a fixer, per merge request, in 24 hours (ADR-0017 §3).
 pub const MAX_ATTEMPTS_PER_DAY: i64 = 6;
 /// The trailer that names the attempt in the bot's commit message.

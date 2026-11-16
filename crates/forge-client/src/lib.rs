@@ -71,6 +71,8 @@ pub mod mirror;
 pub mod merge_queue;
 // M4 C9: auto-merge.
 pub mod auto_merge;
+// M4 C14: the deterministic autofix.
+pub mod autofix;
 pub mod pipelines;
 // Plan 13 Q13: the document lint migration setting.
 pub mod doc_migration;

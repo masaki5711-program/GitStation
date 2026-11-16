@@ -20,13 +20,13 @@ forge-core.workspace = true
 forge-db.workspace = true
 forge-errors.workspace = true
 forge-git.workspace = true
-# M4 C14: the stored autofix bundle's digest.
-sha2.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 unicode-properties.workspace = true
 
 [dev-dependencies]
+# M4 C14: the autofix test stores its bundle artifact with its sha256.
+sha2.workspace = true
 forge-db = { workspace = true, features = ["test-support"] }
 # Tests that need a git timeout use a git that never answers, not a 1 ns timeout.
 forge-git = { workspace = true, features = ["test-support"] }

@@ -271,10 +271,14 @@ async fn world(shape: Shape) -> World {
         )
         .await
         .expect("open");
-    t.exec_superuser(&format!(
-        "UPDATE forge.merge_requests SET head_sha = '{head}' WHERE id = {}",
-        mr.id.get()
-    ))
+    t.commit_audited(
+        ("project", web.project_id.get()),
+        &[format!(
+            "UPDATE forge.merge_requests SET head_sha = '{head}', revision = revision + 1 \
+             WHERE id = {}",
+            mr.id.get()
+        )],
+    )
     .await;
     let artifacts = scratch.path().join("artifacts");
     let bundle_file: forge_review::BundleFile = Arc::new(move |project: i64, id: i64| {
@@ -713,10 +717,14 @@ async fn a_head_that_moved_supersedes_the_attempt() {
         &[&w.head],
     );
     plumb(&w.path, &["update-ref", "refs/heads/feature", &person]);
-    w.t.exec_superuser(&format!(
-        "UPDATE forge.merge_requests SET head_sha = '{person}' WHERE id = {}",
-        w.mr.id.get()
-    ))
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[format!(
+            "UPDATE forge.merge_requests SET head_sha = '{person}', revision = revision + 1 \
+             WHERE id = {}",
+            w.mr.id.get()
+        )],
+    )
     .await;
     w.tick().await;
     let a = w.latest().await;

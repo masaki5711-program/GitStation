@@ -239,6 +239,8 @@ fn read_fixer(name: &str, at: usize, node: &Node, problems: &mut Vec<Problem>) -
             rules: Rules::default(),
             artifacts: Vec::new(),
             services: Vec::new(),
+            // A fixer always runs when the autofix worker starts it.
+            manual: false,
         },
     })
 }

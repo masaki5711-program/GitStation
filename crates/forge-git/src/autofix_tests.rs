@@ -171,8 +171,37 @@ fn runner_bundle(
 fn limits() -> ImportLimits {
     ImportLimits {
         max_bytes: 1024 * 1024,
+        max_blob_bytes: 1024 * 1024,
+        max_unpacked_bytes: 8 * 1024 * 1024,
         timeout: T,
     }
+}
+
+/// The sha256 of `file` (what the artifact row records).
+fn sha_of(file: &Path) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(std::fs::read(file).expect("read"))
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Every file under the repository's `objects/` (what an import may add).
+fn object_files(repo: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).expect("dir") {
+            let p = e.expect("entry").path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&repo.join("objects"), &mut out);
+    out.sort();
+    out
 }
 
 fn reason(e: &ForgeError) -> String {
@@ -217,11 +246,23 @@ async fn a_runner_bundle_on_the_input_commit_yields_its_tree() {
     let bundle = runner_bundle(&f, &input, &input, &[("src.rs", "fn main() {}\n")], "ok");
     let got = f
         .git
-        .import_autofix_bundle(&f.root, f.id, &bundle, &input, limits())
+        .import_autofix_bundle(&f.root, f.id, &bundle, &sha_of(&bundle), &input, limits())
         .await
         .expect("import");
+    // Quarantined: not in the repository before the migration.
+    let probe = Command::new("git")
+        .arg("--git-dir")
+        .arg(&f.path)
+        .args(["cat-file", "-e", got.transport.as_str()])
+        .status()
+        .expect("git");
+    assert!(!probe.success(), "the transport commit is quarantined");
+    let dir = got.quarantine.dir().to_path_buf();
+    let (transport, tree_id) = (got.transport.clone(), got.tree.clone());
+    f.git.migrate_quarantine(got.quarantine).await.expect("migrate");
+    assert!(!dir.exists());
     // The transport commit's tree arrived in forge's repository.
-    assert_eq!(got.tree, tree(&f.path, &got.transport));
+    assert_eq!(tree_id, tree(&f.path, &transport));
     // No ref was written for it.
     let refs = plumb(&f.path, &["for-each-ref", "--format=%(refname)"], None);
     assert!(refs.is_empty(), "{refs}");
@@ -239,7 +280,7 @@ async fn a_bundle_on_another_commit_is_a_precondition_mismatch() {
     let elsewhere = runner_bundle(&f, &other, &other, &[("a.txt", "3\n")], "elsewhere");
     let err = f
         .git
-        .import_autofix_bundle(&f.root, f.id, &elsewhere, &input, limits())
+        .import_autofix_bundle(&f.root, f.id, &elsewhere, &sha_of(&elsewhere), &input, limits())
         .await
         .expect_err("refused");
     assert_eq!(err.code(), ErrorCode::AutofixCandidateInvalid);
@@ -285,7 +326,7 @@ async fn a_bundle_on_another_commit_is_a_precondition_mismatch() {
     );
     let err = f
         .git
-        .import_autofix_bundle(&f.root, f.id, &two, &input, limits())
+        .import_autofix_bundle(&f.root, f.id, &two, &sha_of(&two), &input, limits())
         .await
         .expect_err("refused");
     assert_eq!(reason(&err), "precondition_mismatch");
@@ -298,11 +339,11 @@ async fn an_oversized_or_foreign_bundle_is_refused_before_git_reads_it() {
     let bundle = runner_bundle(&f, &input, &input, &[("a.txt", "2\n")], "big");
     let tiny = ImportLimits {
         max_bytes: 10,
-        timeout: T,
+        ..limits()
     };
     let err = f
         .git
-        .import_autofix_bundle(&f.root, f.id, &bundle, &input, tiny)
+        .import_autofix_bundle(&f.root, f.id, &bundle, &sha_of(&bundle), &input, tiny)
         .await
         .expect_err("too large");
     assert_eq!(reason(&err), "bundle_too_large");
@@ -310,7 +351,7 @@ async fn an_oversized_or_foreign_bundle_is_refused_before_git_reads_it() {
     std::fs::write(&junk, b"not a bundle\n\n").expect("write");
     let err = f
         .git
-        .import_autofix_bundle(&f.root, f.id, &junk, &input, limits())
+        .import_autofix_bundle(&f.root, f.id, &junk, &sha_of(&junk), &input, limits())
         .await
         .expect_err("junk");
     assert_eq!(reason(&err), "bundle_signature");
@@ -333,7 +374,7 @@ async fn tree_changes_carry_kinds_modes_and_ids() {
         .git
         .tree_changes(
             &f.root,
-            f.id,
+            f.id, None,
             (&tree(&f.path, &a), &tree(&f.path, &b)),
             10,
             T,
@@ -360,7 +401,7 @@ async fn tree_changes_carry_kinds_modes_and_ids() {
         .git
         .blob_at_most(
             &f.root,
-            f.id,
+            f.id, None,
             changes[1].new_id.as_ref().expect("id"),
             100,
             T,
@@ -370,7 +411,7 @@ async fn tree_changes_carry_kinds_modes_and_ids() {
     assert_eq!(blob.as_deref(), Some(b"2\n".as_slice()));
     let capped = f
         .git
-        .blob_at_most(&f.root, f.id, changes[1].new_id.as_ref().expect("id"), 1, T)
+        .blob_at_most(&f.root, f.id, None, changes[1].new_id.as_ref().expect("id"), 1, T)
         .await
         .expect("blob");
     assert_eq!(capped, None);
@@ -378,7 +419,7 @@ async fn tree_changes_carry_kinds_modes_and_ids() {
         .git
         .tree_changes(
             &f.root,
-            f.id,
+            f.id, None,
             (&tree(&f.path, &a), &tree(&f.path, &b)),
             2,
             T,
@@ -456,7 +497,7 @@ async fn a_root_entry_is_replaced_and_removed() {
     let bare = commit(&f.path, &[("a.rs", "a\n")], &[]);
     let wanted = f
         .git
-        .root_entry(&f.root, f.id, &target, ".forge-ci.yml", T)
+        .root_entry(&f.root, f.id, None, &target, ".forge-ci.yml", T)
         .await
         .expect("ls")
         .expect("present");
@@ -468,7 +509,7 @@ async fn a_root_entry_is_replaced_and_removed() {
         .git
         .tree_with_root_entry(
             &f.root,
-            f.id,
+            f.id, None,
             &tree(&f.path, &head),
             ".forge-ci.yml",
             Some(&wanted),
@@ -496,7 +537,7 @@ async fn a_root_entry_is_replaced_and_removed() {
         .git
         .tree_with_root_entry(
             &f.root,
-            f.id,
+            f.id, None,
             &tree(&f.path, &head),
             ".forge-ci.yml",
             None,
@@ -507,9 +548,73 @@ async fn a_root_entry_is_replaced_and_removed() {
     assert_eq!(removed, tree(&f.path, &bare));
     assert_eq!(
         f.git
-            .root_entry(&f.root, f.id, &bare, ".forge-ci.yml", T)
+            .root_entry(&f.root, f.id, None, &bare, ".forge-ci.yml", T)
             .await
             .expect("ls"),
         None
     );
+}
+
+/// Review (C14, MEDIUM): a refused import leaves nothing in the repository
+/// — its quarantine is removed on the failure path.
+#[tokio::test]
+async fn a_refused_import_leaves_no_new_objects() {
+    let f = fixture().await;
+    let input = commit(&f.path, &[("a.txt", "1
+")], &[]);
+    let other = commit(&f.path, &[("a.txt", "2
+")], &[]);
+    let two = runner_bundle(&f, &other, &other, &[("a.txt", "3
+")], "refused");
+    let before = object_files(&f.path);
+    let err = f
+        .git
+        .import_autofix_bundle(&f.root, f.id, &two, &sha_of(&two), &input, limits())
+        .await
+        .expect_err("refused");
+    assert_eq!(err.code(), ErrorCode::AutofixCandidateInvalid);
+    assert_eq!(object_files(&f.path), before);
+    // A wrong digest is refused before git reads the bundle.
+    let ok = runner_bundle(&f, &input, &input, &[("a.txt", "4
+")], "digest");
+    let err = f
+        .git
+        .import_autofix_bundle(&f.root, f.id, &ok, &"0".repeat(64), &input, limits())
+        .await
+        .expect_err("digest");
+    assert_eq!(reason(&err), "artifact_digest");
+    assert_eq!(object_files(&f.path), before);
+}
+
+/// Review (C14, MEDIUM): an unpacked blob over the bound is refused before
+/// anything is migrated (a delta bomb never reaches the repository).
+#[tokio::test]
+async fn an_oversized_unpacked_blob_is_refused() {
+    let f = fixture().await;
+    let input = commit(&f.path, &[("a.txt", "1
+")], &[]);
+    let big = "x".repeat(4096);
+    let bundle = runner_bundle(&f, &input, &input, &[("a.txt", big.as_str())], "bomb");
+    let before = object_files(&f.path);
+    let small = ImportLimits {
+        max_blob_bytes: 1024,
+        ..limits()
+    };
+    let err = f
+        .git
+        .import_autofix_bundle(&f.root, f.id, &bundle, &sha_of(&bundle), &input, small)
+        .await
+        .expect_err("too large");
+    assert_eq!(reason(&err), "blob_too_large");
+    assert_eq!(object_files(&f.path), before);
+    let total = ImportLimits {
+        max_unpacked_bytes: 1024,
+        ..limits()
+    };
+    let err = f
+        .git
+        .import_autofix_bundle(&f.root, f.id, &bundle, &sha_of(&bundle), &input, total)
+        .await
+        .expect_err("too large");
+    assert_eq!(reason(&err), "unpacked_too_large");
 }

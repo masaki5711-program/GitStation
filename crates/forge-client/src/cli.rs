@@ -122,6 +122,13 @@ pub enum Command {
         #[command(subcommand)]
         command: AutoMergeCommand,
     },
+    /// The deterministic autofix (M4 C14): a project's switch (off by
+    /// default; a Maintainer turns it on or off) and a merge request's line.
+    #[command(disable_help_subcommand = true)]
+    Autofix {
+        #[command(subcommand)]
+        command: AutofixCommand,
+    },
     /// An integration's event feed (M3 I1c): events, cursor — with the
     /// integration's own service account token.
     #[command(disable_help_subcommand = true)]
@@ -1639,6 +1646,34 @@ pub enum MirrorCommand {
     Sync {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AutofixCommand {
+    /// A project's autofix switch (off by default).
+    Status {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Turn the project's autofix on (people only; Maintainer). You become
+    /// the person the bot's commits are checked with.
+    Enable {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Turn the project's autofix off (people only; Maintainer).
+    Disable {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// What the autofix did with a merge request (applied, proposed,
+    /// refused, failed, …) and why.
+    Mr {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
     },
 }
 

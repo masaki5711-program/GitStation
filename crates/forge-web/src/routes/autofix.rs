@@ -52,7 +52,8 @@ pub struct AutofixBody {
     /// Off by default (no project fixes itself until a Maintainer turns it
     /// on).
     pub enabled: bool,
-    /// Who changed it last: the enabler (`null`: never set).
+    /// Who changed it last: the enabler (`null`: never set, or the caller
+    /// is no Maintainer — only one who may change it sees who did).
     #[schema(required = true, minimum = 1)]
     pub changed_by: Option<i64>,
     /// UTC, RFC 3339.
@@ -153,7 +154,8 @@ fn body<B>(s: forge_review::AutofixSettings, w: &WriteParts<ProjectCtx, B>) -> A
     AutofixBody {
         project_id: s.project.get(),
         enabled: s.enabled,
-        changed_by: s.changed_by.map(UserId::get),
+        // Review (C14, LOW): who the enabler is is a Maintainer's to see.
+        changed_by: s.changed_by.filter(|_| can_change).map(UserId::get),
         changed_at: s.changed_at,
         viewer: AutofixViewerBody { can_change },
     }

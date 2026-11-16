@@ -102,12 +102,13 @@ pub use job::authorize_pinned_copy;
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
-    AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject, CodeownersToggle, CopyMark,
-    Credential, DeploymentView, GroupSight, IntegrationFeedView, JobCredential, JobTokenState,
-    MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView,
-    PersonalDisclosure, PinnedCopy, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
-    ResolvedVia, Resource, Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView,
-    TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility, SSH_KEY_SCOPES,
+    AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject,
+    CodeownersToggle, CopyMark, Credential, DeploymentView, GroupSight, IntegrationFeedView,
+    JobCredential, JobTokenState, MembershipChange, MembershipScope, MergeRequestEdit,
+    MergeRequestState, NamespaceView, PersonalDisclosure, PinnedCopy, Principal, ProjectView,
+    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob,
+    Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView,
+    Visibility, SSH_KEY_SCOPES,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,

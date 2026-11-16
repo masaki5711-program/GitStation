@@ -70,7 +70,7 @@ const PUSH: [Row; 14] = [
 ];
 
 #[rustfmt::skip]
-const SETTINGS: [Row; 13] = [
+const SETTINGS: [Row; 12] = [
     row(A::AutofixSettingsManage, W::Maintainer, F::PrivateProject, Allow),
     row(A::AutofixSettingsManage, W::Owner, F::PrivateProject, Allow),
     row(A::AutofixSettingsManage, W::Admin, F::PrivateProject, Allow),
@@ -83,8 +83,6 @@ const SETTINGS: [Row; 13] = [
     row(A::AutofixSettingsManage, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
     row(A::AutofixSettingsManage, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
     row(A::AutofixSettingsManage, W::Maintainer, F::DeletedProject, deny(E::PendingDeletion)),
-    // The bot never turns itself on.
-    row(A::AutofixSettingsManage, W::Autofix, F::PrivateProject, deny(E::Forbidden)),
 ];
 
 /// Every explicit row of autofix (`matrix::ROWS` appends them).

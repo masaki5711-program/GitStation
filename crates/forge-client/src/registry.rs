@@ -2025,6 +2025,46 @@ pub const COMMANDS: &[CommandSpec] = &[
         routes: &["POST /api/v1/projects/{id}/merge-queue/resume"],
         output: r#"{"type":"object","required":["project_id","target_branch","paused","paused_by","paused_at","batch_limit","batch","entries","recent","viewer"]}"#,
     },
+    // ── M4 C14: the deterministic autofix (ADR-0017 Amendment C14, runbook autofix) ──
+    CommandSpec {
+        name: "autofix status",
+        summary: "A project's deterministic autofix switch (off by default) and who changed it last.",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn autofix status --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/autofix"],
+        output: r#"{"type":"object","required":["project_id","enabled","changed_by","changed_at","viewer"]}"#,
+    },
+    CommandSpec {
+        name: "autofix enable",
+        summary: "Turn a project's deterministic autofix on (people only; Maintainer): fixers of the target branch's .forge-ci.yml run on failed pipelines and conflicts, and the bot commits their result.",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn autofix enable --project 7"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/autofix"],
+        output: r#"{"type":"object","required":["project_id","enabled","changed_by","changed_at","viewer"]}"#,
+    },
+    CommandSpec {
+        name: "autofix disable",
+        summary: "Turn a project's deterministic autofix off (people only; Maintainer).",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn autofix disable --project 7"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/autofix"],
+        output: r#"{"type":"object","required":["project_id","enabled","changed_by","changed_at","viewer"]}"#,
+    },
+    CommandSpec {
+        name: "autofix mr",
+        summary: "What the deterministic autofix did with a merge request: its latest attempt (state, fixer, reason, paths, the bot's commit, FG-GIT-0037 / 0038, FG-CI-0031, FG-REVIEW-0031, FG-AUTH-0024).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request number."),
+        ],
+        examples: &["gstn autofix mr --project 7 --iid 12 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/autofix"],
+        output: r#"{"type":"object","required":["iid","enabled","attempt"]}"#,
+    },
     // ── M4 C9: auto-merge (ADR-0017 Amendment 2026-11-13, runbook auto-merge) ──
     CommandSpec {
         name: "auto-merge status",

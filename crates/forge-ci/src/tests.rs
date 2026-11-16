@@ -1216,6 +1216,7 @@ fn a_manual_job_waits_for_its_stage_but_holds_up_no_later_stage() {
     assert!(!announce.manual);
     // The barrier skips the manual stage: the last automatic stage is test.
     assert_eq!(announce.after, ["integration", "unit"]);
+}
 
 // --- M4 C14: autofix.fixers (ADR-0017 Amendment C14) ---
 

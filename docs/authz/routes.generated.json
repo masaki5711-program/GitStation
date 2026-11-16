@@ -756,6 +756,24 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/autofix",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AutofixSettingsManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/autofix",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "CiVariableManage",
     "method": "GET",
     "path": "/api/v1/projects/{id}/ci/variables",
@@ -1101,6 +1119,15 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/auto-merge",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/autofix",
     "people_only": false,
     "public": false,
     "scope": "fixed",

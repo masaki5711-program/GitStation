@@ -1386,9 +1386,12 @@ LLM の修正とともに M5 で入れる。
   修正だけのパイプライン（source `autofix`、MR に結びつけない、保護なし、シークレットなし、`ci/pipeline` を報告しない）を作る。
   Runner は修正のスクリプトのあと、**マウントの外の自分のリポジトリ**（作業ツリーの `.git` は読まない）で作業ツリーを 1 つの運搬用のコミットに記録し、
   `refs/forge/autofix ^<入力>` の bundle を成果物 `autofix.bundle` として返す（変わらなければ返さない = `no_change`）。
-- **サーバーの検査**（すべて通ったときだけ積む）: 成果物の sha256 が行と同じ → bundle のヘッダを先に読み、ref は `refs/forge/autofix` の 1 つ、
-  前提は **入力のコミットだけ**（衝突でも入力のコミットが head と target を親に持つ）→ `fetch.fsckObjects` で取り込み（ref は書かない。
-  参照されないオブジェクトは保守の prune で消える）、運搬用のコミットの親が入力のコミットでなければ拒否 → `.forge-ci.yml` を変えていれば拒否
+- **サーバーの検査**（すべて通ったときだけ積む）: **隔離領域**（リポジトリの `objects/` の下の一時のオブジェクトのディレクトリ。git の push の
+  隔離と同じく、検査のすべての git を `GIT_OBJECT_DIRECTORY` = 隔離領域、`GIT_ALTERNATE_OBJECT_DIRECTORIES` = リポジトリの objects で動かす）を作り、
+  成果物を **1 回だけ** 読んで隔離領域に写しながら sha256 が行と同じことを確かめる → bundle のヘッダを先に読み、ref は `refs/forge/autofix` の 1 つ、
+  前提は **入力のコミットだけ**（衝突でも入力のコミットが head と target を親に持つ）→ `fetch.fsckObjects` で隔離領域にだけ取り込む（ref は書かない。
+  hooks は空のディレクトリ）→ bundle が持ち込んだオブジェクトを展開後の大きさで数える（blob は 1 つ 1 MiB、合計 128 MiB まで。delta bomb はここで拒否）
+  → 運搬用のコミットの親が入力のコミットでなければ拒否 → `.forge-ci.yml` を変えていれば拒否
   → ボットの tree = 候補の tree の `.forge-ci.yml` を base のものに戻したもの → `diff-tree -r --no-renames --raw`（base とボットの tree）を
   `forge_core::autofix::check_scope` で判定 → 変わったファイルを 1 MiB まで読み、秘密情報は拒否、バイナリは提案、衝突は §1.2 のとおり
   **衝突したパスの衝突した hunk の中だけ**（`within_conflict_hunks`: ブロックの外の行はすべて順に残し、印は残さない）で、衝突したパスはすべて解消されていること。
@@ -1421,13 +1424,17 @@ LLM の修正とともに M5 で入れる。
 
 - **新しい機能クレート `forge-autofix`**: 今は作らない。M4 の worker は MR の書き込み（forge-review の Reverter と同じ形）なので forge-review に置き、
   成果物のファイルは forge-cli が渡す関数（`BundleFile`）で読む（機能クレートどうしは依存しない）。LLM の部分（M5）で分ける。
-- **隔離した別のリポジトリに展開してから移す**: 取り込みは本体のリポジトリへの `fetch`（fsck、ref なし）にした。ref を書かないので誰にも見えず、
-  前提とヘッダの検査を先に行い、大きさは 64 MiB で切る。別リポジトリと alternates の組み合わせより手順が少なく、同じ性質を保つ。
+- **本体のリポジトリへ直接 `fetch` する**（第 1 版）: レビューで改めた。拒否した候補のオブジェクトが本体に残り、展開後の大きさも測れない。
+  隔離領域で検査し、すべて通った後だけ（着地の直前の判定のあと）オブジェクトを本体に移す（pack は .idx を最後に、loose は既にあれば残す）。
+  失敗のどの経路でも隔離領域は消える（試験 `a_refused_import_leaves_no_new_objects`、`an_oversized_unpacked_blob_is_refused`）。
 - **Runner が作業ツリーの `.git` で bundle を作る**: 採らない。コンテナが書ける `.git`（hooks、`core.fsmonitor` など）を Runner のホストの git が読むことになる。
 
 ### C. 残すこと（M5 と M4 の締め）
 
-- pre-receive で人の push のボットの ID・`Forge-Autofix-` のトレーラーを拒否する（§2.5）。今はトレーラーを信じる場所がない（真実は DB）ので後回し。
+- **ボットのコミットかどうかは `forge.autofix_attempts.commit_sha` だけで決める**。作者の email（`autofix@forge.invalid`）やトレーラーで
+  ボットのものとして扱う・表示することはしない（だれでも書ける）。承認を引き継がない判定（`is_bot_commit`）も SHA だけを見る。
+- 人の push のボットの ID・`Forge-Autofix-` のトレーラーを pre-receive で拒否する（§2.5）のは **M5 に送る**。今は SHA だけを真実にしているので、
+  偽のボットの ID は何の権限も得ない。
 - 「AI 変更」タブ、P-9 の `autofix`、`forge doctor` の `autofix.stuck_attempts` / `autofix.orphan_candidate_refs`、指標 `forge_autofix_*`、
   試行の期限（2 時間）、緊急停止 `AutofixPause`（インスタンス全体。今はプロジェクトごとの無効化だけ）、MR ごとの有効・無効。
 - §2.2 のテストを弱めない判定（JUnit の件数）は候補のパイプラインとともに M5。

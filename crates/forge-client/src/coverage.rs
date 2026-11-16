@@ -896,22 +896,21 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/auto-merge",
         Coverage::Command("auto-merge mr"),
     ),
-    // M4 C14 (ADR-0017 Amendment C14): the deterministic autofix (`gstn
-    // api` until the M5 series adds `gstn autofix`).
+    // M4 C14 (ADR-0017 Amendment C14): the deterministic autofix.
     (
         "GET",
         "/api/v1/projects/{id}/autofix",
-        Coverage::Planned("M5 autofix"),
+        Coverage::Command("autofix status"),
     ),
     (
         "PUT",
         "/api/v1/projects/{id}/autofix",
-        Coverage::Planned("M5 autofix"),
+        Coverage::Command("autofix enable"),
     ),
     (
         "GET",
         "/api/v1/projects/{id}/merge-requests/{iid}/autofix",
-        Coverage::Planned("M5 autofix"),
+        Coverage::Command("autofix mr"),
     ),
     // M4 C6 (ADR-0029 decision 8): a project's CI variables.
     (

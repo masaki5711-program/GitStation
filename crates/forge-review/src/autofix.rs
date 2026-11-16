@@ -55,7 +55,7 @@ use forge_auth::{prove, Action, AutofixCtx, AutofixTarget, Principal, ProjectVie
 use forge_core::autofix::{
     check_scope, commit_message, is_binary, script_words, within_conflict_hunks, AttemptState,
     AutofixTrigger, CandidateChange, ScopePolicy, ScopeVerdict, BOT_EMAIL, BOT_NAME,
-    MAX_ATTEMPTS_PER_DAY, MAX_BLOB_BYTES, MAX_BUNDLE_BYTES, MAX_CHANGED_FILES,
+    MAX_ATTEMPTS_PER_DAY, MAX_BLOB_BYTES, MAX_BUNDLE_BYTES, MAX_CHANGED_FILES, MAX_UNPACKED_BYTES,
 };
 use forge_core::{
     telemetry, ObjectId, ProjectAccessLoader, PushRecord, PushUpdateKind, PushedCommits, PushedRef,
@@ -70,7 +70,6 @@ use forge_git::browse::Browser;
 use forge_git::commit::{CommitIdentity, NewCommit};
 use forge_git::mergeability::MergeTreeLimits;
 use forge_git::{Git, RefChange, StorageRoot};
-use sha2::{Digest, Sha256};
 
 use crate::ready;
 
@@ -493,7 +492,7 @@ impl Autofixer {
         let t = self.limits.git;
         let Some(entry) = self
             .git
-            .root_entry(&self.storage, repo, target_sha, DEFINITION, t)
+            .root_entry(&self.storage, repo, None, target_sha, DEFINITION, t)
             .await?
         else {
             return Ok(Err(end(AttemptState::Skipped, "no_definition")));
@@ -503,7 +502,7 @@ impl Autofixer {
         }
         let Some(bytes) = self
             .git
-            .blob_at_most(&self.storage, repo, &entry.id, forge_ci::MAX_BYTES, t)
+            .blob_at_most(&self.storage, repo, None, &entry.id, forge_ci::MAX_BYTES, t)
             .await?
         else {
             return Ok(Err(end(AttemptState::Skipped, "definition_invalid")));
@@ -615,7 +614,15 @@ impl Autofixer {
         let t = self.limits.git;
         let input_tree = self
             .git
-            .tree_with_root_entry(&self.storage, repo, &base.tree, DEFINITION, Some(&entry), t)
+            .tree_with_root_entry(
+                &self.storage,
+                repo,
+                None,
+                &base.tree,
+                DEFINITION,
+                Some(&entry),
+                t,
+            )
             .await?;
         let bot = bot_identity()?;
         let input = self
@@ -658,6 +665,7 @@ impl Autofixer {
                 timeout_s: i32::try_from(job.timeout_secs()).unwrap_or(i32::MAX),
                 tags: Vec::new(),
                 secrets: Vec::new(),
+                manual: false,
             }]),
             ai_eval_job: None,
         };
@@ -772,19 +780,19 @@ impl Autofixer {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "running_without_input"));
         };
-        // The stored artifact is what the runner uploaded.
+        // The stored artifact, read once (copied into the quarantine while
+        // its sha256 is checked against the row).
         let file = (self.bundle_file)(a.project.get(), artifact);
-        if !file_digest_is(&file, digest).await? {
-            return Ok(Err(refused("artifact_digest", None)));
-        }
         let t = self.limits.git;
         let limits = ImportLimits {
             max_bytes: MAX_BUNDLE_BYTES,
+            max_blob_bytes: MAX_BLOB_BYTES as u64,
+            max_unpacked_bytes: MAX_UNPACKED_BYTES,
             timeout: self.limits.import,
         };
         let imported = match self
             .git
-            .import_autofix_bundle(&self.storage, repo, &file, &input, limits)
+            .import_autofix_bundle(&self.storage, repo, &file, digest, &input, limits)
             .await
         {
             Ok(i) => i,
@@ -795,6 +803,8 @@ impl Autofixer {
             }
             Err(e) => return Err(e),
         };
+        // Every check below reads the candidate's objects in the quarantine.
+        let q = Some(&imported.quarantine);
         let (def, _, _) = match self.definition(repo, &a.target_sha).await? {
             Ok(d) => d,
             Err(_) => return Ok(Err(refused("fixer_gone", None))),
@@ -806,11 +816,11 @@ impl Autofixer {
         let input_tree = self.git.tree_of(&self.storage, repo, &input, t).await?;
         let was = self
             .git
-            .root_entry(&self.storage, repo, &input_tree, DEFINITION, t)
+            .root_entry(&self.storage, repo, None, &input_tree, DEFINITION, t)
             .await?;
         let now = self
             .git
-            .root_entry(&self.storage, repo, &imported.tree, DEFINITION, t)
+            .root_entry(&self.storage, repo, q, &imported.tree, DEFINITION, t)
             .await?;
         if was != now {
             return Ok(Err(refused("definition_changed", Some(DEFINITION))));
@@ -821,13 +831,14 @@ impl Autofixer {
         };
         let base_entry = self
             .git
-            .root_entry(&self.storage, repo, &base.tree, DEFINITION, t)
+            .root_entry(&self.storage, repo, None, &base.tree, DEFINITION, t)
             .await?;
         let bot_tree = self
             .git
             .tree_with_root_entry(
                 &self.storage,
                 repo,
+                q,
                 &imported.tree,
                 DEFINITION,
                 base_entry.as_ref(),
@@ -839,6 +850,7 @@ impl Autofixer {
             .tree_changes(
                 &self.storage,
                 repo,
+                q,
                 (&base.tree, &bot_tree),
                 MAX_CHANGED_FILES,
                 t,
@@ -889,7 +901,7 @@ impl Autofixer {
             };
             let Some(content) = self
                 .git
-                .blob_at_most(&self.storage, repo, new_id, MAX_BLOB_BYTES, t)
+                .blob_at_most(&self.storage, repo, q, new_id, MAX_BLOB_BYTES, t)
                 .await?
             else {
                 return Ok(Err(refused("too_large", Some(c.path.as_str()))));
@@ -907,7 +919,7 @@ impl Autofixer {
                 let marked = match &c.old_id {
                     Some(old) => {
                         self.git
-                            .blob_at_most(&self.storage, repo, old, MAX_BLOB_BYTES, t)
+                            .blob_at_most(&self.storage, repo, q, old, MAX_BLOB_BYTES, t)
                             .await?
                     }
                     None => Some(Vec::new()),
@@ -957,9 +969,10 @@ impl Autofixer {
         let message = commit_message(a.trigger, fixer_name, a.id, rid.as_str());
         let commit = self
             .git
-            .commit_tree(
+            .commit_in(
                 &self.storage,
                 repo,
+                q,
                 &NewCommit {
                     tree: &bot_tree,
                     parents: &base.parents,
@@ -978,6 +991,9 @@ impl Autofixer {
         if let Err(e) = self.decide(a, fresh, "land") {
             return Ok(Err(e));
         }
+        // Every check passed: the candidate's objects (and the bot's commit)
+        // join the repository now, never before.
+        self.git.migrate_quarantine(imported.quarantine).await?;
         if !db::set_candidate(&self.db, a.id, &commit).await? {
             return Ok(Err(end(AttemptState::Superseded, "not_running")));
         }
@@ -1067,42 +1083,4 @@ impl Autofixer {
 /// The bot's commit on the source branch.
 struct Landed {
     commit: ObjectId,
-}
-
-/// Whether `file`'s sha256 is `digest` (lower-case hex).
-async fn file_digest_is(file: &std::path::Path, digest: &str) -> Result<bool, ForgeError> {
-    use tokio::io::AsyncReadExt as _;
-    let mut f = match tokio::fs::File::open(file).await {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => {
-            return Err(ForgeError::new(ErrorCode::StorageIoFailed)
-                .with_context("operation", "autofix_bundle_read")
-                .with_source(e))
-        }
-    };
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut total: u64 = 0;
-    loop {
-        let n = f.read(&mut buf).await.map_err(|e| {
-            ForgeError::new(ErrorCode::StorageIoFailed)
-                .with_context("operation", "autofix_bundle_read")
-                .with_source(e)
-        })?;
-        if n == 0 {
-            break;
-        }
-        total += n as u64;
-        if total > MAX_BUNDLE_BYTES {
-            return Ok(false);
-        }
-        hasher.update(&buf[..n]);
-    }
-    let hex: String = hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    Ok(hex == digest)
 }

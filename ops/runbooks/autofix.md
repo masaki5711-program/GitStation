@@ -61,7 +61,8 @@ Developer 以上）→ 対象ブランチの `.forge-ci.yml` の `autofix.fixers
   Maintainer 以上）。新しい試行は `skipped reason=disabled` になり、走っている試行も着地の前の判定で拒否される。DB を直接書き換えない。
 - `FG-GIT-0037` の `precondition_mismatch` / `bundle_*` / `artifact_digest`: その Runner を無効にし（`forge admin runner update
   --disable`、Runbook `ci-runner`）、Runner の作業ディレクトリと成果物のファイル（`<storage.root>/ci-artifacts/<project>/<id>`）を
-  保全してから調べる。ブランチには何も書いていない（取り込んだオブジェクトは参照されず、保守の prune で消える）。
+  保全してから調べる。ブランチには何も書いていない。取り込みと検査は隔離領域（`<repo>/objects/forge-autofix-<uuid>`）で行い、拒否すれば
+  消すので、本体のリポジトリにオブジェクトは入っていない（消せなかったときは warn `forge.autofix.quarantine_left`: そのディレクトリを消す）。
 - `secret_in_output`: 修正が秘密情報らしい文字列を書いた。何も積んでいないが、Runner のログと成果物を Runbook `ci-secrets` に
   従って扱う。
 - `outside_fixer_paths` / `forbidden_path` / `ci_file`: 修正の定義（対象ブランチの `autofix.fixers.<name>.paths`）を直す。

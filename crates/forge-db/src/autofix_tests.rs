@@ -212,16 +212,26 @@ async fn a_failed_merge_result_pipeline_queues_a_pipeline_attempt() {
     register(&t.db, &AutofixTriggers, Start::Beginning)
         .await
         .expect("register");
-    t.exec_superuser(&format!(
-        "UPDATE forge.merge_requests SET head_sha = '{h}' WHERE id = {id}; \
-         INSERT INTO forge.merge_result_refs (merge_request_id, project_id, head_sha, \
-           target_sha, result_sha) VALUES ({id}, {p}, '{h}', '{tg}', '{r}')",
-        h = sha('a').as_str(),
-        tg = sha('b').as_str(),
-        r = sha('c').as_str(),
-        id = mr.id.get(),
-        p = p.get(),
-    ))
+    t.commit_audited(
+        ("project", p.get()),
+        &[
+            format!(
+                "UPDATE forge.merge_requests SET head_sha = '{}', revision = revision + 1 \
+                 WHERE id = {}",
+                sha('a').as_str(),
+                mr.id.get()
+            ),
+            format!(
+                "INSERT INTO forge.merge_result_refs (merge_request_id, project_id, head_sha, \
+                   target_sha, result_sha) VALUES ({}, {}, '{}', '{}', '{}')",
+                mr.id.get(),
+                p.get(),
+                sha('a').as_str(),
+                sha('b').as_str(),
+                sha('c').as_str()
+            ),
+        ],
+    )
     .await;
     let check = |head: char, conclusion: &str| {
         serde_json::json!({
@@ -288,6 +298,7 @@ async fn an_attempt_runs_its_own_pipeline_and_ends_once_with_its_event() {
             timeout_s: 600,
             tags: Vec::new(),
             secrets: Vec::new(),
+            manual: false,
         }]),
         ai_eval_job: None,
     };
