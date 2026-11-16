@@ -124,6 +124,60 @@
         ],
         "type": "object"
       },
+      "AiAssetsBody": {
+        "additionalProperties": false,
+        "description": "A project's `ai_assets.enabled`.",
+        "properties": {
+          "changed_at": {
+            "description": "UTC, RFC 3339 (`null`: never changed).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "On: the AI asset lint, `forge/risk`'s `ai_case_raw_data` (stop) and\n`ai_asset` (warn) and asset releases apply. Off (the default): none.",
+            "type": "boolean"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/AiAssetsViewerBody"
+          }
+        },
+        "required": [
+          "project_id",
+          "enabled",
+          "changed_by",
+          "changed_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "AiAssetsViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do now (a hint; the route decides again).",
+        "properties": {
+          "can_change": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_change"
+        ],
+        "type": "object"
+      },
       "AnnotationBody": {
         "additionalProperties": false,
         "description": "One annotation as stored.",
@@ -8335,6 +8389,19 @@
         ],
         "type": "object"
       },
+      "PutAiAssets": {
+        "additionalProperties": false,
+        "description": "`PUT …/ai-assets`.",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
       "PutApprovalRule": {
         "additionalProperties": false,
         "description": "`PUT …/approval-rules/{name}`.",
@@ -15696,6 +15763,97 @@
         "summary": "Change a project's display name / description (Maintainer)",
         "x-forge-action": "ProjectUpdate",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/ai-assets": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_ai_assets",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAssetsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's ai_assets.enabled: whether the AI asset lint, the forge/risk rules ai_case_raw_data (stop) and ai_asset (warn) and asset releases apply (off by default), who changed it last and when",
+        "x-forge-action": "ProjectRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_ai_assets",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutAiAssets"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAssetsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Turn a project's ai_assets.enabled on or off (people only; Maintainer and above in a web session, never an agent, a bot, a service account or the auto-merge principal); audited. Off stops the lint, the two rules and new releases only",
+        "x-forge-action": "AiAssetsSettingManage",
+        "x-forge-max-body-bytes": 256
       }
     },
     "/api/v1/projects/{id}/approval-rules": {

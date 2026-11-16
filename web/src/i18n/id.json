@@ -659,6 +659,19 @@
       "projectStopped": "Merge otomatis proyek ini sedang dihentikan darurat (sejak {{at}}).",
       "instanceStopped": "Administrator menghentikan merge otomatis untuk semua (sejak {{at}})."
     },
+    "aiAssets": {
+      "title": "Aset AI",
+      "intro": "Aktifkan hanya bila repositori ini menyimpan aset AI pusat PFS (skill, playbook, model, kasus evaluasi). Maka pemeriksaan aset, aturan yang menghentikan auto-merge bila kasus evaluasi berisi data mentah, aturan yang menampilkan perubahan aset di merge request sebagai \"perubahan aset AI\", dan rilis aset berlaku untuk proyek ini. Proyek lain tidak berubah.",
+      "on": "Pemeriksaan dan aturan aset AI: aktif",
+      "off": "Pemeriksaan dan aturan aset AI: nonaktif (bawaan)",
+      "changedAt": "Terakhir diubah: {{at}}",
+      "turnOn": "Aktifkan pemeriksaan aset AI",
+      "turnOff": "Nonaktifkan pemeriksaan aset AI",
+      "turnedOn": "Pemeriksaan dan aturan aset AI aktif.",
+      "turnedOff": "Pemeriksaan dan aturan aset AI nonaktif.",
+      "maintainerOnly": "Hanya Maintainer ke atas yang dapat mengubahnya, masuk lewat web (bukan agen, bot, atau akun layanan).",
+      "offKeeps": "Menonaktifkan tetap menyimpan riwayat, rilis sebelumnya, tanda tangan, dan catatan deploy; hanya pemeriksaan, aturan, dan rilis baru yang berhenti."
+    },
     "docLint": {
       "title": "Pemeriksaan dokumen selama migrasi",
       "intro": "Referensi rusak antar dokumen adalah error di pemeriksaan forge/doc-lint. Selama dokumen dipindahkan ke GitStation, Anda dapat menjadikannya peringatan sampai suatu tanggal. Setelah tanggal itu, otomatis menjadi error lagi.",
@@ -1667,6 +1680,7 @@
       "held": "seseorang mengeluarkannya dari antrean merge, jadi versi ini tidak digabung otomatis.",
       "queued": "di antrean merge; digabung bila pengujian hijau.",
       "queued_warning": "di antrean merge dengan peringatan; digabung bila pengujian hijau.",
+      "queued_ai_asset": "di antrean merge dengan peringatan: mengubah aset AI. Digabung bila pengujian hijau.",
       "queued_by_person": "seseorang memasukkannya ke antrean merge."
     },
     "next": {

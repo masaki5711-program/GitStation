@@ -953,6 +953,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "ci variable set",
             "ci variable delete",
             "agent verify",
+            "ai-asset lint",
+            "ai-asset status",
             "deploy envs",
             "deploy env-set",
             "deploy target-set",

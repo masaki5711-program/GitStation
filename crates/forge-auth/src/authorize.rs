@@ -1558,6 +1558,13 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             people_only()?;
             admin_only()
         }
+        // Plan 17 P17-3: `ai_assets.enabled`, a Maintainer's in a session
+        // (`is_session_only`; people only: never an agent, a bot or a
+        // service account; the auto-merge principal never reaches here).
+        (Action::AiAssetsSettingManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
 
         // --- autofix (M4 C14, ADR-0017 Amendment C14) ---
         // The project's switch: Maintainer and above, people only.
@@ -1689,6 +1696,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
             | Action::AutofixSettingsManage
+            | Action::AiAssetsSettingManage
             | Action::CiVariableManage
             | Action::DeployRead
             | Action::DeployEnvironmentManage

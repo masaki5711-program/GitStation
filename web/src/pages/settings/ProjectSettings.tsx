@@ -23,6 +23,7 @@ import { formatDateTime, roleLabel } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
+import { AiAssetsSection } from './AiAssetsSettings';
 import { AutoMergeSection } from './AutoMergeSettings';
 import { AutofixSection } from './AutofixSettings';
 import { DocLintMigrationSection } from './DocLintMigration';
@@ -91,6 +92,7 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       <MergeConditionsSection projectId={projectId} canManage={viewer.can_manage} />
       <AutoMergeSection projectId={projectId} />
       <AutofixSection projectId={projectId} />
+      <AiAssetsSection projectId={projectId} />
       <DocLintMigrationSection projectId={projectId} />
       <IntegrationBindingsSection project={p} />
       <Section id="move-title" title={t('settings.move.title')}>

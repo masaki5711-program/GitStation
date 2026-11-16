@@ -68,6 +68,8 @@ mod matrix_rows_merge_queue;
 mod matrix_rows_auto_merge;
 // M4 C14: autofix.
 mod matrix_rows_autofix;
+// Plan 17 P17-3: ai_assets.enabled.
+mod matrix_rows_ai_assets;
 // M4 C13: the SSH git transport and SSH keys (ADR-0033).
 mod matrix_rows_pipelines;
 mod matrix_rows_ssh;

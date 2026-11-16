@@ -48,6 +48,7 @@ pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, UserNa
 
 pub mod activity;
 mod after_version;
+mod ai_assets_settings;
 pub mod approvals;
 mod auto_merge_settings;
 // M4 C14: the deterministic autofix worker and its settings.
@@ -81,6 +82,7 @@ pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
 pub use forge_db::autofix::{
     AutofixSettings, DetailPath as AutofixDetailPath, StoredAttempt as StoredAutofixAttempt,
 };
+pub use forge_db::ai_assets::AiAssetsSetting;
 pub use forge_db::review::auto_merge::{
     AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, StopMark, StoredState as AutoMergeState,
 };

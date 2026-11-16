@@ -701,6 +701,14 @@ async fn finish_steps(
         "projects.purge.finish.project_auto_merge",
     )
     .await?;
+    // Plan 17 P17-3: the project's ai_assets.enabled.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.project_ai_assets WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.project_ai_assets",
+    )
+    .await?;
     // M4 C8: the merge queue — entries reference the batches, the queues,
     // the merge requests and the merge attempts; batches the queues.
     delete_rows(

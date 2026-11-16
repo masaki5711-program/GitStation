@@ -59,6 +59,7 @@ struct World {
     _root: tempfile::TempDir,
     scratch: tempfile::TempDir,
     project: ProjectId,
+    owner: forge_core::UserId,
     repo: PathBuf,
     risk: Risk,
 }
@@ -232,6 +233,7 @@ async fn world() -> World {
         _root: root,
         scratch: tempfile::tempdir().expect("scratch"),
         project: web.project_id,
+        owner: alice.user_id,
         repo,
         risk,
     }
@@ -952,6 +954,160 @@ async fn an_unread_migration_or_deploy_file_is_a_stop() {
         runs[0].summary.contains("critical_content_unread"),
         "{}",
         runs[0].summary
+    );
+    w.t.drop_now().await;
+}
+
+// ── plan 17 P17-3: the AI asset rules, only with ai_assets.enabled ──
+
+/// A synthetic case holding an absolute time on line 4, and a skill.
+fn ai_asset_files() -> Vec<(&'static str, &'static str)> {
+    with(&[
+        (
+            "evals/cases/defect_rate_up/c1.json",
+            "{
+  \"id\": \"c1\",
+  \"provenance\": \"replica\",
+  \"at\": \"2026-10-01T08:15:00Z\"
+}
+",
+        ),
+        (
+            "skills/pe-quality-spc.md",
+            "---
+name: pe-quality-spc
+---
+",
+        ),
+    ])
+}
+
+async fn enable_ai_assets(w: &World, on: bool) {
+    let ctx = ChangeContext::new(Actor::User(w.owner), request_id("req-ai-assets"));
+    let (_outcome, setting, ()) =
+        forge_db::ai_assets::set_enabled_decided(&w.t.db, &ctx, w.project, w.owner, on, |_| Ok(()))
+            .await
+            .expect("ai_assets");
+    assert_eq!(setting.enabled, on);
+}
+
+#[tokio::test]
+async fn rules_silent_when_ai_assets_disabled() {
+    // An ordinary repository with `evals/` and `skills/`: neither rule
+    // matches, the run is what it always was.
+    let (w, base) = world_with_main().await;
+    let head = w.commit(&ai_asset_files(), Some(&base));
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    assert!(!run.summary.contains("ai_case_raw_data"), "{}", run.summary);
+    assert!(!run.summary.contains("ai_asset"), "{}", run.summary);
+    // Turned on and off again: silent again.
+    enable_ai_assets(&w, true).await;
+    enable_ai_assets(&w, false).await;
+    let again = w.commit(&ai_asset_files(), Some(&head));
+    let run = w.assess(&again).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        run.summary
+    );
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn an_opted_in_project_stops_on_raw_data_in_a_case_and_warns_on_any_asset() {
+    let (w, base) = world_with_main().await;
+    enable_ai_assets(&w, true).await;
+    let head = w.commit(&ai_asset_files(), Some(&base));
+    let run = w.assess(&head).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains("- stop ai_case_raw_data evals/cases/defect_rate_up/c1.json:4"),
+        "{}",
+        run.summary
+    );
+    assert!(
+        run.summary
+            .contains("- warn ai_asset skills/pe-quality-spc.md"),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("AI 資産の変更"), "{}", run.summary);
+    // The matched text is never copied.
+    assert!(!run.summary.contains("2026-10-01"), "{}", run.summary);
+    // Auto-merge reads it as a leak.
+    assert_eq!(
+        forge_core::auto_merge::deterministic_layer(
+            forge_core::checks::CheckRun::new(
+                forge_core::checks::CheckStatus::Completed,
+                run.conclusion
+            ),
+            Some(&run.summary)
+        ),
+        forge_core::auto_merge::RiskVerdict::Stop {
+            class: forge_core::auto_merge::StopClass::Leak,
+            rule: Some("ai_case_raw_data"),
+        }
+    );
+    // A clean synthetic case only warns: the merge proceeds.
+    let mut files = base_files();
+    files.push((
+        "evals/cases/defect_rate_up/c2.json",
+        "{\"id\": \"c2\", \"provenance\": \"synthetic\", \"offset_seconds\": -60}
+",
+    ));
+    let clean = w.commit(&files, Some(&base));
+    let run = w.assess(&clean).await;
+    assert_eq!(
+        run.conclusion,
+        Some(CheckConclusion::Neutral),
+        "{}",
+        run.summary
+    );
+    assert!(run.summary.contains("ai_asset"), "{}", run.summary);
+    assert!(!run.summary.contains("ai_case_raw_data"), "{}", run.summary);
+    w.t.drop_now().await;
+}
+
+/// Review MEDIUM 3: the setting is read for every run, so the same head
+/// assessed with the setting off and again after it was turned on gets
+/// the AI asset rules (forge-db asks for that run when the setting
+/// changes: `a_change_asks_to_assess_every_open_head_again`).
+#[tokio::test]
+async fn a_head_assessed_with_the_setting_off_stops_once_it_is_turned_on() {
+    let (w, base) = world_with_main().await;
+    let head = w.commit(&ai_asset_files(), Some(&base));
+    let off = w.assess(&head).await;
+    assert_eq!(
+        off.conclusion,
+        Some(CheckConclusion::Success),
+        "{}",
+        off.summary
+    );
+    enable_ai_assets(&w, true).await;
+    let on = w.assess(&head).await;
+    assert_eq!(
+        on.conclusion,
+        Some(CheckConclusion::Failure),
+        "{}",
+        on.summary
+    );
+    assert!(
+        on.summary.contains("- stop ai_case_raw_data"),
+        "{}",
+        on.summary
     );
     w.t.drop_now().await;
 }

@@ -233,6 +233,9 @@ impl AutoMerger {
             blockers: Vec::new(),
             protected_path: false,
         };
+        // The warning a merge request shows by name (plan 17 P17-3: an AI
+        // asset change, "AI 資産の変更"); read with the facts.
+        let mut warn_detail: Option<&'static str> = None;
         // Cheap verdicts first: no git, no check reads.
         let early = decide(&facts);
         let needs_more = matches!(
@@ -273,12 +276,13 @@ impl AutoMerger {
                     let verdict = Verdict::Waiting {
                         reason: waiting_reason(&e),
                     };
-                    self.record(&mr, &head, &verdict, request_id).await?;
+                    self.record(&mr, &head, &verdict, None, request_id).await?;
                     return Ok(verdict);
                 }
                 Err(e) => return Err(e),
             };
-            self.read_facts(&mut facts, &mr, &head, repo, request_id)
+            warn_detail = self
+                .read_facts(&mut facts, &mr, &head, repo, request_id)
                 .await?;
             match decide(&facts) {
                 Verdict::Enqueue { warned } => {
@@ -303,7 +307,8 @@ impl AutoMerger {
                 | Verdict::Stopped(_)) => other,
             }
         };
-        self.record(&mr, &head, &verdict, request_id).await?;
+        self.record(&mr, &head, &verdict, warn_detail, request_id)
+            .await?;
         Ok(verdict)
     }
 
@@ -328,6 +333,8 @@ impl AutoMerger {
 
     /// The risk layers, the merge request's own pipeline, the merge
     /// status and (for `conditional`) the changed paths.
+    /// The `forge/risk` warning shown by name on a queued merge request
+    /// (`detail` of `queued_with_warning`): `ai_asset` (plan 17 P17-3).
     async fn read_facts(
         &self,
         facts: &mut Facts,
@@ -335,7 +342,7 @@ impl AutoMerger {
         head: &ObjectId,
         repo: ProjectRepository,
         request_id: &RequestId,
-    ) -> Result<(), ForgeError> {
+    ) -> Result<Option<&'static str>, ForgeError> {
         let db = &self.merger.db;
         let project = mr.project_id;
         let risk_name = check_name(forge_core::checks::RISK_CHECK)?;
@@ -347,6 +354,12 @@ impl AutoMerger {
             deterministic_layer(runs.run(head, &risk_name), summary.as_deref()),
             None,
         );
+        let warn_detail = summary
+            .as_deref()
+            .map(forge_core::auto_merge::warn_rules)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|rule| *rule == "ai_asset");
         let target_tip = self
             .review
             .branch_tip(project, repo, mr.author, &mr.target_branch)
@@ -373,7 +386,7 @@ impl AutoMerger {
                 .touches_protected_path(repo, head, target_tip.as_ref())
                 .await?;
         }
-        Ok(())
+        Ok(warn_detail)
     }
 
     /// Whether the diff from the merge base with the target to `head`
@@ -419,6 +432,7 @@ impl AutoMerger {
         mr: &forge_db::review::StoredMergeRequest,
         head: &ObjectId,
         verdict: &Verdict,
+        warn_detail: Option<&'static str>,
         request_id: &RequestId,
     ) -> Result<(), ForgeError> {
         let db = &self.merger.db;
@@ -427,7 +441,7 @@ impl AutoMerger {
         };
         let (class, reason, detail) = match verdict {
             Verdict::Stopped(stop) => (Some(stop.class), stop.reason, stop.detail.as_deref()),
-            Verdict::Enqueue { warned: true } => (None, "queued_with_warning", None),
+            Verdict::Enqueue { warned: true } => (None, "queued_with_warning", warn_detail),
             Verdict::Enqueue { warned: false } => (None, "queued", None),
             Verdict::Queued { auto: true } => (None, "queued", None),
             Verdict::Queued { auto: false } => (None, "queued_by_person", None),

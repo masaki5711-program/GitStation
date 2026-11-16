@@ -191,6 +191,13 @@ pub enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// AI assets (plan 17): lint skills, playbooks, agents, models and
+    /// evaluation cases on your working tree (never the server).
+    #[command(name = "ai-asset", disable_help_subcommand = true)]
+    AiAsset {
+        #[command(subcommand)]
+        command: AiAssetCommand,
+    },
     /// Deployments (M4 C11): environments, targets, requests and
     /// approvals of a project.
     #[command(disable_help_subcommand = true)]
@@ -2318,6 +2325,27 @@ pub enum AgentCommand {
         /// exact host, or .suffix for its subdomains).
         #[arg(long, value_delimiter = ',', value_parser = parse_text, value_name = "A,B", requires = "part")]
         mcp_allowed_hosts: Option<Vec<String>>,
+    },
+}
+
+/// `gstn ai-asset` (plan 17 P17-3, ADR-0035): the AI asset lint on the
+/// working tree (local only: nothing is sent), and a project's
+/// ai_assets.enabled.
+#[derive(Subcommand, Debug)]
+pub enum AiAssetCommand {
+    /// Check the AI assets: skill front matter, playbook ↔ skill ↔ tool
+    /// allowlist ↔ profile, models pinned by digest (never latest), case
+    /// shape, provenance and raw data, thresholds only as proposals.
+    Lint {
+        /// The asset repository (default: the repository found upward).
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
+    /// Whether a project's ai_assets.enabled is on (who changed it last).
+    /// Changing it is a Maintainer's in the browser.
+    Status {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
     },
 }
 

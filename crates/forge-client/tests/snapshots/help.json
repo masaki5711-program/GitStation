@@ -6844,6 +6844,99 @@
     {
       "args": [
         {
+          "description": "The asset repository (default: the repository found upward).",
+          "kind": "option",
+          "name": "--dir",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn ai-asset lint",
+        "gstn ai-asset lint --json",
+        "gstn ai-asset lint --dir ../pfs-ai-assets"
+      ],
+      "name": "ai-asset lint",
+      "output": {
+        "properties": {
+          "files": {
+            "type": "integer"
+          },
+          "problems": {
+            "items": {
+              "properties": {
+                "line": {
+                  "type": "integer"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "rule": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "line",
+                "rule",
+                "subject"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Check the AI assets of the working tree (plan 17): skill front matter (pe-*.md keys, profile, date), playbooks against the skills, the agents' tool allowlists, the tool registry and the edge profiles, models pinned as name:tag@sha256 (never latest), bench images pinned, evaluation cases (id, anomaly class, kind, provenance replica / synthetic with source_hash, never confidential) and raw data in them (absolute times, IP addresses, real plant codes, people, free text), thresholds only under thresholds/proposals. Exit 1 with FG-AIASSET-0001 and every problem's path, line and rule. Local only: nothing is sent to the server."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn ai-asset status --project 7 --json"
+      ],
+      "name": "ai-asset status",
+      "output": {
+        "required": [
+          "project_id",
+          "enabled",
+          "changed_by",
+          "changed_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/ai-assets"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Whether a project's ai_assets.enabled is on (plan 17): the AI asset lint, the forge/risk rules ai_case_raw_data (stop) and ai_asset (warn) and asset releases apply only then; who changed it last. Changing it is a Maintainer's in the browser."
+    },
+    {
+      "args": [
+        {
           "description": "The project id.",
           "kind": "option",
           "name": "--project",

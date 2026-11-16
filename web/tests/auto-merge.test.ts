@@ -41,6 +41,10 @@ describe('stateKind', () => {
     expect(stopped('not_assessed')).toBe('not_assessed');
     expect(stopped('emergency_stop', 'instance_stopped')).toBe('instance_stopped');
     expect(stateKind(state({ state: 'queued', reason: 'queued_with_warning' }))).toBe('queued_warning');
+    // Plan 17 P17-3: an AI asset change is named, and still never a stop.
+    expect(stateKind(state({ state: 'queued', reason: 'queued_with_warning', detail: 'ai_asset' }))).toBe(
+      'queued_ai_asset',
+    );
     expect(stateKind(state({ reason: 'protected_path' }))).toBe('protected_path');
     expect(stateKind(state({ state: 'held', reason: 'dequeued_by_person' }))).toBe('held');
   });
@@ -72,6 +76,7 @@ describe('the line in every language', () => {
     'held',
     'queued',
     'queued_warning',
+    'queued_ai_asset',
     'queued_by_person',
   ];
   it.each([
@@ -89,5 +94,6 @@ describe('the line in every language', () => {
       expect(why.length).toBeGreaterThan(0);
     }
     expect(whyText(i.t, 'data_loss', 'sql_drop')).toContain('sql_drop');
+    if (lng === 'ja') expect(whyText(i.t, 'queued_ai_asset', '')).toContain('AI 資産の変更');
   });
 });

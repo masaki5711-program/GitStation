@@ -944,6 +944,8 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
         // ── M4 C14: autofix (20261223100000) ──
         ("forge.project_autofix", operational()),
         ("forge.autofix_attempts", operational()),
+        // ── Plan 17 P17-3: ai_assets.enabled (20261222100000) ──
+        ("forge.project_ai_assets", operational()),
         // ── 2026-11-12: the history import allowance (20261210100000) ──
         ("forge.repository_history_imports", operational()),
         // ── M4 C6: CI variables (20261211100000) ──
@@ -1169,6 +1171,8 @@ const LATER_TABLES: &[&str] = &[
     // ── M4 C14: autofix (20261223100000) ──
     "project_autofix",
     "autofix_attempts",
+    // ── Plan 17 P17-3: ai_assets.enabled (20261222100000) ──
+    "project_ai_assets",
     // ── 2026-11-12: the history import allowance (20261210100000) ──
     "repository_history_imports",
     // ── M4 C6: CI variables (20261211100000) ──
