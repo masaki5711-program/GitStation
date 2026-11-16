@@ -389,14 +389,9 @@ impl World {
             details_url: None,
             annotations: Vec::new(),
         };
-        forge_db::checks::record_forge_check_run(
-            &self.t.db,
-            &system("req-ci-check"),
-            (self.project, &oid(sha)),
-            &run,
-        )
-        .await
-        .expect("check");
+        let _reported =
+            forge_db::test_support::record_forge_check(&self.t.db, self.project, &oid(sha), &run)
+                .await;
         // The worker registers its subscribers at start; here, once.
         forge_db::subscribers::register(
             &self.t.db,
