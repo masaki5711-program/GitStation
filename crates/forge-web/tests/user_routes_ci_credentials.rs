@@ -118,6 +118,7 @@ async fn credentials(t: &FreshDb) -> Callers {
     let _pipeline = pipelines::create(
         &t.db,
         &NewPipeline {
+            ai_eval_job: None,
             request: PipelineRequest {
                 project: web,
                 git_ref: RefName::parse("refs/heads/main").expect("ref"),
@@ -217,6 +218,27 @@ const ROUTES: &[(&str, &str, &str, Option<&str>)] = &[
         "DELETE",
         "/api/v1/user/tokens/{id}",
         "/api/v1/user/tokens/1",
+        None,
+    ),
+    // M4 C13: the SSH keys.
+    (
+        "GET",
+        "/api/v1/user/ssh-keys",
+        "/api/v1/user/ssh-keys",
+        None,
+    ),
+    (
+        "POST",
+        "/api/v1/user/ssh-keys",
+        "/api/v1/user/ssh-keys",
+        Some(
+            r#"{"key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAGuL+srU7BTyMdIqbgh4NRqXH1vOCQWfZxL4x1ZB/uN"}"#,
+        ),
+    ),
+    (
+        "DELETE",
+        "/api/v1/user/ssh-keys/{id}",
+        "/api/v1/user/ssh-keys/1",
         None,
     ),
     (

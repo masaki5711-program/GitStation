@@ -1605,6 +1605,40 @@ fn ci_secret_keys_file_is_optional_absolute_and_its_namespace_closed() {
     }
 }
 
+/// Plan 17 P17-1: no project may use the GPU runner by default; the list
+/// is positive ids, each once; one running job per project by default.
+#[test]
+fn ci_gpu_eval_policy_is_opt_in_per_project() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert!(cfg.ci.gpu_eval.projects.is_empty());
+    assert!(!cfg.ci.gpu_eval.allows(1));
+    assert_eq!(cfg.ci.gpu_eval.max_running_per_project, 1);
+    let set = load(
+        None,
+        &env(&[
+            ("FORGE_CI_GPU_EVAL_PROJECTS", "40, 7,12"),
+            ("FORGE_CI_GPU_EVAL_MAX_RUNNING", "2"),
+        ]),
+    )
+    .expect("set");
+    assert_eq!(set.ci.gpu_eval.projects, [7, 12, 40]);
+    assert!(set.ci.gpu_eval.allows(12) && !set.ci.gpu_eval.allows(13));
+    assert_eq!(set.ci.gpu_eval.max_running_per_project, 2);
+    for (value, reason) in [
+        ("7,x", "invalid"),
+        ("0", "invalid"),
+        ("-3", "invalid"),
+        ("7,7", "duplicate"),
+    ] {
+        let e = load(None, &env(&[("FORGE_CI_GPU_EVAL_PROJECTS", value)])).expect_err(value);
+        assert_invalid(&e, "ci.gpu_eval_projects", reason);
+    }
+    for (value, reason) in [("0", "below_min"), ("17", "above_max"), ("x", "invalid")] {
+        let e = load(None, &env(&[("FORGE_CI_GPU_EVAL_MAX_RUNNING", value)])).expect_err(value);
+        assert_invalid(&e, "ci.gpu_eval_max_running", reason);
+    }
+}
+
 /// M4 C11: `[deploy]` — no key file by default (no deployment runs), a set
 /// one is an absolute path, the timeouts are bounded, and an unknown
 /// `FORGE_DEPLOY_*` variable is a typo.

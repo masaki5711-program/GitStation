@@ -63,7 +63,9 @@ mod matrix_rows_doc_lint;
 mod matrix_rows_merge_queue;
 // M4 C9: auto-merge.
 mod matrix_rows_auto_merge;
+// M4 C13: the SSH git transport and SSH keys (ADR-0033).
 mod matrix_rows_pipelines;
+mod matrix_rows_ssh;
 // M4 C10: one-step revert (existing actions, revert-shaped rows).
 mod matrix_rows_revert;
 // M4 C5: CI outputs.
@@ -99,7 +101,7 @@ pub use model::{
     MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView,
     PersonalDisclosure, PinnedCopy, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
     ResolvedVia, Resource, Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView,
-    TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility,
+    TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility, SSH_KEY_SCOPES,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,

@@ -2162,7 +2162,7 @@ revert の MR」と、「main のパイプラインが失敗したら revert の
      コミッターは `GitStation <revert@gitstation.invalid>`（本人が書いたコミットではないため）。
   結果は戻される MR の **`merge_request.revert_drafted`**（集約は戻される MR、integration の分類、`outcome` opened / conflicted、
   `revert_iid`、dedup `merge_request_revert_drafted:<mr_id>:<merge_id>`）に記録し、通知の種類 **`mr_revert_drafted`** で作成者に知らせる
-  （メールとアプリ内。kanflow は integration の分類で受け取る）。通知の種類の CHECK はマイグレーション 20261216100000 で足した
+  （メールとアプリ内。kanflow は integration の分類で受け取る）。通知の種類の CHECK はマイグレーション 20261219100000 で足した
   （計画 14 の表では C10 のマイグレーションは「—」だったが、通知の種類が要るため足した。新しい表は作らない）。
   マージキューのバッチで 1 回に複数の MR が入ったときは、先端のコミットを作った MR（バッチの最後）だけが下書きの対象になる（M3 の限界）。
 - **ログ**: `forge.review.reverted`（人の取り消し）、`forge.review.revert_drafted`（ジョブの結果、`outcome`・`reason`）、

@@ -144,6 +144,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // Plan 06 D-5 safety net: a whole copy refused to an agent (git
         // routes; never a merge's).
         | ErrorCode::RepositoryCopyWithheld
+        | ErrorCode::SshKeyInvalid
         // M3 X7: notices named in a `forge/risk` run (never a merge's).
         | ErrorCode::RiskStop
         | ErrorCode::RiskWarn
@@ -167,6 +168,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::JobImageNotAllowed
         | ErrorCode::JobWorkspaceTooLarge
         | ErrorCode::ServiceStartFailed
+        | ErrorCode::GpuUnavailable
+        | ErrorCode::ModelStoreUnverified
         | ErrorCode::JobIsolationUnsafe
         // M4 C8: the merge queue's own outcomes (its landing never runs
         // the merge job).
@@ -195,6 +198,12 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DeployCommitNotAllowed
         | ErrorCode::DeploymentAbandoned
         | ErrorCode::DeployTargetNotAllowed
+        // Plan 17 P17-2: the forge/ai-eval check's codes (never a merge's).
+        | ErrorCode::BenchUnavailable
+        | ErrorCode::BaselineMissing
+        | ErrorCode::EvalRegression
+        | ErrorCode::CaseNotReproducing
+        | ErrorCode::EvalReportInvalid
         | ErrorCode::Unauthenticated
         | ErrorCode::InsufficientScope
         | ErrorCode::Forbidden
@@ -331,6 +340,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // 2026-11-12: the history import is the operator CLI's and a push's.
         | ErrorCode::HistoryImportRefused
         | ErrorCode::HistoryImportRecordFailed
+        | ErrorCode::SshCommandRefused
+        | ErrorCode::SshProtocolV2Required
+        | ErrorCode::SshConnectionRefused
+        | ErrorCode::SshTransportFailed
         // M4 C10: a revert's own outcomes, never a merge's.
         | ErrorCode::RevertRefused
         | ErrorCode::RevertConflict

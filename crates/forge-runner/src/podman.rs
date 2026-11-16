@@ -78,6 +78,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::gpu::GpuEval;
 use crate::process::Cmd;
 
 /// The script's path inside the container.
@@ -167,6 +168,17 @@ pub fn service_container_name(job: i64, attempt: i32, service: &str) -> String {
     format!("forge-job-{job}-{attempt}-svc-{service}")
 }
 
+/// `--volume=<path>:<target>:ro,nosuid,nodev,noexec`: the model store,
+/// read-only (plan 17 P17-1). No relabel option: the store is shared and
+/// not the runner's to relabel (runbook `ci-runner`, the GPU runner). The
+/// configuration refused a `:` or `,` in either path.
+pub fn model_store_volume(path: &Path, target: &str) -> std::ffi::OsString {
+    let mut arg = std::ffi::OsString::from("--volume=");
+    arg.push(path);
+    arg.push(format!(":{target}:ro,nosuid,nodev,noexec"));
+    arg
+}
+
 /// The lines of a service's log appended to a failed job's log.
 pub const SERVICE_LOG_LINES: u32 = 50;
 
@@ -213,6 +225,11 @@ pub struct ServiceContainer<'a> {
     pub env: &'a [(String, String)],
     pub user: Option<&'a str>,
     pub tmpfs: &'a [String],
+    /// Plan 17 P17-1: the runner host's GPU and model store, for a service
+    /// that asked (`gpu: true`) in a job tagged `gpu-eval` on a runner with
+    /// `[gpu_eval]` — decided by the caller ([`crate::job`]). Never on the
+    /// job's own [`Container`], which has no such field.
+    pub gpu: Option<&'a GpuEval>,
 }
 
 impl PodmanPlan {
@@ -454,6 +471,14 @@ impl PodmanPlan {
                 "--tmpfs={path}:rw,nosuid,nodev,size={},mode=1777",
                 self.limits.tmpfs
             ));
+        }
+        if let Some(gpu) = s.gpu {
+            for device in &gpu.devices {
+                cmd = cmd.arg(format!("--device={device}"));
+            }
+            if let Some(store) = &gpu.model_store {
+                cmd = cmd.arg(model_store_volume(&store.path, &store.target));
+            }
         }
         for (key, value) in s.env {
             cmd = cmd.arg(format!("--env={key}={value}"));
@@ -714,6 +739,7 @@ mod tests {
                 env: &env,
                 user: Some("999:999"),
                 tmpfs: &tmpfs,
+                gpu: None,
             })
             .argv();
         let dash = argv.iter().position(|a| a == "--").expect("--");
@@ -827,6 +853,7 @@ mod tests {
                 env: &[],
                 user: None,
                 tmpfs: &[],
+                gpu: None,
             })
             .argv();
         for argv in [&alone, &in_pod, &service] {
@@ -839,6 +866,100 @@ mod tests {
                 assert!(argv.iter().all(|a| a != host), "{host}: {argv:?}");
             }
         }
+    }
+
+    fn gpu_eval() -> GpuEval {
+        GpuEval {
+            devices: vec!["nvidia.com/gpu=all".to_owned()],
+            model_store: Some(crate::gpu::ModelStore::new(
+                PathBuf::from("/srv/forge-models"),
+                "/models".to_owned(),
+                "a".repeat(64),
+            )),
+        }
+    }
+
+    fn ollama<'a>(gpu: Option<&'a GpuEval>, image: &'a str) -> ServiceContainer<'a> {
+        ServiceContainer {
+            pod: "forge-job-7-1",
+            name: "forge-job-7-1-svc-ollama",
+            image,
+            env: &[],
+            user: None,
+            tmpfs: &[],
+            gpu,
+        }
+    }
+
+    /// Plan 17 P17-1: the store is a read-only bind of the configured path
+    /// (no suid, devices or executables), before `--`, on the service only;
+    /// the GPU is the CDI names, and the confinement stays.
+    #[test]
+    fn model_store_mounted_read_only() {
+        let image = format!("registry.internal/ollama@sha256:{}", digest());
+        let gpu = gpu_eval();
+        let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+        let argv = plan.service_create(&ollama(Some(&gpu), &image)).argv();
+        let dash = argv.iter().position(|a| a == "--").expect("--");
+        for flag in [
+            "--device=nvidia.com/gpu=all",
+            "--volume=/srv/forge-models:/models:ro,nosuid,nodev,noexec",
+            "--read-only",
+            "--cap-drop=all",
+            "--security-opt=no-new-privileges",
+        ] {
+            let at = argv.iter().position(|a| a == flag);
+            assert!(at.is_some_and(|i| i < dash), "{flag}: {argv:?}");
+        }
+        let mounts: Vec<&String> = argv
+            .iter()
+            .filter(|a| a.starts_with("--volume") || a.starts_with("--mount"))
+            .collect();
+        assert_eq!(mounts.len(), 1, "{argv:?}");
+        assert!(mounts[0].contains(":ro,"), "{argv:?}");
+        assert!(
+            argv.iter()
+                .all(|a| !(a.starts_with("--volume") && a.contains(":rw"))
+                    && !a.starts_with("--privileged")
+                    && !a.starts_with("--cap-add")
+                    && !a.starts_with("--security-opt=label")
+                    && !a.starts_with("--network")),
+            "{argv:?}"
+        );
+        // Without the store only the devices; without the grant nothing.
+        let devices_only = GpuEval {
+            model_store: None,
+            ..gpu_eval()
+        };
+        let argv = plan
+            .service_create(&ollama(Some(&devices_only), &image))
+            .argv();
+        assert!(argv.iter().any(|a| a == "--device=nvidia.com/gpu=all"));
+        assert!(argv.iter().all(|a| !a.starts_with("--volume")));
+        let argv = plan.service_create(&ollama(None, &image)).argv();
+        assert!(argv
+            .iter()
+            .all(|a| !a.starts_with("--device") && !a.starts_with("--volume")));
+    }
+
+    /// Plan 17 P17-1: a GPU service changes nothing of the pod — it is still
+    /// created with `--network=none`, shares only the loopback, and the
+    /// service joins it without a network of its own.
+    #[test]
+    fn pod_still_network_none() {
+        let image = format!("registry.internal/ollama@sha256:{}", digest());
+        let gpu = gpu_eval();
+        let plan = PodmanPlan::new(PathBuf::from("podman"), Limits::default());
+        let pod = plan.pod_create("forge-job-7-1").argv();
+        assert!(pod.iter().any(|a| a == "--network=none"), "{pod:?}");
+        assert!(pod.iter().any(|a| a == "--share=net"), "{pod:?}");
+        let svc = plan.service_create(&ollama(Some(&gpu), &image)).argv();
+        assert!(svc.iter().any(|a| a == "--pod=forge-job-7-1"), "{svc:?}");
+        assert!(
+            svc.iter()
+                .all(|a| !a.starts_with("--network") && !a.starts_with("--net=")),
+            "{svc:?}"
+        );
     }
 
     /// The pod shares only its loopback network namespace: a pod's default

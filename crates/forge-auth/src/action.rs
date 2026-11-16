@@ -202,6 +202,17 @@ actions! {
     TokenList,
     /// `DELETE /api/v1/user/tokens/{id}` (M2 MR6).
     TokenRevoke,
+    // --- REST API: SSH public keys (M4 C13, ADR-0033 §2) ---
+    /// `GET /api/v1/user/ssh-keys`: one's own SSH keys (and the server's
+    /// host key fingerprints). Decided like `TokenList` (`read_api`).
+    SshKeyList,
+    /// `POST /api/v1/user/ssh-keys`: add an SSH key for oneself. Sessions
+    /// only, like `TokenCreate`: a token never adds a key (a key outlives
+    /// the token's revocation and expiry).
+    SshKeyAdd,
+    /// `DELETE /api/v1/user/ssh-keys/{id}`: one's own key (`api`); another
+    /// user's is not found, administrators included.
+    SshKeyDelete,
     // --- REST API: notification settings (M3 N1, ADR-0016 Amendment N1) ---
     /// `GET /api/v1/user/notification-preferences`: one's own mail
     /// settings (mail on or off, language, muted kinds). Only the person:
@@ -635,6 +646,7 @@ impl Action {
             Action::SessionRead
                 | Action::SessionLogout
                 | Action::TokenCreate
+                | Action::SshKeyAdd
                 | Action::SessionList
                 | Action::SessionRevoke
                 | Action::MergeRequestVersionRefsPurge
@@ -735,6 +747,7 @@ impl Action {
             | Action::WebShell
             | Action::SessionRead
             | Action::TokenCreate
+            | Action::SshKeyAdd
             | Action::SessionList
             | Action::SessionRevoke
             | Action::WebLogin
@@ -777,6 +790,7 @@ impl Action {
             | Action::GroupRead
             | Action::GroupList
             | Action::TokenList
+            | Action::SshKeyList
             | Action::NotificationPreferencesRead
             | Action::NotificationInboxRead
             | Action::UserMergeRequestList
@@ -825,6 +839,7 @@ impl Action {
             | Action::NamespaceTombstoneRelease
             | Action::UserRename
             | Action::TokenRevoke
+            | Action::SshKeyDelete
             | Action::NotificationPreferencesWrite
             | Action::NotificationInboxUpdate
             | Action::AdminSessionRevoke
@@ -941,6 +956,9 @@ impl Action {
             | Action::TokenCreate
             | Action::TokenList
             | Action::TokenRevoke
+            | Action::SshKeyList
+            | Action::SshKeyAdd
+            | Action::SshKeyDelete
             | Action::UserCreate
             | Action::UserDisable
             | Action::UserSearch
@@ -1096,6 +1114,9 @@ impl Action {
             | Action::TokenCreate
             | Action::TokenList
             | Action::TokenRevoke
+            | Action::SshKeyList
+            | Action::SshKeyAdd
+            | Action::SshKeyDelete
             | Action::UserCreate
             | Action::UserDisable
             | Action::UserSearch

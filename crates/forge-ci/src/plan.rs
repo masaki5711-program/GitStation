@@ -88,6 +88,31 @@ pub struct PlannedJob {
     pub script_lines: usize,
     /// The names of its services, in file order.
     pub services: Vec<String>,
+    /// Whether it declares the AI evaluation report [`EVAL_REPORT_PATH`]
+    /// under `artifacts: { paths }` (plan 17 P17-2, ADR-0034): forge's
+    /// worker then writes `forge/ai-eval` from it.
+    pub eval_report: bool,
+}
+
+/// The artifact path that declares the AI evaluation report (plan 17
+/// P17-2, ADR-0034): exactly this path, at the work tree's root, under a
+/// job's `artifacts: { paths }`. A pipeline with such a job gets the check
+/// `forge/ai-eval`; every other pipeline never does.
+pub const EVAL_REPORT_PATH: &str = "eval-report.json";
+
+impl Plan {
+    /// The job that declares [`EVAL_REPORT_PATH`], if any (a plan holds at
+    /// most one: `eval_report_declared_twice` otherwise).
+    pub fn eval_report_job(&self) -> Option<&str> {
+        self.jobs
+            .iter()
+            .find(|j| j.eval_report)
+            .map(|j| j.name.as_str())
+    }
+}
+
+fn declares_eval_report(job: &Job) -> bool {
+    job.artifacts.iter().any(|p| p == EVAL_REPORT_PATH)
 }
 
 fn selected(job: &Job, trigger: &Trigger) -> bool {
@@ -101,7 +126,9 @@ fn selected(job: &Job, trigger: &Trigger) -> bool {
 /// selected job that needs a job the trigger does not run, and
 /// `secret_on_unprotected_ref` for a selected job with secrets when the
 /// trigger may not use secrets (a merge request, or an unprotected branch).
-/// The plan fails rather than drop the secrets silently.
+/// The plan fails rather than drop the secrets silently. Plan 17 P17-2:
+/// `eval_report_declared_twice` when more than one selected job declares
+/// [`EVAL_REPORT_PATH`] (which report would `forge/ai-eval` read?).
 pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
     let chosen: BTreeMap<&str, &Job> = def
         .jobs
@@ -127,6 +154,17 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
                 ));
             }
         }
+    }
+    let declaring: Vec<&&Job> = chosen
+        .values()
+        .filter(|j| declares_eval_report(j))
+        .collect();
+    if let [_, second, ..] = declaring.as_slice() {
+        problems.push(Problem::about(
+            second.line,
+            "eval_report_declared_twice",
+            second.name.as_str(),
+        ));
     }
     if !problems.is_empty() {
         problems.sort();
@@ -195,6 +233,7 @@ pub fn plan(def: &Definition, trigger: &Trigger) -> Result<Plan, Vec<Problem>> {
             secrets: job.secrets.clone(),
             script_lines: job.script.len(),
             services: job.services.iter().map(|s| s.name.clone()).collect(),
+            eval_report: declares_eval_report(job),
         })
         .collect();
     let stage_of: BTreeMap<&str, usize> = chosen

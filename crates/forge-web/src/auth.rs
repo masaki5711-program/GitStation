@@ -170,6 +170,20 @@ impl Authenticator for BoundedAuthenticator {
             self.inner.authenticate_ci(request_id, presented).await
         })
     }
+
+    fn authenticate_ssh_key<'a>(
+        &'a self,
+        request_id: &'a RequestId,
+        fingerprint: &'a str,
+        record_use: bool,
+    ) -> forge_core::SshKeyAuthFuture<'a> {
+        Box::pin(async move {
+            let _permit = permit(&self.permits).await?;
+            self.inner
+                .authenticate_ssh_key(request_id, fingerprint, record_use)
+                .await
+        })
+    }
 }
 
 /// A session authenticator behind a [`BoundedAuthenticator`]'s permits.

@@ -67,6 +67,7 @@ fn job(name: &str, needs: &[&str]) -> NewCiJob {
 impl World {
     async fn pipeline(&self, sha: char, mark: CopyMark, jobs: Vec<NewCiJob>) -> i64 {
         let new = NewPipeline {
+            ai_eval_job: None,
             request: PipelineRequest {
                 project: self.web.project_id,
                 git_ref: forge_core::RefName::parse("refs/heads/main").expect("ref"),

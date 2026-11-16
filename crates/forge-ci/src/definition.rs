@@ -40,6 +40,12 @@ pub const MAX_SERVICE_ENV: usize = 16;
 /// At most this many writable tmpfs paths in one service
 /// (`too_many_service_tmpfs`).
 pub const MAX_SERVICE_TMPFS: usize = 4;
+/// The runner tag a job must ask for before any of its services may ask
+/// for the GPU (plan 17 P17-1, ADR-0029 amendment 2026-11-14). A runner
+/// with this tag takes only jobs that ask for it (forge-db's claim keeps
+/// the same name), and only its host configuration — never this file —
+/// names the GPU devices and the model store.
+pub const GPU_EVAL_TAG: &str = "gpu-eval";
 /// The longest environment value of a service, in bytes.
 const MAX_ENV_VALUE: usize = 1024;
 /// The longest name (job, stage, tag, secret) and pattern / path.
@@ -126,6 +132,11 @@ pub struct Service {
     pub(crate) user_line: usize,
     /// Absolute paths mounted as writable tmpfs over the read-only root.
     pub(crate) tmpfs: Vec<String>,
+    /// `gpu: true` (plan 17 P17-1): the service asks for the GPU and the
+    /// read-only model store of a runner tagged [`GPU_EVAL_TAG`]. Only a
+    /// request: the devices and paths are the runner host's configuration,
+    /// and the job must ask for the tag (`service_gpu_without_tag`).
+    pub(crate) gpu: bool,
 }
 
 impl Service {
@@ -140,6 +151,10 @@ impl Service {
     }
     pub fn user(&self) -> Option<&str> {
         self.user.as_deref()
+    }
+    /// The service asks for the GPU runner's GPU and model store.
+    pub fn gpu(&self) -> bool {
+        self.gpu
     }
     pub fn tmpfs(&self) -> &[String] {
         &self.tmpfs
@@ -489,6 +504,12 @@ fn read_job(
     if !fields.iter().any(|f| f.key == "timeout") {
         problems.push(Problem::about(at, "timeout_missing", name));
     }
+    // Plan 17 P17-1: the GPU only on a runner the job asked for by tag (a
+    // tagged runner takes only jobs with its tag, so the GPU never reaches
+    // an untagged job's pod).
+    if services.iter().any(|s| s.gpu) && !tags.iter().any(|t| t == GPU_EVAL_TAG) {
+        problems.push(Problem::about(at, "service_gpu_without_tag", name));
+    }
     if problems.len() != before {
         return None;
     }
@@ -511,7 +532,7 @@ fn read_job(
 }
 
 /// `services:` - a list of at most [`MAX_SERVICES`] mappings `{ name,
-/// image, env?, user?, tmpfs? }` with unique names.
+/// image, env?, user?, tmpfs?, gpu? }` with unique names.
 fn read_services(node: &Node, at: usize, job: &str, problems: &mut Vec<Problem>) -> Vec<Service> {
     let items = match &node.kind {
         Kind::Null => return Vec::new(),
@@ -560,6 +581,7 @@ fn read_service(node: &Node, problems: &mut Vec<Problem>) -> Option<Service> {
     let mut user = None;
     let mut user_line = 0;
     let mut tmpfs = Vec::new();
+    let mut gpu = false;
     // The subject of the service's other problems: its name when valid.
     let label = fields
         .iter()
@@ -612,6 +634,14 @@ fn read_service(node: &Node, problems: &mut Vec<Problem>) -> Option<Service> {
                     |p| (!is_tmpfs_path(p)).then_some("service_tmpfs_invalid"),
                 );
             }
+            // A request only: no device name or path is ever read here.
+            "gpu" => match &value.kind {
+                Kind::Text(v) if v == "true" => gpu = true,
+                Kind::Text(v) if v == "false" => gpu = false,
+                Kind::Text(_) | Kind::Null | Kind::List(_) | Kind::Map(_) => {
+                    problems.push(Problem::about(line, "field_invalid", "gpu"))
+                }
+            },
             other => problems.push(Problem::about(line, "key_unknown", other)),
         }
     }
@@ -631,6 +661,7 @@ fn read_service(node: &Node, problems: &mut Vec<Problem>) -> Option<Service> {
         user,
         user_line,
         tmpfs,
+        gpu,
     })
 }
 

@@ -36,4 +36,4 @@ ALTER TABLE forge.in_app_notifications
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261216100000, "guarded_changes": []}');
+    '{"version": 20261220100000, "guarded_changes": []}');

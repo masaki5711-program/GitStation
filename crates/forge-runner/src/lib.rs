@@ -15,6 +15,8 @@ pub mod api;
 pub mod artifacts;
 pub mod config;
 pub mod git;
+// Plan 17 P17-1: the GPU runner's devices and model store.
+pub mod gpu;
 pub mod isolation;
 pub mod job;
 pub mod logsink;

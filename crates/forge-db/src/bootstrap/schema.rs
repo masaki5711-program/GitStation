@@ -959,6 +959,16 @@ fn expectations() -> Result<Vec<(&'static str, Vec<String>)>, ForgeError> {
             ]
             .concat(),
         ),
+        // ── M4 C13: SSH keys (20261218100000): UPDATE of last_used_at only ──
+        (
+            "forge.user_ssh_keys",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                columns("forge_app", "UPDATE", &["last_used_at"]),
+                ro("user_ssh_keys")?,
+            ]
+            .concat(),
+        ),
         // ── M4 C11: deployments (20261214100000) ──
         ("forge.deploy_environments", operational()),
         ("forge.deploy_targets", operational()),
@@ -1156,6 +1166,8 @@ const LATER_TABLES: &[&str] = &[
     "ci_artifacts",
     // ── M4 C6 review (20261211300000) ──
     "ci_job_secret_snapshots",
+    // ── M4 C13: SSH keys (20261218100000) ──
+    "user_ssh_keys",
     // ── M4 C11: deployments (20261214100000) ──
     "deploy_environments",
     "deploy_targets",

@@ -223,7 +223,7 @@ list|set|delete`（値は標準入力から）。Runner の取得は `secrets_al
 `commit-tree` と `merge-tree` の組み立て）。**衝突したら何も作らない**（FG-REVIEW-0030）、その他の拒否は FG-REVIEW-0029。main の失敗での
 下書き: 購読者 `revert-drafts` → ジョブ `merge_request.revert_draft`（`forge serve`）。target 自身の push のパイプラインが失敗し、マージの前は
 失敗していなかったときだけ、戻される MR の作成者の名前と権限で **下書き** を開き、イベント `merge_request.revert_drafted` と通知の種類
-`mr_revert_drafted` で知らせる。通知の種類のためにマイグレーション `20261216100000`（CHECK の置き換えだけ）を足した。`gstn mr revert`、
+`mr_revert_drafted` で知らせる。通知の種類のためにマイグレーション `20261220100000`（CHECK の置き換えだけ）を足した。`gstn mr revert`、
 MR の画面のボタン（`viewer.can_revert`）。詳細は ADR-0024 Amendment（2026-11-14）。
 
 **C11 の注記（2026-11-13、デプロイ）**: クレート `forge-deploy`（機能クレート）、表 `deploy_environments`・`deploy_targets`（監査あり）・
