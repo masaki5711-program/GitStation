@@ -17,10 +17,13 @@
 //! forge-errors` (forge-doc for its strict YAML tree), checked by
 //! `tests/purity.rs`.
 
+// M4 C14: `autofix.fixers` (ADR-0017 Amendment C14).
+pub mod autofix;
 mod definition;
 mod graph;
 pub mod plan;
 
+pub use autofix::{Fixer, FixerKind, FIXER_STAGE, MAX_FIXERS};
 pub use definition::{
     Definition, Job, Rules, Service, GPU_EVAL_TAG, MAX_ARTIFACT_PATHS, MAX_BRANCHES, MAX_BYTES,
     MAX_JOBS, MAX_NEEDS, MAX_SCRIPT_LINES, MAX_SCRIPT_LINE_BYTES, MAX_SECRETS, MAX_SERVICES,

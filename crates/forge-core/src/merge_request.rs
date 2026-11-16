@@ -105,6 +105,8 @@ pub enum MergeRequestTransition {
     /// The target's push pipeline failed after the merge and the system
     /// tried to open a draft revert (M4 C10, plan 04 M-4).
     RevertDraft,
+    /// One attempt of the deterministic autofix ended (M4 C14).
+    AutofixFinish,
 }
 
 impl MergeRequestTransition {
@@ -125,6 +127,7 @@ impl MergeRequestTransition {
         Self::Approve,
         Self::Unapprove,
         Self::RevertDraft,
+        Self::AutofixFinish,
     ];
 
     /// The one event the transition publishes.
@@ -145,6 +148,7 @@ impl MergeRequestTransition {
             Self::Approve => EventType::MergeRequestApproved,
             Self::Unapprove => EventType::MergeRequestUnapproved,
             Self::RevertDraft => EventType::MergeRequestRevertDrafted,
+            Self::AutofixFinish => EventType::MergeRequestAutofixFinished,
         }
     }
 }
@@ -330,6 +334,13 @@ pub enum MergeRequestChange {
         revert_iid: Option<i64>,
         conflict_files: usize,
     },
+    /// `merge_request.autofix_finished` (M4 C14, ADR-0017 Amendment C14):
+    /// one attempt of the deterministic autofix ended. Ids, the trigger,
+    /// the fixer's name (a validated `[a-z0-9._-]` name of the target
+    /// branch's `.forge-ci.yml`), the state, a stable reason and the bot's
+    /// commit. Deduplicated by
+    /// `merge_request_autofix_finished:<merge_request_id>:<attempt_id>`.
+    AutofixFinished(crate::autofix::AutofixFinished),
 }
 
 /// What the system's revert draft did (M4 C10).
@@ -375,6 +386,7 @@ impl MergeRequestChange {
             Self::Approved { .. } => MergeRequestTransition::Approve,
             Self::Unapproved { .. } => MergeRequestTransition::Unapprove,
             Self::RevertDrafted { .. } => MergeRequestTransition::RevertDraft,
+            Self::AutofixFinished(_) => MergeRequestTransition::AutofixFinish,
         }
     }
 
@@ -396,6 +408,7 @@ impl MergeRequestChange {
             | Self::Approved { merge_request, .. }
             | Self::Unapproved { merge_request, .. }
             | Self::RevertDrafted { merge_request, .. } => *merge_request,
+            Self::AutofixFinished(f) => f.merge_request,
         }
     }
 
@@ -429,6 +442,7 @@ impl MergeRequestChange {
             Self::Approved { .. } => "merge_request_approved",
             Self::Unapproved { .. } => "merge_request_unapproved",
             Self::RevertDrafted { .. } => "merge_request_revert_drafted",
+            Self::AutofixFinished(_) => "merge_request_autofix_finished",
         }
     }
 
@@ -450,7 +464,8 @@ impl MergeRequestChange {
     /// "target_branch","counted","uncounted_reason","carried_from"}`, Unapproved
     /// `{"merge_request_id","iid","approval_id","approver_id","head_sha","reason"}`,
     /// RevertDrafted `{"merge_request_id","iid","merge_id","target_branch","merged_sha",
-    /// "outcome","revert_iid","conflict_files"}`.
+    /// "outcome","revert_iid","conflict_files"}`, AutofixFinished
+    /// `{"merge_request_id","iid","attempt_id","trigger","fixer","state","reason","commit_sha"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -671,6 +686,16 @@ impl MergeRequestChange {
                 "outcome": outcome.as_str(),
                 "revert_iid": revert_iid,
                 "conflict_files": conflict_files,
+            }),
+            Self::AutofixFinished(f) => serde_json::json!({
+                "merge_request_id": f.merge_request.get(),
+                "iid": f.iid,
+                "attempt_id": f.attempt,
+                "trigger": f.trigger.as_str(),
+                "fixer": f.fixer,
+                "state": f.state.as_str(),
+                "reason": f.reason,
+                "commit_sha": f.commit.as_ref().map(ObjectId::as_str),
             }),
         }
     }

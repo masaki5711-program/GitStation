@@ -163,6 +163,8 @@ pub(crate) enum Actor {
     Job(crate::model::JobTokenState),
     /// The auto-merge principal (M4 C9): `matrix_rows_auto_merge.rs`.
     AutoMerge,
+    /// The autofix bot (M4 C14): `matrix_rows_autofix.rs`.
+    Autofix,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -209,6 +211,9 @@ pub(crate) enum Fixture {
     /// A merge request of a private project as the auto-merge principal
     /// reaches it (M4 C9): the project's mode and emergency stop, pending
     /// deletion when `deleted`.
+    /// A merge request's source branch as the autofix bot reaches it
+    /// (M4 C14): one case of `matrix_rows_autofix::Case`.
+    Autofix(crate::matrix_rows_autofix::Case),
     AutoMerge {
         mode: forge_core::auto_merge::AutoMergeMode,
         stop: Option<forge_core::auto_merge::StopScope>,
@@ -611,6 +616,7 @@ impl Actor {
             Actor::Runner => crate::matrix_rows_ci::runner(),
             Actor::Job(state) => crate::matrix_rows_ci::job(state),
             Actor::AutoMerge => Principal::auto_merge(),
+            Actor::Autofix => Principal::autofix(),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -659,7 +665,7 @@ impl Actor {
             }
             Actor::ActAs(via) => via.person,
             // No membership: the job arm decides on the token alone.
-            Actor::Runner | Actor::Job(_) | Actor::AutoMerge => None,
+            Actor::Runner | Actor::Job(_) | Actor::AutoMerge | Actor::Autofix => None,
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -772,7 +778,8 @@ impl Actor {
             | Actor::SshKeyAdmin
             | Actor::Runner
             | Actor::Job(_)
-            | Actor::AutoMerge => None,
+            | Actor::AutoMerge
+            | Actor::Autofix => None,
         }
     }
 
@@ -859,6 +866,7 @@ impl Fixture {
                 stop,
                 deleted,
             } => crate::matrix_rows_auto_merge::target_resource(mode, stop, deleted),
+            Fixture::Autofix(case) => crate::matrix_rows_autofix::target_resource(case),
             Fixture::Ref {
                 kind,
                 update,
@@ -1278,6 +1286,8 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_revert::REVERT_ROWS,
         crate::matrix_rows_auto_merge::AUTO_MERGE_ROWS.as_slice(),
         &crate::matrix_rows_auto_merge::generated_denies(),
+        crate::matrix_rows_autofix::AUTOFIX_ROWS.as_slice(),
+        &crate::matrix_rows_autofix::generated_denies(),
         crate::matrix_rows_ci_outputs::CI_OUTPUT_ROWS.as_slice(),
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,

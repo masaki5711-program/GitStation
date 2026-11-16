@@ -60,6 +60,8 @@ pub struct Definition {
     pub(crate) stages: Vec<String>,
     /// In file order.
     pub(crate) jobs: Vec<Job>,
+    /// M4 C14: `autofix.fixers`, in file order (none without the key).
+    pub(crate) fixers: Vec<crate::autofix::Fixer>,
 }
 
 impl Definition {
@@ -70,6 +72,17 @@ impl Definition {
     /// In file order.
     pub fn jobs(&self) -> &[Job] {
         &self.jobs
+    }
+
+    /// M4 C14: the registered autofix fixers, in file order. forge reads
+    /// them from the target branch's file only.
+    pub fn fixers(&self) -> &[crate::autofix::Fixer] {
+        &self.fixers
+    }
+
+    /// The fixer called `name`.
+    pub fn fixer(&self, name: &str) -> Option<&crate::autofix::Fixer> {
+        self.fixers.iter().find(|f| f.name() == name)
     }
 
     /// What a valid file may do but should not, sorted by line (never a
@@ -280,11 +293,14 @@ pub(crate) fn parse(bytes: &[u8], problems: &mut Vec<Problem>) -> Option<Definit
         }
     };
     let (mut version, mut stages, mut jobs) = (None, None, None);
+    let mut fixers = Vec::new();
     for f in &fields {
         match f.key {
             "version" => version = Some(f),
             "stages" => stages = Some(f),
             "jobs" => jobs = Some(f),
+            // M4 C14: the deterministic fixers (`crate::autofix`).
+            "autofix" => fixers = crate::autofix::read_autofix(f.value, f.line, problems),
             other => problems.push(Problem::about(f.line, "key_unknown", other)),
         }
     }
@@ -313,7 +329,11 @@ pub(crate) fn parse(bytes: &[u8], problems: &mut Vec<Problem>) -> Option<Definit
         Some(f) => read_jobs(f.value, f.line, stages.as_deref(), problems),
     };
     match (stages, jobs) {
-        (Some(stages), Some(jobs)) if problems.len() == before => Some(Definition { stages, jobs }),
+        (Some(stages), Some(jobs)) if problems.len() == before => Some(Definition {
+            stages,
+            jobs,
+            fixers,
+        }),
         _ => None,
     }
 }
@@ -707,7 +727,7 @@ fn read_service_env(
     out
 }
 
-fn read_script(
+pub(crate) fn read_script(
     node: &Node,
     at: usize,
     job: &str,
@@ -901,7 +921,7 @@ fn one_text(
 }
 
 /// Job, stage and tag names: `[a-z0-9][a-z0-9._-]*`, at most 63 bytes.
-fn is_name(s: &str) -> bool {
+pub(crate) fn is_name(s: &str) -> bool {
     let mut chars = s.chars();
     s.len() <= MAX_NAME
         && chars

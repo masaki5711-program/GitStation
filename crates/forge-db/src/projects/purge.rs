@@ -553,6 +553,22 @@ async fn finish_steps(
         "projects.purge.finish.merge_settings",
     )
     .await?;
+    // M4 C14: autofix's rows (the attempts point at the merge requests,
+    // the pipelines and the jobs).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.autofix_attempts WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.autofix_attempts",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.project_autofix WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.project_autofix",
+    )
+    .await?;
     // M4 C6 review: the secrets released to the project's jobs (they
     // point at the jobs).
     delete_rows(

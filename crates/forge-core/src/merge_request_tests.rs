@@ -142,7 +142,8 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.source_branch_deleted",
             "merge_request.approved",
             "merge_request.unapproved",
-            "merge_request.revert_drafted"
+            "merge_request.revert_drafted",
+            "merge_request.autofix_finished"
         ]
     );
 }
@@ -542,5 +543,44 @@ fn revert_drafted_is_a_transition_keyed_by_the_merge() {
     assert_eq!(
         details.event_type(),
         Some(EventType::MergeRequestRevertDrafted)
+    );
+}
+
+/// M4 C14: an autofix attempt's end is a transition of the merge request,
+/// keyed by the attempt; the payload carries ids, names and the commit.
+#[test]
+fn autofix_finished_is_a_transition_keyed_by_the_attempt() {
+    use crate::autofix::{AttemptState, AutofixFinished, AutofixTrigger};
+    use crate::ObjectId;
+    let finished = MergeRequestChange::AutofixFinished(AutofixFinished {
+        merge_request: MergeRequestId::new(9),
+        iid: 3,
+        attempt: 5,
+        trigger: AutofixTrigger::PipelineFailed,
+        fixer: Some("fmt".to_owned()),
+        state: AttemptState::Applied,
+        reason: None,
+        commit: Some(ObjectId::parse(&"c".repeat(40)).expect("oid")),
+    });
+    assert_eq!(finished.transition(), MergeRequestTransition::AutofixFinish);
+    assert_eq!(finished.dedup_prefix(), "merge_request_autofix_finished");
+    assert_eq!(finished.action(), "merge_request.autofix_finished");
+    assert_eq!(
+        finished.to_value(),
+        json!({
+            "merge_request_id": 9,
+            "iid": 3,
+            "attempt_id": 5,
+            "trigger": "pipeline_failed",
+            "fixer": "fmt",
+            "state": "applied",
+            "reason": null,
+            "commit_sha": "c".repeat(40),
+        })
+    );
+    let details = AuditDetails::MergeRequest(finished);
+    assert_eq!(
+        details.event_type(),
+        Some(EventType::MergeRequestAutofixFinished)
     );
 }

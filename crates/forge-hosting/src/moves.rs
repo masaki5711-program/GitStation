@@ -314,7 +314,10 @@ impl Hosting {
             Credential::ActAs(_) => false,
             // CI principals hold no administrator right (ADR-0029 §1).
             // Nor the auto-merge principal (M4 C9).
-            Credential::Runner(_) | Credential::Job(_) | Credential::AutoMerge => false,
+            Credential::Runner(_)
+            | Credential::Job(_)
+            | Credential::AutoMerge
+            | Credential::Autofix => false,
         };
         with_retry("tombstone_release", || async {
             let (released, ()) = tombstones::release_decided(&self.db, &ctx, id, user, |facts| {

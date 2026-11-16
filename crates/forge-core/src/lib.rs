@@ -8,6 +8,8 @@ pub mod approval;
 pub mod audit_details;
 pub mod authenticator;
 pub mod auto_merge;
+// M4 C14: the deterministic autofix (ADR-0017 Amendment C14).
+pub mod autofix;
 pub mod checks;
 pub mod config;
 pub mod cursor;

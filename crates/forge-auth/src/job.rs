@@ -82,7 +82,8 @@ pub(crate) fn decide(
         Credential::Session
         | Credential::Token(_)
         | Credential::ActAs(_)
-        | Credential::AutoMerge => {
+        | Credential::AutoMerge
+        | Credential::Autofix => {
             Err(ForgeError::new(ErrorCode::Internal).with_context("reason", "not_a_ci_principal"))
         }
     };
@@ -236,6 +237,7 @@ fn job(
         | Resource::ActAs(_)
         | Resource::RunnerJob(_)
         | Resource::AutoMerge(_)
+        | Resource::Autofix(_)
         | Resource::Deployment(_)
         | Resource::ActAsConfirm(_) => Err(not_found("job_requires_pinned_copy")),
     }

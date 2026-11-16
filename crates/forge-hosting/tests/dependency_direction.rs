@@ -45,7 +45,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
         ],
     ),
     // M3 R1a (ADR-0024 §11): merge requests, beside forge-hosting (and
-    // never depending on it, nor on forge-checks).
+    // never depending on it, nor on forge-checks). M4 C14: the pure
+    // forge-ci for the autofix fixers of the target branch's file.
     (
         "forge-review",
         &[
@@ -53,6 +54,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-git",
             "forge-db",
             "forge-core",
+            "forge-ci",
             "forge-errors",
         ],
     ),

@@ -62,7 +62,8 @@ pub fn act_as_admission(token: &Principal) -> Result<(), ForgeError> {
         | Credential::ActAs(_)
         | Credential::Runner(_)
         | Credential::Job(_)
-        | Credential::AutoMerge => return Err(refused("act_as_requires_service_account")),
+        | Credential::AutoMerge
+        | Credential::Autofix => return Err(refused("act_as_requires_service_account")),
     };
     credential_checks(token.account_kind(), scopes, token.is_agent())
 }
@@ -183,6 +184,7 @@ fn decide_rule(
             | Resource::RunnerJob(_)
             | Resource::JobSelf(_)
             | Resource::AutoMerge(_)
+            | Resource::Autofix(_)
             | Resource::Deployment(_)
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
@@ -229,6 +231,7 @@ fn decide_rule(
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
+        | Resource::Autofix(_)
         | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
@@ -378,6 +381,7 @@ fn project_view(resource: &Resource) -> Option<&ProjectView> {
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
+        | Resource::Autofix(_)
         | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
@@ -471,6 +475,7 @@ fn capped(inner: &Resource, via: Option<Role>) -> Result<Resource, ForgeError> {
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
+        | Resource::Autofix(_)
         | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }

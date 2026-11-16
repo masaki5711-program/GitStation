@@ -136,7 +136,8 @@ fn all_lists_every_event_type_once() {
             "work_item.linked",
             "work_item.unlinked",
             "webhook.disabled",
-            "merge_request.revert_drafted"
+            "merge_request.revert_drafted",
+            "merge_request.autofix_finished"
         ]
     );
 }

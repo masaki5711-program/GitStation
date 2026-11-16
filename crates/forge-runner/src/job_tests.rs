@@ -58,6 +58,7 @@ fn claim(job_id: i64, token: &str, def: &str) -> ClaimedJob {
         secret_names: Vec::new(),
         secrets: Vec::new(),
         job_token: JobToken::new(token.to_owned()),
+        autofix: false,
     }
 }
 
@@ -126,6 +127,9 @@ struct Fake {
     job_out: Option<Vec<u8>>,
     /// The job's env file as `podman create` found it (M4 C6).
     env_seen: Mutex<Option<String>>,
+    /// M4 C14: what `git write-tree` of the autofix step prints (`None`:
+    /// the pinned commit's tree, i.e. the fixer changed nothing).
+    tree_out: Option<String>,
 }
 
 /// Which Podman call of a job's services fails.
@@ -160,6 +164,7 @@ impl Fake {
             ),
             job_out: None,
             env_seen: Mutex::new(None),
+            tree_out: None,
         }
     }
 
@@ -244,6 +249,31 @@ impl ProcessRunner for Fake {
             },
             ("git", "rev-parse") => ok(format!("{SHA}\n").into_bytes()),
             ("git", "cat-file") => ok(self.definition.lock().unwrap().clone().into_bytes()),
+            // M4 C14: the autofix step.
+            ("git", "write-tree") => ok(format!(
+                "{}
+",
+                self.tree_out.clone().unwrap_or_else(|| SHA.to_owned())
+            )
+            .into_bytes()),
+            ("git", "commit-tree") => ok(format!(
+                "{}
+",
+                "c".repeat(40)
+            )
+            .into_bytes()),
+            ("git", "bundle") => {
+                let argv = cmd.argv();
+                let at = argv.iter().position(|a| a == "create").expect("create");
+                std::fs::write(
+                    &argv[at + 1],
+                    b"# v2 git bundle
+
+PACK",
+                )
+                .expect("bundle");
+                ok(Vec::new())
+            }
             ("git", _) => ok(Vec::new()),
             ("podman", "pod create") if self.service_fails == ServiceFails::PodCreate => Ran {
                 exit: Exit::Code(125),
@@ -1980,4 +2010,110 @@ fn the_lease_heartbeat_runs_while_artifacts_upload() {
     );
     // The container was removed (`podman rm`) before the job ended.
     assert!(!fake.by("podman", "rm").is_empty());
+}
+
+// --- M4 C14: autofix fixers (ADR-0017 Amendment C14) ---
+
+/// A definition with one fixer `fmt` beside the job `build`.
+fn fixer_definition() -> String {
+    format!(
+        "{}autofix:
+  fixers:
+    fmt:
+      kind: format
+      image: {}
+      script: [cargo fmt --all]
+      timeout: 10m
+      paths: [\"**/*.rs\"]
+",
+        definition("make"),
+        image()
+    )
+}
+
+fn fixer_claim(def: &str) -> ClaimedJob {
+    let mut job = claim(7, "fgj_7_secret", def);
+    job.name = "fmt".to_owned();
+    job.stage = "autofix".to_owned();
+    job.autofix = true;
+    job
+}
+
+/// The fixer runs like a job, then its work tree is recorded in a
+/// repository OUTSIDE the work tree (the checkout's `.git` is never read)
+/// and uploaded as `autofix.bundle` with the job's own token.
+#[test]
+fn a_fixer_uploads_its_work_tree_as_a_bundle_built_outside_the_mounts() {
+    let def = fixer_definition();
+    let fake = Arc::new(Fake {
+        tree_out: Some("d".repeat(40)),
+        ..Fake::base(&def, Podman::Exit(0))
+    });
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &fixer_claim(&def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    let uploads = forge.uploads.lock().unwrap().clone();
+    assert_eq!(uploads.len(), 1);
+    assert_eq!(uploads[0].0, forge_core::autofix::BUNDLE_ARTIFACT_PATH);
+    let add = fake.by("git", "add");
+    assert_eq!(add.len(), 1);
+    let git_dir = add[0].env_value("GIT_DIR").expect("GIT_DIR");
+    let work_tree = add[0].env_value("GIT_WORK_TREE").expect("GIT_WORK_TREE");
+    let work = std::path::Path::new(work_tree);
+    assert!(
+        !std::path::Path::new(git_dir).starts_with(work),
+        "the autofix repository is outside the work tree"
+    );
+    assert_eq!(
+        std::path::Path::new(git_dir)
+            .file_name()
+            .and_then(|n| n.to_str()),
+        Some("autofix.git")
+    );
+    let bundle = fake.by("git", "bundle");
+    let argv = bundle[0].argv();
+    assert!(argv.contains(&forge_core::autofix::BUNDLE_REF.to_owned()));
+    assert!(argv.contains(&format!("^{SHA}")), "{argv:?}");
+    // The fixer's second fetch carries the job's token in the environment.
+    assert_eq!(fake.by("git", "fetch").len(), 2);
+}
+
+/// A fixer that changed nothing uploads nothing (`no_change` on forge).
+#[test]
+fn a_fixer_that_changed_nothing_uploads_nothing() {
+    let def = fixer_definition();
+    let fake = Fake::new(&def, Podman::Exit(0));
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let out = run(&s, &fixer_claim(&def), &forge);
+    assert_eq!(out.result, JobResult::Succeeded, "{:?}", out.error);
+    assert!(forge.uploads.lock().unwrap().is_empty());
+    assert!(fake.by("git", "bundle").is_empty());
+}
+
+/// An autofix claim names a fixer, never a job of `jobs:` (and a plain
+/// claim never a fixer): FG-CI-0008 before any container.
+#[test]
+fn an_autofix_claim_must_name_a_fixer() {
+    let def = fixer_definition();
+    let fake = Fake::new(&def, Podman::Exit(0));
+    let s = setup(&fake);
+    let forge = Forge::default();
+    let mut wrong = fixer_claim(&def);
+    wrong.name = "build".to_owned();
+    let out = run(&s, &wrong, &forge);
+    assert_eq!(out.result, JobResult::Failed);
+    assert_eq!(
+        out.error.expect("refused").code(),
+        ErrorCode::JobDefinitionMismatch
+    );
+    let mut plain = claim(7, "fgj_7_secret", &def);
+    plain.name = "fmt".to_owned();
+    let out = run(&s, &plain, &forge);
+    assert_eq!(
+        out.error.expect("refused").code(),
+        ErrorCode::JobDefinitionMismatch
+    );
+    assert!(fake.by("podman", "create").is_empty());
 }

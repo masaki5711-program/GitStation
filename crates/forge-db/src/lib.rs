@@ -150,6 +150,8 @@ pub mod notify;
 pub mod restore;
 // ── M4 C2: CI pipelines and jobs (plan 14 §4.1) ──
 pub mod pipelines;
+// M4 C14: the deterministic autofix (ADR-0017 Amendment C14).
+pub mod autofix;
 // ── M4 C3: CI runners, job tokens and logs (plan 14 §4.1) ──
 pub mod ci_runners;
 // M4 C5: the CI outputs (logs, fingerprints, diagnosis, ci/pipeline).

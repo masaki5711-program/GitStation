@@ -27,6 +27,17 @@ use crate::process::Cmd;
 /// The file read at the pinned commit.
 pub const DEFINITION_FILE: &str = ".forge-ci.yml";
 
+/// The directories of the autofix step (M4 C14).
+#[derive(Debug, Clone, Copy)]
+pub struct AutofixDirs<'a> {
+    /// The fixer's work tree (what the container left).
+    pub work: &'a Path,
+    /// The autofix repository (outside every mount).
+    pub git_dir: &'a Path,
+    /// Its index file (outside every mount).
+    pub index: &'a Path,
+}
+
 /// Builds the git calls.
 #[derive(Debug, Clone)]
 pub struct GitPlan {
@@ -60,6 +71,11 @@ impl GitPlan {
 
     /// `git -c … -C <repo> <subcommand>` with the fixed hardening.
     fn base(&self, repo: &Path, subcommand: &str) -> Cmd {
+        self.base_home(repo, repo, subcommand)
+    }
+
+    /// [`GitPlan::base`] with `HOME` at `home`.
+    fn base_home(&self, repo: &Path, home: &Path, subcommand: &str) -> Cmd {
         let mut hooks = OsString::from("core.hooksPath=");
         hooks.push(&self.empty_hooks);
         Cmd::new(self.git.as_os_str())
@@ -85,7 +101,7 @@ impl GitPlan {
             .env("GIT_CONFIG_GLOBAL", self.empty_config.as_os_str())
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_ASKPASS", "")
-            .env("HOME", repo.as_os_str())
+            .env("HOME", home.as_os_str())
     }
 
     /// `git init --quiet` in the (fresh, empty) work directory.
@@ -133,6 +149,86 @@ impl GitPlan {
             .arg("blob")
             .arg(format!("{}:{DEFINITION_FILE}", sha.as_str()))
             .captured()
+    }
+
+    // ── M4 C14: the autofix bundle (ADR-0017 Amendment C14) ──
+    //
+    // After a fixer's script exited 0 and its container is gone, the work
+    // tree is recorded in a repository of its own OUTSIDE every mount
+    // (`JobDirs::autofix_git`, a fresh fetch of the pinned commit): the
+    // checkout's `.git`, which the container could write, is never read.
+    // `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` point there; `HOME`
+    // is the autofix repository (no ignore file of the work tree's choosing).
+
+    /// `git init --quiet --bare` of the autofix repository (created empty).
+    pub fn autofix_init(&self, git_dir: &Path) -> Cmd {
+        self.base(git_dir, "init").arg("--quiet").arg("--bare")
+    }
+
+    fn autofix_step(&self, a: &AutofixDirs<'_>, subcommand: &str) -> Cmd {
+        self.base_home(a.work, a.git_dir, subcommand)
+            .env("GIT_DIR", a.git_dir.as_os_str())
+            .env("GIT_WORK_TREE", a.work.as_os_str())
+            .env("GIT_INDEX_FILE", a.index.as_os_str())
+    }
+
+    /// The index from the pinned commit.
+    pub fn autofix_read_tree(&self, a: &AutofixDirs<'_>, sha: &ObjectId) -> Cmd {
+        // A validated 40 / 64 hex id: never read as an option.
+        self.autofix_step(a, "read-tree").arg(sha.as_str())
+    }
+
+    /// Every change of the work tree into the index (never a `.git`).
+    pub fn autofix_add(&self, a: &AutofixDirs<'_>) -> Cmd {
+        self.autofix_step(a, "add").arg("--all")
+    }
+
+    /// The index as a tree, printed.
+    pub fn autofix_write_tree(&self, a: &AutofixDirs<'_>) -> Cmd {
+        self.autofix_step(a, "write-tree").captured()
+    }
+
+    /// The pinned commit's tree, printed.
+    pub fn autofix_input_tree(&self, a: &AutofixDirs<'_>, sha: &ObjectId) -> Cmd {
+        self.autofix_step(a, "rev-parse")
+            .arg("--verify")
+            .arg("--end-of-options")
+            .arg(format!("{}^{{tree}}", sha.as_str()))
+            .captured()
+    }
+
+    /// The transport commit of `tree` on the pinned commit, printed (a
+    /// fixed identity and message: forge uses only the tree).
+    pub fn autofix_commit(&self, a: &AutofixDirs<'_>, tree: &ObjectId, sha: &ObjectId) -> Cmd {
+        // Validated hex ids only (never read as an option).
+        self.autofix_step(a, "commit-tree")
+            .arg(tree.as_str())
+            .arg("-p")
+            .arg(sha.as_str())
+            .arg("-m")
+            .arg("autofix transport")
+            .env("GIT_AUTHOR_NAME", "forge-runner")
+            .env("GIT_AUTHOR_EMAIL", "runner@forge.invalid")
+            .env("GIT_COMMITTER_NAME", "forge-runner")
+            .env("GIT_COMMITTER_EMAIL", "runner@forge.invalid")
+            .captured()
+    }
+
+    /// `refs/forge/autofix` at the transport commit.
+    pub fn autofix_ref(&self, a: &AutofixDirs<'_>, commit: &ObjectId) -> Cmd {
+        self.autofix_step(a, "update-ref")
+            .arg(forge_core::autofix::BUNDLE_REF)
+            .arg(commit.as_str())
+    }
+
+    /// The bundle of `refs/forge/autofix` without the pinned commit's
+    /// history (its only prerequisite).
+    pub fn autofix_bundle(&self, a: &AutofixDirs<'_>, out: &Path, sha: &ObjectId) -> Cmd {
+        self.autofix_step(a, "bundle")
+            .arg("create")
+            .arg(out.as_os_str())
+            .arg(forge_core::autofix::BUNDLE_REF)
+            .arg(format!("^{}", sha.as_str()))
     }
 
     /// Check out the pinned commit (detached).

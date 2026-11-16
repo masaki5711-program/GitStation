@@ -144,6 +144,15 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
     if let Credential::AutoMerge = principal.credential() {
         return crate::auto_merge::decide(action, resource);
     }
+    // The autofix bot (M4 C14): its own arm, closed by default.
+    if let Credential::Autofix = principal.credential() {
+        return crate::autofix::decide(action, resource);
+    }
+    // A source branch as the autofix bot reaches it is no resource for
+    // anyone else.
+    if let Resource::Autofix(_) = resource {
+        return Err(deny(ErrorCode::Forbidden).with_context("reason", "autofix_resource"));
+    }
     // A merge request as the auto-merge principal reaches it is no
     // resource for anyone else.
     if let Resource::AutoMerge(_) = resource {
@@ -1466,6 +1475,13 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             admin_only()
         }
 
+        // --- autofix (M4 C14, ADR-0017 Amendment C14) ---
+        // The project's switch: Maintainer and above, people only.
+        (Action::AutofixSettingsManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1587,6 +1603,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::AutoMergeSettingsManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
+            | Action::AutofixSettingsManage
             | Action::CiVariableManage
             | Action::DeployRead
             | Action::DeployEnvironmentManage
@@ -1638,6 +1655,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Resource::RunnerJob(_)
             | Resource::JobSelf(_)
             | Resource::AutoMerge(_)
+            | Resource::Autofix(_)
             | Resource::Deployment(_),
         ) => wrong_resource(),
     }
@@ -1739,6 +1757,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
+        | Resource::Autofix(_)
         | Resource::ActAs(_)
         | Resource::ActAsConfirm(_) => None,
     }
@@ -1778,6 +1797,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::RunnerJob(_)
         | Resource::JobSelf(_)
         | Resource::AutoMerge(_)
+        | Resource::Autofix(_)
         | Resource::Deployment(_)
         | Resource::Transfer { .. }
         | Resource::GroupTransfer { .. }
