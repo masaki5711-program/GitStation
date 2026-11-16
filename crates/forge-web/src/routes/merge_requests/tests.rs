@@ -293,6 +293,8 @@ fn status_schema_v1_fields_are_only_added() {
             "can_approve",
             "can_mark_ready",
             "can_merge",
+            // M4 C10 adds can_revert (within schema_version 1).
+            "can_revert",
             "can_unapprove"
         ]
         .into_iter()

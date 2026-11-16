@@ -2923,6 +2923,17 @@
           "path": {
             "description": "The path segment (ADR-0015 rules; a top-level name must not be\nreserved).",
             "type": "string"
+          },
+          "visibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisibilityName",
+                "description": "`private` (the default: widened when it should be shown, plan 15\n§6) or `internal`; `internal` below a private group is\n`FG-REPO-0033`."
+              }
+            ]
           }
         },
         "required": [
@@ -5384,6 +5395,10 @@
           "display_name": {
             "type": "string"
           },
+          "effective_visibility": {
+            "description": "What applies: the narrowest on the chain to the top level.",
+            "type": "string"
+          },
           "id": {
             "format": "int64",
             "minimum": 1,
@@ -5407,16 +5422,24 @@
               "null"
             ]
           },
+          "pass_through": {
+            "description": "Shown only because the caller holds a role below it: its identity\n(ids, parent, path, names, visibility, creation time) with an empty\ndescription and no role; its members and other subgroups stay\nhidden.",
+            "type": "boolean"
+          },
           "path": {
             "description": "The current full path (`group/sub`).",
             "type": "string"
           },
           "role": {
-            "description": "The caller's effective role (`guest` … `owner`); `null` without one.",
+            "description": "The caller's effective role (`guest` … `owner`); `null` without\none. (This is the viewer's role of plan 15 MR 3.)",
             "type": [
               "string",
               "null"
             ]
+          },
+          "visibility": {
+            "description": "The group's own setting, `private` or `internal` (plan 15 MR 3).",
+            "type": "string"
           }
         },
         "required": [
@@ -5428,7 +5451,10 @@
           "display_name",
           "description",
           "created_at",
-          "role"
+          "role",
+          "visibility",
+          "effective_visibility",
+          "pass_through"
         ],
         "type": "object"
       },
@@ -5458,6 +5484,31 @@
           "items",
           "next_cursor",
           "has_more"
+        ],
+        "type": "object"
+      },
+      "GroupVisibilityBody": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/groups/{id}/visibility` → the group as it is now and\nwhat the change did (or, with `preview`, would do).",
+        "properties": {
+          "affected_projects": {
+            "description": "The live projects below whose effective visibility changes with it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "changed": {
+            "description": "Written (`false` for a preview or when nothing changed).",
+            "type": "boolean"
+          },
+          "group": {
+            "$ref": "#/components/schemas/GroupBody"
+          }
+        },
+        "required": [
+          "group",
+          "changed",
+          "affected_projects"
         ],
         "type": "object"
       },
@@ -6113,6 +6164,10 @@
           "display_name": {
             "type": "string"
           },
+          "effective_visibility": {
+            "description": "What applies: the narrowest on the chain to the top level.",
+            "type": "string"
+          },
           "id": {
             "format": "int64",
             "minimum": 1,
@@ -6127,6 +6182,10 @@
             "minimum": 1,
             "type": "integer"
           },
+          "pass_through": {
+            "description": "Shown only because the caller holds a role below it: its identity\n(ids, path, names, visibility, creation time) with an empty\ndescription and no role.",
+            "type": "boolean"
+          },
           "path": {
             "description": "The current full path (`group/sub`).",
             "type": "string"
@@ -6137,6 +6196,10 @@
               "string",
               "null"
             ]
+          },
+          "visibility": {
+            "description": "The group's own setting, `private` or `internal` (plan 15 MR 3).",
+            "type": "string"
           }
         },
         "required": [
@@ -6147,7 +6210,10 @@
           "display_name",
           "description",
           "created_at",
-          "role"
+          "role",
+          "visibility",
+          "effective_visibility",
+          "pass_through"
         ],
         "type": "object"
       },
@@ -7423,6 +7489,10 @@
           "image": {
             "type": "string"
           },
+          "manual": {
+            "description": "`when: manual` in `.forge-ci.yml` (M4 C12): started by a person;\nstays `true` after it was started.",
+            "type": "boolean"
+          },
           "name": {
             "type": "string"
           },
@@ -7450,7 +7520,7 @@
             ]
           },
           "status": {
-            "description": "`created`, `pending`, `running`, `succeeded`, `failed`, `canceled`.",
+            "description": "`created`, `pending`, `running`, `succeeded`, `failed`,\n`canceled`, `manual` (waits for a person: `…/play`).",
             "type": "string"
           },
           "tags": {
@@ -7480,6 +7550,7 @@
           "tags",
           "secrets",
           "status",
+          "manual",
           "attempt",
           "error_code",
           "created_at",
@@ -7538,6 +7609,157 @@
           "line",
           "reason",
           "subject"
+        ],
+        "type": "object"
+      },
+      "PipelineScheduleBody": {
+        "additionalProperties": false,
+        "description": "A schedule.",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_outcome": {
+            "description": "What its last run did: `created` (`last_pipeline_id`),\n`no_definition`, `ref_missing`, `refused` (FG-CI-0026: the owner may\nnot run pipelines now: the schedule was stopped), `failed`\n(`last_error_code`), `busy` (its previous pipeline was still\nrunning), `capped` (the hourly cap, FG-CI-0028).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_pipeline_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_run_at": {
+            "description": "The due time of its last run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_run_at": {
+            "description": "When it runs next (RFC 3339, UTC); `null` when inactive.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_id": {
+            "description": "The person whose rights it runs with (who created it or last changed\nits branch, rule or offset).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "ref": {
+            "description": "`refs/heads/…`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "utc_offset_minutes": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "description",
+          "ref",
+          "cron",
+          "utc_offset_minutes",
+          "active",
+          "owner_id",
+          "next_run_at",
+          "last_run_at",
+          "last_outcome",
+          "last_pipeline_id",
+          "last_error_code",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "PipelineScheduleInput": {
+        "additionalProperties": false,
+        "description": "`POST …/pipeline-schedules`, `PUT …/{schedule_id}`.",
+        "properties": {
+          "active": {
+            "description": "Default `true`; `false` never runs.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "cron": {
+            "description": "Five-field cron (`minute hour day-of-month month day-of-week`), at\nmost once every 5 minutes.",
+            "type": "string"
+          },
+          "description": {
+            "description": "What it is for (1..=255 bytes, one line).",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch: `main` or `refs/heads/main`.",
+            "type": "string"
+          },
+          "utc_offset_minutes": {
+            "description": "The fixed UTC offset the rule is read at, in minutes (540 = JST,\n420 = WIB); a quarter hour within −720..=840.",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "description",
+          "ref",
+          "cron",
+          "utc_offset_minutes"
+        ],
+        "type": "object"
+      },
+      "PipelineScheduleList": {
+        "additionalProperties": false,
+        "description": "`GET …/pipeline-schedules`.",
+        "properties": {
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineScheduleBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schedules"
         ],
         "type": "object"
       },
@@ -9161,6 +9383,37 @@
         ],
         "type": "object"
       },
+      "RevertBody": {
+        "additionalProperties": false,
+        "description": "The revert merge request as opened.",
+        "properties": {
+          "commit_sha": {
+            "description": "The revert commit (the new branch's tip).",
+            "type": "string"
+          },
+          "merge_request": {
+            "$ref": "#/components/schemas/MergeRequestBody",
+            "description": "The merge request that reverts `reverted_iid` (source\n`revert/mr-<iid>`, target the reverted one's target)."
+          },
+          "parent_sha": {
+            "description": "The target's tip it was built on.",
+            "type": "string"
+          },
+          "reverted_iid": {
+            "description": "The merged merge request it reverts.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "merge_request",
+          "reverted_iid",
+          "commit_sha",
+          "parent_sha"
+        ],
+        "type": "object"
+      },
       "RoleName": {
         "description": "A role in a request.",
         "enum": [
@@ -9639,6 +9892,23 @@
         "required": [
           "user_id",
           "revoked_sessions"
+        ],
+        "type": "object"
+      },
+      "SetGroupVisibility": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/groups/{id}/visibility` (plan 15 MR 3).",
+        "properties": {
+          "preview": {
+            "description": "Decide and count without writing: what the screen shows before a\nnarrowing is confirmed (`affected_projects`).",
+            "type": "boolean"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/VisibilityName"
+          }
+        },
+        "required": [
+          "visibility"
         ],
         "type": "object"
       },
@@ -10890,6 +11160,10 @@
             "description": "`POST …/merge` would be allowed (the target's minimum push role;\nwhether the merge request may merge now is `mergeable`).",
             "type": "boolean"
           },
+          "can_revert": {
+            "description": "M4 C10 (added within `schema_version` 1): `POST …/revert` would be\nallowed — the merge request is merged and the caller may open a\nmerge request and push a branch (a protection of `revert/*`, and\nwhether the revert conflicts, are decided by the revert itself).\nAlways `false` when acting for a person.",
+            "type": "boolean"
+          },
           "can_unapprove": {
             "description": "`POST …/unapprove` would be allowed (pair it with `approved_by_me`:\nthere may be nothing to withdraw).",
             "type": "boolean"
@@ -10900,7 +11174,8 @@
           "can_unapprove",
           "can_merge",
           "can_mark_ready",
-          "approved_by_me"
+          "approved_by_me",
+          "can_revert"
         ],
         "type": "object"
       },
@@ -14405,6 +14680,58 @@
         "summary": "Move or rename a group and its subtree (Owner on both sides; the top level: administrators)",
         "x-forge-action": "GroupTransfer",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/groups/{id}/visibility": {
+      "patch": {
+        "operationId": "patch_api_v1_groups_id_visibility",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetGroupVisibility"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupVisibilityBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change (or preview) a group's visibility (group Owner, web session)",
+        "x-forge-action": "GroupVisibilityChange",
+        "x-forge-max-body-bytes": 16384
       }
     },
     "/api/v1/integrations/{id}/act-as/claim": {
@@ -18676,6 +19003,55 @@
         "x-forge-action": "MergeRequestReopen"
       }
     },
+    "/api/v1/projects/{id}/merge-requests/{iid}/revert": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_revert",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Revert a merged merge request in one step: opens a merge request from the new branch revert/mr-<iid> (one revert commit on the target's tip) into the target. Decided as opening a merge request (Developer; a token needs api) and pushing the branch (a token needs write_repository; a protected revert/* refuses, FG-GIT-0008). 409 FG-REVIEW-0029 (not merged, branch exists, nothing to revert) or FG-REVIEW-0030 (the revert conflicts: nothing is opened)",
+        "x-forge-action": "MergeRequestCreate"
+      }
+    },
     "/api/v1/projects/{id}/merge-requests/{iid}/status": {
       "get": {
         "operationId": "get_api_v1_projects_id_merge_requests_iid_status",
@@ -19237,6 +19613,201 @@
         "x-forge-max-body-bytes": 4096
       }
     },
+    "/api/v1/projects/{id}/pipeline-schedules": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipeline_schedules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineScheduleList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's pipeline schedules (at most 20): branch, cron and UTC offset, active, owner (whose rights it runs with), next time, last run and its outcome (project readers)",
+        "x-forge-action": "PipelineRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_pipeline_schedules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineScheduleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineScheduleBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a pipeline schedule ({\"description\", \"ref\", \"cron\", \"utc_offset_minutes\", \"active\"?}): 201; the caller becomes its owner and it runs with the owner's rights at each run, never with secrets; 400 FG-WEB-0006 (param, reason) for a bad value; 409 FG-CI-0027 past 20 per project (people only; Maintainer)",
+        "x-forge-action": "PipelineScheduleManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/pipeline-schedules/{schedule_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_pipeline_schedules_schedule_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a pipeline schedule: 204; 404 FG-REPO-0005 without it (people only; Maintainer)",
+        "x-forge-action": "PipelineScheduleManage"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_pipeline_schedules_schedule_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineScheduleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineScheduleBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner when the branch, rule or offset changes or after the owner was refused (a description or pause/resume edit keeps the owner); 404 FG-REPO-0005 without it (people only; Maintainer)",
+        "x-forge-action": "PipelineScheduleManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
     "/api/v1/projects/{id}/pipelines": {
       "get": {
         "operationId": "get_api_v1_projects_id_pipelines",
@@ -19715,6 +20286,67 @@
         },
         "summary": "One page of a CI job attempt's log (attempt: default the current one; from: the first chunk, 0-based): whole chunks, at most 256 / 1 MiB, secrets masked as [MASKED]; next_from names the next page, complete says the attempt is over; 404 FG-REPO-0005 without such a pipeline, job or attempt; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers)",
         "x-forge-action": "CiLogRead"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_play",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Start a `when: manual` job: 200 the pipeline (the job pending for a runner, a finished pipeline running again); 404 FG-REPO-0005 without the pipeline or job; 409 FG-CI-0003 operation=play when the job is not waiting for a person (not_manual), the pipeline is cancelled, invalid or error (pipeline_state), or a job it needs has not succeeded (needs_not_succeeded). Secrets reach it only as its pipeline allows (Developer)",
+        "x-forge-action": "PipelineCreate"
       }
     },
     "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry": {

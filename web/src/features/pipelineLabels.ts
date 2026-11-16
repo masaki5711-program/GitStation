@@ -24,6 +24,8 @@ export function pipelineStatusLabel(t: TFunction, status: string): string {
       return t('pipelines.status.error');
     case 'created':
       return t('pipelines.status.created');
+    case 'manual':
+      return t('pipelines.status.manual');
     default:
       return status;
   }

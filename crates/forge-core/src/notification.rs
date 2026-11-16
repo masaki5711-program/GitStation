@@ -5,7 +5,9 @@
 //! whose recipient is known: the author of a merge request hears when it is
 //! approved, merged or commented, and (M3 X6, plan 04 C-2) when the
 //! conflict scan predicts it conflicts with another open merge request —
-//! each side's author hears it from its own event. A "review requested" kind and a mention
+//! each side's author hears it from its own event, and (M4 C10, plan 04
+//! M-4) when the target's pipeline failed after the merge and a draft
+//! revert was opened or could not be. A "review requested" kind and a mention
 //! kind join with their events (none exists yet), a push-mirror failure kind
 //! with O2; the table CHECKs and this list change together, by migration.
 
@@ -24,6 +26,10 @@ pub enum NotificationKind {
     /// `merge_request.conflict_predicted` (M3 X6): your merge request is
     /// likely to conflict with another open one on the same target.
     MergeRequestConflictPredicted,
+    /// `merge_request.revert_drafted` (M4 C10, plan 04 M-4): the target's
+    /// pipeline failed after your merge request was merged, and a draft
+    /// revert was opened (or could not be: it conflicts).
+    MergeRequestRevertDrafted,
 }
 
 impl NotificationKind {
@@ -32,6 +38,7 @@ impl NotificationKind {
         Self::MergeRequestMerged,
         Self::MergeRequestCommented,
         Self::MergeRequestConflictPredicted,
+        Self::MergeRequestRevertDrafted,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -40,6 +47,7 @@ impl NotificationKind {
             Self::MergeRequestMerged => "mr_merged",
             Self::MergeRequestCommented => "mr_commented",
             Self::MergeRequestConflictPredicted => "mr_conflict_predicted",
+            Self::MergeRequestRevertDrafted => "mr_revert_drafted",
         }
     }
 
@@ -55,6 +63,7 @@ impl NotificationKind {
             EventType::MergeRequestMerged => Some(Self::MergeRequestMerged),
             EventType::MergeRequestCommented => Some(Self::MergeRequestCommented),
             EventType::MergeRequestConflictPredicted => Some(Self::MergeRequestConflictPredicted),
+            EventType::MergeRequestRevertDrafted => Some(Self::MergeRequestRevertDrafted),
             EventType::ProjectCreated
             | EventType::RepositoryCreated
             | EventType::TokenCreated
@@ -98,6 +107,9 @@ impl NotificationKind {
             // webhook and notification screens); until then FG-INT-0011 and
             // doctor `webhook.deliveries` report it.
             EventType::WebhookDisabled => None,
+            // M4 C12: a published specification version goes to the
+            // integrations (Kanflow), not to a person's inbox.
+            EventType::SpecReleased => None,
         }
     }
 }
@@ -202,6 +214,7 @@ mod tests {
                 ("merge_request.commented", "mr_commented"),
                 ("merge_request.conflict_predicted", "mr_conflict_predicted"),
                 ("merge_request.merged", "mr_merged"),
+                ("merge_request.revert_drafted", "mr_revert_drafted"),
             ]
         );
         // Every kind is reached by some event.

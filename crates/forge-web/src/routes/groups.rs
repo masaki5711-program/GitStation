@@ -1,7 +1,16 @@
 //! Groups (M1 phase 8b MR7a): `POST /api/v1/groups` (`GroupCreateTopLevel`,
 //! administrators), `POST /api/v1/groups/{id}/subgroups` (`SubgroupCreate`,
-//! group Owner), `GET /api/v1/groups/{id}` (`GroupRead`, every signed-in
-//! user) and `PATCH /api/v1/groups/{id}` (`GroupUpdate`, group Owner).
+//! group Owner), `GET /api/v1/groups/{id}` (`GroupRead`: whoever sees the
+//! group, plan 15 MR 3), `PATCH /api/v1/groups/{id}` (`GroupUpdate`, group
+//! Owner) and `PATCH /api/v1/groups/{id}/visibility`
+//! (`GroupVisibilityChange`, the group's Owner in a web session; plan 15
+//! MR 3).
+//!
+//! A group's effective visibility is the narrowest on its chain (ADR-0010
+//! Amendment "グループの可視性"): a group the caller cannot see is the same
+//! `FG-REPO-0005` as an absent one, and one seen only because the caller
+//! holds a role below it shows its identity without its description
+//! (`pass_through`).
 //!
 //! The registry authenticates, reads the strict JSON body (write routes),
 //! loads the group with **one** `forge_hosting::Hosting::group` call (the
@@ -16,8 +25,10 @@
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use forge_auth::{Authorized, GroupCtx, InstanceCtx, LoadedGroup, ResourceCtx};
-use forge_core::{GroupId, GroupRecord, Role, UserId};
+use forge_auth::{
+    group_seen, Authorized, GroupCtx, GroupSeen, InstanceCtx, LoadedGroup, Principal, ResourceCtx,
+};
+use forge_core::{GroupId, GroupRecord, Role, UserId, Visibility};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_hosting::{NewGroupFields, Patch};
 use serde::{Deserialize, Serialize};
@@ -26,6 +37,7 @@ use serde_json::Value;
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup};
+use crate::routes::project_writes::VisibilityName;
 use crate::routes::write::{absent, bounded, hosting, id_in, json, write_request};
 
 /// `POST` (top-level create).
@@ -34,6 +46,8 @@ pub const COLLECTION: &str = "/api/v1/groups";
 pub const ONE: &str = "/api/v1/groups/{id}";
 /// `POST` a subgroup.
 pub const SUBGROUPS: &str = "/api/v1/groups/{id}/subgroups";
+/// `PATCH` a group's visibility (plan 15 MR 3).
+pub const VISIBILITY: &str = "/api/v1/groups/{id}/visibility";
 
 const PREFIX: &str = "/api/v1/groups/";
 
@@ -51,6 +65,22 @@ pub struct CreateGroup {
     pub display_name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// `private` (the default: widened when it should be shown, plan 15
+    /// §6) or `internal`; `internal` below a private group is
+    /// `FG-REPO-0033`.
+    #[serde(default)]
+    pub visibility: Option<VisibilityName>,
+}
+
+/// `PATCH /api/v1/groups/{id}/visibility` (plan 15 MR 3).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetGroupVisibility {
+    pub visibility: VisibilityName,
+    /// Decide and count without writing: what the screen shows before a
+    /// narrowing is confirmed (`affected_projects`).
+    #[serde(default)]
+    pub preview: bool,
 }
 
 /// `PATCH /api/v1/groups/{id}`: at least one field.
@@ -83,14 +113,38 @@ pub struct GroupBody {
     pub description: String,
     /// UTC, RFC 3339.
     pub created_at: String,
-    /// The caller's effective role (`guest` … `owner`); `null` without one.
+    /// The caller's effective role (`guest` … `owner`); `null` without
+    /// one. (This is the viewer's role of plan 15 MR 3.)
     #[schema(required = true)]
     pub role: Option<String>,
+    /// The group's own setting, `private` or `internal` (plan 15 MR 3).
+    pub visibility: String,
+    /// What applies: the narrowest on the chain to the top level.
+    pub effective_visibility: String,
+    /// Shown only because the caller holds a role below it: its identity
+    /// (ids, parent, path, names, visibility, creation time) with an empty
+    /// description and no role; its members and other subgroups stay
+    /// hidden.
+    pub pass_through: bool,
 }
 
-/// The API shape of one group for the caller (the single builder).
-fn group_view(record: &GroupRecord) -> Result<Value, ForgeError> {
-    json(GroupBody {
+/// `PATCH /api/v1/groups/{id}/visibility` → the group as it is now and
+/// what the change did (or, with `preview`, would do).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GroupVisibilityBody {
+    pub group: GroupBody,
+    /// Written (`false` for a preview or when nothing changed).
+    pub changed: bool,
+    /// The live projects below whose effective visibility changes with it.
+    #[schema(minimum = 0)]
+    pub affected_projects: i64,
+}
+
+/// The body of one group for `principal` (the single builder).
+fn group_body(record: &GroupRecord, principal: &Principal) -> GroupBody {
+    let pass_through = group_seen(principal, record.role, record.sight) != GroupSeen::Full;
+    GroupBody {
         id: record.id.get(),
         namespace_id: record.namespace_id.get(),
         parent_id: record.parent_id.map(GroupId::get),
@@ -102,10 +156,22 @@ fn group_view(record: &GroupRecord) -> Result<Value, ForgeError> {
             .map(|s| s.as_str().to_owned())
             .unwrap_or_default(),
         display_name: record.display_name.clone(), // clone: the record is borrowed
-        description: record.description.clone(),
+        description: if pass_through {
+            String::new()
+        } else {
+            record.description.clone()
+        },
         created_at: record.created_at.clone(),
         role: record.role.map(|r| Role::as_str(r).to_owned()),
-    })
+        visibility: record.own_visibility.as_str().to_owned(),
+        effective_visibility: record.sight.visibility.as_str().to_owned(),
+        pass_through,
+    }
+}
+
+/// The API shape of one group for `principal`.
+fn group_view(record: &GroupRecord, principal: &Principal) -> Result<Value, ForgeError> {
+    json(group_body(record, principal))
 }
 
 /// The group id of `/api/v1/groups/{id}` (`suffix` = "") or
@@ -136,6 +202,7 @@ async fn load_group(
         ctx: GroupCtx::new(LoadedGroup {
             id: record.id,
             role: record.role,
+            sight: record.sight,
         }),
         canonical: Some(record.path.clone()), // clone: the record moves on too
         tombstone: None,
@@ -191,6 +258,22 @@ impl BodyLoader<AppState, CreateGroup> for ParentGroup {
     }
 }
 
+/// `PATCH /api/v1/groups/{id}/visibility`.
+pub struct GroupForVisibility;
+
+impl BodyLoader<AppState, SetGroupVisibility> for GroupForVisibility {
+    type Ctx = GroupCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        _: &'a SetGroupVisibility,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, GroupCtx> {
+        Box::pin(async move { load_group(state, group_id(parts, "/visibility")?, viewer).await })
+    }
+}
+
 /// `POST /api/v1/groups`: decided on the instance (no lookup).
 pub struct TopLevel;
 
@@ -220,6 +303,11 @@ fn fields(body: &CreateGroup) -> NewGroupFields {
         path: body.path.clone(), // clone: the body stays with the request
         display_name: body.display_name.clone(),
         description: body.description.clone().unwrap_or_default(),
+        // Plan 15 §6: new groups are private unless asked otherwise, always
+        // written explicitly (the column default is the wider value).
+        visibility: body
+            .visibility
+            .map_or(Visibility::Private, VisibilityName::visibility),
     }
 }
 
@@ -229,6 +317,15 @@ async fn written<R: ResourceCtx>(
     proof: &Authorized<R>,
     id: GroupId,
 ) -> Result<Value, ForgeError> {
+    json(written_body(state, proof, id).await?)
+}
+
+/// [`written`] as the body.
+async fn written_body<R: ResourceCtx>(
+    state: &AppState,
+    proof: &Authorized<R>,
+    id: GroupId,
+) -> Result<GroupBody, ForgeError> {
     let hosting = hosting(state)?;
     let record = bounded(
         state,
@@ -241,7 +338,7 @@ async fn written<R: ResourceCtx>(
             .with_context("reason", "written_group_missing")
             .with_context("group_id", id.get())
     })?;
-    group_view(&record)
+    Ok(group_body(&record, proof.principal()))
 }
 
 fn respond(
@@ -287,7 +384,9 @@ pub async fn create_subgroup(
 /// `GET /api/v1/groups/{id}` → `200` the group.
 pub async fn read(_state: AppState, request: Dispatched<GroupCtx>) -> Response {
     let built = match request.group() {
-        Some(record) if record.id == *request.proof().id() => group_view(record),
+        Some(record) if record.id == *request.proof().id() => {
+            group_view(record, request.proof().principal())
+        }
         Some(_) | None => Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "group_details_missing")
             .with_context("group_id", request.proof().id().get())),
@@ -308,6 +407,36 @@ pub async fn update(state: AppState, request: Dispatched<GroupCtx, UpdateGroup>)
             .update_group(&write_request(&w), &w.proof, &patch)
             .await?;
         written(&state, &w.proof, *w.proof.id()).await
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
+/// `PATCH /api/v1/groups/{id}/visibility` → `200` the group as it is now,
+/// whether it changed and how many projects below follow it (plan 15
+/// MR 3). Narrowing never rewrites the rows below; widening above a
+/// private group is `FG-REPO-0033`. One `group.visibility_changed` audit
+/// row when written.
+pub async fn change_visibility(
+    state: AppState,
+    request: Dispatched<GroupCtx, SetGroupVisibility>,
+) -> Response {
+    let w = request.into_write();
+    let built = async {
+        let outcome = hosting(&state)?
+            .change_group_visibility(
+                &write_request(&w),
+                &w.proof,
+                w.input.visibility.visibility(),
+                w.input.preview,
+            )
+            .await?;
+        let group = written_body(&state, &w.proof, *w.proof.id()).await?;
+        json(GroupVisibilityBody {
+            group,
+            changed: outcome.changed,
+            affected_projects: outcome.affected_projects,
+        })
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)

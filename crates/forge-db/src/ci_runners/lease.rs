@@ -660,7 +660,9 @@ async fn lock_pipeline(c: &mut PgConnection, pipeline: i64) -> Result<(), ForgeE
 /// After a job ended: jobs whose `needs` failed or were cancelled are
 /// cancelled (repeated down the chain, at most one pass per wave), jobs
 /// whose `needs` all succeeded become `pending`, and a `pending` /
-/// `running` pipeline takes its jobs' state. Returns the pipeline status.
+/// `running` pipeline takes its jobs' state. A manual job still waiting for
+/// a person (M4 C12) counts for nothing: nothing waits for it, and the
+/// pipeline finishes on its other jobs. Returns the pipeline status.
 pub(crate) async fn settle_pipeline(
     c: &mut PgConnection,
     pipeline: i64,
@@ -702,7 +704,8 @@ pub(crate) async fn settle_pipeline(
                  WHEN bool_and(status = 'succeeded') THEN 'succeeded' \
                  WHEN bool_or(status = 'failed') THEN 'failed' \
                  ELSE 'canceled' END AS next \
-               FROM forge.ci_jobs WHERE pipeline_id = $1) s \
+               FROM forge.ci_jobs WHERE pipeline_id = $1 AND status <> 'manual' \
+               HAVING count(*) > 0) s \
          WHERE p.id = $1 AND p.status IN ('pending', 'running') AND p.status <> s.next",
     )
     .bind(pipeline)

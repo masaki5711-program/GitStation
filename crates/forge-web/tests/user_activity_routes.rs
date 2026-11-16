@@ -115,6 +115,7 @@ async fn project(
         &t.db,
         &ctx(&format!("req-{group}")),
         &NewGroup {
+            visibility: forge_core::Visibility::Internal,
             segment: group.into(),
             parent: None,
             display_name: group.into(),
@@ -635,6 +636,7 @@ async fn runner_job_and_act_as_credentials_are_refused() {
                 timeout_s: 600,
                 tags: Vec::new(),
                 secrets: Vec::new(),
+                manual: false,
             }]),
         },
     )

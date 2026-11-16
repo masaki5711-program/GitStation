@@ -19,8 +19,23 @@ use super::{evented_record, not_found, request_invalid, RESOURCE};
 use crate::access::{lock_account, Account};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::groups::{changed_fields, check_fields, Updated};
-use crate::roles::{lock_roles, RoleAnchor};
+use crate::roles::{chain_private_column, chain_private_locked_on, lock_roles, RoleAnchor, CAP};
 use crate::{query_error, Db};
+
+/// Whether a group above project `$1` (its chain capped at `$2` steps, as
+/// the role loaders' chain) is private: a scalar subquery of the lock
+/// statement (plan 15 MR 3). Fails closed like `roles::chain_private_column!`.
+const ABOVE_PRIVATE_SQL: &str = concat!(
+    "(WITH RECURSIVE c (id, parent_id, kind, owner_id, step) AS ( \
+       SELECT id, parent_id, kind, owner_id, 1 FROM forge.namespaces \
+       WHERE kind = 'project' AND owner_id = $1 \
+       UNION ALL \
+       SELECT n.id, n.parent_id, n.kind, n.owner_id, c.step + 1 \
+       FROM forge.namespaces n JOIN c ON n.id = c.parent_id WHERE c.step < $2) \
+     SELECT coalesce(bool_or(group_private), false) FROM (SELECT ",
+    chain_private_column!(),
+    " FROM c) s)"
+);
 
 /// A change to a project's display name and / or description (`None` =
 /// unchanged).
@@ -57,7 +72,11 @@ pub enum VisibilityOutcome {
 
 /// The project row as locked.
 pub(crate) struct Locked {
+    /// The stored `projects.visibility`.
     visibility: Visibility,
+    /// A group above the project is private (plan 15 MR 3): the effective
+    /// visibility is `private` whatever the stored value.
+    above_private: bool,
     pub(crate) pending_deletion: bool,
     display_name: String,
     description: String,
@@ -87,21 +106,30 @@ async fn lock_with(
     project: ProjectId,
     strength: &'static str,
 ) -> Result<Locked, ForgeError> {
-    let row: Option<(String, bool, String, String, bool)> = tx
+    let row: Option<(String, bool, String, String, bool, bool)> = tx
         .step(|c| async move {
             sqlx::query_as(&format!(
                 "SELECT p.visibility, p.deleted_at IS NOT NULL, p.display_name, p.description, \
-                 n.id IS NOT NULL FROM forge.projects p \
+                 n.id IS NOT NULL, {ABOVE_PRIVATE_SQL} FROM forge.projects p \
                  LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id \
                  WHERE p.id = $1 {strength}"
             ))
             .bind(project.get())
+            .bind(CAP)
             .fetch_optional(c)
             .await
             .map_err(|e| query_error("projects.update.lock", e))
         })
         .await?;
-    let Some((visibility, pending_deletion, display_name, description, has_namespace)) = row else {
+    let Some((
+        visibility,
+        pending_deletion,
+        display_name,
+        description,
+        has_namespace,
+        above_private,
+    )) = row
+    else {
         return Err(not_found("project"));
     };
     if !has_namespace {
@@ -116,10 +144,29 @@ async fn lock_with(
     })?;
     Ok(Locked {
         visibility,
+        above_private,
         pending_deletion,
         display_name,
         description,
     })
+}
+
+/// Whether a group above `project` is private, after locking the groups
+/// above `FOR SHARE` (`roles::chain_private_locked_on`).
+async fn above_private_locked(tx: &mut ChangeTx, project: ProjectId) -> Result<bool, ForgeError> {
+    let namespace: i64 = tx
+        .step(|c| async move {
+            sqlx::query_scalar(
+                "SELECT id FROM forge.namespaces WHERE kind = 'project' AND owner_id = $1",
+            )
+            .bind(project.get())
+            .fetch_one(c)
+            .await
+            .map_err(|e| query_error("projects.visibility.namespace", e))
+        })
+        .await?;
+    tx.step(|c| chain_private_locked_on(c, forge_core::NamespaceId::new(namespace)))
+        .await
 }
 
 /// The facts `decide` sees: the locked row, then the roles (membership
@@ -139,7 +186,13 @@ pub(crate) async fn facts(
         project: ProjectAccessFacts {
             project,
             access: ProjectAccess {
-                visibility: locked.visibility,
+                // The effective visibility (plan 15 MR 3), as the loaders
+                // read it.
+                visibility: if locked.above_private {
+                    Visibility::Private
+                } else {
+                    locked.visibility
+                },
                 role: roles.native,
                 pending_deletion: locked.pending_deletion,
             },
@@ -218,7 +271,9 @@ pub async fn update_decided<P>(
 /// with `from` / `to`, or [`VisibilityOutcome::Unchanged`] when it already
 /// is `to` (nothing written). Every exit that does not commit rolls back
 /// explicitly (`ChangeTx::settle`). Errors: `FG-REPO-0005
-/// resource=project` and whatever `decide` returns.
+/// resource=project`, whatever `decide` returns, and (after it)
+/// `FG-REPO-0033 reason=project_above_private` for `internal` below a
+/// private group (plan 15 MR 3; the stored value stays).
 pub async fn change_visibility_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
@@ -231,6 +286,15 @@ pub async fn change_visibility_decided<P>(
     let outcome = async {
         let locked = lock(&mut tx, project).await?;
         let decided = decide(&facts(&mut tx, project, viewer, &locked).await?)?;
+        // Never wider than the chain above (plan 15 MR 3): an internal
+        // project below a private group would still be private.
+        // The groups above locked `FOR SHARE` first (review): a concurrent
+        // narrowing above waits until this change commits, or is seen.
+        if to == Visibility::Internal && above_private_locked(&mut tx, project).await? {
+            return Err(ForgeError::new(ErrorCode::VisibilityAboveParent)
+                .with_context("reason", "project_above_private")
+                .with_context("project_id", project.get()));
+        }
         let from = locked.visibility;
         if from == to {
             return Ok(Settle::Discard((VisibilityOutcome::Unchanged, decided)));

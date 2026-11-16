@@ -29,7 +29,7 @@ use forge_auth::{
     Authorized, Credential, GroupTransferCtx, LoadedGroup, LoadedTombstone, LoadedTransferTarget,
     LoadedUserNamespace, TombstoneCtx, TombstoneRelease, TransferCtx, UserRenameCtx,
 };
-use forge_core::{Scope, TombstoneId, UserId};
+use forge_core::{GroupSight, Scope, TombstoneId, UserId};
 use forge_db::namespaces::{Destination, MoveOptions, MoveOutcome, TargetAccess};
 use forge_db::tombstones::{self, TombstoneAccess};
 use forge_db::{groups, projects, users};
@@ -72,7 +72,11 @@ fn target_of(
             role,
         } => LoadedTransferTarget::Group {
             namespace,
-            group: LoadedGroup { id: group, role },
+            group: LoadedGroup {
+                id: group,
+                role,
+                sight: GroupSight::ROLE_ONLY,
+            },
         },
         TargetAccess::PersonalNamespace {
             namespace,
@@ -224,6 +228,7 @@ impl Hosting {
                         LoadedGroup {
                             id: facts.group.group,
                             role: facts.group.role,
+                            sight: GroupSight::ROLE_ONLY,
                         },
                         target,
                     );

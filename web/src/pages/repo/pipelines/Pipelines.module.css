@@ -242,3 +242,37 @@
 .confirm p {
   margin: 0;
 }
+
+/* M4 C12: pipeline schedules — the last run's line (why nothing started and
+   what to do), the form, and the active checkbox. */
+.scheduleLine {
+  flex-basis: 100%;
+  margin: 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-left: var(--gs-accent-border-width) solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+}
+
+.scheduleForm {
+  margin: 0 0 var(--gs-space-6);
+  padding: var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.scheduleForm h2:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.check {
+  display: flex;
+  gap: var(--gs-space-2);
+  align-items: center;
+}
+
+/* A manual job's "run" button sits in its row like the log link. */
+.play {
+  padding-block: 0;
+}

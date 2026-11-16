@@ -218,6 +218,7 @@ impl World {
                     timeout_s: 600,
                     tags: Vec::new(),
                     secrets: vec!["DEPLOY_KEY".to_owned()],
+                    manual: false,
                 }]),
             },
         )

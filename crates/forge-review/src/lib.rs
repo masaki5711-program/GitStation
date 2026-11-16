@@ -60,6 +60,7 @@ pub mod merges;
 pub mod outdated;
 pub mod position;
 mod purge;
+pub mod revert;
 pub mod user_lists;
 mod version_refs;
 pub mod versions;
@@ -95,6 +96,7 @@ pub use merges::{
     MergeAsk, MergeClearance, MergeQueue, MergeReport, MergeSettings, MergeTimeouts, Merger,
     QueueAsk, QueueLimits, ReconcileReport, StoredMerge, TickReport,
 };
+pub use revert::{revert_branch, revert_ctx, DraftReport, RevertOpened, RevertTimeouts, Reverter};
 pub use user_lists::{
     AttentionReason, UserListCount, UserListCounts, UserListItem, UserListPage, UserListQuery,
     UserListScope,

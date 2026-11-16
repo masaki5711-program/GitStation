@@ -102,6 +102,9 @@ pub enum MergeRequestTransition {
     /// An approval was withdrawn or revoked (M3 R5: by the approver, a new
     /// head or a new target).
     Unapprove,
+    /// The target's push pipeline failed after the merge and the system
+    /// tried to open a draft revert (M4 C10, plan 04 M-4).
+    RevertDraft,
 }
 
 impl MergeRequestTransition {
@@ -121,6 +124,7 @@ impl MergeRequestTransition {
         Self::SourceBranchDelete,
         Self::Approve,
         Self::Unapprove,
+        Self::RevertDraft,
     ];
 
     /// The one event the transition publishes.
@@ -140,6 +144,7 @@ impl MergeRequestTransition {
             Self::SourceBranchDelete => EventType::MergeRequestSourceBranchDeleted,
             Self::Approve => EventType::MergeRequestApproved,
             Self::Unapprove => EventType::MergeRequestUnapproved,
+            Self::RevertDraft => EventType::MergeRequestRevertDrafted,
         }
     }
 }
@@ -307,6 +312,48 @@ pub enum MergeRequestChange {
         head_sha: ObjectId,
         reason: UnapproveReason,
     },
+    /// `merge_request.revert_drafted` (M4 C10, plan 04 M-4): the push
+    /// pipeline of `target_branch` failed on `merged_sha`, the commit merge
+    /// attempt `merge_id` of this merge request produced, and the system
+    /// tried to open a draft merge request reverting it: `outcome`
+    /// `opened` (`revert_iid` names it) or `conflicted` (nothing opened;
+    /// `conflict_files` paths conflict with the target's tip). Ids, refs
+    /// and counts only. Deduplicated by
+    /// `merge_request_revert_drafted:<merge_request_id>:<merge_id>`.
+    RevertDrafted {
+        merge_request: MergeRequestId,
+        iid: i64,
+        merge_id: i64,
+        target_branch: RefName,
+        merged_sha: ObjectId,
+        outcome: RevertDraftOutcome,
+        revert_iid: Option<i64>,
+        conflict_files: usize,
+    },
+}
+
+/// What the system's revert draft did (M4 C10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RevertDraftOutcome {
+    /// A draft merge request reverting the merge was opened.
+    Opened,
+    /// The revert conflicts with the target's tip: nothing was opened.
+    Conflicted,
+}
+
+impl RevertDraftOutcome {
+    pub const ALL: [RevertDraftOutcome; 2] = [Self::Opened, Self::Conflicted];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Opened => "opened",
+            Self::Conflicted => "conflicted",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|o| o.as_str() == raw)
+    }
 }
 
 impl MergeRequestChange {
@@ -327,6 +374,7 @@ impl MergeRequestChange {
             Self::SourceBranchDeleted { .. } => MergeRequestTransition::SourceBranchDelete,
             Self::Approved { .. } => MergeRequestTransition::Approve,
             Self::Unapproved { .. } => MergeRequestTransition::Unapprove,
+            Self::RevertDrafted { .. } => MergeRequestTransition::RevertDraft,
         }
     }
 
@@ -346,7 +394,8 @@ impl MergeRequestChange {
             | Self::Merged { merge_request, .. }
             | Self::SourceBranchDeleted { merge_request, .. }
             | Self::Approved { merge_request, .. }
-            | Self::Unapproved { merge_request, .. } => *merge_request,
+            | Self::Unapproved { merge_request, .. }
+            | Self::RevertDrafted { merge_request, .. } => *merge_request,
         }
     }
 
@@ -379,6 +428,7 @@ impl MergeRequestChange {
             Self::SourceBranchDeleted { .. } => "merge_source_deleted",
             Self::Approved { .. } => "merge_request_approved",
             Self::Unapproved { .. } => "merge_request_unapproved",
+            Self::RevertDrafted { .. } => "merge_request_revert_drafted",
         }
     }
 
@@ -398,7 +448,9 @@ impl MergeRequestChange {
     /// SourceBranchDeleted `{"merge_request_id","iid","merge_id","source_branch","old"}`,
     /// Approved `{"merge_request_id","iid","approval_id","approver_id","head_sha",
     /// "target_branch","counted","uncounted_reason","carried_from"}`, Unapproved
-    /// `{"merge_request_id","iid","approval_id","approver_id","head_sha","reason"}`.
+    /// `{"merge_request_id","iid","approval_id","approver_id","head_sha","reason"}`,
+    /// RevertDrafted `{"merge_request_id","iid","merge_id","target_branch","merged_sha",
+    /// "outcome","revert_iid","conflict_files"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -600,6 +652,25 @@ impl MergeRequestChange {
                 "approver_id": approver.get(),
                 "head_sha": head_sha.as_str(),
                 "reason": reason.as_str(),
+            }),
+            Self::RevertDrafted {
+                merge_request,
+                iid,
+                merge_id,
+                target_branch,
+                merged_sha,
+                outcome,
+                revert_iid,
+                conflict_files,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "merge_id": merge_id,
+                "target_branch": target_branch.as_str(),
+                "merged_sha": merged_sha.as_str(),
+                "outcome": outcome.as_str(),
+                "revert_iid": revert_iid,
+                "conflict_files": conflict_files,
             }),
         }
     }

@@ -262,6 +262,15 @@ pub enum AuditDetails {
         group_id: GroupId,
         fields: Vec<ChangedField>,
     },
+    /// `group.visibility_changed` (plan 15 MR 3; audit-only): the stored
+    /// visibility and how many live projects below changed their effective
+    /// visibility with it.
+    GroupVisibilityChanged {
+        group_id: GroupId,
+        from: Visibility,
+        to: Visibility,
+        affected_projects: i64,
+    },
     // ── end M1 phase 8b MR7a ──
     // ── D5 MR2: namespace moves and tombstone releases ──
     /// `project.moved`: the project itself moved or was renamed.
@@ -589,6 +598,7 @@ impl AuditDetails {
             Self::ProjectUpdated { .. } => "project.updated",
             Self::ProjectVisibilityChanged { .. } => "project.visibility_changed",
             Self::GroupUpdated { .. } => "group.updated",
+            Self::GroupVisibilityChanged { .. } => "group.visibility_changed",
             Self::ProjectMoved { .. } | Self::ProjectMovedWithAncestor { .. } => "project.moved",
             Self::GroupMoved { .. } => "group.moved",
             Self::UserRenamed { .. } => "user.renamed",
@@ -659,7 +669,9 @@ impl AuditDetails {
             Self::ProtectedRefUpdated { .. } => Some(EventType::ProtectedRefUpdated),
             Self::ProtectedRefDeleted { .. } => Some(EventType::ProtectedRefDeleted),
             Self::RepositoryPushed { .. } => Some(EventType::RepositoryPushed),
-            Self::ProjectUpdated { .. } | Self::GroupUpdated { .. } => None,
+            Self::ProjectUpdated { .. }
+            | Self::GroupUpdated { .. }
+            | Self::GroupVisibilityChanged { .. } => None,
             Self::ProjectVisibilityChanged { .. } => Some(EventType::ProjectVisibilityChanged),
             // D5 MR5: one event per move, for the moved resource. A group
             // move can touch 1000 projects, more than the 100 events one
@@ -686,13 +698,15 @@ impl AuditDetails {
             | Self::PushMirror(_)
             | Self::HistoryImport(_)
             | Self::DocLintMigration(_)
-            | Self::Pipeline(_)
             | Self::Runner(_)
             | Self::MergeQueue(_)
             | Self::AutoMerge(_)
             | Self::AiAssets(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => None,
+            // M4 C12: a published specification version is the one
+            // pipeline change that is an event.
+            Self::Pipeline(change) => change.event_type(),
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,
@@ -745,7 +759,8 @@ impl AuditDetails {
     /// ProtectedRefUpdated `{"protected_ref_id","pattern","from","to"}`,
     /// RepositoryPushed: [`push_json`] within [`AUDIT_BUDGET`],
     /// ProjectUpdated `{"project_id","fields"}`, GroupUpdated
-    /// `{"group_id","fields"}` (field names only),
+    /// `{"group_id","fields"}` (field names only), GroupVisibilityChanged
+    /// `{"group_id","from","to","affected_projects"}`,
     /// ProjectVisibilityChanged `{"project_id","from","to"}`,
     /// ProjectDeleted / ProjectRestored
     /// `{"project_id","deleted_at","purge_after","deleted_by"}`,
@@ -968,6 +983,17 @@ impl AuditDetails {
             Self::GroupUpdated { group_id, fields } => serde_json::json!({
                 "group_id": group_id.get(),
                 "fields": field_names(fields),
+            }),
+            Self::GroupVisibilityChanged {
+                group_id,
+                from,
+                to,
+                affected_projects,
+            } => serde_json::json!({
+                "group_id": group_id.get(),
+                "from": from.as_str(),
+                "to": to.as_str(),
+                "affected_projects": affected_projects,
             }),
             Self::ProjectVisibilityChanged {
                 project_id,
@@ -1202,6 +1228,7 @@ impl AuditDetails {
             | Self::ProjectUpdated { .. }
             | Self::ProjectVisibilityChanged { .. }
             | Self::GroupUpdated { .. }
+            | Self::GroupVisibilityChanged { .. }
             | Self::ProjectMovedWithAncestor { .. }
             | Self::TombstoneReleased { .. }
             | Self::ProjectDeleted { .. }

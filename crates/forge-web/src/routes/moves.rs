@@ -257,9 +257,14 @@ async fn named_target(
             namespace,
             group,
             role,
+            sight,
         }) => LoadedTransferTarget::Group {
             namespace,
-            group: LoadedGroup { id: group, role },
+            group: LoadedGroup {
+                id: group,
+                role,
+                sight,
+            },
         },
         Some(HostedParent::User {
             namespace,
@@ -410,6 +415,7 @@ impl BodyLoader<AppState, TransferGroup> for GroupToMove {
                     LoadedGroup {
                         id: record.id,
                         role: record.role,
+                        sight: record.sight,
                     },
                     target,
                 ),

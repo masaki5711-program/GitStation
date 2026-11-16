@@ -13,6 +13,7 @@ use crate::test_support::*;
 use crate::users::{self, NewUser};
 
 mod members;
+mod visibility;
 
 fn ctx(request: &str) -> ChangeContext {
     ChangeContext::new(
@@ -53,6 +54,7 @@ async fn user(t: &FreshDb, name: &str) -> UserId {
 
 fn group(segment: &str, parent: Option<NamespaceId>, owner: UserId) -> NewGroup {
     NewGroup {
+        visibility: forge_core::Visibility::Internal,
         segment: segment.to_owned(),
         parent,
         display_name: format!("Group {segment}"),
@@ -213,6 +215,7 @@ async fn an_invalid_group_request_is_group_request_invalid() {
     let cases = [
         (
             NewGroup {
+                visibility: forge_core::Visibility::Internal,
                 display_name: String::new(),
                 ..group("g1", None, alice)
             },
@@ -220,6 +223,7 @@ async fn an_invalid_group_request_is_group_request_invalid() {
         ),
         (
             NewGroup {
+                visibility: forge_core::Visibility::Internal,
                 display_name: "x".repeat(256),
                 ..group("g2", None, alice)
             },
@@ -227,6 +231,7 @@ async fn an_invalid_group_request_is_group_request_invalid() {
         ),
         (
             NewGroup {
+                visibility: forge_core::Visibility::Internal,
                 description: "x".repeat(2001),
                 ..group("g3", None, alice)
             },
@@ -234,6 +239,7 @@ async fn an_invalid_group_request_is_group_request_invalid() {
         ),
         (
             NewGroup {
+                visibility: forge_core::Visibility::Internal,
                 display_name: "a\0b".into(),
                 ..group("g4", None, alice)
             },

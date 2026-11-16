@@ -142,6 +142,10 @@ fn actor_of(
         // M3 X6: the conflict scan (actor system) acted, nobody in person;
         // the event's own merge request's author is told.
         NotificationKind::MergeRequestConflictPredicted => Some(None),
+        // M4 C10: the system drafted (or could not draft) a revert after
+        // the target's pipeline failed; the reverted merge request's
+        // author is told.
+        NotificationKind::MergeRequestRevertDrafted => Some(None),
     })
 }
 

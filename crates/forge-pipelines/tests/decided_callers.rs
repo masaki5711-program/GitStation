@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// The commands' names, assembled so this file does not match itself.
 fn pipeline_commands() -> Vec<String> {
+    // M4 C12: a manual job's start and the schedules' commands too.
     [
         "cancel_pipeline",
         "retry_pipeline",
@@ -17,6 +18,11 @@ fn pipeline_commands() -> Vec<String> {
         // M4 C6: CI variables (named so forge-hosting's `delete` needle never matches).
         "put_variable",
         "delete_variable",
+        "play_job",
+        "create_schedule",
+        "update_schedule",
+        "delete_schedule",
+        "fire_schedule",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))

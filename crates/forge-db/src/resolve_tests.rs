@@ -44,6 +44,7 @@ async fn group(
     owner: UserId,
 ) -> CreatedGroup {
     let new = NewGroup {
+        visibility: forge_core::Visibility::Internal,
         segment: segment.to_owned(),
         parent: parent.map(|p| p.namespace_id),
         display_name: format!("Group {segment}"),
@@ -164,7 +165,10 @@ fn project_target(resolved: &Resolved) -> (ProjectId, ProjectAccess) {
 }
 
 fn group_target(resolved: &Resolved) -> (GroupId, Option<Role>) {
-    let ResolvedTarget::Group { id, viewer_role } = resolved.target else {
+    let ResolvedTarget::Group {
+        id, viewer_role, ..
+    } = resolved.target
+    else {
         panic!("expected a group, got {resolved:?}");
     };
     (id, viewer_role)
@@ -199,6 +203,11 @@ async fn live_user_group_and_project_resolve_to_their_targets() {
             target: ResolvedTarget::Group {
                 id: api.group_id,
                 viewer_role: Some(Role::Owner),
+                // Plan 15 MR 3: alice also holds roles below acme/api.
+                sight: forge_core::GroupSight {
+                    visibility: forge_core::Visibility::Internal,
+                    descendant: true,
+                },
             },
         }
     );

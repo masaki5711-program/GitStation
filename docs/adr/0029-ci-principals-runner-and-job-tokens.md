@@ -115,6 +115,7 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 6. **保護された push のパイプラインの再実行**（`PipelineRetry`）は、シークレットを持つジョブもやり直す。Developer・エージェント・サービスアカウントに許すが、
    **デプロイのジョブ（C11）はそれとは別に人だけの `DeployApprove` を要る**（再実行が承認の代わりにならない）。C11 は「再実行されたデプロイのジョブが承認を待つ」試験を入れる。
 7. 手動・定期の実行の保護（C12）: 今は常に保護されない扱い。C12 で変えるときも 5 の判定（作成時の記録）を通す。
+   **C12 で決めた（2026-11-13、下の Amendment）**: 手動・定期のパイプラインは保護されないまま（シークレットは渡らない）。定期の実行は持ち主の今の権利で判定する。
 
 ## 追記（2026-11-10、C1）— `forge-ci` の置き場所と、シークレットの判定
 
@@ -246,6 +247,47 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
   `secrets/` はモード 0700 で一度に作り、Runner の起動のときに作業ディレクトリごと消す。Windows（開発機だけ）では env ファイルは
   作業ディレクトリの ACL に頼る。
 
+## Amendment 2026-11-13（計画 14 C12）— 手動のジョブと定期のパイプラインの主体
+
+義務 7（手動・定期の実行の保護）を決める。**どちらもシークレットの範囲は広げない**（義務 5 のまま、作成時の記録 `source = push` かつ
+`protected` だけ）。
+
+- **手動のジョブ**（`.forge-ci.yml` の `when: manual`）: `manual` の状態で作り、人が始めるまで動かない。始める Action は
+  `PipelineCreate`（手動の実行と同じ権利: Developer 以上、エージェントのトークン・サービスアカウントを含む。計画 14 §4.2）。
+  ルート `POST …/pipelines/{pipeline_id}/jobs/{job_id}/play`、監査 `pipeline.job_played`（同じトランザクション、判定をやり直す）。
+  ジョブにシークレットを渡すかは**パイプラインの記録だけ**で決まる（保護された push のパイプラインの手動のジョブには渡る。決定 6 の
+  再実行と同じ）。デプロイのジョブは別に人の `DeployApprove`（C11）が要るので、手動で始めることが承認の代わりにはならない。
+  何も手動のジョブを待たない（`needs` で指すと lint の `needs_manual_job`、ステージの壁からも外す）。パイプラインの状態は他の
+  ジョブで決まり、手動のジョブだけのパイプラインは `skipped`。始めると `running` に戻る。
+- **定期のパイプライン**: 表 `ci_pipeline_schedules`（監査あり）。作る・変える・消すのは新しい Action `PipelineScheduleManage`
+  （Maintainer 以上、**人だけ**。エージェントのトークン・サービスアカウント・ボット・代理・Runner・Job は断る）。読むのは `PipelineRead`。
+  **保存した人が持ち主**になり、定期の実行はその持ち主の権利で動く。
+  - **判断**: 定期の実行は「人の主体」を新しく作らない。worker（`system`）が、実行のたびに**持ち主を Web のセッションの人として**
+    `PipelineCreate` を `authorize()` で判定する。判定はパイプラインを書くトランザクションの中で、ロックしたプロジェクトとアカウントの
+    事実で行う（`forge_pipelines::schedules::owner_decision`）。無効になった・抜けた・Reporter 以下になった・削除待ちのプロジェクトなら
+    何も作らず FG-CI-0026 ScheduleOwnerNotAllowed（warn）を記録し、定期の行に `refused` を残す。**持ち主が今持つ権利より多くの権利で
+    動くことはない**。保存したときの権利を写さない（時間が経つと古くなるため）。
+  - パイプラインは `source = schedule`、`triggered_by` = 持ち主、**常に保護されない**（表の CHECK `ci_pipelines_protected`）。だから
+    シークレットを名指すジョブが選ばれると計画は `invalid`（`secret_on_unprotected_ref`）で、値は一切渡らない。持ち主が Maintainer でも同じ。
+  - 監査: 人の変更は `pipeline_schedule.created` / `.updated` / `.deleted`（持ち主・ブランチ・規則）、実行は `pipeline.scheduled`
+    （行為者 `system`、`owner_id`・`schedule_id`・`pipeline_id`）を同じトランザクションで書く。
+  - 時刻: 5 つの欄の cron を固定の UTC オフセットで読む（日本・インドネシアは夏時間が無い）。5 分に 1 回より頻繁な規則は断る。
+    期限は DB の `now()` で決め、止まっていた間の取りこぼしは 1 回だけ動かす。1 つの期限は 1 つのジョブ（`ci_schedule:<id>:<due>`）。
+- **選ばなかった案**: (a) 定期の実行をサービスアカウントで動かす（長命で広い主体を作る。持ち主の降格が反映されない）。
+  (b) 保存した時点の権利を記録して使う（降格・無効化の後も動き続ける）。(c) 定期のパイプラインを保護された扱いにしてシークレットを渡す
+  （人が見ていない時刻に保護ブランチのシークレットが自動で使われる。必要になったら別の ADR で、`DeployApprove` と同じ人の承認を前提に決める）。
+- **C12 のセキュリティレビュー（2026-11-14）で改めたこと**:
+  - 保護された push のパイプラインの手動のジョブはシークレットを受け取りデプロイもできるので、始めるには `PipelineCreate` に加えて
+    新しい Action `PipelinePlayProtected`（Maintainer 以上、人だけ）を、行のロックの下で読んだ `protected` の印で判定する。
+    Developer・エージェントのトークン・サービスアカウント・ボットは断る（FG-AUTH-0003）。保護されないパイプラインは今までどおり。
+  - 持ち主の判定で断られた定期は止める（`active = false`、`pipeline_schedule.deactivated`、行為者 `system`、`cause_code`）。
+    Maintainer が保存し直すと引き継ぐ。持ち主が変わるのはブランチ・規則・オフセットを変えたとき（と止まった定期の保存）だけで、
+    説明の変更や停止・再開では変わらない。
+  - 同じ定期の前のパイプラインが `pending` / `running` の間は始めない（`busy`）。定期のパイプラインは 1 時間にプロジェクトで 12、
+    全体で 120 まで（超えると `capped`、FG-CI-0028 warn）。
+  - `spec.released` は (プロジェクト, タグ) で 1 回だけ（タグを作り直しても再び出ない）。タグを push したのが**人**（人の
+    アカウントで、エージェントのトークンではない。サービスアカウント・ボットは不可）で、そのタグを覆う保護の規則があるときだけ出す。
+
 ## Amendment 2026-11-14（計画 17 P17-1）— GPU の Runner とモデル置き場
 
 - **背景**: 計画 17 §1.6 の評価ベンチは、ジョブの `services` に Ollama を入れ（C5s のポッド、ループバックだけ）、GPU と読み取り専用の
@@ -302,6 +344,9 @@ C5 で満たした（2026-11-11、成果物は C6 が同じ `authorize_ci_output
 - C5s: FG-CI-0014 ServiceStartFailed（新規）、FG-CI-0011 に `service`、FG-CI-0001 にサービスの理由。
 - 2026-11-12: FG-CI-0015 JobIsolationUnsafe（新規、alert。runbook `ci-runner` の「ジョブの切り離し」）。
 - C6: FG-CI-0016 SecretKeyUnavailable（alert）、FG-CI-0017 SecretOnUnprotectedRef、FG-CI-0018 SecretNotDefined（info）、runbook `ci-secrets`（新規）。FG-CI-0019 ArtifactTooLarge（info）、FG-CI-0020 ArtifactTransferFailed（warn、runbook `ci-runner`）。C6 のレビュー: FG-CI-0021 SecretInArtifact（warn、runbook `ci-secrets`）、FG-CI-0022 ArtifactQuotaExceeded（info）。
+- C12: FG-CI-0026 ScheduleOwnerNotAllowed（warn、runbook `ci-pipelines` の「定期の実行」）、FG-CI-0027 ScheduleLimitReached（info）、FG-CI-0028 ScheduleRateLimited（warn、レビューで追加）。FG-CI-0003 に `operation=play`。
+- runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
+
 - 計画 17 P17-1（2026-11-14）: FG-CI-0029 GpuUnavailable（warn）、FG-CI-0030 ModelStoreUnverified（alert）、FG-CI-0001 に `service_gpu_without_tag`、FG-CI-0008 に `gpu_without_tag`。
 - runbook: `ci-runner`（新規、C3。C5s で「ジョブのサービス」の節、P17-1 で「GPU の Runner とモデル置き場」の節）、`smart-http`（ジョブの fetch の節、C0）、`checks-reporting`（`ci_namespace_internal`、X）。
 - `forge-auth/README.md` の「CI principals」の節（責務・公開 API）は C0 の MR で足す（act-as の節と同じ形）。

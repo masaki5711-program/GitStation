@@ -1,4 +1,4 @@
-# Runbook: ci-pipelines（FG-CI-0002、FG-CI-0003。関連: FG-CI-0001、FG-GIT-0002 / 0003 / 0004、FG-DB-0006、FG-REPO-0016）
+# Runbook: ci-pipelines（FG-CI-0002、FG-CI-0003、FG-CI-0026、FG-CI-0027、FG-CI-0028。関連: FG-CI-0001、FG-GIT-0002 / 0003 / 0004、FG-DB-0006、FG-REPO-0016）
 
 M4 C2（計画 14）の CI のパイプラインの作成（ジョブ `ci.pipeline_create`、購読者 `ci-pipelines`、表 `forge.ci_pipelines` / `forge.ci_jobs`）が
 できない・遅れる・期待と違うとき。
@@ -37,18 +37,71 @@ M4 C2（計画 14）の CI のパイプラインの作成（ジョブ `ci.pipeli
 6. `invalid`（FG-CI-0001）: 行の `problems`（最大 20 件の `line` / `reason` / `subject`）か `gstn pipeline show`。手元で
    `gstn ci lint --protected <保護ブランチ>` / `gstn ci plan --branch <b> --event push|mr` で再現する。MR のパイプラインと手動の実行は
    保護されない扱いなので、シークレットを持つジョブが選ばれると `secret_on_unprotected_ref` になる（意図どおり）。
-7. 409（FG-CI-0003）: ログの `operation`（`cancel` / `retry`）と `status`（見つけた状態）。終わったパイプラインは取り消せず、
-   `failed` / `canceled` 以外は再実行できない。
+7. 409（FG-CI-0003）: ログの `operation`（`cancel` / `retry` / `play`）と `status`（見つけた状態）。終わったパイプラインは取り消せず、
+   `failed` / `canceled` 以外は再実行できない。`play`（手動のジョブ、C12）は `reason` で分かる: `not_manual`（もう始まった、または
+   手動のジョブではない）、`pipeline_state`（取り消し・`invalid`・`error` のパイプライン）、`needs_not_succeeded`（`needs` のジョブが
+   まだ成功していない。待ってから押し直す）。
 
 ## 重複と回復（知っておくこと）
 
 - push と MR のパイプラインは (project, source, ref, sha, MR) で 1 つだけ。**`error` / `invalid` になった後に同じブランチへ同じ SHA を
   push し直しても、新しいパイプラインはできない**（重複として捨てる）。回復は手動の実行（`gstn pipeline run`）か、新しいコミットの push。
-- **手動の実行はシークレットを使えない**（行の `protected` は保護されたブランチへの push だけ真。ADR-0029）。シークレットを持つジョブ（デプロイなど）が
-  選ばれる定義を手動で実行すると `invalid`（`secret_on_unprotected_ref`）になる。そのパイプラインの回復は新しいコミットの push（C12 で見直す）。
+- **手動の実行・定期の実行はシークレットを使えない**（行の `protected` は保護されたブランチへの push だけ真。ADR-0029、C12 で維持を決めた）。
+  シークレットを持つジョブ（デプロイなど）が選ばれる定義を手動・定期で実行すると `invalid`（`secret_on_unprotected_ref`）になる。
+  そのパイプラインの回復は新しいコミットの push。保護された push のパイプラインの `when: manual` のジョブなら、押せばシークレットが渡る。
 - 手動の実行には冪等のキーが無い。同じ要求を 2 回送れば 2 つのパイプラインができる（どちらも監査の行 `pipeline.run_manual` が残る）。
 - 取り消し・再実行・手動の実行は `forge.audit_log`（`action LIKE 'pipeline.%'`、resource は project）に、誰が（人・エージェントのトークンの持ち主・
   サービスアカウント）を残す。
+
+## 手動のジョブ（C12）
+
+- `.forge-ci.yml` の `when: manual` のジョブは `manual` の状態で作られ、人が「実行」を押すまで動かない（`PipelineCreate`、Developer 以上）。
+  何も手動のジョブを待たないので、パイプラインは他のジョブで `succeeded` / `failed` になる。手動のジョブだけのパイプラインは `skipped`。
+- 押すと `pending` になり、終わったパイプラインは `running` に戻る（`ci/pipeline` のチェックも書き直される）。監査は `pipeline.job_played`。
+- シークレットはパイプラインの記録どおり（保護された push のパイプラインだけ）。手動で始めても広がらない。
+- **保護された push のパイプラインの手動のジョブ**（シークレットを受け取る）を始められるのは Maintainer 以上の人だけ
+  （`PipelinePlayProtected`）。Developer・エージェントのトークンは 403 FG-AUTH-0003。
+
+## 定期の実行（C12、FG-CI-0026 / FG-CI-0027）
+
+worker のタスク `ci_schedules`（30 秒ごと）が期限の来た定期を取り（`SKIP LOCKED`）、次の時刻を DB の時計で決め、ジョブ
+`ci.schedule_fire`（`ci_schedule:<定期>:<期限>` で 1 回だけ）を積む。ジョブは持ち主の今の権利を判定してからパイプラインを作る。
+
+### Trigger
+
+- `forge worker` のログに `forge.ci.schedule_refused`（warn、`FG-CI-0026`）: 持ち主が無効になった・プロジェクトを抜けた・Reporter 以下に
+  なった・プロジェクトが削除待ち。パイプラインは作られず、**定期は止められた**（`active = false`、監査 `pipeline_schedule.deactivated`）。
+- `forge.ci.schedule_capped`（warn、`FG-CI-0028`）: 定期のパイプラインが 1 時間の上限（プロジェクト 12、全体 120）に達した。
+  前のパイプラインがまだ動いている間の期限は `busy`（コードなし、info の `forge.ci.schedule_not_started`）。
+- `forge.ci.schedule_failed`（warn、`FG-CI-0002` と `cause_code`）: ジョブの最後の試行でも計画できなかった。
+- 利用者から「夜間のパイプラインが動いていない」と問い合わせがあった。画面の定期の一覧に最後の結果（`refused` / `failed` /
+  `ref_missing` / `no_definition`）が出る。
+- 作成が 409 `FG-CI-0027`: 1 プロジェクト 20 件の上限（止まっているものも数える）。
+
+### Diagnose（読み取りのみ）
+
+1. `SELECT id, description, ref, cron, utc_offset_minutes, active, owner_id, next_run_at, last_run_at, last_outcome, last_error_code, last_pipeline_id FROM forge.ci_pipeline_schedules WHERE project_id = <id> ORDER BY id;`
+2. `last_outcome`:
+   - `refused`（FG-CI-0026）: 持ち主の今の状態を見る: `SELECT id, username, state FROM forge.users WHERE id = <owner_id>;` と
+     そのプロジェクトの役割（`gstn member list --project <id>`）。
+   - `ref_missing`: 定期のブランチが消えた。`no_definition`: そのブランチの先端に `.forge-ci.yml` が無い。
+   - `failed`: `last_error_code` の Runbook（git・DB・置き場）。ジョブ: `SELECT id, state, attempts, last_error_code FROM forge.jobs WHERE kind = 'ci.schedule_fire' ORDER BY id DESC LIMIT 10;`
+3. `next_run_at` が過去のまま動かない: worker が止まっている（`ci_schedules` のタスクの失敗は supervisor が `task=ci_schedules` で記録する）。
+4. 実行の監査: `SELECT created_at, details FROM forge.audit_log WHERE action = 'pipeline.scheduled' AND project_id = <id> ORDER BY id DESC LIMIT 10;`
+   （行為者は `system`、`owner_id` が権利を使った人）。
+5. 定期のパイプラインは常に保護されない。シークレットを名指すジョブが選ばれると `invalid`（`secret_on_unprotected_ref`）。意図どおり（ADR-0029 Amendment 2026-11-13）。
+
+### Mitigate（変更は人の承認のあと）
+
+- FG-CI-0026: そのプロジェクトの Maintainer が定期を開いて有効にして保存し直す（止まった定期の保存はその人を持ち主にする）。
+  要らなければ消す。DB の `owner_id` や `active` を直接書き換えない（監査の引き金が断る）。
+- FG-CI-0028: 定期の時刻を 1 時間の中で散らす（同じ分に集めない）か、要らない定期を消す。上限はコードの定数。
+- `failed` / `ref_missing` / `no_definition`: 原因を直せば次の期限で動く。すぐ要るなら手動の実行（`gstn pipeline run --project <id> --ref <branch>`）。
+- FG-CI-0027: 使っていない定期を消す。
+
+### Verify
+
+- 次の期限の後、`last_outcome = 'created'` と `last_pipeline_id` が新しくなり、`forge.ci.schedule_fired` が出る。
 
 ## 保持期間
 

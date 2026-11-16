@@ -14,7 +14,7 @@ use crate::change::{ChangeContext, ChangeTx, Settle};
 use crate::namespaces::{
     lock_subtree, lock_target, move_subtree, Destination, MoveOptions, MoveOutcome, TargetAccess,
 };
-use crate::roles::{lock_roles, RoleAnchor};
+use crate::roles::{lock_roles, narrow_before_move, MovedRow, RoleAnchor};
 use crate::{query_error, Db};
 
 /// The prefix of the `group.moved` event's dedup key,
@@ -90,6 +90,10 @@ pub async fn move_decided<P>(
             source_parent: subtree.root_parent(),
             target: target.access(),
         })?;
+        // Plan 15 MR 3 review: never widen by moving out of a private group.
+        let (old, new) = (subtree.root_parent(), to.parent);
+        tx.step(|c| narrow_before_move(c, MovedRow::Group(group), old, new))
+            .await?;
         let moved = move_subtree(&mut tx, ctx, &subtree, &target, &to.segment, options).await?;
         let details = AuditDetails::GroupMoved {
             group_id: group,

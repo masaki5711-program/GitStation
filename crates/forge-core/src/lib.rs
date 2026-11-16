@@ -74,6 +74,8 @@ pub mod ci_token;
 pub mod ci_secret;
 // M4 C6: CI artifacts (paths, limits, retention).
 pub mod ci_artifact;
+// M4 C12: the time rule of scheduled pipelines.
+pub mod ci_schedule;
 pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;
@@ -117,7 +119,7 @@ pub use merge_conditions::{
 };
 pub use merge_request::{
     CheckReason, MergeRequestChange, MergeRequestField, MergeRequestState, MergeRequestTransition,
-    MergeRequestVersionChange, MergeabilityStatus,
+    MergeRequestVersionChange, MergeabilityStatus, RevertDraftOutcome,
 };
 pub use merge_results::{Freshness, MergeCheckRuns, MergeResultRuns};
 pub use move_details::{MoveSummary, RoleChange, TombstoneKind};
@@ -137,7 +139,7 @@ pub use ref_pattern::RefPattern;
 pub use ref_protection::{ProtectionLoader, ProtectionRule, ProtectionRules};
 pub use repository::RepositoryState;
 pub use request_id::RequestId;
-pub use role::{Role, Visibility};
+pub use role::{GroupSight, Role, Visibility};
 pub use scope::Scope;
 pub use user_kind::UserKind;
 pub use web_path::{

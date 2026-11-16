@@ -7,14 +7,14 @@
 
 use forge_core::ids::{GroupId, NamespaceId, UserId};
 use forge_core::namespace_path::{MAX_DEPTH, MAX_FULL_PATH_LEN};
-use forge_core::{AuditDetails, ChangedField, PathSegment, Role};
+use forge_core::{AuditDetails, ChangedField, PathSegment, Role, Visibility};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
 use crate::access::{lock_account, Account};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::namespaces::{check_parent_path, is_tombstoned, lock_path, path_taken};
-use crate::roles::{lock_roles, RoleAnchor};
+use crate::roles::{chain_private_on, lock_roles, RoleAnchor};
 use crate::{query_error, Db};
 
 mod member_writes;
@@ -28,6 +28,11 @@ pub use member_writes::{
 pub use members::{add_member, change_member, remove_member, MemberChange};
 pub use moves::{move_decided, GroupMoveFacts};
 pub use read::load;
+pub use visibility::{
+    change_visibility_decided, wider_than_parent, GroupVisibilityOutcome, WiderThanParent,
+};
+
+mod visibility;
 
 /// The audit resource type of groups and their members (tables.toml).
 const RESOURCE: &str = "group";
@@ -44,6 +49,10 @@ pub struct NewGroup {
     pub description: String,
     /// The first Owner: an active human or service account.
     pub owner: UserId,
+    /// The stored `groups.visibility`, always written explicitly (plan 15
+    /// MR 3: the column default `internal` is the wider value and is never
+    /// relied on). `internal` below a private group is `FG-REPO-0033`.
+    pub visibility: Visibility,
 }
 
 /// What `create` wrote.
@@ -213,13 +222,25 @@ async fn finish_create(
     if tx.step(|c| is_tombstoned(c, path)).await? {
         return Err(path_taken("tombstoned"));
     }
+    // Never wider than the parent's chain (plan 15 MR 3, "narrowest wins"):
+    // the parent namespace is locked `FOR SHARE` by `place`.
+    if let (Visibility::Internal, Some(parent)) = (new.visibility, placement.parent) {
+        if tx.step(|c| chain_private_on(c, parent)).await? {
+            return Err(ForgeError::new(ErrorCode::VisibilityAboveParent)
+                .with_context("reason", "group_above_private")
+                .with_context("parent_namespace_id", parent.get()));
+        }
+    }
+    let visibility = new.visibility;
     let group_id: i64 = tx
         .step(|c| async move {
             sqlx::query_scalar(
-                "INSERT INTO forge.groups (display_name, description) VALUES ($1, $2) RETURNING id",
+                "INSERT INTO forge.groups (display_name, description, visibility) \
+                 VALUES ($1, $2, $3) RETURNING id",
             )
             .bind(new.display_name.as_str())
             .bind(new.description.as_str())
+            .bind(visibility.as_str())
             .fetch_one(c)
             .await
             .map_err(|e| query_error("groups.create.group", e))
@@ -307,6 +328,8 @@ pub struct GroupFields {
     pub segment: String,
     pub display_name: String,
     pub description: String,
+    /// Written explicitly ([`NewGroup::visibility`]).
+    pub visibility: Visibility,
 }
 
 /// Lock the namespace of `group` (`FOR SHARE`, as `place` does) and return
@@ -347,7 +370,9 @@ pub async fn create_decided<P>(
         display_name: fields.display_name.clone(),
         description: fields.description.clone(),
         owner,
+        visibility: fields.visibility,
     };
+
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let parent_access = match parent {

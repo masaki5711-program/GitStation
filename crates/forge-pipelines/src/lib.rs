@@ -210,6 +210,7 @@ fn jobs_of(plan: &forge_ci::Plan) -> Result<Vec<db::NewCiJob>, ForgeError> {
                     .map_err(|_| internal("timeout_out_of_range"))?,
                 tags: j.tags.clone(),       // clone: as name
                 secrets: j.secrets.clone(), // clone: as name
+                manual: j.manual,
             })
         })
         .collect()
@@ -779,6 +780,10 @@ fn loaded(facts: &ProjectAccessFacts) -> LoadedProject {
 fn status_of(planned: &db::Planned) -> (PipelineStatus, usize) {
     match planned {
         db::Planned::Jobs(jobs) if jobs.is_empty() => (PipelineStatus::Skipped, 0),
+        // M4 C12: only manual jobs: nothing runs on its own.
+        db::Planned::Jobs(jobs) if jobs.iter().all(|j| j.manual) => {
+            (PipelineStatus::Skipped, jobs.len())
+        }
         db::Planned::Jobs(jobs) => (PipelineStatus::Pending, jobs.len()),
         db::Planned::Invalid(_) => (PipelineStatus::Invalid, 0),
         db::Planned::Error => (PipelineStatus::Error, 0),
@@ -808,6 +813,11 @@ pub mod artifacts;
 // M4 C5: the CI outputs (logs, diagnosis, fingerprints, ci/pipeline).
 pub mod fingerprint;
 pub mod outputs;
+// M4 C12: manual jobs and scheduled pipelines.
+mod manual;
+pub mod schedules;
+// M4 C12: the specification pipeline's spec-publish (plan 04 §6).
+pub mod spec_publish;
 // Plan 17 P17-2: the forge/ai-eval check from the bench's eval-report.json.
 pub mod ai_eval;
 

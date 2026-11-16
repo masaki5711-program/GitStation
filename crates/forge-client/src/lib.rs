@@ -44,6 +44,7 @@ pub mod mr_approvals;
 pub mod mr_conditions;
 pub mod mr_discussions;
 pub mod mr_merge;
+pub mod mr_revert;
 pub mod mr_work_items;
 pub mod notifications;
 pub mod registry;
@@ -61,6 +62,8 @@ pub mod webhooks;
 pub mod ci_variables;
 // M4 C11: deployments.
 pub mod deploy;
+// M4 C12: pipeline schedules.
+pub mod pipeline_schedules;
 // M4 C6: `gstn pipeline artifact-download`.
 pub mod pipeline_artifacts;
 // M3 O2: the push mirror to GitLab.

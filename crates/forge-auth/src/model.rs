@@ -7,7 +7,7 @@
 
 // Role, Visibility (D2) and Scope (D3) live in forge-core (forge-db stores and loads
 // them); re-exported here so the authorization API is unchanged.
-pub use forge_core::{MergeRequestState, Role, Scope, Visibility};
+pub use forge_core::{GroupSight, MergeRequestState, Role, Scope, Visibility};
 
 use forge_core::act_as::Intent;
 /// The kind of the caller's account (ADR-0024 §8.4, M3 R3): `human`,
@@ -553,9 +553,11 @@ pub enum CodeownersToggle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MembershipScope {
     Project(ProjectView),
-    /// The caller's effective role on the group.
+    /// The caller's effective role on the group and how the group can be
+    /// seen (plan 15 MR 3).
     Group {
         role: Option<Role>,
+        sight: GroupSight,
     },
 }
 
@@ -638,9 +640,12 @@ impl CopyMark {
 pub enum Resource {
     /// Instance-wide (user administration, top-level groups, metrics).
     Instance,
-    /// A group; `role` is the caller's effective role on it.
+    /// A group; `role` is the caller's effective role on it, `sight` its
+    /// effective visibility and the caller's roles below (plan 15 MR 3:
+    /// a group nobody may see is the invisible project's 404).
     Group {
         role: Option<Role>,
+        sight: GroupSight,
     },
     /// A user's personal namespace. `owner_kind` is the owner's
     /// `users.kind`, loaded with the namespace (S0 review: only a person's
@@ -707,6 +712,9 @@ pub enum Resource {
     /// effective role on the group and where it goes.
     GroupTransfer {
         source_role: Option<Role>,
+        /// How the moved group is seen (plan 15 MR 3: a group the caller
+        /// cannot see is not found, never refused).
+        source_sight: GroupSight,
         target: TransferTarget,
     },
     /// Changing a user's username and personal namespace path
@@ -1155,9 +1163,13 @@ pub enum ResolvedVia {
 pub enum NamespaceView {
     /// A personal namespace: visible to every signed-in user.
     User,
-    /// A group: visible to every signed-in user (as for `GroupRead`); `role`
-    /// is the caller's effective role on it.
-    Group { role: Option<Role> },
+    /// A group: visible as for `GroupRead` (plan 15 MR 3: its effective
+    /// visibility, the caller's role, the pass-through view); `role` is the
+    /// caller's effective role on it.
+    Group {
+        role: Option<Role>,
+        sight: GroupSight,
+    },
     /// A project: visible to its members (Guest included), to every
     /// signed-in user when internal, and to administrators.
     Project(ProjectView),
@@ -1181,9 +1193,14 @@ impl NamespaceView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferTarget {
     /// A group, with the caller's effective role on it. `visible` is false
-    /// when the caller cannot see the target — and for a target that does
-    /// not exist, so both get the same `FG-REPO-0005`.
-    Group { role: Option<Role>, visible: bool },
+    /// for a target that does not exist (or is not a group); a private
+    /// target the caller sees no more than as a pass-through (`sight`,
+    /// plan 15 MR 3) gets the same `FG-REPO-0005`.
+    Group {
+        role: Option<Role>,
+        visible: bool,
+        sight: GroupSight,
+    },
     /// A user's personal namespace, with its owner's `users.kind`.
     PersonalNamespace {
         owner: UserId,

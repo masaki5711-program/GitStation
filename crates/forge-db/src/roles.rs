@@ -194,16 +194,77 @@ macro_rules! chain_visibility_columns {
     };
 }
 
+/// Two CTEs (to follow a `WITH RECURSIVE` list) over the viewer's ($2)
+/// direct memberships — an active user's; a group, or a project not
+/// deleted: `member_ns` (their namespaces, found by the user indexes
+/// `group_members_user`, `project_members_user`) and `above` (`id`,
+/// `parent_id`, `step`: the chains walked upwards from them, capped at $3
+/// steps like `chain`). "The viewer holds a role strictly below namespace
+/// X" is `EXISTS (SELECT 1 FROM above a WHERE a.parent_id = X)`; nothing
+/// below X is scanned. Both CTEs are `UNION` (deduplicated): many
+/// memberships below one group share their ancestors, which are walked
+/// once per step instead of once per membership. Shared by the access
+/// loaders (plan 15 MR 2) and the deciding group loaders of plan 15 MR 3
+/// (`groups::load`, the group page, the resolver, the project parent).
+///
+/// A `parent_id` cycle or a chain past the cap is reported by `chain` (its
+/// `truncated` column, `FG-DB-0018` in [`fold_chain`]) before the result
+/// is used; `above` has no such signal and only stops at the cap, so a
+/// cycle that does not touch the anchor's own chain is not detected here.
+macro_rules! viewer_above_cte {
+    () => {
+        "member_ns (id) AS ( \
+           SELECT n.id FROM forge.group_members m \
+           JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
+           JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = m.group_id \
+           WHERE m.user_id = $2 \
+           UNION \
+           SELECT n.id FROM forge.project_members m \
+           JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
+           JOIN forge.projects p ON p.id = m.project_id AND p.deleted_at IS NULL \
+           JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = m.project_id \
+           WHERE m.user_id = $2), \
+         above (id, parent_id, step) AS ( \
+           SELECT n.id, n.parent_id, 1 FROM forge.namespaces n \
+           WHERE n.id IN (SELECT id FROM member_ns) \
+           UNION \
+           SELECT n.id, n.parent_id, a.step + 1 \
+           FROM forge.namespaces n JOIN above a ON n.id = a.parent_id \
+           WHERE a.step < $3)"
+    };
+}
+pub(crate) use viewer_above_cte;
+
+/// One `chain c` row is a group whose stored visibility is not `internal`
+/// (plan 15 MR 3), as the column `group_private`. Fails closed: a group row
+/// missing under its namespace, or a value outside the CHECK, counts as
+/// private (the access loaders refuse those with `FG-DB-0018`; the
+/// deciding loaders hide rather than guess wider). Aggregated per anchor
+/// with [`chain_private_agg`], it is the effective visibility of plan 15
+/// §3.2: the narrowest on the chain.
+macro_rules! chain_private_column {
+    () => {
+        "(c.kind = 'group' AND NOT EXISTS (SELECT 1 FROM forge.groups g \
+           WHERE g.id = c.owner_id AND g.visibility = 'internal')) AS group_private"
+    };
+}
+pub(crate) use chain_private_column;
+
+/// The aggregate of [`chain_private_column`] over one anchor's steps:
+/// `chain_private` (true = some group on the chain is private).
+macro_rules! chain_private_agg {
+    () => {
+        "coalesce(bool_or(group_private), false) AS chain_private"
+    };
+}
+pub(crate) use chain_private_agg;
+
 /// The access loaders' statement: the role loaders' chain and columns, the
 /// visibility of each row, and (the same on every row: an uncorrelated
 /// subquery, evaluated once) whether a direct membership of the user ($2)
 /// — active user; a group, or a project not deleted — has the anchor as a
-/// strict ancestor. Their chains are walked upwards (`above`, capped at $3
-/// steps like `chain`) from the memberships, which the user indexes
-/// (`group_members_user`, `project_members_user`) find; the anchor's
-/// subtree is never scanned. Both CTEs are `UNION` (deduplicated): many
-/// memberships below one group share their ancestors, which are walked
-/// once per step instead of once per membership.
+/// strict ancestor ([`viewer_above_cte`]; the anchor's subtree is never
+/// scanned).
 ///
 /// A `parent_id` cycle or a chain past the cap is reported by `chain` (its
 /// `truncated` column, `FG-DB-0018` in [`fold_chain`]) before the result
@@ -211,8 +272,8 @@ macro_rules! chain_visibility_columns {
 /// cycle that does not touch the anchor's own chain is not detected here.
 ///
 /// The `project` arm (a project has nothing below it) leaves the walk out
-/// and answers `false`; the namespace anchor also skips it when the anchor
-/// is a project namespace.
+/// and answers `false` (a project namespace anchor of the namespace loader
+/// answers `false` too: nothing has it as a parent).
 macro_rules! access_sql {
     (project, $anchor:literal) => {
         concat!(
@@ -229,26 +290,9 @@ macro_rules! access_sql {
         concat!(
             "WITH RECURSIVE ",
             chain_cte!($anchor),
-            ", member_ns (id) AS ( \
-               SELECT n.id FROM forge.group_members m \
-               JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
-               JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = m.group_id \
-               WHERE m.user_id = $2 \
-               UNION \
-               SELECT n.id FROM forge.project_members m \
-               JOIN forge.users u ON u.id = m.user_id AND u.state = 'active' \
-               JOIN forge.projects p ON p.id = m.project_id AND p.deleted_at IS NULL \
-               JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = m.project_id \
-               WHERE m.user_id = $2), \
-               above (id, parent_id, step) AS ( \
-               SELECT n.id, n.parent_id, 1 FROM forge.namespaces n \
-               WHERE n.id IN (SELECT id FROM member_ns) \
-               AND (SELECT kind FROM chain WHERE step = 1) <> 'project' \
-               UNION \
-               SELECT n.id, n.parent_id, a.step + 1 \
-               FROM forge.namespaces n JOIN above a ON n.id = a.parent_id \
-               WHERE a.step < $3) \
-               SELECT ",
+            ", ",
+            viewer_above_cte!(),
+            " SELECT ",
             chain_role_columns!(),
             ", ",
             chain_visibility_columns!(),
@@ -462,6 +506,114 @@ pub(crate) async fn lock_roles(
 }
 
 // ── end M1 phase 8b MR7a ──
+
+// ── Plan 15 MR 3: the chain's ceiling inside a write ──
+
+/// Whether a group on the chain from `namespace` (itself included) up to
+/// the top level is private, read on `conn` (a write transaction's
+/// connection, after it locked what it changes): the ceiling a new or
+/// changed visibility below must not exceed (`FG-REPO-0033`). Fails closed
+/// like [`chain_private_column`]. `false` for a chain without a group (a
+/// personal namespace).
+pub(crate) async fn chain_private_on(
+    conn: &mut PgConnection,
+    namespace: NamespaceId,
+) -> Result<bool, ForgeError> {
+    const SQL: &str = concat!(
+        "WITH RECURSIVE c (id, parent_id, kind, owner_id, step) AS ( \
+           SELECT id, parent_id, kind, owner_id, 1 FROM forge.namespaces WHERE id = $1 \
+           UNION ALL \
+           SELECT n.id, n.parent_id, n.kind, n.owner_id, c.step + 1 \
+           FROM forge.namespaces n JOIN c ON n.id = c.parent_id WHERE c.step < $2) \
+         SELECT coalesce(bool_or(group_private), false) FROM (SELECT ",
+        chain_private_column!(),
+        " FROM c) s"
+    );
+    sqlx::query_scalar(SQL)
+        .bind(namespace.get())
+        .bind(CAP)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.chain_private", e))
+}
+
+/// [`chain_private_on`] after locking the groups rows of that chain
+/// `FOR SHARE`, in id order (review of plan 15 MR 3): a concurrent
+/// narrowing of a group above (its row `FOR UPDATE`) waits until this
+/// write commits, or commits first and is seen — so an `internal` value
+/// is never written below a group that has just become private. The
+/// caller holds no lock on a group above before this (it locked its own
+/// row only), and a narrowing locks only its own row, so the two never
+/// wait on each other in a cycle.
+pub(crate) async fn chain_private_locked_on(
+    conn: &mut PgConnection,
+    namespace: NamespaceId,
+) -> Result<bool, ForgeError> {
+    const LOCK: &str = "WITH RECURSIVE c (id, parent_id, kind, owner_id, step) AS ( \
+           SELECT id, parent_id, kind, owner_id, 1 FROM forge.namespaces WHERE id = $1 \
+           UNION ALL \
+           SELECT n.id, n.parent_id, n.kind, n.owner_id, c.step + 1 \
+           FROM forge.namespaces n JOIN c ON n.id = c.parent_id WHERE c.step < $2) \
+         SELECT g.id FROM forge.groups g \
+         WHERE g.id IN (SELECT owner_id FROM c WHERE kind = 'group') \
+         ORDER BY g.id FOR SHARE OF g";
+    let _locked: Vec<i64> = sqlx::query_scalar(LOCK)
+        .bind(namespace.get())
+        .bind(CAP)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.chain_lock", e))?;
+    chain_private_on(conn, namespace).await
+}
+
+/// What a move narrows (review of plan 15 MR 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MovedRow {
+    Group(GroupId),
+    Project(ProjectId),
+}
+
+/// Before a group or project leaves `old_parent` for `new_parent`: when the
+/// old chain is private, its stored visibility is narrowed to `private`
+/// (its effective value there), so the move never widens it — an
+/// `internal` row below a private group is private in effect, and would
+/// otherwise become internal under an internal parent. Its descendants keep
+/// their stored values: below a private row they stay private in effect
+/// ("narrowest wins"). A rename (same parent) changes nothing. Returns
+/// whether the row was narrowed.
+pub(crate) async fn narrow_before_move(
+    conn: &mut PgConnection,
+    row: MovedRow,
+    old_parent: Option<NamespaceId>,
+    new_parent: Option<NamespaceId>,
+) -> Result<bool, ForgeError> {
+    let Some(old) = old_parent else {
+        return Ok(false);
+    };
+    if new_parent == Some(old) || !chain_private_on(conn, old).await? {
+        return Ok(false);
+    }
+    let (sql, id) = match row {
+        MovedRow::Group(g) => (
+            "UPDATE forge.groups SET visibility = 'private', updated_at = now() \
+             WHERE id = $1 AND visibility <> 'private'",
+            g.get(),
+        ),
+        MovedRow::Project(p) => (
+            "UPDATE forge.projects SET visibility = 'private', updated_at = now() \
+             WHERE id = $1 AND visibility <> 'private'",
+            p.get(),
+        ),
+    };
+    let done = sqlx::query(sql)
+        .bind(id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.narrow_before_move", e))?;
+    Ok(done.rows_affected() > 0)
+}
+
+// ── end plan 15 MR 3 ──
 
 /// The native role of each of `users` on `project`, read on `conn`
 /// without locking, in one statement (M3 R5: the approvers' roles at

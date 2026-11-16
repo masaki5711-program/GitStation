@@ -55,9 +55,10 @@ fn project(id: i64, role: Option<Role>) -> ProjectCtx {
 fn resolved(id: i64, via: ResolvedVia, view: NamespaceView) -> ResolvedCtx {
     let target = match view {
         NamespaceView::User => LoadedTarget::User(UserId::new(1)),
-        NamespaceView::Group { role } => LoadedTarget::Group {
+        NamespaceView::Group { role, sight } => LoadedTarget::Group {
             id: GroupId::new(3),
             role,
+            sight,
         },
         NamespaceView::Project(p) => LoadedTarget::Project(LoadedProject {
             id: ProjectId::new(9),
@@ -336,9 +337,13 @@ fn an_invisible_target_behind_a_tombstone_is_logged_as_such() {
 fn groups_and_personal_namespaces_resolve_for_every_signed_in_user() {
     for view in [
         NamespaceView::User,
-        NamespaceView::Group { role: None },
+        NamespaceView::Group {
+            role: None,
+            sight: forge_core::GroupSight::INTERNAL,
+        },
         NamespaceView::Group {
             role: Some(Role::Guest),
+            sight: forge_core::GroupSight::INTERNAL,
         },
     ] {
         let ctx = resolved(3, ResolvedVia::Live, view);
@@ -387,7 +392,14 @@ fn resolved_fits_only_path_resolve() {
 #[test]
 fn namespace_view_names_its_kind() {
     assert_eq!(NamespaceView::User.kind(), "user");
-    assert_eq!(NamespaceView::Group { role: None }.kind(), "group");
+    assert_eq!(
+        NamespaceView::Group {
+            role: None,
+            sight: forge_core::GroupSight::INTERNAL,
+        }
+        .kind(),
+        "group"
+    );
     assert_eq!(NamespaceView::Project(private(None)).kind(), "project");
 }
 
@@ -408,6 +420,7 @@ fn group_ctx(id: i64, role: Option<Role>) -> crate::GroupCtx {
     crate::GroupCtx::new(crate::LoadedGroup {
         id: GroupId::new(id),
         role,
+        sight: forge_core::GroupSight::INTERNAL,
     })
 }
 
@@ -459,13 +472,15 @@ fn a_parent_context_is_the_namespace_id_and_the_parents_resource() {
         group: crate::LoadedGroup {
             id: GroupId::new(3),
             role: Some(Role::Maintainer),
+            sight: forge_core::GroupSight::INTERNAL,
         },
     });
     assert_eq!(in_group.id(), NamespaceId::new(5));
     assert_eq!(
         in_group.resource(),
         Resource::Group {
-            role: Some(Role::Maintainer)
+            role: Some(Role::Maintainer),
+            sight: forge_core::GroupSight::INTERNAL,
         }
     );
     assert!(prove(&session(), Action::ProjectCreate, in_group).is_ok());
@@ -474,6 +489,7 @@ fn a_parent_context_is_the_namespace_id_and_the_parents_resource() {
         group: crate::LoadedGroup {
             id: GroupId::new(3),
             role: Some(Role::Developer),
+            sight: forge_core::GroupSight::INTERNAL,
         },
     });
     let err = prove(&session(), Action::ProjectCreate, developer).expect_err("developer");
@@ -648,6 +664,7 @@ fn d5_contexts_bind_source_and_target() {
         group: crate::LoadedGroup {
             id: GroupId::new(3),
             role: Some(Role::Maintainer),
+            sight: forge_core::GroupSight::INTERNAL,
         },
     };
     let proof = prove(
@@ -679,6 +696,7 @@ fn d5_contexts_bind_source_and_target() {
             crate::LoadedGroup {
                 id: GroupId::new(4),
                 role: Some(Role::Owner),
+                sight: forge_core::GroupSight::INTERNAL,
             },
             hidden,
         ),
@@ -692,6 +710,7 @@ fn d5_contexts_bind_source_and_target() {
             crate::LoadedGroup {
                 id: GroupId::new(4),
                 role: None,
+                sight: forge_core::GroupSight::INTERNAL,
             },
             crate::LoadedTransferTarget::TopLevel,
         ),

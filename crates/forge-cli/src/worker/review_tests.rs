@@ -346,6 +346,9 @@ fn the_production_registry_starts_the_subscribers_task() {
             // M4 C2: every pushed branch and merge request version asks
             // for its CI pipeline.
             forge_db::pipelines::subscriber::PIPELINES_SUBSCRIBER,
+            // M4 C10: a target pipeline's failure after a merge asks for a
+            // revert draft.
+            forge_db::review::reverts::REVERT_DRAFTS_SUBSCRIBER,
         ]
     );
     let tasks = crate::worker::tasks(
