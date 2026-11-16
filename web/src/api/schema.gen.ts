@@ -1626,6 +1626,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revert a merged merge request in one step: opens a merge request from the new branch revert/mr-<iid> (one revert commit on the target's tip) into the target. Decided as opening a merge request (Developer; a token needs api) and pushing the branch (a token needs write_repository; a protected revert/* refuses, FG-GIT-0008). 409 FG-REVIEW-0029 (not merged, branch exists, nothing to revert) or FG-REVIEW-0030 (the revert conflicts: nothing is opened) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_revert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/status": {
         parameters: {
             query?: never;
@@ -6324,6 +6341,23 @@ export interface components {
             /** @description `branch`, `tag` or `commit` (a full commit id was given). */
             type: string;
         };
+        /** @description The revert merge request as opened. */
+        RevertBody: {
+            /** @description The revert commit (the new branch's tip). */
+            commit_sha: string;
+            /**
+             * @description The merge request that reverts `reverted_iid` (source
+             *     `revert/mr-<iid>`, target the reverted one's target).
+             */
+            merge_request: components["schemas"]["MergeRequestBody"];
+            /** @description The target's tip it was built on. */
+            parent_sha: string;
+            /**
+             * Format: int64
+             * @description The merged merge request it reverts.
+             */
+            reverted_iid: number;
+        };
         /**
          * @description A role in a request.
          * @enum {string}
@@ -6921,6 +6955,14 @@ export interface components {
              *     whether the merge request may merge now is `mergeable`).
              */
             can_merge: boolean;
+            /**
+             * @description M4 C10 (added within `schema_version` 1): `POST …/revert` would be
+             *     allowed — the merge request is merged and the caller may open a
+             *     merge request and push a branch (a protection of `revert/*`, and
+             *     whether the revert conflicts, are decided by the revert itself).
+             *     Always `false` when acting for a person.
+             */
+            can_revert: boolean;
             /**
              * @description `POST …/unapprove` would be allowed (pair it with `approved_by_me`:
              *     there may be nothing to withdraw).
@@ -11700,6 +11742,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_revert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevertBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

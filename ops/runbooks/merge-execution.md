@@ -98,6 +98,19 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
 - 照合が 1 件を片付けるのに 20 秒を超えると `FG-SYS-0005 reason=reconcile_attempt_timeout`（`merge_id` つき）を出し、その試行は
   次の回の後ろへ回る。同じ `merge_id` で繰り返すなら、その試行の ref とロック（`<ref>.lock`）を Diagnose の手順で見る。
 
+## 一手の revert（M4 C10）
+
+- `POST …/merge-requests/{iid}/revert`（`gstn mr revert`、画面の「このマージを取り消す」）は、ブランチ `revert/mr-<iid>` に revert の
+  コミットを 1 つ置き、MR を開く。マージ先のブランチは、その MR をマージするまで変わらない。
+- **その後に一部だけ戻した変更でも revert は作れる**: 取り消しはマージ前と後の差を今の先端に逆に当てる三方向マージなので、残っている部分
+  だけが戻る。同じ行が後から変わっていれば衝突し、**何も作らない**（FG-REVIEW-0030、ログ `forge.review.revert_conflicted` に衝突した
+  パス）。手元で `git revert -m 1 <マージのコミット>`（squash なら `git revert <コミット>`）をして衝突を直し、MR を開く。
+- FG-REVIEW-0029 `branch_exists`: `revert/mr-<iid>` がまだマージされていない（開いている取り消しがある）。その MR を使う。既にマージ
+  された取り消しのブランチは次の取り消しで先へ進める（消す必要はない）。
+- main の失敗での下書き（ジョブ `merge_request.revert_draft`、`forge serve`）が何もしなかった理由はログ
+  `forge.review.revert_drafted`（`reason`）にある。`cause_ambiguous` はパイプラインの無いマージが複数続いた（マージキューの列）ため、
+  どれが壊したか決められなかった（`forge.review.revert_draft_ambiguous` の `merge_ids`）。原因を確かめて手で取り消す。
+
 ## Verify
 
 - `gstn mr merge-status --project <id> --iid <iid>` が `applied` で、`gstn mr view` が `merged`。

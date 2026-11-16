@@ -443,3 +443,25 @@ export function useMergeAttempt(project: number, iid: number, since: number | nu
 export function latestVersion<V extends { version: number }>(list: readonly V[]): V | null {
   return list.reduce<V | null>((best, v) => (best === null || v.version > best.version ? v : best), null);
 }
+
+/** M4 C10: revert a merged merge request in one step (`POST …/revert`):
+ * the answer names the revert merge request opened. */
+export function useRevertMergeRequest(project: number, iid: number) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const refreshSession = useRefreshSessionOn403();
+  return useMutation({
+    mutationFn: () =>
+      call(() =>
+        api.POST('/api/v1/projects/{id}/merge-requests/{iid}/revert', {
+          params: { path: { id: project, iid: String(iid) } },
+        }),
+      ),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: mrKeys.all(project) }),
+        invalidateActivity(queryClient),
+      ]),
+    onError: refreshSession,
+  });
+}

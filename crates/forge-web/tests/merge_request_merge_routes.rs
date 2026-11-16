@@ -1167,7 +1167,9 @@ fn mr_viewer(approve: bool, merge: bool, ready: bool, approved_by_me: bool) -> V
         "can_unapprove": approve,
         "can_merge": merge,
         "can_mark_ready": ready,
-        "approved_by_me": approved_by_me
+        "approved_by_me": approved_by_me,
+        // M4 C10: an open merge request is never revertible.
+        "can_revert": false
     })
 }
 

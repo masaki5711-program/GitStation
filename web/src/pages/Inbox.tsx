@@ -45,6 +45,8 @@ function sentence(t: TFunction, item: InAppNotification): string {
       return actor === null ? t('inbox.kind.commentedBySystem') : t('inbox.kind.commented', { actor });
     case 'mr_conflict_predicted':
       return t('inbox.kind.conflictPredicted');
+    case 'mr_revert_drafted':
+      return t('inbox.kind.revertDrafted');
     default:
       return t('inbox.kind.other');
   }

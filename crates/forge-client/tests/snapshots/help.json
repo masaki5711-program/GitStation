@@ -3843,6 +3843,56 @@
           "required": true
         },
         {
+          "description": "The merged merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr revert --project 7 --iid 3"
+      ],
+      "name": "mr revert",
+      "output": {
+        "properties": {
+          "merge_request": {
+            "required": [
+              "iid",
+              "source_branch",
+              "target_branch",
+              "draft"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "merge_request",
+          "reverted_iid",
+          "commit_sha",
+          "parent_sha"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/revert"
+      ],
+      "scopes": [
+        "api",
+        "write_repository"
+      ],
+      "summary": "Revert a merged merge request in one step: opens a merge request from the new branch revert/mr-<iid> (one revert commit on the target's tip; git revert -m 1 of a merge commit, the squash commit, or a whole fast-forward) into its target. Decided as opening a merge request and pushing the branch (Developer). A revert that conflicts opens nothing (FG-REVIEW-0030); not merged, an existing revert branch or nothing left to revert is FG-REVIEW-0029."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
           "description": "The merge request's number in the project.",
           "kind": "option",
           "name": "--iid",

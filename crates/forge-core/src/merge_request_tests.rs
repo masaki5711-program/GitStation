@@ -141,7 +141,8 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.merged",
             "merge_request.source_branch_deleted",
             "merge_request.approved",
-            "merge_request.unapproved"
+            "merge_request.unapproved",
+            "merge_request.revert_drafted"
         ]
     );
 }
@@ -500,4 +501,46 @@ fn comments_are_one_transition_with_an_action_and_ids_only() {
     let details = AuditDetails::MergeRequest(resolved);
     assert_eq!(details.event_type(), Some(EventType::MergeRequestCommented));
     assert_eq!(details.event_payload(), details.to_value());
+}
+
+/// M4 C10 (plan 04 M-4): the system's revert draft is a transition of the
+/// reverted merge request, keyed by its merge attempt; the payload carries
+/// ids, the branch, the merged commit, the outcome and counts only.
+#[test]
+fn revert_drafted_is_a_transition_keyed_by_the_merge() {
+    use crate::{ObjectId, RevertDraftOutcome};
+    let drafted = MergeRequestChange::RevertDrafted {
+        merge_request: MergeRequestId::new(9),
+        iid: 3,
+        merge_id: 17,
+        target_branch: branch("main"),
+        merged_sha: ObjectId::parse(&"b".repeat(40)).expect("oid"),
+        outcome: RevertDraftOutcome::Opened,
+        revert_iid: Some(4),
+        conflict_files: 0,
+    };
+    assert_eq!(drafted.transition(), MergeRequestTransition::RevertDraft);
+    assert_eq!(drafted.dedup_prefix(), "merge_request_revert_drafted");
+    assert_eq!(drafted.action(), "merge_request.revert_drafted");
+    assert_eq!(
+        drafted.to_value(),
+        json!({
+            "merge_request_id": 9,
+            "iid": 3,
+            "merge_id": 17,
+            "target_branch": "refs/heads/main",
+            "merged_sha": "b".repeat(40),
+            "outcome": "opened",
+            "revert_iid": 4,
+            "conflict_files": 0,
+        })
+    );
+    for o in RevertDraftOutcome::ALL {
+        assert_eq!(RevertDraftOutcome::parse(o.as_str()), Some(o));
+    }
+    let details = AuditDetails::MergeRequest(drafted);
+    assert_eq!(
+        details.event_type(),
+        Some(EventType::MergeRequestRevertDrafted)
+    );
 }

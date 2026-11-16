@@ -116,7 +116,7 @@ pub use merge_conditions::{
 };
 pub use merge_request::{
     CheckReason, MergeRequestChange, MergeRequestField, MergeRequestState, MergeRequestTransition,
-    MergeRequestVersionChange, MergeabilityStatus,
+    MergeRequestVersionChange, MergeabilityStatus, RevertDraftOutcome,
 };
 pub use merge_results::{Freshness, MergeCheckRuns, MergeResultRuns};
 pub use move_details::{MoveSummary, RoleChange, TombstoneKind};

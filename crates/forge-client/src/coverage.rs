@@ -559,6 +559,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/merge",
         Coverage::Command("mr merge-status"),
     ),
+    // M4 C10: one-step revert.
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/revert",
+        Coverage::Command("mr revert"),
+    ),
     // M3 R5 (ADR-0024 §8): approvals and approval rules.
     (
         "POST",

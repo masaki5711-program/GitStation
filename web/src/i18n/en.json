@@ -1089,7 +1089,8 @@
       "mr_approved": "Merge request approved",
       "mr_merged": "Merge request merged",
       "mr_commented": "Comment on a merge request",
-      "mr_conflict_predicted": "Likely conflict with another merge request"
+      "mr_conflict_predicted": "Likely conflict with another merge request",
+      "mr_revert_drafted": "Pipeline failed after a merge (draft revert)"
     }
   },
   "inbox": {
@@ -1125,6 +1126,7 @@
       "commented": "{{actor}} commented on your merge request",
       "commentedBySystem": "Your merge request has a new comment",
       "conflictPredicted": "Your merge request is likely to conflict with another one",
+      "revertDrafted": "The pipeline failed after this was merged. Check the draft revert.",
       "other": "There is a new notification about your merge request"
     }
   },
@@ -1644,5 +1646,13 @@
     "recentTitle": "Recent results",
     "mr": "!{{iid}}",
     "alone": "(tested on its own)"
+  },
+  "revert": {
+    "label": "Revert",
+    "button": "Revert this merge",
+    "hint": "Opens a merge request that undoes this merge. The target branch does not change until that merge request is merged.",
+    "pending": "Creating…",
+    "opened": "Revert merge request !{{iid}} opened.",
+    "open": "Open it"
   }
 }

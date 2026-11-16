@@ -3322,3 +3322,32 @@ cause = "Plan 17 P17-2 (ADR-0034): the artifact `eval-report.json` of the declar
 diagnosis = "The worker logs `forge.ai_eval.check_written` with `error_code=FG-AIASSET-0007`, `pipeline_id`, `reason` and `detail` (the field or case at fault, never the report's text). The schema is docs/ai-eval-report.md."
 fix = "Fix the bench's report writer (the PFS `bench` entry point) to the v1 schema and retry the pipeline."
 test = "report_with_passes_above_runs_is_invalid"
+
+# ── M4 C10 (plan 14 C10, plan 04 M-4, ADR-0024 Amendment C10): one-step
+# revert of a merged merge request ──
+
+[[error]]
+code = "FG-REVIEW-0029"
+name = "RevertRefused"
+http_status = 409
+severity = "info"
+user_message_ja = "このマージリクエストは取り消せません（マージされていない、すでに取り消しのブランチがある、または取り消す変更が残っていません）。マージリクエストの状態を確かめてください。"
+user_message_en = "This merge request cannot be reverted (it is not merged, a revert branch already exists, or its change is no longer on the branch). Check the merge request's state."
+user_message_id = "Merge request ini tidak dapat dibatalkan (belum di-merge, branch pembatalan sudah ada, atau perubahannya sudah tidak ada di branch). Periksa status merge request."
+cause = "M4 C10 (plan 04 M-4): `POST …/merge-requests/{iid}/revert` (or `gstn mr revert`, or the system's draft after the target's pipeline failed) could not build a revert merge request for a reason of the merge request itself: `reason=not_merged` (the merge request is open or closed), `no_applied_merge` (merged, but no applied merge attempt records what the merge moved — a merge request merged before M3 R4 or by another path), `target_missing` (the target branch is gone), `nothing_to_revert` (the target's tip no longer holds the change: it was reverted already), `branch_exists` (the revert branch `revert/mr-<iid>` exists: a revert was already opened — its merge request is the one with that source branch). Whether the caller may open a merge request and push the branch was decided before (FG-AUTH-0003, FG-GIT-0008 on a protected `revert/*`). Nothing was written: no commit is referenced, no branch, no merge request."
+diagnosis = "The log event `forge.review.revert_refused` carries `reason`, `project_id`, `merge_request_id`, `iid` and the request_id. For branch_exists: `gstn mr list --project <id> --state all` shows the merge request whose source branch is `revert/mr-<iid>`."
+fix = "Nothing on the server. not_merged: a merge request that is not merged has nothing to revert (close it instead). branch_exists: use the revert merge request already opened, or delete the branch `revert/mr-<iid>` and revert again. nothing_to_revert: the change is gone already."
+test = "a_merge_request_that_is_not_merged_cannot_be_reverted"
+
+[[error]]
+code = "FG-REVIEW-0030"
+name = "RevertConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "このマージを取り消すと、その後の変更と衝突します。取り消しのマージリクエストは作りませんでした。手元で git revert して衝突を直してください。"
+user_message_en = "Reverting this merge conflicts with changes made after it. No revert merge request was opened. Run git revert locally and resolve the conflicts."
+user_message_id = "Membatalkan merge ini berkonflik dengan perubahan setelahnya. Merge request pembatalan tidak dibuat. Jalankan git revert secara lokal dan selesaikan konfliknya."
+cause = "M4 C10 (plan 04 M-4, ADR-0024 Amendment C10): the revert of the merge (`merge-tree` of the target's tip with the tip the merge was built on, the merged commit as the base — what `git revert -m 1` merges) conflicts in at least one path changed again after the merge. forge never commits conflict markers, so nothing was opened: no branch, no merge request (decided in ADR-0024 Amendment C10 — a draft with markers would be a broken change waiting to merge). The system's draft after a failed pipeline records the same outcome as `merge_request.revert_drafted` with `outcome=conflicted`, and the merge request's author is told."
+diagnosis = "The log event `forge.review.revert_conflicted` carries `project_id`, `merge_request_id`, `iid`, `merge_id`, `target_sha`, `conflict_files`, `files_truncated` and the conflicted paths (logs only, never in the answer)."
+fix = "Revert locally: `git revert -m 1 <merged commit>` (a merge commit) or `git revert <commit>` (a squash), resolve the conflicts, push a branch and open a merge request; or fix forward."
+test = "a_revert_that_conflicts_opens_nothing"

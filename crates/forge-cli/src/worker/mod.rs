@@ -469,7 +469,11 @@ fn registry_with(
         // M4 C2 (`independent`): every push to a branch and every merge
         // request version asks for its CI pipeline (the
         // `ci.pipeline_create` job).
-        .with(Arc::new(forge_db::pipelines::subscriber::PipelineRequests))?;
+        .with(Arc::new(forge_db::pipelines::subscriber::PipelineRequests))?
+        // M4 C10 (`independent`): a target branch's `ci/pipeline` failure on
+        // a commit a merge produced asks for a revert draft (the
+        // `merge_request.revert_draft` job, run by `forge serve`).
+        .with(Arc::new(forge_db::review::reverts::RevertDrafts))?;
     // M3 I2: deliveries are recorded only when the lane can send them.
     let registry = if webhooks {
         registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?

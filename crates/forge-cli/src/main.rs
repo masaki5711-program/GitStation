@@ -41,6 +41,7 @@ mod serve;
 mod serve_auto_merge;
 mod serve_merge_queue;
 mod serve_merges;
+mod serve_reverts;
 mod state_copy;
 mod worker;
 
