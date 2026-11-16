@@ -54,6 +54,8 @@ use crate::routes::write::{bounded, json, no_store};
 
 mod approvals;
 mod auto_merge;
+// M4 C14: the autofix line.
+mod autofix;
 mod conflicts;
 mod discussion_loaders;
 mod discussions;
@@ -76,6 +78,10 @@ pub use approvals::{
 };
 pub use auto_merge::{
     auto_merge_state, AutoMergeStateBody, AutoMergeStateOf, MergeRequestAutoMergeBody, AUTO_MERGE,
+};
+pub use autofix::{
+    autofix_state, AutofixAttemptBody, AutofixPathBody, AutofixStateOf, MergeRequestAutofixBody,
+    AUTOFIX,
 };
 pub use conflicts::{
     conflicts, ConflictPredictionBody, ConflictScanBody, ConflictsBody, CONFLICTS, CONFLICTS_SUFFIX,

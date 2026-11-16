@@ -39,6 +39,8 @@ mod restore;
 mod runtime;
 mod serve;
 mod serve_auto_merge;
+// M4 C14: the deterministic autofix worker.
+mod serve_autofix;
 mod serve_merge_queue;
 mod serve_merges;
 mod serve_reverts;

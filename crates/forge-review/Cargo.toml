@@ -14,10 +14,14 @@ publish.workspace = true
 # depends on another feature crate (forge-hosting, forge-checks).
 [dependencies]
 forge-auth.workspace = true
+# M4 C14: the fixers of the target branch's `.forge-ci.yml` (pure).
+forge-ci.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
 forge-errors.workspace = true
 forge-git.workspace = true
+# M4 C14: the stored autofix bundle's digest.
+sha2.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 unicode-properties.workspace = true

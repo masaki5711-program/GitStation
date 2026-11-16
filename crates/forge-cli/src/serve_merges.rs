@@ -152,6 +152,12 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::AutoMergeStopped
         | ErrorCode::AutoMergeEmergencyStopped
         | ErrorCode::AutoMergeScanFailed
+        // M4 C14: the autofix's own outcomes (never a merge's).
+        | ErrorCode::AutofixCandidateInvalid
+        | ErrorCode::AutofixLandingRaced
+        | ErrorCode::AutofixFixerFailed
+        | ErrorCode::AutofixProposalOnly
+        | ErrorCode::AutofixPushDenied
         // M4 C1: a `.forge-ci.yml` content outcome (never a merge's).
         | ErrorCode::CiConfigInvalid
         // M4 C2: pipeline outcomes (never a merge's).

@@ -50,6 +50,9 @@ pub mod activity;
 mod after_version;
 pub mod approvals;
 mod auto_merge_settings;
+// M4 C14: the deterministic autofix worker and its settings.
+pub mod autofix;
+mod autofix_settings;
 pub mod conflicts;
 pub mod discussions;
 mod fields;
@@ -73,7 +76,11 @@ pub use activity::{
     ActivityActor, ActivityItem, ActivityMergeRequest, ActivityPage, ActivityQuery,
     MAX_INVOLVED_PROJECTS, SHOWN_TYPES,
 };
+pub use autofix::{AutofixLimits, Autofixer, BundleFile, TickReport as AutofixTickReport};
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
+pub use forge_db::autofix::{
+    AutofixSettings, DetailPath as AutofixDetailPath, StoredAttempt as StoredAutofixAttempt,
+};
 pub use forge_db::review::auto_merge::{
     AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, StopMark, StoredState as AutoMergeState,
 };
@@ -272,6 +279,12 @@ fn change_context(
         (Credential::AutoMerge, _) => {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "auto_merge_principal_in_review"))
+        }
+        // The autofix bot acts through `Autofixer`, never a person's
+        // command (M4 C14).
+        (Credential::Autofix, _) => {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "autofix_principal_in_review"))
         }
     };
     let mut ctx = ChangeContext::new(actor, request.request_id.clone());

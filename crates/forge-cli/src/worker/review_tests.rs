@@ -349,6 +349,9 @@ fn the_production_registry_starts_the_subscribers_task() {
             // M4 C10: a target pipeline's failure after a merge asks for a
             // revert draft.
             forge_db::review::reverts::REVERT_DRAFTS_SUBSCRIBER,
+            // M4 C14: a failed merge result or a conflict queues an
+            // autofix attempt.
+            forge_db::autofix::AUTOFIX_TRIGGERS_SUBSCRIBER,
         ]
     );
     let tasks = crate::worker::tasks(
