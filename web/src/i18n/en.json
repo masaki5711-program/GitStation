@@ -1415,7 +1415,8 @@
       "skipped": "Nothing to run",
       "invalid": "Invalid definition",
       "error": "Could not read",
-      "created": "Waiting"
+      "created": "Waiting",
+      "manual": "Manual"
     },
     "source": {
       "push": "push",
@@ -1448,7 +1449,10 @@
       "pendingOperate": "Waiting to start. It starts when a runner is free. To stop it, press \"Cancel\".",
       "pendingAsk": "Waiting to start. It starts when a runner is free. If it must be stopped, ask a Developer or above of this project.",
       "runningOperate": "Running. The result will appear on this page. To stop it, press \"Cancel\".",
-      "runningAsk": "Running. The result will appear on this page. If it must be stopped, ask a Developer or above of this project."
+      "runningAsk": "Running. The result will appear on this page. If it must be stopped, ask a Developer or above of this project.",
+      "manualOperate": "Job “{{job}}” starts by hand. Press “Run” when it is ready to go.",
+      "manualAsk": "Job “{{job}}” starts by hand. To run it, ask a Developer or above of this project.",
+      "manualAskProtected": "Job “{{job}}” starts by hand. It runs on a protected branch, so to run it, ask a Maintainer or above of this project."
     },
     "problems": {
       "title": "Mistakes in .forge-ci.yml",
@@ -1474,7 +1478,11 @@
       "attempt": "attempt {{attempt}}",
       "needs": "waits for: {{needs}}",
       "log": "Log",
-      "logOf": "Log of the job \"{{job}}\""
+      "logOf": "Log of the job \"{{job}}\"",
+      "play": "Run",
+      "playing": "Starting…",
+      "playOf": "Run job “{{job}}”",
+      "manual": "Started by hand"
     },
     "log": {
       "title": "Log of the job \"{{job}}\"",
@@ -1491,7 +1499,48 @@
     "cancelConfirm": "This stops the running jobs midway. Cancel the pipeline?",
     "cancelYes": "Cancel it",
     "cancelNo": "Keep running",
-    "span": "{{from}} – {{to}}"
+    "span": "{{from}} – {{to}}",
+    "schedules": {
+      "title": "Schedules",
+      "subtitle": "Run a branch’s pipeline at set times. A schedule runs with the rights of whoever saved it and never uses secrets.",
+      "open": "View schedules",
+      "add": "Add schedule",
+      "listLabel": "Pipeline schedules",
+      "empty": "No schedules yet.",
+      "emptyManage": "Use “Add schedule” to pick a branch and a time.",
+      "emptyAsk": "To create one, ask a Maintainer or above of this project.",
+      "active": "Active",
+      "paused": "Paused",
+      "next": "Next {{time}}",
+      "owner": "Owner: user #{{id}}",
+      "ownerYou": "Owner: you",
+      "edit": "Edit",
+      "delete": "Delete",
+      "deleteConfirm": "Delete schedule “{{name}}”?",
+      "deleteYes": "Delete it",
+      "newTitle": "Add schedule",
+      "editTitle": "Edit schedule",
+      "description": "Description",
+      "branch": "Branch",
+      "cron": "Time rule (cron)",
+      "cronHelp": "Five fields: minute hour day month weekday. E.g. 0 2 * * * is every day at 2:00, 30 6 * * 1-5 is weekdays at 6:30. At most once every 5 minutes.",
+      "offset": "Time zone",
+      "activeLabel": "Active",
+      "ownerHelp": "Changing the branch or the time rule makes you the owner; from then on it runs with your rights. Editing the description or pausing and resuming keeps the owner.",
+      "save": "Save",
+      "saving": "Saving…",
+      "last": {
+        "never": "It has not run yet.",
+        "created": "Its last run started a pipeline.",
+        "noDefinition": "Its last run started nothing: the branch tip has no .forge-ci.yml. Add the file and push.",
+        "refMissing": "Its last run started nothing: branch {{branch}} does not exist. Create it, or choose another branch with “Edit”.",
+        "refusedManage": "Stopped: the owner may no longer run pipelines. Make it active from “Edit” and save, and it runs with your rights.",
+        "refusedAsk": "Stopped: the owner may no longer run pipelines. Ask a Maintainer of this project to save it again.",
+        "failed": "Its last run could not create a pipeline. Ask an administrator to look into schedule #{{id}}.",
+        "busy": "Its last run started nothing: the previous pipeline was still running.",
+        "capped": "Its last run started nothing: scheduled pipelines had reached their hourly limit. It runs again at its next time."
+      }
+    }
   },
   "editor": {
     "newTitle": "New file",

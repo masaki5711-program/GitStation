@@ -136,7 +136,8 @@ fn all_lists_every_event_type_once() {
             "work_item.linked",
             "work_item.unlinked",
             "webhook.disabled",
-            "merge_request.revert_drafted"
+            "merge_request.revert_drafted",
+            "spec.released"
         ]
     );
 }
@@ -246,5 +247,20 @@ fn webhook_disabled_is_maintainer_class() {
     assert_eq!(
         EventType::WebhookDisabled.visibility_class(),
         VisibilityClass::Maintainer
+    );
+}
+
+/// M4 C12 (plan 04 §6 `spec-publish`): a published specification version
+/// is for the integrations (Kanflow's feed), like a push.
+#[test]
+fn spec_released_is_integration_class() {
+    assert_eq!(EventType::SpecReleased.as_str(), "spec.released");
+    assert_eq!(
+        EventType::SpecReleased.visibility_class(),
+        VisibilityClass::Integration
+    );
+    assert_eq!(
+        EventType::parse("spec.released"),
+        Some(EventType::SpecReleased)
     );
 }

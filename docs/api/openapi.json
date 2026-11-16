@@ -7369,6 +7369,10 @@
           "image": {
             "type": "string"
           },
+          "manual": {
+            "description": "`when: manual` in `.forge-ci.yml` (M4 C12): started by a person;\nstays `true` after it was started.",
+            "type": "boolean"
+          },
           "name": {
             "type": "string"
           },
@@ -7396,7 +7400,7 @@
             ]
           },
           "status": {
-            "description": "`created`, `pending`, `running`, `succeeded`, `failed`, `canceled`.",
+            "description": "`created`, `pending`, `running`, `succeeded`, `failed`,\n`canceled`, `manual` (waits for a person: `…/play`).",
             "type": "string"
           },
           "tags": {
@@ -7426,6 +7430,7 @@
           "tags",
           "secrets",
           "status",
+          "manual",
           "attempt",
           "error_code",
           "created_at",
@@ -7484,6 +7489,157 @@
           "line",
           "reason",
           "subject"
+        ],
+        "type": "object"
+      },
+      "PipelineScheduleBody": {
+        "additionalProperties": false,
+        "description": "A schedule.",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_outcome": {
+            "description": "What its last run did: `created` (`last_pipeline_id`),\n`no_definition`, `ref_missing`, `refused` (FG-CI-0026: the owner may\nnot run pipelines now: the schedule was stopped), `failed`\n(`last_error_code`), `busy` (its previous pipeline was still\nrunning), `capped` (the hourly cap, FG-CI-0028).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_pipeline_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_run_at": {
+            "description": "The due time of its last run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_run_at": {
+            "description": "When it runs next (RFC 3339, UTC); `null` when inactive.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_id": {
+            "description": "The person whose rights it runs with (who created it or last changed\nits branch, rule or offset).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "ref": {
+            "description": "`refs/heads/…`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "utc_offset_minutes": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "description",
+          "ref",
+          "cron",
+          "utc_offset_minutes",
+          "active",
+          "owner_id",
+          "next_run_at",
+          "last_run_at",
+          "last_outcome",
+          "last_pipeline_id",
+          "last_error_code",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "PipelineScheduleInput": {
+        "additionalProperties": false,
+        "description": "`POST …/pipeline-schedules`, `PUT …/{schedule_id}`.",
+        "properties": {
+          "active": {
+            "description": "Default `true`; `false` never runs.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "cron": {
+            "description": "Five-field cron (`minute hour day-of-month month day-of-week`), at\nmost once every 5 minutes.",
+            "type": "string"
+          },
+          "description": {
+            "description": "What it is for (1..=255 bytes, one line).",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch: `main` or `refs/heads/main`.",
+            "type": "string"
+          },
+          "utc_offset_minutes": {
+            "description": "The fixed UTC offset the rule is read at, in minutes (540 = JST,\n420 = WIB); a quarter hour within −720..=840.",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "description",
+          "ref",
+          "cron",
+          "utc_offset_minutes"
+        ],
+        "type": "object"
+      },
+      "PipelineScheduleList": {
+        "additionalProperties": false,
+        "description": "`GET …/pipeline-schedules`.",
+        "properties": {
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineScheduleBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schedules"
         ],
         "type": "object"
       },
@@ -19164,6 +19320,201 @@
         "x-forge-max-body-bytes": 4096
       }
     },
+    "/api/v1/projects/{id}/pipeline-schedules": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_pipeline_schedules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineScheduleList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's pipeline schedules (at most 20): branch, cron and UTC offset, active, owner (whose rights it runs with), next time, last run and its outcome (project readers)",
+        "x-forge-action": "PipelineRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_pipeline_schedules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineScheduleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineScheduleBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a pipeline schedule ({\"description\", \"ref\", \"cron\", \"utc_offset_minutes\", \"active\"?}): 201; the caller becomes its owner and it runs with the owner's rights at each run, never with secrets; 400 FG-WEB-0006 (param, reason) for a bad value; 409 FG-CI-0027 past 20 per project (people only; Maintainer)",
+        "x-forge-action": "PipelineScheduleManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/pipeline-schedules/{schedule_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_pipeline_schedules_schedule_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a pipeline schedule: 204; 404 FG-REPO-0005 without it (people only; Maintainer)",
+        "x-forge-action": "PipelineScheduleManage"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_pipeline_schedules_schedule_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineScheduleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineScheduleBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner when the branch, rule or offset changes or after the owner was refused (a description or pause/resume edit keeps the owner); 404 FG-REPO-0005 without it (people only; Maintainer)",
+        "x-forge-action": "PipelineScheduleManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
     "/api/v1/projects/{id}/pipelines": {
       "get": {
         "operationId": "get_api_v1_projects_id_pipelines",
@@ -19642,6 +19993,67 @@
         },
         "summary": "One page of a CI job attempt's log (attempt: default the current one; from: the first chunk, 0-based): whole chunks, at most 256 / 1 MiB, secrets masked as [MASKED]; next_from names the next page, complete says the attempt is over; 404 FG-REPO-0005 without such a pipeline, job or attempt; 403 FG-AUTH-0022 to an AI agent audience unless the pipeline's commit and the default branch's tip are both measured open (project readers)",
         "x-forge-action": "CiLogRead"
+      }
+    },
+    "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_pipelines_pipeline_id_jobs_job_id_play",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipeline_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Start a `when: manual` job: 200 the pipeline (the job pending for a runner, a finished pipeline running again); 404 FG-REPO-0005 without the pipeline or job; 409 FG-CI-0003 operation=play when the job is not waiting for a person (not_manual), the pipeline is cancelled, invalid or error (pipeline_state), or a job it needs has not succeeded (needs_not_succeeded). Secrets reach it only as its pipeline allows (Developer)",
+        "x-forge-action": "PipelineCreate"
       }
     },
     "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry": {

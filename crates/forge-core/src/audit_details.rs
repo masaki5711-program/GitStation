@@ -680,12 +680,14 @@ impl AuditDetails {
             | Self::PushMirror(_)
             | Self::HistoryImport(_)
             | Self::DocLintMigration(_)
-            | Self::Pipeline(_)
             | Self::Runner(_)
             | Self::MergeQueue(_)
             | Self::AutoMerge(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => None,
+            // M4 C12: a published specification version is the one
+            // pipeline change that is an event.
+            Self::Pipeline(change) => change.event_type(),
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,

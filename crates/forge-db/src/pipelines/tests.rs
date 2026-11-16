@@ -120,6 +120,18 @@ async fn create_jobs(t: &FreshDb) -> Vec<PipelineRequest> {
         .collect()
 }
 
+async fn spec_jobs(t: &FreshDb) -> Vec<crate::spec_releases::PublishRequest> {
+    let rows: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT payload FROM forge.jobs WHERE kind = $1 ORDER BY id")
+            .bind(crate::spec_releases::SPEC_PUBLISH_JOB)
+            .fetch_all(&mut t.superuser().await)
+            .await
+            .expect("jobs");
+    rows.iter()
+        .map(|p| crate::spec_releases::publish_payload(p).expect("payload"))
+        .collect()
+}
+
 #[test]
 fn the_payload_round_trips_and_refuses_anything_else() {
     let request = PipelineRequest {
@@ -180,11 +192,23 @@ async fn one_push_enqueues_one_job_per_branch_and_a_redelivery_none() {
                 pushed("refs/heads/feature", PushUpdateKind::Create, 'c'),
                 pushed("refs/heads/old", PushUpdateKind::Delete, 'a'),
                 pushed("refs/tags/v1", PushUpdateKind::Create, 'c'),
+                pushed("refs/tags/latest", PushUpdateKind::Create, 'c'),
             ],
         },
     )
     .await;
     drain(&t, &subscriber).await;
+    // M4 C12: one `spec.publish` job for the created version tag only.
+    assert_eq!(
+        spec_jobs(&t).await,
+        [crate::spec_releases::PublishRequest {
+            project: web.project_id,
+            tag: RefName::parse("refs/tags/v1").expect("tag"),
+            object: sha('c'),
+            released_by: Some(alice),
+            push_request_id: Some("req-push-1".to_owned()),
+        }]
+    );
     let jobs = create_jobs(&t).await;
     let mut seen: Vec<(String, String)> = jobs
         .iter()
@@ -220,6 +244,7 @@ async fn one_push_enqueues_one_job_per_branch_and_a_redelivery_none() {
         2,
         "a redelivery enqueues nothing new"
     );
+    assert_eq!(spec_jobs(&t).await.len(), 1, "nor a second release job");
     t.drop_now().await;
 }
 
@@ -335,6 +360,7 @@ fn a_job(name: &str, needs: &[&str]) -> NewCiJob {
         timeout_s: 600,
         tags: vec!["linux".to_owned()],
         secrets: Vec::new(),
+        manual: false,
     }
 }
 
@@ -766,5 +792,255 @@ async fn only_pending_and_running_pipelines_are_live() {
     let live = live_among(&t.db, &asked).await.expect("live");
     assert_eq!(live, ids[..2].to_vec());
     assert!(live_among(&t.db, &[]).await.expect("none").is_empty());
+    t.drop_now().await;
+}
+
+fn a_manual_job(name: &str, needs: &[&str]) -> NewCiJob {
+    NewCiJob {
+        manual: true,
+        ..a_job(name, needs)
+    }
+}
+
+async fn set_job(t: &FreshDb, pipeline: i64, name: &str, status: &str) {
+    let _ =
+        sqlx::query("UPDATE forge.ci_jobs SET status = $3 WHERE pipeline_id = $1 AND name = $2")
+            .bind(pipeline)
+            .bind(name)
+            .bind(status)
+            .execute(&mut t.superuser().await)
+            .await
+            .expect("job");
+}
+
+async fn settle(t: &FreshDb, pipeline: i64) -> String {
+    let mut c = t.db.write_pool().acquire().await.expect("conn");
+    crate::ci_runners::lease::settle_pipeline(&mut c, pipeline)
+        .await
+        .expect("settle")
+}
+
+/// M4 C12: a manual job is written `manual`; nothing waits for it, so the
+/// pipeline finishes on its other jobs; a pipeline of manual jobs only is
+/// `skipped` from the start.
+#[tokio::test]
+async fn a_manual_job_waits_without_holding_up_its_pipeline() {
+    let t = FreshDb::migrated().await;
+    let (_, web) = web(&t).await;
+    let p = web.project_id;
+    let id = create(
+        &t.db,
+        &new_pipeline(
+            p,
+            Source::Push,
+            Planned::Jobs(vec![
+                a_job("build", &[]),
+                a_manual_job("deploy", &["build"]),
+            ]),
+        ),
+    )
+    .await
+    .expect("create")
+    .pipeline_id;
+    let (stored, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(stored.status, PipelineStatus::Pending);
+    let states: Vec<(&str, JobStatus, bool)> = jobs
+        .iter()
+        .map(|j| (j.name.as_str(), j.status, j.manual))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            ("build", JobStatus::Pending, false),
+            ("deploy", JobStatus::Manual, true)
+        ]
+    );
+    set_job(&t, id, "build", "succeeded").await;
+    assert_eq!(settle(&t, id).await, "succeeded");
+    let (_, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(
+        jobs[1].status,
+        JobStatus::Manual,
+        "settling never starts it"
+    );
+
+    let mut only = new_pipeline(
+        p,
+        Source::Push,
+        Planned::Jobs(vec![a_manual_job("deploy", &[])]),
+    );
+    only.request.git_ref = branch("release");
+    let only = create(&t.db, &only).await.expect("create").pipeline_id;
+    let (stored, jobs) = get(&t.db, p, only).await.expect("get").expect("found");
+    assert_eq!(stored.status, PipelineStatus::Skipped);
+    assert_eq!(jobs.len(), 1);
+    t.drop_now().await;
+}
+
+/// M4 C12: playing a manual job makes it `pending` and a finished pipeline
+/// `running`, with one `pipeline.job_played` row; a job that is not waiting
+/// for a person, a cancelled pipeline, or needs that have not succeeded
+/// are FG-CI-0003 (`operation=play`, `reason`) and write nothing.
+#[tokio::test]
+async fn playing_a_manual_job_starts_it_once() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let id = create(
+        &t.db,
+        &new_pipeline(
+            p,
+            Source::Push,
+            Planned::Jobs(vec![
+                a_job("build", &[]),
+                a_manual_job("deploy", &["build"]),
+            ]),
+        ),
+    )
+    .await
+    .expect("create")
+    .pipeline_id;
+    let (_, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    let (build, deploy) = (jobs[0].id, jobs[1].id);
+    let user = |r: &str| by(Actor::User(alice), r);
+    let play = |r: &'static str, job: i64| {
+        let ctx = user(r);
+        let db = t.db.clone();
+        async move { play_job_decided(&db, &ctx, (p, id, job), alice, |_| Ok(()), |_| Ok(())).await }
+    };
+
+    let early = play("req-play-early", deploy).await.expect_err("needs");
+    assert_reason_ctx(&early, "reason", "needs_not_succeeded");
+    assert_eq!(early.code(), ErrorCode::PipelineStateConflict);
+    let not_manual = play("req-play-build", build).await.expect_err("not manual");
+    assert_reason_ctx(&not_manual, "reason", "not_manual");
+
+    set_job(&t, id, "build", "succeeded").await;
+    assert_eq!(settle(&t, id).await, "succeeded");
+    let (name, ()) = play("req-play", deploy).await.expect("play");
+    assert_eq!(name, "deploy");
+    let (stored, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(stored.status, PipelineStatus::Running);
+    assert_eq!(stored.finished_at, None);
+    assert_eq!(jobs[1].status, JobStatus::Pending);
+    assert!(jobs[1].manual);
+    let twice = play("req-play-2", deploy).await.expect_err("twice");
+    assert_reason_ctx(&twice, "reason", "not_manual");
+    set_job(&t, id, "deploy", "failed").await;
+    assert_eq!(settle(&t, id).await, "failed");
+
+    let missing = play("req-play-missing", deploy + 100)
+        .await
+        .expect_err("missing");
+    assert_eq!(missing.code(), ErrorCode::NotFound);
+
+    let mut other = new_pipeline(
+        p,
+        Source::Push,
+        Planned::Jobs(vec![a_job("build", &[]), a_manual_job("deploy", &[])]),
+    );
+    other.request.git_ref = branch("other");
+    let other = create(&t.db, &other).await.expect("create").pipeline_id;
+    cancel_pipeline_decided(&t.db, &user("req-cancel"), (p, other), alice, |_| Ok(()))
+        .await
+        .expect("cancel");
+    let (_, jobs) = get(&t.db, p, other).await.expect("get").expect("found");
+    let manual = jobs.iter().find(|j| j.manual).expect("manual");
+    let ctx = user("req-play-canceled");
+    let canceled = play_job_decided(
+        &t.db,
+        &ctx,
+        (p, other, manual.id),
+        alice,
+        |_| Ok(()),
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("canceled");
+    assert_reason_ctx(&canceled, "reason", "pipeline_state");
+
+    let rows = pipeline_audit(&t).await;
+    let played: Vec<_> = rows
+        .iter()
+        .filter(|r| r.0 == "pipeline.job_played")
+        .collect();
+    assert_eq!(played.len(), 1);
+    assert_eq!(
+        played[0].3,
+        serde_json::json!({"project_id": p.get(), "pipeline_id": id, "job_id": deploy, "name": "deploy"})
+    );
+    t.drop_now().await;
+}
+
+/// M4 C12 review (HIGH): a manual job of a protected pipeline (its jobs get
+/// the project's secrets) is decided once more (`decide_protected`); a
+/// refusal starts nothing and writes no audit row. An unprotected pipeline
+/// never asks.
+#[tokio::test]
+async fn a_protected_pipelines_manual_job_is_decided_again() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let mut protected = new_pipeline(
+        p,
+        Source::Push,
+        Planned::Jobs(vec![a_manual_job("deploy", &[])]),
+    );
+    protected.protected = true;
+    let id = create(&t.db, &protected).await.expect("create").pipeline_id;
+    let (_, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    let job = jobs[0].id;
+    let refused = play_job_decided(
+        &t.db,
+        &by(Actor::User(alice), "req-play-protected"),
+        (p, id, job),
+        alice,
+        |_| Ok(()),
+        |_| Err(ForgeError::new(ErrorCode::Forbidden)),
+    )
+    .await
+    .expect_err("refused");
+    assert_eq!(refused.code(), ErrorCode::Forbidden);
+    let (_, jobs) = get(&t.db, p, id).await.expect("get").expect("found");
+    assert_eq!(jobs[0].status, JobStatus::Manual, "nothing started");
+    let mut asked = false;
+    play_job_decided(
+        &t.db,
+        &by(Actor::User(alice), "req-play-protected-2"),
+        (p, id, job),
+        alice,
+        |_| Ok(()),
+        |_| {
+            asked = true;
+            Ok(())
+        },
+    )
+    .await
+    .expect("allowed");
+    assert!(asked);
+
+    let mut open = new_pipeline(
+        p,
+        Source::Push,
+        Planned::Jobs(vec![a_manual_job("deploy", &[])]),
+    );
+    open.request.git_ref = branch("feature");
+    let open = create(&t.db, &open).await.expect("create").pipeline_id;
+    let (_, jobs) = get(&t.db, p, open).await.expect("get").expect("found");
+    play_job_decided(
+        &t.db,
+        &by(Actor::User(alice), "req-play-open"),
+        (p, open, jobs[0].id),
+        alice,
+        |_| Ok(()),
+        |_| Err(ForgeError::new(ErrorCode::Forbidden)),
+    )
+    .await
+    .expect("an unprotected pipeline never asks");
+    let rows = pipeline_audit(&t).await;
+    assert_eq!(
+        rows.iter().filter(|r| r.0 == "pipeline.job_played").count(),
+        2
+    );
     t.drop_now().await;
 }

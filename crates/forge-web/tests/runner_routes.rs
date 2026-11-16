@@ -125,6 +125,7 @@ impl World {
                     // M4 C6: a job naming secrets on an unprotected push is failed
                     // at the claim (ci_secret_routes.rs); this one names none.
                     secrets: Vec::new(),
+                    manual: false,
                 }]),
             },
         )

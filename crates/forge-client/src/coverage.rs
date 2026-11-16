@@ -786,6 +786,32 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/pipelines/{pipeline_id}/retry",
         Coverage::Command("pipeline retry"),
     ),
+    // M4 C12 (plan 14): a manual job's start and the pipeline schedules.
+    (
+        "POST",
+        "/api/v1/projects/{id}/pipelines/{pipeline_id}/jobs/{job_id}/play",
+        Coverage::Command("pipeline play"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/pipeline-schedules",
+        Coverage::Command("pipeline schedule list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/pipeline-schedules",
+        Coverage::Command("pipeline schedule create"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/pipeline-schedules/{schedule_id}",
+        Coverage::Command("pipeline schedule update"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/pipeline-schedules/{schedule_id}",
+        Coverage::Command("pipeline schedule delete"),
+    ),
     // M4 C5 (plan 14): CI outputs, decided on their marks.
     (
         "GET",

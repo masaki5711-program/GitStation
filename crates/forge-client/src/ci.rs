@@ -202,6 +202,7 @@ fn report_plan(cli: &Cli, io: &mut Io<'_>, file: &str, plan: &Plan) -> Result<()
                 "secrets": j.secrets,
                 "script_lines": j.script_lines,
                 "services": j.services,
+                "manual": j.manual,
             })
         })
         .collect();
@@ -232,8 +233,9 @@ fn report_plan(cli: &Cli, io: &mut Io<'_>, file: &str, plan: &Plan) -> Result<()
         } else {
             format!(" services {}", j.services.join(", "))
         };
+        let manual = if j.manual { " (manual)" } else { "" };
         human.push(format!(
-            "  wave {} {} [{}] timeout {}s{after}{secrets}{services}",
+            "  wave {} {}{manual} [{}] timeout {}s{after}{secrets}{services}",
             j.wave, j.name, j.stage, j.timeout_secs
         ));
     }

@@ -26,7 +26,7 @@ golden）は `docs/api/integration-feed.example.json`。forge-web のテスト `
   無効にした連携（`reason=integration_disabled`）: `FG-AUTH-0003`（403）。無効のサービスアカウント: `FG-AUTH-0004`。
 - 見えるイベント: 結びつけたプロジェクトのうち、サービスアカウントが **Reporter 以上のメンバー**で、削除待ちでないもの、の
   **連携の分類**（ADR-0016 §5: `merge_request.*`（`merge_request.work_items_changed` を含む。`merge_request.relink_requested` は除く）、
-  `repository.pushed`、`project.created` など、`check.completed`、`work_item.*`）の
+  `repository.pushed`、`project.created` など、`check.completed`、`work_item.*`、`spec.released`）の
   イベントを、連携の `event_types` で狭めたもの。判定は読むたびに `authorize()` で行う（`prove_visible`）。
 - **決して出ないもの**: `project_id` のないイベント（インスタンス全体）、`member.*`・`protected_ref.*`・`project.visibility_changed`
   （maintainer の分類）、`token.*` など（admin の分類）。結びつけを解除したプロジェクトは、**解除の前のイベントも後のイベントも**出ない。
@@ -86,6 +86,26 @@ ADR-0016 Amendment 2026-11-12。MR と作業項目のリンクが **手で**（�
   見つけ直さない。人が解除した作業項目は付かない。
 - タイトルの編集・push で付いた・外れたリンクには出ない（その合図は今までどおり `merge_request.updated` などで、`work_items` に今のリンクが入る）。
 - 見つけ直しの内部のイベント `merge_request.relink_requested` は admin の分類で、連携の feed には **出ない**。
+
+## `spec.released`（仕様の版を公開した、M4 C12）
+
+計画 04 §6 の `spec-publish`・計画 03 §5.1。版の形のタグ（`v1.5`、`spec-v2.0` など。`forge_core::spec_version`）を **作る push** があり、
+そのタグのコミットが **既定のブランチの上**（レビューを通ってマージされた）にあり、そのコミットにリポジトリ自身の仕様のディレクトリ
+（`.forge/repo.yml` の `path:`、無ければ `spec/`）があるとき、worker のジョブ `spec.publish` が 1 回だけ出す（`actor.kind = system`）。
+既定のブランチの外のタグ・仕様の無いリポジトリのタグには出ない（ログ `forge.spec.release_skipped` の `reason`）。
+
+| `data` の欄 | 内容 |
+|---|---|
+| `project_id`・`repository_id` | そのリポジトリ |
+| `tag`・`version` | `refs/tags/v1.5` と `v1.5` |
+| `sha` | タグが指すコミット（注釈付きのタグは剥がしたもの） |
+| `released_by` | タグを push した利用者の id（サービスアカウントを含む。分からなければ `null`） |
+| `default_branch` | 見つけた既定のブランチ（`refs/heads/main`） |
+
+- 同じ (プロジェクト, タグ) では 1 回だけ出る。タグを消して同じ名前で別のコミットに作り直しても、もう出ない（版は 1 回だけ公開する）。
+- タグを push したのが **人**（人のアカウントで、エージェントのトークンではない。サービスアカウント・ボットは不可）で、そのタグを覆う
+  保護の規則（`refs/tags/v*` など）があるときだけ出す（ログの `reason`: `pusher_not_a_person`・`tag_not_protected`）。
+- 未決定の項目の数（計画 07 W12）は schema_version 1 には入らない（後の版で足す）。
 
 ## `GET /api/v1/integrations/{id}/events/cursor`
 

@@ -100,6 +100,7 @@ fn write_tools_are_listed_with_their_annotations() {
         ("run_pipeline", false, false),
         ("cancel_pipeline", true, true),
         ("retry_pipeline", false, false),
+        ("play_pipeline_job", false, false),
     ] {
         let a = &find(name)["annotations"];
         assert_eq!(a["readOnlyHint"], false, "{name}");
@@ -605,6 +606,7 @@ fn the_tool_list_is_exactly_the_manifest() {
             "run_pipeline",
             "cancel_pipeline",
             "retry_pipeline",
+            "play_pipeline_job",
         ]
     );
 }

@@ -73,6 +73,8 @@ pub mod ci_token;
 pub mod ci_secret;
 // M4 C6: CI artifacts (paths, limits, retention).
 pub mod ci_artifact;
+// M4 C12: the time rule of scheduled pipelines.
+pub mod ci_schedule;
 pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;

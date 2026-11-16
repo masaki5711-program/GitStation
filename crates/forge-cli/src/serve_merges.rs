@@ -198,6 +198,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::DeployCommitNotAllowed
         | ErrorCode::DeploymentAbandoned
         | ErrorCode::DeployTargetNotAllowed
+        // M4 C12: pipeline schedules, never a merge's.
+        | ErrorCode::ScheduleOwnerNotAllowed
+        | ErrorCode::ScheduleLimitReached
+        | ErrorCode::ScheduleRateLimited
         // Plan 17 P17-2: the forge/ai-eval check's codes (never a merge's).
         | ErrorCode::BenchUnavailable
         | ErrorCode::BaselineMissing

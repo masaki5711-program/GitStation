@@ -1415,7 +1415,8 @@
       "skipped": "Tidak ada yang dijalankan",
       "invalid": "Definisi salah",
       "error": "Gagal dibaca",
-      "created": "Menunggu giliran"
+      "created": "Menunggu giliran",
+      "manual": "Manual"
     },
     "source": {
       "push": "push",
@@ -1448,7 +1449,10 @@
       "pendingOperate": "Menunggu dimulai. Akan berjalan saat runner tersedia. Untuk menghentikannya, tekan \"Batalkan\".",
       "pendingAsk": "Menunggu dimulai. Akan berjalan saat runner tersedia. Jika perlu dihentikan, minta Developer atau lebih tinggi di proyek ini.",
       "runningOperate": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Untuk menghentikannya, tekan \"Batalkan\".",
-      "runningAsk": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Jika perlu dihentikan, minta Developer atau lebih tinggi di proyek ini."
+      "runningAsk": "Sedang berjalan. Hasilnya akan muncul di halaman ini. Jika perlu dihentikan, minta Developer atau lebih tinggi di proyek ini.",
+      "manualOperate": "Tugas “{{job}}” dimulai secara manual. Tekan “Jalankan” bila sudah siap.",
+      "manualAsk": "Tugas “{{job}}” dimulai secara manual. Untuk menjalankannya, minta anggota Developer ke atas di proyek ini.",
+      "manualAskProtected": "Tugas “{{job}}” dimulai secara manual. Tugas ini berjalan pada cabang yang dilindungi, jadi untuk menjalankannya minta Maintainer ke atas di proyek ini."
     },
     "problems": {
       "title": "Kesalahan di .forge-ci.yml",
@@ -1474,7 +1478,11 @@
       "attempt": "percobaan ke-{{attempt}}",
       "needs": "menunggu: {{needs}}",
       "log": "Log",
-      "logOf": "Log job \"{{job}}\""
+      "logOf": "Log job \"{{job}}\"",
+      "play": "Jalankan",
+      "playing": "Memulai…",
+      "playOf": "Jalankan tugas “{{job}}”",
+      "manual": "Dimulai manual"
     },
     "log": {
       "title": "Log job \"{{job}}\"",
@@ -1491,7 +1499,48 @@
     "cancelConfirm": "Ini menghentikan job yang sedang berjalan. Batalkan pipeline?",
     "cancelYes": "Ya, batalkan",
     "cancelNo": "Biarkan berjalan",
-    "span": "{{from}} – {{to}}"
+    "span": "{{from}} – {{to}}",
+    "schedules": {
+      "title": "Jadwal",
+      "subtitle": "Menjalankan pipeline sebuah cabang pada waktu tertentu. Jadwal berjalan dengan hak orang yang terakhir menyimpannya dan tidak memakai rahasia.",
+      "open": "Lihat jadwal",
+      "add": "Tambah jadwal",
+      "listLabel": "Jadwal pipeline",
+      "empty": "Belum ada jadwal.",
+      "emptyManage": "Pakai “Tambah jadwal” untuk memilih cabang dan waktu.",
+      "emptyAsk": "Untuk membuatnya, minta anggota Maintainer ke atas di proyek ini.",
+      "active": "Aktif",
+      "paused": "Dihentikan",
+      "next": "Berikutnya {{time}}",
+      "owner": "Pemilik: pengguna #{{id}}",
+      "ownerYou": "Pemilik: Anda",
+      "edit": "Ubah",
+      "delete": "Hapus",
+      "deleteConfirm": "Hapus jadwal “{{name}}”?",
+      "deleteYes": "Ya, hapus",
+      "newTitle": "Tambah jadwal",
+      "editTitle": "Ubah jadwal",
+      "description": "Deskripsi",
+      "branch": "Cabang",
+      "cron": "Aturan waktu (cron)",
+      "cronHelp": "Lima bagian: menit jam tanggal bulan hari. Contoh: 0 2 * * * setiap hari pukul 2:00, 30 6 * * 1-5 hari kerja pukul 6:30. Paling sering sekali setiap 5 menit.",
+      "offset": "Zona waktu",
+      "activeLabel": "Aktif",
+      "ownerHelp": "Mengubah cabang atau aturan waktu menjadikan Anda pemilik; sejak itu jadwal berjalan dengan hak Anda. Mengubah deskripsi atau menghentikan dan melanjutkan tidak mengubah pemilik.",
+      "save": "Simpan",
+      "saving": "Menyimpan…",
+      "last": {
+        "never": "Belum pernah berjalan.",
+        "created": "Jalankan terakhir memulai sebuah pipeline.",
+        "noDefinition": "Jalankan terakhir tidak memulai apa pun: ujung cabang tidak memiliki .forge-ci.yml. Tambahkan berkasnya lalu push.",
+        "refMissing": "Jalankan terakhir tidak memulai apa pun: cabang {{branch}} tidak ada. Buat cabangnya, atau pilih cabang lain lewat “Ubah”.",
+        "refusedManage": "Dihentikan: pemilik tidak lagi boleh menjalankan pipeline. Aktifkan lewat “Ubah” lalu simpan agar berjalan dengan hak Anda.",
+        "refusedAsk": "Dihentikan: pemilik tidak lagi boleh menjalankan pipeline. Minta Maintainer proyek ini menyimpannya ulang.",
+        "failed": "Jalankan terakhir tidak dapat membuat pipeline. Minta administrator memeriksa jadwal #{{id}}.",
+        "busy": "Jalankan terakhir tidak memulai apa pun: pipeline sebelumnya masih berjalan.",
+        "capped": "Jalankan terakhir tidak memulai apa pun: pipeline terjadwal mencapai batas per jam. Jadwal berjalan lagi pada waktu berikutnya."
+      }
+    }
   },
   "editor": {
     "newTitle": "Berkas baru",

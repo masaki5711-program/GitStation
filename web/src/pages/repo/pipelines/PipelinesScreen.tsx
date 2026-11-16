@@ -13,7 +13,13 @@ import {
   pipelineSourceLabel,
   triggeredByLabel,
 } from '../../../features/pipelineLabels';
-import { commitUrl, encodePath, pipelineUrl, pipelinesUrl } from '../../../features/repoUrls';
+import {
+  commitUrl,
+  encodePath,
+  pipelineSchedulesUrl,
+  pipelineUrl,
+  pipelinesUrl,
+} from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { useSession } from '../../../session/session';
 import { RepoError } from '../common';
@@ -31,7 +37,10 @@ export function PipelinesScreen({ projectId, project }: { projectId: number; pro
 
   return (
     <>
-      <PageHeader title={title} />
+      <PageHeader
+        title={title}
+        actions={<Link to={pipelineSchedulesUrl(project)}>{t('pipelines.schedules.open')}</Link>}
+      />
       {page.isPending && <Loading />}
       {page.isError && (
         <RepoError
