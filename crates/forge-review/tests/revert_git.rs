@@ -695,3 +695,165 @@ async fn a_draft_conflict_is_recorded_and_unrelated_failures_draft_nothing() {
     assert_eq!(drafted[0]["payload"]["revert_iid"], serde_json::Value::Null);
     w.t.drop_now().await;
 }
+
+/// Review HIGH (C10): a merge queue train runs ONE pipeline, at its tip.
+/// Two merges land with no push pipeline between them and the tip fails:
+/// the failure cannot be pinned on the last merge (the first may have
+/// broken main), so nothing is drafted.
+#[tokio::test]
+async fn a_failure_after_several_unpiped_merges_drafts_nothing() {
+    let mut w = world().await;
+    let first = w.merged(MergeMethod::MergeCommit).await;
+    // A second merge request on top (the train's next step).
+    let second_head = commit(
+        &w.path,
+        &[
+            ("README.md", "base\n"),
+            ("feature.txt", "f\n"),
+            ("second.txt", "s\n"),
+        ],
+        Some(&first),
+    );
+    plumb(
+        &w.path,
+        &["update-ref", "refs/heads/second", &second_head],
+        None,
+    );
+    w.browser.invalidate(w.repo);
+    let proof = open_proof(&w.t, &session(w.dev), w.project, ("second", "main"), false)
+        .await
+        .expect("open proof");
+    w.mr = w
+        .review
+        .open(
+            &request("req-open-2"),
+            &proof,
+            ready(w.repo),
+            &NewFields {
+                title: "Second".to_owned(),
+                description: String::new(),
+            },
+        )
+        .await
+        .expect("open");
+    w.head = second_head;
+    let tip = w.merged(MergeMethod::MergeCommit).await;
+    // Pipelines at the base (passed) and at the tip (failed) only.
+    w.push_pipeline("main", &w.base, "succeeded").await;
+    w.push_pipeline("main", &tip, "failed").await;
+    let before = w.merge_request_count().await;
+    let report = w
+        .reverter
+        .draft_after_failure(
+            w.project,
+            &oid(&tip),
+            &RequestId::parse("req-draft").expect("id"),
+        )
+        .await
+        .expect("draft");
+    assert_eq!(report, DraftReport::Skipped("cause_ambiguous"));
+    assert_eq!(w.merge_request_count().await, before, "nothing opened");
+    assert!(w.events("merge_request.revert_drafted").await.is_empty());
+    // With a passing pipeline at the first step, the second is the cause.
+    w.push_pipeline("main", &first, "succeeded").await;
+    let report = w
+        .reverter
+        .draft_after_failure(
+            w.project,
+            &oid(&tip),
+            &RequestId::parse("req-draft-2").expect("id"),
+        )
+        .await
+        .expect("draft");
+    assert!(matches!(report, DraftReport::Opened { .. }), "{report:?}");
+    assert!(
+        w.tip("revert/mr-2").is_some(),
+        "the second merge request's revert"
+    );
+    w.t.drop_now().await;
+}
+
+/// Review MEDIUM 1: a revert refused under the lock (the caller was demoted
+/// after the route's proof) leaves no branch behind, so a later revert is
+/// not blocked by `branch_exists`.
+#[tokio::test]
+async fn a_revert_refused_under_the_lock_leaves_no_branch() {
+    let mut w = world().await;
+    w.merged(MergeMethod::MergeCommit).await;
+    let who = session(w.dev);
+    let (create, push) = w.proofs(&who).await.expect("proofs");
+    let _demoted = forge_db::projects::change_member(
+        &w.t.db,
+        &system("req-demote"),
+        w.project,
+        w.dev,
+        Role::Developer,
+        Role::Reporter,
+    )
+    .await
+    .expect("demote");
+    let err = w
+        .reverter
+        .revert(
+            &request("req-revert"),
+            &create,
+            &push,
+            ready(w.repo),
+            w.mr.iid,
+        )
+        .await
+        .expect_err("refused under the lock");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    assert!(w.tip("revert/mr-1").is_none(), "the branch was put back");
+    // The owner may revert now.
+    w.revert_as(w.owner, "req-owner").await.expect("reverted");
+    w.t.drop_now().await;
+}
+
+/// Review MEDIUM 2 and 3: once the revert is merged and the change comes
+/// back to main, the same merge request can be reverted again — the
+/// branch `revert/mr-1` (merged into main) moves forward. The person is the
+/// author of the revert commit, the server its committer.
+#[tokio::test]
+async fn a_merged_revert_branch_is_reused_for_the_next_revert() {
+    let mut w = world().await;
+    w.merged(MergeMethod::MergeCommit).await;
+    let original = w.mr.clone();
+    let opened = w.revert_as(w.dev, "req-revert").await.expect("reverted");
+    let raw = plumb(
+        &w.path,
+        &["cat-file", "commit", opened.commit.as_str()],
+        None,
+    );
+    assert!(raw.contains("author dave <dave@example.test>"), "{raw}");
+    assert!(
+        raw.contains("committer GitStation <revert@gitstation.invalid>"),
+        "{raw}"
+    );
+    // The revert merge request is merged (the real merge job).
+    w.mr = opened.merge_request.clone();
+    w.head = opened.commit.as_str().to_owned();
+    let after_revert = w.merged(MergeMethod::MergeCommit).await;
+    // The feature comes back (a revert of the revert, pushed directly).
+    let back = commit(
+        &w.path,
+        &[("README.md", "base\n"), ("feature.txt", "f\n")],
+        Some(&after_revert),
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/main", &back], None);
+    w.browser.invalidate(w.repo);
+    w.mr = original;
+    let again = w
+        .revert_as(w.dev, "req-revert-again")
+        .await
+        .expect("reverted again");
+    assert_eq!(again.parent.as_str(), back);
+    assert_eq!(w.tip("revert/mr-1").as_deref(), Some(again.commit.as_str()));
+    let files = plumb(
+        &w.path,
+        &["ls-tree", "--name-only", again.commit.as_str()],
+        None,
+    );
+    assert_eq!(files, "README.md");
+    w.t.drop_now().await;
+}

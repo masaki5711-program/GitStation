@@ -2141,8 +2141,7 @@ revert の MR」と、「main のパイプラインが失敗したら revert の
   採らなかった: 壊れた変更がマージを待つ形になり、レビューで見落とすと main をさらに壊す。手元の `git revert` で直してもらう。
 - **その他の拒否**: **FG-REVIEW-0029** RevertRefused（409、info）`reason=not_merged`・`no_applied_merge`・`target_missing`・
   `nothing_to_revert`・`branch_exists`（`revert/mr-<N>` があれば、取り消しの MR は既にある。表を作らず、ブランチの名前が取り消しと元の MR を
-  結ぶ）。ブランチを作った後に MR を開けなかったとき（ロックの下の拒否・DB）はブランチが残り、次の取り消しは `branch_exists`（そのブランチから
-  手で MR を開ける）。
+  結ぶ）。MR を開けなかったときはブランチを CAS で元に戻す（下のレビューでの修正 2）。
 - **権限（新しい Action は無い: 計画 14「既存の MR の Action」）**: ルート `POST /api/v1/projects/{id}/merge-requests/{iid}/revert` は、
   ローダーが **取り消しの MR を開く** `MergeRequestCreate` の文脈（呼び出した本人の、`revert/mr-<N>` → !N の target）を作り、レジストリが
   それで判定する（Developer 以上、トークンは `api`、エージェントの `api` トークンも可 — MR を開くのは人だけに限らない）。ハンドラーは
@@ -2162,9 +2161,21 @@ revert の MR」と、「main のパイプラインが失敗したら revert の
      コミッターは `GitStation <revert@gitstation.invalid>`（本人が書いたコミットではないため）。
   結果は戻される MR の **`merge_request.revert_drafted`**（集約は戻される MR、integration の分類、`outcome` opened / conflicted、
   `revert_iid`、dedup `merge_request_revert_drafted:<mr_id>:<merge_id>`）に記録し、通知の種類 **`mr_revert_drafted`** で作成者に知らせる
-  （メールとアプリ内。kanflow は integration の分類で受け取る）。通知の種類の CHECK はマイグレーション 20261219100000 で足した
+  （メールとアプリ内。kanflow は integration の分類で受け取る）。通知の種類の CHECK はマイグレーション 20261220100000 で足した
   （計画 14 の表では C10 のマイグレーションは「—」だったが、通知の種類が要るため足した。新しい表は作らない）。
   マージキューのバッチで 1 回に複数の MR が入ったときは、先端のコミットを作った MR（バッチの最後）だけが下書きの対象になる（M3 の限界）。
+- **レビューでの修正（git-protocol-reviewer、2026-11-15）**:
+  1. **原因の特定**: マージキューの列は先端にだけパイプラインを動かす。下書きは、失敗したコミットから target のマージを遡り、push の
+     パイプラインがある直近の祖先までに **このマージだけ** があるときに限る（祖先が失敗なら `target_already_failing`、パイプラインの無い
+     マージが複数あれば `cause_ambiguous` で何もしない。warn `forge.review.revert_draft_ambiguous`）。遡るのは 10 マージまで。
+  2. **書く順**: コミットとブランチ → MR を開く（ロックの下で判定し直す）→ その後に push として記録。MR を開けなければ、ブランチを
+     CAS で元に戻す（消す、または前の先端へ）。孤立したブランチが次の取り消しを止めない。
+  3. **ブランチの再利用**: `revert/mr-<iid>` の先端が target にマージ済みなら、次の取り消しはそのブランチを先へ進める（fast-forward の
+     push として判定）。マージされていなければ開いている取り消しなので `branch_exists`。
+  4. **作者とコミッター**: 人の取り消しは作者 = その人（DB の名前）、コミッター = サーバー（`GitStation <revert@gitstation.invalid>`）。
+  5. **push の検査（X8）を通さない理由**: revert のコミットの木は、target の履歴にある 3 つの木（マージしたコミット、その前の先端、
+     今の先端）の衝突なしの三方向マージで、どの blob も target の既存のコミットの blob（到着時に push の検査を通った）である。衝突の印は
+     コミットしない。ref の判定は push の経路と同じ（保護の規則）、身元は DB のもの（マージのコミットと同じ、§4.1）。
 - **ログ**: `forge.review.reverted`（人の取り消し）、`forge.review.revert_drafted`（ジョブの結果、`outcome`・`reason`）、
   `forge.review.revert_conflicted`（衝突したパスはログだけ）、`forge.review.revert_refused`、`forge.review.revert_draft_refused`、
   `forge.review.revert_branch_created`。ブランチの push の記録の失敗は 1 回ログに出す（ブランチは残る）。

@@ -40,10 +40,30 @@
 //! `outcome=conflicted` (the system's). forge never commits conflict
 //! markers. Every other refusal is `FG-REVIEW-0029` with its `reason`.
 //!
-//! If the merge request cannot be opened after the branch was created (a
-//! refusal under the lock, the database), the branch stays and the error is
-//! returned: a second revert then answers `branch_exists`, and a merge
-//! request can be opened from the branch by hand.
+//! **Order of writes.** The commit and the branch are written, then the
+//! merge request is opened (decided again under the lock); only then is the
+//! branch recorded as a push (`repository.pushed`: its pipeline). If the
+//! merge request cannot be opened, the branch is put back with a
+//! compare-and-swap (deleted, or moved back to its earlier tip) so no
+//! orphan blocks the next revert. The branch `revert/mr-<iid>` is reused
+//! when its tip is already merged into the target (a revert merged
+//! earlier); one that is not merged is an open revert (`branch_exists`).
+//!
+//! **Identity.** The author of a person's revert commit is the person
+//! (from the database), the committer the server
+//! (`GitStation <revert@gitstation.invalid>`); the system's draft is the
+//! server's on both.
+//!
+//! **Why the push checks (X8: blob size, secret scan) do not run on the
+//! revert commit.** Its tree is the clean three-way merge of three trees
+//! already on the target's history (the merged commit, the tip it was built
+//! on, the target's tip): every blob in it is a blob of an existing commit
+//! of the target branch, which passed the push checks (or a merge, whose
+//! sources did) when it arrived. git writes no new content in a clean
+//! merge, and forge never commits conflict markers. The ref decision is the
+//! push path's (`authorize_ref_updates` on the protection rules), and the
+//! identity is the database's, never the client's — as for a merge commit
+//! (ADR-0024 §4.1, no server hooks on the merge path).
 
 use std::time::Duration;
 
@@ -195,6 +215,23 @@ pub enum DraftReport {
     Skipped(&'static str),
 }
 
+/// Which merge a failing target pipeline is attributed to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Attribution {
+    /// The newest earlier commit with a push pipeline is the one this merge
+    /// was built on (or no earlier commit has one and nothing else merged
+    /// in between), and it did not fail.
+    ThisMerge,
+    /// That pipeline failed too: the target was broken before.
+    AlreadyFailing,
+    /// Other merges (a merge queue train's earlier steps) lie between it and
+    /// the failing commit: the cause cannot be told.
+    Ambiguous { merges: Vec<i64> },
+}
+
+/// The most merges walked back from a failing commit.
+const ATTRIBUTION_WALK: usize = 10;
+
 /// The applied merge of a merged merge request and the facts a revert is
 /// built from.
 struct Plan {
@@ -204,6 +241,20 @@ struct Plan {
     merged: ObjectId,
     before: ObjectId,
     branch: RefName,
+    /// The revert branch's tip when it exists already and is merged into
+    /// the target (a revert merged earlier, review MEDIUM 2): the branch is
+    /// moved forward instead of created.
+    existing: Option<ObjectId>,
+}
+
+impl Plan {
+    /// The branch's update as the push path decides it.
+    fn update(&self) -> RefUpdate {
+        match self.existing {
+            Some(_) => RefUpdate::FastForward,
+            None => RefUpdate::Create,
+        }
+    }
 }
 
 /// The tree the revert commit gets, on `parent`.
@@ -301,7 +352,7 @@ impl Reverter {
             .map_err(|e| self.refusal_logged(fail(e), &request.request_id))?;
         // The branch's creation, decided like a push before git writes it.
         let rules = forge_db::protected_refs::rules_for(&self.db, project).await?;
-        let update = RefUpdateCtx::new(plan.branch.clone(), RefUpdate::Create, &rules); // clone: the context owns its name
+        let update = RefUpdateCtx::new(plan.branch.clone(), plan.update(), &rules); // clone: the context owns its name
         authorize_ref_updates(push, std::slice::from_ref(&update))?
             .into_iter()
             .collect::<Result<Vec<()>, ForgeError>>()
@@ -310,14 +361,15 @@ impl Reverter {
             .build(&plan, &request.request_id)
             .await
             .map_err(|e| self.refusal_logged(fail(e), &request.request_id))?;
-        let identity = account_commit_identity(&self.db, user).await?;
+        // The author is the person; the committer is the server, which
+        // built the commit (review MEDIUM 3).
+        let author = account_commit_identity(&self.db, user).await?;
+        let committer = system_identity()?;
+        let ctx = change_context(request, create.principal(), user)?;
         let commit = self
-            .write(&plan, &built, (&identity, &identity))
+            .write(&plan, &built, (&author, &committer))
             .await
             .map_err(|e| self.refusal_logged(fail(e), &request.request_id))?;
-        let ctx = change_context(request, create.principal(), user)?;
-        self.record_branch(&ctx, &plan, &commit, &request.request_id)
-            .await;
         let new = NewMergeRequest {
             title: title_of(&plan.reverted),
             description: description_of(&plan.reverted, &plan.merge, &plan.merged),
@@ -325,12 +377,23 @@ impl Reverter {
             target_branch: plan.reverted.target_branch.clone(), // clone: as above
             draft: false,
         };
-        let (opened, ()) = review::open_mr_decided(&self.db, &ctx, project, user, &new, |facts| {
+        let opened = review::open_mr_decided(&self.db, &ctx, project, user, &new, |facts| {
             let fresh = MergeRequestCtx::new(loaded(&facts.project), wanted.clone()); // clone: the fresh context owns it
             create.reconfirm(account(facts.account), fresh).map(drop)
         })
-        .await
-        .map_err(|e| fail(e).with_context("phase", "open_merge_request"))?;
+        .await;
+        let opened = match opened {
+            Ok((opened, ())) => opened,
+            Err(e) => {
+                // Refused under the lock (or the database): no branch is
+                // left behind to block the next revert.
+                self.undo_branch(&plan, &commit, &request.request_id).await;
+                return Err(fail(e).with_context("phase", "open_merge_request"));
+            }
+        };
+        // Recorded as a push once the merge request exists.
+        self.record_branch(&ctx, &plan, &commit, &request.request_id)
+            .await;
         tracing::info!(
             target: "forge_review",
             event = "forge.review.reverted",
@@ -393,9 +456,9 @@ impl Reverter {
         let Some(merge) = applied_merge_at(&self.db, project, sha).await? else {
             return Ok(DraftReport::Skipped("no_merge"));
         };
+        // The target branch's own push pipeline at the merged commit, not a
+        // merge request's or another branch's that holds the same commit.
         let target = merge.target_branch.clone(); // clone: the merge moves into the plan
-                                                  // The target branch's own push pipeline at the merged commit, not a
-                                                  // merge request's or another branch's that holds the same commit.
         if push_pipeline_status(&self.db, project, &target, sha)
             .await?
             .as_deref()
@@ -403,15 +466,27 @@ impl Reverter {
         {
             return Ok(DraftReport::Skipped("not_target_pipeline"));
         }
-        // The branch was failing before this merge: the merge is not the
-        // cause (plan 04 M-4: identify the merge that broke it).
-        if let Some(before) = &merge.expected_old {
-            if push_pipeline_status(&self.db, project, &target, before)
-                .await?
-                .as_deref()
-                == Some("failed")
-            {
-                return Ok(DraftReport::Skipped("target_already_failing"));
+        // Plan 04 M-4: identify the merge that broke it. Only this merge
+        // may lie between the failing commit and the newest earlier commit
+        // of the target whose push pipeline ran (review HIGH: a merge queue
+        // train runs one pipeline at its tip, so several merges can share
+        // the failure).
+        match self.attribution(project, &target, &merge).await? {
+            Attribution::ThisMerge => {}
+            Attribution::AlreadyFailing => {
+                return Ok(DraftReport::Skipped("target_already_failing"))
+            }
+            Attribution::Ambiguous { merges } => {
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.review.revert_draft_ambiguous",
+                    request_id = %request_id,
+                    project_id = project.get(),
+                    sha = %sha.as_str(),
+                    merge_ids = ?merges,
+                    "the target's pipeline failed after several merges with no pipeline between                      them: no revert is drafted (revert the cause by hand)"
+                );
+                return Ok(DraftReport::Skipped("cause_ambiguous"));
             }
         }
         let iid = reverts::merge_request_iid(&self.db, merge.merge_request).await?;
@@ -463,7 +538,7 @@ impl Reverter {
                 .with_context("merge_id", merge.id));
         }
         let rules = forge_db::protected_refs::rules_for(&self.db, project).await?;
-        let update = RefUpdateCtx::new(plan.branch.clone(), RefUpdate::Create, &rules); // clone: the context owns its name
+        let update = RefUpdateCtx::new(plan.branch.clone(), plan.update(), &rules); // clone: the context owns its name
         let allowed = authorize_ref_updates(&push, std::slice::from_ref(&update))?
             .into_iter()
             .collect::<Result<Vec<()>, ForgeError>>();
@@ -488,13 +563,11 @@ impl Reverter {
             }
             Err(e) => return self.skipped(e, request_id),
         };
-        let (name, email, username) = SYSTEM_IDENTITY;
-        let identity = CommitIdentity::new(name, email, username)?;
+        let identity = system_identity()?;
         let commit = match self.write(&plan, &built, (&identity, &identity)).await {
             Ok(commit) => commit,
             Err(e) => return self.skipped(e, request_id),
         };
-        self.record_branch(&ctx, &plan, &commit, request_id).await;
         let new = NewMergeRequest {
             title: title_of(&plan.reverted),
             description: description_of(&plan.reverted, &plan.merge, &plan.merged),
@@ -503,16 +576,21 @@ impl Reverter {
             draft: true,
         };
         let wanted = create.ctx().merge_request().clone(); // clone: the fresh context owns it
-        let (opened, ()) =
-            review::open_mr_decided(&self.db, &ctx, project, author, &new, |facts| {
-                let fresh = MergeRequestCtx::new(loaded(&facts.project), wanted);
-                create.reconfirm(account(facts.account), fresh).map(drop)
-            })
-            .await
-            .map_err(|e| {
-                e.with_context("phase", "open_merge_request")
-                    .with_context("project_id", project.get())
-            })?;
+        let opened = review::open_mr_decided(&self.db, &ctx, project, author, &new, |facts| {
+            let fresh = MergeRequestCtx::new(loaded(&facts.project), wanted);
+            create.reconfirm(account(facts.account), fresh).map(drop)
+        })
+        .await;
+        let opened = match opened {
+            Ok((opened, ())) => opened,
+            Err(e) => {
+                self.undo_branch(&plan, &commit, request_id).await;
+                return Err(e
+                    .with_context("phase", "open_merge_request")
+                    .with_context("project_id", project.get()));
+            }
+        };
+        self.record_branch(&ctx, &plan, &commit, request_id).await;
         self.record_drafted(
             &ctx,
             project,
@@ -523,6 +601,46 @@ impl Reverter {
         )
         .await?;
         Ok(DraftReport::Opened { iid: opened.iid })
+    }
+
+    /// Walk back from `merge` through the target's applied merges until a
+    /// commit with a push pipeline of `target` (module docs, review HIGH).
+    async fn attribution(
+        &self,
+        project: ProjectId,
+        target: &RefName,
+        merge: &StoredMerge,
+    ) -> Result<Attribution, ForgeError> {
+        let mut merges = vec![merge.id];
+        let mut cur = merge.expected_old.clone(); // clone: walked below
+        for _ in 0..ATTRIBUTION_WALK {
+            let Some(at) = cur else {
+                break;
+            };
+            match push_pipeline_status(&self.db, project, target, &at)
+                .await?
+                .as_deref()
+            {
+                Some("failed") => return Ok(Attribution::AlreadyFailing),
+                Some(_) => break,
+                None => {}
+            }
+            // No pipeline here: was this commit itself made by a merge (a
+            // train step)? Then that merge is a candidate too.
+            match applied_merge_at(&self.db, project, &at).await? {
+                Some(earlier) if earlier.target_branch == *target => {
+                    merges.push(earlier.id);
+                    cur = earlier.expected_old;
+                }
+                // A commit pushed directly (or before CI ran): stop here.
+                Some(_) | None => break,
+            }
+        }
+        Ok(if merges.len() == 1 {
+            Attribution::ThisMerge
+        } else {
+            Attribution::Ambiguous { merges }
+        })
     }
 
     /// The facts of the revert of `reverted` (refusals: not merged, no
@@ -546,13 +664,36 @@ impl Reverter {
             return Err(refused("no_applied_merge").with_context("merge_id", merge.id));
         };
         let branch = revert_branch(reverted.iid)?;
-        if self
+        let existing = self
             .git
             .read_ref(&self.storage, repo, &branch, self.timeouts.read)
-            .await?
-            .is_some()
-        {
-            return Err(refused("branch_exists").with_context("branch", branch.as_str().to_owned()));
+            .await?;
+        if let Some(tip) = &existing {
+            // A revert branch already merged into the target (its merge
+            // request merged; e.g. a revert of the revert since) is reused:
+            // moved forward from its tip. One not merged is an open revert.
+            let target_tip = self
+                .git
+                .read_ref(
+                    &self.storage,
+                    repo,
+                    &reverted.target_branch,
+                    self.timeouts.read,
+                )
+                .await?;
+            let merged_in = match &target_tip {
+                Some(t) => {
+                    self.git
+                        .is_ancestor(&self.storage, repo, tip, t, self.timeouts.read)
+                        .await?
+                }
+                None => false,
+            };
+            if !merged_in {
+                return Err(
+                    refused("branch_exists").with_context("branch", branch.as_str().to_owned())
+                );
+            }
         }
         Ok(Plan {
             repo,
@@ -561,6 +702,7 @@ impl Reverter {
             merged,
             before,
             branch,
+            existing,
         })
     }
 
@@ -644,9 +786,16 @@ impl Reverter {
                 self.timeouts.write,
             )
             .await?;
-        let change = RefChange::Create {
-            name: plan.branch.clone(), // clone: the change owns its name
-            new: commit.clone(),       // clone: as above
+        let change = match &plan.existing {
+            None => RefChange::Create {
+                name: plan.branch.clone(), // clone: the change owns its name
+                new: commit.clone(),       // clone: as above
+            },
+            Some(old) => RefChange::Update {
+                name: plan.branch.clone(), // clone: as above
+                new: commit.clone(),       // clone: as above
+                old: old.clone(),          // clone: as above
+            },
         };
         let created = self
             .git
@@ -654,7 +803,15 @@ impl Reverter {
             .await;
         self.invalidate(plan.repo);
         if let Err(e) = created {
-            // A concurrent revert won the create: read again.
+            tracing::info!(
+                target: "forge_review",
+                event = "forge.review.revert_branch_not_written",
+                error_code = e.code().id(),
+                r#ref = plan.branch.as_str(),
+                error = %e,
+                "the revert branch's update-ref was refused; reading it again"
+            );
+            // A concurrent revert won the swap: read again.
             let now = self
                 .git
                 .read_ref(&self.storage, plan.repo, &plan.branch, self.timeouts.read)
@@ -680,23 +837,26 @@ impl Reverter {
         commit: &ObjectId,
         request_id: &RequestId,
     ) {
-        let zero = match ObjectId::parse(&"0".repeat(commit.as_str().len())) {
-            Ok(zero) => zero,
-            Err(e) => {
-                telemetry::log_failure(
-                    &e.with_context("phase", "revert_branch_record"),
-                    request_id,
-                );
-                return;
-            }
+        let (old, kind) = match &plan.existing {
+            Some(old) => (old.clone(), PushUpdateKind::FastForward), // clone: the record owns it
+            None => match ObjectId::parse(&"0".repeat(commit.as_str().len())) {
+                Ok(zero) => (zero, PushUpdateKind::Create),
+                Err(e) => {
+                    telemetry::log_failure(
+                        &e.with_context("phase", "revert_branch_record"),
+                        request_id,
+                    );
+                    return;
+                }
+            },
         };
         let record = PushRecord {
             repository_id: plan.repo,
             updates: vec![PushedRef {
                 name: plan.branch.clone(), // clone: the record owns its name
-                old: zero,
+                old,
                 new: commit.clone(), // clone: as above
-                kind: PushUpdateKind::Create,
+                kind,
                 commits: vec![commit.clone()], // clone: as above
                 total_commits: 1,
                 total_commits_partial: false,
@@ -723,6 +883,44 @@ impl Reverter {
                     .with_context("ref", plan.branch.as_str().to_owned()),
                 request_id,
             );
+        }
+    }
+
+    /// Put the branch back as it was before [`Reverter::write`] (review
+    /// MEDIUM 1: the merge request could not be opened): a compare-and-swap
+    /// on the revert commit, so a branch someone moved since is left alone.
+    /// A failure is logged once; the original error is what the caller
+    /// returns.
+    async fn undo_branch(&self, plan: &Plan, commit: &ObjectId, request_id: &RequestId) {
+        let change = match &plan.existing {
+            None => RefChange::Delete {
+                name: plan.branch.clone(), // clone: the change owns its name
+                old: commit.clone(),       // clone: as above
+            },
+            Some(before) => RefChange::Update {
+                name: plan.branch.clone(), // clone: as above
+                new: before.clone(),       // clone: as above
+                old: commit.clone(),       // clone: as above
+            },
+        };
+        let undone = self
+            .git
+            .update_refs(&self.storage, plan.repo, &[change], self.timeouts.write)
+            .await;
+        self.invalidate(plan.repo);
+        match undone {
+            Ok(_) => tracing::info!(
+                target: "forge_review",
+                event = "forge.review.revert_branch_undone",
+                request_id = %request_id,
+                r#ref = plan.branch.as_str(),
+                commit = commit.as_str(),
+            ),
+            Err(e) => telemetry::log_failure(
+                &e.with_context("phase", "revert_branch_undo")
+                    .with_context("ref", plan.branch.as_str().to_owned()),
+                request_id,
+            ),
         }
     }
 
@@ -814,6 +1012,12 @@ impl crate::Review {
     pub fn reverter(&self, git: Git, storage: StorageRoot) -> Reverter {
         Reverter::new(self.db.clone(), git, storage) // clone: the pool handle is shared
     }
+}
+
+/// The server's commit identity (the committer of every revert commit).
+fn system_identity() -> Result<CommitIdentity, ForgeError> {
+    let (name, email, username) = SYSTEM_IDENTITY;
+    CommitIdentity::new(name, email, username)
 }
 
 /// The reverted merge request's author as a principal for the system's
