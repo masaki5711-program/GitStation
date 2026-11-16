@@ -27,6 +27,7 @@ import { DiscussionThread, threadElementId } from '../../../features/mr/Discussi
 import { MrChanges } from '../../../features/mr/MrChanges';
 import { MrSidePanel } from '../../../features/mr/MrSidePanel';
 import { AutoMergeLine } from '../../../features/mr/AutoMergeLine';
+import { AutofixLine } from '../../../features/mr/AutofixLine';
 import { QueueSection } from '../../../features/mr/QueueControl';
 import { RevertSection } from '../../../features/mr/RevertControl';
 import { Announcer } from '../../../features/mr/announce';
@@ -316,6 +317,7 @@ function Overview({
     <>
       <ConditionsPanel projectId={projectId} iid={mr.iid} sourceBranch={mr.source_branch} />
       <AutoMergeLine projectId={projectId} iid={mr.iid} open={mr.state === 'open'} />
+      <AutofixLine projectId={projectId} iid={mr.iid} open={mr.state === 'open'} />
       <QueueSection projectId={projectId} project={project} iid={mr.iid} open={mr.state === 'open'} />
       <RevertSection projectId={projectId} project={project} iid={mr.iid} merged={mr.state === 'merged'} />
       <CheckRunsSection projectId={projectId} project={project} iid={mr.iid} head={head} />

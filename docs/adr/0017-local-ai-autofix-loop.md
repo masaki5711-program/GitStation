@@ -1361,3 +1361,73 @@ pub enum SyncTrigger { Schedule, KanflowNotification }
   （`reason=author_role`）。
 - **残すこと（M4 の締めで扱う）**: `forge/risk` は head とマージ基点の差分で判定し、キューで前に並ぶ MR を含めたマージ結果の差分では判定しない
   （前に並ぶ MR もそれぞれ判定され、組み合わせはキューのパイプラインが試す）。インスタンスの許可 `merge.allow_full_auto` も M4 の締めの項目。
+
+## Amendment（2026-11-16、M4 C14）: 自動修正の土台と決定的な修正
+
+**出どころ**: 計画 14 §5 の C14（`feat/ci-autofix-deterministic`、§6 の M4 の段の「計画の抜け」として 2026-11-14 に追加）、計画 04 C-5。
+LLM による修正と衝突の解消案（04 C-4）は M5（`forge-llm`）で、ここでは作らない。§1 の ②（入力の組み立て）・⑤⑥（候補のパイプラインと判定）は
+LLM の修正とともに M5 で入れる。
+
+### A. 決めたこと
+
+- **既定は無効**。表 `forge.project_autofix`（行がない = 無効。古いプロジェクトも新しいプロジェクトも同じ）。Maintainer 以上の人だけが
+  `PUT /api/v1/projects/{id}/autofix`（Action `AutofixSettingsManage`、人だけ、`api`）で有効・無効にし、監査 `autofix.settings_changed`。
+  有効にした人が **enabler** で、ボットの書き込みのたびにその人の今のロールで判定する（§2.5 のボット ∩ 作成者 ∩ enabler）。
+  MR ごとの有効・無効（`MergeRequestAutofixToggle`）は M5 で足す。サービスアカウント・ボットが作った MR は対象外（決定 5。`author_not_a_person`）。
+- **trigger**（購読者 `autofix-triggers`、`independent`）: MR の **今のマージ結果**（`merge_result_refs`）の `ci/pipeline` が `failure`
+  になった `check.completed`、と `merge_request.conflict_detected`。有効なプロジェクトの開いた MR にだけ、(MR, trigger, head, target)
+  ごとに 1 行の `queued` の試行（`forge.autofix_attempts`）を書く。購読者は git を呼ばない。
+- **修正は対象ブランチの `.forge-ci.yml` の `autofix.fixers` だけ**（MR の tree からは読まない）。種類は `format`・`lint`（パイプラインの失敗）と
+  `regenerate`（ロックファイル・生成ファイルの再生成。衝突は **衝突したパスがすべてその修正の `paths` に入るときだけ**、04 C-5）。
+  修正のジョブはイメージ・スクリプト・時間だけを持ち、`stage`・`needs`・`services`・`secrets`・`artifacts`・`tags` は書けない（`key_unknown`）。
+  1 回の試行 = 1 つの修正。変わらなかった・失敗したら、同じ head で次の修正を試す（なくなれば `skipped reason=no_fix`）。MR あたり 24 時間に 6 回まで（§3）。
+- **Runner の出力は tree だけ**（§1 ③④）: サーバーが **入力のコミット**（パイプラインの失敗は head の tree、衝突はサーバーが自分で計算した
+  `merge-tree --write-tree` の衝突の tree。どちらも `.forge-ci.yml` だけ対象ブランチのものに差し替え、親は head〔、target〕）を書き、
+  修正だけのパイプライン（source `autofix`、MR に結びつけない、保護なし、シークレットなし、`ci/pipeline` を報告しない）を作る。
+  Runner は修正のスクリプトのあと、**マウントの外の自分のリポジトリ**（作業ツリーの `.git` は読まない）で作業ツリーを 1 つの運搬用のコミットに記録し、
+  `refs/forge/autofix ^<入力>` の bundle を成果物 `autofix.bundle` として返す（変わらなければ返さない = `no_change`）。
+- **サーバーの検査**（すべて通ったときだけ積む）: 成果物の sha256 が行と同じ → bundle のヘッダを先に読み、ref は `refs/forge/autofix` の 1 つ、
+  前提は **入力のコミットだけ**（衝突でも入力のコミットが head と target を親に持つ）→ `fetch.fsckObjects` で取り込み（ref は書かない。
+  参照されないオブジェクトは保守の prune で消える）、運搬用のコミットの親が入力のコミットでなければ拒否 → `.forge-ci.yml` を変えていれば拒否
+  → ボットの tree = 候補の tree の `.forge-ci.yml` を base のものに戻したもの → `diff-tree -r --no-renames --raw`（base とボットの tree）を
+  `forge_core::autofix::check_scope` で判定 → 変わったファイルを 1 MiB まで読み、秘密情報は拒否、バイナリは提案、衝突は §1.2 のとおり
+  **衝突したパスの衝突した hunk の中だけ**（`within_conflict_hunks`: ブロックの外の行はすべて順に残し、印は残さない）で、衝突したパスはすべて解消されていること。
+- **範囲の規則**（§2.1 の M4 の形）: 拒否（`FG-GIT-0037`、alert）は、修正の `paths` の外、衝突していないパス、§2.1 の固定の拒否
+  （`.forge-ci.yml`、`.forge/**`、`CODEOWNERS`、`Cargo.toml`、`build.rs`、ツールチェーン、`.claude/**` などのエージェントの設定、秘密情報らしい名前）、
+  対象ブランチの `.forge-ci.yml` のスクリプトが名指しするファイル、削除、100644 以外のモード、`.git` の変種などの不正なパス、大文字小文字だけの衝突、100 ファイル超、
+  1 MiB 超。**提案だけ**（`FG-REVIEW-0031`）は、マイグレーション・バイナリ・保護されたパス（`forge_core::auto_merge::is_protected_path`）。
+  提案は MR の 1 行がパスを名指しする（ボットはコメントを書かない。MR のコメントでの提案は M5）。
+- **ボットのコミット**: サーバーが `commit-tree`（作者・コミッター `forge-autofix <autofix@forge.invalid>`、メッセージ `autofix(<trigger>): …`、
+  トレーラー `Forge-Autofix-Attempt` / `-Trigger` / `-Fixer`、`Forge-Request-Id`、`Signed-off-by` なし）。真実は `forge.autofix_attempts.commit_sha`
+  （ソースブランチを動かす **前に** 記録するので、MR の版のジョブはこの head に **承認を引き継がない**。決定 7）。
+- **反映**: 着地の直前に DB の事実で判定し直し（`prove(RepoPush)`）、ソースブランチを head から比較して交換で進め（動いていれば `superseded`、
+  `FG-GIT-0038`。force push も人のコミットの上書きもしない）、push として記録する（`repository.pushed`: MR の版、パイプライン）。
+  候補のパイプライン（§1 ⑤⑥）は M4 では回さない: 決定的な修正の結果は、積んだ後の MR の通常のパイプラインが確かめる（承認は取り消されるので、
+  緑になるまでマージされない）。
+- **ボットの主体**: `Credential::Autofix`（`Principal::autofix()`、人でない、ログインもトークンもない、forge-review の worker だけが作る:
+  試験 `only_the_autofix_worker_builds_the_autofix_bot`）。`authorize()` の最初の腕（`forge-auth/src/autofix.rs`）で、許すのは
+  **`RepoPush` を `Resource::Autofix` の上でだけ**: ブランチ、早送り、**保護なし（管理者の MR でも）**、MR が開いている、自動修正が有効、
+  作成者と enabler が有効な Developer 以上。それ以外の Action（承認、マージ、キュー、予約、保護 ref・保護パス、設定、デプロイ、代理、読み取り）は
+  すべて `FG-AUTH-0003 reason=autofix_not_allowed`（`matrix_rows_autofix.rs` が全 Action の deny を生成）。他の主体は `Resource::Autofix` を断られる。
+  §2.5 の `AutofixPush` / `AutofixCandidateWrite` を別の Action にせず `RepoPush` に寄せたのは、ルートを持たない Action を置く場所（`app::INTERNAL`）が
+  まだないため（ゲート `authz-coverage` はルートか `PLANNED` を求める）。判定の点は同じで、M5 で `INTERNAL` を入れるときに分ける。
+- **見え方**: MR の 1 行 `GET …/merge-requests/{iid}/autofix`（`MergeRequestRead`）。画面は「何を自動で直したか / なぜ拒否・提案だけにしたか /
+  次に何をするか」を 1 行で出す（ja / en / id）。試行の終わりはイベント `merge_request.autofix_finished`（integration の分類: kanflow が読める）。
+- **エラーコード**: `FG-GIT-0037` AutofixCandidateInvalid（alert、Runbook `autofix`）、`FG-GIT-0038` AutofixLandingRaced（info）、
+  `FG-CI-0031` AutofixFixerFailed（warn）、`FG-REVIEW-0031` AutofixProposalOnly（info）、`FG-AUTH-0024` AutofixPushDenied（warn。§5 の表では alert
+  だったが、保護されたソースブランチや権限の変化は普通に起きるので warn にした）。
+
+### B. 採らなかった案
+
+- **新しい機能クレート `forge-autofix`**: 今は作らない。M4 の worker は MR の書き込み（forge-review の Reverter と同じ形）なので forge-review に置き、
+  成果物のファイルは forge-cli が渡す関数（`BundleFile`）で読む（機能クレートどうしは依存しない）。LLM の部分（M5）で分ける。
+- **隔離した別のリポジトリに展開してから移す**: 取り込みは本体のリポジトリへの `fetch`（fsck、ref なし）にした。ref を書かないので誰にも見えず、
+  前提とヘッダの検査を先に行い、大きさは 64 MiB で切る。別リポジトリと alternates の組み合わせより手順が少なく、同じ性質を保つ。
+- **Runner が作業ツリーの `.git` で bundle を作る**: 採らない。コンテナが書ける `.git`（hooks、`core.fsmonitor` など）を Runner のホストの git が読むことになる。
+
+### C. 残すこと（M5 と M4 の締め）
+
+- pre-receive で人の push のボットの ID・`Forge-Autofix-` のトレーラーを拒否する（§2.5）。今はトレーラーを信じる場所がない（真実は DB）ので後回し。
+- 「AI 変更」タブ、P-9 の `autofix`、`forge doctor` の `autofix.stuck_attempts` / `autofix.orphan_candidate_refs`、指標 `forge_autofix_*`、
+  試行の期限（2 時間）、緊急停止 `AutofixPause`（インスタンス全体。今はプロジェクトごとの無効化だけ）、MR ごとの有効・無効。
+- §2.2 のテストを弱めない判定（JUnit の件数）は候補のパイプラインとともに M5。

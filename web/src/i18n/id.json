@@ -624,6 +624,19 @@
       "removeConfirm": "Hapus syarat",
       "removed": "Syarat merge {{pattern}} dihapus."
     },
+    "autofix": {
+      "title": "Perbaikan otomatis",
+      "intro": "Saat pipeline merge request gagal atau berkonflik dengan branch tujuan, GitStation dapat menjalankan perbaikan yang terdaftar di autofix.fixers pada .forge-ci.yml branch tujuan (format, lint --fix, pembuatan ulang lock file) dan menambahkan hasilnya sebagai commit bot perbaikan otomatis.",
+      "on": "Perbaikan otomatis aktif.",
+      "off": "Perbaikan otomatis nonaktif (bawaan).",
+      "changedAt": "(diubah {{at}})",
+      "scope": "Bot hanya mengubah jalur yang tercantum di paths perbaikan, tidak pernah branch yang dilindungi. Migrasi, file biner, dan jalur yang dilindungi hanya diusulkan. Commit bot membatalkan semua persetujuan.",
+      "turnOn": "Aktifkan perbaikan otomatis",
+      "turnOff": "Nonaktifkan perbaikan otomatis",
+      "turnedOn": "Perbaikan otomatis aktif. Commit bot juga diperiksa dengan peran Anda.",
+      "turnedOff": "Perbaikan otomatis nonaktif.",
+      "maintainerOnly": "Hanya Maintainer (atau lebih tinggi) yang dapat mengaktifkan atau menonaktifkan perbaikan otomatis."
+    },
     "autoMerge": {
       "title": "Merge otomatis",
       "intro": "Saat merge request dapat digabung, merge otomatis GitStation memasukkannya ke antrean merge dan menggabungkannya bila pengujian antrean hijau. Persetujuan dan aturan cabang terlindungi tetap berlaku.",
@@ -1571,6 +1584,17 @@
       "direct": "Perubahan di-commit ke {{branch}}.",
       "mrFailed": "Merge request tidak dapat dibuka: {{message}}",
       "openMr": "Buka merge request"
+    }
+  },
+  "autofix": {
+    "label": "Perbaikan otomatis:",
+    "line": {
+      "running": "perbaikan {{fixer}} sedang berjalan pada merge request ini.",
+      "applied": "diperbaiki otomatis: {{fixer}} menambahkan commit {{sha}} (persetujuan dimulai lagi). Periksa pipeline yang baru.",
+      "proposed": "tidak di-commit: perbaikan {{fixer}} menyentuh {{paths}} (migrasi, file biner, atau jalur yang dilindungi). Jalankan perbaikan itu sendiri lalu push.",
+      "refused": "perbaikan otomatis ditolak: perbaikan mengubah {{paths}} di luar yang boleh diubah. Tidak ada yang di-commit. Beri tahu administrator (ID permintaan {{requestId}}).",
+      "failed": "job perbaikan {{fixer}} gagal; tidak ada yang berubah. Periksa log-nya di Pipeline.",
+      "denied": "bot perbaikan otomatis tidak boleh menulis branch ini (branch dilindungi, atau peran pembuat). Perbaiki secara manual."
     }
   },
   "autoMerge": {
