@@ -13,6 +13,11 @@
 -- nothing changes for a project until a person turns it on.
 --   enabled               on / off
 --   changed_by / _at      who changed it last, and when
+--   version               1, +1 on every change: part of the dedup key of
+--                         the `check.risk` jobs a change asks for
+--                         (`risk:<project>:<head>:mr<id>:ai<version>`), so
+--                         a head assessed before the change is assessed
+--                         again with the rules now in force
 -- Turning it off removes nothing: history, releases, signatures and
 -- deployment records stay (plan 17 §0.4).
 
@@ -20,7 +25,8 @@ CREATE TABLE forge.project_ai_assets (
     project_id  bigint PRIMARY KEY REFERENCES forge.projects (id),
     enabled     boolean NOT NULL,
     changed_by  bigint NOT NULL REFERENCES forge.users (id),
-    changed_at  timestamptz NOT NULL DEFAULT now()
+    changed_at  timestamptz NOT NULL DEFAULT now(),
+    version     bigint NOT NULL DEFAULT 1 CONSTRAINT project_ai_assets_version CHECK (version >= 1)
 );
 CREATE INDEX project_ai_assets_changed_by ON forge.project_ai_assets (changed_by);
 

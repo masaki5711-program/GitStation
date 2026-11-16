@@ -16,6 +16,9 @@ regex.workspace = true
 # parsers already in the tree (no I/O).
 toml.workspace = true
 serde_json.workspace = true
+# The duplicate-key-refusing JSON reader of the AI cases (a Deserialize
+# impl; no I/O).
+serde.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

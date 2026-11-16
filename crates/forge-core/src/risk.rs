@@ -768,7 +768,7 @@ pub fn ai_case_content_kind(file: &ChangedFile) -> Option<ContentKind> {
 /// holds raw data ([`forge_doc::ai_asset::case_raw_data`]), never the text.
 fn ai_case_findings(path: &str, content: &str) -> Vec<Finding> {
     let mut found: Vec<Finding> = Vec::new();
-    for raw in forge_doc::ai_asset::case_raw_data(content) {
+    for raw in forge_doc::ai_asset::case_raw_data(path, content) {
         let line = u32::try_from(raw.line).unwrap_or(u32::MAX);
         let f = Finding::of("ai_case_raw_data").at(path).on_line(line);
         if !found.contains(&f) {

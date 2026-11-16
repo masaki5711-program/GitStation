@@ -77,6 +77,17 @@ pub enum AssetKind {
     Owners,
 }
 
+/// A file under `evals/` that is no case: documentation (`.md`, any case)
+/// and `.gitkeep`. Everything else there is a case (any extension: a
+/// misnamed or misplaced case is still scanned; the lint says
+/// `case_path_invalid`).
+fn not_a_case(name: &str) -> bool {
+    name == ".gitkeep"
+        || name
+            .rsplit_once('.')
+            .is_some_and(|(_, e)| e.eq_ignore_ascii_case("md"))
+}
+
 /// The asset at `path`, `None` for any other file (README, `.forge-ci.yml`).
 pub fn kind_of(path: &str) -> Option<AssetKind> {
     let parts: Vec<&str> = path.split('/').collect();
@@ -88,8 +99,8 @@ pub fn kind_of(path: &str) -> Option<AssetKind> {
         ["tools", "tools.toml"] => Some(AssetKind::Tools),
         ["models", "models.toml"] => Some(AssetKind::Models),
         ["bench", "bench.toml"] => Some(AssetKind::Bench),
-        ["evals", "cases", ..] if ext("json") => Some(AssetKind::Case),
-        ["evals", "baselines", _] if ext("json") => Some(AssetKind::Baseline),
+        ["evals", "baselines", ..] => Some(AssetKind::Baseline),
+        ["evals", .., last] if !not_a_case(last) => Some(AssetKind::Case),
         ["thresholds", "proposals", _] if ext("md") => Some(AssetKind::ThresholdProposal),
         ["thresholds", ..] => Some(AssetKind::Threshold),
         ["CODEOWNERS"] | [".gitstation", "CODEOWNERS"] => Some(AssetKind::Owners),
@@ -118,7 +129,8 @@ pub fn is_case_path(path: &str) -> bool {
 /// Something in a case that a synthetic replica never holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RawData {
-    /// 1-based (1 for a finding about the whole case).
+    /// 1-based (1 for a finding about the whole case, or one whose place
+    /// in the text cannot be told — an escaped key).
     pub line: usize,
     /// `absolute_timestamp`, `ip_address`, `plant_code`, `free_text`,
     /// `person`, `provenance` (missing, or not `replica` / `synthetic`),
@@ -127,29 +139,40 @@ pub struct RawData {
 }
 
 /// Keys whose value is a person's free text (the feedback; plan 17 §4:
-/// never, not even summarised — it is an injection path).
+/// never, not even summarised — it is an injection path). Compared after
+/// JSON decoding, lower-cased, `-` read as `_`.
 const FREE_TEXT_KEYS: &[&str] = &[
     "feedback",
     "feedback_text",
     "comment",
     "comments",
     "free_text",
+    "freetext",
     "remarks",
+    "remark",
+    "note_text",
     "operator_comment",
 ];
-/// Keys naming a person.
+/// Keys naming a person (as [`FREE_TEXT_KEYS`]).
 const PERSON_KEYS: &[&str] = &[
     "staff_id",
+    "staff_no",
     "employee_id",
+    "employee_no",
     "employee_number",
     "operator",
+    "operator_id",
     "operator_name",
+    "person",
     "person_name",
     "user_name",
+    "username",
+    "worker",
+    "worker_name",
 ];
-/// Keys that must appear once (a second one could hide the first from a
-/// JSON reader that keeps the last).
-const ONCE_KEYS: &[&str] = &["provenance", "classification", "id", "kind"];
+/// A number at least this large under a date-like key is an epoch time
+/// (seconds since 2001-09-09, or milliseconds).
+const EPOCH_MIN: f64 = 1_000_000_000.0;
 
 fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
@@ -159,12 +182,14 @@ fn digits(bytes: &[u8], at: usize, n: usize) -> bool {
     (at..at + n).all(|i| bytes.get(i).is_some_and(u8::is_ascii_digit))
 }
 
-/// `YYYY-MM-DD` (with or without a time after it) starting at `at`.
+/// `YYYY-MM-DD`, `YYYY/MM/DD` or `YYYY.MM.DD` (with or without a time after
+/// it) starting at `at`.
 fn date_at(b: &[u8], at: usize) -> bool {
+    let sep = b.get(at + 4).copied();
     digits(b, at, 4)
-        && b.get(at + 4) == Some(&b'-')
+        && matches!(sep, Some(b'-' | b'/' | b'.'))
         && digits(b, at + 5, 2)
-        && b.get(at + 7) == Some(&b'-')
+        && b.get(at + 7).copied() == sep
         && digits(b, at + 8, 2)
         && !b.get(at + 10).is_some_and(u8::is_ascii_digit)
 }
@@ -194,6 +219,27 @@ fn ipv4_at(b: &[u8], at: usize) -> usize {
     i - at
 }
 
+/// The length of an IPv6 address at `at` (0: none): hex groups and colons,
+/// with `::` or at least five colons (a time `08:15:00` is neither).
+fn ipv6_at(b: &[u8], at: usize) -> usize {
+    let mut i = at;
+    while b.get(i).is_some_and(|c| c.is_ascii_hexdigit() || *c == b':') {
+        i += 1;
+    }
+    let Some(token) = b.get(at..i) else {
+        return 0;
+    };
+    let colons = token.iter().filter(|c| **c == b':').count();
+    let compressed = token.windows(2).any(|w| w == b"::");
+    let hex = token.iter().any(u8::is_ascii_hexdigit);
+    let ends_ok = !b.get(i).is_some_and(|c| is_word(*c));
+    if token.len() >= 3 && hex && ends_ok && ((compressed && colons >= 2) || colons >= 5) {
+        token.len()
+    } else {
+        0
+    }
+}
+
 /// A real plant code `P<3 digits>` at `at` (`P9xx` is the synthetic range).
 fn plant_at(b: &[u8], at: usize) -> bool {
     b.get(at) == Some(&b'P')
@@ -202,31 +248,20 @@ fn plant_at(b: &[u8], at: usize) -> bool {
         && !b.get(at + 4).is_some_and(|c| is_word(*c))
 }
 
-/// The JSON key at `at` (`"name"` followed by `:`), if any.
-fn key_at(line: &str, at: usize) -> Option<&str> {
-    let rest = line.get(at + 1..)?;
-    let end = rest.find('"')?;
-    let name = rest.get(..end)?;
-    let after = rest.get(end + 1..)?.trim_start();
-    after.starts_with(':').then_some(name)
-}
-
-fn scan_line(
-    line: &str,
-    number: usize,
-    out: &mut Vec<RawData>,
-    keys: &mut BTreeMap<String, usize>,
-) {
-    let b = line.as_bytes();
+/// The kinds of raw data in one text (a raw line or a decoded string).
+fn scan_text(text: &str) -> Vec<&'static str> {
+    let b = text.as_bytes();
+    let mut found = Vec::new();
     let mut hit = |kind: &'static str| {
-        let found = RawData { line: number, kind };
-        if !out.contains(&found) {
-            out.push(found);
+        if !found.contains(&kind) {
+            found.push(kind);
         }
     };
     let mut i = 0;
     while i < b.len() {
-        let boundary = i == 0 || b.get(i - 1).is_some_and(|c| !is_word(*c) && *c != b'.');
+        let boundary = i == 0
+            || b.get(i - 1)
+                .is_some_and(|c| !is_word(*c) && !matches!(*c, b'.' | b':'));
         if boundary && date_at(b, i) {
             hit("absolute_timestamp");
             i += 10;
@@ -239,34 +274,61 @@ fn scan_line(
                 i += n;
                 continue;
             }
+            let n = ipv6_at(b, i);
+            if n > 0 {
+                hit("ip_address");
+                i += n;
+                continue;
+            }
         }
         if boundary && plant_at(b, i) {
             hit("plant_code");
             i += 4;
             continue;
         }
-        if b.get(i) == Some(&b'"') {
-            if let Some(key) = key_at(line, i) {
-                let lower = key.to_ascii_lowercase();
-                if FREE_TEXT_KEYS.contains(&lower.as_str()) {
-                    hit("free_text");
-                }
-                if PERSON_KEYS.contains(&lower.as_str()) {
-                    hit("person");
-                }
-                if ONCE_KEYS.contains(&lower.as_str()) {
-                    let seen = keys.entry(lower).or_insert(0);
-                    *seen += 1;
-                    if *seen > 1 {
-                        hit("duplicate_key");
-                    }
-                }
-                i += key.len() + 2;
-                continue;
-            }
-        }
         i += 1;
     }
+    found
+}
+
+/// A key as compared: lower-cased, `-` and spaces read as `_`.
+fn key_norm(key: &str) -> String {
+    key.chars()
+        .map(|c| match c {
+            '-' | ' ' => '_',
+            other => other.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
+fn key_kinds(key: &str) -> Vec<&'static str> {
+    let k = key_norm(key);
+    let mut out = Vec::new();
+    if FREE_TEXT_KEYS.contains(&k.as_str()) {
+        out.push("free_text");
+    }
+    if PERSON_KEYS.contains(&k.as_str()) {
+        out.push("person");
+    }
+    out
+}
+
+/// A key whose value is a point in time.
+fn date_like_key(key: &str) -> bool {
+    let k = key_norm(key);
+    k.ends_with("_at")
+        || ["time", "date", "timestamp", "epoch", "when"]
+            .iter()
+            .any(|w| k.contains(w))
+}
+
+/// The JSON key at `at` of a raw line (`"name"` followed by `:`), if any.
+fn key_at(line: &str, at: usize) -> Option<&str> {
+    let rest = line.get(at + 1..)?;
+    let end = rest.find('"')?;
+    let name = rest.get(..end)?;
+    let after = rest.get(end + 1..)?.trim_start();
+    after.starts_with(':').then_some(name)
 }
 
 fn line_of_key(text: &str, key: &str) -> usize {
@@ -276,43 +338,227 @@ fn line_of_key(text: &str, key: &str) -> usize {
         .map_or(1, |i| i + 1)
 }
 
-/// The raw data in a case's text (plan 17 §4): absolute dates and times,
-/// IPv4 addresses, real plant codes (anything but `P9xx`), a person's free
-/// text or name by key, a `provenance` other than `replica` / `synthetic`,
-/// a `classification` of `confidential`, a key that must be unique written
-/// twice. A case that is no JSON object cannot be shown free of raw data
-/// (`not_json`). Line order; each kind once per line.
-pub fn case_raw_data(text: &str) -> Vec<RawData> {
-    let mut out = Vec::new();
-    let mut keys = BTreeMap::new();
-    for (index, line) in text.lines().enumerate() {
-        scan_line(line, index + 1, &mut out, &mut keys);
+/// A JSON value read with every duplicate key refused (a reader that keeps
+/// the last one must not be able to hide the first).
+mod strict {
+    use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+
+    pub struct Strict(pub serde_json::Value);
+
+    impl<'de> Deserialize<'de> for Strict {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_any(V).map(Strict)
+        }
     }
-    // Values a reader keeps — after the duplicate check above.
-    match serde_json::from_str::<serde_json::Value>(text) {
-        Ok(serde_json::Value::Object(map)) => {
-            let provenance = map.get("provenance").and_then(serde_json::Value::as_str);
-            if !matches!(provenance, Some("replica" | "synthetic")) {
+
+    struct V;
+
+    impl<'de> Visitor<'de> for V {
+        type Value = serde_json::Value;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("JSON")
+        }
+        fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+            Ok(v.into())
+        }
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(v.into())
+        }
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(v.into())
+        }
+        fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(serde_json::Number::from_f64(v).map_or(serde_json::Value::Null, Into::into))
+        }
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(v.into())
+        }
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E> {
+            Ok(v.into())
+        }
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(serde_json::Value::Null)
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut items = Vec::new();
+            while let Some(Strict(v)) = seq.next_element::<Strict>()? {
+                items.push(v);
+            }
+            Ok(serde_json::Value::Array(items))
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut out = serde_json::Map::new();
+            while let Some(key) = map.next_key::<String>()? {
+                let Strict(value) = map.next_value::<Strict>()?;
+                if out.contains_key(&key) {
+                    return Err(serde::de::Error::custom("duplicate_key"));
+                }
+                out.insert(key, value);
+            }
+            Ok(serde_json::Value::Object(out))
+        }
+    }
+}
+
+/// One parsed document: `Err(kind)` when it cannot be read
+/// (`duplicate_key` / `not_json`).
+fn parse_strict(text: &str) -> Result<serde_json::Value, &'static str> {
+    match serde_json::from_str::<strict::Strict>(text) {
+        Ok(strict::Strict(v)) => Ok(v),
+        Err(e) if e.to_string().contains("duplicate_key") => Err("duplicate_key"),
+        Err(_) => Err("not_json"),
+    }
+}
+
+/// Every key and decoded string of `value` (depth-bounded: deeper is
+/// `not_json`, it cannot be shown free of raw data).
+fn walk(
+    value: &serde_json::Value,
+    key: Option<&str>,
+    text: &str,
+    base_line: usize,
+    depth: usize,
+    out: &mut Vec<RawData>,
+) {
+    let line = |key: Option<&str>| key.map_or(base_line, |k| line_of_key(text, k).max(base_line));
+    if depth > 64 {
+        out.push(RawData {
+            line: base_line,
+            kind: "not_json",
+        });
+        return;
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                for kind in key_kinds(k).into_iter().chain(scan_text(k)) {
+                    out.push(RawData {
+                        line: line(Some(k)),
+                        kind,
+                    });
+                }
+                walk(v, Some(k), text, base_line, depth + 1, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                walk(v, key, text, base_line, depth + 1, out);
+            }
+        }
+        serde_json::Value::String(s) => {
+            for kind in scan_text(s) {
                 out.push(RawData {
-                    line: line_of_key(text, "provenance"),
-                    kind: "provenance",
+                    line: line(key),
+                    kind,
                 });
             }
-            if map
-                .get("classification")
-                .and_then(serde_json::Value::as_str)
-                == Some("confidential")
-            {
+            let epoch_text = s.len() >= 10 && s.bytes().all(|c| c.is_ascii_digit());
+            if epoch_text && key.is_some_and(date_like_key) {
                 out.push(RawData {
-                    line: line_of_key(text, "classification"),
-                    kind: "confidential",
+                    line: line(key),
+                    kind: "absolute_timestamp",
                 });
             }
         }
-        Ok(_) | Err(_) => out.push(RawData {
-            line: 1,
+        serde_json::Value::Number(n) => {
+            let big = n.as_f64().is_some_and(|f| f.abs() >= EPOCH_MIN);
+            if big && key.is_some_and(date_like_key) {
+                out.push(RawData {
+                    line: line(key),
+                    kind: "absolute_timestamp",
+                });
+            }
+        }
+        serde_json::Value::Bool(_) | serde_json::Value::Null => {}
+    }
+}
+
+/// The top-level checks of one case object.
+fn case_object(value: &serde_json::Value, text: &str, base_line: usize, out: &mut Vec<RawData>) {
+    let serde_json::Value::Object(map) = value else {
+        out.push(RawData {
+            line: base_line,
             kind: "not_json",
-        }),
+        });
+        return;
+    };
+    let at = |k: &str| line_of_key(text, k).max(base_line);
+    let provenance = map.get("provenance").and_then(serde_json::Value::as_str);
+    if !matches!(provenance, Some("replica" | "synthetic")) {
+        out.push(RawData {
+            line: at("provenance"),
+            kind: "provenance",
+        });
+    }
+    let classification = map.get("classification").and_then(serde_json::Value::as_str);
+    if classification.is_some_and(|c| c.eq_ignore_ascii_case("confidential")) {
+        out.push(RawData {
+            line: at("classification"),
+            kind: "confidential",
+        });
+    }
+    walk(value, None, text, base_line, 0, out);
+}
+
+fn is_jsonl(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, e)| e.eq_ignore_ascii_case("jsonl"))
+}
+
+/// The raw data in a case at `path` (plan 17 §4). The text is scanned line
+/// by line, and the **decoded** JSON is walked (so `\u` escapes and `\/`
+/// hide nothing): absolute dates (`-`, `/` or `.`) and times, epoch numbers
+/// under date-like keys, IPv4 and IPv6 addresses, real plant codes
+/// (anything but `P9xx`), a person's name or free text by key (any case),
+/// a `provenance` other than `replica` / `synthetic`, `confidential`, a key
+/// written twice. A `.jsonl` case is one object per line. A case that
+/// cannot be read as JSON objects cannot be shown free of raw data
+/// (`not_json` / `duplicate_key`): fail closed. Line order; each kind once
+/// per line; never the matched value.
+pub fn case_raw_data(path: &str, text: &str) -> Vec<RawData> {
+    let mut out = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let number = index + 1;
+        for kind in scan_text(line) {
+            out.push(RawData { line: number, kind });
+        }
+        let b = line.as_bytes();
+        for (i, c) in b.iter().enumerate() {
+            if *c == b'"' {
+                if let Some(key) = key_at(line, i) {
+                    for kind in key_kinds(key) {
+                        out.push(RawData { line: number, kind });
+                    }
+                }
+            }
+        }
+    }
+    if is_jsonl(path) {
+        let mut any = false;
+        for (index, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            any = true;
+            match parse_strict(line) {
+                Ok(v) => case_object(&v, line, index + 1, &mut out),
+                Err(kind) => out.push(RawData {
+                    line: index + 1,
+                    kind,
+                }),
+            }
+        }
+        if !any {
+            out.push(RawData {
+                line: 1,
+                kind: "not_json",
+            });
+        }
+    } else {
+        match parse_strict(text) {
+            Ok(v) => case_object(&v, text, 1, &mut out),
+            Err(kind) => out.push(RawData { line: 1, kind }),
+        }
     }
     out.sort_by_key(|r| (r.line, r.kind));
     out.dedup();
@@ -949,19 +1195,20 @@ fn case_id_ok(s: &str) -> bool {
 
 fn case(file: &AssetFile<'_>, text: &str, out: &mut Vec<Problem>) {
     let p = file.path;
-    for raw in case_raw_data(text) {
+    for raw in case_raw_data(p, text) {
         out.push(Problem::new(p, raw.line, "case_raw_data", Some(raw.kind)));
     }
     let parts: Vec<&str> = p.split('/').collect();
+    let json = p.rsplit_once('.').is_some_and(|(_, e)| e == "json");
     let dir = match parts.as_slice() {
-        ["evals", "cases", dir, _] => *dir,
+        ["evals", "cases", dir, _] if json => *dir,
         _ => {
             out.push(Problem::new(p, 0, "case_path_invalid", None));
             return;
         }
     };
     let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(text) else {
-        return; // `case_raw_data not_json` above
+        return; // `case_raw_data not_json` / `duplicate_key` above
     };
     let s = |key: &str| map.get(key).and_then(serde_json::Value::as_str);
     match s("id") {

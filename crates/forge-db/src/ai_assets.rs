@@ -7,6 +7,12 @@
 //!
 //! Every decision is the caller's (`AiAssetsSettingManage`, decided again
 //! on the locked project by `decide`).
+//!
+//! A change asks for `forge/risk` again (review MEDIUM 3): in the same
+//! transaction, one `check.risk` job for the head of each open merge
+//! request of the project (at most [`MAX_REASSESSED`], newest first), keyed
+//! with the setting's `version` — a head assessed with the setting off is
+//! assessed again with the AI asset rules on, and the other way round.
 
 use forge_core::ai_assets::AiAssetsChange;
 use forge_core::ids::{ProjectId, UserId};
@@ -20,6 +26,9 @@ use crate::review::auto_merge::ChangeOutcome;
 use crate::{query_error, read_query_error, Db};
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
+
+/// The most open merge requests whose head a change asks to assess again.
+pub const MAX_REASSESSED: i64 = 500;
 
 /// A project's `ai_assets.enabled` as stored (or the default, off).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,7 +144,7 @@ pub async fn set_enabled_decided<P>(
                 "INSERT INTO forge.project_ai_assets (project_id, enabled, changed_by, changed_at) \
                  VALUES ($1, $2, $3, now()) ON CONFLICT (project_id) DO UPDATE SET \
                  enabled = EXCLUDED.enabled, changed_by = EXCLUDED.changed_by, \
-                 changed_at = now()",
+                 changed_at = now(), version = forge.project_ai_assets.version + 1",
             )
             .bind(project.get())
             .bind(enabled)
@@ -149,6 +158,17 @@ pub async fn set_enabled_decided<P>(
         let after = tx
             .step(|c| async move { setting_on(c, project).await })
             .await?;
+        let origin = ctx.request_id.clone(); // clone: each job owns its origin
+        let asked = tx
+            .step(|c| async move { reassess(c, project, origin).await })
+            .await?;
+        tracing::info!(
+            target: "forge_db",
+            event = "forge.ai_assets.reassess",
+            project_id = project.get(),
+            heads = asked,
+            "open merge request heads asked to assess forge/risk again"
+        );
         let change = AiAssetsChange {
             project,
             from: before.enabled,
@@ -161,6 +181,47 @@ pub async fn set_enabled_decided<P>(
     }
     .await;
     tx.settle(action, outcome).await
+}
+
+/// One `check.risk` job per open merge request head of `project`, keyed
+/// with the setting's current version (module docs). How many were asked.
+async fn reassess(
+    conn: &mut PgConnection,
+    project: ProjectId,
+    origin: forge_core::RequestId,
+) -> Result<usize, ForgeError> {
+    let version: i64 = sqlx::query_scalar(
+        "SELECT version FROM forge.project_ai_assets WHERE project_id = $1",
+    )
+    .bind(project.get())
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| query_error("ai_assets.version", e))?;
+    let heads: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, head_sha FROM forge.merge_requests \
+         WHERE project_id = $1 AND state = 'open' AND head_sha IS NOT NULL \
+         ORDER BY id DESC LIMIT $2",
+    )
+    .bind(project.get())
+    .bind(MAX_REASSESSED)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| query_error("ai_assets.open_heads", e))?;
+    for (mr, head) in &heads {
+        let head = forge_core::ObjectId::parse(head).map_err(|_| {
+            ForgeError::new(forge_errors::ErrorCode::Internal)
+                .with_context("reason", "invalid_head_sha")
+                .with_context("merge_request_id", *mr)
+        })?;
+        let job = crate::checks::risk::risk_job(
+            &crate::checks::risk::RiskRequest { project, head },
+            &format!("mr{mr}:ai{version}"),
+            origin.clone(), // clone: each job owns its origin
+            None,
+        )?;
+        let _enqueued = crate::jobs::enqueue_on(&mut *conn, &job).await?;
+    }
+    Ok(heads.len())
 }
 
 #[cfg(test)]

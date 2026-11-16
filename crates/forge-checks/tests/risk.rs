@@ -1080,3 +1080,20 @@ async fn an_opted_in_project_stops_on_raw_data_in_a_case_and_warns_on_any_asset(
     assert!(!run.summary.contains("ai_case_raw_data"), "{}", run.summary);
     w.t.drop_now().await;
 }
+
+/// Review MEDIUM 3: the setting is read for every run, so the same head
+/// assessed with the setting off and again after it was turned on gets
+/// the AI asset rules (forge-db asks for that run when the setting
+/// changes: `a_change_asks_to_assess_every_open_head_again`).
+#[tokio::test]
+async fn a_head_assessed_with_the_setting_off_stops_once_it_is_turned_on() {
+    let (w, base) = world_with_main().await;
+    let head = w.commit(&ai_asset_files(), Some(&base));
+    let off = w.assess(&head).await;
+    assert_eq!(off.conclusion, Some(CheckConclusion::Success), "{}", off.summary);
+    enable_ai_assets(&w, true).await;
+    let on = w.assess(&head).await;
+    assert_eq!(on.conclusion, Some(CheckConclusion::Failure), "{}", on.summary);
+    assert!(on.summary.contains("- stop ai_case_raw_data"), "{}", on.summary);
+    w.t.drop_now().await;
+}

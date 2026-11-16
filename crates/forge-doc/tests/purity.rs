@@ -7,7 +7,7 @@
 /// Every dependency forge-doc may have (normal and build).
 /// `toml` and `serde_json`: the AI assets' formats (plan 17 P17-3,
 /// ADR-0035), pure parsers.
-const ALLOWED: &[&str] = &["forge-errors", "yaml-rust2", "regex", "toml", "serde_json"];
+const ALLOWED: &[&str] = &["forge-errors", "yaml-rust2", "regex", "toml", "serde_json", "serde"];
 
 fn names(table: Option<&toml::Value>) -> Vec<String> {
     table

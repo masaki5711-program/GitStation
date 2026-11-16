@@ -147,3 +147,59 @@ async fn a_refused_decision_writes_nothing() {
     );
     w.t.drop_now().await;
 }
+
+/// Review MEDIUM 3: a change asks `forge/risk` again for the head of every
+/// open merge request, keyed with the setting's version (a head assessed
+/// before is not taken for assessed with the new rules).
+#[tokio::test]
+async fn a_change_asks_to_assess_every_open_head_again() {
+    let w = world().await;
+    let mr = crate::review::open_mr_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-open"),
+        w.web.project_id,
+        w.alice,
+        &crate::review::NewMergeRequest {
+            title: "Merge feature".to_owned(),
+            description: String::new(),
+            source_branch: forge_core::RefName::parse("refs/heads/feature").expect("branch"),
+            target_branch: forge_core::RefName::parse("refs/heads/main").expect("branch"),
+            draft: false,
+        },
+        |_| Ok(()),
+    )
+    .await
+    .map(|(stored, ())| stored)
+    .expect("open");
+    let head = forge_core::ObjectId::parse(&"a".repeat(40)).expect("sha");
+    crate::review::record_mr_version(&w.t.db, &system("req-v1"), mr.id, &head, Some(w.alice))
+        .await
+        .expect("version");
+    let keys = || async {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT dedup_key FROM forge.jobs WHERE kind = 'check.risk' AND dedup_key LIKE '%:ai%' ORDER BY id",
+        )
+        .fetch_all(&mut w.t.superuser().await)
+        .await
+        .expect("keys");
+        rows
+    };
+    let _ = w.set(true, "req-on").await;
+    let _ = w.set(false, "req-off").await;
+    let _ = w.set(true, "req-on-again").await;
+    let p = w.web.project_id.get();
+    let m = mr.id.get();
+    let h = head.as_str();
+    assert_eq!(
+        keys().await,
+        vec![
+            format!("risk:{p}:{h}:mr{m}:ai1"),
+            format!("risk:{p}:{h}:mr{m}:ai2"),
+            format!("risk:{p}:{h}:mr{m}:ai3"),
+        ]
+    );
+    // Already so: nothing is asked.
+    let _ = w.set(true, "req-on-still").await;
+    assert_eq!(keys().await.len(), 3);
+    w.t.drop_now().await;
+}
