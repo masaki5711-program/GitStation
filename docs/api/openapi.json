@@ -2869,6 +2869,17 @@
           "path": {
             "description": "The path segment (ADR-0015 rules; a top-level name must not be\nreserved).",
             "type": "string"
+          },
+          "visibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisibilityName",
+                "description": "`private` (the default: widened when it should be shown, plan 15\n§6) or `internal`; `internal` below a private group is\n`FG-REPO-0033`."
+              }
+            ]
           }
         },
         "required": [
@@ -5330,6 +5341,10 @@
           "display_name": {
             "type": "string"
           },
+          "effective_visibility": {
+            "description": "What applies: the narrowest on the chain to the top level.",
+            "type": "string"
+          },
           "id": {
             "format": "int64",
             "minimum": 1,
@@ -5353,16 +5368,24 @@
               "null"
             ]
           },
+          "pass_through": {
+            "description": "Shown only because the caller holds a role below it: the name and\npath only (the description is empty; members and other subgroups\nstay hidden).",
+            "type": "boolean"
+          },
           "path": {
             "description": "The current full path (`group/sub`).",
             "type": "string"
           },
           "role": {
-            "description": "The caller's effective role (`guest` … `owner`); `null` without one.",
+            "description": "The caller's effective role (`guest` … `owner`); `null` without\none. (This is the viewer's role of plan 15 MR 3.)",
             "type": [
               "string",
               "null"
             ]
+          },
+          "visibility": {
+            "description": "The group's own setting, `private` or `internal` (plan 15 MR 3).",
+            "type": "string"
           }
         },
         "required": [
@@ -5374,7 +5397,10 @@
           "display_name",
           "description",
           "created_at",
-          "role"
+          "role",
+          "visibility",
+          "effective_visibility",
+          "pass_through"
         ],
         "type": "object"
       },
@@ -5404,6 +5430,31 @@
           "items",
           "next_cursor",
           "has_more"
+        ],
+        "type": "object"
+      },
+      "GroupVisibilityBody": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/groups/{id}/visibility` → the group as it is now and\nwhat the change did (or, with `preview`, would do).",
+        "properties": {
+          "affected_projects": {
+            "description": "The live projects below whose effective visibility changes with it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "changed": {
+            "description": "Written (`false` for a preview or when nothing changed).",
+            "type": "boolean"
+          },
+          "group": {
+            "$ref": "#/components/schemas/GroupBody"
+          }
+        },
+        "required": [
+          "group",
+          "changed",
+          "affected_projects"
         ],
         "type": "object"
       },
@@ -6059,6 +6110,10 @@
           "display_name": {
             "type": "string"
           },
+          "effective_visibility": {
+            "description": "What applies: the narrowest on the chain to the top level.",
+            "type": "string"
+          },
           "id": {
             "format": "int64",
             "minimum": 1,
@@ -6073,6 +6128,10 @@
             "minimum": 1,
             "type": "integer"
           },
+          "pass_through": {
+            "description": "Shown only because the caller holds a role below it: the name and\npath only (the description is empty).",
+            "type": "boolean"
+          },
           "path": {
             "description": "The current full path (`group/sub`).",
             "type": "string"
@@ -6083,6 +6142,10 @@
               "string",
               "null"
             ]
+          },
+          "visibility": {
+            "description": "The group's own setting, `private` or `internal` (plan 15 MR 3).",
+            "type": "string"
           }
         },
         "required": [
@@ -6093,7 +6156,10 @@
           "display_name",
           "description",
           "created_at",
-          "role"
+          "role",
+          "visibility",
+          "effective_visibility",
+          "pass_through"
         ],
         "type": "object"
       },
@@ -9759,6 +9825,23 @@
         "required": [
           "user_id",
           "revoked_sessions"
+        ],
+        "type": "object"
+      },
+      "SetGroupVisibility": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/groups/{id}/visibility` (plan 15 MR 3).",
+        "properties": {
+          "preview": {
+            "description": "Decide and count without writing: what the screen shows before a\nnarrowing is confirmed (`affected_projects`).",
+            "type": "boolean"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/VisibilityName"
+          }
+        },
+        "required": [
+          "visibility"
         ],
         "type": "object"
       },
@@ -14530,6 +14613,58 @@
         "summary": "Move or rename a group and its subtree (Owner on both sides; the top level: administrators)",
         "x-forge-action": "GroupTransfer",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/groups/{id}/visibility": {
+      "patch": {
+        "operationId": "patch_api_v1_groups_id_visibility",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetGroupVisibility"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupVisibilityBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change (or preview) a group's visibility (group Owner, web session)",
+        "x-forge-action": "GroupVisibilityChange",
+        "x-forge-max-body-bytes": 16384
       }
     },
     "/api/v1/integrations/{id}/act-as/claim": {
