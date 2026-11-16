@@ -1826,6 +1826,83 @@ pub enum PipelineCommand {
         #[arg(long, value_name = "FILE")]
         output: std::path::PathBuf,
     },
+    /// Start a `when: manual` job (M4 C12, Developer).
+    Play {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        pipeline: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        job: i64,
+    },
+    /// A project's pipeline schedules (M4 C12): list (readers); create,
+    /// update, delete (a Maintainer, a person, who becomes the owner).
+    #[command(disable_help_subcommand = true)]
+    Schedule {
+        #[command(subcommand)]
+        command: PipelineScheduleCommand,
+    },
+}
+
+/// The settings of `gstn pipeline schedule create|update`.
+#[derive(clap::Args, Debug)]
+pub struct ScheduleArgs {
+    /// What it is for (one line, at most 255 bytes).
+    #[arg(long, value_parser = parse_text)]
+    pub description: String,
+    /// The branch (`main` or `refs/heads/main`).
+    #[arg(long = "ref", value_parser = parse_text, value_name = "BRANCH")]
+    pub git_ref: String,
+    /// Five-field cron, at most once every 5 minutes (`0 2 * * *`).
+    #[arg(long, value_parser = parse_text)]
+    pub cron: String,
+    /// The UTC offset the rule is read at, in minutes (540 = JST, 420 = WIB).
+    #[arg(
+        long = "utc-offset",
+        value_name = "MINUTES",
+        allow_hyphen_values = true
+    )]
+    pub utc_offset: i32,
+    /// Save it paused (it never runs until saved active).
+    #[arg(long)]
+    pub inactive: bool,
+}
+
+/// `gstn pipeline schedule` (M4 C12).
+#[derive(Subcommand, Debug)]
+pub enum PipelineScheduleCommand {
+    /// The project's schedules: branch, rule, owner, next and last run.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Create a schedule; you become its owner (it runs with your rights).
+    Create {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[command(flatten)]
+        settings: ScheduleArgs,
+    },
+    /// Replace a schedule's settings; you become its owner when the branch,
+    /// rule or offset changes (or after its owner was refused).
+    Update {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        schedule: i64,
+        #[command(flatten)]
+        settings: ScheduleArgs,
+    },
+    /// Delete a schedule.
+    Delete {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        schedule: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// A job's attempt: 1..=100.

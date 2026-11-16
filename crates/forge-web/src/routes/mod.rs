@@ -75,6 +75,8 @@ pub mod job_fetch;
 pub mod ci_variables;
 // M4 C11: deployments.
 pub mod deploy;
+// M4 C12: a project's pipeline schedules.
+pub mod pipeline_schedules;
 // M4 C6: CI artifacts (a job's upload, its needs, the project's reads).
 pub mod ci_artifacts;
 // ── M3 I2: project webhooks (ADR-0016 §8) ──

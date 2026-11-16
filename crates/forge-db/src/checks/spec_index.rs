@@ -385,6 +385,7 @@ impl Subscriber for SpecIndexRequests {
                 | EventType::MergeRequestWorkItemsChanged
                 | EventType::MergeRequestRelinkRequested
                 | EventType::WebhookDisabled
+                | EventType::SpecReleased
                 | EventType::MergeRequestRevertDrafted
                 | EventType::MergeRequestAutofixFinished => Ok(()),
             }

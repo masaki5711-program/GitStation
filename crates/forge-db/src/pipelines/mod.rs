@@ -167,11 +167,14 @@ pub enum JobStatus {
     Succeeded,
     Failed,
     Canceled,
+    /// A `when: manual` job waiting for a person (M4 C12).
+    Manual,
 }
 
 impl JobStatus {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Manual => "manual",
             Self::Created => "created",
             Self::Pending => "pending",
             Self::Running => "running",
@@ -189,6 +192,7 @@ impl JobStatus {
             "succeeded" => Some(Self::Succeeded),
             "failed" => Some(Self::Failed),
             "canceled" => Some(Self::Canceled),
+            "manual" => Some(Self::Manual),
             _ => None,
         }
     }
@@ -317,6 +321,9 @@ pub struct NewCiJob {
     pub timeout_s: i32,
     pub tags: Vec<String>,
     pub secrets: Vec<String>,
+    /// `when: manual` (M4 C12): written as `manual`, run when a person
+    /// starts it.
+    pub manual: bool,
 }
 
 /// What the planning found.
@@ -382,6 +389,14 @@ fn row_of(
         Planned::Jobs(jobs) if jobs.is_empty() => {
             (PipelineStatus::Skipped, None, serde_json::json!([]), &[])
         }
+        // M4 C12: only manual jobs — nothing runs on its own; the jobs are
+        // written so a person can start one.
+        Planned::Jobs(jobs) if jobs.iter().all(|j| j.manual) => (
+            PipelineStatus::Skipped,
+            None,
+            serde_json::json!([]),
+            jobs.as_slice(),
+        ),
         Planned::Jobs(jobs) => (
             PipelineStatus::Pending,
             None,
@@ -460,15 +475,17 @@ async fn insert(
         return Ok(None);
     };
     for job in jobs {
-        let status = if job.needs.is_empty() {
+        let status = if job.manual {
+            JobStatus::Manual
+        } else if job.needs.is_empty() {
             JobStatus::Pending
         } else {
             JobStatus::Created
         };
         sqlx::query(
             "INSERT INTO forge.ci_jobs (pipeline_id, project_id, name, stage, wave, needs, \
-               image, timeout_s, tags, secrets, status) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+               image, timeout_s, tags, secrets, status, manual) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(pipeline_id)
         .bind(r.project.get())
@@ -481,6 +498,7 @@ async fn insert(
         .bind(&job.tags)
         .bind(&job.secrets)
         .bind(status.as_str())
+        .bind(job.manual)
         .execute(&mut *c)
         .await
         .map_err(|e| query_error(query, e))?;
@@ -503,6 +521,21 @@ pub(crate) async fn insert_autofix(
     insert(c, new, "pipelines.create_autofix")
         .await?
         .ok_or_else(|| internal("autofix_pipeline_deduplicated"))
+}
+
+/// [`insert`] for another module's transaction (M4 C12: a scheduled run
+/// is written with its schedule's row and audit row).
+pub(crate) async fn insert_pipeline(
+    c: &mut sqlx::PgConnection,
+    new: &NewPipeline,
+    query: &'static str,
+) -> Result<Option<i64>, ForgeError> {
+    insert(c, new, query).await
+}
+
+/// The status `new` is written with.
+pub(crate) fn planned_status(new: &NewPipeline) -> PipelineStatus {
+    row_of(new).0
 }
 
 /// Write `new` and its jobs in one transaction (forge's own pipelines: a
@@ -667,6 +700,8 @@ pub struct StoredJob {
     /// The secret names only (values never reach the database here, C6).
     pub secrets: Vec<String>,
     pub status: JobStatus,
+    /// `when: manual` (M4 C12): stays true after a person started it.
+    pub manual: bool,
     pub attempt: i32,
     pub error_code: Option<String>,
     pub created_at: String,
@@ -804,6 +839,7 @@ type JobRow = (
     String,
     Option<String>,
     Option<String>,
+    bool,
 );
 
 /// One pipeline of `project` with its jobs (by wave, stage, name); `None`
@@ -832,7 +868,8 @@ pub async fn get(
                    attempt, error_code, \
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
                    to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
-                   to_char(finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
+                   to_char(finished_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
+                   manual \
                  FROM forge.ci_jobs WHERE pipeline_id = $1 ORDER BY wave, stage, name",
             )
             .bind(pipeline)
@@ -865,6 +902,7 @@ pub async fn get(
             created_at: j.12,
             started_at: j.13,
             finished_at: j.14,
+            manual: j.15,
         });
     }
     Ok(Some((stored, out)))
@@ -1051,6 +1089,170 @@ pub async fn retry_pipeline_decided<P>(
     decide: impl FnOnce(&ProjectUpdateFacts) -> Result<P, ForgeError>,
 ) -> Result<P, ForgeError> {
     transition(db, ctx, target, caller, Transition::Retry, decide).await
+}
+
+/// The pipeline states a manual job may be started in (M4 C12): a live one,
+/// or one that finished on its other jobs (`skipped`: only manual jobs).
+/// Not a cancelled one (a person stopped it), nor `invalid` / `error` (no
+/// jobs).
+fn playable(status: PipelineStatus) -> bool {
+    matches!(
+        status,
+        PipelineStatus::Pending
+            | PipelineStatus::Running
+            | PipelineStatus::Succeeded
+            | PipelineStatus::Failed
+            | PipelineStatus::Skipped
+    )
+}
+
+fn play_conflict(
+    project: ProjectId,
+    pipeline: i64,
+    job: i64,
+    reason: &'static str,
+    status: &str,
+) -> ForgeError {
+    ForgeError::new(ErrorCode::PipelineStateConflict)
+        .with_context("operation", "play")
+        .with_context("reason", reason)
+        .with_context("status", status.to_owned())
+        .with_context("pipeline_id", pipeline)
+        .with_context("job_id", job)
+        .with_context("project_id", project.get())
+}
+
+/// Start a `when: manual` job (M4 C12): `manual` → `pending`, and a
+/// finished pipeline is `running` again; one `pipeline.job_played` audit
+/// row, decided again on the locked project and caller (`decide`) and, when
+/// the pipeline is `protected` (its jobs get the project's secrets), once
+/// more on the flag read under the row's lock (`decide_protected`:
+/// forge-pipelines decides `PipelinePlayProtected`, M4 C12 review). The
+/// pipeline row is locked before the job (the lock order of cancel and
+/// completion). Returns the job's name. Errors (nothing written):
+/// `decide`'s, `decide_protected`'s, `FG-REPO-0005 resource=pipeline|job`
+/// (none in `project`),
+/// `FG-CI-0003 operation=play` with `reason` = `not_manual` (the job is not
+/// waiting for a person: started already, or not a manual job),
+/// `pipeline_state` (cancelled, invalid, error) or `needs_not_succeeded`
+/// (a job it needs has not succeeded).
+pub async fn play_job_decided<P>(
+    db: &Db,
+    ctx: &ChangeContext,
+    (project, pipeline, job): (ProjectId, i64, i64),
+    caller: UserId,
+    decide: impl FnOnce(&ProjectUpdateFacts) -> Result<P, ForgeError>,
+    decide_protected: impl FnOnce(&ProjectUpdateFacts) -> Result<(), ForgeError>,
+) -> Result<(String, P), ForgeError> {
+    const QUERY: &str = "pipelines.play_job";
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = async {
+        let facts = decided_facts(&mut tx, project, caller).await?;
+        let decided = decide(&facts)?;
+        let found: Option<(String, bool)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "SELECT status, protected FROM forge.ci_pipelines \
+                     WHERE project_id = $1 AND id = $2 FOR UPDATE",
+                )
+                .bind(project.get())
+                .bind(pipeline)
+                .fetch_optional(c)
+                .await
+                .map_err(|e| query_error(QUERY, e))
+            })
+            .await?;
+        let (status, protected) = found.ok_or_else(|| {
+            ForgeError::new(ErrorCode::NotFound)
+                .with_context("resource", "pipeline")
+                .with_context("reason", "absent")
+                .with_context("pipeline_id", pipeline)
+        })?;
+        // M4 C12 review (HIGH): a protected pipeline's jobs are given the
+        // project's secrets and may deploy.
+        if protected {
+            decide_protected(&facts)?;
+        }
+        let parsed = PipelineStatus::parse(&status)
+            .ok_or_else(|| unreadable("stored_status_invalid", pipeline))?;
+        let row: Option<(String, String, bool)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "SELECT name, status, NOT EXISTS ( \
+                       SELECT 1 FROM forge.ci_jobs n WHERE n.pipeline_id = j.pipeline_id \
+                         AND n.name = ANY (j.needs) AND n.status <> 'succeeded') \
+                     FROM forge.ci_jobs j WHERE j.pipeline_id = $1 AND j.id = $2 FOR UPDATE",
+                )
+                .bind(pipeline)
+                .bind(job)
+                .fetch_optional(c)
+                .await
+                .map_err(|e| query_error(QUERY, e))
+            })
+            .await?;
+        let (name, job_status, needs_met) = row.ok_or_else(|| {
+            ForgeError::new(ErrorCode::NotFound)
+                .with_context("resource", "job")
+                .with_context("reason", "absent")
+                .with_context("pipeline_id", pipeline)
+                .with_context("job_id", job)
+        })?;
+        if job_status != JobStatus::Manual.as_str() {
+            return Err(play_conflict(
+                project,
+                pipeline,
+                job,
+                "not_manual",
+                &job_status,
+            ));
+        }
+        if !playable(parsed) {
+            return Err(play_conflict(
+                project,
+                pipeline,
+                job,
+                "pipeline_state",
+                parsed.as_str(),
+            ));
+        }
+        if !needs_met {
+            return Err(play_conflict(
+                project,
+                pipeline,
+                job,
+                "needs_not_succeeded",
+                &job_status,
+            ));
+        }
+        tx.step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.ci_jobs SET status = 'pending', updated_at = now() WHERE id = $1",
+            )
+            .bind(job)
+            .execute(&mut *c)
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+            sqlx::query(
+                "UPDATE forge.ci_pipelines SET status = 'running', finished_at = NULL, \
+                   updated_at = now() WHERE id = $1 AND status NOT IN ('pending', 'running')",
+            )
+            .bind(pipeline)
+            .execute(&mut *c)
+            .await
+            .map_err(|e| query_error(QUERY, e))
+            .map(drop)
+        })
+        .await?;
+        let change = PipelineChange::JobPlayed {
+            project,
+            pipeline,
+            job,
+            name: name.clone(), // clone: the audit row and the answer each own it
+        };
+        Ok(Settle::Commit(record(change, project), (name, decided)))
+    }
+    .await;
+    tx.settle("pipeline.job_played", outcome).await
 }
 
 /// What doctor's `ci.pipelines` reads: `error` pipelines of the last 24

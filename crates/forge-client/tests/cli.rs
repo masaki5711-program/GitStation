@@ -1032,6 +1032,11 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "pipeline diagnosis",
             "pipeline artifacts",
             "pipeline artifact-download",
+            "pipeline play",
+            "pipeline schedule list",
+            "pipeline schedule create",
+            "pipeline schedule update",
+            "pipeline schedule delete",
             "api",
             "help",
             "schema"

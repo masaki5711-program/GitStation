@@ -119,7 +119,11 @@ mod ci_artifacts;
 mod ci_ai_eval;
 // M4 C11: deployments over SSH.
 pub(crate) mod deploy;
+// M4 C12: due pipeline schedules and their `ci.schedule_fire` jobs.
+pub(crate) mod ci_schedules;
+// M4 C12: the `spec.publish` job (plan 04 §6 spec-publish).
 mod in_app_retention;
+mod spec_publish;
 // ── end check run retention ──
 // ── M2 MR6: the session purge ──
 mod session_purge;
@@ -268,6 +272,8 @@ enum Task {
     CiAiEval,
     /// Deployments over SSH (`deploy`, M4 C11), with `deploy.ssh_key_file`.
     DeployRunner,
+    /// Due pipeline schedules claimed (`ci_schedules`, M4 C12).
+    CiSchedules,
     /// Dead `check.spec_drift` jobs answered with `error` (`spec_drift_sweep`, M3 X2).
     SpecDriftSweep,
     /// Dead `check.risk` jobs answered with `error` (`risk_sweep`, M3 X7).
@@ -377,6 +383,8 @@ fn tasks_with(
         Task::CiLeaseReaper,
         // M4 C5: needs only the database.
         Task::CiOutputs,
+        // M4 C12: needs only the database (the fire jobs run on the runner).
+        Task::CiSchedules,
         // M3 X2: needs only the database.
         Task::SpecDriftSweep,
         // M3 X7: needs only the database.
@@ -559,6 +567,7 @@ impl Task {
             Self::CiArtifactExpiry => ci_artifacts::NAME,
             Self::CiAiEval => ci_ai_eval::NAME,
             Self::DeployRunner => deploy::NAME,
+            Self::CiSchedules => ci_schedules::NAME,
             Self::SpecDriftSweep => spec_drift_sweep::NAME,
             Self::RiskSweep => risk_sweep::NAME,
             Self::SpecIndexSweep => spec_index_sweep::NAME,
@@ -599,6 +608,7 @@ impl Task {
             Self::CiArtifactExpiry => ci_artifacts::PERIOD,
             Self::CiAiEval => ci_ai_eval::PERIOD,
             Self::DeployRunner => deploy::PERIOD,
+            Self::CiSchedules => ci_schedules::PERIOD,
             Self::SpecDriftSweep => spec_drift_sweep::PERIOD,
             Self::RiskSweep => risk_sweep::PERIOD,
             Self::SpecIndexSweep => spec_index_sweep::PERIOD,
@@ -665,6 +675,7 @@ impl Task {
             Self::ActAsSweep => act_as_sweep::run_act_as_sweep(db).await,
             Self::CiLeaseReaper => ci_leases::run_ci_lease_reaper(db).await,
             Self::CiOutputs => ci_outputs::run_ci_outputs(db).await,
+            Self::CiSchedules => ci_schedules::run_ci_schedules(db).await,
             Self::CiArtifactExpiry => match shared.storage.as_ref() {
                 Some(storage) => {
                     let store = forge_pipelines::artifacts::ArtifactStore::new(storage.root.path());

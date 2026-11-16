@@ -160,6 +160,10 @@ pub mod ci_outputs;
 pub mod ci_variables;
 // M4 C11: deployments (environments, targets, requests, approvals, the worker).
 pub mod deploy;
+// M4 C12: pipeline schedules.
+pub mod ci_schedules;
+// M4 C12: specification releases (plan 04 §6 spec-publish).
+pub mod spec_releases;
 // M4 C6: CI artifacts (the rows; the files are forge-pipelines').
 pub mod ci_artifacts;
 // Plan 17 P17-2: the forge/ai-eval check (ADR-0034).

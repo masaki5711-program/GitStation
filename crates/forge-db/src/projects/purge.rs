@@ -619,6 +619,15 @@ async fn finish_steps(
         "projects.purge.finish.ci_job_tokens",
     )
     .await?;
+    // M4 C12: the project's pipeline schedules (audited on the project:
+    // the project.purged row covers them).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.ci_pipeline_schedules WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.ci_pipeline_schedules",
+    )
+    .await?;
     // M4 C2: the CI jobs, then their pipelines.
     delete_rows(
         tx,

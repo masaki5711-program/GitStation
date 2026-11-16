@@ -61,6 +61,7 @@ fn job(name: &str, needs: &[&str]) -> NewCiJob {
         timeout_s: 600,
         tags: Vec::new(),
         secrets: Vec::new(),
+        manual: false,
     }
 }
 

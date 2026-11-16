@@ -224,6 +224,15 @@ pub enum EventType {
     /// told, kind `mr_revert_drafted`). Actor `system`. Deduplicated by
     /// `merge_request_revert_drafted:<merge_request_id>:<merge_id>`.
     MergeRequestRevertDrafted,
+    /// `spec.released` (M4 C12, plan 04 §6 `spec-publish`, plan 03 §5.1;
+    /// integration class): a version of a specification was published — a
+    /// version-shaped tag (`forge_core::spec_version`) was pushed at a
+    /// commit of the default branch (merged through review) that holds the
+    /// repository's own specification directory. Written by the
+    /// `spec.publish` job (actor `system`, the pusher as `released_by`).
+    /// Deduplicated by `spec_released:<project>:<tag hash>` (a version is
+    /// released once).
+    SpecReleased,
     /// `merge_request.autofix_finished` (M4 C14, ADR-0017 Amendment C14;
     /// integration class): one attempt of the deterministic autofix ended
     /// (`state` applied — the bot's commit is on the source branch —,
@@ -235,7 +244,7 @@ pub enum EventType {
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 42] = [
+    pub const ALL: [EventType; 43] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -277,6 +286,7 @@ impl EventType {
         EventType::WorkItemUnlinked,
         EventType::WebhookDisabled,
         EventType::MergeRequestRevertDrafted,
+        EventType::SpecReleased,
         EventType::MergeRequestAutofixFinished,
     ];
 
@@ -328,6 +338,7 @@ impl EventType {
             EventType::WorkItemUnlinked => "work_item.unlinked",
             EventType::WebhookDisabled => "webhook.disabled",
             EventType::MergeRequestRevertDrafted => "merge_request.revert_drafted",
+            EventType::SpecReleased => "spec.released",
             EventType::MergeRequestAutofixFinished => "merge_request.autofix_finished",
         }
     }
@@ -364,6 +375,7 @@ impl EventType {
             | EventType::CheckCompleted
             | EventType::WorkItemLinked
             | EventType::WorkItemUnlinked
+            | EventType::SpecReleased
             | EventType::MergeRequestRevertDrafted
             | EventType::MergeRequestAutofixFinished => VisibilityClass::Integration,
             EventType::TokenCreated

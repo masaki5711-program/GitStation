@@ -38,6 +38,7 @@ jobs:
     timeout: 10m
     script: [./deploy.sh]
     secrets: [DEPLOY_KEY]                         # 名前だけ（値はサーバー、C6）。16 まで
+    when: manual                                  # C12: 人が「実行」を押すまで動かない（既定 on_success）。何もこのジョブを待てない
     rules:
       branches: [main]                            # push で動くブランチ。完全一致か末尾 `*` の前方一致。既定 ["*"]
       merge_requests: false                       # MR のパイプラインで動くか。既定 true
@@ -54,8 +55,8 @@ jobs:
 | 分類 | 理由 |
 |---|---|
 | 読み取り | `too_large`（64 KiB 超）、`not_utf8`、`empty_file`、`not_a_mapping`、`syntax`、`multiple_documents`、`yaml_anchor`、`yaml_alias`、`yaml_tag`、`too_deep`、`too_many_keys`（1 つのマップに 64 超）、`duplicate_key`（同じジョブ名の 2 度書きもこれ）、`key_not_text` |
-| スキーマ | `script_line_invalid`、`script_line_too_long`（4096 バイト）、`key_unknown`、`field_missing`、`field_invalid`、`version_unsupported`、`stages_empty`、`stage_name_invalid`、`stage_duplicate`、`too_many_stages`（16）、`stage_unknown`、`jobs_empty`、`too_many_jobs`（48）、`job_name_invalid`、`image_not_pinned`、`script_empty`、`too_many_script_lines`（200）、`timeout_missing`、`timeout_invalid`、`timeout_too_long`（4h）、`tag_invalid`、`too_many_tags`（8）、`secret_name_invalid`、`too_many_secrets`（16）、`branch_pattern_invalid`、`too_many_branches`（16）、`artifact_path_invalid`、`too_many_artifacts`（16）、サービス（C5s）: `too_many_services`（2）、`service_name_invalid`、`service_duplicate`、`service_env_invalid`（値は出さない）、`too_many_service_env`（16）、`service_user_invalid`、`service_tmpfs_invalid`、`too_many_service_tmpfs`（4）、GPU（計画 17 P17-1）: `service_gpu_without_tag`（`gpu: true` のサービスはジョブの `tags` に `gpu-eval` が要る。`gpu` は `true` / `false` だけで、装置・パスは書けない）。警告（エラーではない、`Definition::warnings`、`gstn ci lint` は exit 0）: `service_user_root` |
-| ジョブの間（スキーマが正しいときだけ） | `needs_unknown`、`needs_duplicate`、`too_many_needs`（16）、`needs_later_stage`、`needs_cycle`（循環の上のジョブごと）、`secret_on_unprotected_ref`、`secret_protection_unknown`（保護の一覧を知らない手元の検査） |
+| スキーマ | `script_line_invalid`、`script_line_too_long`（4096 バイト）、`key_unknown`、`field_missing`、`field_invalid`、`version_unsupported`、`stages_empty`、`stage_name_invalid`、`stage_duplicate`、`too_many_stages`（16）、`stage_unknown`、`jobs_empty`、`too_many_jobs`（48）、`job_name_invalid`、`image_not_pinned`、`script_empty`、`too_many_script_lines`（200）、`timeout_missing`、`timeout_invalid`、`timeout_too_long`（4h）、`tag_invalid`、`too_many_tags`（8）、`secret_name_invalid`、`too_many_secrets`（16）、`branch_pattern_invalid`、`too_many_branches`（16）、`artifact_path_invalid`、`too_many_artifacts`（16）、サービス（C5s）: `too_many_services`（2）、`service_name_invalid`、`service_duplicate`、`service_env_invalid`（値は出さない）、`too_many_service_env`（16）、`service_user_invalid`、`service_tmpfs_invalid`、`too_many_service_tmpfs`（4）、GPU（計画 17 P17-1）: `service_gpu_without_tag`（`gpu: true` のサービスはジョブの `tags` に `gpu-eval` が要る。`gpu` は `true` / `false` だけで、装置・パスは書けない）、`when_invalid`（C12: `on_success` か `manual`）。警告（エラーではない、`Definition::warnings`、`gstn ci lint` は exit 0）: `service_user_root` |
+| ジョブの間（スキーマが正しいときだけ） | `needs_unknown`、`needs_duplicate`、`too_many_needs`（16）、`needs_later_stage`、`needs_manual_job`（C12: 手動のジョブは動かないかもしれないので待てない）、`needs_cycle`（循環の上のジョブごと）、`secret_on_unprotected_ref`、`secret_protection_unknown`（保護の一覧を知らない手元の検査） |
 | 全体 | `too_many_problems`（100 件を超えた） |
 | 計画 | `needs_not_in_pipeline`（選ばれたジョブが、その契機で動かないジョブを `needs` に持つ）、`secret_on_unprotected_ref`（保護されていないブランチか MR で、シークレットを持つジョブが選ばれた）、`eval_report_declared_twice`（計画 17 P17-2: 選ばれたジョブの 2 つ以上が成果物 `eval-report.json` を宣言した。`forge/ai-eval` が読む報告が決まらない） |
 

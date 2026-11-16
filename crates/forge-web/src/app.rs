@@ -456,6 +456,9 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
     (Action::SessionCreate, routes::auth::CALLBACK_PATH),
     (Action::SessionContinue, routes::session::PATH),
     (Action::WebhookDeliver, routes::webhooks::COLLECTION),
+    // M4 C12 review: the second decision of a manual job's start when its
+    // pipeline is protected (decided in the transaction).
+    (Action::PipelinePlayProtected, routes::pipelines::PLAY),
 ];
 
 /// The words whose page is the SPA shell on a project (ADR-0015 "ルートの
@@ -610,7 +613,7 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    autofix_routes(auto_merge_routes(deploy_routes(user_activity_routes(
+    autofix_routes(schedule_routes(auto_merge_routes(deploy_routes(user_activity_routes(
         user_merge_request_routes(runner_routes(pipeline_routes(merge_queue_routes(
             doc_lint_routes(binding_routes(act_as_routes(mirror_routes(
                 webhook_routes(notification_routes(check_routes(dev_status_routes(
@@ -622,7 +625,7 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
                 )))),
             )))),
         )))),
-    ))))
+    )))))
 }
 
 /// The deterministic autofix (M4 C14, ADR-0017 Amendment C14): a
@@ -712,6 +715,60 @@ fn auto_merge_routes(registry: Registry<AppState>) -> Registry<AppState> {
             a::instance_resume,
         )
         .responds::<a::InstanceAutoMergeBody>(Verb::Post, a::ADMIN_RESUME)
+}
+
+/// M4 C12: a project's pipeline schedules and the start of a manual job.
+fn schedule_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::pipeline_schedules as s;
+    use routes::pipelines as p;
+    registry
+        .route_with(
+            Verb::Post,
+            p::PLAY,
+            Action::PipelineCreate,
+            "Start a `when: manual` job: 200 the pipeline (the job pending for a runner, a finished pipeline running again); 404 FG-REPO-0005 without the pipeline or job; 409 FG-CI-0003 operation=play when the job is not waiting for a person (not_manual), the pipeline is cancelled, invalid or error (pipeline_state), or a job it needs has not succeeded (needs_not_succeeded). Secrets reach it only as its pipeline allows (Developer)",
+            p::OF_PLAY,
+            p::play,
+        )
+        .responds::<p::PipelineBody>(Verb::Post, p::PLAY)
+        .route_with(
+            Verb::Get,
+            s::LIST,
+            Action::PipelineRead,
+            "A project's pipeline schedules (at most 20): branch, cron and UTC offset, active, owner (whose rights it runs with), next time, last run and its outcome (project readers)",
+            s::OF_LIST,
+            s::list,
+        )
+        .responds::<s::PipelineScheduleList>(Verb::Get, s::LIST)
+        .route_with_body(
+            Verb::Post,
+            s::LIST,
+            Action::PipelineScheduleManage,
+            "Create a pipeline schedule ({\"description\", \"ref\", \"cron\", \"utc_offset_minutes\", \"active\"?}): 201; the caller becomes its owner and it runs with the owner's rights at each run, never with secrets; 400 FG-WEB-0006 (param, reason) for a bad value; 409 FG-CI-0027 past 20 per project (people only; Maintainer)",
+            s::MAX_BODY,
+            s::OF_LIST,
+            s::create,
+        )
+        .responds::<s::PipelineScheduleBody>(Verb::Post, s::LIST)
+        .route_with_body(
+            Verb::Put,
+            s::ONE,
+            Action::PipelineScheduleManage,
+            "Replace a pipeline schedule's settings (the same body): 200; the caller becomes its owner when the branch, rule or offset changes or after the owner was refused (a description or pause/resume edit keeps the owner); 404 FG-REPO-0005 without it (people only; Maintainer)",
+            s::MAX_BODY,
+            s::OF_ONE,
+            s::update,
+        )
+        .responds::<s::PipelineScheduleBody>(Verb::Put, s::ONE)
+        .route_with(
+            Verb::Delete,
+            s::ONE,
+            Action::PipelineScheduleManage,
+            "Delete a pipeline schedule: 204; 404 FG-REPO-0005 without it (people only; Maintainer)",
+            s::OF_ONE,
+            s::delete,
+        )
+        .responds_no_content(Verb::Delete, s::ONE)
 }
 
 /// The merge requests of the caller's own work across projects (plan 15
