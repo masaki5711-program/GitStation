@@ -31,6 +31,9 @@ pub(crate) enum MrBranches {
     TagTarget,
     /// `refs/merge-requests/1/head` → `refs/heads/main`.
     ReservedSource,
+    /// `refs/heads/revert/mr-1` → `refs/heads/main` (M4 C10: the revert of
+    /// merge request !1).
+    RevertToMain,
 }
 
 /// The target an update asks for.
@@ -100,6 +103,7 @@ impl MrFixture {
             MrBranches::Same => ("refs/heads/main", "refs/heads/main"),
             MrBranches::TagTarget => ("refs/heads/feature", "refs/tags/v1.0"),
             MrBranches::ReservedSource => ("refs/merge-requests/1/head", "refs/heads/main"),
+            MrBranches::RevertToMain => ("refs/heads/revert/mr-1", "refs/heads/main"),
         };
         let new_target = match self.target {
             MrTarget::Unchanged => None,

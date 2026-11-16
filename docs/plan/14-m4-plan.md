@@ -217,6 +217,15 @@ list|set|delete`（値は標準入力から）。Runner の取得は `secrets_al
 上限は 1 ファイル 100 MiB・1 回 512 MiB / 1000 ファイル（FG-CI-0019）、送受の失敗は FG-CI-0020（ジョブは失敗）。worker の `ci_artifact_expiry`
 （30 日、`keep` は残す、消えたプロジェクトのディレクトリも消す）。`keep` を立てるのは C11。
 
+**C10 の注記（2026-11-14、一手の revert）**: ブランチは計画の名前 `feat/review-one-step-revert`。新しい Action は無い: ルート
+`POST …/merge-requests/{iid}/revert` は取り消しの MR を開く `MergeRequestCreate` と、ブランチ `revert/mr-<iid>` の作成の `RepoPush`
+（`authorize_ref_updates`）で判定する（権限の表に取り消しの形の行）。木は `forge_git::revert`（作業ツリーなし、git 2.38 で動く
+`commit-tree` と `merge-tree` の組み立て）。**衝突したら何も作らない**（FG-REVIEW-0030）、その他の拒否は FG-REVIEW-0029。main の失敗での
+下書き: 購読者 `revert-drafts` → ジョブ `merge_request.revert_draft`（`forge serve`）。target 自身の push のパイプラインが失敗し、マージの前は
+失敗していなかったときだけ、戻される MR の作成者の名前と権限で **下書き** を開き、イベント `merge_request.revert_drafted` と通知の種類
+`mr_revert_drafted` で知らせる。通知の種類のためにマイグレーション `20261220100000`（CHECK の置き換えだけ）を足した。`gstn mr revert`、
+MR の画面のボタン（`viewer.can_revert`）。詳細は ADR-0024 Amendment（2026-11-14）。
+
 **C11 の注記（2026-11-13、デプロイ）**: クレート `forge-deploy`（機能クレート）、表 `deploy_environments`・`deploy_targets`（監査あり）・
 `deployments`（派生。要求と承認は監査の行、ガード `deployments_forward`）、マイグレーション `20261214100000`。Action `DeployRead`・
 `DeployEnvironmentManage`・`DeployTargetManage`（管理者）・`DeployCreate`・`DeployApprove`（`Resource::Deployment`）、FG-DEPLOY-0001〜0010、

@@ -9250,6 +9250,37 @@
         ],
         "type": "object"
       },
+      "RevertBody": {
+        "additionalProperties": false,
+        "description": "The revert merge request as opened.",
+        "properties": {
+          "commit_sha": {
+            "description": "The revert commit (the new branch's tip).",
+            "type": "string"
+          },
+          "merge_request": {
+            "$ref": "#/components/schemas/MergeRequestBody",
+            "description": "The merge request that reverts `reverted_iid` (source\n`revert/mr-<iid>`, target the reverted one's target)."
+          },
+          "parent_sha": {
+            "description": "The target's tip it was built on.",
+            "type": "string"
+          },
+          "reverted_iid": {
+            "description": "The merged merge request it reverts.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "merge_request",
+          "reverted_iid",
+          "commit_sha",
+          "parent_sha"
+        ],
+        "type": "object"
+      },
       "RoleName": {
         "description": "A role in a request.",
         "enum": [
@@ -10979,6 +11010,10 @@
             "description": "`POST …/merge` would be allowed (the target's minimum push role;\nwhether the merge request may merge now is `mergeable`).",
             "type": "boolean"
           },
+          "can_revert": {
+            "description": "M4 C10 (added within `schema_version` 1): `POST …/revert` would be\nallowed — the merge request is merged and the caller may open a\nmerge request and push a branch (a protection of `revert/*`, and\nwhether the revert conflicts, are decided by the revert itself).\nAlways `false` when acting for a person.",
+            "type": "boolean"
+          },
           "can_unapprove": {
             "description": "`POST …/unapprove` would be allowed (pair it with `approved_by_me`:\nthere may be nothing to withdraw).",
             "type": "boolean"
@@ -10989,7 +11024,8 @@
           "can_unapprove",
           "can_merge",
           "can_mark_ready",
-          "approved_by_me"
+          "approved_by_me",
+          "can_revert"
         ],
         "type": "object"
       },
@@ -18672,6 +18708,55 @@
         },
         "summary": "Reopen a closed merge request (the author or Developer; never a merged one)",
         "x-forge-action": "MergeRequestReopen"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/revert": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_revert",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevertBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Revert a merged merge request in one step: opens a merge request from the new branch revert/mr-<iid> (one revert commit on the target's tip) into the target. Decided as opening a merge request (Developer; a token needs api) and pushing the branch (a token needs write_repository; a protected revert/* refuses, FG-GIT-0008). 409 FG-REVIEW-0029 (not merged, branch exists, nothing to revert) or FG-REVIEW-0030 (the revert conflicts: nothing is opened)",
+        "x-forge-action": "MergeRequestCreate"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/status": {
