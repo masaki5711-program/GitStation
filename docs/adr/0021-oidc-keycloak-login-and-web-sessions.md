@@ -560,3 +560,53 @@ ID トークンとの取り違えは防げる）。バックチャネルのエ�
 
 ADR-0028 §3（proposed）: 承認のフェーズのあるリポジトリの文書の承認の直前に、直近 5 分以内の Keycloak の認証でなければ再ログインさせる
 （OIDC の `max_age`、ID トークンの `auth_time`）。トークンによる文書の承認は拒否する。ADR-0028 が accepted になったときに有効になる。
+
+## Amendment（accepted、2026-11-17）— PFS の Keycloak（claim はアクセストークンにだけ）
+
+**背景。** 主な IdP は PFS の Keycloak（realm `iotpf`、Keycloak 26.5.5、この PC の issuer は `http://localhost:18180/realms/iotpf`）。
+人の claim（`name`、`email`、`locale`、`staff_id`、`plant_code`、`plants`、`org_units`、`positions`、`position_rank`）と
+`resource_access.<client_id>.roles` は、クライアントスコープ `iotpf-identity` が**アクセストークンにだけ**入れる。ID トークンは
+素のまま（`sub`、`sid`、`nonce`、`aud`、`azp` だけ）。`preferred_username` は `basic` から来る。groups、`email_verified`、
+バックチャネルのログアウトはない。GitStation のクライアント `gitstation` は confidential、認可コード + PKCE S256、
+既定のスコープ `[basic, iotpf-identity]`、`fullScopeAllowed: false`、入場のクライアントロール `access`（PFS のセッションが MR で
+足す。GitStation はクライアントを作らない）。§4・§9 は claim が ID トークンにある前提だった。
+
+**決定。**
+
+1. 設定 `auth.oidc.claims_source = "id_token" | "access_token"`（既定 `id_token`: 今までの振る舞いのまま）。
+2. `access_token` のとき、コールバックでは §9 どおりに ID トークンを確かめ（`sub`、`nonce`、`sid` はここから）、続けて
+   トークンのエンドポイントの `access_token` を JWT として確かめる: discovery の JWKS、`auth.oidc.signing_algs` と同じ方式と
+   kty の組、`iss` = `auth.oidc.issuer`、`exp` 必須・`nbf`・`iat`（60 秒のずれ）、`azp` 必須で `client_id` と同じ、`aud` は
+   Keycloak の流儀で確かめない（ない・`account`・ほかのクライアントの並びのどれでもよい。文字列か文字列の並びでなければ拒否）、
+   `typ` があれば `Bearer`（Keycloak の ID トークンは同じ鍵で `typ: ID`）、`sub` 必須で ID トークンの `sub` と同じ。人の claim と
+   ロールはそこから読む。失敗はすべて新しい **FG-AUTH-0025 AccessTokenInvalid**（warn、401、`reason` つき。ID トークンの失敗は
+   先に確かめるので FG-AUTH-0012 のまま）。応答に `access_token` がないのは FG-AUTH-0015 `reason=invalid_json detail=access_token`。
+   トークンも claim もログに出さず、アクセストークンは保存しない。
+3. 5 分ごとのリフレッシュの確認（§7）でも、ロールはリフレッシュで来たアクセストークンから読む（同じ規則、`sub` と issuer は
+   セッションのものと同じ）。確かめられない・`sub` が違う・ロールがない・来ないは失効（`why=access_token_invalid` /
+   `access_token_missing` / `session_continue_denied`）。JWKS に届かないときだけ続行（§7 と同じ）。ID トークンが来れば §7 どおりに
+   確かめて保存する（ログアウトの `id_token_hint`）。来なくても数えない（ロールの確認に ID トークンを使わないため）。
+4. 社員番号は `auth.oidc.employee_number_claim = "staff_id"`。結び付け（§4）は `access_token` のとき
+   `forge_db::identities::LinkRules::EmployeeNumberOnly` になる:
+   - `email_verified` を求めない（PFS は送らない）。社員番号の利用者への自動の結び付けは **社員番号だけ**で決め、e-mail の一致を
+     見ない（§4 の「確認済みで一致する e-mail と一緒のときだけ」はこのモードでは外す。社員番号は PFS の管理者だけが書ける属性で、
+     共通のキー）。e-mail だけで結ぶことは今までどおりない。管理者・無効・bot・`auto_link = false`・別の subject に結び付け済みの
+     拒否は今までどおり。
+   - **大文字と小文字を区別せずに比べる**（PFS の `staff_id` は大文字）: `upper(employee_number) = upper($1)`。値は前後の空白を
+     除いて**送られたとおりに**保存し、正規化はしない（既存の行を書き換えないため）。一意の索引は大小を区別するので、大小だけ違う
+     2 行が当たれば FG-AUTH-0014 `employee_number_ambiguous` で拒否し、推測しない。この比較は索引を使わないが、結び付け済みの
+     ログインは `(issuer, subject)` で先に決まり、比較は最初のログインだけで起きる（利用者の数は社内の人数）。
+   - 新しい利用者の username は **`staff_id` の小文字**（`preferred_username` には頼らない。あってもなくてもよい）、表示名は
+     `name`。e-mail は確認済みでなくてよいが、新しい利用者には要る（forge.users の規則: 人には e-mail。ないと `email_missing`、重複は `email_taken`）。
+5. issuer の http: loopback（`localhost`、`127.0.0.1`、`[::1]`）だけ今までどおり許す。それ以外の http は
+   FG-SYS-0002 `reason=insecure_http` で起動しない。試験の IdP のためだけに `auth.oidc.allow_insecure_issuer = true` で許せる
+   （既定 false。本番では使わない。トークンが平文で流れる）。Linux のサーバーの issuer はそのサーバーの PFS の `.env` から取る。
+6. バックチャネルのログアウトがなくてもログインは動く（§8 のルートは呼ばれないだけ）。切った人は §7 の確認で最長 5 分で切れる。
+   無操作・絶対の寿命（`web.session_idle_secs` / `web.session_absolute_secs`）は変えない。
+
+**結果。** `id_token` の振る舞いは変わらない（既存のテストのまま）。PFS の形は forge-oidc の `tests/pfs.rs`（モックの
+`authorize_pfs`: 素の ID トークンと署名したアクセストークン）と forge-db の
+`employee_number_only_links_without_the_case_or_a_verified_email` で確かめる。運用は runbook `oidc-login` の「PFS Keycloak」。
+
+**見送り。** 開発用の Keycloak（`ops/dev/compose.yml`、版は 26.5.5 に合わせた）の realm は claim を ID トークンに入れたまま。
+PFS と同じ形（`basic` + `iotpf-identity`）の realm は後で足す。`forge doctor` が `allow_insecure_issuer = true` を warn に出すのも後で。

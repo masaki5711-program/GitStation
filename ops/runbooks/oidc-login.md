@@ -1,4 +1,4 @@
-# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0017 / FG-AUTH-0018）
+# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0025 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0017 / FG-AUTH-0018）
 
 ブラウザのログイン（Keycloak の OIDC、ADR-0021 §3・§9）が失敗するとき、バックチャネルのログアウト（FG-AUTH-0017、ADR-0021 §8）が
 断られるとき、5 分ごとのリフレッシュの確認でセッションが切れるとき（ADR-0021 §7、M2 MR5）の診断。
@@ -8,6 +8,10 @@
 - `error_code=FG-AUTH-0012` IdTokenInvalid（warn、401）。ログの `context` に `event=forge.auth.login_failed` と `reason`:
   `malformed`、`alg_not_allowed`（`alg`）、`kid_missing`、`unknown_kid`、`key_invalid`（`detail`）、`key_alg_mismatch`（`alg`、`kty`）、
   `signature`、`issuer`、`audience`、`azp`、`expired`、`not_yet_valid`（`claim`）、`nonce`、`subject`、`missing_claim`（`claim`）。
+- `error_code=FG-AUTH-0025` AccessTokenInvalid（warn、401）。`auth.oidc.claims_source = access_token`（PFS の Keycloak）のときだけ。
+  `reason`: 0012 と同じ署名・鍵・`issuer`・`expired`・`not_yet_valid`・`missing_claim`（`claim`: exp、iss、sub、azp）に加えて
+  `azp`（別のクライアントのトークン）、`typ`（`Bearer` でない: ID トークンなど）、`subject_mismatch`（ID トークンと `sub` が違う）、
+  `audience`（`aud` が文字列でも文字列の並びでもない）。下の「PFS Keycloak」を見る。
 - 利用者から「ログインできない」の問い合わせ（`request_id` 付き）。FG-AUTH-0011（state の誤り）、FG-AUTH-0013（入場の拒否）、
   FG-AUTH-0018（`auth.oidc` がない）も同じ手順で見分ける。
 - `error_code=FG-AUTH-0017` LogoutTokenInvalid（warn、400）。`POST /-/auth/backchannel-logout` で、呼ぶのは Keycloak のサーバー
@@ -73,3 +77,72 @@
 
 - 新しい失敗の形なら、errors.toml の FG-AUTH-0012 の diagnosis に `reason` を足し、forge-oidc の `tests/jwt.rs` にテストを足す。
   ログアウトのトークンなら FG-AUTH-0017 と `tests/session.rs`（`logout_token_failures_are_logout_token_invalid`）。
+
+## PFS Keycloak
+
+PFS の Keycloak（realm `iotpf`、Keycloak 26.5.5）は人の claim（`name`、`email`、`locale`、`staff_id`、`plant_code`、`plants`、
+`org_units`、`positions`、`position_rank`）とクライアントロール（`resource_access.gitstation.roles`）を**アクセストークンにだけ**
+入れ、ID トークンには入れない（クライアントスコープ `iotpf-identity`）。`preferred_username` は `basic` から来るが GitStation は
+使わない。groups はない。`email_verified` も、バックチャネルのログアウトもない（ADR-0021 の 2026-11-17 の追記）。
+
+### 設定（この PC）
+
+PFS の Keycloak はこの PC の `http://localhost:18180`（http の loopback なので `ca_file` は付けない、`allow_insecure_issuer` も
+要らない）。クライアント `gitstation`（confidential、認可コード + PKCE S256、既定のスコープ `basic` と `iotpf-identity`、
+`fullScopeAllowed: false`、クライアントロール `access`）は PFS のセッションが MR で足す。**GitStation の側から Keycloak の
+クライアントを作らない。PFS のコンテナやファイルに触らない。**
+
+```toml
+[auth.oidc]
+issuer = "http://localhost:18180/realms/iotpf"
+client_id = "gitstation"
+# 秘密は PFS の管理者から受け取り、ソースの外のファイルに置く（所有者だけが読める）。リポジトリに入れない。
+client_secret_file = "D:/APP/secrets/gitstation/oidc-client-secret"
+employee_number_claim = "staff_id"
+access_role = "access"
+claims_source = "access_token"
+```
+
+同じことを環境変数で: `FORGE_AUTH_OIDC_ISSUER`、`FORGE_AUTH_OIDC_CLIENT_ID`、`FORGE_AUTH_OIDC_CLIENT_SECRET_FILE`、
+`FORGE_AUTH_OIDC_EMPLOYEE_NUMBER_CLAIM=staff_id`、`FORGE_AUTH_OIDC_ACCESS_ROLE=access`、`FORGE_AUTH_OIDC_CLAIMS_SOURCE=access_token`。
+`web.base_url` + `/-/auth/callback` を、PFS の側でクライアント `gitstation` の Valid redirect URI に入れてもらう。
+
+**Linux のサーバー**: issuer はそのサーバーの PFS の `.env`（Keycloak の公開 URL と realm）から取る。discovery の `issuer` と
+**文字どおり**同じにする。https なら `ca_file`（社内 CA）が要る。loopback 以外の http は `FG-SYS-0002 reason=insecure_http` で
+起動しない。試験の間だけ `auth.oidc.allow_insecure_issuer = true` で通せる（トークンが平文で流れる。本番では使わない）。
+
+### 何がどう読まれるか
+
+- ID トークン: 署名、`iss`、`aud`、`azp`、`exp`、`nonce` を確かめ、`sub` と `sid` を取る（セッションの `oidc_sub` / `oidc_sid`）。
+- アクセストークン: 同じ JWKS と署名方式、`iss` = issuer、`exp` / `nbf` / `iat`（60 秒のずれ）、`azp` = `gitstation`、`typ` が
+  あれば `Bearer`、`sub` が ID トークンと同じ。`aud` は Keycloak の流儀（なし・`account`・ほかのクライアント）のどれでもよい。
+  ここから `staff_id`、`name`、`email`、`resource_access.gitstation.roles` を読む。トークンも claim もログに出ない。
+- 結び付け: `staff_id` が社員番号。大文字と小文字を区別せずに `forge.users.employee_number` と比べる。e-mail の一致も
+  `email_verified` も見ない。新しい利用者の username は `staff_id` の小文字、表示名は `name`、社員番号は送られたとおり（大文字）。新しい利用者には `email` が要る（確認済みでなくてよい。ないと FG-AUTH-0014 `email_missing`）。
+- 5 分ごとのリフレッシュの確認でも、ロールはリフレッシュで来たアクセストークンから読む。ロールが外れた・`sub` が変わった・
+  アクセストークンが確かめられない（`why=access_token_invalid`）・来ない（`why=access_token_missing`）はセッションを失効させる。
+- バックチャネルのログアウトがないので、Keycloak で切った人はリフレッシュの確認（最長 5 分とその人の次の操作）で切れる。
+  無操作（`web.session_idle_secs`）と絶対（`web.session_absolute_secs`）の寿命はそのまま効く。
+
+### 失敗の見分け
+
+1. `request_id` でログを引き、`error_code` と `reason` を読む。
+2. FG-AUTH-0012（ID トークン）が先に確かめられる。0012 なら上の「Diagnose」の手順。
+3. FG-AUTH-0025:
+   - `azp`: 別の PFS アプリのトークン。`auth.oidc.client_id` が `gitstation` か、PFS 側のクライアント名と同じか。
+   - `missing_claim claim=sub`: クライアントの既定のスコープに `basic` がない（Keycloak 25 以降、`sub` は `basic` が入れる）。
+   - `typ`: アクセストークンの代わりに別のトークン。Keycloak の設定の誤りか、間に入った何か。
+   - `subject_mismatch`: ID トークンとアクセストークンの `sub` が違う。正しい Keycloak なら起きない。続くなら中間者を疑う。
+   - `malformed`: アクセストークンが JWT でない（不透明なトークン）。その IdP は `claims_source = access_token` に向かない。
+     claim が ID トークンにある IdP なら `claims_source = id_token`（既定）にする。
+4. FG-AUTH-0013 `no_access_role`: アクセストークンの `resource_access.gitstation.roles` に `access` がない。PFS の管理者に
+   ロールの付与を頼む（`fullScopeAllowed: false` なので、`gitstation` のロールしか入らない）。
+5. FG-AUTH-0014 `employee_number_missing`: アクセストークンに `staff_id` がない（PFS の利用者の属性が空か、スコープ
+   `iotpf-identity` が外れた）。`employee_number_ambiguous`: 大文字と小文字だけが違う社員番号の利用者が 2 人いる。データを直す
+   （承認の要る手順。runbook oidc-identity-link）。
+
+### Verify
+
+- この PC で PFS の利用者（`access` ロールあり）がログインでき、ログに `forge.auth.login_succeeded`（`outcome=created` か
+  `linked`）が出る。`forge doctor` の `auth.oidc` が `ok`。
+- その利用者の `forge.users.username` が `staff_id` の小文字、`employee_number` が `staff_id`。

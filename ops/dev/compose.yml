@@ -32,11 +32,15 @@ services:
   #   client_secret_file = <absolute path of a 0600 copy of ops/dev/keycloak/client-secret.dev>
   #   web.base_url       = http://localhost:8080
   # nextest never uses this (the mock provider of forge-oidc test-support).
+  # The version follows the PFS Keycloak (26.5.5). This realm still puts the
+  # claims in the ID token (`claims_source = id_token`); a realm shaped like
+  # PFS (`basic` + `iotpf-identity`, claims in the access token) is a
+  # follow-up (ADR-0021 amendment 2026-11-17).
   keycloak:
     profiles: ["sso"]
     # Pin the digest too before the first use (ADR-0021 §14): the registry
     # could not be reached from the session that wrote this (M2 MR4 handoff).
-    image: quay.io/keycloak/keycloak:26.4.2
+    image: quay.io/keycloak/keycloak:26.5.5
     command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://127.0.0.1:58080"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: synthetic-admin

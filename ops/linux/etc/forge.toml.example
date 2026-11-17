@@ -80,6 +80,12 @@ client_id = "gitstation"
 client_secret_file = "/etc/forge/secrets/oidc-client-secret"
 # The internal CA that signed Keycloak's certificate (no public roots).
 ca_file = "/etc/forge/ca/internal-ca.pem"
+# PFS realm `iotpf`: the identity claims and the client roles are in the
+# access token only, and the employee number is `staff_id` (ADR-0021
+# amendment 2026-11-17; runbook oidc-login, "PFS Keycloak").
+claims_source = "access_token"
+employee_number_claim = "staff_id"
+access_role = "access"
 
 [maintenance]
 # Repository maintenance runs inside this nightly window (Asia/Tokyo).
