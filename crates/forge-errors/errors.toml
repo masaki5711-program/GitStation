@@ -3518,3 +3518,86 @@ diagnosis = "The log event `forge.auth.login_failed` (or `forge.auth.session_ref
 fix = "Follow runbook oidc-login, section PFS Keycloak: check that the `gitstation` client in realm `iotpf` is the one in `auth.oidc.client_id`, that its default client scopes are `basic` (it carries `sub`) and `iotpf-identity`, that the realm signs with RS256 (or add ES256 to `auth.oidc.signing_algs`), and the server clock. `azp` means another client's token reached GitStation: check the client id. For a provider that puts the claims in the ID token, set `auth.oidc.claims_source = id_token`."
 runbook = "oidc-login"
 test = "access_token_failures_are_access_token_invalid"
+
+# ── PFS portal home widgets and news (ADR-0036) ──────────────────────────────
+[[error]]
+code = "FG-AUTH-0026"
+name = "PortalTokenInvalid"
+http_status = 401
+severity = "warn"
+user_message_ja = "ポータルからの呼び出しを確認できませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The call from the portal could not be verified. Contact the administrator with the request ID."
+user_message_id = "Panggilan dari portal tidak dapat diverifikasi. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "A request to a portal widget route (`/api/portal-widgets/v1/**`, ADR-0036) carried a Bearer token that is not a valid access token of the configured identity provider: not a JWT, or its signature, algorithm (`auth.oidc.signing_algs`), key (`kid` from the discovery JWKS), `iss` (`auth.oidc.issuer`), `exp` / `nbf` / `iat` (60 s skew), `typ` (when present `Bearer`), `azp` (required) or `sub` is wrong; or the widget routes are off (`portal.enabled = false`, `reason=portal_disabled`) or the sign-in is not configured (`reason=oidc_unconfigured`); or the request carried no Bearer token at all (`reason=bearer_required`: a cookie or Basic). The token's party (`azp`) and its roles are decided afterwards by authorize() (FG-AUTH-0003). Nothing was read."
+diagnosis = "The log event `forge.auth.token_rejected` with `scheme` and `reason` (the access token reasons of FG-AUTH-0025: malformed, alg_not_allowed, kid_missing, unknown_kid, key_invalid, key_alg_mismatch, signature, issuer, expired, not_yet_valid, missing_claim with `claim`, typ, subject, audience; or portal_disabled, oidc_unconfigured, bearer_required). The token and its claims are never logged. An identity provider that cannot be reached is FG-AUTH-0015 (503), not this code."
+fix = "Follow runbook portal-widgets: check `portal.enabled`, that the portal and GitStation use the same realm (`auth.oidc.issuer`), the realm's signing algorithm and the server clock. `expired` from the portal means its own token refresh is late (portal side)."
+runbook = "portal-widgets"
+test = "a_bad_portal_token_is_portal_token_invalid"
+
+[[error]]
+code = "FG-AUTH-0027"
+name = "PortalUserNotLinked"
+http_status = 403
+severity = "info"
+user_message_ja = "この利用者は GitStation にまだ登録されていません。一度 GitStation にログインしてください。"
+user_message_en = "This person has no GitStation account yet. Sign in to GitStation once."
+user_message_id = "Orang ini belum memiliki akun GitStation. Masuk ke GitStation sekali."
+cause = "A verified portal access token (ADR-0036) names a person GitStation cannot map to one of its users by the sign-in's link rules (ADR-0021 §4 and its amendment 2026-11-17), read-only: the identity (`iss`, `sub`) is not linked and the employee number (`auth.oidc.employee_number_claim`, `staff_id`) finds no user (`reason=unlinked`), finds two (`employee_number_ambiguous`), is missing (`employee_number_missing`), or belongs to a user the sign-in would not link automatically (`auto_link_disabled`, `employee_number_linked` for a user linked to another subject, `privileged_account` for an administrator). A widget call never creates or links a user."
+diagnosis = "The log event `forge.auth.token_rejected` with `reason`. The employee number and the subject are never logged. Ask the person whether they have signed in to GitStation; as the operator (read-only) look the employee number up in forge.users and the identity in forge.user_identities."
+fix = "The person signs in to GitStation once (the sign-in links or creates the account). An administrator is linked by the operator (`forge admin user link-identity`). Two users with the same employee number: correct one of them (runbook oidc-identity-link)."
+test = "an_unlinked_portal_user_is_refused"
+
+[[error]]
+code = "FG-WEB-0011"
+name = "PortalWidgetSettingInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "ウィジェットの設定の値が正しくありません。設定を開き直して選び直してください。"
+user_message_en = "A widget setting has an invalid value. Open the settings and choose again."
+user_message_id = "Nilai pengaturan widget tidak valid. Buka pengaturan dan pilih lagi."
+cause = "A portal widget route (ADR-0036, PFS portal contract v1 §6.1) got a query value it does not accept: `kind` other than review / mine / stopped / spec, `scope` other than mine / reviews, `show` other than pipeline / deploy, `limit` outside 3..=10, `project` that is not a positive id (or more than 24 of them), `locale` other than ja / en / id, `tz` that is not an IANA zone name, a single-valued key repeated, or a query that is not valid percent-encoding. Unknown keys are ignored (the contract). Nothing was read."
+diagnosis = "The log event carries `param` and `rule` (`unknown_value`, `out_of_range`, `not_positive_decimal`, `repeated`, `too_many`, `invalid`). Compare with the widget declaration (`docs/portal/widgets.md`)."
+fix = "The portal's settings form sends only the declared values; a 422 means the declaration and the portal's copy differ, or a hand-made request. Align the declaration (iotpf-portal catalog) with docs/portal/widgets.md."
+test = "a_bad_widget_setting_is_422"
+
+[[error]]
+code = "FG-INT-0022"
+name = "PortalNewsAttemptFailed"
+http_status = 502
+severity = "info"
+user_message_ja = "ポータルへのお知らせの送信が 1 回失敗しました。自動で再試行します。"
+user_message_en = "One attempt to send news to the portal failed. It will be retried automatically."
+user_message_id = "Satu percobaan mengirim berita ke portal gagal. Akan dicoba ulang secara otomatis."
+cause = "One attempt of the job `portal.news_send` (ADR-0036) did not end with 202: the portal answered another status (`reason=status`, with `status`; 401 / 403 also drop the cached service token), a redirect (`redirect`, never followed), or the connection failed (`connect`, `timeout`, `tls`, `request`), or the service token could not be obtained (`reason=service_token`, after FG-INT-0024). The news row stays `pending` with `attempts`, `last_error_code` and `last_status`; the job queue retries after its backoff (10 s doubling, at most 1 h) up to `portal.max_attempts` runs. Nobody is waiting on it: info."
+diagnosis = "The log event `forge.portal.news_attempt_failed` carries `news_id`, `source_id`, `attempt`, `max_attempts`, `status` (or none) and `reason`, never the token, the body or the audience. On the database (read-only): the `pending` rows of forge.portal_news, newest first, with attempts, last_error_code and last_status."
+fix = "Usually nothing: a portal that is briefly down catches up. If every attempt fails, follow runbook portal-widgets (portal.registry_url, the CA in portal.ca_file, NEWS_SENDER_CLIENTS on the portal listing gitstation)."
+runbook = "portal-widgets"
+test = "a_refused_news_post_is_retried"
+
+[[error]]
+code = "FG-INT-0023"
+name = "PortalNewsUndeliverable"
+http_status = 502
+severity = "alert"
+user_message_ja = "ポータルへのお知らせを送れませんでした。管理者に連絡してください。"
+user_message_en = "News could not be sent to the portal. Contact the administrator."
+user_message_id = "Berita tidak dapat dikirim ke portal. Hubungi administrator."
+cause = "A portal news item (ADR-0036) was given up: the last of `portal.max_attempts` runs failed (`reason=tries_used_up`, with `last_reason`), or the portal refused the payload for good (400, 404, 409, 413 or 422: `reason=refused`, with `status`). The row is `failed` and is not sent again automatically. People still see the event in GitStation itself; only the portal's news list misses it."
+diagnosis = "The log event `forge.portal.news_failed` with `news_id`, `source_id`, `reason`, `last_reason`, `status`, `attempts`. The `forge doctor` line `portal.news` counts the failed rows of the last 24 hours. On the database (read-only): the `failed` rows of forge.portal_news with topic, attempts, last_error_code, last_status and updated_at."
+fix = "Runbook portal-widgets, 「新着が届かない」: fix the cause (registry URL, CA, the portal's NEWS_SENDER_CLIENTS, the gitstation client's service account), then re-queue the failed rows with the approved runbook step (they are idempotent on source_id)."
+runbook = "portal-widgets"
+test = "news_gives_up_after_the_last_attempt"
+
+[[error]]
+code = "FG-INT-0024"
+name = "PortalServiceTokenUnavailable"
+http_status = 503
+severity = "warn"
+user_message_ja = "ポータルへ送るための認証を取得できませんでした。自動で再試行します。"
+user_message_en = "The credentials for sending to the portal could not be obtained. It will be retried automatically."
+user_message_id = "Kredensial untuk mengirim ke portal tidak dapat diperoleh. Akan dicoba ulang secara otomatis."
+cause = "The client-credentials token of the `auth.oidc.client_id` client (ADR-0036: the token endpoint from discovery, `client_secret_basic` with `auth.oidc.client_secret_file`) could not be obtained: the identity provider refused the client (`reason=client_rejected`, with `oauth_error`: the service account is off or the secret is wrong), answered another status (`status`), sent no usable `access_token` or `expires_in` (`invalid_json`), or could not be reached (`unreachable`, with the transport's `detail`). The news attempt fails and is retried (FG-INT-0022)."
+diagnosis = "The log event `forge.portal.service_token_failed` with `reason`, `status`, `oauth_error` and `detail`, never the secret or a token. The `forge doctor` line `auth.oidc` checks discovery."
+fix = "Runbook portal-widgets: enable the service account of the gitstation client in realm iotpf (the PFS MR), check the client secret file, then wait for the retry."
+runbook = "portal-widgets"
+test = "a_failed_service_token_is_portal_token_unavailable"
