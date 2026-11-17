@@ -359,7 +359,7 @@ impl Browser {
         deadline: Deadline,
     ) -> Result<String, ForgeError> {
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         match self.fast_info(repo, &dir, id, deadline).await {
             Some(crate::batch::Info::Found { kind, .. }) if kind == "commit" => {
                 return Ok(id.to_owned())
@@ -430,7 +430,7 @@ impl Browser {
         deadline: Deadline,
     ) -> Result<bool, ForgeError> {
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let budget = deadline.left()?.min(self.limits.reach_timeout);
         let mut cmd = self
             .git

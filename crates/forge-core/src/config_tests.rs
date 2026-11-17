@@ -732,6 +732,10 @@ fn git_http_limits_have_defaults_file_env_and_rules() {
     assert_eq!(cfg.git_http.max_object_wants, 10_000);
     assert_eq!(cfg.git_http.push_max_bytes, 2 * 1024 * 1024 * 1024);
     assert_eq!(cfg.git_http.push_max_blob_bytes, 100 * 1024 * 1024);
+    assert_eq!(cfg.git_http.busy_wait, Duration::from_secs(5));
+    // 0 is a valid wait: refused at once (2026-11-17 F1 / F4).
+    let cfg = load(None, &env(&[("FORGE_GIT_HTTP_BUSY_WAIT_MS", "0")])).expect("zero wait");
+    assert_eq!(cfg.git_http.busy_wait, Duration::ZERO);
 
     let f = file("[git.http]\nmax_streams = 8\nidle_timeout_ms = 1000\n");
     let cfg = load(
@@ -790,6 +794,17 @@ fn git_http_limits_have_defaults_file_env_and_rules() {
                 ("FORGE_GIT_HTTP_IDLE_TIMEOUT_MS", "5000"),
             ],
             "git.http.body_timeout_ms",
+            "above_timeout",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_HTTP_TIMEOUT_MS", "10000"),
+                ("FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_BODY_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_IDLE_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_BUSY_WAIT_MS", "20000"),
+            ],
+            "git.http.busy_wait_ms",
             "above_timeout",
         ),
         (

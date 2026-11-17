@@ -14,11 +14,10 @@
 //! After stdout reached EOF (or stdin failed), [`GitStream::finish`] says how
 //! git ended. A killed stream also ends the caller's I/O: the pipes close.
 
-use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -31,60 +30,37 @@ use tracing::Instrument;
 
 use crate::command::{GitCommand, MAX_STDERR_BYTES};
 use crate::config::GitConfig;
+use crate::gate::{GatePermit, KeyedGate};
 use crate::process_tree::{self, ProcessTree};
 use crate::redact::stderr_head;
 
-/// The streaming pool and the per-principal counts (part of [`crate::Git`]).
+/// The streaming pool and the per-principal caps (part of [`crate::Git`]).
 #[derive(Debug, Clone)]
 pub(crate) struct StreamLimits {
     slots: Arc<Semaphore>,
-    per_principal: Arc<Mutex<HashMap<String, usize>>>,
+    per_principal: KeyedGate<String>,
 }
 
 impl StreamLimits {
     pub(crate) fn new(config: &GitConfig) -> Self {
         Self {
             slots: Arc::new(Semaphore::new(config.max_streams.max(1))),
-            per_principal: Arc::new(Mutex::new(HashMap::new())),
+            per_principal: KeyedGate::new(
+                config.max_streams_per_principal,
+                config.max_principal_waiters,
+            ),
         }
     }
 
-    /// Claim one stream for `principal`; `None` when it already holds `max`.
-    fn claim(&self, principal: &str, max: usize) -> Option<PrincipalClaim> {
-        let mut map = self
-            .per_principal
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let count = map.entry(principal.to_owned()).or_insert(0);
-        if *count >= max.max(1) {
-            return None;
-        }
-        *count += 1;
-        Some(PrincipalClaim {
-            map: Arc::clone(&self.per_principal),
-            key: principal.to_owned(),
-        })
+    /// Streams `principal` holds now (tests).
+    #[cfg(test)]
+    pub(crate) fn held(&self, principal: &str) -> usize {
+        self.per_principal.held(&principal.to_owned())
     }
 }
 
-/// Released (count decremented, empty entries removed) on drop.
-#[derive(Debug)]
-struct PrincipalClaim {
-    map: Arc<Mutex<HashMap<String, usize>>>,
-    key: String,
-}
-
-impl Drop for PrincipalClaim {
-    fn drop(&mut self) {
-        let mut map = self.map.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(count) = map.get_mut(&self.key) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                map.remove(&self.key);
-            }
-        }
-    }
-}
+/// One principal's stream place; released when git is reaped.
+type PrincipalClaim = GatePermit<String>;
 
 /// Byte counters and the time of the last byte in either direction.
 #[derive(Debug)]
@@ -370,7 +346,9 @@ impl GitCommand {
     /// anonymous access); it is not logged.
     ///
     /// Refusals: over the per-principal cap → FG-GIT-0004
-    /// `reason=principal_streams` (at once); no stream slot within
+    /// `reason=principal_streams` after waiting at most
+    /// `principal_wait` (`queue=timeout`), or at once when
+    /// `max_principal_waiters` already wait (`queue=full`); no stream slot within
     /// `acquire_timeout` → FG-GIT-0004 `reason=streams`; spawn failure →
     /// FG-GIT-0001.
     pub async fn spawn_stream(self, principal: &str) -> Result<GitStream, ForgeError> {
@@ -386,14 +364,21 @@ impl GitCommand {
         }
         let git = self.git.clone(); // clone: Arc handle
         let config = git.config();
-        let Some(claim) = git
+        let claim = match git
             .streams
-            .claim(principal, config.max_streams_per_principal)
-        else {
-            return Err(self
-                .fail(ErrorCode::GitBusy)
-                .with_context("reason", "principal_streams")
-                .with_context("max_per_principal", config.max_streams_per_principal));
+            .per_principal
+            .acquire(&principal.to_owned(), config.principal_wait)
+            .await
+        {
+            Ok(claim) => claim,
+            Err(refusal) => {
+                return Err(refusal.into_error(
+                    self.fail(ErrorCode::GitBusy)
+                        .with_context("reason", "principal_streams")
+                        .with_context("max_per_principal", config.max_streams_per_principal),
+                    config.max_principal_waiters,
+                ))
+            }
         };
         let permit = match tokio::time::timeout(
             config.acquire_timeout,

@@ -78,9 +78,16 @@ pub struct GitConfig {
     /// pool, so long clones cannot starve the short captured calls.
     pub max_streams: usize,
     /// Maximum concurrent streams per principal (the key the caller passes
-    /// to [`crate::GitCommand::spawn_stream`]); over it the stream is refused
-    /// at once, without waiting.
+    /// to [`crate::GitCommand::spawn_stream`]); over it the stream waits
+    /// (see `principal_wait`).
     pub max_streams_per_principal: usize,
+    /// How long a stream over the per-principal cap waits for one of the
+    /// principal's slots (`git.http.busy_wait_ms`); zero: refused at once
+    /// (load test 2026-11-17 F4).
+    pub principal_wait: Duration,
+    /// Streams of one principal that may wait at once; one more is refused
+    /// at once.
+    pub max_principal_waiters: usize,
     /// A stream with no bytes in either direction for this long is killed.
     pub stream_idle_timeout: Duration,
     /// Upper bound for one stream.
@@ -110,6 +117,8 @@ impl GitConfig {
             max_output_bytes: 16 * 1024 * 1024,
             max_streams: 16,
             max_streams_per_principal: 4,
+            principal_wait: Duration::from_secs(5),
+            max_principal_waiters: 16,
             stream_idle_timeout: Duration::from_secs(60),
             stream_timeout_total: Duration::from_secs(3600),
             pack: GitPackConfig::DEFAULT,

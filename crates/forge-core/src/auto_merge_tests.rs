@@ -14,6 +14,7 @@ fn clear_facts() -> Facts {
         queue: QueueFacts::None,
         risk: RiskVerdict::Clear { warned: false },
         pipeline: PipelineState::None,
+        doc_lint: DocLintState::Clear,
         blockers: Vec::new(),
         protected_path: false,
     }
@@ -629,4 +630,104 @@ fn a_merge_result_removal_stops_the_same_head_with_its_class() {
         })
     );
     assert_eq!(merge_result_class("conflict"), None);
+}
+
+/// Load test 2026-11-17 F5 (ADR-0030 Amendment 2026-11-17): a new
+/// project is `full` without required checks, and a document whose
+/// `forge/doc-lint` failed was merged by auto-merge. A failed doc-lint on
+/// the head now stops it, named like a red required check.
+#[test]
+fn a_failed_doc_lint_stops_auto_merge_without_being_a_required_check() {
+    let facts = Facts {
+        doc_lint: DocLintState::of(run(CheckConclusion::Failure)),
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&facts),
+        Verdict::Stopped(Stop {
+            class: StopClass::ProgramBreakage,
+            reason: "doc_lint_failed",
+            detail: Some("forge/doc-lint".to_owned()),
+        })
+    );
+    // A stop outranks every wait.
+    let facts = Facts {
+        blockers: vec![Blocker {
+            reason: "approvals_missing",
+            red_check: None,
+        }],
+        ..facts
+    };
+    assert!(matches!(
+        decide(&facts),
+        Verdict::Stopped(Stop {
+            reason: "doc_lint_failed",
+            ..
+        })
+    ));
+}
+
+/// Not reported on the head yet (or still running): wait for it, so a
+/// failing document cannot slip in before its lint.
+#[test]
+fn auto_merge_waits_for_doc_lint_on_the_head() {
+    for state in [
+        DocLintState::of(None),
+        DocLintState::of(CheckRun::new(CheckStatus::InProgress, None)),
+        DocLintState::of(CheckRun::new(CheckStatus::Queued, None)),
+    ] {
+        assert_eq!(state, DocLintState::Pending);
+        let facts = Facts {
+            doc_lint: state,
+            ..clear_facts()
+        };
+        assert_eq!(
+            decide(&facts),
+            Verdict::Waiting {
+                reason: "doc_lint_pending"
+            }
+        );
+    }
+}
+
+/// A repository without documents gets `success`; a bound hit with no
+/// problem is `neutral`; a job that could not lint is `error`. None of them
+/// stops auto-merge (only a found problem does).
+#[test]
+fn a_doc_lint_without_a_problem_never_stops_auto_merge() {
+    for conclusion in [
+        CheckConclusion::Success,
+        CheckConclusion::Neutral,
+        CheckConclusion::Error,
+        CheckConclusion::ActionRequired,
+    ] {
+        let facts = Facts {
+            doc_lint: DocLintState::of(run(conclusion)),
+            ..clear_facts()
+        };
+        assert_eq!(
+            decide(&facts),
+            Verdict::Enqueue { warned: false },
+            "{conclusion:?}"
+        );
+    }
+}
+
+/// The mode, the emergency stop and the queue still come first: `off`
+/// never shows a doc-lint line, a live entry stays queued.
+#[test]
+fn doc_lint_is_read_only_where_auto_merge_acts() {
+    let failed = DocLintState::of(run(CheckConclusion::Failure));
+    let off = Facts {
+        mode: AutoMergeMode::Off,
+        doc_lint: failed,
+        ..clear_facts()
+    };
+    assert_eq!(decide(&off), Verdict::Inactive);
+    let queued = Facts {
+        queue: QueueFacts::Live { auto: false },
+        doc_lint: failed,
+        ..clear_facts()
+    };
+    assert_eq!(decide(&queued), Verdict::Queued { auto: false });
 }

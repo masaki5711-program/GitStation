@@ -694,7 +694,7 @@ async fn a_browse_call_past_its_deadline_is_git_timeout() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn calls_over_the_per_repository_cap_are_refused_at_once() {
+async fn calls_over_the_per_repository_cap_with_a_full_queue_are_refused_at_once() {
     let f = fixture().await;
     let tmp = tempfile::tempdir().expect("tmp");
     let bin = fake_git(tmp.path(), "exec sleep 5");
@@ -702,6 +702,7 @@ async fn calls_over_the_per_repository_cap_are_refused_at_once() {
         &bin,
         BrowseLimits {
             max_per_repo: 2,
+            max_repo_waiters: 0,
             timeout: Duration::from_secs(5),
             ..BrowseLimits::default()
         },
@@ -714,14 +715,7 @@ async fn calls_over_the_per_repository_cap_are_refused_at_once() {
         })
         .collect();
     for _ in 0..100 {
-        let held = b
-            .slots
-            .lock()
-            .expect("lock")
-            .get(&f.id)
-            .copied()
-            .unwrap_or(0);
-        if held == 2 {
+        if b.held(f.id) == 2 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -735,13 +729,16 @@ async fn calls_over_the_per_repository_cap_are_refused_at_once() {
         "refused at once"
     );
     // Another repository is not affected by this one's cap.
-    assert!(b.claim(RepoId::new(12)).is_ok());
+    assert!(b
+        .claim(RepoId::new(12), Deadline::new(Duration::from_secs(1)))
+        .await
+        .is_ok());
     for task in busy {
         task.abort();
         let _ = task.await; // ignore: aborted
     }
     // Aborted calls released their slots.
-    assert_eq!(b.slots.lock().expect("lock").get(&f.id), None);
+    assert_eq!(b.users(f.id), 0);
 }
 
 #[test]

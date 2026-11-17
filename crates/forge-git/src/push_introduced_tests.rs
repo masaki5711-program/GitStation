@@ -282,3 +282,62 @@ fn snapshot_tips_round_trip_as_sorted_unique_bytes() {
     wide.seal();
     assert_eq!(wide.tip_hexes().collect::<Vec<_>>(), [long]);
 }
+
+/// Load test 2026-11-17 F4 (`FG-GIT-0016 snapshot_failed cause_code=
+/// FG-GIT-0004`): the pusher's other streams held every one of its slots,
+/// and the snapshot — a stream of the same principal — was refused. The
+/// record reads no longer count against the principal's push streams.
+#[tokio::test]
+async fn the_ref_snapshot_and_listing_run_while_the_pusher_holds_every_stream() {
+    let home = tempfile::tempdir().expect("home");
+    let root_dir = tempfile::tempdir().expect("root");
+    let mut config = GitConfig::new("git", home.path());
+    config.max_streams_per_principal = 1;
+    config.principal_wait = Duration::ZERO;
+    let git = Git::new(config);
+    let root = StorageRoot::open(root_dir.path()).expect("root");
+    let id = RepoId::new(9);
+    let path = root
+        .init_bare(&git, id, uuid::Uuid::new_v4(), None)
+        .await
+        .expect("init");
+    let c1 = commit(&path, "a", None);
+    plumb(&path, &["update-ref", "refs/heads/main", &c1], None);
+    // The pusher's receive-pack (any stream of "user:1").
+    let held = git
+        .command("cat-file")
+        .repo(&path)
+        .arg("--batch")
+        .spawn_stream("user:1")
+        .await
+        .expect("the only push stream");
+    let before = git
+        .ref_snapshot(&root, id, "user:1", T)
+        .await
+        .expect("the snapshot is not refused by the pusher's own streams");
+    let c2 = commit(&path, "b", Some(&c1));
+    let got = git
+        .introduced_commits(
+            &root,
+            id,
+            &before,
+            &[query("refs/heads/main", &c1, &c2)],
+            "user:1",
+            10,
+            T,
+        )
+        .await
+        .expect("the listing is not refused either");
+    assert_eq!(ids(&got), vec![c2.as_str()]);
+    assert!(got.complete);
+    // The pusher's own cap still holds for its git streams.
+    let err = git
+        .command("cat-file")
+        .repo(&path)
+        .arg("--batch")
+        .spawn_stream("user:1")
+        .await
+        .expect_err("the push cap is unchanged");
+    assert_eq!(err.code(), ErrorCode::GitBusy);
+    let _ = held.abort_client_disconnected().await;
+}

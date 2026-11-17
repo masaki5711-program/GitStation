@@ -162,6 +162,8 @@ pub const KEYS: &[Key] = &[
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",
     ),
+    // Load test 2026-11-17 F1 / F4: the bounded wait over a git cap.
+    number("git.http.busy_wait_ms", "FORGE_GIT_HTTP_BUSY_WAIT_MS"),
     // M4 C13: the SSH git transport (ADR-0033).
     boolean("git.ssh.enabled", "FORGE_GIT_SSH_ENABLED"),
     text("git.ssh.bind", "FORGE_GIT_SSH_BIND"),

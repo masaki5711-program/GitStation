@@ -129,3 +129,23 @@
     バッチを捨てて全件を列に戻し（自動マージの分は待つ）、方式が動かない・`full` の許可が外れたなら自動マージのエントリーを外して
     （`full_auto_not_allowed` / `auto_merge_off`）人の分は次のバッチで着地する。読んだ後、`update-ref` までの間に切り替わったものは
     この着地には間に合わない（切替はマージのロックを取らない。残る窓は git の 1 回の CAS の間だけ）。
+
+## Amendment（2026-11-17、大量のマージの負荷試験 F5）: 自動マージは `forge/doc-lint` の失敗で止まる
+
+- **きっかけ**: 新しいプロジェクトは自動マージ `full` だが必須チェックが無いので、`forge/doc-lint` が `failure` の文書もそのまま
+  自動でマージされた（`docs/handoff/2026-11-17-merge-load-test.md` F5）。
+- **決定（いちばん小さい規則）**: 自動マージの判定（forge-core `auto_merge::decide`）は、MR の head の `forge/doc-lint` を
+  必須チェックと同じに読む。`failure` → `stopped`（`program_breakage`、`reason=doc_lint_failed`、`detail=forge/doc-lint`、
+  `FG-REVIEW-0026`。画面の 1 行は赤い必須チェックと同じ「必須のチェック forge/doc-lint が赤なので止めました。」）。head にまだ
+  無い → `waiting reason=doc_lint_pending`（`check.spec_index` はすべての版に 1 回走るので、待ちはそのジョブ 1 本分）。
+- **文書の無いリポジトリは止めない**: doc-lint が `failure` になるのは、`doctype` を書いた `.md` か型の定義に問題があるときだけ。
+  文書が無ければ `success`。`neutral`（上限に当たったが問題なし）と `error`（ジョブが検査できなかった）も止めない（文書があるか
+  分からないものを全リポジトリで止めない）。
+- **人のマージは変えない**: この規則は自動マージの主体だけ。人のマージと「準備ができたらマージ」は、これまでどおり保護したブランチの
+  必須チェックで決まる。Maintainer は `forge/doc-lint` を merge rule の必須チェックに入れれば人のマージも止められ、壊れた参照だけを
+  一時的に警告にしたいときはリポジトリの doc-lint の移行の期限（計画 13 Q13）を使う。プロジェクトごとにこの規則を外す設定は作らない
+  （必要になったら設定とマイグレーションを足す）。
+- **残る窓**: キューに入った後で doc-lint が `failure` になった MR は、この規則では外れない（`Queued` は判定の前に返る）。
+  `doc_lint_pending` の待ちがあるので、版ごとの最初の判定より前に doc-lint が無いまま入ることはない。
+- 試験: forge-core `a_failed_doc_lint_stops_auto_merge_without_being_a_required_check` ほか、forge-review
+  `a_failed_doc_lint_stops_auto_merge_on_a_project_without_required_checks`（実際の行）。

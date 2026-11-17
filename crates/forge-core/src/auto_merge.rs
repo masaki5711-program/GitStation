@@ -18,6 +18,16 @@
 //!   administrator does not allow it, `full` cannot be selected and a project
 //!   set to `full` is effectively `reserve` ([`AutoMergeMode::effective`]):
 //!   its merge requests show `held reason=full_auto_not_allowed`.
+//! - Documents ([`DocLintState`], ADR-0030 Amendment 2026-11-17): a
+//!   `forge/doc-lint` that **failed** on the head stops auto-merge like a
+//!   red required check (`doc_lint_failed`), whether or not a Maintainer
+//!   made it a required check; it fails only on a document (a `.md` naming
+//!   a `doctype`) or a type definition with a problem, so a repository
+//!   without documents is never stopped. Until it reports on the head the
+//!   merge request waits (`doc_lint_pending`, one `check.spec_index` job,
+//!   which every version gets); `neutral` (a bound hit, no problem) and
+//!   `error` (the job could not lint) do not stop — a person's merge is
+//!   unchanged, and a branch's required checks still decide that.
 //! - The merge result ([`MergeResultAssessor`], [`merge_result_decision`]):
 //!   the merge queue judges `forge/risk`'s rules again on the combined tree
 //!   it will write to the target, so a stop that only the combination shows
@@ -406,6 +416,36 @@ impl PipelineState {
     }
 }
 
+/// `forge/doc-lint` on the head as auto-merge reads it (module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocLintState {
+    /// No completed run on the head yet: wait.
+    Pending,
+    /// `success`, `neutral` or `error`: nothing that stops.
+    Clear,
+    /// `failure`: a document or a type definition has a problem.
+    Failed,
+}
+
+impl DocLintState {
+    /// From the head's run (only runs on the head count).
+    pub fn of(run: Option<CheckRun>) -> Self {
+        match run {
+            Some(r) if r.status == CheckStatus::Completed => match r.conclusion {
+                Some(CheckConclusion::Failure) => Self::Failed,
+                Some(
+                    CheckConclusion::Success
+                    | CheckConclusion::Neutral
+                    | CheckConclusion::Error
+                    | CheckConclusion::ActionRequired,
+                ) => Self::Clear,
+                None => Self::Pending,
+            },
+            Some(_) | None => Self::Pending,
+        }
+    }
+}
+
 /// One reason `evaluate_merge()` gave (its stable name), and whether it is
 /// a required check that concluded red (`check`: its name).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,6 +478,8 @@ pub struct Facts {
     pub queue: QueueFacts,
     pub risk: RiskVerdict,
     pub pipeline: PipelineState,
+    /// `forge/doc-lint` on the head (ADR-0030 Amendment 2026-11-17).
+    pub doc_lint: DocLintState,
     /// `evaluate_merge()`'s reasons, `ci/pipeline` left to the queue.
     pub blockers: Vec<Blocker>,
     /// `conditional` only: a changed path is protected (or the changed
@@ -533,7 +575,8 @@ pub fn merge_result_class(reason: &str) -> Option<StopClass> {
 
 /// The verdict for one open merge request (module docs). Order: the mode,
 /// the emergency stop, `full` not allowed by the instance, the queue, a
-/// draft, the risk layers, red checks, then what it waits for;
+/// draft, the risk layers, red checks, `forge/doc-lint`, then what it
+/// waits for;
 /// `conditional` keeps protected paths for a person.
 pub fn decide(facts: &Facts) -> Verdict {
     if !facts.mode.acts() {
@@ -596,6 +639,21 @@ pub fn decide(facts: &Facts) -> Verdict {
             reason: "required_check_failed",
             detail: Some(red.clone()), // clone: the stop owns its detail
         });
+    }
+    match facts.doc_lint {
+        DocLintState::Failed => {
+            return Verdict::Stopped(Stop {
+                class: StopClass::ProgramBreakage,
+                reason: "doc_lint_failed",
+                detail: Some(crate::checks::DOC_LINT_CHECK.to_owned()),
+            })
+        }
+        DocLintState::Pending => {
+            return Verdict::Waiting {
+                reason: "doc_lint_pending",
+            }
+        }
+        DocLintState::Clear => {}
     }
     if let Some(first) = facts.blockers.first() {
         return Verdict::Waiting {

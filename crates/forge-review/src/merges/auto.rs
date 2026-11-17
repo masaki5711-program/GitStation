@@ -8,8 +8,9 @@
 //!
 //! What it decides is `forge_core::auto_merge::decide` on facts read here:
 //! the mode and the emergency stops, the queue, the `forge/risk` run on the
-//! head (its `stop` rules), the merge request's own `ci/pipeline` on its
-//! merge result, `evaluate_merge()`'s reasons (the merge status, with
+//! head (its `stop` rules), `forge/doc-lint` on the head (a failure stops,
+//! no run yet waits: ADR-0030 Amendment 2026-11-17), the merge request's
+//! own `ci/pipeline` on its merge result, `evaluate_merge()`'s reasons (the merge status, with
 //! `ci/pipeline` left to the queue) and, for `conditional`, the changed
 //! paths. It stops **only** on the stop classes and the emergency stop;
 //! everything else is a wait whose reason is shown. Each verdict is stored
@@ -19,7 +20,8 @@
 use std::time::Duration;
 
 use forge_core::auto_merge::{
-    decide, deterministic_layer, Blocker, Facts, PipelineState, QueueFacts, StopClass, Verdict,
+    decide, deterministic_layer, Blocker, DocLintState, Facts, PipelineState, QueueFacts,
+    StopClass, Verdict,
 };
 use forge_core::merge_results::reported_on_merge_results;
 use forge_core::{
@@ -231,6 +233,7 @@ impl AutoMerger {
             queue: self.queue_facts(&mr, &head).await?,
             risk: forge_core::auto_merge::RiskVerdict::Pending,
             pipeline: PipelineState::None,
+            doc_lint: DocLintState::Pending,
             blockers: Vec::new(),
             protected_path: false,
         };
@@ -332,8 +335,9 @@ impl AutoMerger {
         })
     }
 
-    /// The risk layers, the merge request's own pipeline, the merge
-    /// status and (for `conditional`) the changed paths.
+    /// The risk layers, `forge/doc-lint` on the head, the merge request's
+    /// own pipeline, the merge status and (for `conditional`) the changed
+    /// paths.
     /// The `forge/risk` warning shown by name on a queued merge request
     /// (`detail` of `queued_with_warning`): `ai_asset` (plan 17 P17-3).
     async fn read_facts(
@@ -355,6 +359,10 @@ impl AutoMerger {
             deterministic_layer(runs.run(head, &risk_name), summary.as_deref()),
             None,
         );
+        // ADR-0030 Amendment 2026-11-17: a failed forge/doc-lint on the
+        // head stops auto-merge even when it is no required check.
+        facts.doc_lint =
+            DocLintState::of(runs.run(head, &check_name(forge_core::checks::DOC_LINT_CHECK)?));
         let warn_detail = summary
             .as_deref()
             .map(forge_core::auto_merge::warn_rules)

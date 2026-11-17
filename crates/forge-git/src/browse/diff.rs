@@ -379,7 +379,7 @@ impl Browser {
         deadline: Deadline,
     ) -> Result<(Vec<u8>, bool), ForgeError> {
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let mut cmd = self
             .git
             .command("diff-tree")

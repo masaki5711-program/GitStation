@@ -300,10 +300,11 @@ async fn a_reachability_check_without_a_slot_is_git_busy_not_success() {
     let g = graph(&f.path);
     let b = f.browser(BrowseLimits {
         max_per_repo: 1,
+        repo_wait: Duration::from_millis(50),
         ..BrowseLimits::default()
     });
-    let held = b.claim(f.id).expect("the only slot");
     let deadline = Deadline::new(Duration::from_secs(5));
+    let held = b.claim(f.id, deadline).await.expect("the only slot");
     let e = b
         .reachable(f.id, &g.mid, &ReachRoots::branches_and_tags(), deadline)
         .await

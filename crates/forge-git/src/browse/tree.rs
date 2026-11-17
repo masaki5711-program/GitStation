@@ -81,7 +81,7 @@ impl Browser {
         deadline: Deadline,
     ) -> Result<Option<TreeEntry>, ForgeError> {
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         if let Some(found) = self.fast_entry_at(repo, &dir, commit, path, deadline).await {
             return Ok(found);
         }
@@ -134,7 +134,7 @@ impl Browser {
             }
         };
         let dir = self.storage.existing(repo)?;
-        let slot = self.claim(repo)?;
+        let slot = self.claim(repo, deadline).await?;
         if let Some(tree) = self
             .fast_tree(repo, &dir, commit, &target, path, deadline)
             .await
@@ -200,7 +200,7 @@ impl Browser {
         deadline: Deadline,
     ) -> Result<String, ForgeError> {
         let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
+        let _slot = self.claim(repo, deadline).await?;
         let out = self
             .git
             .command("cat-file")

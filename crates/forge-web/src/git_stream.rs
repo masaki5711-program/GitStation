@@ -5,8 +5,9 @@
 //! - [`BodySlots`]: a request body is read only while holding a slot,
 //!   global (`max_streams`, waiting up to `acquire_timeout`, then
 //!   `FG-GIT-0004 reason=body_reads`) and per user
-//!   (`max_streams_per_principal`, refused at once,
-//!   `reason=principal_body_reads`), so slow uploads cannot pile up
+//!   (`max_streams_per_principal`, waiting up to `git.http.busy_wait_ms`
+//!   in a bounded queue, then `reason=principal_body_reads`), so slow
+//!   uploads cannot pile up
 //!   buffered bodies (MR3 review).
 //! - [`read_request_body`]: the whole body, at most
 //!   `fetch_request_max_bytes` raw **and** decompressed (gzip through
@@ -25,15 +26,15 @@
 //!   logged with the request id (status 499 in the code; no response is
 //!   left to send).
 
-use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use forge_auth::ProjectCtx;
 use forge_core::{telemetry, ProjectRepository, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
+use forge_git::gate::{GatePermit, KeyedGate};
 use forge_git::gzip::GzipDecoder;
 use forge_git::{GitStdout, GitStream};
 use futures_util::StreamExt as _;
@@ -262,50 +263,56 @@ impl PushBody {
 #[derive(Debug, Clone)]
 pub(crate) struct BodySlots {
     global: Arc<Semaphore>,
-    per_principal: Arc<Mutex<HashMap<String, usize>>>,
-    max_per_principal: usize,
+    per_principal: KeyedGate<String>,
     wait: Duration,
+    principal_wait: Duration,
 }
 
 /// One held body-read slot; released on drop (the permit, then the
-/// per-user claim).
+/// per-user place).
 #[derive(Debug)]
 pub(crate) struct BodySlot {
     _permit: OwnedSemaphorePermit,
-    _claim: Claim,
+    _claim: GatePermit<String>,
 }
 
 impl BodySlots {
-    pub(crate) fn new(max: usize, max_per_principal: usize, wait: Duration) -> Self {
+    /// `max` in total (waiting `wait`), `max_per_principal` per user
+    /// (waiting `principal_wait` in a queue of at most
+    /// `max_principal_waiters`).
+    pub(crate) fn new(
+        max: usize,
+        max_per_principal: usize,
+        wait: Duration,
+        principal_wait: Duration,
+        max_principal_waiters: usize,
+    ) -> Self {
         Self {
             global: Arc::new(Semaphore::new(max.max(1))),
-            per_principal: Arc::new(Mutex::new(HashMap::new())),
-            max_per_principal: max_per_principal.max(1),
+            per_principal: KeyedGate::new(max_per_principal, max_principal_waiters),
             wait,
+            principal_wait,
         }
     }
 
-    /// A slot for `principal`: refused at once over the per-user cap,
-    /// after `wait` when every slot is taken (both `FG-GIT-0004`, 503).
+    /// A slot for `principal`: over the per-user cap it waits at most
+    /// `principal_wait` (`FG-GIT-0004 principal_body_reads`, `queue=
+    /// timeout|full`), then at most `wait` for a global slot
+    /// (`body_reads`); both 503 with `Retry-After`.
     pub(crate) async fn acquire(&self, principal: &str) -> Result<BodySlot, ForgeError> {
-        {
-            let mut map = self
-                .per_principal
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let held = map.entry(principal.to_owned()).or_insert(0);
-            if *held >= self.max_per_principal {
-                return Err(ForgeError::new(ErrorCode::GitBusy)
-                    .with_context("reason", "principal_body_reads")
-                    .with_context("max", self.max_per_principal));
-            }
-            *held += 1;
-        }
-        // From here the per-user claim must be returned on every path.
-        let claim = Claim {
-            key: principal.to_owned(),
-            per_principal: Arc::clone(&self.per_principal),
-        };
+        let claim = self
+            .per_principal
+            .acquire(&principal.to_owned(), self.principal_wait)
+            .await
+            .map_err(|refusal| {
+                refusal.into_error(
+                    ForgeError::new(ErrorCode::GitBusy)
+                        .with_context("reason", "principal_body_reads")
+                        .with_context("max", self.per_principal.max()),
+                    self.per_principal.max_waiters(),
+                )
+            })?;
+        // From here the per-user place is returned on every path (drop).
         let permit =
             match tokio::time::timeout(self.wait, Arc::clone(&self.global).acquire_owned()).await {
                 Ok(Ok(permit)) => permit,
@@ -317,7 +324,8 @@ impl BodySlots {
                 Err(_) => {
                     return Err(ForgeError::new(ErrorCode::GitBusy)
                         .with_context("reason", "body_reads")
-                        .with_context("wait_ms", self.wait.as_millis()))
+                        .with_context("wait_ms", self.wait.as_millis())
+                        .with_context(forge_git::RETRY_AFTER_CONTEXT, 1))
                 }
             };
         Ok(BodySlot {
@@ -328,34 +336,7 @@ impl BodySlots {
 
     #[cfg(test)]
     pub(crate) fn held(&self, principal: &str) -> usize {
-        self.per_principal
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(principal)
-            .copied()
-            .unwrap_or(0)
-    }
-}
-
-/// A per-user claim, returned on drop.
-#[derive(Debug)]
-struct Claim {
-    key: String,
-    per_principal: Arc<Mutex<HashMap<String, usize>>>,
-}
-
-impl Drop for Claim {
-    fn drop(&mut self) {
-        let mut map = self
-            .per_principal
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(held) = map.get_mut(&self.key) {
-            *held = held.saturating_sub(1);
-            if *held == 0 {
-                map.remove(&self.key);
-            }
-        }
+        self.per_principal.held(&principal.to_owned())
     }
 }
 
