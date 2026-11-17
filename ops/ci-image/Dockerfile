@@ -53,9 +53,14 @@ LABEL org.opencontainers.image.title="gitstation-ci-rust" \
 # git: forge-git and the tests shell out to it (>= 2.38, ADR-0006; bookworm
 # has 2.39; checked below: gc --cruft, pack.writeBitmapLookupTable).
 # hostname: forge-core's instance id tests.
+# openssh-client (ssh, ssh-keygen): forge-cli's tests/ssh_e2e.rs drives a real
+# git over SSH against forge's own server; with CI set it fails, instead of
+# skipping, when the client is missing.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git hostname \
+    && apt-get install -y --no-install-recommends git hostname openssh-client \
     && rm -rf /var/lib/apt/lists/* \
+    && ssh -V \
+    && command -v ssh-keygen \
     && git --version \
     && git --version | awk '{ split($3, v, "."); if (v[1] < 2 || (v[1] == 2 && v[2] < 38)) { print "git >= 2.38 required, found " $3; exit 1 } }'
 

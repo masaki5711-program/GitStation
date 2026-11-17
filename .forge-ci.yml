@@ -14,7 +14,7 @@ stages: [check]
 jobs:
   lint:
     stage: check
-    image: registry:5000/ci/rust@sha256:8f7c368ae318e2519233de79aa8754438d427a5dac8331ce02c7432eaef264fd
+    image: registry:5000/ci/rust@sha256:31e8984ac0cc924a8c9078ff3f8b9b740bfee5e4cc3f2670000e1d62781bc8b3
     timeout: 45m
     tags: [linux]
     script:
@@ -33,7 +33,7 @@ jobs:
 
   test:
     stage: check
-    image: registry:5000/ci/rust@sha256:8f7c368ae318e2519233de79aa8754438d427a5dac8331ce02c7432eaef264fd
+    image: registry:5000/ci/rust@sha256:31e8984ac0cc924a8c9078ff3f8b9b740bfee5e4cc3f2670000e1d62781bc8b3
     timeout: 90m
     tags: [linux]
     # Same user, password, database and port (55432) as ops/dev/compose.yml (ADR-0011):
@@ -45,7 +45,7 @@ jobs:
     # Never copy this pattern for a real secret: use CI secrets instead.
     services:
       - name: db
-        image: registry:5000/ci/postgres@sha256:b778617c9388e61cf971b9e493680425f8d0f02498cf1977a3def211c066fbd2
+        image: registry:5000/ci/postgres@sha256:9b7429f1f88dcfeb3d58a9f29510fb16fbf94795c4ac70151b245aaf26d79697
         user: "999:999"
         env:
           POSTGRES_USER: forge_dev
@@ -68,7 +68,7 @@ jobs:
 
   generated:
     stage: check
-    image: registry:5000/ci/rust@sha256:8f7c368ae318e2519233de79aa8754438d427a5dac8331ce02c7432eaef264fd
+    image: registry:5000/ci/rust@sha256:31e8984ac0cc924a8c9078ff3f8b9b740bfee5e4cc3f2670000e1d62781bc8b3
     timeout: 45m
     tags: [linux]
     script:

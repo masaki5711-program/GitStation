@@ -94,12 +94,26 @@ node ops/ci-image/build-and-push.mjs --skip-postgres --jobs 4
 | `registry:5000/ci/postgres`（16-forge） | `sha256:dcc37320cb7b82f77b6eac3a5d58440d67d8b03790dcd3d63c43fc5605176206` |
 
 2026-11-17 の結果（`Cargo.lock` の今のクレート 461 個で作り直した。指紋 `30dcb36d…`。cargo-nextest の層はキャッシュが効き、
-作る・入れるで 1 分 44 秒）。今の `.forge-ci.yml` と `image.toml` はこれを指す:
+作る・入れるで 1 分 44 秒）:
 
 | イメージ | ダイジェスト |
 |---|---|
 | `registry:5000/ci/rust`（1.99.1） | `sha256:8f7c368ae318e2519233de79aa8754438d427a5dac8331ce02c7432eaef264fd` |
 | `registry:5000/ci/postgres`（16-forge） | `sha256:b778617c9388e61cf971b9e493680425f8d0f02498cf1977a3def211c066fbd2` |
+
+2026-11-17 の 2 回目（OpenSSH のクライアントを足した。作る・入れるで 2 分 16 秒）。今の `.forge-ci.yml` と `image.toml` は
+これを指す:
+
+| イメージ | ダイジェスト |
+|---|---|
+| `registry:5000/ci/rust`（1.99.1） | `sha256:31e8984ac0cc924a8c9078ff3f8b9b740bfee5e4cc3f2670000e1d62781bc8b3` |
+| `registry:5000/ci/postgres`（16-forge） | `sha256:9b7429f1f88dcfeb3d58a9f29510fb16fbf94795c4ac70151b245aaf26d79697` |
+
+1 回目のイメージでビルドは通ったが、`forge-cli` の `tests/ssh_e2e.rs` が落ちた（`CI: the OpenSSH client (ssh, ssh-keygen)
+must be installed for this test`）。このテストは本物の git を SSH で動かし、`CI` が立っていると `ssh` が無いことを飛ばさずに
+失敗にする。イメージに入っているのは `git`・`hostname`・`openssh-client`（`ssh -V` は OpenSSH 9.2p1）。**テストが新しい
+コマンドを使うようになったら Dockerfile に足して作り直す**（クレートと違い、これを見張るテストは無い。落ちるのは
+パイプラインの `test` のジョブ）。
 
 `postgres.Containerfile` は変えていないが、作り直すとダイジェストは変わる（Podman のビルドは時刻を含む）。前のダイジェストも
 レジストリに残る。
