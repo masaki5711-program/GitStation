@@ -1,9 +1,11 @@
 # GitStation's own CI on forge-runner (plan 14 X; DRAFT until the cutover).
 # Mirrors .github/workflows/ci.yml (lint, test, generated). Jobs have no
 # network: the image (ops/ci-image) carries the toolchain and every crate of
-# Cargo.lock. Rebuild and re-pin both digests with
-# `node ops/ci-image/build-and-push.mjs` when rust-toolchain.toml or
-# Cargo.lock changes (a missing crate fails the job: cargo is offline).
+# Cargo.lock. `node ops/ci-image/build-and-push.mjs` rebuilds it, re-pins both
+# digests here and writes ops/ci-image/image.toml: run it when
+# rust-toolchain.toml or the crates of Cargo.lock change (a missing crate
+# fails the job: cargo is offline). Until then
+# crates/forge-runner/tests/own_ci_image.rs fails.
 # Every job builds from scratch (no shared target/, debuginfo off): the
 # runner's work_dir must hold about 6.2 GB (ops/ci-image/README.md).
 version: 1
@@ -12,7 +14,7 @@ stages: [check]
 jobs:
   lint:
     stage: check
-    image: registry:5000/ci/rust@sha256:e96601afbc8533373dd783de037b22dba07f5a4fd5a932cedcd2a4a94e5a634f
+    image: registry:5000/ci/rust@sha256:8f7c368ae318e2519233de79aa8754438d427a5dac8331ce02c7432eaef264fd
     timeout: 45m
     tags: [linux]
     script:
@@ -31,7 +33,7 @@ jobs:
 
   test:
     stage: check
-    image: registry:5000/ci/rust@sha256:e96601afbc8533373dd783de037b22dba07f5a4fd5a932cedcd2a4a94e5a634f
+    image: registry:5000/ci/rust@sha256:8f7c368ae318e2519233de79aa8754438d427a5dac8331ce02c7432eaef264fd
     timeout: 90m
     tags: [linux]
     # Same user, password, database and port (55432) as ops/dev/compose.yml (ADR-0011):
@@ -43,7 +45,7 @@ jobs:
     # Never copy this pattern for a real secret: use CI secrets instead.
     services:
       - name: db
-        image: registry:5000/ci/postgres@sha256:dcc37320cb7b82f77b6eac3a5d58440d67d8b03790dcd3d63c43fc5605176206
+        image: registry:5000/ci/postgres@sha256:b778617c9388e61cf971b9e493680425f8d0f02498cf1977a3def211c066fbd2
         user: "999:999"
         env:
           POSTGRES_USER: forge_dev
@@ -66,7 +68,7 @@ jobs:
 
   generated:
     stage: check
-    image: registry:5000/ci/rust@sha256:e96601afbc8533373dd783de037b22dba07f5a4fd5a932cedcd2a4a94e5a634f
+    image: registry:5000/ci/rust@sha256:8f7c368ae318e2519233de79aa8754438d427a5dac8331ce02c7432eaef264fd
     timeout: 45m
     tags: [linux]
     script:
