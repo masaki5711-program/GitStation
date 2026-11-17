@@ -65,3 +65,9 @@ Linux runner host exists (plan 14 §10.1): run it there with
 The services test `a_real_postgres_service_is_reached_over_loopback_and_nothing_leaks`
 also needs `FORGE_RUNNER_TEST_PG_IMAGE=<postgres:16@sha256:…>`. Both ran in the
 test-environment runner container (`ops/runner`, 2026-11-11).
+
+`tests/own_ci_image.rs` guards GitStation's own pipeline, not the runner's
+code: it fails when `Cargo.lock`, `rust-toolchain.toml`, `.forge-ci.yml` and
+`ops/ci-image/image.toml` disagree, that is when the pinned job image (jobs
+have no network) no longer holds the crates of `Cargo.lock`. Fix: rebuild the
+image (`ops/ci-image/README.md`).

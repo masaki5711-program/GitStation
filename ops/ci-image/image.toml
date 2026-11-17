@@ -1,0 +1,10 @@
+# Written by ops/ci-image/build-and-push.mjs: never edit by hand.
+# What the images pinned in .forge-ci.yml were built from. A job has no
+# network, so a crate of Cargo.lock that is not in the image fails every job;
+# crates/forge-runner/tests/own_ci_image.rs fails when this file, Cargo.lock,
+# rust-toolchain.toml and .forge-ci.yml disagree (ops/ci-image/README.md).
+rust_channel = "1.99.1"
+rust_image = "sha256:31e8984ac0cc924a8c9078ff3f8b9b740bfee5e4cc3f2670000e1d62781bc8b3"
+postgres_image = "sha256:9b7429f1f88dcfeb3d58a9f29510fb16fbf94795c4ac70151b245aaf26d79697"
+crates = 461
+crates_sha256 = "30dcb36d6520c7250a2b42f79d2bf03fd8efc21d70c6f1f7e7c8a7f23304f0d7"
