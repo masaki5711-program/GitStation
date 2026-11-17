@@ -47,6 +47,11 @@ pub(crate) async fn carry_plan(
     if &previous == tip {
         return Ok(None);
     }
+    // M4 C14 (ADR-0017 decision 7): the autofix bot's commit never carries
+    // an approval, whatever the project keeps on push.
+    if forge_db::autofix::is_bot_commit(db, stored.project_id, tip).await? {
+        return Ok(None);
+    }
     let settings = forge_db::review::merge_settings(db, stored.project_id).await?;
     if settings.values.reset_approvals_on_push {
         // The default: nothing to read, nothing to log.

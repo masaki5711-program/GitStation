@@ -101,7 +101,8 @@ fn fields_of(t: EventType) -> Option<Fields> {
         | EventType::MergeRequestRelinkRequested
         | EventType::WebhookDisabled
         | EventType::SpecReleased
-        | EventType::MergeRequestRevertDrafted => None,
+        | EventType::MergeRequestRevertDrafted
+        | EventType::MergeRequestAutofixFinished => None,
     }
 }
 

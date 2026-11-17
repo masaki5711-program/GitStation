@@ -481,7 +481,11 @@ fn registry_with(
         // M4 C10 (`independent`): a target branch's `ci/pipeline` failure on
         // a commit a merge produced asks for a revert draft (the
         // `merge_request.revert_draft` job, run by `forge serve`).
-        .with(Arc::new(forge_db::review::reverts::RevertDrafts))?;
+        .with(Arc::new(forge_db::review::reverts::RevertDrafts))?
+        // M4 C14 (`independent`): a merge request's failed merge-result
+        // pipeline or a new conflict records a queued autofix attempt (for
+        // projects that turned autofix on; `forge serve` runs it).
+        .with(Arc::new(forge_db::autofix::AutofixTriggers))?;
     // M3 I2: deliveries are recorded only when the lane can send them.
     let registry = if webhooks {
         registry.with(Arc::new(forge_integ::webhooks::WebhookDispatch))?

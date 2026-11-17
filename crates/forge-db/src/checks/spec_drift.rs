@@ -239,7 +239,8 @@ impl Subscriber for SpecDriftRequests {
                 | EventType::MergeRequestRelinkRequested
                 | EventType::WebhookDisabled
                 | EventType::SpecReleased
-                | EventType::MergeRequestRevertDrafted => Ok(()),
+                | EventType::MergeRequestRevertDrafted
+                | EventType::MergeRequestAutofixFinished => Ok(()),
             }
         })
     }

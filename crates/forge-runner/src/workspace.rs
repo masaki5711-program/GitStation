@@ -22,6 +22,25 @@ pub struct JobDirs {
     pub secrets: PathBuf,
 }
 
+impl JobDirs {
+    /// M4 C14: the autofix step's own repository, outside every mount (the
+    /// container can never touch the git directory the bundle is built
+    /// from; the checkout's `.git` under `work` is never read again).
+    pub fn autofix_git(&self) -> PathBuf {
+        self.base.join("autofix.git")
+    }
+
+    /// M4 C14: the index of the autofix step (outside every mount).
+    pub fn autofix_index(&self) -> PathBuf {
+        self.base.join("autofix.index")
+    }
+
+    /// M4 C14: the bundle the autofix step uploads.
+    pub fn autofix_bundle(&self) -> PathBuf {
+        self.base.join("autofix.bundle")
+    }
+}
+
 /// The runner's work directory.
 #[derive(Debug, Clone)]
 pub struct Workspace {

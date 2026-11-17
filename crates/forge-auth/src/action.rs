@@ -497,6 +497,14 @@ actions! {
     /// emergency stop of auto-merge. People only, administrators (a token
     /// needs `admin`); `api`.
     AutoMergeInstanceStopToggle,
+    // --- autofix (M4 C14, ADR-0017 Amendment C14) ---
+    /// `PUT /api/v1/projects/{id}/autofix`: turn the project's
+    /// deterministic autofix on or off (`autofix.enabled`, off by default).
+    /// People only (never an agent, a service account or the bot),
+    /// Maintainer and above; `api`. Read with `GET …/autofix`
+    /// (`ProjectRead`). The bot itself is decided in its own arm
+    /// (`RepoPush` on `Resource::Autofix`).
+    AutofixSettingsManage,
     // --- AI assets (plan 17 P17-3, ADR-0035) ---
     /// `PUT /api/v1/projects/{id}/ai-assets`: turn the project's
     /// `ai_assets.enabled` on or off (the opt-in of the AI asset lint, the
@@ -759,6 +767,8 @@ impl Action {
                 | Action::AiAssetsSettingManage
                 | Action::AutoMergeStopToggle
                 | Action::AutoMergeInstanceStopToggle
+                // M4 C14: autofix's setting is a person's.
+                | Action::AutofixSettingsManage
                 // M4 C11: deploy configuration and approval are a person's.
                 | Action::DeployEnvironmentManage
                 | Action::DeployTargetManage
@@ -914,6 +924,7 @@ impl Action {
             | Action::MergeQueueManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
+            | Action::AutofixSettingsManage
             | Action::CiVariableManage
             | Action::DeployEnvironmentManage
             | Action::DeployTargetManage
@@ -1068,6 +1079,7 @@ impl Action {
                 | Action::AiAssetsSettingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
+            | Action::AutofixSettingsManage
             // M4 C6: nor are CI secrets.
             | Action::CiVariableManage
             // M4 C11: nor are deployments (an approval is a person's own).
@@ -1226,6 +1238,7 @@ impl Action {
                 | Action::AiAssetsSettingManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
+            | Action::AutofixSettingsManage
             // M4 C6: a job never reads or sets a secret through the API
             // (ADR-0029 decision 8: they come with the claim).
             | Action::CiVariableManage

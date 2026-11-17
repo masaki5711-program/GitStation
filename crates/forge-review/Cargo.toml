@@ -14,6 +14,8 @@ publish.workspace = true
 # depends on another feature crate (forge-hosting, forge-checks).
 [dependencies]
 forge-auth.workspace = true
+# M4 C14: the fixers of the target branch's `.forge-ci.yml` (pure).
+forge-ci.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
 forge-errors.workspace = true
@@ -23,6 +25,8 @@ tokio.workspace = true
 unicode-properties.workspace = true
 
 [dev-dependencies]
+# M4 C14: the autofix test stores its bundle artifact with its sha256.
+sha2.workspace = true
 forge-db = { workspace = true, features = ["test-support"] }
 # Tests that need a git timeout use a git that never answers, not a 1 ns timeout.
 forge-git = { workspace = true, features = ["test-support"] }

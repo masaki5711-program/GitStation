@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 45] = [
+const GROUPS: [[Row; 2]; 46] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -118,6 +118,8 @@ const GROUPS: [[Row; 2]; 45] = [
     both!(A::AutoMergeSettingsManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::PrivateProject),
     both!(A::AutoMergeStopToggle, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     both!(A::AutoMergeInstanceStopToggle, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Instance),
+    // M4 C14: the autofix switch is a Maintainer's (a person's).
+    both!(A::AutofixSettingsManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // Plan 17 P17-3: ai_assets.enabled is a person's (session only: the
     // administrator's session is the twin); a bot — pfs-ai-bot — and a
     // service account are refused even in a session.

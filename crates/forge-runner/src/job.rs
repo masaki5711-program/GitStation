@@ -50,7 +50,7 @@ use forge_errors::{ErrorCode, ForgeError, Lang};
 use sha2::{Digest, Sha256};
 
 use crate::api::{ClaimedJob, JobResult, RunnerApi};
-use crate::git::GitPlan;
+use crate::git::{AutofixDirs, GitPlan};
 use crate::gpu::{GpuEval, Verified};
 use crate::logsink::LogSink;
 use crate::podman::{
@@ -131,6 +131,10 @@ struct Started {
     /// that exited 0 — uploaded only once the container (and its pod) is
     /// confirmed removed.
     upload: Option<(std::path::PathBuf, Vec<String>)>,
+    /// M4 C14: the job directories of an autofix fixer whose script
+    /// exited 0 — its work tree becomes the bundle once the container is
+    /// confirmed removed.
+    autofix: Option<JobDirs>,
 }
 
 /// The longest all of one job's artifact transfers may take together (the
@@ -351,6 +355,19 @@ impl Executor {
             }
             (other, _) => other,
         };
+        // M4 C14: a fixer's output, also only once nothing of the job runs.
+        let ran = match (ran, started.autofix.take()) {
+            (Ok(ScriptEnd::Exited(0)), Some(dirs)) => {
+                if container_gone && !pod_left {
+                    self.autofix_output(api, job, &dirs, stop, &mut sink)
+                        .map(|()| ScriptEnd::Exited(0))
+                } else {
+                    Err(ForgeError::new(ErrorCode::ArtifactTransferFailed)
+                        .with_context("reason", "container_not_removed"))
+                }
+            }
+            (other, _) => other,
+        };
         let workspace_dirty = !self.clean_workspace(&request_id, job.job_id) || pod_left;
         let outcome = match ran {
             Ok(ScriptEnd::Exited(0)) => Outcome {
@@ -468,11 +485,14 @@ impl Executor {
         let def = forge_ci::check(&bytes, &forge_ci::LintContext::pinned_by_server()).map_err(
             |problems| mismatch("definition_invalid").with_context("problems", problems.len()),
         )?;
-        let spec = def
-            .jobs()
-            .iter()
-            .find(|j| j.name() == job.name)
-            .ok_or_else(|| mismatch("job_missing"))?;
+        // M4 C14: an autofix claim names a fixer (`autofix.fixers`), never
+        // a job of `jobs:` (and the reverse).
+        let spec = if job.autofix {
+            def.fixer(&job.name).map(forge_ci::Fixer::job)
+        } else {
+            def.jobs().iter().find(|j| j.name() == job.name)
+        }
+        .ok_or_else(|| mismatch("job_missing"))?;
         if spec.image() != job.image || !valid_image(&job.image) {
             return Err(mismatch("image_mismatch"));
         }
@@ -637,6 +657,10 @@ impl Executor {
                     started.upload = Some((dirs.work.clone(), spec.artifacts().to_vec()));
                     // clone: sent after the cleanup
                 }
+                // M4 C14: a fixer's work tree, bundled after the cleanup.
+                if code == 0 && job.autofix {
+                    started.autofix = Some(dirs.clone()); // clone: used after the cleanup
+                }
                 Ok(ScriptEnd::Exited(code))
             }
             Exit::TimedOut => {
@@ -648,6 +672,108 @@ impl Executor {
                 Ok(ScriptEnd::Stopped)
             }
         }
+    }
+
+    /// M4 C14 (ADR-0017 Amendment C14): the fixer's work tree as a bundle
+    /// of one transport commit on the pinned commit, built in a repository
+    /// of its own outside every mount (`GitPlan::autofix_*`) and uploaded
+    /// as the artifact `autofix.bundle`. A work tree the fixer left
+    /// unchanged uploads nothing (`no_change` on the server). A git step
+    /// that fails is `FG-CI-0009` (`step=autofix_*`), the upload
+    /// `FG-CI-0020`: the job fails.
+    fn autofix_output(
+        &self,
+        api: &dyn RunnerApi,
+        job: &ClaimedJob,
+        dirs: &JobDirs,
+        stop: &AtomicBool,
+        sink: &mut LogSink<'_>,
+    ) -> Result<(), ForgeError> {
+        let sha = ObjectId::parse(&job.sha).map_err(|_| mismatch("claim_invalid"))?;
+        let (git_dir, index, bundle) = (
+            dirs.autofix_git(),
+            dirs.autofix_index(),
+            dirs.autofix_bundle(),
+        );
+        std::fs::create_dir_all(&git_dir)
+            .map_err(|e| start_failed("workspace_unusable").with_source(e))?;
+        let a = AutofixDirs {
+            work: &dirs.work,
+            git_dir: &git_dir,
+            index: &index,
+        };
+        let local = self.git_limits.local;
+        let id_of = |step: &'static str, ran: &Ran| {
+            ObjectId::parse(String::from_utf8_lossy(&ran.stdout).trim())
+                .map_err(|_| fetch_failed(step, "unexpected_output"))
+        };
+        self.git_step(
+            "autofix_init",
+            &self.git.autofix_init(&git_dir),
+            local,
+            stop,
+            sink,
+        )?;
+        let url = (self.fetch_url)(job.job_id)?;
+        let fetch = self
+            .git
+            .fetch(&git_dir, &url, job.pipeline_id, &job.job_token);
+        self.git_step("autofix_fetch", &fetch, self.git_limits.fetch, stop, sink)?;
+        let fetched = self.git_step(
+            "autofix_verify",
+            &self.git.fetched(&git_dir),
+            local,
+            stop,
+            sink,
+        )?;
+        if String::from_utf8_lossy(&fetched.stdout).trim() != sha.as_str() {
+            return Err(fetch_failed("autofix_verify", "sha_mismatch"));
+        }
+        let read = self.git.autofix_read_tree(&a, &sha);
+        self.git_step("autofix_read_tree", &read, local, stop, sink)?;
+        self.git_step("autofix_add", &self.git.autofix_add(&a), local, stop, sink)?;
+        let written = self.git.autofix_write_tree(&a);
+        let tree = id_of(
+            "autofix_write_tree",
+            &self.git_step("autofix_write_tree", &written, local, stop, sink)?,
+        )?;
+        let input = self.git.autofix_input_tree(&a, &sha);
+        let before = id_of(
+            "autofix_input_tree",
+            &self.git_step("autofix_input_tree", &input, local, stop, sink)?,
+        )?;
+        if tree == before {
+            sink.line("the fixer changed nothing: no autofix bundle");
+            return Ok(());
+        }
+        let commit_cmd = self.git.autofix_commit(&a, &tree, &sha);
+        let commit = id_of(
+            "autofix_commit",
+            &self.git_step("autofix_commit", &commit_cmd, local, stop, sink)?,
+        )?;
+        self.git_step(
+            "autofix_ref",
+            &self.git.autofix_ref(&a, &commit),
+            local,
+            stop,
+            sink,
+        )?;
+        let made = self.git.autofix_bundle(&a, &bundle, &sha);
+        self.git_step("autofix_bundle", &made, local, stop, sink)?;
+        let size = std::fs::symlink_metadata(&bundle)
+            .map_err(|e| {
+                ForgeError::new(ErrorCode::ArtifactTransferFailed)
+                    .with_context("reason", "bundle_unreadable")
+                    .with_source(e)
+            })?
+            .len();
+        let limit = transfer_left(Instant::now() + TRANSFER_DEADLINE, stop)?;
+        let file = crate::artifacts::open_regular(&bundle, size)?;
+        let path = forge_core::autofix::BUNDLE_ARTIFACT_PATH;
+        api.upload_artifact(job.job_id, &job.job_token, path, file, size, limit)
+            .map_err(|e| transfer_failed("send", &e).with_context("path", path))?;
+        sink.line(&format!("uploaded the autofix bundle ({size} bytes)"));
+        Ok(())
     }
 
     /// The artifacts of the jobs `job` needs, each into its path under

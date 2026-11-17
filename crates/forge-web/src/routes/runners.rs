@@ -192,6 +192,10 @@ pub struct ClaimedJobBody {
     /// revoked when the job ends. Shown once.
     pub job_token: String,
     pub job_token_expires_at: String,
+    /// M4 C14 (ADR-0017 Amendment C14): the job is an autofix fixer: run
+    /// `autofix.fixers.<name>` of the definition at `sha`, then upload the
+    /// work tree as `autofix.bundle` (one transport commit on `sha`).
+    pub autofix: bool,
 }
 
 /// One secret released with a claim (M4 C6).
@@ -522,6 +526,7 @@ fn claimed_body(grant: ClaimGrant) -> ClaimedJobBody {
         lease_until: c.lease_until,
         job_token: c.token.reveal(),
         job_token_expires_at: c.token_expires_at,
+        autofix: c.pipeline.source == forge_pipelines::Source::Autofix,
     }
 }
 

@@ -48,6 +48,11 @@ pub enum Source {
     /// M4 C8 (ADR-0030 §5): a merge queue's train (`ref` = the target
     /// branch, no merge request, never protected).
     MergeQueue,
+    /// M4 C14 (ADR-0017 Amendment C14): one autofix fixer's own pipeline
+    /// (`ref` = the merge request's source branch, `sha` = the input
+    /// commit, no merge request link, never protected, never deduplicated;
+    /// written by `forge_db::autofix::start` only, never planned from a trigger).
+    Autofix,
 }
 
 impl Source {
@@ -58,6 +63,7 @@ impl Source {
             Self::Schedule => "schedule",
             Self::Manual => "manual",
             Self::MergeQueue => "merge_queue",
+            Self::Autofix => "autofix",
         }
     }
 
@@ -68,6 +74,7 @@ impl Source {
             "schedule" => Some(Self::Schedule),
             "manual" => Some(Self::Manual),
             "merge_queue" => Some(Self::MergeQueue),
+            "autofix" => Some(Self::Autofix),
             _ => None,
         }
     }
@@ -497,6 +504,23 @@ async fn insert(
         .map_err(|e| query_error(query, e))?;
     }
     Ok(Some(pipeline_id))
+}
+
+/// M4 C14: write an autofix fixer's pipeline and its job on `c` (inside
+/// the caller's transaction, `forge_db::autofix::start`): its id. Source
+/// `autofix` only, never protected, no merge request link, never
+/// deduplicated (`FG-SYS-0001 reason=autofix_pipeline_shape` otherwise).
+pub(crate) async fn insert_autofix(
+    c: &mut sqlx::PgConnection,
+    new: &NewPipeline,
+) -> Result<i64, ForgeError> {
+    let r = &new.request;
+    if r.source != Source::Autofix || new.protected || r.merge_request.is_some() {
+        return Err(internal("autofix_pipeline_shape"));
+    }
+    insert(c, new, "pipelines.create_autofix")
+        .await?
+        .ok_or_else(|| internal("autofix_pipeline_deduplicated"))
 }
 
 /// [`insert`] for another module's transaction (M4 C12: a scheduled run

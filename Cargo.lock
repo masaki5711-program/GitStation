@@ -1389,12 +1389,14 @@ name = "forge-review"
 version = "0.1.0"
 dependencies = [
  "forge-auth",
+ "forge-ci",
  "forge-core",
  "forge-db",
  "forge-errors",
  "forge-git",
  "proptest",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tracing",

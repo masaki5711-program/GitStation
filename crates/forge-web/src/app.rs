@@ -613,19 +613,49 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    ai_assets_routes(schedule_routes(auto_merge_routes(deploy_routes(
-        user_activity_routes(user_merge_request_routes(runner_routes(pipeline_routes(
-            merge_queue_routes(doc_lint_routes(binding_routes(act_as_routes(
-                mirror_routes(webhook_routes(notification_routes(check_routes(
-                    dev_status_routes(feed_routes(integration_routes(service_account_routes(
-                        account_routes(history_routes(browse_routes(git_routes(shell_routes(
-                            merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
-                        ))))),
+    autofix_routes(ai_assets_routes(schedule_routes(auto_merge_routes(
+        deploy_routes(user_activity_routes(user_merge_request_routes(
+            runner_routes(pipeline_routes(merge_queue_routes(doc_lint_routes(
+                binding_routes(act_as_routes(mirror_routes(webhook_routes(
+                    notification_routes(check_routes(dev_status_routes(feed_routes(
+                        integration_routes(service_account_routes(account_routes(history_routes(
+                            browse_routes(git_routes(shell_routes(merge_request_routes(
+                                member_routes(move_routes(hosting_routes(fixed))),
+                            )))),
+                        )))),
                     )))),
                 )))),
             )))),
-        )))),
+        ))),
     ))))
+}
+
+/// The deterministic autofix (M4 C14, ADR-0017 Amendment C14): a
+/// project's switch. The merge request's own line is in
+/// `merge_request_routes`; the bot itself has no route (it is decided in
+/// its own arm of `authorize()`, `RepoPush` on `Resource::Autofix`).
+fn autofix_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::autofix as f;
+    registry
+        .route_with(
+            Verb::Get,
+            f::ONE,
+            Action::ProjectRead,
+            "A project's deterministic autofix switch (off by default), who changed it last and when; a hint whether the caller may change it",
+            f::AutofixOf,
+            f::read,
+        )
+        .responds::<f::AutofixBody>(Verb::Get, f::ONE)
+        .route_with_body(
+            Verb::Put,
+            f::ONE,
+            Action::AutofixSettingsManage,
+            "Turn a project's deterministic autofix on or off (people only; Maintainer; the caller becomes the enabler the bot's pushes are decided with); audited",
+            f::MAX_BODY,
+            f::AutofixOf,
+            f::put,
+        )
+        .responds::<f::AutofixBody>(Verb::Put, f::ONE)
 }
 
 /// A project's `ai_assets.enabled` (plan 17 P17-3, ADR-0035).
@@ -2617,6 +2647,16 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::auto_merge_state,
         )
         .responds::<mr::MergeRequestAutoMergeBody>(Verb::Get, mr::AUTO_MERGE)
+        // M4 C14: what the deterministic autofix did (one line).
+        .route_with(
+            Verb::Get,
+            mr::AUTOFIX,
+            Action::MergeRequestRead,
+            "What the deterministic autofix did with a merge request: whether the project's autofix is on and its latest attempt (trigger, fixer, state, a stable reason, the paths behind a refusal or proposal, the bot's commit, FG-GIT-0037 / 0038, FG-CI-0031, FG-REVIEW-0031, FG-AUTH-0024) (null: none) (as the repository browse API)",
+            mr::AutofixStateOf,
+            mr::autofix_state,
+        )
+        .responds::<mr::MergeRequestAutofixBody>(Verb::Get, mr::AUTOFIX)
         // M3 R5 (ADR-0024 §8, §9): approvals of the head the caller saw,
         // their evaluation, and the project's approval rules.
         .route_with_body(

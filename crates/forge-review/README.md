@@ -264,3 +264,20 @@ push pipeline failed on the merged commit and had not failed before the merge, d
 the reverted merge request's author and recorded as `merge_request.revert_drafted`. Owned
 codes: FG-REVIEW-0029 RevertRefused, FG-REVIEW-0030 RevertConflict (a conflicting revert
 opens nothing). Tests: `tests/revert_git.rs`.
+
+**M4 C14 — deterministic autofix** (`src/autofix.rs`, `src/autofix_settings.rs`,
+ADR-0017 Amendment C14): `Autofixer::tick` (the `forge serve` task `autofix`) starts a
+queued attempt (forge-db's `autofix-triggers` subscriber: a failed merge-result
+`ci/pipeline` or a conflict, projects with autofix on only) — `prove(RepoPush)` of the
+bot on `Resource::Autofix` before git is read, a fixer from the TARGET branch's
+`autofix.fixers`, the input commit, the fixer's own `autofix` pipeline — and lands a
+finished one: the bundle imported with fsck and exactly the input commit as precondition,
+only its tree used, `diff-tree` checked by `forge_core::autofix::check_scope` (conflicts:
+inside the conflicted hunks only), the bot's commit built with `commit-tree`, decided
+again, recorded as the bot's (no approval carried) and moved onto the source branch by a
+compare-and-swap. `Review::set_autofix_enabled` (`AutofixSettingsManage`, Maintainer,
+audited), `autofix_settings`, `autofix_state`. The artifact file comes through
+`BundleFile` (forge-cli passes forge-pipelines' store). Owned codes: FG-GIT-0037
+AutofixCandidateInvalid (alert, runbook `autofix`), FG-GIT-0038 AutofixLandingRaced,
+FG-CI-0031 AutofixFixerFailed, FG-REVIEW-0031 AutofixProposalOnly, FG-AUTH-0024
+AutofixPushDenied. Tests: `tests/autofix_git.rs` (real git and database).

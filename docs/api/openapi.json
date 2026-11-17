@@ -850,6 +850,158 @@
         ],
         "type": "object"
       },
+      "AutofixAttemptBody": {
+        "additionalProperties": false,
+        "description": "The merge request's latest autofix attempt.",
+        "properties": {
+          "attempt_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "commit_sha": {
+            "description": "The bot's commit on the source branch (`applied`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "description": "`FG-GIT-0037`, `FG-GIT-0038`, `FG-CI-0031`, `FG-REVIEW-0031`,\n`FG-AUTH-0024` (`null`: none).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fixer": {
+            "description": "The target branch's fixer (`null` while queued).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "description": "The head it started from.",
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "$ref": "#/components/schemas/AutofixPathBody"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "description": "A stable word (`applied`, `no_change`, `outside_fixer_paths`,\n`migration`, `denied`, `disabled`, `head_moved`, `job_failed`, …).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "description": "The request id of the decision (its log lines).",
+            "type": "string"
+          },
+          "state": {
+            "description": "`queued`, `running`, `applied`, `no_change`, `refused`, `proposed`,\n`failed`, `skipped` or `superseded`.",
+            "type": "string"
+          },
+          "trigger": {
+            "description": "`pipeline_failed` or `conflict`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "trigger",
+          "fixer",
+          "state",
+          "reason",
+          "paths",
+          "commit_sha",
+          "error_code",
+          "head_sha",
+          "request_id",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "AutofixBody": {
+        "additionalProperties": false,
+        "description": "A project's autofix switch.",
+        "properties": {
+          "changed_at": {
+            "description": "UTC, RFC 3339.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_by": {
+            "description": "Who changed it last: the enabler (`null`: never set, or the caller\nis no Maintainer — only one who may change it sees who did).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Off by default (no project fixes itself until a Maintainer turns it\non).",
+            "type": "boolean"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/AutofixViewerBody"
+          }
+        },
+        "required": [
+          "project_id",
+          "enabled",
+          "changed_by",
+          "changed_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "AutofixPathBody": {
+        "additionalProperties": false,
+        "description": "One path behind a refusal or a proposal.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "`migration`, `binary`, `protected_path`, `outside_fixer_paths`, … .",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "AutofixViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do now (a hint; the route decides again).",
+        "properties": {
+          "can_change": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_change"
+        ],
+        "type": "object"
+      },
       "BindProject": {
         "additionalProperties": false,
         "description": "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`.",
@@ -1604,6 +1756,10 @@
             "format": "int32",
             "type": "integer"
           },
+          "autofix": {
+            "description": "M4 C14 (ADR-0017 Amendment C14): the job is an autofix fixer: run\n`autofix.fixers.<name>` of the definition at `sha`, then upload the\nwork tree as `autofix.bundle` (one transport commit on `sha`).",
+            "type": "boolean"
+          },
           "definition_hash": {
             "description": "sha256 of the `.forge-ci.yml` bytes the pipeline was planned from:\nthe runner reads the job's script from that file at `sha` and\nrefuses other bytes.",
             "type": [
@@ -1702,7 +1858,8 @@
           "secrets",
           "lease_until",
           "job_token",
-          "job_token_expires_at"
+          "job_token_expires_at",
+          "autofix"
         ],
         "type": "object"
       },
@@ -6606,6 +6763,37 @@
         ],
         "type": "object"
       },
+      "MergeRequestAutofixBody": {
+        "additionalProperties": false,
+        "description": "A merge request's autofix.",
+        "properties": {
+          "attempt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AutofixAttemptBody"
+              }
+            ]
+          },
+          "enabled": {
+            "description": "The project's autofix switch.",
+            "type": "boolean"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "iid",
+          "enabled",
+          "attempt"
+        ],
+        "type": "object"
+      },
       "MergeRequestBody": {
         "additionalProperties": false,
         "description": "One merge request as the API shows it.",
@@ -8269,6 +8457,19 @@
         },
         "required": [
           "mode"
+        ],
+        "type": "object"
+      },
+      "PutAutofix": {
+        "additionalProperties": false,
+        "description": "`PUT …/autofix`.",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
         ],
         "type": "object"
       },
@@ -15969,6 +16170,97 @@
         "x-forge-action": "AutoMergeStopToggle"
       }
     },
+    "/api/v1/projects/{id}/autofix": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_autofix",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutofixBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's deterministic autofix switch (off by default), who changed it last and when; a hint whether the caller may change it",
+        "x-forge-action": "ProjectRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_autofix",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutAutofix"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutofixBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Turn a project's deterministic autofix on or off (people only; Maintainer; the caller becomes the enabler the bot's pushes are decided with); audited",
+        "x-forge-action": "AutofixSettingsManage",
+        "x-forge-max-body-bytes": 128
+      }
+    },
     "/api/v1/projects/{id}/ci/variables": {
       "get": {
         "operationId": "get_api_v1_projects_id_ci_variables",
@@ -18128,6 +18420,55 @@
           }
         },
         "summary": "What auto-merge did with a merge request: the project's mode, the emergency stop in effect, and its last state (queued, waiting, held, stopped) with the stop class, a stable reason, the forge/risk rule or check behind it and FG-REVIEW-0026 / 0027 (null: none for its current head) (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/autofix": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_autofix",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestAutofixBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "What the deterministic autofix did with a merge request: whether the project's autofix is on and its latest attempt (trigger, fixer, state, a stable reason, the paths behind a refusal or proposal, the bot's commit, FG-GIT-0037 / 0038, FG-CI-0031, FG-REVIEW-0031, FG-AUTH-0024) (null: none) (as the repository browse API)",
         "x-forge-action": "MergeRequestRead"
       }
     },

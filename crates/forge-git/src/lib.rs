@@ -42,6 +42,8 @@
 //!   push brings inside git's quarantine (blob sizes, secrets) and the
 //!   secret patterns.
 
+// M4 C14: the git side of the deterministic autofix.
+pub mod autofix;
 mod batch;
 pub mod browse;
 mod command;

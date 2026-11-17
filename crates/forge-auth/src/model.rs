@@ -46,6 +46,14 @@ pub enum Credential {
     /// own arm (`auto_merge.rs`): `MergeQueueEnqueue` and
     /// `MergeRequestMerge` on `Resource::AutoMerge`, nothing else.
     AutoMerge,
+    /// The autofix bot `forge-autofix` (M4 C14, ADR-0017 §2.5 and its
+    /// Amendment C14): forge's own worker pushing one deterministic fix to
+    /// the source branch of the merge request it was asked to fix. No
+    /// person, no login, no token; built only by [`Principal::autofix`] and
+    /// decided in its own arm (`autofix.rs`): `RepoPush` on
+    /// `Resource::Autofix`, nothing else — never an approval, a merge, a
+    /// protected branch or path, a setting, a deploy or an act-as.
+    Autofix,
 }
 
 /// The scopes an SSH key carries (M4 C13, ADR-0033 §2).
@@ -204,7 +212,8 @@ impl Principal {
             | Credential::ActAs(_)
             | Credential::Runner(_)
             | Credential::Job(_)
-            | Credential::AutoMerge => PersonalDisclosure::default(),
+            | Credential::AutoMerge
+            | Credential::Autofix => PersonalDisclosure::default(),
         }
     }
 
@@ -340,7 +349,8 @@ impl Principal {
             | Credential::Token(_)
             | Credential::Runner(_)
             | Credential::Job(_)
-            | Credential::AutoMerge => None,
+            | Credential::AutoMerge
+            | Credential::Autofix => None,
         }
     }
 
@@ -374,6 +384,20 @@ impl Principal {
         matches!(self.credential, Credential::AutoMerge)
     }
 
+    /// The autofix bot (M4 C14): forge-review's autofix worker builds it,
+    /// nothing else (no route authenticates as it). No person, no
+    /// administrator rights, the kind of no person (`Bot`), never an agent
+    /// token; `authorize()` decides it in `autofix.rs` before any other
+    /// rule.
+    pub fn autofix() -> Self {
+        Self::ci(Credential::Autofix)
+    }
+
+    /// The autofix bot.
+    pub fn is_autofix(&self) -> bool {
+        matches!(self.credential, Credential::Autofix)
+    }
+
     /// No user, active (the credential's own state decides), the kind of
     /// no person (`Bot`: never a member, never `Human`).
     fn ci(credential: Credential) -> Self {
@@ -398,7 +422,8 @@ impl Principal {
                 Credential::ActAs(_)
                 | Credential::Runner(_)
                 | Credential::Job(_)
-                | Credential::AutoMerge => false,
+                | Credential::AutoMerge
+                | Credential::Autofix => false,
             }
     }
 
@@ -412,7 +437,10 @@ impl Principal {
             Credential::Token(scopes) => names(scopes),
             Credential::ActAs(c) => names(&c.via_scopes),
             // CI principals hold no scope (ADR-0029: `CiRule` decides).
-            Credential::Runner(_) | Credential::Job(_) | Credential::AutoMerge => Vec::new(),
+            Credential::Runner(_)
+            | Credential::Job(_)
+            | Credential::AutoMerge
+            | Credential::Autofix => Vec::new(),
         }
     }
 }
@@ -440,6 +468,36 @@ pub struct AutoMergeTarget {
     pub mode: forge_core::auto_merge::AutoMergeMode,
     /// The emergency stop in effect now (the instance's first).
     pub stop: Option<forge_core::auto_merge::StopScope>,
+}
+
+/// What the autofix bot is decided on (M4 C14, ADR-0017 §2.5): every
+/// fact read from the database (and the protection rules) in the same
+/// transaction as the merge request, before git is read or written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutofixTarget {
+    /// The project (the bot is no member: `role` is `None`).
+    pub project: ProjectView,
+    /// The ref the bot would write: the merge request's source branch.
+    pub source_branch: RefName,
+    pub target_branch: RefName,
+    /// What the write does to it (only a fast-forward is allowed).
+    pub update: RefUpdate,
+    /// The protection of the source branch (`Some`: refused, even for an
+    /// administrator's merge request).
+    pub protection: Option<RefProtection>,
+    pub mr_open: bool,
+    /// The project's `autofix.enabled` now.
+    pub autofix_enabled: bool,
+    /// The merge request's author's role on the project now (`None`: no
+    /// member) and whether the account is active: the bot never does more
+    /// than the author could (`Developer` and above).
+    pub author_role: Option<Role>,
+    pub author_active: bool,
+    /// The person who enabled autofix on the project: their role now and
+    /// whether the account is active (ADR-0017 §2.5: bot ∩ author ∩
+    /// enabler).
+    pub enabler_role: Option<Role>,
+    pub enabler_active: bool,
 }
 
 /// What a push does to one ref.
@@ -813,6 +871,11 @@ pub enum Resource {
     /// merge request. Every other principal is refused it
     /// (`reason=auto_merge_resource`).
     AutoMerge(AutoMergeTarget),
+    /// A merge request's source branch as the autofix bot reaches it (M4
+    /// C14): `RepoPush` of the bot's one commit (the candidate's import
+    /// and the landing). Every other principal is refused it
+    /// (`reason=autofix_resource`).
+    Autofix(AutofixTarget),
     /// One discussion of a merge request (M3 R3, ADR-0024 §12):
     /// `DiscussionResolve`. `mr_author` is the merge request's author,
     /// `started_by` the author of the thread's first note. The merge

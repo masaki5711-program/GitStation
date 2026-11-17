@@ -159,6 +159,20 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
             ),
         )?;
+        // M4 C14 (ADR-0017 Amendment C14): the deterministic autofix lands
+        // the bot's commit on source branches: here, next to the browse
+        // cache; its bundles are CI artifacts (forge-pipelines' store).
+        let artifact_store =
+            forge_pipelines::artifacts::ArtifactStore::new(smart_http.storage.path());
+        let autofix_tasks = crate::serve_autofix::spawn(Arc::new(
+            forge_review::Autofixer::new(
+                db.clone(),                 // clone: the pool handle is shared
+                smart_http.git.clone(),     // clone: Arc handles
+                smart_http.storage.clone(), // clone: the root path
+                Arc::new(move |project, id| artifact_store.file(project, id)),
+            )
+            .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
+        ));
         // M4 C9: the auto-merge worker queues mergeable merge requests of
         // `full` / `conditional` projects as the auto-merge principal. The
         // same Review serves the routes.
@@ -389,6 +403,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         auto_merge_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         queue_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         revert_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
+        autofix_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         merge_tasks.stop(MERGE_SHUTDOWN_WAIT).await;
         // A receive-pack whose body was complete runs on in its own task
         // (and records the push afterwards): let it finish before the

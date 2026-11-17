@@ -187,8 +187,10 @@ impl<R: ResourceCtx> Authorized<R> {
         // own state was read with the request (a disabled runner or a
         // revoked job token never authenticated).
         // The auto-merge principal (M4 C9) has no account either.
-        if let Credential::Runner(_) | Credential::Job(_) | Credential::AutoMerge =
-            self.principal.credential()
+        if let Credential::Runner(_)
+        | Credential::Job(_)
+        | Credential::AutoMerge
+        | Credential::Autofix = self.principal.credential()
         {
             return prove(&self.principal, self.action, fresh);
         }

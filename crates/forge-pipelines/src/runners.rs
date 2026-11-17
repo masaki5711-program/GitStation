@@ -59,7 +59,8 @@ fn runner_of(principal: &Principal, action: Action) -> Result<i64, ForgeError> {
         | Credential::Token(_)
         | Credential::ActAs(_)
         | Credential::Job(_)
-        | Credential::AutoMerge => Err(ForgeError::new(ErrorCode::Internal)
+        | Credential::AutoMerge
+        | Credential::Autofix => Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "runner_proof_without_runner")
             .with_context("action", action.name())),
     }

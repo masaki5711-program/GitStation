@@ -950,6 +950,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/autofix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's deterministic autofix switch (off by default), who changed it last and when; a hint whether the caller may change it */
+        get: operations["get_api_v1_projects_id_autofix"];
+        /** Turn a project's deterministic autofix on or off (people only; Maintainer; the caller becomes the enabler the bot's pushes are decided with); audited */
+        put: operations["put_api_v1_projects_id_autofix"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/ci/variables": {
         parameters: {
             query?: never;
@@ -1445,6 +1463,23 @@ export interface paths {
         };
         /** What auto-merge did with a merge request: the project's mode, the emergency stop in effect, and its last state (queued, waiting, held, stopped) with the stop class, a stable reason, the forge/risk rule or check behind it and FG-REVIEW-0026 / 0027 (null: none for its current head) (as the repository browse API) */
         get: operations["get_api_v1_projects_id_merge_requests_iid_auto_merge"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/autofix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the deterministic autofix did with a merge request: whether the project's autofix is on and its latest attempt (trigger, fixer, state, a stable reason, the paths behind a refusal or proposal, the bot's commit, FG-GIT-0037 / 0038, FG-CI-0031, FG-REVIEW-0031, FG-AUTH-0024) (null: none) (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_autofix"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3324,6 +3359,68 @@ export interface components {
             can_change_mode: boolean;
             can_stop: boolean;
         };
+        /** @description The merge request's latest autofix attempt. */
+        AutofixAttemptBody: {
+            /** Format: int64 */
+            attempt_id: number;
+            /** @description The bot's commit on the source branch (`applied`). */
+            commit_sha: string | null;
+            /**
+             * @description `FG-GIT-0037`, `FG-GIT-0038`, `FG-CI-0031`, `FG-REVIEW-0031`,
+             *     `FG-AUTH-0024` (`null`: none).
+             */
+            error_code: string | null;
+            /** @description The target branch's fixer (`null` while queued). */
+            fixer: string | null;
+            /** @description The head it started from. */
+            head_sha: string;
+            paths: components["schemas"]["AutofixPathBody"][];
+            /**
+             * @description A stable word (`applied`, `no_change`, `outside_fixer_paths`,
+             *     `migration`, `denied`, `disabled`, `head_moved`, `job_failed`, …).
+             */
+            reason: string | null;
+            /** @description The request id of the decision (its log lines). */
+            request_id: string;
+            /**
+             * @description `queued`, `running`, `applied`, `no_change`, `refused`, `proposed`,
+             *     `failed`, `skipped` or `superseded`.
+             */
+            state: string;
+            /** @description `pipeline_failed` or `conflict`. */
+            trigger: string;
+            /** @description UTC, RFC 3339. */
+            updated_at: string;
+        };
+        /** @description A project's autofix switch. */
+        AutofixBody: {
+            /** @description UTC, RFC 3339. */
+            changed_at: string | null;
+            /**
+             * Format: int64
+             * @description Who changed it last: the enabler (`null`: never set, or the caller
+             *     is no Maintainer — only one who may change it sees who did).
+             */
+            changed_by: number | null;
+            /**
+             * @description Off by default (no project fixes itself until a Maintainer turns it
+             *     on).
+             */
+            enabled: boolean;
+            /** Format: int64 */
+            project_id: number;
+            viewer: components["schemas"]["AutofixViewerBody"];
+        };
+        /** @description One path behind a refusal or a proposal. */
+        AutofixPathBody: {
+            path: string;
+            /** @description `migration`, `binary`, `protected_path`, `outside_fixer_paths`, … . */
+            reason: string;
+        };
+        /** @description What the caller could do now (a hint; the route decides again). */
+        AutofixViewerBody: {
+            can_change: boolean;
+        };
         /** @description `PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`. */
         BindProject: {
             /**
@@ -3598,6 +3695,12 @@ export interface components {
              * @description Send it back with every call on this job.
              */
             attempt: number;
+            /**
+             * @description M4 C14 (ADR-0017 Amendment C14): the job is an autofix fixer: run
+             *     `autofix.fixers.<name>` of the definition at `sha`, then upload the
+             *     work tree as `autofix.bundle` (one transport commit on `sha`).
+             */
+            autofix: boolean;
             /**
              * @description sha256 of the `.forge-ci.yml` bytes the pipeline was planned from:
              *     the runner reads the job's script from that file at `sha` and
@@ -5419,6 +5522,14 @@ export interface components {
             /** @description The emergency stop in effect: `instance`, `project` (`null`: none). */
             stop: string | null;
         };
+        /** @description A merge request's autofix. */
+        MergeRequestAutofixBody: {
+            attempt: null | components["schemas"]["AutofixAttemptBody"];
+            /** @description The project's autofix switch. */
+            enabled: boolean;
+            /** Format: int64 */
+            iid: number;
+        };
         /** @description One merge request as the API shows it. */
         MergeRequestBody: {
             /**
@@ -6106,6 +6217,10 @@ export interface components {
         PutAutoMerge: {
             /** @description `off`, `reserve`, `conditional` or `full`. */
             mode: string;
+        };
+        /** @description `PUT …/autofix`. */
+        PutAutofix: {
+            enabled: boolean;
         };
         /** @description `PUT …/ci/variables/{name}`. */
         PutCiVariable: {
@@ -10202,6 +10317,72 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_autofix: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutofixBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_autofix: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAutofix"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutofixBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_ci_variables: {
         parameters: {
             query?: never;
@@ -11535,6 +11716,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MergeRequestAutoMergeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_autofix: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestAutofixBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

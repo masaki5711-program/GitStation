@@ -4,6 +4,7 @@
 use crate::ai_assets::AiAssetsChange;
 use crate::approval::ApprovalRuleChange;
 use crate::auto_merge::AutoMergeChange;
+use crate::autofix::AutofixChange;
 use crate::checks::CheckRunChange;
 use crate::doc_lint_migration::DocLintMigrationChange;
 use crate::event_type::EventType;
@@ -443,6 +444,10 @@ pub enum AuditDetails {
     /// project or the instance, no event). Shapes:
     /// [`AutoMergeChange::to_value`].
     AutoMerge(AutoMergeChange),
+    /// M4 C14 (ADR-0017 Amendment C14): a Maintainer turned a project's
+    /// deterministic autofix on or off (resource the project, no event).
+    /// Shapes: [`AutofixChange::to_value`].
+    Autofix(AutofixChange),
     /// Plan 17 P17-3: a person turned the project's `ai_assets.enabled` on
     /// or off (resource the project, no event). Shape:
     /// [`AiAssetsChange::to_value`].
@@ -632,6 +637,7 @@ impl AuditDetails {
             Self::Runner(change) => change.action(),
             Self::MergeQueue(change) => change.action(),
             Self::AutoMerge(change) => change.action(),
+            Self::Autofix(change) => change.action(),
             Self::AiAssets(change) => change.action(),
             Self::CiVariable(change) => change.action(),
             Self::Deploy(change) => change.action(),
@@ -701,6 +707,7 @@ impl AuditDetails {
             | Self::Runner(_)
             | Self::MergeQueue(_)
             | Self::AutoMerge(_)
+            | Self::Autofix(_)
             | Self::AiAssets(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => None,
@@ -1166,6 +1173,7 @@ impl AuditDetails {
             Self::Runner(change) => change.to_value(),
             Self::MergeQueue(change) => change.to_value(),
             Self::AutoMerge(change) => change.to_value(),
+            Self::Autofix(change) => change.to_value(),
             Self::AiAssets(change) => change.to_value(),
             Self::CiVariable(change) => change.to_value(),
             Self::Deploy(change) => change.to_value(),
@@ -1259,6 +1267,7 @@ impl AuditDetails {
             | Self::Runner(_)
             | Self::MergeQueue(_)
             | Self::AutoMerge(_)
+            | Self::Autofix(_)
             | Self::AiAssets(_)
             | Self::CiVariable(_)
             | Self::Deploy(_) => self.to_value(),

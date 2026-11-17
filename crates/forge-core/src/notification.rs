@@ -92,6 +92,8 @@ impl NotificationKind {
             | EventType::MergeRequestConflictResolved
             | EventType::MergeRequestSourceBranchDeleted
             | EventType::MergeRequestUnapproved
+            // M4 C14: the autofix's end is on the merge request's line.
+            | EventType::MergeRequestAutofixFinished
             | EventType::CodeownersEnforcementChanged
             | EventType::CodeownersEnforcementRestored
             | EventType::CheckCompleted

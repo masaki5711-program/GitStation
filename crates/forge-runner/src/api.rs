@@ -78,6 +78,13 @@ pub struct ClaimedJob {
     #[serde(default)]
     pub secrets: Vec<JobSecret>,
     pub job_token: JobToken,
+    /// M4 C14 (ADR-0017 Amendment C14): the job is an autofix fixer
+    /// (`autofix.fixers.<name>` of the definition at `sha`, not a job of
+    /// `jobs:`); after its script exits 0 the runner uploads the work
+    /// tree as a bundle of one transport commit on `sha`
+    /// (`autofix.bundle`), and nothing else.
+    #[serde(default)]
+    pub autofix: bool,
 }
 
 #[derive(Deserialize)]

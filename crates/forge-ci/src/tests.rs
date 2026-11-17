@@ -1217,3 +1217,109 @@ fn a_manual_job_waits_for_its_stage_but_holds_up_no_later_stage() {
     // The barrier skips the manual stage: the last automatic stage is test.
     assert_eq!(announce.after, ["integration", "unit"]);
 }
+
+// --- M4 C14: autofix.fixers (ADR-0017 Amendment C14) ---
+
+fn with_fixers(fixers: &str) -> String {
+    format!("{}autofix:\n  fixers:\n{fixers}", valid())
+}
+
+fn fmt_fixer() -> String {
+    format!(
+        "    fmt:
+      kind: format
+      image: {img}
+      script: [cargo fmt --all]
+      timeout: 10m
+      paths: [\"**/*.rs\"]
+    lockfile:
+      kind: regenerate
+      image: {img}
+      script: [cargo generate-lockfile --offline]
+      timeout: 5m
+      paths: [Cargo.lock]
+",
+        img = image()
+    )
+}
+
+#[test]
+fn autofix_fixers_parse_into_jobs_without_secrets() {
+    let def = check(with_fixers(&fmt_fixer()).as_bytes(), &ctx()).expect("valid");
+    let names: Vec<&str> = def.fixers().iter().map(Fixer::name).collect();
+    assert_eq!(names, ["fmt", "lockfile"]);
+    let fmt = def.fixer("fmt").expect("fmt");
+    assert_eq!(fmt.kind(), FixerKind::Format);
+    assert_eq!(fmt.paths(), ["**/*.rs"]);
+    assert_eq!(fmt.job().script(), ["cargo fmt --all"]);
+    assert_eq!(fmt.job().timeout_secs(), 600);
+    assert_eq!(fmt.job().stage(), FIXER_STAGE);
+    assert!(fmt.job().secrets().is_empty() && fmt.job().services().is_empty());
+    assert!(FixerKind::Regenerate.resolves_conflicts());
+    assert!(!FixerKind::Format.resolves_conflicts());
+    // A fixer is no job of the pipeline.
+    assert!(def.jobs().iter().all(|j| j.name() != "fmt"));
+    // No `autofix:`: no fixer.
+    assert!(check(valid().as_bytes(), &ctx())
+        .expect("valid")
+        .fixers()
+        .is_empty());
+}
+
+/// A fixer never asks for secrets, services, needs or artifacts.
+#[test]
+fn a_fixer_with_a_job_only_key_is_refused() {
+    for key in [
+        "secrets: [TOKEN]",
+        "needs: [build]",
+        "stage: build",
+        "artifacts:\n        paths: [x]",
+        "tags: [linux]",
+    ] {
+        let text = with_fixers(&format!(
+            "    fmt:\n      kind: format\n      image: {}\n      script: [cargo fmt]\n      timeout: 1m\n      paths: [\"**\"]\n      {key}\n",
+            image()
+        ));
+        assert!(
+            reasons(&text).contains(&"key_unknown"),
+            "{key}: {:?}",
+            reasons(&text)
+        );
+    }
+}
+
+#[test]
+fn a_fixer_needs_a_kind_and_valid_paths() {
+    let missing = with_fixers(&format!(
+        "    fmt:\n      image: {}\n      script: [cargo fmt]\n      timeout: 1m\n",
+        image()
+    ));
+    let r = reasons(&missing);
+    assert!(r.contains(&"field_missing"), "{r:?}");
+    let bad_kind = with_fixers(&format!(
+        "    fmt:\n      kind: magic\n      image: {}\n      script: [cargo fmt]\n      timeout: 1m\n      paths: [\"**\"]\n",
+        image()
+    ));
+    assert!(reasons(&bad_kind).contains(&"fixer_kind_invalid"));
+    let bad_path = with_fixers(&format!(
+        "    fmt:\n      kind: format\n      image: {}\n      script: [cargo fmt]\n      timeout: 1m\n      paths: [\"../x\"]\n",
+        image()
+    ));
+    assert!(reasons(&bad_path).contains(&"fixer_path_invalid"));
+    let unpinned = with_fixers(
+        "    fmt:\n      kind: format\n      image: rust:latest\n      script: [cargo fmt]\n      timeout: 1m\n      paths: [\"**\"]\n",
+    );
+    assert!(reasons(&unpinned).contains(&"image_not_pinned"));
+}
+
+#[test]
+fn too_many_fixers_are_refused() {
+    let one = |i: usize| {
+        format!(
+            "    f{i}:\n      kind: lint\n      image: {}\n      script: [x]\n      timeout: 1m\n      paths: [\"**\"]\n",
+            image()
+        )
+    };
+    let text = with_fixers(&(0..=MAX_FIXERS).map(one).collect::<String>());
+    assert!(reasons(&text).contains(&"too_many_fixers"));
+}

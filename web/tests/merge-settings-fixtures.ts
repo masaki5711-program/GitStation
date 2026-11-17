@@ -77,6 +77,15 @@ export function settingsRoutes(over: Record<string, Handler> = {}): Record<strin
     [`GET ${API}/doc-lint/migration`]: () => json(200, docLintMigration({ viewer: { can_manage: true } })),
     // Plan 17 P17-3: ai_assets.enabled (off).
     [`GET ${API}/ai-assets`]: () => json(200, aiAssets({ viewer: { can_change: true } })),
+    // M4 C14: the autofix switch (off, the default).
+    [`GET ${API}/autofix`]: () =>
+      json(200, {
+        project_id: 7,
+        enabled: false,
+        changed_by: null,
+        changed_at: null,
+        viewer: { can_change: true },
+      }),
     // The rules name their approvers: no member list is read for them.
     'GET /api/v1/groups': () =>
       page([

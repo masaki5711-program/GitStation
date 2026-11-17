@@ -277,7 +277,8 @@ impl Subscriber for PipelineRequests {
                 | EventType::MergeRequestRelinkRequested
                 | EventType::WebhookDisabled
                 | EventType::SpecReleased
-                | EventType::MergeRequestRevertDrafted => Ok(()),
+                | EventType::MergeRequestRevertDrafted
+                | EventType::MergeRequestAutofixFinished => Ok(()),
             }
         })
     }

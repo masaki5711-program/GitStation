@@ -724,7 +724,7 @@ pub async fn pipelines_due_for_check(db: &Db, limit: i64) -> Result<Vec<i64>, Fo
     db.within(QUERY, async {
         sqlx::query_scalar(
             "SELECT id FROM forge.ci_pipelines WHERE check_status IS DISTINCT FROM status \
-             ORDER BY id LIMIT $1",
+             AND source <> 'autofix' ORDER BY id LIMIT $1",
         )
         .bind(limit)
         .fetch_all(db.pool().executor())

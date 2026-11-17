@@ -18,6 +18,8 @@ mod act_as_ctx;
 mod action;
 mod authorize;
 mod auto_merge;
+// M4 C14: the autofix bot's arm.
+mod autofix;
 mod codeowners_ctx;
 // M4 C5: the CI outputs (ADR-0029 decision 5).
 mod ci_output;
@@ -64,6 +66,8 @@ mod matrix_rows_doc_lint;
 mod matrix_rows_merge_queue;
 // M4 C9: auto-merge.
 mod matrix_rows_auto_merge;
+// M4 C14: autofix.
+mod matrix_rows_autofix;
 // Plan 17 P17-3: ai_assets.enabled.
 mod matrix_rows_ai_assets;
 // M4 C13: the SSH git transport and SSH keys (ADR-0033).
@@ -90,6 +94,7 @@ pub use act_as_ctx::{ActAsBindingConfirmCtx, ActAsConfirmCtx, LoadedConfirmInteg
 pub use action::{ActAsRule, Action, CiRule};
 pub use authorize::{authorize, group_seen, GroupSeen};
 pub use auto_merge::{auto_merge_may, AutoMergeCtx};
+pub use autofix::{autofix_may, AutofixCtx};
 pub use ci_output::{authorize_ci_artifact, authorize_ci_output, CiOutputAllowed};
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
 pub use deploy_ctx::{DeploymentCtx, LoadedDeployment};
@@ -99,12 +104,13 @@ pub use job::authorize_pinned_copy;
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, ActAsConfirmView, ActAsCredential, ActAsSubject, ActAsView, AdmissionAccount,
-    AssertionFacts, AssertionSubject, AutoMergeTarget, BindingSubject, CodeownersToggle, CopyMark,
-    Credential, DeploymentView, GroupSight, IntegrationFeedView, JobCredential, JobTokenState,
-    MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView,
-    PersonalDisclosure, PinnedCopy, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
-    ResolvedVia, Resource, Role, RunnerCredential, RunnerJob, Scope, ServiceAccountView,
-    TombstoneRelease, TransferTarget, UnresolvedReason, ViaView, Visibility, SSH_KEY_SCOPES,
+    AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject,
+    CodeownersToggle, CopyMark, Credential, DeploymentView, GroupSight, IntegrationFeedView,
+    JobCredential, JobTokenState, MembershipChange, MembershipScope, MergeRequestEdit,
+    MergeRequestState, NamespaceView, PersonalDisclosure, PinnedCopy, Principal, ProjectView,
+    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob,
+    Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView,
+    Visibility, SSH_KEY_SCOPES,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,

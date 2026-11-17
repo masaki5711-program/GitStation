@@ -559,7 +559,8 @@ impl Subscriber for WorkItemSync {
                 // M3 I2: a webhook's own state, no merge request.
                 | EventType::WebhookDisabled
                 | EventType::SpecReleased
-                | EventType::MergeRequestRevertDrafted => Ok(()),
+                | EventType::MergeRequestRevertDrafted
+                | EventType::MergeRequestAutofixFinished => Ok(()),
             }
         })
     }

@@ -609,6 +609,34 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                 .expect("revert drafted");
                 assert!(recorded);
             }
+            // M4 C14: the end of an autofix attempt (the worker's).
+            MergeRequestTransition::AutofixFinish => {
+                t.exec_superuser(&format!(
+                    "INSERT INTO forge.autofix_attempts (project_id, merge_request_id, trigger,                        head_sha, target_sha, state, request_id) VALUES ({}, {}, 'conflict',                        '{}', '{}', 'queued', 'req-autofix')",
+                    p.get(),
+                    drafted.id.get(),
+                    "a".repeat(40),
+                    "b".repeat(40),
+                ))
+                .await;
+                let attempt = crate::autofix::queued(&t.db, 1)
+                    .await
+                    .expect("queued")
+                    .remove(0);
+                let done = crate::autofix::Finish {
+                    state: forge_core::autofix::AttemptState::Skipped,
+                    reason: Some("no_fixer"),
+                    detail: Vec::new(),
+                    error_code: None,
+                    commit: None,
+                    fixer: None,
+                };
+                assert!(
+                    crate::autofix::finish(&t.db, &system(&request), &attempt, &done)
+                        .await
+                        .expect("autofix finished")
+                );
+            }
         }
         let events = events_of(&t, &request).await;
         // M3 R4: a merge and a source deletion also record the ref update

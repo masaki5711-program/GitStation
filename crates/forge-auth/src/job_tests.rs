@@ -409,6 +409,29 @@ fn only_forge_web_builds_ssh_principals() {
     );
 }
 
+/// M4 C14 (ADR-0017 §2.5): the autofix bot is built by forge-review's
+/// autofix worker only — no route, no other worker, no other crate.
+#[test]
+fn only_the_autofix_worker_builds_the_autofix_bot() {
+    // Assembled so this file's own code does not match the needles.
+    let needles = [["Principal::", "autofix("].concat()];
+    let allowed = [
+        // The constructor's own module and the matrix's fixtures.
+        "forge-auth/src/model.rs",
+        "forge-auth/src/matrix.rs",
+        // The production caller: the autofix worker.
+        "forge-review/src/autofix.rs",
+    ];
+    let offenders: Vec<_> = mentions(&needles)
+        .into_iter()
+        .filter(|f| !allowed.contains(&f.as_str()))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "only forge-review's autofix worker builds the autofix bot: {offenders:?}"
+    );
+}
+
 /// M4 C4: the job fetch route's context decides exactly like
 /// `authorize_pinned_copy` — its own project at its own SHA while live; another
 /// project or SHA is the invisible project's 404; an ended job is

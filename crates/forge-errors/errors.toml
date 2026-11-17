@@ -3422,3 +3422,71 @@ cause = "M4 C10 (plan 04 M-4, ADR-0024 Amendment C10): the revert of the merge (
 diagnosis = "The log event `forge.review.revert_conflicted` carries `project_id`, `merge_request_id`, `iid`, `merge_id`, `target_sha`, `conflict_files`, `files_truncated` and the conflicted paths (logs only, never in the answer)."
 fix = "Revert locally: `git revert -m 1 <merged commit>` (a merge commit) or `git revert <commit>` (a squash), resolve the conflicts, push a branch and open a merge request; or fix forward."
 test = "a_revert_that_conflicts_opens_nothing"
+
+# ── M4 C14 (plan 14 C14, ADR-0017 Amendment C14): the deterministic autofix ──
+
+[[error]]
+code = "FG-GIT-0037"
+name = "AutofixCandidateInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "自動修正の結果を受け取れませんでした（範囲の外の変更か、壊れた出力）。何もコミットしていません。管理者に問い合わせ番号を伝えてください。"
+user_message_en = "The automatic fix's result was refused (a change outside the allowed scope, or a broken output). Nothing was committed. Give the request ID to the administrator."
+user_message_id = "Hasil perbaikan otomatis ditolak (perubahan di luar cakupan yang diizinkan, atau keluaran rusak). Tidak ada yang di-commit. Berikan ID permintaan kepada administrator."
+cause = "M4 C14 (ADR-0017 §1 ④, §1.2, §2.1): the bundle a fixer job's runner uploaded (`autofix.bundle`), or the tree in it, broke a rule the server checks before it builds the bot's commit. `reason`: `bundle_unreadable` / `bundle_too_large` (over 64 MiB) / `bundle_signature` / `bundle_capability` (a partial bundle) / `bundle_header_unterminated` / `bundle_ref_line` / `bundle_prerequisite` / `bundle_refs` (not exactly one ref `refs/forge/autofix`) / `precondition_mismatch` (the bundle's prerequisites are not exactly the input commit, or its transport commit's parent is another commit: the runner checked out something else) / `bundle_rejected` (git's `fetch` with `fetch.fsckObjects` refused it: a malformed object, a missing prerequisite) / `artifact_digest` (the stored artifact's sha256 differs from its row) / `blob_too_large` / `unpacked_too_large` / `too_many_objects` (what the bundle brings, unpacked, is over 1 MiB for one blob or 128 MiB in all: a delta bomb); and for the tree: `forbidden_path` / `secret_path` / `ci_file` (a fixed denial of ADR-0017 §2.1, or a file the target branch's `.forge-ci.yml` names in a script), `outside_fixer_paths` (a path outside the fixer's `paths`), `outside_conflict` (a path that did not conflict), `outside_conflict_hunk` (a conflicted file changed outside its conflicted hunks, or a marker left), `conflict_unresolved`, `deleted`, `mode` (anything but a 100644 file), `git_dir` / `path_invalid` / `case_collision`, `too_many_files` (over 100), `too_large` (a changed file over 1 MiB), `definition_changed` (the candidate changed `.forge-ci.yml`), `secret_in_output` (a secret pattern in a changed file). A deterministic fixer never does these; a runner defect, a fixer that writes elsewhere, or a compromised runner does. Nothing was written to any branch and nothing reached the repository: the import and every check run in a quarantine (`objects/forge-autofix-<uuid>`, the repository's objects as alternates), removed on every refusal; its objects are migrated only after every check passed."
+diagnosis = "`forge serve` logs `forge.autofix.refused` (error) with `error_code`, `request_id`, `attempt_id`, `project_id`, `merge_request_id`, `job_id`, `reason` and `path`. The attempt: SELECT * FROM forge.autofix_attempts WHERE id = <attempt_id>; the job and its runner: SELECT id, runner_id, status FROM forge.ci_jobs WHERE id = <job_id>; the job log shows what the fixer's script did. Runbook autofix."
+fix = "outside_fixer_paths / ci_file / forbidden_path with a fixer that really must touch the file: change the fixer's `paths` on the target branch (fixed denials never loosen). precondition_mismatch / bundle_* / artifact_digest: disable the runner, keep its work directory and the artifact file for the investigation, and follow runbook ci-runner. secret_in_output: treat as a possible leak (runbook autofix)."
+runbook = "autofix"
+test = "a_bundle_on_another_commit_is_a_precondition_mismatch"
+
+[[error]]
+code = "FG-GIT-0038"
+name = "AutofixLandingRaced"
+http_status = 409
+severity = "info"
+user_message_ja = "自動修正の途中で MR のブランチが更新されたので、自動修正のコミットは積みませんでした。新しいコミットで改めて確かめます。"
+user_message_en = "The merge request's branch changed while the automatic fix ran, so its commit was not added. The new commit is checked again."
+user_message_id = "Branch merge request berubah saat perbaikan otomatis berjalan, sehingga commit-nya tidak ditambahkan. Commit baru akan diperiksa lagi."
+cause = "M4 C14 (ADR-0017 §1.1): the source branch was not at the head the attempt started from when the bot's commit was to land (a person or an agent pushed, or the merge request was closed or retargeted). The bot never overwrites a person's commit and never force-pushes: the attempt is `superseded` and its commit stays unreferenced. Not a fault."
+diagnosis = "`forge.autofix.superseded` (info) with `attempt_id`, `expected_sha`, `actual_sha`. SELECT state, reason FROM forge.autofix_attempts WHERE merge_request_id = <id> ORDER BY id DESC."
+fix = "Nothing. A new failing pipeline or conflict on the new head starts a new attempt."
+test = "a_head_that_moved_supersedes_the_attempt"
+
+[[error]]
+code = "FG-CI-0031"
+name = "AutofixFixerFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "自動修正のジョブが失敗しました。MR はそのままです。ジョブのログを確かめてください。"
+user_message_en = "The automatic fix job failed. The merge request is unchanged. Check the job's log."
+user_message_id = "Job perbaikan otomatis gagal. Merge request tidak berubah. Periksa log job tersebut."
+cause = "M4 C14: the fixer's CI job (`autofix.fixers.<name>` of the target branch's `.forge-ci.yml`, run as its own pipeline with source `autofix`) ended `failed` or `canceled`, or could not be started: `reason=job_failed` / `job_canceled` / `pipeline_not_created` / `artifact_missing` (the artifact row exists but its file is gone). A fixer that changes nothing uploads no bundle: that is `no_change`, not this code."
+diagnosis = "`forge.autofix.failed` (warn) with `attempt_id`, `pipeline_id`, `job_id`, `reason`. The job's log: `gstn ci log`. SELECT * FROM forge.autofix_attempts WHERE id = <attempt_id>."
+fix = "Fix the fixer on the target branch (its image, script or timeout), or the runner (runbook ci-runner). The next failing pipeline or conflict on a new head tries again."
+test = "a_failed_fixer_job_fails_the_attempt"
+
+[[error]]
+code = "FG-REVIEW-0031"
+name = "AutofixProposalOnly"
+http_status = 409
+severity = "info"
+user_message_ja = "自動修正はマイグレーション・バイナリ・保護されたパスに触れるため、コミットせず提案だけにしました。MR の表示を読んで、人が直してください。"
+user_message_en = "The automatic fix touches a migration, a binary file or a protected path, so it was not committed and is only a proposal. Read the merge request's line and fix it by hand."
+user_message_id = "Perbaikan otomatis menyentuh migrasi, file biner, atau jalur yang dilindungi, sehingga tidak di-commit dan hanya menjadi usulan. Baca baris pada merge request dan perbaiki secara manual."
+cause = "M4 C14 (ADR-0017 §1.2, §2.1): the candidate was within the fixer's scope, but at least one changed path is a migration (`reason=migration`), a binary file (`binary`) or a protected path (forge's own configuration, CODEOWNERS, authentication or permission code: `protected_path`). Those are never changed by the bot; the attempt is `proposed` and the merge request's line names the paths."
+diagnosis = "`forge.autofix.proposed` (info) with `attempt_id`, `paths`, `reasons`. GET /api/v1/projects/{id}/merge-requests/{iid}/autofix answers the same."
+fix = "A person runs the fixer locally (the same command as the target branch's `autofix.fixers.<name>.script`) and pushes the change."
+test = "a_migration_change_is_a_proposal_only"
+
+[[error]]
+code = "FG-AUTH-0024"
+name = "AutofixPushDenied"
+http_status = 403
+severity = "warn"
+user_message_ja = "自動修正のボットはこの MR のブランチに書けません（保護されたブランチ、作成者・有効にした人の権限、または自動修正が無効）。"
+user_message_en = "The automatic fix bot may not write to this merge request's branch (a protected branch, the author's or the enabler's role, or autofix is turned off)."
+user_message_id = "Bot perbaikan otomatis tidak boleh menulis ke branch merge request ini (branch dilindungi, peran pembuat atau pengaktif, atau perbaikan otomatis dimatikan)."
+cause = "M4 C14 (ADR-0017 §2.5): `authorize(RepoPush)` on `Resource::Autofix` refused the bot — before git was read (the attempt's start) or under the merge request's lock at landing. `cause_reason`: `autofix_protected_branch` (the source branch is protected: the bot never writes one), `autofix_author_role` / `autofix_enabler_role` (the merge request's author, or the person who enabled autofix, is no longer an active Developer or above), `autofix_disabled`, `autofix_merge_request_not_open`, `autofix_not_fast_forward`, `source_equals_target`, `pending_deletion`. Nothing was written."
+diagnosis = "`forge.autofix.denied` (warn) with `attempt_id`, `stage` (start / land), `cause_reason`. SELECT * FROM forge.project_autofix WHERE project_id = <id>; the protection rules of the project's source branch."
+fix = "Expected for a protected source branch (work on a feature branch). For a lost role, the author or the enabler needs Developer again, or a Maintainer turns autofix off and on (becoming the enabler)."
+test = "the_bot_may_not_push_to_a_protected_source_branch"

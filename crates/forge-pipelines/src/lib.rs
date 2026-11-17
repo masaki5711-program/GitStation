@@ -438,6 +438,9 @@ impl Pipelines {
                 // result: the merge request's jobs run on it.
                 Source::MergeRequest | Source::MergeQueue => Event::MergeRequest,
                 Source::Push | Source::Manual | Source::Schedule => Event::Push,
+                // M4 C14: an autofix pipeline is written by the autofix
+                // worker from the target branch's fixer, never planned here.
+                Source::Autofix => return Err(internal("autofix_not_planned")),
             },
             branch: branch.to_owned(),
             protected: protected_push(request, rules),

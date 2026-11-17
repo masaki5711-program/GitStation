@@ -624,6 +624,19 @@
       "removeConfirm": "Remove the conditions",
       "removed": "The merge conditions of {{pattern}} were removed."
     },
+    "autofix": {
+      "title": "Autofix",
+      "intro": "When a merge request's pipeline fails or it conflicts with its target, GitStation can run the fixers registered under autofix.fixers in the target branch's .forge-ci.yml (format, lint --fix, lock file regeneration) and add the result as a commit by the autofix bot.",
+      "on": "Autofix is on.",
+      "off": "Autofix is off (the default).",
+      "changedAt": "(changed {{at}})",
+      "scope": "The bot only changes the paths a fixer lists, never protected branches. Migrations, binary files and protected paths are only proposed. Its commit removes every approval.",
+      "turnOn": "Turn autofix on",
+      "turnOff": "Turn autofix off",
+      "turnedOn": "Autofix is on. You are the person whose role the bot's commits are checked with.",
+      "turnedOff": "Autofix is off.",
+      "maintainerOnly": "Only a Maintainer (or higher) can turn autofix on or off."
+    },
     "autoMerge": {
       "title": "Auto-merge",
       "intro": "When a merge request can be merged, GitStation's auto-merge adds it to the merge queue and merges it when the queue's test is green. Approvals and protected branch rules still apply.",
@@ -1633,6 +1646,17 @@
       "direct": "Your change was committed to {{branch}}.",
       "mrFailed": "The merge request could not be opened: {{message}}",
       "openMr": "Open a merge request"
+    }
+  },
+  "autofix": {
+    "label": "Autofix:",
+    "line": {
+      "running": "the {{fixer}} fixer is running on this merge request.",
+      "applied": "fixed automatically: the {{fixer}} fixer added commit {{sha}} (approvals start again). Check the new pipeline.",
+      "proposed": "not committed: the fix of {{fixer}} touches {{paths}} (a migration, a binary file or a protected path). Run the fixer yourself and push.",
+      "refused": "the automatic fix was refused: it changed {{paths}} outside what the fixer may change. Nothing was committed. Tell an administrator (request ID {{requestId}}).",
+      "failed": "the {{fixer}} fixer's job failed; nothing changed. Check its log in Pipelines.",
+      "denied": "the autofix bot may not write this branch (a protected branch, or the author's role). Fix it yourself."
     }
   },
   "autoMerge": {

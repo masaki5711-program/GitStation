@@ -344,7 +344,8 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::MergeRequestRelinkRequested
                 | EventType::WebhookDisabled
                 | EventType::SpecReleased
-                | EventType::MergeRequestRevertDrafted => Ok(()),
+                | EventType::MergeRequestRevertDrafted
+                | EventType::MergeRequestAutofixFinished => Ok(()),
             }
         })
     }

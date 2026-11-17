@@ -10700,6 +10700,139 @@
         }
       ],
       "examples": [
+        "gstn autofix status --project 7 --json"
+      ],
+      "name": "autofix status",
+      "output": {
+        "required": [
+          "project_id",
+          "enabled",
+          "changed_by",
+          "changed_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/autofix"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A project's deterministic autofix switch (off by default) and who changed it last."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn autofix enable --project 7"
+      ],
+      "name": "autofix enable",
+      "output": {
+        "required": [
+          "project_id",
+          "enabled",
+          "changed_by",
+          "changed_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/autofix"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Turn a project's deterministic autofix on (people only; Maintainer): fixers of the target branch's .forge-ci.yml run on failed pipelines and conflicts, and the bot commits their result."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn autofix disable --project 7"
+      ],
+      "name": "autofix disable",
+      "output": {
+        "required": [
+          "project_id",
+          "enabled",
+          "changed_by",
+          "changed_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/autofix"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Turn a project's deterministic autofix off (people only; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request number.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn autofix mr --project 7 --iid 12 --json"
+      ],
+      "name": "autofix mr",
+      "output": {
+        "required": [
+          "iid",
+          "enabled",
+          "attempt"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/autofix"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "What the deterministic autofix did with a merge request: its latest attempt (state, fixer, reason, paths, the bot's commit, FG-GIT-0037 / 0038, FG-CI-0031, FG-REVIEW-0031, FG-AUTH-0024)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
         "gstn auto-merge status --project 7 --json"
       ],
       "name": "auto-merge status",
