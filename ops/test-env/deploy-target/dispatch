@@ -1,0 +1,19 @@
+#!/bin/sh
+# forge-deploy dispatcher (runbook deploy, "前提"): the forced command of
+# forge's key (authorized_keys `restrict,command=`). SSH_ORIGINAL_COMMAND
+# must be exactly `<script> <verb> <sha>`; only registered scripts run.
+set -eu
+log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) dispatch $*" >> /srv/hello-app/dispatch.log 2>/dev/null || true; }
+cmd="${SSH_ORIGINAL_COMMAND:-}"
+# shellcheck disable=SC2086 # word splitting is the parse; globbing is off
+set -f; set -- $cmd; set +f
+if [ "$#" -ne 3 ]; then log "refused: words=$#"; echo "dispatch: expected <script> <verb> <sha>" >&2; exit 64; fi
+script=$1 verb=$2 sha=$3
+case "$script" in
+  hello-app) path=/opt/forge-deploy/scripts/hello-app ;;
+  *) log "refused: script"; echo "dispatch: unknown script" >&2; exit 64 ;;
+esac
+case "$verb" in deploy|health|rollback) ;; *) log "refused: verb"; echo "dispatch: unknown verb" >&2; exit 64 ;; esac
+if ! printf '%s' "$sha" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$'; then log "refused: sha"; echo "dispatch: bad sha" >&2; exit 64; fi
+log "run $script $verb $sha"
+exec "$path" "$verb" "$sha"
