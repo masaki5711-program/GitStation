@@ -35,7 +35,8 @@ M4 の完了の条件（計画 14 §8）をこの PC の試験環境（runbook `
 3. host key: コンテナのログの最初の行が指紋（`ssh-keygen -lf` の出力）。`docker exec … cat /etc/ssh/keys/ssh_host_ed25519_key.pub`
    の base64 をターゲットの `host_key` に登録し、応答の `host_key_fingerprint` がログの指紋と同じことを確かめる。
 4. forwarder（PowerShell、切り離して起動）:
-   `Start-Process node -ArgumentList '<.local/m4>\deploy-forwarder.mjs','<vEthernet の IPv4>','22022','22022' -WindowStyle Hidden -RedirectStandardOutput <.local/m4>\forwarder.log`。
+   `Start-Process node -ArgumentList '<worktree>\ops\test-env\deploy-forwarder.mjs','<vEthernet の IPv4>','22022','22022','<.local/m4>\forwarder.pid' -WindowStyle Hidden -RedirectStandardOutput <.local/m4>\forwarder.log`。
+   forwarder は listen のときに 4 つ目の引数の pid ファイルを書く。同時の接続は 8 まで、5 分通信の無い接続は閉じる。
    PC の再起動で vEthernet のアドレスが変わったら、ターゲットの `host` と `FORGE_DEPLOY_ALLOWED_NETWORKS` も直す。
 5. **`[deploy]` は forge.toml に書かない**（`test-env.mjs up` が毎回 forge.toml を書き直す）。環境変数で渡す:
    `.local/m4/deploy.env`（`FORGE_DEPLOY_SSH_KEY_FILE`・`FORGE_DEPLOY_SSH_PROGRAM`・`FORGE_DEPLOY_ALLOWED_NETWORKS=<vEthernet>/20`）を
@@ -48,6 +49,7 @@ M4 の完了の条件（計画 14 §8）をこの PC の試験環境（runbook `
    また Windows の OpenSSH（System32）は環境変数 `ProgramData` が無いと何も言わずに 255 で終わる（forge は PATH と SystemRoot しか
    渡さない）。どちらも Linux には無い。回避: `.local/m4/sshwrap.ps1` で `.local/m4/sshwrap.exe` を作り（`\"` を `"` に戻して Git の
    `usr/bin/ssh.exe` を呼び、終了コードと stderr を `.local/m4/sshwrap.log` に残す）、`FORGE_DEPLOY_SSH_PROGRAM` に指定する。
+   **`sshwrap.exe`・Git の ssh・`ProgramData` の回避は試験専用**。製品の修正は branch `fix/deploy-windows-ssh-argv` で進行中。入ったら外す。
 7. プロジェクトの設定（`dora` の `admin` 付きトークン。自動マージだけは Web のセッション）:
    - `POST …/protected-refs {"pattern":"refs/heads/main","push_min_role":"maintainer"}`、
      `PUT …/protected-refs/<id>/merge-rule {"required_approvals":0,"required_checks":["ci/pipeline"],"require_resolved_discussions":false,"direct_push_forbidden":true,"require_work_item_link":false,"expected_updated_at":null}`
@@ -65,13 +67,16 @@ M4 の完了の条件（計画 14 §8）をこの PC の試験環境（runbook `
   ターゲットの `/srv/hello-app/deploy.log` に `healthy`。
 - `/health` を壊す変更（CI は通る）: `rolled_back`、`error_code = FG-DEPLOY-0005`、`failed_target = app-1`。ターゲットは
   `previous_sha` に戻り、`health <previous_sha>` が `healthy`。
+- `rollback <sha>` は、その SHA のリリースのディレクトリがあり `refs/heads/main` にあれば、ターゲットの中だけで戻す（GitStation が
+  止まっていても戻せる）。ディレクトリが無ければ GitStation から `main` を取り直して作る。`hello-app` は SHA の形と、`main` から
+  届くことを自分でも確かめる（dispatch だけに頼らない）。
 - その環境の最初のデプロイが失敗すると前の版が無いので `rollback_failed`（FG-DEPLOY-0006 `no_previous_version`、alert）。仕様。
 
 ## 片づけ
 
 `docker compose -p gs-m3-test -f ops/test-env/compose.m4.yml rm -s -f deploy-target runner-m4`（volume も消すなら
 `docker volume rm gs-m3-test_deploy-target-hostkey gs-m3-test_deploy-target-srv gs-m3-test_runner-m4-podman-store gs-m3-test_runner-m4-work`）、
-forwarder を止める（`.local/m4/forwarder.pid`）、`forge admin runner disable <id> --admin dora`、トークンを `forge admin token revoke <id>`。
+forwarder を止める（PowerShell の `Stop-Process -Id (Get-Content <.local/m4>\forwarder.pid)`。強制終了なので pid ファイルは残る。手で消す）、`forge admin runner disable <id> --admin dora`、トークンを `forge admin token revoke <id>`。
 
 ## Escalate
 

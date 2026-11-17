@@ -12,5 +12,7 @@ AllowAgentForwarding no
 X11Forwarding no
 PermitTunnel no
 PermitUserEnvironment no
+PermitTTY no
+MaxAuthTries 3
+LoginGraceTime 20
 LogLevel VERBOSE
-Subsystem sftp internal-sftp

@@ -6,6 +6,7 @@ mkdir -p /etc/ssh/keys
 [ -f /etc/ssh/keys/ssh_host_ed25519_key ] || ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/keys/ssh_host_ed25519_key
 chmod 600 /etc/ssh/keys/ssh_host_ed25519_key
 install -d -o deploy -g deploy -m 700 /home/deploy/.ssh
+[ "$(grep -c '' /run/forge-deploy/forge-deploy.pub)" = 1 ] || { echo "entrypoint: forge-deploy.pub must be exactly one line" >&2; exit 1; }
 pub=$(cat /run/forge-deploy/forge-deploy.pub)
 case "$pub" in ssh-ed25519\ *) ;; *) echo "entrypoint: forge-deploy.pub is not an ed25519 public key" >&2; exit 1 ;; esac
 printf 'restrict,command="/opt/forge-deploy/dispatch" %s\n' "$pub" > /home/deploy/.ssh/authorized_keys

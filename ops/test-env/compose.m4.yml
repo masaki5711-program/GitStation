@@ -40,6 +40,9 @@ services:
       dockerfile: ops/runner/Dockerfile
     image: gitstation/forge-runner:m4
     user: podman
+    # TEST ONLY - never copy to production: seccomp=unconfined and /dev/fuse are
+    # what nested rootless Podman needs inside a container (ops/runner/README.md).
+    # Production runners run on their own Linux host (runbook ci-runner).
     security_opt:
       - seccomp=unconfined
     devices:

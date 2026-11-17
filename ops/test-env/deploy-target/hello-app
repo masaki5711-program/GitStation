@@ -6,7 +6,12 @@
 # deploy and rollback hold one exclusive lock (runbook deploy, lock contract).
 # Output goes to the host log only (forge keeps none of it).
 set -eu
-verb=$1 sha=$2
+verb=${1:-} sha=${2:-}
+# Checked again here, not only in the dispatcher.
+case "$verb" in deploy|health|rollback) ;; *) echo "hello-app: unknown verb" >&2; exit 64 ;; esac
+printf '%s' "$sha" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' || { echo "hello-app: bad sha" >&2; exit 64; }
+# Only commits on the environment's auto-deploy ref are deployed.
+DEPLOY_REF=refs/heads/main
 APP=/srv/hello-app
 REL=$APP/releases
 MIRROR=$APP/mirror.git
@@ -15,15 +20,24 @@ LOG=$APP/deploy.log
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $verb $sha $*" >> "$LOG"; }
 fail() { log "FAILED: $*"; echo "hello-app: $*" >&2; exit 1; }
 
-fetch() {
-  [ -d "$REL/$sha" ] && return 0
+on_ref() { git -C "$MIRROR" merge-base --is-ancestor "$sha" "$DEPLOY_REF" 2>/dev/null; }
+
+refresh() {
   [ -d "$MIRROR" ] || git init -q --bare "$MIRROR"
   # The token goes to git through the environment, never argv.
   tok=$(cat /etc/forge-deploy/read-token)
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: Bearer $tok" \
-    GIT_TERMINAL_PROMPT=0 timeout 120 git -C "$MIRROR" fetch -q --prune "$FORGE_REPO_URL" '+refs/heads/*:refs/heads/*' \
+    GIT_TERMINAL_PROMPT=0 timeout 120 git -C "$MIRROR" fetch -q --prune "$FORGE_REPO_URL" "+$DEPLOY_REF:$DEPLOY_REF" \
     || fail "fetch failed"
-  git -C "$MIRROR" cat-file -e "$sha^{commit}" 2>/dev/null || fail "commit not on any branch"
+}
+
+# A release that exists and is on the ref needs no network (a rollback works
+# while GitStation is down); a missing release, or a SHA not yet known to be
+# on the ref, fetches the ref again from GitStation.
+fetch() {
+  if [ ! -d "$REL/$sha" ] || ! on_ref; then refresh; fi
+  on_ref || fail "commit is not on $DEPLOY_REF"
+  [ -d "$REL/$sha" ] && return 0
   tmp="$REL/.tmp-$sha"; rm -rf "$tmp"; mkdir -p "$tmp"
   git -C "$MIRROR" archive "$sha" | tar -x -C "$tmp" || fail "unpack failed"
   [ -f "$tmp/public/index.html" ] || fail "release has no public/index.html"
