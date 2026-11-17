@@ -508,3 +508,31 @@ fn a_ci_credential_on_an_absent_user_resource_is_forbidden_not_not_found() {
         }
     }
 }
+
+/// ADR-0036: the portal's principal is built by forge-web's authentication
+/// of the widget routes only, from a token forge-oidc verified — never by
+/// a worker or another route.
+#[test]
+fn only_forge_web_builds_portal_principals() {
+    // Assembled so this file's own code does not match the needles.
+    let needles = [
+        ["Principal::", "portal("].concat(),
+        ["PortalCredential", " {"].concat(),
+    ];
+    let allowed = [
+        // The constructor's own module, the arm's tests and the matrix's fixtures.
+        "forge-auth/src/model.rs",
+        "forge-auth/src/portal.rs",
+        "forge-auth/src/matrix_rows_portal.rs",
+        // The production caller: the widget routes' authentication.
+        "forge-web/src/auth.rs",
+    ];
+    let offenders: Vec<_> = mentions(&needles)
+        .into_iter()
+        .filter(|f| !allowed.contains(&f.as_str()))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "only forge-web's authentication builds a portal principal: {offenders:?}"
+    );
+}

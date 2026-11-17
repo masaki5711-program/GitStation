@@ -63,7 +63,8 @@ pub fn act_as_admission(token: &Principal) -> Result<(), ForgeError> {
         | Credential::Runner(_)
         | Credential::Job(_)
         | Credential::AutoMerge
-        | Credential::Autofix => return Err(refused("act_as_requires_service_account")),
+        | Credential::Autofix
+        | Credential::Portal(_) => return Err(refused("act_as_requires_service_account")),
     };
     credential_checks(token.account_kind(), scopes, token.is_agent())
 }

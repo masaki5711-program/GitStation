@@ -917,3 +917,10 @@ ro_columns = ["*"]
 guarded = false
 kind = "derived"
 ro_columns = ["*"]
+
+# ── ADR-0036 (20261225100000): the PFS portal's news outbox — written by the
+# business change in its own transaction, sent by the worker ──
+[tables.portal_news]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]

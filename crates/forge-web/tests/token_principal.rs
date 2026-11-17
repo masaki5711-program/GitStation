@@ -143,6 +143,7 @@ async fn whoami(_: AppState, request: Dispatched<InstanceCtx>) -> Response {
         Credential::Job(_) => vec!["<job>"],
         Credential::AutoMerge => vec!["<auto_merge>"],
         Credential::Autofix => vec!["<autofix>"],
+        Credential::Portal(_) => vec!["<portal>"],
     };
     Json(json!({
         "user": principal.user().map(|u| u.get()),
@@ -165,6 +166,7 @@ async fn whoami_raw(_: AppState, request: Dispatched<ProjectCtx>) -> Response {
         Credential::Job(_) => vec!["<job>"],
         Credential::AutoMerge => vec!["<auto_merge>"],
         Credential::Autofix => vec!["<autofix>"],
+        Credential::Portal(_) => vec!["<portal>"],
     };
     Json(json!({
         "user": principal.user().map(|u| u.get()),

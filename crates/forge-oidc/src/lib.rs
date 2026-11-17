@@ -50,6 +50,8 @@ pub mod jwks;
 pub mod jwt;
 mod keys;
 mod operator;
+// ADR-0036: the PFS portal's widget tokens and the news' service token.
+mod portal;
 mod session;
 pub mod state;
 
@@ -62,6 +64,7 @@ pub use flow::{
 };
 pub use keys::{KeyEntry, KeySet, VerifyKey};
 pub use operator::operator_link_identity;
+pub use portal::{PortalWidgets, ServiceTokens};
 pub use session::{
     LogoutRequest, RefreshVerdict, RefreshingSessions, JTI_MEMORY_SECS, MAX_JTIS,
     MAX_REFRESH_WITHOUT_ID_TOKEN, MAX_UNCONFIRMED_SECS,

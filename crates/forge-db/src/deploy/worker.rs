@@ -242,6 +242,53 @@ pub async fn claim_next(db: &Db, request_id: &RequestId) -> Result<Claim, ForgeE
     tx.settle("deployment.claim", outcome).await
 }
 
+/// `finish`'s row: project, SHA, tier and the people behind it.
+type DoneRow = (i64, String, String, Option<i64>, Option<i64>, Option<i64>);
+/// `abandon_stale`'s row: the deployment and the same facts.
+type AbandonedRow = (
+    i64,
+    i64,
+    String,
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
+
+/// The portal news of a deployment's end (ADR-0036): failed, rolled back
+/// or rollback failed is `deploy_failed`, succeeded `deploy_finished`; told
+/// the requester, the approver and the merge request's author.
+fn deploy_news(
+    id: i64,
+    (project, sha, tier): (i64, &str, &str),
+    status: DeploymentStatus,
+    people: [Option<i64>; 3],
+    request_id: &RequestId,
+) -> crate::portal::NewsDraft {
+    use forge_core::portal::{deploy_source_id, NewsTopic};
+    let topic = if status == DeploymentStatus::Succeeded {
+        NewsTopic::DeployFinished
+    } else {
+        NewsTopic::DeployFailed
+    };
+    crate::portal::NewsDraft {
+        source_id: deploy_source_id(id, status.as_str()),
+        topic,
+        project: ProjectId::new(project),
+        facts: serde_json::json!({
+            "tier": tier,
+            "sha": sha.chars().take(12).collect::<String>(),
+            "status": status.as_str(),
+        }),
+        audience: people
+            .into_iter()
+            .flatten()
+            .map(forge_core::UserId::new)
+            .collect(),
+        request_id: request_id.clone(), // clone: the draft owns its request id
+    }
+}
+
 /// How a running deployment ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finish {
@@ -273,12 +320,14 @@ pub async fn finish(
     let ctx = system(request_id);
     let mut tx = ChangeTx::begin(db, &ctx).await?;
     let outcome = async {
-        let done: Option<(i64, String, String)> = tx
+        let done: Option<DoneRow> = tx
             .step(|c| async move {
                 sqlx::query_as(
                     "UPDATE forge.deployments SET status = $2, error_code = $3, \
                        failed_target = $4, finished_at = now(), updated_at = now() \
-                     WHERE id = $1 AND status = 'running' RETURNING project_id, sha, tier",
+                     WHERE id = $1 AND status = 'running' \
+                     RETURNING project_id, sha, tier, requested_by, approved_by, \
+                       merge_request_author",
                 )
                 .bind(id)
                 .bind(end.status.as_str())
@@ -289,9 +338,18 @@ pub async fn finish(
                 .map_err(|e| query_error(QUERY, e))
             })
             .await?;
-        let Some((project, sha, tier)) = done else {
+        let Some((project, sha, tier, requested_by, approved_by, mr_author)) = done else {
             return Ok(Settle::Discard(false));
         };
+        // ADR-0036: the portal hears of the end in the same transaction.
+        let draft = deploy_news(
+            id,
+            (project, &sha, &tier),
+            end.status,
+            [requested_by, approved_by, mr_author],
+            request_id,
+        );
+        tx.step(|c| crate::portal::stage(db, c, &draft)).await?;
         if end.status == DeploymentStatus::Succeeded {
             tx.step(|c| async move {
                 sqlx::query(
@@ -434,7 +492,7 @@ pub async fn abandon_stale(
     let ctx = system(request_id);
     let mut tx = ChangeTx::begin(db, &ctx).await?;
     let outcome = async {
-        let rows: Vec<(i64, i64, String)> = tx
+        let rows: Vec<AbandonedRow> = tx
             .step(|c| async move {
                 sqlx::query_as(
                     "UPDATE forge.deployments SET status = 'failed', error_code = $1, \
@@ -442,7 +500,8 @@ pub async fn abandon_stale(
                      WHERE id IN (SELECT id FROM forge.deployments WHERE status = 'running' \
                        AND coalesce(heartbeat_at, started_at) < now() - make_interval(secs => $2) \
                        ORDER BY id LIMIT $3) \
-                     RETURNING id, project_id, tier",
+                     RETURNING id, project_id, sha, tier, requested_by, approved_by, \
+                       merge_request_author",
                 )
                 .bind(ErrorCode::DeploymentAbandoned.id())
                 .bind(f64::from(stale_secs))
@@ -452,9 +511,20 @@ pub async fn abandon_stale(
                 .map_err(|e| query_error(QUERY, e))
             })
             .await?;
+        // ADR-0036: each abandoned deployment is a failed one for the portal.
+        for (dep, project, sha, tier, requested_by, approved_by, mr_author) in &rows {
+            let draft = deploy_news(
+                *dep,
+                (*project, sha, tier),
+                DeploymentStatus::Failed,
+                [*requested_by, *approved_by, *mr_author],
+                request_id,
+            );
+            tx.step(|c| crate::portal::stage(db, c, &draft)).await?;
+        }
         let rows = rows
             .into_iter()
-            .map(|(id, p, t)| Ok((id, p, tier_of(&t)?)))
+            .map(|(id, p, _, t, _, _, _)| Ok((id, p, tier_of(&t)?)))
             .collect::<Result<Vec<_>, ForgeError>>()?;
         let changes = rows
             .iter()

@@ -81,7 +81,7 @@ impl LinkAuthSources {
         }
     }
 
-    fn allows(self, auth_source: &str) -> bool {
+    pub(crate) fn allows(self, auth_source: &str) -> bool {
         match auth_source {
             "local" => self.local,
             "ldap" => self.ldap,
@@ -94,7 +94,7 @@ impl LinkAuthSources {
 /// (`[A-Za-z0-9_-]{1,32}`: the case is folded in ASCII only).
 pub const MAX_STAFF_ID_CHARS: usize = 32;
 
-fn staff_id_ok(value: &str) -> bool {
+pub(crate) fn staff_id_ok(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_STAFF_ID_CHARS
         && value

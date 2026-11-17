@@ -41,6 +41,8 @@ pub mod namespace_path;
 pub mod namespace_resolver;
 // ── M3 N1: notification kinds and delivery states ──
 pub mod notification;
+// ADR-0036: the PFS portal's widgets and news.
+pub mod portal;
 // ── end M3 N1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod path_vectors;
