@@ -40,6 +40,8 @@ pub mod mirror;
 // ── end M3 O2 ──
 // ── M3 N1: `notify.*` ──
 mod notify;
+// ADR-0036: the PFS portal's widgets and news.
+mod portal;
 // ── end M3 N1 ──
 mod review;
 mod secret;
@@ -67,6 +69,7 @@ pub use keys::{Key, Kind, KEYS};
 pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
 pub use mirror::{CredentialProblem, MirrorConfig};
 pub use notify::{valid_mailbox, NotifyConfig, SmtpConfig, SmtpTls};
+pub use portal::PortalConfig;
 pub use review::ReviewConfig;
 pub(crate) use secret::read_secret_text;
 pub use secret::{DatabaseUrl, Secret};
@@ -217,6 +220,8 @@ pub struct Config {
     pub ci: CiConfig,
     /// `deploy.*` (deployments over SSH, M4 C11).
     pub deploy: DeployConfig,
+    /// `portal.*` (the PFS portal's widgets and news, ADR-0036).
+    pub portal: PortalConfig,
 }
 
 impl Config {
@@ -485,6 +490,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         backup: BackupConfig::load(get)?,
         ci: CiConfig::load(get)?,
         deploy: DeployConfig::load(get)?,
+        portal: PortalConfig::load(get)?,
     }
     .validate_across()
 }

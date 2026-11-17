@@ -20,7 +20,9 @@ mod authorize;
 mod auto_merge;
 // M4 C14: the autofix bot's arm.
 mod autofix;
+// ADR-0036: the PFS portal's arm.
 mod codeowners_ctx;
+mod portal;
 // M4 C5: the CI outputs (ADR-0029 decision 5).
 mod ci_output;
 mod contexts;
@@ -68,6 +70,8 @@ mod matrix_rows_merge_queue;
 mod matrix_rows_auto_merge;
 // M4 C14: autofix.
 mod matrix_rows_autofix;
+// ADR-0036: the PFS portal.
+mod matrix_rows_portal;
 // Plan 17 P17-3: ai_assets.enabled.
 mod matrix_rows_ai_assets;
 // M4 C13: the SSH git transport and SSH keys (ADR-0033).
@@ -107,11 +111,12 @@ pub use model::{
     AssertionFacts, AssertionSubject, AutoMergeTarget, AutofixTarget, BindingSubject,
     CodeownersToggle, CopyMark, Credential, DeploymentView, GroupSight, IntegrationFeedView,
     JobCredential, JobTokenState, MembershipChange, MembershipScope, MergeRequestEdit,
-    MergeRequestState, NamespaceView, PersonalDisclosure, PinnedCopy, Principal, ProjectView,
-    RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential, RunnerJob,
-    Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, ViaView,
-    Visibility, SSH_KEY_SCOPES,
+    MergeRequestState, NamespaceView, PersonalDisclosure, PinnedCopy, PortalCredential, Principal,
+    ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, RunnerCredential,
+    RunnerJob, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
+    ViaView, Visibility, SSH_KEY_SCOPES,
 };
+pub use portal::{portal_may, portal_reader, PortalWidgetCtx};
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
     GroupTransferCtx, InstanceCtx, JobSelfCtx, LoadedGroup, LoadedMembership, LoadedNamespace,

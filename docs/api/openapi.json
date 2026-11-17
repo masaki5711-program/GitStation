@@ -13415,6 +13415,221 @@
         "x-forge-action": "WebShell"
       }
     },
+    "/api/portal-widgets/v1/my-reviews": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_my_reviews",
+        "parameters": [
+          {
+            "description": "review (waiting for my review, default), mine (my open changes), stopped (stopped auto-merges I wrote or approved) or spec (specs awaiting my approval)",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One project id (an option of options/project); none: every project the person may see",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items, 3..=10 (default 5)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 10,
+              "minimum": 3,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget my-reviews (list): merge requests waiting for the person's review, their own, stopped auto-merges or specs awaiting their approval (PFS portal contract v1)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/my-reviews/options/project": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_my_reviews_options_project",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget my-reviews: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/pipelines": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_pipelines",
+        "parameters": [
+          {
+            "description": "Project ids, repeated (at most 24); none: the projects the person holds a role on",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "pipeline (the newest pipeline of main, default) or deploy (the newest deployment)",
+            "in": "query",
+            "name": "show",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget pipelines (status): the main pipeline or the last deploy of each chosen project, at most 24",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/pipelines/options/project": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_pipelines_options_project",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget pipelines: the project options (projects the person holds a role on and may read, at most 200)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
+    "/api/portal-widgets/v1/stopped-count": {
+      "get": {
+        "operationId": "get_api_portal_widgets_v1_stopped_count",
+        "parameters": [
+          {
+            "description": "mine (my changes, default) or reviews (also those I approved)",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "ja, en or id (default en): the language of every text",
+            "in": "query",
+            "name": "locale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "An IANA zone name (checked; times are answered in UTC)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Portal widget stopped-count (kpi): the person's merge requests whose auto-merge stopped (the standard is 0)",
+        "x-forge-action": "PortalWidgetRead"
+      }
+    },
     "/api/v1/admin/auto-merge/allow-full-auto": {
       "put": {
         "operationId": "put_api_v1_admin_auto_merge_allow_full_auto",

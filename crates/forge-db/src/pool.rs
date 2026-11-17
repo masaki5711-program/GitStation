@@ -63,6 +63,11 @@ pub struct Db {
     /// Client-side bound for a short multi-statement operation (doctor
     /// checks, schema status): acquire + one statement timeout.
     op_timeout: Duration,
+    /// `portal.enabled && portal.news_enabled` (ADR-0036): the business
+    /// changes stage portal news in the same transaction only when set
+    /// (`forge serve` / `forge worker` set it from the configuration;
+    /// off by default, so nothing is written to the news outbox).
+    portal_news: Option<crate::portal::NewsPolicy>,
 }
 
 impl Db {
@@ -132,7 +137,21 @@ impl Db {
             target,
             ping_timeout: cfg.acquire_timeout,
             op_timeout: cfg.acquire_timeout.saturating_add(cfg.statement_timeout),
+            portal_news: None,
         })
+    }
+
+    /// The same pools, staging portal news with `policy`'s job settings
+    /// (`None`: nothing is staged; ADR-0036).
+    #[must_use]
+    pub fn with_portal_news(mut self, policy: Option<crate::portal::NewsPolicy>) -> Self {
+        self.portal_news = policy;
+        self
+    }
+
+    /// The news policy when the business changes stage portal news.
+    pub fn portal_news(&self) -> Option<crate::portal::NewsPolicy> {
+        self.portal_news
     }
 
     /// The read pool (pages, API reads, schema status).

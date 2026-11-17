@@ -121,7 +121,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     block_on(async {
         let smart_http = smart_http(storage, &cfg.git_http, cfg.git_pack)?;
         forge_git::version::detect(&smart_http.git).await?;
-        let db = Db::connect(database).await?;
+        // ADR-0036: the business changes stage portal news only when on.
+        let db = Db::connect(database)
+            .await?
+            .with_portal_news(crate::portal::news_policy(cfg)?);
         forge_db::check_schema(&db, &MIGRATOR).await?;
         // Pushes load their protection snapshot from, and are recorded in,
         // the database (forge-web reads both through forge-core traits).
@@ -308,6 +311,21 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 )
                 .with_api_config(&cfg.api),
             );
+        // ADR-0036: the portal's widget routes verify with the sign-in.
+        if let Some(portal) = crate::portal::widgets(cfg, oidc.as_ref()) {
+            tracing::info!(
+                portal_client = %cfg.portal.client_id,
+                "forge.serve.portal_widgets_enabled"
+            );
+            state = state.with_portal(portal);
+        } else if cfg.portal.enabled {
+            tracing::warn!(
+                error_code = forge_errors::ErrorCode::ConfigInvalid.id(),
+                config_key = "portal.enabled",
+                reason = "needs_auth_oidc",
+                "forge.serve.portal_widgets_disabled"
+            );
+        }
         match oidc {
             Some(oidc) => {
                 tracing::info!(issuer = oidc.issuer(), "forge.serve.oidc_enabled");

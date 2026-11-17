@@ -1162,6 +1162,9 @@ pub fn non_api_coverage(path: &str) -> &'static str {
     } else if path.starts_with("/-/auth/") {
         // M2 MR4: the browser sign-in (OIDC redirects and cookies).
         "browser only (OIDC sign-in; gstn uses a personal access token, ADR-0021)"
+    } else if path.starts_with("/api/portal-widgets/") {
+        // ADR-0036: widget data for the PFS portal's home page.
+        "portal only (the PFS portal reads it with its own access token; every other credential is refused, ADR-0036)"
     } else if path.contains(".git/") {
         "git (auth git-credential makes plain git clone/push work)"
     } else {

@@ -39,3 +39,5 @@
 | [0033](0033-git-over-ssh.md) | SSH の git 転送 — `forge serve` の中の SSH サーバー、Smart HTTP の経路への橋渡し | proposed（accepted は C13 のレビューの後） | 2026-11-13 |
 | [0034](0034-ai-eval-check.md) | AI の評価のチェック `forge/ai-eval` — ベンチの報告の形、基準との比較、宣言したパイプラインだけ | proposed（accepted は P17-2 のレビューの後） | 2026-11-14 |
 | [0035](0035-ai-asset-lint.md) | AI 資産の lint と `forge/risk` の 2 つの規則、プロジェクトの設定 `ai_assets.enabled` | proposed（accepted は P17-3 のレビューの後） | 2026-11-15 |
+| [0036](0036-pfs-portal-widgets-and-news.md) | PFS ポータルのホームのウィジェットと新着 — ポータルの資格情報 `PortalWidgetRead`、ニュースの outbox | proposed（accepted は `feat/web-portal-widgets` のレビューの後） | 2026-11-17 |
+| [0037](0037-merge-path-throughput.md) | マージ経路のスループット — イベントで起こす待ち、プロセス内の文書の列車、変更パスを見た再計算 | proposed（accepted は計画 18 の S1〜S4 のレビューと負荷試験の後） | 2026-11-17 |

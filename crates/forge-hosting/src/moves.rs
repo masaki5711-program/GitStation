@@ -322,7 +322,9 @@ impl Hosting {
             Credential::Runner(_)
             | Credential::Job(_)
             | Credential::AutoMerge
-            | Credential::Autofix => false,
+            | Credential::Autofix
+            // Nor the portal's credential (ADR-0036).
+            | Credential::Portal(_) => false,
         };
         with_retry("tombstone_release", || async {
             let (released, ()) = tombstones::release_decided(&self.db, &ctx, id, user, |facts| {

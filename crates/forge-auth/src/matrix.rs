@@ -166,6 +166,9 @@ pub(crate) enum Actor {
     AutoMerge,
     /// The autofix bot (M4 C14): `matrix_rows_autofix.rs`.
     Autofix,
+    /// The PFS portal forwarding `ME`'s token (ADR-0036):
+    /// `matrix_rows_portal.rs`.
+    Portal(crate::matrix_rows_portal::Case),
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -646,6 +649,7 @@ impl Actor {
             Actor::Job(state) => crate::matrix_rows_ci::job(state),
             Actor::AutoMerge => Principal::auto_merge(),
             Actor::Autofix => Principal::autofix(),
+            Actor::Portal(case) => case.principal(),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -695,6 +699,7 @@ impl Actor {
             Actor::ActAs(via) => via.person,
             // No membership: the job arm decides on the token alone.
             Actor::Runner | Actor::Job(_) | Actor::AutoMerge | Actor::Autofix => None,
+            Actor::Portal(case) => case.role(),
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -808,7 +813,8 @@ impl Actor {
             | Actor::Runner
             | Actor::Job(_)
             | Actor::AutoMerge
-            | Actor::Autofix => None,
+            | Actor::Autofix
+            | Actor::Portal(_) => None,
         }
     }
 
@@ -1405,6 +1411,8 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         &crate::matrix_rows_auto_merge::generated_denies(),
         crate::matrix_rows_autofix::AUTOFIX_ROWS.as_slice(),
         &crate::matrix_rows_autofix::generated_denies(),
+        crate::matrix_rows_portal::PORTAL_ROWS,
+        &crate::matrix_rows_portal::generated_denies(),
         crate::matrix_rows_ci_outputs::CI_OUTPUT_ROWS.as_slice(),
         crate::matrix_rows_spec_refs::SPEC_REF_ROWS,
         crate::matrix_rows_spec_refs::SPEC_READ_ROWS,

@@ -83,7 +83,8 @@ pub(crate) fn decide(
         | Credential::Token(_)
         | Credential::ActAs(_)
         | Credential::AutoMerge
-        | Credential::Autofix => {
+        | Credential::Autofix
+        | Credential::Portal(_) => {
             Err(ForgeError::new(ErrorCode::Internal).with_context("reason", "not_a_ci_principal"))
         }
     };

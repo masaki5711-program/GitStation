@@ -847,11 +847,24 @@ fn a_blob_entry_without_a_size_is_git_process_failed() {
 
 /// A fake git that answers one subcommand shape itself and runs the real
 /// one for everything else (synthetic).
+///
+/// `condition` sees the arguments from the subcommand on (`$1`): forge
+/// starts a pack-heavy subcommand, `cat-file` among them, with `-c
+/// key=value` pairs (`config::PACK_HEAVY_SUBCOMMANDS`), and a condition
+/// that looked for the subcommand in the first argument never matched, so
+/// the real git answered and the test no longer faked anything.
 #[cfg(unix)]
 pub(super) fn wrapping_git(dir: &Path, condition: &str, answer: &str) -> PathBuf {
     fake_git(
         dir,
-        &format!("if {condition}; then\n{answer}\nexit 0\nfi\nexec git \"$@\""),
+        &format!(
+            "answer() {{\n\
+             while [ \"$#\" -ge 2 ] && [ \"$1\" = -c ]; do shift 2; done\n\
+             if {condition}; then\n{answer}\nexit 0\nfi\n\
+             }}\n\
+             answer \"$@\"\n\
+             exec git \"$@\""
+        ),
     )
 }
 

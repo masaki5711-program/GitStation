@@ -225,7 +225,30 @@ pub async fn record_release(
             )?),
         }],
     };
-    let tx = ChangeTx::begin(db, ctx).await?;
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    // ADR-0036: the portal's news of the release, in the same transaction
+    // (a deduplicated release rolls it back with everything else).
+    if db.portal_news().is_some() {
+        let project = release.project;
+        let audience = tx
+            .step(|c| crate::portal::project_people(c, project, &ctx.request_id))
+            .await?;
+        let draft = crate::portal::NewsDraft {
+            source_id: forge_core::portal::spec_source_id(
+                project.get(),
+                &hash.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            ),
+            topic: forge_core::portal::NewsTopic::SpecReleased,
+            project,
+            facts: serde_json::json!({
+                "version": release.version,
+                "sha": release.commit.as_str().chars().take(12).collect::<String>(),
+            }),
+            audience,
+            request_id: ctx.request_id.clone(), // clone: the draft owns its request id
+        };
+        tx.step(|c| crate::portal::stage(db, c, &draft)).await?;
+    }
     match tx.commit(record).await? {
         Committed::Recorded { .. } => Ok(true),
         Committed::Deduped => Ok(false),

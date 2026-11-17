@@ -61,6 +61,8 @@ pub mod tokens;
 pub mod ssh_keys;
 pub mod user_activity;
 pub mod user_merge_requests;
+// ADR-0036: the PFS portal's home widgets.
+pub mod portal_widgets;
 pub mod user_sessions;
 pub mod users;
 // ── M3 O2: the push mirror's administration ──

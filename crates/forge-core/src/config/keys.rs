@@ -341,6 +341,14 @@ pub const KEYS: &[Key] = &[
     // Plan 17 P17-1: the GPU runner's projects and per-project limit.
     text("ci.gpu_eval_projects", "FORGE_CI_GPU_EVAL_PROJECTS"),
     number("ci.gpu_eval_max_running", "FORGE_CI_GPU_EVAL_MAX_RUNNING"),
+    // ADR-0036: the PFS portal's home widgets and news.
+    boolean("portal.enabled", "FORGE_PORTAL_ENABLED"),
+    text("portal.registry_url", "FORGE_PORTAL_REGISTRY_URL"),
+    boolean("portal.news_enabled", "FORGE_PORTAL_NEWS_ENABLED"),
+    text("portal.client_id", "FORGE_PORTAL_CLIENT_ID"),
+    text("portal.ca_file", "FORGE_PORTAL_CA_FILE"),
+    number("portal.timeout_ms", "FORGE_PORTAL_TIMEOUT_MS"),
+    number("portal.max_attempts", "FORGE_PORTAL_MAX_ATTEMPTS"),
     // M4 C11: deployments over SSH (ADR-0031).
     text("deploy.ssh_key_file", "FORGE_DEPLOY_SSH_KEY_FILE"),
     text("deploy.ssh_program", "FORGE_DEPLOY_SSH_PROGRAM"),

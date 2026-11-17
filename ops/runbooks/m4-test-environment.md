@@ -72,6 +72,43 @@ M4 の完了の条件（計画 14 §8）をこの PC の試験環境（runbook `
   届くことを自分でも確かめる（dispatch だけに頼らない）。
 - その環境の最初のデプロイが失敗すると前の版が無いので `rollback_failed`（FG-DEPLOY-0006 `no_previous_version`、alert）。仕様。
 
+## GitStation 自身の履歴の取り込みと自前のパイプライン（2026-11-17）
+
+GitStation の `main` を履歴ごと試験環境に入れ、`.forge-ci.yml` を Runner `docker-test-m4` で動かす手順。結果は handoff の 4.4。
+
+1. **空のプロジェクトを使う**。取り込みの許可（runbook `push-checks`「履歴の取り込み」）は ref が 1 つも無いリポジトリだけ
+   （ref があれば FG-GIT-0025 `repository_not_empty`）。`gitstation/gitstation`（project 4）は 11-11 の履歴の無い写しで ref があるので
+   使えない。今回は `gitstation/gitstation-history`（project 14、repository 14）。
+   - `POST /api/v1/projects` の `namespace_id` は**グループの** namespace（`GET /api/v1/namespaces/resolve?path=gitstation` の
+     `namespace_id`）。プロジェクト自身の `namespace_id` を渡すと 404 FG-REPO-0005（ログ `reason=kind_mismatch lookup=parent_is_project`）。
+   - `SELECT state FROM forge.repositories WHERE id = <repo_id>` が `ready` になるのを待つ。`provisioning` の間は FG-GIT-0025
+     `repository_not_ready`。worker のキューが詰まっていると数分かかる（`SELECT kind, state, count(*) FROM forge.jobs WHERE finished_at IS NULL GROUP BY 1, 2`）。
+2. cargo の枠のロックを取る（ジョブは Rust の全体のビルド）。**push の前**に取り、始めたパイプラインのジョブがすべて終わるまで持つ。
+   どの終わり方でも trap で離す。
+3. 許可: `ops/test-env` で `<target>/release/forge.exe --config .local/forge.toml admin repo allow-import <repo_id> --ttl-hours 2`。
+4. 最初の push は、`main` に「`.forge-ci.yml` の `tags: [linux]` を `tags: [linux, m4]` にする」だけを足した**試験環境だけの**コミットの
+   branch（`docker-test-1` も `linux` を持つので、`m4` を足さないとどちらが取るか決まらない）。`dora` のトークン
+   （`.local/m4/dora.pat`）を `http.extraHeader` で渡す。履歴にだけある秘密の候補は `remote: FG-GIT-0022 warning` で出るだけで、push は通る。
+   Git Bash のスクリプトから Windows の git に渡すパスは `pwd -W` の形にする（`/tmp/…` は git が読めない）。
+5. パイプラインを待つ: `SELECT status, finished_at FROM forge.ci_pipelines WHERE project_id = <id> AND ref = 'refs/heads/<branch>'`、
+   ジョブは `forge.ci_jobs`、失敗の抜き出しは `forge.ci_job_failures.excerpt`。どの Runner が取ったかは Runner のコンテナのログ
+   `forge.runner.job_started`（`ci_jobs.runner_id` は終わると消える）。
+6. `main` も置くなら、その後に push し（新しいオブジェクトは無い）、できたパイプライン（`tags: [linux]`、両方の Runner が取る）を
+   `POST /api/v1/projects/<id>/pipelines/<pipeline_id>/cancel` ですぐ取り消す。重いジョブを同時に 2 つ走らせない。
+7. ジョブが `error: no matching package named … found` で数秒で終わるときは、CI のイメージが `Cargo.lock` より古い
+   （ジョブの cargo はオフライン）。`node ops/ci-image/build-and-push.mjs` で作り直して `.forge-ci.yml` の digest を書き直す
+   （`ops/ci-image/README.md`。compose `gs-runner-test` の Runner を通すので、その compose に触れる承認が要る）。
+   branch `ci/ci-image-digest-russh` からはスクリプトが digest を書き、`crates/forge-runner/tests/own_ci_image.rs` が
+   `Cargo.lock` とイメージの食い違いで落ちる。
+8. 2 回目からの push に取り込みの許可は要らない（新しいオブジェクトだけを検査する）。作り直したイメージでの 1 回は
+   `generated` 70〜79 秒・`lint` 約 70 秒・`test` 613〜618 秒、全体で 12 分半ほど（パイプライン 491・492）。ロックは 15 分ほど持つ。
+9. `test` のジョブが落ちたときは、ログ（`GET /api/v1/projects/<id>/pipelines/<pipeline_id>/jobs/<job_id>/log`、JSON の `text`）から
+   `TRY 2 FAIL` の行と nextest の `Summary` を拾う。11-17 に落ちた 2 件は handoff の 4.4（イメージに OpenSSH のクライアントが
+   無い、unix だけのテストの偽の git が効いていなかった）。どちらも branch `ci/ci-image-digest-russh` で直し、パイプライン 492 は
+   緑（4168 件すべて成功）。
+10. テストが `command not found` や「… must be installed」で落ちるときは、CI のイメージにそのコマンドが無い。
+    `ops/ci-image/Dockerfile` に足して手順 7 のとおり作り直す（クレートと違い、これを見張るテストは無い）。
+
 ## 片づけ
 
 `docker compose -p gs-m3-test -f ops/test-env/compose.m4.yml rm -s -f deploy-target runner-m4`（volume も消すなら

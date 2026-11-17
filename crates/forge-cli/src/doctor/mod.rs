@@ -57,6 +57,8 @@ mod mirror;
 // M3 N1: FG-INT-0015 (the mail queue and the relay).
 mod notify;
 mod oidc;
+// ADR-0036: the PFS portal's news.
+mod portal;
 mod render;
 // ── D4 MR3b ──
 mod repositories;
@@ -96,7 +98,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 42] = [
+const DB_CHECKS: [&str; 43] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -167,6 +169,8 @@ const DB_CHECKS: [&str; 42] = [
     ci_secrets::NAME,
     // M4 C11: FG-DEPLOY-0008 / 0004 (the deploy key, the pinned host keys).
     deploy::NAME,
+    // ADR-0036: FG-INT-0023 / 0022 (the portal's news: given up, waiting).
+    portal::NEWS,
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -322,6 +326,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let runners = ci_runners::runners_check(db).await;
     let secret_keys = ci_secrets::secret_keys_check(db, cfg).await;
     let known_hosts = deploy::known_hosts_check(db, cfg).await;
+    let portal_news = portal::news_check(db, cfg).await;
     vec![
         bootstrap,
         connections,
@@ -366,6 +371,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         runners,
         secret_keys,
         known_hosts,
+        portal_news,
     ]
 }
 

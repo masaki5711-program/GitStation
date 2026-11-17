@@ -821,6 +821,8 @@ mod manual;
 pub mod schedules;
 // M4 C12: the specification pipeline's spec-publish (plan 04 §6).
 pub mod spec_publish;
+// ADR-0036: the PFS portal's pipelines widget and project options.
+pub mod portal;
 // Plan 17 P17-2: the forge/ai-eval check from the bench's eval-report.json.
 pub mod ai_eval;
 
