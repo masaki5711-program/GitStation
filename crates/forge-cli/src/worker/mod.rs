@@ -52,7 +52,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::config::{Config, MaintenanceConfig, MirrorConfig, ReviewConfig, SealKeys};
-use forge_db::jobs::{JobRunner, WorkerId};
+use forge_db::jobs::JobRunner;
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::subscribers::Registry;
 use forge_db::{Db, MIGRATOR};
@@ -885,7 +885,7 @@ pub(crate) async fn run_with_notify(
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     let notify = NotifyTask::new(db, lane, sender)?;
-    let runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
+    let runner = JobRunner::new(db.clone(), forge_db::jobs::WorkerId::generate()); // clone: pool handles
     run_all(
         db,
         (runner, 1),
