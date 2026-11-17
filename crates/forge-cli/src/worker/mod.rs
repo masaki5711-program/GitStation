@@ -101,6 +101,8 @@ pub(crate) mod mirror;
 // ── end M3 O3 ──
 // ── M3 N1: the notification lane (the subscriber and its own job runner) ──
 mod notify_lane;
+// ADR-0036: the portal news lane.
+mod portal_news;
 // ── end M3 N1 ──
 mod seal;
 // ── M3 I1c: events retention ──
@@ -166,7 +168,10 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
         origin: cfg.web.base_url().map(|u| u.origin().to_owned()),
     });
     block_on(async {
-        let db = Db::connect(database).await?;
+        // ADR-0036: deployments and spec releases stage portal news only when on.
+        let db = Db::connect(database)
+            .await?
+            .with_portal_news(crate::portal::news_policy(cfg)?);
         forge_db::check_schema(&db, &MIGRATOR).await?;
         // M3 O3: the database must know the window's time zone.
         forge_db::maintenance::local_minute(&db, &cfg.maintenance.time_zone).await?;
@@ -190,6 +195,15 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
         let webhook = WebhookLane {
             runner: webhooks::lane(&db, &cfg.webhook).await?,
             retention_days: cfg.webhook.delivery_retention_days,
+        };
+        // ADR-0036: the portal news lane (its token source and CA read now).
+        let news = match crate::portal::news_sender(cfg, &db)? {
+            Some(sender) => Some(portal_news::spawn(
+                db.clone(), // clone: the lane's own pool handle
+                portal_news::runner(&db, sender)?,
+                stopped.clone(), // clone: the lane waits on its own receiver
+            )),
+            None => None,
         };
         let purger = purge::Purger::new(&db, storage.root.clone()); // clone: the purge's own handle
         let purge = Some(PurgeTask {
@@ -216,6 +230,9 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
         )
         .await;
         if let Some(task) = state_copy {
+            task.abort();
+        }
+        if let Some(task) = news {
             task.abort();
         }
         signal.abort();

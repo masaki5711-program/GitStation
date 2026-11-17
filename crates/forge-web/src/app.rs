@@ -165,6 +165,10 @@ pub struct AppState {
     /// clone host and the host key fingerprints the SSH key page shows.
     /// `None` while `git.ssh.enabled` is off.
     pub ssh_info: Option<Arc<crate::ssh::SshPublicInfo>>,
+    /// The PFS portal's widget authenticator (ADR-0036; `forge serve` sets
+    /// it when `portal.enabled` and `auth.oidc` are configured; without it
+    /// a widget route answers `FG-AUTH-0026 reason=portal_disabled`).
+    pub portal: Option<Arc<dyn forge_core::portal::PortalAuthenticator>>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -228,7 +232,15 @@ impl AppState {
                 routes::pipelines::OUTPUT_MAX_IN_FLIGHT,
             )),
             ssh_info: None,
+            portal: None,
         }
+    }
+
+    /// The PFS portal's widget authenticator (ADR-0036).
+    #[must_use]
+    pub fn with_portal(mut self, portal: Arc<dyn forge_core::portal::PortalAuthenticator>) -> Self {
+        self.portal = Some(portal);
+        self
     }
 
     /// The SSH transport's public facts (M4 C13; `forge serve` sets them
@@ -613,7 +625,7 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    autofix_routes(ai_assets_routes(schedule_routes(auto_merge_routes(
+    let all = autofix_routes(ai_assets_routes(schedule_routes(auto_merge_routes(
         deploy_routes(user_activity_routes(user_merge_request_routes(
             runner_routes(pipeline_routes(merge_queue_routes(doc_lint_routes(
                 binding_routes(act_as_routes(mirror_routes(webhook_routes(
@@ -627,7 +639,9 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
                 )))),
             )))),
         ))),
-    ))))
+    ))));
+    // ADR-0036: the PFS portal's home widgets.
+    portal_widget_routes(all)
 }
 
 /// The deterministic autofix (M4 C14, ADR-0017 Amendment C14): a
@@ -806,6 +820,57 @@ fn schedule_routes(registry: Registry<AppState>) -> Registry<AppState> {
             s::delete,
         )
         .responds_no_content(Verb::Delete, s::ONE)
+}
+
+/// The PFS portal's home widgets (ADR-0036): `PortalWidgetRead` with the
+/// portal's credential only; every project and merge request shown is
+/// decided again for the person (`routes::portal_widgets`).
+fn portal_widget_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::portal_widgets as p;
+    registry
+        .route_with(
+            Verb::Get,
+            p::MY_REVIEWS,
+            Action::PortalWidgetRead,
+            "Portal widget my-reviews (list): merge requests waiting for the person's review, their own, stopped auto-merges or specs awaiting their approval (PFS portal contract v1)",
+            p::PortalWidgets,
+            p::my_reviews,
+        )
+        .queries(Verb::Get, p::MY_REVIEWS, p::MY_REVIEWS_QUERY)
+        .route_with(
+            Verb::Get,
+            p::MY_REVIEWS_OPTIONS,
+            Action::PortalWidgetRead,
+            "Portal widget my-reviews: the project options (projects the person holds a role on and may read, at most 200)",
+            p::PortalWidgets,
+            p::project_options,
+        )
+        .route_with(
+            Verb::Get,
+            p::PIPELINES,
+            Action::PortalWidgetRead,
+            "Portal widget pipelines (status): the main pipeline or the last deploy of each chosen project, at most 24",
+            p::PortalWidgets,
+            p::pipelines,
+        )
+        .queries(Verb::Get, p::PIPELINES, p::PIPELINES_QUERY)
+        .route_with(
+            Verb::Get,
+            p::PIPELINES_OPTIONS,
+            Action::PortalWidgetRead,
+            "Portal widget pipelines: the project options (projects the person holds a role on and may read, at most 200)",
+            p::PortalWidgets,
+            p::project_options,
+        )
+        .route_with(
+            Verb::Get,
+            p::STOPPED_COUNT,
+            Action::PortalWidgetRead,
+            "Portal widget stopped-count (kpi): the person's merge requests whose auto-merge stopped (the standard is 0)",
+            p::PortalWidgets,
+            p::stopped_count,
+        )
+        .queries(Verb::Get, p::STOPPED_COUNT, p::STOPPED_COUNT_QUERY)
 }
 
 /// The merge requests of the caller's own work across projects (plan 15
@@ -3185,6 +3250,12 @@ pub(crate) fn build(
         )))
         .layer(axum::Extension(authenticator))
         .layer(axum::Extension(sessions))
+        // ADR-0036: the widget routes' authenticator.
+        .layer(axum::Extension(crate::auth::PortalExt(
+            state.portal.clone(),
+        ))) // clone: the Arc is shared
+        // ADR-0036: the widget routes answer failures in the portal's envelope.
+        .layer(middleware::from_fn(routes::portal_widgets::envelope_errors))
         .layer(axum::Extension(crate::act_as::ActAsExt {
             act_as: state.act_as.clone(), // clone: the Arc is shared
             failures: Arc::clone(&state.act_as_failures),

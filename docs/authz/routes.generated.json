@@ -234,6 +234,51 @@
     "word": "project_permalink"
   },
   {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/my-reviews",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/my-reviews/options/project",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/pipelines",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/pipelines/options/project",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PortalWidgetRead",
+    "method": "GET",
+    "path": "/api/portal-widgets/v1/stopped-count",
+    "people_only": false,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "AutoMergeFullAutoManage",
     "method": "PUT",
     "path": "/api/v1/admin/auto-merge/allow-full-auto",

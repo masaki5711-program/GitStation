@@ -346,6 +346,15 @@ pub(crate) async fn authenticate(
     mut req: Request,
     next: Next,
 ) -> Response {
+    // ADR-0036: the portal's widget routes take the portal's Bearer token
+    // only (and no other route ever does: their tokens are no personal
+    // access tokens, so the token authenticator refuses them).
+    if action == forge_auth::Action::PortalWidgetRead {
+        return match authenticate_portal(&mut req).await {
+            Ok(()) => next.run(req).await,
+            Err(res) => *res,
+        };
+    }
     match authenticate_request_acting(&mut req, Surface::Api, Some(action)).await {
         Ok(None) => next.run(req).await,
         Ok(Some(accepted)) => {
@@ -602,6 +611,88 @@ pub(crate) async fn authenticate_request(
                 lang,
             )
             .into_response(),
+        )),
+    }
+}
+
+/// The portal's authenticator, as a request extension (`app::build`; `None`:
+/// `portal.enabled` is off or the sign-in is not configured).
+#[derive(Clone)]
+pub(crate) struct PortalExt(pub(crate) Option<Arc<dyn forge_core::portal::PortalAuthenticator>>);
+
+/// The widget routes' authentication (ADR-0036 §2): exactly one
+/// `Authorization: Bearer` (cookies are not looked at: the portal calls
+/// from its server), verified by the portal authenticator, the person as a
+/// portal principal — the only production builder of one
+/// (`only_forge_web_builds_portal_principals`). Refusals are logged once as
+/// `forge.auth.token_rejected`: `FG-AUTH-0026` (the token, `bearer_required`,
+/// `portal_disabled`), `FG-AUTH-0027` (no linked user); an outage
+/// (`FG-AUTH-0015`, `FG-DB-0001`) passes through unchanged.
+async fn authenticate_portal(req: &mut Request) -> Result<(), Box<Response>> {
+    let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
+    let Some(request_id) = req.extensions().get::<RequestId>().cloned() else {
+        return Err(Box::new(
+            ApiError::new(
+                ForgeError::new(ErrorCode::Internal).with_context("reason", "request_id_missing"),
+                RequestId::generate(),
+                lang,
+            )
+            .into_response(),
+        ));
+    };
+    let refuse = |reason: &'static str, scheme: Option<Scheme>, request_id: RequestId| {
+        Box::new(token_rejected(
+            ForgeError::new(ErrorCode::PortalTokenInvalid).with_context("reason", reason),
+            scheme,
+            request_id,
+            lang,
+        ))
+    };
+    let presented = match presented(req.headers()) {
+        Ok(Some(p)) if p.scheme == Scheme::Bearer => p,
+        Ok(Some(p)) => return Err(refuse("bearer_required", Some(p.scheme), request_id)),
+        Ok(None) => return Err(refuse("bearer_required", None, request_id)),
+        Err(reason) => return Err(refuse(reason, None, request_id)),
+    };
+    if req.extensions().get::<Principal>().is_some() {
+        return Err(refuse("ambiguous", Some(Scheme::Bearer), request_id));
+    }
+    let Some(PortalExt(Some(portal))) = req.extensions().get::<PortalExt>().cloned() else {
+        return Err(refuse("portal_disabled", Some(Scheme::Bearer), request_id));
+    };
+    match portal
+        .authenticate_portal(&request_id, &presented.token)
+        .await
+    {
+        Ok(identity) => {
+            req.extensions_mut().insert(Principal::portal(
+                identity.user_id,
+                identity.active,
+                identity.kind,
+                forge_auth::PortalCredential {
+                    portal_party: identity.portal_party,
+                    access_role: identity.access_role,
+                },
+            ));
+            // The credential has done its job: no handler can echo or log it.
+            req.headers_mut().remove(AUTHORIZATION);
+            Ok(())
+        }
+        Err(err)
+            if matches!(
+                err.code(),
+                ErrorCode::PortalTokenInvalid | ErrorCode::PortalUserNotLinked
+            ) =>
+        {
+            Err(Box::new(token_rejected(
+                err,
+                Some(Scheme::Bearer),
+                request_id,
+                lang,
+            )))
+        }
+        Err(err) => Err(Box::new(
+            ApiError::new(err.with_context("scheme", "bearer"), request_id, lang).into_response(),
         )),
     }
 }
