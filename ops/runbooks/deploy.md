@@ -70,7 +70,10 @@ M4 C11（計画 14 §4.1・§4.2、ADR-0031）のデプロイが期待どおり�
 
 1. **鍵（FG-DEPLOY-0008）** `[MUTATING — needs approval]`: 秘密鍵を `deploy.ssh_key_file` に置き、`chown <forge の利用者>`、
    `chmod 600`、`forge worker` を再起動。戻し: 設定を元に戻して再起動（デプロイは止まったまま）。
-2. **接続（FG-DEPLOY-0003）** `[MUTATING — needs approval]`: ネットワーク・DNS・sshd・`authorized_keys` を直す。その後
+2. **接続（FG-DEPLOY-0003）** `[MUTATING — needs approval]`: ネットワーク・DNS・sshd・`authorized_keys` を直す。
+   `reason=ssh_config` は forge のホストの ssh がオプションを受け付けなかった（接続前、ターゲットは変わっていない）:
+   `deploy.ssh_program` と `<ssh_program> -V` を確かめる。`reason=temp_path` は一時ディレクトリのパスに空白・引用符・`%`・`$`・`#`
+   などがある: forge worker の TMPDIR / TMP を普通のパスにして再起動する。その後
    `POST /api/v1/projects/{id}/deployments` で同じ SHA をもう一度要求する（prod は新しい承認が要る）。
 3. **host key の不一致（FG-DEPLOY-0004）** `[MUTATING — needs approval]`: 正当な変更と確認できたときだけ、管理者が
    `PUT /api/v1/projects/{id}/deploy/environments/{tier}/targets/{name}` で新しい `host_key_type` / `host_key` を登録する（監査に残る）。
