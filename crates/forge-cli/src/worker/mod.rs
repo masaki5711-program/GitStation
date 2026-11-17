@@ -840,12 +840,7 @@ pub(crate) async fn run_full(
     (webhook, deploy): (WebhookLane, Option<deploy::DeployLane>),
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
-    let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
-    for handler in jobs::handlers(db, storage)? {
-        // Merge load test 2026-11-17 (F2): each kind under its cap.
-        runner.limit_kind(&handler.kind(), jobs::kind_cap(&handler.kind()));
-        runner.register(handler)?;
-    }
+    let runner = jobs::main_runner(db, storage)?;
     let maintenance = match maintenance {
         Some((cfg, mirror_cfg)) => Some(MaintenanceTask {
             runner: Arc::new(maintenance::runner(db, storage, cfg)?),

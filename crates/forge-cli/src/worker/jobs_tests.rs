@@ -244,3 +244,44 @@ async fn a_job_in_progress_at_shutdown_is_released_after_the_grace() {
     );
     t.drop_now().await;
 }
+
+/// Merge load test 2026-11-17 (F2) and the review of f44e7afd: the main
+/// runner claims every kind it has a handler for (a handler added to
+/// `handlers` without being claimable would leave its jobs queued for
+/// ever), each kind has a cap of at least one, and every kind named in
+/// `KIND_CAPS` is a registered handler (no stale cap). The portal news
+/// lane (ADR-0036) is its own runner with its own claim.
+#[tokio::test]
+async fn the_main_runner_claims_every_handler_kind() {
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = super::provision::tests::storage();
+    let handlers = super::jobs::handlers(&t.db, &storage).expect("handlers");
+    let registered: std::collections::BTreeSet<String> = handlers
+        .iter()
+        .map(|h| h.kind().as_str().to_owned())
+        .collect();
+    for (kind, cap) in super::jobs::KIND_CAPS {
+        assert!(registered.contains(*kind), "a cap for no handler: {kind}");
+        assert!(*cap >= 1, "{kind}");
+    }
+    let runner = super::jobs::main_runner(&t.db, &storage).expect("runner");
+    let kinds = runner.kinds();
+    let claimed_kinds: std::collections::BTreeSet<String> =
+        kinds.iter().map(|k| k.as_str().to_owned()).collect();
+    assert_eq!(claimed_kinds, registered);
+    for kind in &kinds {
+        assert!(super::jobs::kind_cap(kind).get() >= 1);
+        enqueue(&t.db, &job(kind.as_str())).await.expect("enqueue");
+    }
+    // Every queued kind comes out of the claim (no handler run here).
+    let worker = WorkerId::generate();
+    let mut out = std::collections::BTreeSet::new();
+    while let Some(job) = forge_db::jobs::claim(&t.db, &worker, &kinds)
+        .await
+        .expect("claim")
+    {
+        out.insert(job.kind.as_str().to_owned());
+    }
+    assert_eq!(out, registered);
+    t.drop_now().await;
+}

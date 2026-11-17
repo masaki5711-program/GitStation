@@ -85,6 +85,19 @@ pub(crate) fn kind_cap(kind: &JobKind) -> NonZeroUsize {
         .unwrap_or(NonZeroUsize::MIN)
 }
 
+/// The main job runner: every handler of [`handlers`], each kind under
+/// its cap ([`kind_cap`]). It claims exactly the registered kinds, each in
+/// forge-db's priority tiers (a kind not named there is the default tier).
+pub(crate) fn main_runner(db: &Db, storage: &Storage) -> Result<JobRunner, ForgeError> {
+    let mut runner = JobRunner::new(db.clone(), forge_db::jobs::WorkerId::generate()); // clone: pool handles
+    for handler in handlers(db, storage)? {
+        // Merge load test 2026-11-17 (F2): each kind under its cap.
+        runner.limit_kind(&handler.kind(), kind_cap(&handler.kind()));
+        runner.register(handler)?;
+    }
+    Ok(runner)
+}
+
 /// Every job handler of this build: `repository.provision` (D4 MR3b),
 /// `merge_request.refresh` (M3 R1b: merge request versions),
 /// `merge_request.mergeability` (M3 R2: the trial merge),
