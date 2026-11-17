@@ -100,11 +100,14 @@ GitStation の `main` を履歴ごと試験環境に入れ、`.forge-ci.yml` を
    （`ops/ci-image/README.md`。compose `gs-runner-test` の Runner を通すので、その compose に触れる承認が要る）。
    branch `ci/ci-image-digest-russh` からはスクリプトが digest を書き、`crates/forge-runner/tests/own_ci_image.rs` が
    `Cargo.lock` とイメージの食い違いで落ちる。
-8. 2 回目からの push に取り込みの許可は要らない（新しいオブジェクトだけを検査する）。作り直したイメージでの 1 回
-   （パイプライン 491）は `generated` 79 秒・`lint` 69 秒・`test` 618 秒、全体で 12 分 47 秒。ロックは 15 分ほど持つ。
+8. 2 回目からの push に取り込みの許可は要らない（新しいオブジェクトだけを検査する）。作り直したイメージでの 1 回は
+   `generated` 70〜79 秒・`lint` 約 70 秒・`test` 613〜618 秒、全体で 12 分半ほど（パイプライン 491・492）。ロックは 15 分ほど持つ。
 9. `test` のジョブが落ちたときは、ログ（`GET /api/v1/projects/<id>/pipelines/<pipeline_id>/jobs/<job_id>/log`、JSON の `text`）から
    `TRY 2 FAIL` の行と nextest の `Summary` を拾う。11-17 に落ちた 2 件は handoff の 4.4（イメージに OpenSSH のクライアントが
-   無い、unix だけのテストが古い）。
+   無い、unix だけのテストの偽の git が効いていなかった）。どちらも branch `ci/ci-image-digest-russh` で直し、パイプライン 492 は
+   緑（4168 件すべて成功）。
+10. テストが `command not found` や「… must be installed」で落ちるときは、CI のイメージにそのコマンドが無い。
+    `ops/ci-image/Dockerfile` に足して手順 7 のとおり作り直す（クレートと違い、これを見張るテストは無い）。
 
 ## 片づけ
 

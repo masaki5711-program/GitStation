@@ -150,22 +150,48 @@ MR !4「hello-app v5」は `public/health` を `maintenance` にする（CI の�
        立っていると ssh が無いことを失敗にする）。直し方: Dockerfile に `openssh-client` を足して作り直す（ビルドのときだけ
        パッケージの取得が要る）。
     2. `forge-git browse::tests::git_answers_forge_cannot_trust_are_git_process_failed` — `expect_err("mismatch")` が
-       `RawBlob { size: 20, … }`（本物の中身）を受け取った。**テストが古い**: 867c6c00（11-12、`perf(git): browse through the
-       batch pool`）から `raw` はまず常駐の `cat-file --batch-command` で blob を読み、`cat-file blob` は代わりの道になった。
-       テストの偽の git は `cat-file blob` だけを差し替えるので、もう通らない道を見ている。`#[cfg(unix)]` なので Windows の
-       開発機では走らず、Linux で全体のテストを走らせたのは 867c6c00 の後では今回が初めて。直すのはテスト（または
-       「常駐の読み出しが短い中身を返したとき」の扱いを決めること）で、製品のコードの判断が要る。
+       `RawBlob { size: 20, … }`（本物の中身）を受け取った。**テストの偽の git が効かなくなっていた**（製品の穴ではない）:
+       7c0c4e81（11-13、`perf(git): cap pack memory of forge's git`）から `cat-file` はメモリの上限を付ける
+       サブコマンドになり、forge は `-c key=value` を 5 組、先頭に付けて呼ぶ。偽の git の条件 `[ "$1" = cat-file ]` は
+       もう当たらず、本物の git が答えていた。`#[cfg(unix)]` なので Windows の開発機では走らない。
+       （最初の報告では「867c6c00 の常駐の `cat-file --batch-command` に道が変わったため」と書いたが**誤り**。この
+       テストの `browser_with_bin` は常駐の読み出しを切っている（`batch_per_repo: 0`）。）製品の側は今も断る: 1 回きりの
+       読み出しは長さが違えば `blob_size_mismatch`（`crates/forge-git/src/browse/content.rs` の `raw`）、常駐の読み出しは
+       ヘッダーの id・長さ・終わりの改行を確かめ（`crates/forge-git/src/batch.rs` の `read_contents`）、`ls-tree` の
+       大きさと違う中身は受け取らずに 1 回きりの読み出しへ回す（`crates/forge-git/src/browse/objects.rs` の `fast_blob`）。
   - ロック（`m4done-gitstation-ci`）は 15:08:09〜15:21:25（ジョブがすべて終わってから離した）。空きメモリは 6.8〜9.1 GB。
+  - この 2 回目が、この PC から見える限り、11-11（パイプライン 4〜7）の後で初めて Linux でテストの全体を走らせた回
+    （直す前で 4168 件のうち 4166 件が成功）。GitHub Actions の結果はこの PC からは確かめていない（`gh` が無い）。
+- **3 回目（同じ日、2 件を直した後）: succeeded。GitStation 自身のパイプラインが新しい Runner で緑になった**。時刻は UTC。
+  - **直したもの**（branch `ci/ci-image-digest-russh`、main 00c1bbc0 をマージした上。製品のコードは変えていない。未マージ）:
+    - 072152d7 `test(git)`: 偽の git（`crates/forge-git/src/browse/tests.rs` の `wrapping_git`）が、先頭の `-c key=value` の
+      組を飛ばしてから条件を見る。テストの本体は変えていない。
+    - 9dcbce2d `ci(ci)`: `ops/ci-image/Dockerfile` に `openssh-client` を足し、イメージを作り直した（ロック `m4done-ci-image`
+      15:58:14〜16:01:06、ビルドと push は 2 分 16 秒）。ジョブ `registry:5000/ci/rust@sha256:31e8984a…`、サービス
+      `registry:5000/ci/postgres@sha256:9b7429f1…`、クレートは同じ 461 個。見張りのテスト 4 件は通る。
+  - **push**（16:15:22）: 9dcbce2d に「`tags: [linux, m4]`」だけを足した試験環境だけのコミット aa12669e（branch
+    `chore/ci-m4-self-runner-ssh`）。
+  - **パイプライン 492**（request_id `e143b9030b0d4b76a2e71fecf099065d`）: **succeeded、12 分 34 秒**（16:15:23〜16:27:57）。3 つの
+    ジョブはすべて Runner `docker-test-m4` が取った（Runner のログ、job 525〜527、終了コード 0。`docker-test-1` は 0 件）。
+
+    | ジョブ | 結果 | 時間 |
+    |---|---|---|
+    | `generated`（525） | succeeded | 70 秒 |
+    | `lint`（526） | succeeded | 70 秒 |
+    | `test`（527） | succeeded | 613 秒（nextest 498 秒: 4168 件すべて成功、6 件はスキップ） |
+
+  - 2 回目に落ちた 2 件はどちらも通った（ジョブのログ: `forge-cli::ssh_e2e …` PASS 4.954 秒、
+    `forge-git browse::tests::git_answers_forge_cannot_trust_are_git_process_failed` PASS 0.045 秒）。
+  - ロック（`m4done-gitstation-ci`）は 16:15:19〜16:28:13（16:02:32 から待った）。空きメモリは 9.1〜11.4 GB。
 
 ## 5. 残り
 
-1. GitStation 自身のパイプラインを新しい Runner で**緑に**する（4.4。ビルドと `lint`・`generated` は通った。`test` の 2 件が残る）:
-   - branch `ci/ci-image-digest-russh`（イメージの digest と見張りのテスト）をレビューしてマージする。
-   - CI のイメージに `openssh-client` を足して作り直す（`ops/ci-image/Dockerfile`、`node ops/ci-image/build-and-push.mjs`）。
-   - `forge-git` の `git_answers_forge_cannot_trust_are_git_process_failed` を 867c6c00 の後の読み出しの道に合わせる。
-   - unix だけのテスト（`#[cfg(unix)]`）は Windows の開発機の Stop ゲートでは走らない。自前のパイプラインが緑になるまでは、
-     Linux でしか走らないテストの失敗に気づくのが遅れる。
-   - その後 `gitstation/gitstation-history` に push してもう 1 回動かす（runbook `m4-test-environment`）。
+1. GitStation 自身のパイプラインは新しい Runner で**緑になった**（4.4 の 3 回目、パイプライン 492）。残るのは取り込み:
+   - branch `ci/ci-image-digest-russh`（9dcbce2d: イメージの digest と見張りのテスト、`openssh-client`、偽の git の直し）を
+     レビューして main にマージする。main の `.forge-ci.yml` はまだ古いイメージを指している。
+   - unix だけのテスト（`#[cfg(unix)]`）は Windows の開発機の Stop ゲートでは走らない。自前のパイプラインを main の
+     変更のたびに走らせるまでは、Linux でしか走らないテストの失敗に気づくのが遅れる（今回の 1 件は 4 日間そのままだった）。
+   - テストが新しいコマンドを使うようになったら CI のイメージに足す（クレートと違い、見張りのテストは無い）。
 2. 製品の修正: D1（Windows で `UserKnownHostsFile` の引用符）、D2（`ProgramData`）。修正の後は `sshwrap.exe` を外して確かめる。
    ssh の stderr の分類の結果（stderr そのものではなく、例えば `invalid quotes` のような種類）をログに残すと、今回のような
    `connection_lost` の誤った見え方を防げる。
