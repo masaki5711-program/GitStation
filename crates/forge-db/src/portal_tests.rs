@@ -12,6 +12,8 @@ use serde_json::json;
 use super::*;
 use crate::change::{Actor, ChangeContext};
 use crate::groups::{self, NewGroup};
+use crate::identities::{LinkAuthSources, LinkRules};
+use crate::jobs::{self, Failed, JobFailure, JobKind, WorkerId};
 use crate::projects::{self, NewProject};
 use crate::test_support::*;
 use crate::users::{self, NewUser};
@@ -190,6 +192,21 @@ async fn a_deployments_end_stages_its_news_in_the_same_change() {
     assert_eq!(rows[0]["audience"], json!([olga.get()]));
 }
 
+/// The sign-in's rules of `claims_source = access_token` with every
+/// account source linkable.
+const BY_NUMBER: LinkRules = LinkRules::EmployeeNumberOnly {
+    auth_sources: LinkAuthSources::ALL,
+};
+
+fn refusal(e: &ForgeError) -> String {
+    assert_eq!(e.code(), ErrorCode::PortalUserNotLinked);
+    e.context()
+        .iter()
+        .find(|(k, _)| *k == "reason")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default()
+}
+
 #[tokio::test]
 async fn an_unlinked_portal_user_is_refused() {
     let t = FreshDb::migrated().await;
@@ -198,16 +215,8 @@ async fn an_unlinked_portal_user_is_refused() {
     person(&t, "root", Some("SYN0002"), true).await;
     person(&t, "twin1", Some("syn0003"), false).await;
     person(&t, "twin2", Some("SYN0003"), false).await;
-    let reason = |e: ForgeError| {
-        assert_eq!(e.code(), ErrorCode::PortalUserNotLinked);
-        e.context()
-            .iter()
-            .find(|(k, _)| *k == "reason")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_default()
-    };
     // The employee number, without the case, links the one user.
-    let found = portal_user(&t.db, iss, "sub-ada", Some(" syn0001 "), true)
+    let found = portal_user(&t.db, iss, "sub-ada", Some(" syn0001 "), true, BY_NUMBER)
         .await
         .expect("linked by staff id");
     assert_eq!(found.user, ada);
@@ -215,14 +224,15 @@ async fn an_unlinked_portal_user_is_refused() {
     for (staff, auto_link, want) in [
         (Some("SYN9999"), true, "unlinked"),
         (None, true, "employee_number_missing"),
+        (Some("SYN 0001"), true, "employee_number_format"),
         (Some("SYN0003"), true, "employee_number_ambiguous"),
         (Some("SYN0002"), true, "privileged_account"),
         (Some("SYN0001"), false, "auto_link_disabled"),
     ] {
-        let e = portal_user(&t.db, iss, "sub-x", staff, auto_link)
+        let e = portal_user(&t.db, iss, "sub-x", staff, auto_link, BY_NUMBER)
             .await
             .expect_err("refused");
-        assert_eq!(reason(e), want, "{staff:?}");
+        assert_eq!(refusal(&e), want, "{staff:?}");
     }
     // A linked identity wins (and the number then does not matter); ada's
     // number under another subject of the same issuer is not hers.
@@ -234,16 +244,166 @@ async fn an_unlinked_portal_user_is_refused() {
         )],
     )
     .await;
-    let linked = portal_user(&t.db, iss, "sub-ada", None, false)
+    let linked = portal_user(&t.db, iss, "sub-ada", None, false, BY_NUMBER)
         .await
         .expect("linked");
     assert_eq!(linked.user, ada);
-    let other = portal_user(&t.db, iss, "sub-someone-else", Some("SYN0001"), true)
-        .await
-        .expect_err("linked to another subject");
-    assert_eq!(reason(other), "employee_number_linked");
+    let other = portal_user(
+        &t.db,
+        iss,
+        "sub-someone-else",
+        Some("SYN0001"),
+        true,
+        BY_NUMBER,
+    )
+    .await
+    .expect_err("linked to another subject");
+    assert_eq!(refusal(&other), "employee_number_linked");
     // Nothing was written by any of these.
     assert_eq!(count(&t, "SELECT 1 FROM forge.user_identities").await, 1);
+}
+
+/// Review S1: the employee-number fallback is the sign-in's rule, not a
+/// weaker one — an account whose source `auth.oidc.link_auth_sources` does
+/// not name, an account bound to another provider, and (under the id-token
+/// rules, which need a verified e-mail) anyone not linked are NOT resolved.
+#[tokio::test]
+async fn a_portal_user_is_found_only_as_the_sign_in_would_link() {
+    let t = FreshDb::migrated().await;
+    let iss = "https://sso.example.test/realms/iotpf";
+    let lena = person(&t, "lena", Some("SYN0702"), false).await;
+    let mut ldap = NewUser::human("dirk", "dirk", "dirk@example.test");
+    ldap.employee_number = Some("SYN0701".to_owned());
+    ldap.auth_source = users::AuthSource::Ldap;
+    let dirk = users::create(&t.db, &system("req-user-dirk"), &ldap)
+        .await
+        .expect("ldap user")
+        .user_id;
+    let only = |local: bool, ldap: bool| LinkRules::EmployeeNumberOnly {
+        auth_sources: LinkAuthSources { local, ldap },
+    };
+    // The source is not linkable: a matching staff id does not resolve.
+    for (staff, rules) in [
+        ("SYN0702", only(false, true)),
+        ("SYN0701", only(true, false)),
+        ("SYN0702", only(false, false)),
+    ] {
+        let e = portal_user(&t.db, iss, "sub-x", Some(staff), true, rules)
+            .await
+            .expect_err("not linkable");
+        assert_eq!(refusal(&e), "auth_source_not_linkable", "{staff}");
+    }
+    // The same accounts with their source named are the ones a sign-in links.
+    let local = portal_user(
+        &t.db,
+        iss,
+        "sub-lena",
+        Some("SYN0702"),
+        true,
+        only(true, false),
+    )
+    .await
+    .expect("local is linkable");
+    assert_eq!(local.user, lena);
+    let dir = portal_user(
+        &t.db,
+        iss,
+        "sub-dirk",
+        Some("syn0701"),
+        true,
+        only(false, true),
+    )
+    .await
+    .expect("ldap is linkable");
+    assert_eq!(dir.user, dirk);
+    // The id-token rules link with a verified e-mail only: never by number.
+    let e = portal_user(
+        &t.db,
+        iss,
+        "sub-lena",
+        Some("SYN0702"),
+        true,
+        LinkRules::VerifiedEmail,
+    )
+    .await
+    .expect_err("id-token rules");
+    assert_eq!(refusal(&e), "sign_in_required");
+    // An account another provider (or the operator) bound is not moved.
+    t.commit_audited(
+        ("user", lena.get()),
+        &[format!(
+            "INSERT INTO forge.user_identities (user_id, issuer, subject) VALUES ({}, \
+             'https://other-idp.example.test/realms/x', 'sub-bound')",
+            lena.get()
+        )],
+    )
+    .await;
+    let e = portal_user(&t.db, iss, "sub-lena", Some("SYN0702"), true, BY_NUMBER)
+        .await
+        .expect_err("bound elsewhere");
+    assert_eq!(refusal(&e), "employee_number_linked");
+    assert_eq!(count(&t, "SELECT 1 FROM forge.user_identities").await, 1);
+}
+
+/// Review H2: a `pending` row whose job ended without recording an outcome
+/// is ended by the sweep, once; a row with a live job is left alone.
+#[tokio::test]
+async fn a_pending_row_without_a_live_job_is_swept_to_failed() {
+    let t = FreshDb::migrated().await;
+    let olga = person(&t, "olga", Some("SYN0001"), false).await;
+    let p = project_of(&t, olga, "acme").await;
+    let db = t.db.clone().with_portal_news(Some(policy()));
+    let mut ids = Vec::new();
+    for n in 1..=3 {
+        let source = format!("gitstation-deploy-{n}-failed");
+        let id = stage_alone(&db, &draft(p, vec![olga], &source))
+            .await
+            .expect("stage")
+            .expect("a row");
+        ids.push(id);
+    }
+    // Nothing is orphaned while every job is queued.
+    assert_eq!(sweep_orphaned(&db, 10).await.expect("sweep"), Vec::new());
+    // The first job dies without the sender recording the end (its last
+    // attempt failed on the database); the second is running; the third
+    // stays queued.
+    let kinds = [JobKind::parse(NEWS_JOB).expect("kind")];
+    let worker = WorkerId::generate();
+    let first = jobs::claim(&db, &worker, &kinds)
+        .await
+        .expect("claim")
+        .expect("the first job");
+    assert_eq!(first.payload["news_id"], ids[0]);
+    let dead = jobs::fail(
+        &db,
+        &first,
+        &JobFailure::permanent(internal("synthetic_database_failure")),
+    )
+    .await
+    .expect("fail");
+    assert!(matches!(dead, Failed::Dead), "{dead:?}");
+    let second = jobs::claim(&db, &worker, &kinds)
+        .await
+        .expect("claim")
+        .expect("the second job");
+    assert_eq!(second.payload["news_id"], ids[1]);
+    let swept = sweep_orphaned(&db, 10).await.expect("sweep");
+    assert_eq!(swept.len(), 1, "{swept:?}");
+    assert_eq!(swept[0].id, ids[0]);
+    assert_eq!(swept[0].source_id, "gitstation-deploy-1-failed");
+    assert_eq!(swept[0].request_id, "req-news");
+    let rows = t
+        .json_rows("SELECT id, state, reason, last_error_code FROM forge.portal_news ORDER BY id")
+        .await;
+    assert_eq!(rows[0]["state"], "failed");
+    assert_eq!(rows[0]["reason"], "tries_used_up");
+    assert_eq!(rows[0]["last_error_code"], "FG-INT-0023");
+    assert_eq!(rows[1]["state"], "pending", "a running job is alive");
+    assert_eq!(rows[2]["state"], "pending", "a queued job is alive");
+    // Once: the next sweep finds nothing, and doctor counts the failure.
+    assert_eq!(sweep_orphaned(&db, 10).await.expect("again"), Vec::new());
+    let h = health(&db).await.expect("health");
+    assert_eq!((h.pending, h.failed_24h), (2, 1));
 }
 
 #[tokio::test]
@@ -277,7 +437,9 @@ async fn the_widget_reads_name_members_projects_and_their_newest_state() {
     assert_eq!(deploys, vec![(b, None)]);
     // The spec release's audience: the people with a role on the project.
     let mut conn = t.db.write_pool().acquire().await.expect("conn");
-    let people = project_people(&mut conn, a).await.expect("people");
+    let people = project_people(&mut conn, a, &RequestId::parse("req-people").expect("id"))
+        .await
+        .expect("people");
     assert!(
         people.contains(&olga) && people.contains(&dave),
         "{people:?}"

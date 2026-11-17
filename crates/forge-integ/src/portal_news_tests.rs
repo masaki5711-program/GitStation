@@ -299,3 +299,15 @@ async fn nobody_left_to_tell_is_dropped_without_a_post() {
     );
     assert!(portal.sent.lock().expect("sent").is_empty());
 }
+
+/// Review H2: a database failure is retried, but on the job's last attempt
+/// it ends the job (nothing would retry it; the sweep ends the row).
+#[test]
+fn a_database_failure_on_the_last_attempt_ends_the_job() {
+    use forge_db::jobs::Retry;
+    let failed = || ForgeError::new(ErrorCode::DbUnavailable).with_context("query", "portal.news");
+    assert_eq!(db_failure(false)(failed()).retry, Retry::Backoff);
+    let last = db_failure(true)(failed());
+    assert_eq!(last.retry, Retry::Never);
+    assert_eq!(last.error.code(), ErrorCode::DbUnavailable);
+}

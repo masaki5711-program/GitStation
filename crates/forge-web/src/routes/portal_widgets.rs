@@ -16,7 +16,14 @@
 //! - The answer is the contract's envelope `{success, data}`; a failure is
 //!   `{success: false, error: {code, message, request_id}}` with the same
 //!   status ([`envelope_errors`]). `href`s are paths of this application.
-//!   `Cache-Control: private, max-age=30` (≤ every widget's `refresh_sec`).
+//!   `Cache-Control: private, max-age=30` (≤ every widget's `refresh_sec`);
+//!   a failure is `Cache-Control: no-store`.
+//! - One gate for all of them ([`WidgetGate`], review S3): the requests
+//!   running at once and the requests per minute, counted before the token
+//!   is verified and the person looked up (`FG-WEB-0010
+//!   route=portal_widgets`, with `Retry-After`).
+
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::Request;
@@ -39,6 +46,8 @@ use serde_json::{json, Value};
 
 use crate::app::AppState;
 use crate::registry::{Dispatched, LoadFuture, Loader, Lookup, QueryParam};
+use crate::routes::namespaces::CallerLimiter;
+use crate::routes::specs::{InFlight, Running};
 use crate::routes::write::{absent_because, bounded};
 
 pub const MY_REVIEWS: &str = "/api/portal-widgets/v1/my-reviews";
@@ -113,6 +122,67 @@ pub const STOPPED_COUNT_QUERY: &[QueryParam] = &[
     LOCALE,
     TZ,
 ];
+
+/// Widget requests running at once, all persons together: the caller is
+/// one portal backend, so the gate is one for the routes, not per person
+/// (the person is not known before the token is verified). Each request is
+/// a token check, the person's lookup and a few indexed reads; 16 at once
+/// is far above a portal polling for a few hundred open home pages and
+/// well below `server.max_connections_per_peer`.
+pub const WIDGET_MAX_IN_FLIGHT: usize = 16;
+/// Widget requests per [`WIDGET_LIMIT_WINDOW`], all persons together:
+/// 100 a second — about 2 000 open home pages with three widgets each
+/// refreshing once a minute (the declared `refresh_sec` are 60 and 120).
+pub const WIDGET_LIMIT: u32 = 6_000;
+pub const WIDGET_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+
+/// The one caller the gate counts: the portal.
+const PORTAL_CALLER: UserId = UserId::new(0);
+
+/// The widget routes' gate (review S3): taken by `crate::auth` after the
+/// request's shape is checked and before the token is verified or anything
+/// is read from the database, and held until the answer is produced.
+#[derive(Debug)]
+pub struct WidgetGate {
+    max_in_flight: usize,
+    in_flight: InFlight,
+    limiter: CallerLimiter,
+}
+
+impl WidgetGate {
+    pub fn new(max_in_flight: usize, limit: u32, window: Duration) -> Self {
+        Self {
+            max_in_flight,
+            in_flight: InFlight::new(max_in_flight),
+            limiter: CallerLimiter::new("portal_widgets", limit, window),
+        }
+    }
+
+    /// A place for one more widget request: `FG-WEB-0010
+    /// route=portal_widgets reason=in_flight` (`Retry-After: 1`) with
+    /// `max_in_flight` running, `FG-WEB-0010 route=portal_widgets` over the
+    /// rate (`Retry-After`: the rest of the window). A request refused for
+    /// the running ones does not count against the rate.
+    pub fn enter(&self, now: Instant) -> Result<Running<'_>, ForgeError> {
+        let Some(running) = self.in_flight.enter(PORTAL_CALLER) else {
+            return Err(ForgeError::new(ErrorCode::RateLimited)
+                .with_context("route", "portal_widgets")
+                .with_context("reason", "in_flight")
+                .with_context("limit", self.max_in_flight)
+                .with_context(crate::error::RETRY_AFTER_CONTEXT, 1u64));
+        };
+        self.limiter
+            .check(PORTAL_CALLER, now)
+            .map_err(|retry| self.limiter.refused(retry))?;
+        Ok(running)
+    }
+}
+
+impl Default for WidgetGate {
+    fn default() -> Self {
+        Self::new(WIDGET_MAX_IN_FLIGHT, WIDGET_LIMIT, WIDGET_LIMIT_WINDOW)
+    }
+}
 
 /// Every widget route: the person's own widgets.
 pub struct PortalWidgets;
@@ -565,7 +635,9 @@ const MAX_ERROR_BODY: usize = 16 * 1024;
 
 /// Middleware (`app::build`): a failure of a widget route answers the
 /// contract's `{success: false, error: {code, message, request_id}}` with
-/// the same status and headers (contract §6.3). The standard body's
+/// the same status and headers (contract §6.3) — except `Cache-Control`,
+/// which is `no-store` on every failure (review S4: a refusal is never
+/// kept by the portal or anything between). The standard body's
 /// `error_code` and `user_message` become `code` and `message`; nothing
 /// else is added.
 pub(crate) async fn envelope_errors(req: Request, next: Next) -> Response {
@@ -575,6 +647,9 @@ pub(crate) async fn envelope_errors(req: Request, next: Next) -> Response {
         return res;
     }
     let (mut parts, body) = res.into_parts();
+    parts
+        .headers
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     let Ok(bytes) = axum::body::to_bytes(body, MAX_ERROR_BODY).await else {
         // Not readable as a small body: answered as it is, without one.
         return Response::from_parts(parts, Body::empty());

@@ -132,22 +132,86 @@ async fn a_widget_failure_answers_in_the_contracts_envelope() {
                 .await
                 .expect("infallible");
             let status = res.status();
+            let cache = res
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
             let bytes = axum::body::to_bytes(res.into_body(), 1 << 16)
                 .await
                 .expect("body");
             (
                 status,
                 serde_json::from_slice::<Value>(&bytes).expect("json"),
+                cache,
             )
         }
     };
-    let (status, wrapped) = call(MY_REVIEWS).await;
+    let (status, wrapped, cache) = call(MY_REVIEWS).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(
         wrapped,
         json!({"success": false, "error": {"code": "FG-AUTH-0003", "message": "no", "request_id": "r-1"}})
     );
-    // Any other route keeps the standard body.
-    let (_, plain) = call("/api/v1/other").await;
+    // Review S4: a widget's failure is never kept.
+    assert_eq!(cache.as_deref(), Some("no-store"));
+    // Any other route keeps the standard body (and its own headers).
+    let (_, plain, cache) = call("/api/v1/other").await;
     assert_eq!(plain["error_code"], "FG-AUTH-0003");
+    assert_eq!(cache, None);
+}
+
+fn context_of(e: &ForgeError, key: &str) -> Option<String> {
+    e.context()
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v.clone())
+}
+
+/// Review S3: the gate bounds the widget requests running at once and
+/// their rate, as one caller (the portal).
+#[test]
+fn the_widget_gate_bounds_the_running_requests_and_the_rate() {
+    let now = Instant::now();
+    // Two at once: the third waits for one to end.
+    let gate = WidgetGate::new(2, 100, Duration::from_secs(60));
+    let first = gate.enter(now).expect("first");
+    let _second = gate.enter(now).expect("second");
+    let full = gate.enter(now).expect_err("two are running");
+    assert_eq!(full.code(), ErrorCode::RateLimited);
+    assert_eq!(
+        context_of(&full, "route").as_deref(),
+        Some("portal_widgets")
+    );
+    assert_eq!(context_of(&full, "reason").as_deref(), Some("in_flight"));
+    assert_eq!(
+        context_of(&full, crate::error::RETRY_AFTER_CONTEXT).as_deref(),
+        Some("1")
+    );
+    drop(first);
+    drop(gate.enter(now).expect("a place again"));
+    // Three a minute: the fourth is refused until the window ends (the
+    // one refused for the running ones above did not count).
+    let gate = WidgetGate::new(8, 3, Duration::from_secs(60));
+    for _ in 0..3 {
+        drop(gate.enter(now).expect("within the rate"));
+    }
+    let over = gate
+        .enter(now + Duration::from_secs(20))
+        .expect_err("over the rate");
+    assert_eq!(over.code(), ErrorCode::RateLimited);
+    assert_eq!(
+        context_of(&over, "route").as_deref(),
+        Some("portal_widgets")
+    );
+    assert_eq!(context_of(&over, "reason"), None);
+    assert_eq!(
+        context_of(&over, crate::error::RETRY_AFTER_CONTEXT).as_deref(),
+        Some("40")
+    );
+    // The refused request left no place taken, and the next window is open.
+    drop(
+        gate.enter(now + Duration::from_secs(61))
+            .expect("a new window"),
+    );
 }

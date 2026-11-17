@@ -24,13 +24,22 @@ PFS のポータル（iotpf-portal、Keycloak のレルム `iotpf`）に、利�
      認証器（forge-oidc `PortalWidgets`、forge-core の trait `PortalAuthenticator` 越し）に渡す。Cookie と Basic は見ない
      （`FG-AUTH-0026 reason=bearer_required`）。ほかの経路では JWT は個人のアクセストークンでないので、トークンの認証器が今までどおり
      拒む（`FG-AUTH-0001`、テスト `a_portal_token_is_refused_on_every_other_route`）。
-   - 検証はサインインのアクセストークンと同じ（JWKS とアルゴリズム、`iss`、`exp` / `nbf` / `iat`、`typ`、`sub`）。`azp` は **トークン自身の値を
-     比べる相手として検証** し、それが `portal.client_id`（既定 `portal`）か、`resource_access.<auth.oidc.client_id>.roles` に
-     `auth.oidc.access_role` があるかは **事実として** `PortalCredential { portal_party, access_role }` に載せ、`authorize()` の
-     ポータルの腕（`forge-auth/src/portal.rs`）が判断する（`portal_wrong_party` / `portal_no_access_role`、どちらも 403）。
+   - 検証はサインインのアクセストークンと同じ（JWKS とアルゴリズム、`iss`、`exp` / `nbf` / `iat`、`typ`、`sub`）。`azp` は
+     **forge-oidc が `portal.client_id`（既定 `portal`）と比べる**（レビュー S2）: ほかのクライアントのトークン（gitstation 自身のものを
+     含む）は `FG-AUTH-0026 reason=azp` で、**DB を読む前に** 落ちる（テスト `another_clients_token_never_reaches_the_user_lookup`）。
+     `resource_access.<auth.oidc.client_id>.roles` に `auth.oidc.access_role` があるかは **事実として**
+     `PortalCredential { portal_party, access_role }` に載せ、`authorize()` のポータルの腕（`forge-auth/src/portal.rs`）が判断する
+     （`portal_wrong_party` / `portal_no_access_role`、どちらも 403）。`portal_party` の行は多層の守りとして残す。
    - 人はサインインの規則で **読み取りだけ** で探す（`forge_db::portal::portal_user`）: `(iss, sub)` のリンク → そうでなければ社員番号
-     （ちょうど 1 人、`auto_link` が on、別の subject にリンク済みでない、管理者でない）。見つからなければ `FG-AUTH-0027`（403）。
-     リンクも作成もしない。
+     （形が正しい、ちょうど 1 人、`auto_link` が on、どの発行者の identity も持たない、管理者でない、アカウントの種類が
+     `auth.oidc.link_auth_sources` にある — レビュー S1、サインインと同じ順）。`auth.oidc.claims_source = id_token` のときサインインは
+     確認済みのメールでリンクするが、アクセストークンはそれを示さないので、リンク済みの identity だけを受ける（`sign_in_required`）。
+     見つからなければ `FG-AUTH-0027`（403）。リンクも作成もしない。
+   - **門（レビュー S3）**: ウィジェットの経路は、Bearer が 1 つあることを見たあと、トークンを検証して人を探す **前に** 門
+     （`routes::portal_widgets::WidgetGate`）を通る。呼ぶのはポータルのバックエンド 1 つなので、人ごとではなく経路全体で数える:
+     同時に 16 件（`FG-WEB-0010 route=portal_widgets reason=in_flight`、`Retry-After: 1`）、1 分に 6000 件
+     （`route=portal_widgets`、`Retry-After` は窓の残り）。6000 件/分は、3 つのウィジェットが 60 秒ごとに更新するホームを 2000 人が
+     開いている量。既存の `InFlight` と `CallerLimiter` を使う。失敗の応答は `Cache-Control: no-store`（レビュー S4）。
    - ポータルの腕は閉じている: `PortalWidgetRead` だけ、インスタンス（ウィジェットの経路そのもの）とプロジェクトの上だけ。プロジェクトは
      **管理者の権限のないセッションの本人** として `ProjectRead` で決める（Web の画面と同じ規則）。表に出す MR は同じ本人
      （`forge_auth::portal_reader`、ウィジェットの経路の証明からだけ作れる）で `MergeRequestRead` と承認の試し判定をする。
@@ -41,7 +50,8 @@ PFS のポータル（iotpf-portal、Keycloak のレルム `iotpf`）に、利�
    - `my-reviews`: `review` = 承認できて未承認（「自分の仕事」の `approvable`）、`mine` = 自分の開いた MR、`stopped` = 現在の
      head で自動マージが止まった MR のうち自分が作者か承認者、`spec` = 仕様を公開したことのあるプロジェクト（監査に `spec.released`）の
      `approvable`（ADR-0023: 仕様は種類でなく中身で決まる）。件数は見える行だけ、100 で頭打ち。
-   - `pipelines`: `refs/heads/main` の最新のパイプライン、または最新の配備をランプで。最大 24。
+   - `pipelines`: `refs/heads/main` の最新のパイプライン、または最新の配備をランプで。最大 24。設定が無いときの候補は id だけを
+     取り（1 文、最大 200）、プロジェクトの記録は 24 件ずつ、24 個のランプが揃うまでだけ読む（レビュー D2。ふつうは 1 回）。
    - `stopped-count`: 止まった自動マージの数を標準 0 と比べる。
    - 選択肢 `options/project`: 本人がロールを持ち読めるプロジェクト、最大 200。
    - 不正な値は 422 `FG-WEB-0011`、知らないキーは無視。失敗の本文は契約の `{success: false, error: {code, message, request_id}}`。
@@ -54,6 +64,11 @@ PFS のポータル（iotpf-portal、Keycloak のレルム `iotpf`）に、利�
      （`FG-INT-0022`）としてキューのバックオフで再試行、`portal.max_attempts` の最後で `failed`。トークンは gitstation の client
      credentials（forge-oidc `ServiceTokens`、discovery の token endpoint、期限の 30 秒前まで使う）。取れなければ `FG-INT-0024`。
    - **`portal.enabled` / `portal.news_enabled` が off のあいだは outbox に何も書かない**（後から on にしても過去を流さない）。
+   - **`pending` のまま残る行を作らない（レビュー H2）。** ジョブの最後の試行で DB が失敗したら、そのジョブは再試行でなく終わりにする
+     （`Retry::Never`）。それでも結果を書けずにジョブが終わった行（DB の失敗、試行の上限でのリースの期限切れ）は、`forge worker` の
+     1 時間ごとの掃除（`worker::portal_news::housekeep` → `forge_db::portal::sweep_orphaned`）が「`queued` / `running` のジョブを持たない
+     `pending`」として見つけ、`failed`（`reason=tries_used_up`）にして、行ごとに 1 回 `FG-INT-0023`（`detail=job_ended`、行を作った変更の
+     request_id）を記録する。同じ掃除が、終わった行の 30 日の削除を、1 回分（500 行）より少なくなるまで繰り返す（最大 20 回）。
 4. **「レビューを頼まれた」と「承認待ちの仕様」は新着にしない（契約の穴、下の Consequences）。**
 
 ## Alternatives Considered
@@ -90,6 +105,27 @@ PFS のポータル（iotpf-portal、Keycloak のレルム `iotpf`）に、利�
   - トークンの `plants` では絞らない（GitStation のデータに工場の区別が無い）。
 - 自動マージの状態の記録が、ニュースが on のとき短いトランザクションになる。
 
+- 門は経路全体で 1 つなので、不正なトークンの洪水はポータルのウィジェットも 429 にする（GitStation の DB と IdP は守られ、
+  ポータルは前の答えを出し続ける）。呼び出し元の区別が要るようになったら、プロキシの配置（ADR-0019 の未決）と一緒に決める。
+- 索引（移行 `20261228100000`）: `audit_log (project_id) WHERE action = 'spec.released'`（`spec` の一覧の EXISTS、レビュー H1）と
+  `ci_pipelines (project_id, ref, id DESC)`（最新のパイプライン、レビュー D1）。`CONCURRENTLY` でないので、作るあいだ両方の表への
+  書き込みが待つ（移行 `20261111100100` と同じ扱い。静かな時間に当てる）。
+
+### Follow-ups（2026-11-17 のレビューで決めた、この枝ではやらないこと）
+- **新着の送信に専用のクライアントと audience を絞ったトークン（レビュー S5）。** 今は gitstation のクライアントの client credentials を
+  そのまま使う。ニュース専用のクライアント（または `aud` をポータルのニュースの受け口に絞るマッパー）にすると、漏れたトークンで
+  できることが新着の送信だけになる。PFS 側のレルムの変更（クライアントの追加、`NEWS_SENDER_CLIENTS`）が要るので、PFS の MR と
+  一緒に行う。この枝ではコードを変えない。
+- **`my-reviews` / `stopped-count` の人ごとの短いキャッシュ（レビュー D3）は入れなかった。** 理由: (1) 停止や承認の直後に古い数が
+  30 秒残ると「次に何をするか」がずれる。応答は既に `Cache-Control: private, max-age=30` で、ポータル側が持てる。(2) 鍵に人と
+  すべての設定を入れた表をプロセスに持つと、権限の変更（メンバーから外す）を 30 秒遅らせる経路が 1 つ増える。
+  1 回の呼び出しの文の数（コードから数えた。計測ではない）: 候補のページ 1 文（100 行ごと、最大 10 ページ = 1000 候補）＋
+  候補に出てくるプロジェクトごとに 1 文（`load_project`、呼び出しの中でキャッシュ）＋ 失敗したチェックのある行を持つプロジェクトごとに
+  1 文（保護の規則、同じくキャッシュ）。`decide()` は **行ごとの文を出さない**（上の 2 つのキャッシュだけ）。ふつうの人
+  （候補 100 未満、プロジェクト P 個）で 1 + P 〜 1 + 2P 文。権限の判断は SQL の LIMIT のあとなので、表示の行は見える行が `limit` に
+  届くまでページをまたいで埋まり、短くなるのは候補が 1000 を超えるときだけ（そのとき `total` は `truncated`）。
+  門（S3）が同時 16 件に抑えるので、まず計測（`http.request` の `duration_ms`）を見てから決める。
+
 ### Risks
-- ポータルのトークンの `azp` を検証の前に読む: 比べる相手を選ぶためだけで、検証がその値を確かめる。偽の値は署名で落ちる。
+- 検証の順: `azp` は署名を確かめた検証の中で `portal.client_id` と比べる（検証の前に本文を読むことはやめた）。
 - 宛先が 200 人を超えるプロジェクトの仕様の公開は先頭の 200 人だけ（行の CHECK）。必要なら `role` の宛先を後で検討する。

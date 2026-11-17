@@ -58,9 +58,14 @@ GitStation が PFS のポータル（iotpf-portal）のホームに出すウィ�
 ## 認証と認可
 
 - ポータルは本人のアクセストークン（`azp = portal`）を `Authorization: Bearer` で付ける。GitStation はレルムの鍵で検証し、
-  `azp` が `portal.client_id`、`resource_access.gitstation.roles` に `access` があることを `authorize()`（`PortalWidgetRead`）で確かめる。
-- 人は社員番号（`staff_id`）でサインインと同じ規則で探す（読み取りだけ。ウィジェットの呼び出しで利用者を作らない）。
+  `azp` が `portal.client_id` でなければその場で 401（`FG-AUTH-0026 reason=azp`）。`resource_access.gitstation.roles` に `access` が
+  あることは `authorize()`（`PortalWidgetRead`）で確かめる。
+- 人は社員番号（`staff_id`）でサインインと同じ規則で探す（読み取りだけ。ウィジェットの呼び出しで利用者を作らない。
+  `auth.oidc.link_auth_sources` に無い種類のアカウントや、ほかの IdP に結び付いたアカウントは社員番号では見つからない）。
   GitStation に一度もログインしていない人は 403 `FG-AUTH-0027`。
+- 呼び出しの上限（全員で 1 つ）: 同時に 16 件、1 分に 6000 件。超えると 429（`FG-WEB-0010`、`Retry-After` 付き）。ポータルは
+  次の更新まで前の答えを出す。
+- 成功の応答は `Cache-Control: private, max-age=30`、失敗の応答は `Cache-Control: no-store`。
 - 見せるのは本人が GitStation の画面で見られるものだけ（管理者の権限は使わない）。
 - このトークンはウィジェットの経路でだけ受ける。ほかの API は 401 のまま。
 

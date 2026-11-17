@@ -4,15 +4,17 @@
 //! - [`PortalWidgets`] ([`forge_core::portal::PortalAuthenticator`]): the
 //!   portal forwards the person's access token (`azp = portal`). It is
 //!   verified like the sign-in's access token (the same JWKS and
-//!   algorithms, `iss`, `exp` / `nbf` / `iat`, `typ`, `sub`) with **its own
-//!   `azp` as the party** — read from the payload only to choose what the
-//!   verification compares, then checked by it — and `authorize()` decides
-//!   whether that party is the portal (`portal.client_id`) and whether the
-//!   token holds the access role on `auth.oidc.client_id`. The person is
-//!   found read-only by the sign-in's link rules
-//!   ([`forge_db::portal::portal_user`]). Failures: `FG-AUTH-0026` (the
-//!   token, with the reasons of `FG-AUTH-0025`), `FG-AUTH-0027` (no linked
-//!   user), `FG-AUTH-0015` (the provider cannot be reached).
+//!   algorithms, `iss`, `exp` / `nbf` / `iat`, `typ`, `sub`) with
+//!   **`portal.client_id` as the party**: a token another client was
+//!   issued — the gitstation client's own included — is refused here
+//!   (`FG-AUTH-0026 reason=azp`) before anything is read from the
+//!   database. `authorize()` then decides the party again (defence in
+//!   depth) and whether the token holds the access role on
+//!   `auth.oidc.client_id`. The person is found read-only by the sign-in's
+//!   link rules ([`forge_db::portal::portal_user`], with
+//!   `auth.oidc.link_auth_sources`). Failures: `FG-AUTH-0026` (the token,
+//!   with the reasons of `FG-AUTH-0025`), `FG-AUTH-0027` (no linked user),
+//!   `FG-AUTH-0015` (the provider cannot be reached).
 //! - [`ServiceTokens`] ([`forge_core::portal::ServiceTokenSource`]): the
 //!   token endpoint from discovery, `grant_type=client_credentials` with
 //!   `client_secret_basic`, cached until 30 s before `expires_in` ends.
@@ -20,13 +22,13 @@
 
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
+use forge_core::config::OidcClaimsSource;
 use forge_core::portal::{
     PortalAuthFuture, PortalAuthenticator, PortalIdentity, ServiceToken, ServiceTokenFuture,
     ServiceTokenSource,
 };
 use forge_core::RequestId;
+use forge_db::identities::{LinkAuthSources, LinkRules};
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::Value;
 
@@ -63,20 +65,6 @@ fn as_portal(e: ForgeError) -> ForgeError {
     )
 }
 
-/// The `azp` a token claims, read from its payload **before**
-/// verification, only to choose the party the verification then checks
-/// (`None`: no readable `azp`; the verification refuses it).
-fn claimed_party(token: &str) -> Option<String> {
-    let payload = token.split('.').nth(1)?;
-    let bytes = URL_SAFE_NO_PAD.decode(payload).ok()?;
-    let claims: Value = serde_json::from_slice(&bytes).ok()?;
-    claims
-        .get("azp")
-        .and_then(Value::as_str)
-        .filter(|a| !a.is_empty() && a.len() <= 255)
-        .map(str::to_owned)
-}
-
 impl PortalWidgets {
     pub fn new(oidc: std::sync::Arc<Oidc>, portal_client: &str) -> Self {
         Self {
@@ -85,9 +73,19 @@ impl PortalWidgets {
         }
     }
 
+    /// The sign-in's link rules (`Oidc::callback`), for the read-only
+    /// lookup.
+    fn link_rules(&self) -> LinkRules {
+        match self.oidc.settings.claims_source {
+            OidcClaimsSource::IdToken => LinkRules::VerifiedEmail,
+            OidcClaimsSource::AccessToken => LinkRules::EmployeeNumberOnly {
+                auth_sources: LinkAuthSources::from_names(&self.oidc.settings.link_auth_sources),
+            },
+        }
+    }
+
     async fn authenticate(&self, token: &str) -> Result<PortalIdentity, ForgeError> {
         let oidc = &self.oidc;
-        let party = claimed_party(token).unwrap_or_else(|| self.portal_client.clone());
         let kid = oidc.verifier.access_kid(token).map_err(as_portal)?;
         let doc = oidc.discovered().await?;
         let keys = oidc
@@ -101,7 +99,9 @@ impl PortalWidgets {
             .await?;
         let expected = Expected {
             issuer: &oidc.settings.issuer,
-            client_id: &party,
+            // The party is the portal, whatever the token claims: another
+            // client's token ends here (`reason=azp`), before the lookup.
+            client_id: &self.portal_client,
             nonce: None,
             now: now_secs()?,
             leeway: 60,
@@ -121,13 +121,15 @@ impl PortalWidgets {
             &claims.subject,
             staff_id,
             oidc.settings.auto_link,
+            self.link_rules(),
         )
         .await?;
         Ok(PortalIdentity {
             user_id: user.user,
             active: user.active,
             kind: user.kind,
-            portal_party: party == self.portal_client,
+            // Verified above; `authorize()` decides it again.
+            portal_party: true,
             access_role,
         })
     }
@@ -341,18 +343,6 @@ mod tests {
         assert_eq!(token, "eyJ.a.b");
         assert_eq!(usable_for(lifetime), Duration::from_secs(270));
         assert_eq!(usable_for(Duration::from_secs(10)), MIN_LIFETIME);
-    }
-
-    #[test]
-    fn the_claimed_party_is_read_only_to_choose_the_check() {
-        let claims = URL_SAFE_NO_PAD.encode(br#"{"azp":"portal","sub":"s"}"#);
-        assert_eq!(
-            claimed_party(&format!("e30.{claims}.sig")).as_deref(),
-            Some("portal")
-        );
-        assert_eq!(claimed_party("garbage"), None);
-        let none = URL_SAFE_NO_PAD.encode(br#"{"sub":"s"}"#);
-        assert_eq!(claimed_party(&format!("e30.{none}.sig")), None);
     }
 
     #[test]

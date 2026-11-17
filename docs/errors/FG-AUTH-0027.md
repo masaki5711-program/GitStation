@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-A verified portal access token (ADR-0036) names a person GitStation cannot map to one of its users by the sign-in's link rules (ADR-0021 §4 and its amendment 2026-11-17), read-only: the identity (`iss`, `sub`) is not linked and the employee number (`auth.oidc.employee_number_claim`, `staff_id`) finds no user (`reason=unlinked`), finds two (`employee_number_ambiguous`), is missing (`employee_number_missing`), or belongs to a user the sign-in would not link automatically (`auto_link_disabled`, `employee_number_linked` for a user linked to another subject, `privileged_account` for an administrator). A widget call never creates or links a user.
+A verified portal access token (ADR-0036) names a person GitStation cannot map to one of its users by the sign-in's link rules (ADR-0021 §4 and its amendment 2026-11-17), read-only: the identity (`iss`, `sub`) is not linked and the employee number (`auth.oidc.employee_number_claim`, `staff_id`) finds no user (`reason=unlinked`), finds two (`employee_number_ambiguous`), is missing (`employee_number_missing`), is not a staff id (`employee_number_format`), or belongs to a user the sign-in would not link automatically (`auto_link_disabled`; `employee_number_linked` for a user who already has an identity of any provider; `privileged_account` for an administrator; `auth_source_not_linkable` for an account whose source `auth.oidc.link_auth_sources` does not name). With `auth.oidc.claims_source = id_token` the sign-in links by a verified e-mail, which an access token does not prove, so only an already linked identity is accepted (`sign_in_required`). A widget call never creates or links a user.
 
 ## 調べ方 (diagnosis)
 
@@ -24,4 +24,4 @@ The log event `forge.auth.token_rejected` with `reason`. The employee number and
 
 ## 対処 (fix)
 
-The person signs in to GitStation once (the sign-in links or creates the account). An administrator is linked by the operator (`forge admin user link-identity`). Two users with the same employee number: correct one of them (runbook oidc-identity-link).
+The person signs in to GitStation once (the sign-in links or creates the account). An administrator, or an account of a source that is not linkable, is linked by the operator (`forge admin user link-identity`). Two users with the same employee number: correct one of them (runbook oidc-identity-link).

@@ -231,7 +231,7 @@ pub async fn record_release(
     if db.portal_news().is_some() {
         let project = release.project;
         let audience = tx
-            .step(|c| crate::portal::project_people(c, project))
+            .step(|c| crate::portal::project_people(c, project, &ctx.request_id))
             .await?;
         let draft = crate::portal::NewsDraft {
             source_id: forge_core::portal::spec_source_id(

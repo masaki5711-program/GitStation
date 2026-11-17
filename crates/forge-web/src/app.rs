@@ -169,6 +169,10 @@ pub struct AppState {
     /// it when `portal.enabled` and `auth.oidc` are configured; without it
     /// a widget route answers `FG-AUTH-0026 reason=portal_disabled`).
     pub portal: Option<Arc<dyn forge_core::portal::PortalAuthenticator>>,
+    /// ADR-0036 review S3: the widget routes' gate — the requests running
+    /// at once and per minute, all persons together (`FG-WEB-0010
+    /// route=portal_widgets`), taken before the token is verified.
+    pub portal_gate: Arc<routes::portal_widgets::WidgetGate>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -233,6 +237,7 @@ impl AppState {
             )),
             ssh_info: None,
             portal: None,
+            portal_gate: Arc::default(),
         }
     }
 
@@ -3251,9 +3256,10 @@ pub(crate) fn build(
         .layer(axum::Extension(authenticator))
         .layer(axum::Extension(sessions))
         // ADR-0036: the widget routes' authenticator.
-        .layer(axum::Extension(crate::auth::PortalExt(
-            state.portal.clone(),
-        ))) // clone: the Arc is shared
+        .layer(axum::Extension(crate::auth::PortalExt {
+            portal: state.portal.clone(), // clone: the Arc is shared
+            gate: Arc::clone(&state.portal_gate),
+        }))
         // ADR-0036: the widget routes answer failures in the portal's envelope.
         .layer(middleware::from_fn(routes::portal_widgets::envelope_errors))
         .layer(axum::Extension(crate::act_as::ActAsExt {

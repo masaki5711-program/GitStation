@@ -92,6 +92,10 @@ impl Pipelines {
     /// person holds a role on), each decided, at most 24, in the order
     /// asked (newest first without a setting). A project asked for that the
     /// person may not read is left out, as an absent one (never a hint).
+    ///
+    /// The candidates are ids only (one statement, at most 200); their
+    /// records are loaded 24 at a time and only until 24 are shown (review
+    /// D2) — one load in the usual case, where a member may read.
     pub async fn portal_lamps(
         &self,
         proof: &Authorized<PortalWidgetCtx>,
@@ -104,12 +108,21 @@ impl Pipelines {
             Some(asked) => asked.iter().copied().take(MAX_STATUS_ITEMS).collect(),
             None => db_portal::member_projects(&self.db, user, MAX_OPTIONS).await?,
         };
-        let mut records = forge_db::lists::project_records(&self.db, &ids, user).await?;
-        records.sort_by_key(|r| ids.iter().position(|id| *id == r.id).unwrap_or(usize::MAX));
-        let shown: Vec<ProjectRecord> = Self::visible(proof, records)
-            .into_iter()
-            .take(MAX_STATUS_ITEMS)
-            .collect();
+        let mut shown: Vec<ProjectRecord> = Vec::with_capacity(MAX_STATUS_ITEMS.min(ids.len()));
+        for chunk in ids.chunks(MAX_STATUS_ITEMS) {
+            let mut records = forge_db::lists::project_records(&self.db, chunk, user).await?;
+            records.sort_by_key(|r| {
+                chunk
+                    .iter()
+                    .position(|id| *id == r.id)
+                    .unwrap_or(usize::MAX)
+            });
+            shown.extend(Self::visible(proof, records));
+            if shown.len() >= MAX_STATUS_ITEMS {
+                shown.truncate(MAX_STATUS_ITEMS);
+                break;
+            }
+        }
         let shown_ids: Vec<ProjectId> = shown.iter().map(|r| r.id).collect();
         let lamps: Vec<(Lamp, Option<String>)> = match show {
             Show::Pipeline => db_portal::latest_pipelines(&self.db, &shown_ids, MAIN_REF)

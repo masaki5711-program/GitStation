@@ -724,18 +724,14 @@ pub async fn record_state(db: &Db, new: &NewState<'_>) -> Result<bool, ForgeErro
         .await
         .map_err(|e| query_error(QUERY, e))?;
         if changed && new.state == "stopped" && db.portal_news().is_some() {
-            let author: Option<i64> =
-                sqlx::query_scalar("SELECT author_id FROM forge.merge_requests WHERE id = $1")
+            // One read for both facts of the news item.
+            let facts: Option<(i64, i64)> =
+                sqlx::query_as("SELECT author_id, iid FROM forge.merge_requests WHERE id = $1")
                     .bind(new.merge_request.get())
                     .fetch_optional(&mut *tx)
                     .await
                     .map_err(|e| query_error(QUERY, e))?;
-            let iid: Option<i64> =
-                sqlx::query_scalar("SELECT iid FROM forge.merge_requests WHERE id = $1")
-                    .bind(new.merge_request.get())
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(|e| query_error(QUERY, e))?;
+            let (author, iid) = (facts.map(|f| f.0), facts.map(|f| f.1));
             let draft = crate::portal::NewsDraft {
                 source_id: forge_core::portal::auto_merge_source_id(
                     new.merge_request.get(),

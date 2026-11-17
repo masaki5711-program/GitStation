@@ -350,8 +350,14 @@ pub(crate) async fn authenticate(
     // only (and no other route ever does: their tokens are no personal
     // access tokens, so the token authenticator refuses them).
     if action == forge_auth::Action::PortalWidgetRead {
-        return match authenticate_portal(&mut req).await {
-            Ok(()) => next.run(req).await,
+        let portal = req.extensions().get::<PortalExt>().cloned();
+        return match authenticate_portal(&mut req, portal.as_ref()).await {
+            Ok(running) => {
+                let res = next.run(req).await;
+                // The gate's place is held until the answer is produced.
+                drop(running);
+                res
+            }
             Err(res) => *res,
         };
     }
@@ -615,10 +621,14 @@ pub(crate) async fn authenticate_request(
     }
 }
 
-/// The portal's authenticator, as a request extension (`app::build`; `None`:
-/// `portal.enabled` is off or the sign-in is not configured).
+/// The portal's authenticator (`None`: `portal.enabled` is off or the
+/// sign-in is not configured) and the widget routes' gate, as a request
+/// extension (`app::build`).
 #[derive(Clone)]
-pub(crate) struct PortalExt(pub(crate) Option<Arc<dyn forge_core::portal::PortalAuthenticator>>);
+pub(crate) struct PortalExt {
+    pub(crate) portal: Option<Arc<dyn forge_core::portal::PortalAuthenticator>>,
+    pub(crate) gate: Arc<crate::routes::portal_widgets::WidgetGate>,
+}
 
 /// The widget routes' authentication (ADR-0036 §2): exactly one
 /// `Authorization: Bearer` (cookies are not looked at: the portal calls
@@ -628,7 +638,16 @@ pub(crate) struct PortalExt(pub(crate) Option<Arc<dyn forge_core::portal::Portal
 /// `forge.auth.token_rejected`: `FG-AUTH-0026` (the token, `bearer_required`,
 /// `portal_disabled`), `FG-AUTH-0027` (no linked user); an outage
 /// (`FG-AUTH-0015`, `FG-DB-0001`) passes through unchanged.
-async fn authenticate_portal(req: &mut Request) -> Result<(), Box<Response>> {
+///
+/// Review S3: before the token is verified (and the person looked up) the
+/// request takes a place in the widget gate — `FG-WEB-0010
+/// route=portal_widgets` with `Retry-After` when there is none, logged once
+/// by the renderer. The place is returned: the caller holds it until the
+/// answer is produced.
+async fn authenticate_portal<'g>(
+    req: &mut Request,
+    ext: Option<&'g PortalExt>,
+) -> Result<crate::routes::specs::Running<'g>, Box<Response>> {
     let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
     let Some(request_id) = req.extensions().get::<RequestId>().cloned() else {
         return Err(Box::new(
@@ -657,8 +676,16 @@ async fn authenticate_portal(req: &mut Request) -> Result<(), Box<Response>> {
     if req.extensions().get::<Principal>().is_some() {
         return Err(refuse("ambiguous", Some(Scheme::Bearer), request_id));
     }
-    let Some(PortalExt(Some(portal))) = req.extensions().get::<PortalExt>().cloned() else {
+    let Some((portal, gate)) = ext.and_then(|e| e.portal.as_ref().map(|p| (p, &e.gate))) else {
         return Err(refuse("portal_disabled", Some(Scheme::Bearer), request_id));
+    };
+    let running = match gate.enter(std::time::Instant::now()) {
+        Ok(running) => running,
+        Err(err) => {
+            return Err(Box::new(
+                ApiError::new(err, request_id, lang).into_response(),
+            ))
+        }
     };
     match portal
         .authenticate_portal(&request_id, &presented.token)
@@ -676,7 +703,7 @@ async fn authenticate_portal(req: &mut Request) -> Result<(), Box<Response>> {
             ));
             // The credential has done its job: no handler can echo or log it.
             req.headers_mut().remove(AUTHORIZATION);
-            Ok(())
+            Ok(running)
         }
         Err(err)
             if matches!(

@@ -89,13 +89,14 @@ async fn a_portal_token_names_the_linked_person_and_its_facts() {
         .expect("verified");
     assert_eq!(ok.user_id, person);
     assert!(ok.active && ok.portal_party && ok.access_role);
-    // Another party's token (the gitstation client's own) is verified, and
-    // its party is reported for authorize() to refuse.
+    // Another party's token (the gitstation client's own) is refused by
+    // the verification itself, although this person is linkable.
     let own = portal
         .authenticate_portal(&rid, &token(&op, json!({ "azp": "gitstation" })))
         .await
-        .expect("verified");
-    assert!(!own.portal_party);
+        .expect_err("another client's token");
+    assert_eq!(own.code(), ErrorCode::PortalTokenInvalid, "{own}");
+    assert_eq!(reason(&own), "azp", "{own}");
     // No access role on gitstation.
     let bare = portal
         .authenticate_portal(&rid, &token(&op, json!({ "resource_access": {} })))
@@ -143,6 +144,56 @@ async fn a_bad_portal_token_is_portal_token_invalid() {
         .await
         .expect_err("forged");
     assert_eq!(err.code(), ErrorCode::PortalTokenInvalid);
+}
+
+/// Review S2: the party is compared before the person is looked up. A
+/// validly signed token of another client for a person GitStation does not
+/// know answers "bad token" (`reason=azp`), not "not linked": the lookup
+/// (which would say `FG-AUTH-0027`) is never reached, so another client
+/// cannot use the widget routes to ask who has an account.
+#[tokio::test]
+async fn another_clients_token_never_reaches_the_user_lookup() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let portal = widgets(&t, &op);
+    let rid = RequestId::generate();
+    for party in ["gitstation", "some-other-app", "Portal", "portal "] {
+        let err = portal
+            .authenticate_portal(&rid, &token(&op, json!({ "azp": party })))
+            .await
+            .expect_err("another client's token");
+        assert_eq!(err.code(), ErrorCode::PortalTokenInvalid, "{party}: {err}");
+        assert_eq!(reason(&err), "azp", "{party}: {err}");
+    }
+    // The same person with the portal's own token IS looked up (and is
+    // not linked): the difference above is the party alone.
+    let unknown = portal
+        .authenticate_portal(&rid, &token(&op, json!({})))
+        .await
+        .expect_err("nobody has the number");
+    assert_eq!(unknown.code(), ErrorCode::PortalUserNotLinked);
+}
+
+/// Review S1: `auth.oidc.link_auth_sources` binds the widget routes as it
+/// binds the sign-in.
+#[tokio::test]
+async fn a_portal_user_of_a_source_that_is_not_linkable_is_refused() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    staff(&t, "pfsperson", "syn9001").await; // a local account
+    let mut settings = op.settings(BASE);
+    settings.claims_source = OidcClaimsSource::AccessToken;
+    settings.employee_number_claim = "staff_id".to_owned();
+    settings.link_auth_sources = vec!["ldap".to_owned()];
+    settings.timeouts.fetch = Duration::from_secs(2);
+    let oidc = Arc::new(Oidc::new(settings, &web_keys(), t.db.clone()).expect("oidc"));
+    let portal = PortalWidgets::new(oidc, "portal");
+    let err = portal
+        .authenticate_portal(&RequestId::generate(), &token(&op, json!({})))
+        .await
+        .expect_err("a local account is not linkable here");
+    assert_eq!(err.code(), ErrorCode::PortalUserNotLinked);
+    assert_eq!(reason(&err), "auth_source_not_linkable");
 }
 
 #[tokio::test]

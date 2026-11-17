@@ -9,7 +9,10 @@
 //! [`Db::portal_news`] is `None` (`portal.enabled` / `portal.news_enabled`
 //! off: nothing is written). The sender (forge-integ) reads the row
 //! ([`news`]), the audience's staff ids ([`audience`]) and records the
-//! outcome ([`record_sent`], [`record_attempt`], [`record_final`]).
+//! outcome ([`record_sent`], [`record_attempt`], [`record_final`]). A row
+//! whose job ended without recording one (the job dead-lettered after an
+//! expired lease, or the database failed on its last attempt) is ended by
+//! the hourly [`sweep_orphaned`], so no row stays `pending` for ever.
 //!
 //! **Widgets.** Candidates only, never a decision: the projects where the
 //! person holds a membership ([`member_projects`]), and the newest pipeline
@@ -26,6 +29,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{json, Value};
 use sqlx::PgConnection;
 
+use crate::identities::{staff_id_ok, LinkRules};
 use crate::jobs::{enqueue_on, DedupKey, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::roles::CAP;
 use crate::{query_error, read_query_error, Db};
@@ -411,17 +415,77 @@ pub async fn purge_finished(db: &Db, limit: i64) -> Result<u64, ForgeError> {
     .await
 }
 
+/// A `pending` row [`sweep_orphaned`] ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SweptNews {
+    pub id: i64,
+    pub source_id: String,
+    pub attempts: i32,
+    /// The request id of the change that staged it.
+    pub request_id: String,
+}
+
+/// End at most `limit` `pending` rows that no job will send any more —
+/// their `portal.news_send` job is neither queued nor running (it
+/// dead-lettered after an expired lease, or the database failed on its
+/// last attempt before the sender could record the end): `failed` with
+/// `reason = tries_used_up` and `FG-INT-0023`. Returns the rows it ended,
+/// oldest first, each exactly once (the caller logs them); a row whose job
+/// is still alive is never touched (the row and its job are staged in one
+/// transaction, so a fresh row always has one).
+pub async fn sweep_orphaned(db: &Db, limit: i64) -> Result<Vec<SweptNews>, ForgeError> {
+    const QUERY: &str = "portal.news.sweep";
+    let rows: Vec<(i64, String, i32, String)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "UPDATE forge.portal_news AS n SET state = 'failed', reason = 'tries_used_up', \
+                 last_error_code = $2, updated_at = now() \
+                 FROM (SELECT p.id FROM forge.portal_news p \
+                        WHERE p.state = 'pending' AND NOT EXISTS ( \
+                          SELECT 1 FROM ONLY forge.jobs j \
+                           WHERE j.kind = $3 AND j.dedup_key IS NOT NULL \
+                             AND j.dedup_key = 'portal-news:' || p.id::text \
+                             AND j.state <> 'dead' AND j.state IN ('queued', 'running')) \
+                        ORDER BY p.id LIMIT $1 FOR UPDATE OF p SKIP LOCKED) AS orphan \
+                 WHERE n.id = orphan.id AND n.state = 'pending' \
+                 RETURNING n.id, n.source_id, n.attempts, n.request_id",
+            )
+            .bind(limit)
+            .bind(ErrorCode::PortalNewsUndeliverable.id())
+            .bind(NEWS_JOB)
+            .fetch_all(db.write_pool())
+            .await
+            .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
+    let mut swept: Vec<SweptNews> = rows
+        .into_iter()
+        .map(|(id, source_id, attempts, request_id)| SweptNews {
+            id,
+            source_id,
+            attempts,
+            request_id,
+        })
+        .collect();
+    swept.sort_by_key(|s| s.id);
+    Ok(swept)
+}
+
 /// The people who hold a role on `project` — direct members, members of a
 /// group above it, the owner of its personal namespace — at most
 /// [`MAX_AUDIENCE`], by id: the audience of a spec release (each is decided
-/// again with `authorize()` when it is sent).
+/// again with `authorize()` when it is sent). More than that is logged once
+/// (`forge.portal.news_audience_truncated`): the people beyond the limit
+/// are not told.
 pub(crate) async fn project_people(
     conn: &mut PgConnection,
     project: ProjectId,
+    request_id: &RequestId,
 ) -> Result<Vec<UserId>, ForgeError> {
     const QUERY: &str = "portal.news.project_people";
-    let limit = i64::try_from(MAX_AUDIENCE).unwrap_or(200);
-    let rows: Vec<i64> = sqlx::query_scalar(
+    // One more than the limit, only to know whether it was reached.
+    let limit = i64::try_from(MAX_AUDIENCE).unwrap_or(200).saturating_add(1);
+    let mut rows: Vec<i64> = sqlx::query_scalar(
         "WITH RECURSIVE up (id, parent_id, step) AS ( \
            SELECT n.id, n.parent_id, 0 FROM forge.namespaces n \
             WHERE n.kind = 'project' AND n.owner_id = $1 \
@@ -442,6 +506,17 @@ pub(crate) async fn project_people(
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| query_error(QUERY, e))?;
+    if rows.len() > MAX_AUDIENCE {
+        rows.truncate(MAX_AUDIENCE);
+        tracing::warn!(
+            target: "forge_db",
+            event = "forge.portal.news_audience_truncated",
+            request_id = %request_id,
+            project_id = project.get(),
+            limit = MAX_AUDIENCE,
+            "a project has more people than one portal news item is addressed to"
+        );
+    }
     Ok(rows.into_iter().map(UserId::new).collect())
 }
 
@@ -466,18 +541,26 @@ fn fits(value: &str) -> bool {
 }
 
 /// The user of a portal access token (ADR-0036 §2), by the sign-in's link
-/// rules (`identities::login_decided` with `LinkRules::EmployeeNumberOnly`)
-/// but **read-only** — a widget call never links or creates a user:
+/// rules (`identities::login_decided`) but **read-only** — a widget call
+/// never links or creates a user:
 ///
 /// 1. `(issuer, subject)` is linked → that user (whatever their state:
 ///    `authorize()` refuses a disabled one);
-/// 2. otherwise the employee number, trimmed and without the case:
-///    missing → `employee_number_missing`; nobody → `unlinked`; two →
+/// 2. otherwise, only under [`LinkRules::EmployeeNumberOnly`] (the sign-in
+///    of `auth.oidc.claims_source = access_token`), the employee number,
+///    trimmed and without the case, refused in the sign-in's order:
+///    missing → `employee_number_missing`; not `[A-Za-z0-9_-]{1,32}` →
+///    `employee_number_format`; nobody → `unlinked`; two →
 ///    `employee_number_ambiguous`; `auto_link` off → `auto_link_disabled`;
-///    a user linked to another subject of this issuer →
-///    `employee_number_linked`; an administrator → `privileged_account`
-///    (the sign-in would not link either); otherwise that user — the one
-///    the next sign-in would link.
+///    a user who has an identity of any issuer → `employee_number_linked`;
+///    an administrator → `privileged_account`; a user whose `auth_source`
+///    is not in `auth.oidc.link_auth_sources` → `auth_source_not_linkable`;
+///    otherwise that user — the one the next sign-in would link.
+///
+/// Under [`LinkRules::VerifiedEmail`] (`claims_source = id_token`) the
+/// sign-in links by the number **and** a verified e-mail, which a widget
+/// call cannot check: only a linked person is found, anyone else is
+/// `sign_in_required`.
 ///
 /// Every refusal is `FG-AUTH-0027` with `reason`; the subject and the
 /// number are never in it. The write pool (the employee number is not
@@ -488,6 +571,7 @@ pub async fn portal_user(
     subject: &str,
     employee_number: Option<&str>,
     auto_link: bool,
+    rules: LinkRules,
 ) -> Result<PortalUser, ForgeError> {
     const QUERY: &str = "portal.user";
     if !fits(issuer) || !fits(subject) {
@@ -517,20 +601,28 @@ pub async fn portal_user(
     if let Some((id, kind, state)) = linked {
         return to_user(id, &kind, &state);
     }
+    let sources = match rules {
+        LinkRules::EmployeeNumberOnly { auth_sources } => auth_sources,
+        LinkRules::VerifiedEmail => return Err(not_linked("sign_in_required")),
+    };
     let Some(number) = employee_number.map(str::trim).filter(|e| !e.is_empty()) else {
         return Err(not_linked("employee_number_missing"));
     };
-    let mut holders: Vec<(i64, String, String, bool, bool)> = db
+    if !staff_id_ok(number) {
+        return Err(not_linked("employee_number_format"));
+    }
+    // As the sign-in under EmployeeNumberOnly: an identity of ANY issuer
+    // counts as linked (the number alone never moves a bound account).
+    let mut holders: Vec<(i64, String, String, bool, bool, String)> = db
         .within(QUERY, async {
             sqlx::query_as(
                 "SELECT u.id, u.kind, u.state, u.is_admin, \
-                 EXISTS (SELECT 1 FROM forge.user_identities i \
-                         WHERE i.user_id = u.id AND i.issuer = $2) \
+                 EXISTS (SELECT 1 FROM forge.user_identities i WHERE i.user_id = u.id), \
+                 u.auth_source \
                  FROM forge.users u WHERE upper(u.employee_number) = upper($1) \
                  ORDER BY u.id LIMIT 2",
             )
             .bind(number)
-            .bind(issuer)
             .fetch_all(db.write_pool())
             .await
             .map_err(|e| query_error(QUERY, e))
@@ -539,7 +631,7 @@ pub async fn portal_user(
     if holders.len() > 1 {
         return Err(not_linked("employee_number_ambiguous"));
     }
-    let Some((id, kind, state, is_admin, has_identity)) = holders.pop() else {
+    let Some((id, kind, state, is_admin, has_identity, auth_source)) = holders.pop() else {
         return Err(not_linked("unlinked"));
     };
     if !auto_link {
@@ -550,6 +642,9 @@ pub async fn portal_user(
     }
     if is_admin {
         return Err(not_linked("privileged_account"));
+    }
+    if !sources.allows(&auth_source) {
+        return Err(not_linked("auth_source_not_linkable"));
     }
     to_user(id, &kind, &state)
 }

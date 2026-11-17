@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-A portal news item (ADR-0036) was given up: the last of `portal.max_attempts` runs failed (`reason=tries_used_up`, with `last_reason`), or the portal refused the payload for good (400, 404, 409, 413 or 422: `reason=refused`, with `status`). The row is `failed` and is not sent again automatically. People still see the event in GitStation itself; only the portal's news list misses it.
+A portal news item (ADR-0036) was given up: the last of `portal.max_attempts` runs failed (`reason=tries_used_up`, with `last_reason`), or the portal refused the payload for good (400, 404, 409, 413 or 422: `reason=refused`, with `status`), or the row's job ended without recording an outcome — the database failed on its last attempt, or its lease expired at the attempt cap — and the worker's hourly sweep found the `pending` row without a queued or running job (`reason=tries_used_up detail=job_ended`; no row stays `pending` for ever). The row is `failed` and is not sent again automatically. People still see the event in GitStation itself; only the portal's news list misses it.
 
 ## 調べ方 (diagnosis)
 
-The log event `forge.portal.news_failed` with `news_id`, `source_id`, `reason`, `last_reason`, `status`, `attempts`. The `forge doctor` line `portal.news` counts the failed rows of the last 24 hours. On the database (read-only): the `failed` rows of forge.portal_news with topic, attempts, last_error_code, last_status and updated_at.
+The log event `forge.portal.news_failed` with `news_id`, `source_id`, `reason`, `last_reason`, `status`, `attempts` (the sweep's: `detail=job_ended`, under the request id of the change that staged the row; the job's own end is the `portal.news_send` job's `FG-DB-0006` or `FG-DB-0007`, or the `FG-INT-0022` before it). The `forge doctor` line `portal.news` counts the failed rows of the last 24 hours. On the database (read-only): the `failed` rows of forge.portal_news with topic, attempts, last_error_code, last_status and updated_at.
 
 ## 対処 (fix)
 

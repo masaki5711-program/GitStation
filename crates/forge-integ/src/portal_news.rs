@@ -266,6 +266,21 @@ fn attempt_error(news: &StoredNews, (attempt, max): (i32, i32), why: &Why) -> Fo
     e
 }
 
+/// A database failure of a run as the job's failure: retried — but on the
+/// job's last attempt it ends the job at once (`Retry::Never`), because
+/// nothing would run it again. The row may then still be `pending` (the
+/// database that failed is the one that records the end); the worker's
+/// hourly sweep ends it (`forge_db::portal::sweep_orphaned`, `FG-INT-0023`).
+fn db_failure(last_attempt: bool) -> impl Fn(ForgeError) -> JobFailure {
+    move |e| {
+        if last_attempt {
+            JobFailure::permanent(e)
+        } else {
+            JobFailure::retry(e)
+        }
+    }
+}
+
 /// Why an attempt did not end with 202.
 struct Why {
     reason: &'static str,
@@ -276,6 +291,8 @@ impl Inner {
     async fn run(&self, job: ClaimedJob) -> Result<(), JobFailure> {
         let request_id = job.request_id();
         let attempt = job.lease.attempt;
+        let last_attempt = attempt >= job.max_attempts;
+        let db_failed = db_failure(last_attempt);
         let id = job
             .payload
             .get("news_id")
@@ -287,20 +304,17 @@ impl Inner {
                         .with_context("job", NEWS_JOB),
                 )
             })?;
-        let Some(news) = db_portal::news(&self.db, id)
-            .await
-            .map_err(JobFailure::retry)?
-        else {
+        let Some(news) = db_portal::news(&self.db, id).await.map_err(&db_failed)? else {
             return Ok(());
         };
         if news.state != "pending" {
             return Ok(());
         }
-        let (staff_ids, path) = self.audience(&news).await.map_err(JobFailure::retry)?;
+        let (staff_ids, path) = self.audience(&news).await.map_err(&db_failed)?;
         let Some(path) = path.filter(|_| !staff_ids.is_empty()) else {
             db_portal::record_final(&self.db, id, "dropped", "no_audience", attempt, None, None)
                 .await
-                .map_err(JobFailure::retry)?;
+                .map_err(&db_failed)?;
             tracing::info!(
                 target: "forge_integ",
                 event = "forge.portal.news_dropped",
@@ -325,7 +339,7 @@ impl Inner {
                 Posted::Answered(202) => {
                     db_portal::record_sent(&self.db, id, attempt)
                         .await
-                        .map_err(JobFailure::retry)?;
+                        .map_err(&db_failed)?;
                     tracing::info!(
                         target: "forge_integ",
                         event = "forge.portal.news_sent",
@@ -339,7 +353,8 @@ impl Inner {
                 Posted::Answered(status) if refused_for_good(status) => {
                     return self
                         .give_up(&news, attempt, "refused", Some(status), &request_id)
-                        .await;
+                        .await
+                        .map_err(&db_failed);
                 }
                 Posted::Answered(status) => {
                     if matches!(status, 401 | 403) {
@@ -356,12 +371,13 @@ impl Inner {
                 },
             },
         };
-        if attempt >= job.max_attempts {
+        if last_attempt {
             let last = attempt_error(&news, (attempt, job.max_attempts), &why);
             telemetry::log_failure(&last, &request_id);
             return self
                 .give_up(&news, attempt, "tries_used_up", why.status, &request_id)
-                .await;
+                .await
+                .map_err(&db_failed);
         }
         db_portal::record_attempt(
             &self.db,
@@ -371,7 +387,7 @@ impl Inner {
             ErrorCode::PortalNewsAttemptFailed,
         )
         .await
-        .map_err(JobFailure::retry)?;
+        .map_err(&db_failed)?;
         // The job runner logs it once, with the event's request id.
         Err(JobFailure::retry(attempt_error(
             &news,
@@ -381,6 +397,8 @@ impl Inner {
     }
 
     /// `failed` with `reason`, logged once as `FG-INT-0023` (the job ends).
+    /// `Err`: the database did not record it (nothing is logged here; the
+    /// caller decides whether the job runs again).
     async fn give_up(
         &self,
         news: &StoredNews,
@@ -388,7 +406,7 @@ impl Inner {
         reason: &'static str,
         status: Option<u16>,
         request_id: &forge_core::RequestId,
-    ) -> Result<(), JobFailure> {
+    ) -> Result<(), ForgeError> {
         db_portal::record_final(
             &self.db,
             news.id,
@@ -398,8 +416,7 @@ impl Inner {
             status,
             Some(ErrorCode::PortalNewsUndeliverable),
         )
-        .await
-        .map_err(JobFailure::retry)?;
+        .await?;
         let mut e = ForgeError::new(ErrorCode::PortalNewsUndeliverable)
             .with_context("event", "forge.portal.news_failed")
             .with_context("news_id", news.id)

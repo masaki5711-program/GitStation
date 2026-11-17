@@ -10,11 +10,14 @@
 //! disabled person, `FG-AUTH-0027` for an unlinked person, `FG-AUTH-0026`
 //! for a bad token, a cookie, or the portal off, 422 for invalid settings
 //! (unknown keys ignored), the limit, the locale, another person's and a
-//! private project's rows never appearing, and a portal token refused on a
-//! route that is not a widget's. Synthetic data only.
+//! private project's rows never appearing, a portal token refused on a
+//! route that is not a widget's, and the widget gate (429 with
+//! `Retry-After` and `no-store`, before the token is checked). Synthetic
+//! data only.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -32,6 +35,7 @@ use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::{Git, GitConfig, StorageRoot};
 use forge_pipelines::{CopyMark, MarkFuture, MarkMeter, Pipelines};
 use forge_review::{BranchProbe, Review};
+use forge_web::routes::portal_widgets::WidgetGate;
 use forge_web::{AppConfig, AppState, Lookups};
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -116,6 +120,8 @@ struct World {
     web: ProjectId,
     secret: ProjectId,
     portal: Option<Arc<dyn PortalAuthenticator>>,
+    /// The widget gate of every router built (`None`: the product's).
+    gate: Option<Arc<WidgetGate>>,
     _dirs: (tempfile::TempDir, tempfile::TempDir),
     git: Git,
     storage: StorageRoot,
@@ -262,6 +268,7 @@ impl World {
             web,
             secret,
             portal: Some(Arc::new(FakePortal(tokens))),
+            gate: None,
             _dirs: (home, root),
             git,
             storage,
@@ -292,6 +299,9 @@ impl World {
         if let Some(portal) = &self.portal {
             state = state.with_portal(Arc::clone(portal));
         }
+        if let Some(gate) = &self.gate {
+            state.portal_gate = Arc::clone(gate);
+        }
         forge_web::app(state, AppConfig::default()).expect("router")
     }
 
@@ -311,6 +321,39 @@ impl World {
         let bearer = format!("Bearer {token}");
         self.get(uri, &[("authorization", bearer.as_str())]).await
     }
+
+    /// As [`World::as_token`], with the answer's `Retry-After` and
+    /// `Cache-Control`.
+    async fn as_token_with_headers(&self, uri: &str, token: &str) -> Answer {
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("request");
+        let res = self.router().oneshot(req).await.expect("infallible");
+        let header = |name: &str| {
+            res.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        let (retry_after, cache_control) = (header("retry-after"), header("cache-control"));
+        let status = res.status();
+        let raw = res.into_body().collect().await.expect("body").to_bytes();
+        Answer {
+            answer: (status, serde_json::from_slice(&raw).unwrap_or(Value::Null)),
+            retry_after,
+            cache_control,
+        }
+    }
+}
+
+/// An answer with the two headers the gate's tests read.
+struct Answer {
+    answer: (StatusCode, Value),
+    retry_after: Option<String>,
+    cache_control: Option<String>,
 }
 
 /// The data of a successful answer (and its envelope's common fields).
@@ -551,4 +594,52 @@ async fn a_portal_token_is_refused_on_every_other_route() {
         // Not the portal's envelope: an ordinary route's answer.
         assert!(a.1.get("success").is_none());
     }
+}
+
+/// Review S3: the widget routes are gated before the token is verified —
+/// a request over the gate is `429 FG-WEB-0010` with `Retry-After` whatever
+/// its token (a forged one would otherwise be 401: the authenticator, and
+/// with it the person's lookup, is not reached). Review S4: the refusal is
+/// `no-store`.
+#[tokio::test]
+async fn the_widget_routes_are_gated_before_the_token_is_checked() {
+    let mut w = World::new().await;
+    // No place among the running requests.
+    w.gate = Some(Arc::new(WidgetGate::new(0, 100, Duration::from_secs(60))));
+    for token in ["t-dave", "t-forged", "t-unlinked"] {
+        let a = w.as_token_with_headers(REVIEWS, token).await;
+        assert_eq!(a.answer.0, StatusCode::TOO_MANY_REQUESTS, "{token}");
+        assert_eq!(refused(&a.answer), "FG-WEB-0010", "{token}");
+        assert_eq!(a.retry_after.as_deref(), Some("1"), "{token}");
+        assert_eq!(a.cache_control.as_deref(), Some("no-store"), "{token}");
+    }
+    // Two requests a minute, whoever they are for and whatever they answer.
+    w.gate = Some(Arc::new(WidgetGate::new(8, 2, Duration::from_secs(60))));
+    let first = w.as_token_with_headers(REVIEWS, "t-dave").await;
+    assert_eq!(first.answer.0, StatusCode::OK, "{}", first.answer.1);
+    assert_eq!(
+        first.cache_control.as_deref(),
+        Some("private, max-age=30"),
+        "an answer is kept as before"
+    );
+    let second = w.as_token_with_headers(STOPPED, "t-forged").await;
+    assert_eq!(second.answer.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(second.cache_control.as_deref(), Some("no-store"));
+    for (uri, token) in [(PIPELINES, "t-olga"), (REVIEWS, "t-forged")] {
+        let a = w.as_token_with_headers(uri, token).await;
+        assert_eq!(a.answer.0, StatusCode::TOO_MANY_REQUESTS, "{uri} {token}");
+        assert_eq!(refused(&a.answer), "FG-WEB-0010", "{uri} {token}");
+        let retry: u64 = a
+            .retry_after
+            .as_deref()
+            .and_then(|v| v.parse().ok())
+            .expect("Retry-After in seconds");
+        assert!((1..=60).contains(&retry), "{retry}");
+        assert_eq!(a.cache_control.as_deref(), Some("no-store"));
+    }
+    // A request that is not the portal's shape is refused before the gate
+    // (nothing is verified for it), as before.
+    let none = w.get(REVIEWS, &[]).await;
+    assert_eq!(none.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(refused(&none), "FG-AUTH-0026");
 }
