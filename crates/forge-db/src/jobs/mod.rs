@@ -5,10 +5,18 @@
 //!   `queued` job; a `dedup_key` held by a queued, running or succeeded job
 //!   of the same kind is [`Enqueued::Deduped`]. A dead job does not hold its
 //!   key: its work can be enqueued again.
-//! - [`claim`] takes the oldest ready job in ONE autocommit statement
+//! - [`claim`] takes the next ready job in ONE autocommit statement
 //!   (`FOR UPDATE SKIP LOCKED`): `state = running`, `attempts + 1`,
 //!   `worker_id`, `lease_until = now() + timeout + 30 s`. Concurrent
-//!   claimers never get the same job.
+//!   claimers never get the same job. The order is a priority tier first
+//!   (`queue::priority_sql`: what the merge queue waits on before the bulk
+//!   recomputation a target push fans out; a job ready for 5 minutes is
+//!   raised to the default tier), then the oldest. [`claim_excluding`]
+//!   passes over the jobs whose [`ordering_key`] is running in this process.
+//! - A per-request job (mergeability, conflict scan) is enqueued with
+//!   `enqueue_superseding_on`: the queued jobs of older requests of the same
+//!   merge request are deleted in the same statement (at most one queued
+//!   job per merge request and kind; merge load test 2026-11-17, F2).
 //! - [`complete`] / [`fail`] / [`release`] are fenced by `(id, state =
 //!   running, worker_id, attempts)`: a worker whose lease was reaped and
 //!   re-claimed changes nothing ([`Completed::Fenced`] / [`Failed::Fenced`]
@@ -17,9 +25,12 @@
 //! - [`reap`] (every 30 s, ONE statement) ends expired leases: `dead` when
 //!   `attempts >= max_attempts` (`last_error_code = FG-DB-0007`), otherwise
 //!   `queued` again after the backoff.
-//! - [`JobRunner`] runs one job at a time with a [`JobHandler`] per kind
-//!   under `tokio::time::timeout(timeout_ms)` and reports dead jobs
-//!   (`FG-DB-0006`, alert) and lost leases (`FG-DB-0007`, warn).
+//! - [`JobRunner`] runs a job with a [`JobHandler`] per kind under
+//!   `tokio::time::timeout(timeout_ms)` and reports dead jobs (`FG-DB-0006`,
+//!   alert) and lost leases (`FG-DB-0007`, warn). Several runs of one runner
+//!   may run at once (`forge worker`'s slots): each kind has a cap
+//!   ([`JobRunner::limit_kind`]) and two jobs with the same [`ordering_key`]
+//!   (one merge request, one head) never run at once in the runner.
 //! - [`health`] is what `forge doctor` reports (`jobs.dead` → FG-DB-0006,
 //!   `jobs.expired_leases` / `jobs.queue_depth` → FG-DB-0017).
 //!
@@ -30,10 +41,12 @@
 //! idempotent or fenced by `lease.attempt`. Backoff after a failure or an
 //! expired lease: 10 s × 2^(attempt − 1), capped at 1 h.
 //!
-//! **One job at a time per worker (head-of-line):** a long job of one kind
-//! delays every other kind on that worker. Acceptable while the kinds are
-//! few and short; revisit (a runner per kind or a bounded pool) before the
-//! seal (C8) and retention jobs land.
+//! **Bounded parallelism (merge load test 2026-11-17, F2):** `forge worker`
+//! runs its main runner in `review.worker_job_concurrency` slots (default
+//! 4, at most half the write pool); the per-kind caps keep one slow kind
+//! (the conflict scan: 1) from taking every slot. The ordering keys are
+//! per process: two `forge worker` processes may still run two jobs of one
+//! merge request at once (one worker per instance today).
 //!
 //! **Scale (plan 01 §3.10, the factory IoT edge fleet):** this queue is for
 //! internal work — tens of kinds, a backlog of hundreds. It must never hold
@@ -54,8 +67,11 @@ mod runner;
 
 pub use doctor::{health, ExpiredLease, JobsHealth, KindDepth, NewestDead};
 pub use doctor::{DEAD_WINDOW, LEASE_GRACE, QUEUE_DEPTH_ALERT, QUEUE_WAIT_ALERT};
-pub use queue::{claim, complete, enqueue, fail, reap, release, REAP_BATCH};
-pub(crate) use queue::{enqueue_after_on, enqueue_on};
+pub use queue::{
+    claim, claim_excluding, complete, enqueue, fail, ordering_key, reap, release,
+    PRIORITY_AGING_SECS, REAP_BATCH,
+};
+pub(crate) use queue::{enqueue_after_on, enqueue_on, enqueue_superseding_on, supersede_queued_on};
 pub use reports::{Ran, Reported};
 pub use runner::{JobFuture, JobHandler, JobRunner, ABORT_WAIT, RELEASE_TIMEOUT};
 
@@ -309,6 +325,8 @@ pub(crate) mod runner_stop_tests;
 mod runner_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod throughput_tests;
 #[cfg(test)]
 mod unit {
     use super::*;

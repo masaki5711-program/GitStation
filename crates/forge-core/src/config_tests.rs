@@ -1472,6 +1472,41 @@ fn review_mergeability_fanout_has_a_default_env_and_a_range() {
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
 
+/// `review.worker_job_concurrency` (merge load test 2026-11-17, F2):
+/// default 4, cut to half the write pool when unset; a set value is
+/// 1..=16 and at most half the write pool (FG-SYS-0002 naming the key).
+#[test]
+fn review_worker_job_concurrency_is_bounded_by_half_the_write_pool() {
+    const KEY: &str = "FORGE_REVIEW_WORKER_JOB_CONCURRENCY";
+    const POOL: &str = "FORGE_DATABASE_WRITE_MAX_CONNECTIONS";
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.review.worker_job_concurrency, 4);
+    // The production example's pool of 5: the default becomes 2.
+    let cfg = load(None, &env(&[(POOL, "5")])).expect("small pool");
+    assert_eq!(cfg.review.worker_job_concurrency, 2);
+    let cfg = load(None, &env(&[(POOL, "1")])).expect("tiny pool");
+    assert_eq!(cfg.review.worker_job_concurrency, 1);
+    for (pool, value, n) in [("10", "1", 1), ("10", "5", 5), ("40", "16", 16)] {
+        let cfg = load(None, &env(&[(POOL, pool), (KEY, value)])).expect(value);
+        assert_eq!(cfg.review.worker_job_concurrency, n);
+    }
+    for (pool, value, reason) in [
+        ("10", "0", "below_min"),
+        ("40", "17", "above_max"),
+        ("10", "6", "above_half_write_pool"),
+        ("5", "3", "above_half_write_pool"),
+        ("10", "four", "invalid"),
+    ] {
+        let err = load(None, &env(&[(POOL, pool), (KEY, value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("review.worker_job_concurrency") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}
+
 /// `feed.require_sink_compare` (M3 I1c, plan 11 Q1): `false` by default
 /// and when set so; `true` cannot take effect before the seal sink exists,
 /// so it is refused (`reason=unsupported`), as is any other value.

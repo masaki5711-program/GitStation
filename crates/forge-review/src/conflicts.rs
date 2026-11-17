@@ -5,7 +5,10 @@
 //!
 //! One scan is about one merge request M (its recorded head H, its target
 //! branch T) and every other open merge request on T — **drafts included** —
-//! the [`ScanLimits::peers_max`] most recently updated:
+//! at most [`ScanLimits::peers_max`] of them. With more peers than that the
+//! scan reads T's tip only and is stored `incomplete peers_capped` with no
+//! pair (merge load test 2026-11-17, F3: reading 50 peers took 5–15 s for
+//! a result that is incomplete anyway); otherwise:
 //!
 //! 1. [`forge_db::review::begin_scan`]: a run whose `scan_seq` is no longer
 //!    the latest stops (`superseded`); otherwise the row is `scanning`.
@@ -446,6 +449,23 @@ impl ConflictPredictor {
                 }
             }
         };
+        // More peers than the cap (merge load test 2026-11-17, F3): the
+        // scan would be `incomplete peers_capped` whatever the pairs say,
+        // after up to three git reads per peer (5–15 s). Stop here, after
+        // the tip only (the stored row names the target it is about).
+        if i64::try_from(peers.len()).unwrap_or(i64::MAX) < total_peers {
+            return done(ScanResult {
+                status: ScanStatus::Incomplete,
+                reason: Some("peers_capped"),
+                head: Some(head.clone()), // clone: the result owns its ids
+                target_branch: target.clone(), // clone: as above
+                target_sha: Some(tip),
+                peers: i32_of(peers.len()),
+                pairs_tried: 0,
+                pairs_skipped: i32::try_from(total_peers).unwrap_or(i32::MAX),
+                pairs: Vec::new(),
+            });
+        }
         let (own_base, own, own_deleted) = match self.changed(repo, &tip, head, deadline).await {
             Ok(SideRead::Paths {
                 base,
@@ -580,15 +600,13 @@ impl ConflictPredictor {
                 }
             }
         }
-        let peers_capped = i64::try_from(peers.len()).unwrap_or(i64::MAX) < total_peers;
+        // `peers_capped` returned before any pair was read.
         let reason = if pair_failed {
             Some("pair_failed")
         } else if budget_out {
             Some("budget_exhausted")
         } else if capped {
             Some("pairs_capped")
-        } else if peers_capped {
-            Some("peers_capped")
         } else {
             None
         };

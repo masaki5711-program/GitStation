@@ -6,7 +6,7 @@ use forge_errors::ForgeError;
 use sqlx::postgres::PgConnection;
 
 use super::conflict_scan_job;
-use crate::jobs::{enqueue_on, Enqueued};
+use crate::jobs::{enqueue_superseding_on, Enqueued};
 use crate::{query_error, Db};
 
 /// Request a scan of `mr` on `conn`, the caller's transaction: the row is
@@ -47,7 +47,9 @@ async fn bump_and_enqueue(
     .await
     .map_err(|e| query_error("review.conflict_scan_request", e))?;
     let job = conflict_scan_job(mr, seq, origin, origin_event_seq)?;
-    if let Enqueued::Deduped = enqueue_on(conn, &job).await? {
+    // One queued scan per merge request (merge load test 2026-11-17, F2):
+    // the queued jobs of older requests are replaced.
+    if let Enqueued::Deduped = enqueue_superseding_on(conn, &job, mr.get()).await?.enqueued {
         // A fresh seq is a fresh key: a duplicate means a job was enqueued
         // for a seq the row had not reached (never expected). The job that
         // exists runs for this seq, so nothing is lost; say so.

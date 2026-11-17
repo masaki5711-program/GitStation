@@ -22,7 +22,14 @@
 3. worker のログを読む:
    - 起動時の `forge.worker.jobs`: `job_kinds`（登録されたハンドラーの数）と `worker_id`。その種類のハンドラーを持たない版が動いていると `queue_wait` になる
    - `task=job_runner` / `task=job_reaper` の失敗（`FG-DB-0001` なら `db-unavailable.md`）
-   - 1 件のジョブが長く動いていないか（1 つの worker は 1 度に 1 件だけ実行する: 長いジョブが他の種類を待たせる）
+   - 起動時の `forge.worker.jobs` の `job_slots`（同時に動かすジョブの数、`review.worker_job_concurrency`。既定 4、書き込みのプールの半分まで）。
+     種類ごとにも上限がある（`merge_request.mergeability` 3、`merge_request.refresh`・`ci.pipeline_create`・`check.*` 2、`merge_request.conflict_scan` と
+     その他 1）。1 つの種類が上限まで長く動いていると、その種類の待ちだけが伸びる
+   - 取り出す順は優先の段の順（マージキューの列車のパイプライン・`repository.provision` → `merge_request.refresh`・列にいる MR の mergeability →
+     その他 → target の前進でまとめて積まれた mergeability → `merge_request.conflict_scan`。5 分以上待ったジョブは「その他」の段に上がる）。
+     `merge_request.conflict_scan` や `merge_request.mergeability` の `queue_wait` は、上の段が混んでいる間は起きうる（負荷試験 2026-11-17 F2）
+   - mergeability と conflict_scan は MR ごとに待ちが 1 件まで（新しい依頼が古い待ちのジョブを消す）。その種類の `ready` が開いている MR の数を
+     大きく超えるなら、この仕組みの不具合として開発者に渡す
 4. 種類ごとの待ち行列を読む（読み取りのみ）:
    `SELECT kind, count(*), min(run_after) FROM forge.jobs WHERE state = 'queued' AND run_after <= now() GROUP BY kind;`
    実行中のジョブ: `SELECT id, kind, worker_id, attempts, lease_until FROM forge.jobs WHERE state = 'running' ORDER BY lease_until;`

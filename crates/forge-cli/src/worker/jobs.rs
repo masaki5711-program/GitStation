@@ -1,7 +1,22 @@
 //! The job tasks of `forge worker` (ADR-0016 §7): the job runner (claims
-//! one job at a time for the kinds with a registered handler, every second
-//! while idle, at once again after a job) and the reaper (every 30 s, also
-//! once at startup so leases left by a crashed worker are ended early).
+//! a job for the kinds with a registered handler, every second while idle,
+//! at once again after a job) and the reaper (every 30 s, also once at
+//! startup so leases left by a crashed worker are ended early).
+//!
+//! **Slots** (merge load test 2026-11-17, F2): the runner runs in
+//! `review.worker_job_concurrency` slots (default 4) — one supervised task
+//! each, sharing one `JobRunner`. The claim order is forge-db's priority
+//! (the merge queue's train pipeline, versions and queued merge requests'
+//! checks before a target push's fan-out and the conflict scans). Each
+//! kind has a cap ([`KIND_CAPS`], 1 for a kind not listed), so a slow kind
+//! never takes every slot; and two jobs with the same ordering key never
+//! run at once (forge-db `jobs::ordering_key`): one merge request's
+//! versions (`merge_request.refresh` must not record an older head after a
+//! newer one), checks and scans, one merge request's spec index, one
+//! head's risk and drift runs. The other kinds (provision, schedules,
+//! spec publish, relink) keep cap 1: one at a time, as before. Every run
+//! holds at most a few write-pool connections at a time, hence the bound
+//! of half the write pool.
 //!
 //! Handlers are registered in [`handlers`]: `repository.provision` (step
 //! D4 MR3b, `provision`), `merge_request.refresh` (M3 R1b, `review`),
@@ -22,10 +37,11 @@
 //! end after the abort keeps its job leased (`left_leased`) instead of
 //! being released, so it can never overlap the next attempt.
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_db::jobs::{JobHandler, JobRunner, Ran, REAP_BATCH};
+use forge_db::jobs::{JobHandler, JobKind, JobRunner, Ran, REAP_BATCH};
 use forge_db::Db;
 use forge_errors::ForgeError;
 use tokio::sync::watch;
@@ -47,6 +63,27 @@ pub(crate) const JOB_POLL_PERIOD: Duration = Duration::from_secs(1);
 pub(crate) const REAP_PERIOD: Duration = Duration::from_secs(30);
 /// How long a job in progress may finish after a shutdown request.
 pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+
+/// The most jobs of a kind running at once in one worker (a kind not
+/// listed: 1). The conflict scan is the slow one (seconds of git per run).
+pub(crate) const KIND_CAPS: &[(&str, usize)] = &[
+    (forge_db::review::REFRESH_JOB, 2),
+    (forge_db::review::MERGEABILITY_JOB, 3),
+    (forge_db::review::CONFLICT_SCAN_JOB, 1),
+    (forge_db::pipelines::PIPELINE_CREATE_JOB, 2),
+    (forge_db::checks::risk::RISK_JOB, 2),
+    (forge_db::checks::spec_drift::SPEC_DRIFT_JOB, 2),
+    (forge_db::checks::spec_index::SPEC_INDEX_JOB, 2),
+];
+
+/// The cap of `kind` ([`KIND_CAPS`]).
+pub(crate) fn kind_cap(kind: &JobKind) -> NonZeroUsize {
+    KIND_CAPS
+        .iter()
+        .find(|(k, _)| *k == kind.as_str())
+        .and_then(|(_, cap)| NonZeroUsize::new(*cap))
+        .unwrap_or(NonZeroUsize::MIN)
+}
 
 /// Every job handler of this build: `repository.provision` (D4 MR3b),
 /// `merge_request.refresh` (M3 R1b: merge request versions),
