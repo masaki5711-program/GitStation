@@ -38,8 +38,10 @@ pub struct ReviewConfig {
     pub mergeability_fanout_max: u32,
     /// `review.check_run_retention_days`.
     pub check_run_retention_days: u32,
-    /// `review.worker_job_concurrency` (resolved: the default is cut to
-    /// half the write pool).
+    /// `review.worker_job_concurrency` (resolved by [`Self::load`] only:
+    /// the default is cut to half the write pool and a set value above it
+    /// is refused there; `Default` and a hand-built value are not checked
+    /// against any pool).
     pub worker_job_concurrency: u32,
 }
 

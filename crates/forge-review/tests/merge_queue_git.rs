@@ -590,6 +590,84 @@ async fn a_train_with_a_ci_definition_waits_for_its_pipeline_job() {
     assert_eq!(w.tip("main"), w.base);
 }
 
+/// Review of f44e7afd: a train whose `.forge-ci.yml` cannot be read (git
+/// does not answer `ls-tree` within the read timeout) falls back to the
+/// pipeline job — never to "no pipeline" — and the batch waits for it.
+#[tokio::test]
+async fn a_train_whose_definition_cannot_be_read_still_gets_its_pipeline_job() {
+    let mut w = world_with(DOC_BASE).await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.enqueue(&a).await.expect("enqueue");
+    let fake = tempfile::tempdir().expect("fake git dir");
+    let stalled = forge_git::test_git::stalled_git(w._home.path(), fake.path(), Some("ls-tree"));
+    let merger = Merger::new(w.t.db.clone(), stalled, w.storage.clone())
+        .with_browser(w.browser.clone())
+        .with_timeouts(forge_review::MergeTimeouts {
+            read: Duration::from_secs(2),
+            ..forge_review::MergeTimeouts::default()
+        })
+        .expect("timeouts");
+    let worker = MergeQueue::new(merger, "w1", w.rules()).with_limits(QueueLimits {
+        poll: Duration::ZERO,
+        ..QueueLimits::default()
+    });
+    let built = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(built.outcome, "built");
+    assert_eq!(train_jobs(&w).await, 1, "the job decides, as before");
+    let next = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(next.outcome, "waiting");
+    assert_eq!(w.tip("main"), w.base);
+}
+
+/// Review of f44e7afd (ADR-0030 §5): the fast path never passes a required
+/// check. With `ci/pipeline` required on `main` and no `.forge-ci.yml`, the
+/// train gets no job and no pipeline, and the landing refuses the entry
+/// with `required_check_missing` — what it did after the job ran.
+#[tokio::test]
+async fn a_required_pipeline_without_a_ci_definition_is_missing_at_the_landing() {
+    let mut w = world_with(DOC_BASE).await;
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[
+            format!(
+                "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
+                 VALUES ({}, 'refs/heads/main', 'developer')",
+                w.project.get()
+            ),
+            format!(
+                "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
+                 required_approvals, required_checks, require_resolved_discussions) \
+                 SELECT id, project_id, 0, ARRAY['ci/pipeline']::text[], false \
+                 FROM forge.protected_refs WHERE project_id = {}",
+                w.project.get()
+            ),
+        ],
+    )
+    .await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.enqueue(&a)
+        .await
+        .expect("ci/pipeline is the queue's to test");
+    let worker = w.worker("w1");
+    let built = worker.tick().await.expect("tick").expect("due");
+    assert_eq!(built.outcome, "built");
+    assert_eq!(train_jobs(&w).await, 0);
+    for _ in 0..5 {
+        if worker.tick().await.expect("tick").is_none() {
+            break;
+        }
+    }
+    let entry = w.entry_of(&a).await;
+    assert_eq!(entry.state, EntryState::Removed);
+    assert_eq!(entry.reason.as_deref(), Some("required_check_missing"));
+    assert_eq!(
+        entry.error_code.as_deref(),
+        Some(ErrorCode::MergeBlocked.id())
+    );
+    assert_eq!(w.tip("main"), w.base, "the target never moved");
+    assert!(!w.main_has("fa.txt"));
+}
+
 #[tokio::test]
 async fn a_testing_train_is_pinned_by_its_hidden_ref() {
     let mut w = world().await;

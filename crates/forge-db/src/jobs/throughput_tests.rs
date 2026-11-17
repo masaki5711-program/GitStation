@@ -445,3 +445,185 @@ async fn the_ordering_key_matches_its_sql() {
     }
     t.drop_now().await;
 }
+
+/// Review of f44e7afd: a handler that did not end after its abort
+/// (`left_leased`) keeps its merge request's ordering key until the lease
+/// ends — nothing else stops a second version job of that merge request
+/// from running beside the stale one and recording an older head last.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_left_leased_job_keeps_its_merge_request_busy_until_its_lease_ends() {
+    let t = FreshDb::migrated().await;
+    let (open, gate) = std::sync::mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let script: Script = Arc::new(move |job: ClaimedJob| {
+        let gate = Arc::clone(&gate);
+        let run: JobFuture = Box::pin(async move {
+            if job.payload["merge_request_id"].as_i64() == Some(9) {
+                // Blocks its thread, ignoring the abort, until the gate opens.
+                let _ = gate.lock().map(|g| g.recv());
+            }
+            Ok(())
+        });
+        run
+    });
+    let r = runner(&t, "test.stale", script).with_abort_wait(Duration::from_millis(100));
+    let short = |mr: i64| NewJob {
+        timeout: JobTimeout::new(Duration::from_millis(100)).expect("timeout"),
+        ..of_mr("test.stale", mr)
+    };
+    queued(&t, &short(9)).await;
+    let ran = r.run_once().await.expect("run");
+    assert!(matches!(ran, Some(Ran::LeftLeased { .. })), "{ran:?}");
+    let newer = queued(&t, &short(9)).await;
+    let other = queued(&t, &short(10)).await;
+    assert!(
+        matches!(r.run_once().await.expect("run"), Some(Ran::Succeeded(id)) if id == other),
+        "another merge request goes ahead"
+    );
+    assert!(
+        r.run_once().await.expect("run").is_none(),
+        "merge request 9 stays busy while the stale run may work"
+    );
+    assert_eq!(r.running(), 1, "the left-leased run holds its place");
+    let (st, _, _, _) = super::tests::state(&t, newer).await;
+    assert_eq!(st, "queued");
+    drop(open);
+    t.drop_now().await;
+}
+
+/// Aging: a fan-out check (tier 3) and a conflict scan (tier 4) ready for
+/// more than five minutes go before a fresh default-tier job, never before
+/// the train pipeline (tier 0) or a version (tier 1).
+#[tokio::test]
+async fn an_aged_bulk_job_passes_the_default_tier_but_not_tiers_zero_and_one() {
+    let t = FreshDb::migrated().await;
+    let aged_check = queued(
+        &t,
+        &job_of(
+            "merge_request.mergeability",
+            json!({ "merge_request_id": 2, "check_seq": 1 }),
+            None,
+        ),
+    )
+    .await;
+    let aged_scan = queued(
+        &t,
+        &job_of(
+            "merge_request.conflict_scan",
+            json!({ "merge_request_id": 3, "scan_seq": 1 }),
+            None,
+        ),
+    )
+    .await;
+    let young_scan = queued(
+        &t,
+        &job_of(
+            "merge_request.conflict_scan",
+            json!({ "merge_request_id": 4, "scan_seq": 1 }),
+            None,
+        ),
+    )
+    .await;
+    let fresh = queued(&t, &job_of("test.other", json!({}), None)).await;
+    let version = queued(
+        &t,
+        &job_of(
+            "merge_request.refresh",
+            json!({ "merge_request_id": 5 }),
+            None,
+        ),
+    )
+    .await;
+    let train = queued(
+        &t,
+        &job_of(
+            "ci.pipeline_create",
+            json!({ "project_id": 1, "source": "merge_queue" }),
+            None,
+        ),
+    )
+    .await;
+    t.exec_superuser(&format!(
+        "UPDATE forge.jobs SET run_after = now() - interval '6 minutes' WHERE id = {}; \
+         UPDATE forge.jobs SET run_after = now() - interval '7 minutes' WHERE id = {}; \
+         UPDATE forge.jobs SET run_after = now() - interval '4 minutes' WHERE id = {};",
+        aged_check.get(),
+        aged_scan.get(),
+        young_scan.get()
+    ))
+    .await;
+    let order = claim_order(
+        &t,
+        &[
+            "merge_request.conflict_scan",
+            "merge_request.mergeability",
+            "merge_request.refresh",
+            "ci.pipeline_create",
+            "test.other",
+        ],
+    )
+    .await;
+    assert_eq!(
+        order,
+        [train, version, aged_scan, aged_check, fresh, young_scan],
+        "aged by run_after within tier 2; under 5 minutes keeps tier 4"
+    );
+    t.drop_now().await;
+}
+
+/// A superseding enqueue never postpones the work: it inherits an older
+/// job's earlier `run_after`, and a replaced job waiting out a retry
+/// backoff (run_after in the future) gives a job ready now.
+#[tokio::test]
+async fn a_superseding_enqueue_never_postpones() {
+    let t = FreshDb::migrated().await;
+    const K: &str = "merge_request.conflict_scan";
+    let one = |seq: i64| {
+        job_of(
+            K,
+            json!({ "merge_request_id": 8, "scan_seq": seq }),
+            Some(&format!("mr_conflict_scan:8:{seq}")),
+        )
+    };
+    let wait_of = |t: &FreshDb, id: JobId| {
+        let id = id.get();
+        let sql = format!(
+            "SELECT EXTRACT(epoch FROM run_after - now())::float8 FROM forge.jobs WHERE id = {id}"
+        );
+        async move {
+            let secs: f64 = sqlx::query_scalar(&sql)
+                .fetch_one(&mut t.superuser().await)
+                .await
+                .expect("run_after");
+            secs
+        }
+    };
+    let Enqueued::Queued(first) = superseding(&t, &one(1), 8).await.enqueued else {
+        panic!("queued");
+    };
+    // In a retry backoff: ready only in ten minutes.
+    t.exec_superuser(&format!(
+        "UPDATE forge.jobs SET run_after = now() + interval '10 minutes' WHERE id = {}",
+        first.get()
+    ))
+    .await;
+    let Enqueued::Queued(second) = superseding(&t, &one(2), 8).await.enqueued else {
+        panic!("queued");
+    };
+    assert!(
+        wait_of(&t, second).await <= 0.0,
+        "ready now, not after the backoff"
+    );
+    // Waiting for three minutes: the next one keeps that place.
+    t.exec_superuser(&format!(
+        "UPDATE forge.jobs SET run_after = now() - interval '3 minutes' WHERE id = {}",
+        second.get()
+    ))
+    .await;
+    let Enqueued::Queued(third) = superseding(&t, &one(3), 8).await.enqueued else {
+        panic!("queued");
+    };
+    assert!(wait_of(&t, third).await < -170.0, "the older place in line");
+    assert_eq!(jobs_of(&t, K, 8).await.len(), 1);
+    t.drop_now().await;
+}

@@ -4,9 +4,14 @@
 //! claims are taken one at a time, a kind under its cap
 //! ([`JobRunner::limit_kind`]) and never a job whose ordering key
 //! (`super::ordering_key`: one merge request, one head) runs already. A run
-//! whose handler did not end after its abort (`left_leased`) gives its
-//! place back anyway: the old handler may still work for a moment, as after
-//! a lease the reaper ended (the at-least-once contract).
+//! whose handler did not end after its abort (`left_leased`) keeps its
+//! ordering key and its kind's place until the job's lease ends: nothing
+//! else guards the order of one merge request's versions —
+//! `review::record_mr_version` moves the head to whatever head its job
+//! read, with no check of the head it read it after, so a second version
+//! job of the same merge request running beside a stale one could record
+//! the older head last. After the lease the reaper may hand the job out
+//! again anyway (the at-least-once contract).
 //! It is the boundary for job failures: it logs them once, with the job's
 //! origin `request_id`, and returns what it logged (tests, the worker).
 //!
@@ -263,7 +268,7 @@ impl JobRunner {
         stop: impl Future<Output = ()>,
         grace: Duration,
     ) -> Result<Option<Ran>, ForgeError> {
-        let (job, _slot) = {
+        let (job, slot, claimed_at) = {
             // One claim at a time: a cap or an ordering key is decided and
             // taken together.
             let _gate = self.gate.lock().await;
@@ -272,7 +277,7 @@ impl JobRunner {
                 return Ok(None);
             };
             let slot = Slot::take(&self.in_flight, &job);
-            (job, slot)
+            (job, slot, tokio::time::Instant::now())
         };
         let request_id = job.request_id();
         let settled = match self.execute(&job, stop, grace).await {
@@ -287,6 +292,16 @@ impl JobRunner {
             error: with_job_context(e, &job),
         });
         log_outcome(&outcome, &request_id);
+        if let Ran::LeftLeased { .. } = &outcome {
+            // The old handler may still run: its ordering key (and its
+            // kind's place) stays taken until its lease ends, when the
+            // reaper may hand the job out again (module docs).
+            let lease_end = claimed_at + job.timeout.get() + super::LEASE_SLACK;
+            tokio::spawn(async move {
+                tokio::time::sleep_until(lease_end).await;
+                drop(slot);
+            });
+        }
         Ok(Some(outcome))
     }
 

@@ -30,6 +30,9 @@
      `merge_request.conflict_scan` や `merge_request.mergeability` の `queue_wait` は、上の段が混んでいる間は起きうる（負荷試験 2026-11-17 F2）
    - mergeability と conflict_scan は MR ごとに待ちが 1 件まで（新しい依頼が古い待ちのジョブを消す）。その種類の `ready` が開いている MR の数を
      大きく超えるなら、この仕組みの不具合として開発者に渡す
+   - 配備のときの注意: マイグレーション 20261226100000 は `forge.jobs` に索引 `jobs_queued_merge_request` を普通の `CREATE INDEX` で作る。
+     作っている間、ジョブの投入と取り出し（書き込み）は待たされる（読み取りは続く）。`forge.jobs` の行が多い（数十万行以上）ときは、
+     先に `forge worker` を止めてから移行する `[MUTATING — needs approval]`
 4. 種類ごとの待ち行列を読む（読み取りのみ）:
    `SELECT kind, count(*), min(run_after) FROM forge.jobs WHERE state = 'queued' AND run_after <= now() GROUP BY kind;`
    実行中のジョブ: `SELECT id, kind, worker_id, attempts, lease_until FROM forge.jobs WHERE state = 'running' ORDER BY lease_until;`
