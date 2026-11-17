@@ -98,6 +98,13 @@ GitStation の `main` を履歴ごと試験環境に入れ、`.forge-ci.yml` を
 7. ジョブが `error: no matching package named … found` で数秒で終わるときは、CI のイメージが `Cargo.lock` より古い
    （ジョブの cargo はオフライン）。`node ops/ci-image/build-and-push.mjs` で作り直して `.forge-ci.yml` の digest を書き直す
    （`ops/ci-image/README.md`。compose `gs-runner-test` の Runner を通すので、その compose に触れる承認が要る）。
+   branch `ci/ci-image-digest-russh` からはスクリプトが digest を書き、`crates/forge-runner/tests/own_ci_image.rs` が
+   `Cargo.lock` とイメージの食い違いで落ちる。
+8. 2 回目からの push に取り込みの許可は要らない（新しいオブジェクトだけを検査する）。作り直したイメージでの 1 回
+   （パイプライン 491）は `generated` 79 秒・`lint` 69 秒・`test` 618 秒、全体で 12 分 47 秒。ロックは 15 分ほど持つ。
+9. `test` のジョブが落ちたときは、ログ（`GET /api/v1/projects/<id>/pipelines/<pipeline_id>/jobs/<job_id>/log`、JSON の `text`）から
+   `TRY 2 FAIL` の行と nextest の `Summary` を拾う。11-17 に落ちた 2 件は handoff の 4.4（イメージに OpenSSH のクライアントが
+   無い、unix だけのテストが古い）。
 
 ## 片づけ
 

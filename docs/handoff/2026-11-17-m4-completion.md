@@ -93,7 +93,7 @@ MR !4「hello-app v5」は `public/health` を `maintenance` にする（CI の�
 ### 4.4 GitStation 自身のパイプライン
 
 - 前回（11-11）の Runner `docker-test-1` で、試験環境のプロジェクト `gitstation/gitstation` のパイプライン 4〜7（lint・test・generated）が成功している。
-- 今回（main 3300cc30、新しい Runner `docker-test-m4`）: **履歴の取り込みは成功、パイプラインは 1 回動いて failed**（原因は CI の
+- 1 回目（main 3300cc30、新しい Runner `docker-test-m4`）: **履歴の取り込みは成功、パイプラインは 1 回動いて failed**（原因は CI の
   イメージが古いこと。Runner とジョブの仕組みは動いた）。時刻は UTC。
   - **入れ先**: `gitstation/gitstation`（project 4）は 11-11 の履歴の無い写し（別の履歴、ref あり）なので、取り込みの許可は使えない。
     空のプロジェクト `gitstation/gitstation-history`（project 14、repository 14）を作った（request_id `fc9498acd3bc4b168a8857d3389824f5`）。
@@ -123,16 +123,49 @@ MR !4「hello-app v5」は `public/health` を `maintenance` にする（CI の�
     FG-CI-0004 で断られる。仕様）。
   - cargo の枠のロック（`m4done-gitstation-ci`）は 12:26:33〜12:27:27 に持ち、trap で離した。その前の 1 回目（11:06:31〜11:06:33）は
     スクリプトのパスの形の誤り（Git Bash の `/tmp/…` を Windows の git に渡した）で push の前に終わり、何も送っていない。
+- **2 回目（同じ日、イメージを作り直した後）: ビルドは通り、テスト 4168 件のうち 2 件が落ちて failed**。時刻は UTC。
+  - **イメージの作り直し**（承認: compose `gs-runner-test` の Runner とレジストリを使う）: `node ops/ci-image/build-and-push.mjs`、
+    ロック `m4done-ci-image` 15:00:59〜15:03:30、ビルドと push は 1 分 44 秒。ジョブ `registry:5000/ci/rust@sha256:8f7c368a…`、
+    サービス `registry:5000/ci/postgres@sha256:b778617c…`、`Cargo.lock` の外のクレート 461 個。
+  - **見張り**（branch `ci/ci-image-digest-russh`、48cf8646、main 59ca1d27 から。未マージ）: スクリプトが digest を `.forge-ci.yml` に
+    書き、何から作ったか（ツールチェーン、digest 2 つ、クレートの数と指紋）を `ops/ci-image/image.toml` に残す。テスト
+    `crates/forge-runner/tests/own_ci_image.rs`（4 件、ファイルを読むだけ）が `Cargo.lock`・`rust-toolchain.toml`・`.forge-ci.yml`・
+    `image.toml` の食い違いで落ちる。`Cargo.lock` の `russh` の版を 1 つ変えると落ち、戻すと通ることを確かめた。説明は
+    その branch の `ops/ci-image/README.md`「作り直しの見張り」。
+  - **push**（15:08:12）: 48cf8646 に「`tags: [linux, m4]`」だけを足した試験環境だけのコミット e08fb427（branch
+    `chore/ci-m4-self-runner-russh`）。取り込みの許可は要らなかった。
+  - **パイプライン 491**（request_id `4e2a95bda67541bcb97373f2316ea84f`）: **failed、12 分 47 秒**（15:08:13〜15:21:00）。3 つの
+    ジョブはすべて Runner `docker-test-m4` が取った（Runner のログ、job 522〜524。`docker-test-1` は 0 件）。
+
+    | ジョブ | 結果 | 時間 |
+    |---|---|---|
+    | `generated`（522） | succeeded | 79 秒 |
+    | `lint`（523） | succeeded | 69 秒 |
+    | `test`（524） | **failed**（終了コード 100） | 618 秒（nextest 495 秒: 4168 件のうち 4166 件成功、2 件失敗、6 件はスキップ） |
+
+  - **落ちた 2 件**（どちらも 2 回目の試行でも同じ。直していない）:
+    1. `forge-cli::ssh_e2e git_clone_and_push_over_ssh_go_through_the_same_checks_as_smart_http` —
+       `CI: the OpenSSH client (ssh, ssh-keygen) must be installed for this test`。**CI のイメージに OpenSSH のクライアントが無い**
+       （`ops/ci-image/Dockerfile` が入れるのは `git` と `hostname` だけ。このテストは 11-14〜15 の M4 C13 で入り、`CI` が
+       立っていると ssh が無いことを失敗にする）。直し方: Dockerfile に `openssh-client` を足して作り直す（ビルドのときだけ
+       パッケージの取得が要る）。
+    2. `forge-git browse::tests::git_answers_forge_cannot_trust_are_git_process_failed` — `expect_err("mismatch")` が
+       `RawBlob { size: 20, … }`（本物の中身）を受け取った。**テストが古い**: 867c6c00（11-12、`perf(git): browse through the
+       batch pool`）から `raw` はまず常駐の `cat-file --batch-command` で blob を読み、`cat-file blob` は代わりの道になった。
+       テストの偽の git は `cat-file blob` だけを差し替えるので、もう通らない道を見ている。`#[cfg(unix)]` なので Windows の
+       開発機では走らず、Linux で全体のテストを走らせたのは 867c6c00 の後では今回が初めて。直すのはテスト（または
+       「常駐の読み出しが短い中身を返したとき」の扱いを決めること）で、製品のコードの判断が要る。
+  - ロック（`m4done-gitstation-ci`）は 15:08:09〜15:21:25（ジョブがすべて終わってから離した）。空きメモリは 6.8〜9.1 GB。
 
 ## 5. 残り
 
-1. GitStation 自身のパイプラインを新しい Runner で**緑に**する（4.4。1 回動いて failed）。要るもの:
-   - CI のイメージを今の `Cargo.lock` で作り直し（`node ops/ci-image/build-and-push.mjs`。compose `gs-runner-test` の Runner の
-     コンテナの Podman を通してレジストリに入れるので、その compose に触れる承認が要る）、`.forge-ci.yml` の digest を書き直す
-     （製品の変更。別の branch）。その後、`gitstation/gitstation-history` に push してもう 1 回動かす（取り込みの許可は要らない。
-     2 回目からは新しいオブジェクトだけを検査する）。
-   - ゲート: `Cargo.lock`・`rust-toolchain.toml` が変わったのに `.forge-ci.yml` の digest が変わっていない変更を止める
-     （今は注意書きだけ。`validate-*` か CI の確かめにする）。
+1. GitStation 自身のパイプラインを新しい Runner で**緑に**する（4.4。ビルドと `lint`・`generated` は通った。`test` の 2 件が残る）:
+   - branch `ci/ci-image-digest-russh`（イメージの digest と見張りのテスト）をレビューしてマージする。
+   - CI のイメージに `openssh-client` を足して作り直す（`ops/ci-image/Dockerfile`、`node ops/ci-image/build-and-push.mjs`）。
+   - `forge-git` の `git_answers_forge_cannot_trust_are_git_process_failed` を 867c6c00 の後の読み出しの道に合わせる。
+   - unix だけのテスト（`#[cfg(unix)]`）は Windows の開発機の Stop ゲートでは走らない。自前のパイプラインが緑になるまでは、
+     Linux でしか走らないテストの失敗に気づくのが遅れる。
+   - その後 `gitstation/gitstation-history` に push してもう 1 回動かす（runbook `m4-test-environment`）。
 2. 製品の修正: D1（Windows で `UserKnownHostsFile` の引用符）、D2（`ProgramData`）。修正の後は `sshwrap.exe` を外して確かめる。
    ssh の stderr の分類の結果（stderr そのものではなく、例えば `invalid quotes` のような種類）をログに残すと、今回のような
    `connection_lost` の誤った見え方を防げる。
