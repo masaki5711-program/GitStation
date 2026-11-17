@@ -1,12 +1,14 @@
 //! Auto-merge's rows (M4 C9, ADR-0017 Amendment 2026-11-13; migration
 //! 20261215100000): `forge.project_auto_merge` (a project's `merge.auto`
 //! and emergency stop; no row = `full`, not stopped),
-//! `forge.auto_merge_instance` (the instance's emergency stop) and
+//! `forge.auto_merge_instance` (the instance's emergency stop and, since
+//! migration 20261224100000, its `merge.allow_full_auto`) and
 //! `forge.auto_merge_states` (what auto-merge did with each open merge
 //! request last). Every decision is forge-review's.
 //!
 //! - **A person's commands** (audited, `ChangeTx`): [`set_mode_decided`],
-//!   [`set_project_stop_decided`], [`set_instance_stop_decided`].
+//!   [`set_project_stop_decided`], [`set_instance_stop_decided`],
+//!   [`set_full_auto_decided`].
 //! - **Reads**: [`settings`], [`state_of`]; [`state_on`] inside a
 //!   transaction (the merge gate's credential).
 //! - **The worker**: [`candidates`], [`record`], [`forget_inactive`].
@@ -48,9 +50,19 @@ pub struct AutoMergeSettings {
     pub mode_at: Option<String>,
     pub project_stop: Option<StopMark>,
     pub instance_stop: Option<StopMark>,
+    /// The instance's `merge.allow_full_auto` (M4 close; default allowed).
+    pub allow_full_auto: bool,
+    /// Who changed it last, and when (`None`: never changed).
+    pub allow_full_auto_mark: Option<StopMark>,
 }
 
 impl AutoMergeSettings {
+    /// The mode in effect (`full` without the instance's allowance is
+    /// `reserve`).
+    pub fn effective_mode(&self) -> AutoMergeMode {
+        self.mode.effective(self.allow_full_auto)
+    }
+
     /// The emergency stop in effect (the instance's first).
     pub fn stop(&self) -> Option<StopScope> {
         if self.instance_stop.is_some() {
@@ -71,13 +83,18 @@ type SettingsRow = (
     Option<String>,
     Option<i64>,
     Option<String>,
+    bool,
+    Option<i64>,
+    Option<String>,
 );
 
 fn settings_sql(lock: &str) -> String {
     format!(
         "SELECT a.mode, a.mode_by, to_char(a.mode_at AT TIME ZONE 'UTC', {TS}), \
          a.stopped_by, to_char(a.stopped_at AT TIME ZONE 'UTC', {TS}), \
-         i.stopped_by, to_char(i.stopped_at AT TIME ZONE 'UTC', {TS}) \
+         i.stopped_by, to_char(i.stopped_at AT TIME ZONE 'UTC', {TS}), \
+         i.allow_full_auto, i.allow_full_auto_by, \
+         to_char(i.allow_full_auto_at AT TIME ZONE 'UTC', {TS}) \
          FROM forge.auto_merge_instance i \
          LEFT JOIN forge.project_auto_merge a ON a.project_id = $1 \
          WHERE i.id = 1 {lock}"
@@ -88,7 +105,7 @@ fn parse_settings(
     project: ProjectId,
     row: Option<SettingsRow>,
 ) -> Result<AutoMergeSettings, ForgeError> {
-    let (mode, mode_by, mode_at, stopped_by, stopped_at, i_by, i_at) =
+    let (mode, mode_by, mode_at, stopped_by, stopped_at, i_by, i_at, allow, allow_by, allow_at) =
         row.ok_or_else(|| unreadable("auto_merge_instance_row_missing"))?;
     let stored = mode.is_some();
     let mode = match mode {
@@ -110,6 +127,8 @@ fn parse_settings(
         mode_at,
         project_stop: mark(stopped_by, stopped_at),
         instance_stop: mark(i_by, i_at),
+        allow_full_auto: allow,
+        allow_full_auto_mark: mark(allow_by, allow_at),
     })
 }
 
@@ -127,14 +146,15 @@ pub(crate) async fn settings_on(
     parse_settings(project, row)
 }
 
-/// The mode and the emergency stop in effect for `project`, read in the
-/// caller's transaction (the merge gate's auto-merge credential).
+/// The mode, the emergency stop in effect and the instance's
+/// `merge.allow_full_auto` for `project`, read in the caller's transaction
+/// (the merge gate's auto-merge credential).
 pub(crate) async fn state_on(
     conn: &mut PgConnection,
     project: ProjectId,
-) -> Result<(AutoMergeMode, Option<StopScope>), ForgeError> {
+) -> Result<(AutoMergeMode, Option<StopScope>, bool), ForgeError> {
     let s = settings_on(conn, project).await?;
-    Ok((s.mode, s.stop()))
+    Ok((s.mode, s.stop(), s.allow_full_auto))
 }
 
 /// The settings of `project` (`GET …/auto-merge`, the worker).
@@ -185,7 +205,10 @@ fn record(change: AutoMergeChange) -> ChangeRecord {
 /// Set `project`'s `merge.auto` to `mode` for `caller`, decided again on
 /// the locked project (`decide`: forge-review's reconfirmed
 /// `AutoMergeSettingsManage`). One `auto_merge.mode_changed` audit row;
-/// [`ChangeOutcome::Unchanged`] writes nothing.
+/// [`ChangeOutcome::Unchanged`] writes nothing. `full` while the instance's
+/// `merge.allow_full_auto` is off (read under a shared lock on the instance
+/// row, so a change committed before is seen and one after waits) is
+/// `FG-REVIEW-0032` and writes nothing.
 pub async fn set_mode_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
@@ -202,6 +225,9 @@ pub async fn set_mode_decided<P>(
         let before = tx
             .step(|c| async move { settings_on(c, project).await })
             .await?;
+        if mode == AutoMergeMode::Full && !before.allow_full_auto {
+            return Err(full_auto_not_allowed(project));
+        }
         if before.mode == mode && before.stored {
             return Ok(Settle::Discard((ChangeOutcome::Unchanged, before, decided)));
         }
@@ -380,6 +406,127 @@ pub async fn set_instance_stop_decided<P>(
     }
     .await;
     tx.settle(action, outcome).await
+}
+
+/// `FG-REVIEW-0032`: `full` is not allowed on this instance.
+fn full_auto_not_allowed(project: ProjectId) -> ForgeError {
+    ForgeError::new(ErrorCode::AutoMergeFullNotAllowed)
+        .with_context("reason", "full_auto_not_allowed")
+        .with_context("project_id", project.get())
+}
+
+/// The instance's `merge.allow_full_auto` as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullAutoSetting {
+    pub allowed: bool,
+    /// Who changed it last, and when (`None`: never changed).
+    pub changed: Option<StopMark>,
+}
+
+type FullAutoRow = (bool, Option<i64>, Option<String>);
+
+fn full_auto_setting((allowed, by, at): FullAutoRow) -> FullAutoSetting {
+    FullAutoSetting {
+        allowed,
+        changed: at.map(|at| StopMark {
+            by: by.map(UserId::new),
+            at,
+        }),
+    }
+}
+
+/// Allow `full` on the instance (`allowed`) or take the allowance away for
+/// `caller`, decided again on the caller's locked account (`decide`). One
+/// `auto_merge.allow_full_auto_changed` audit row on the instance. Returns
+/// the setting now.
+pub async fn set_full_auto_decided<P>(
+    db: &Db,
+    ctx: &ChangeContext,
+    caller: UserId,
+    allowed: bool,
+    decide: impl FnOnce(&Account) -> Result<P, ForgeError>,
+) -> Result<(ChangeOutcome, FullAutoSetting, P), ForgeError> {
+    const ACTION: &str = "auto_merge.allow_full_auto_changed";
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = async {
+        let account = tx
+            .step(|c| async move { lock_account(c, caller).await })
+            .await?;
+        let decided = decide(&account)?;
+        let changed: Option<FullAutoRow> = tx
+            .step(|c| async move {
+                sqlx::query_as(&format!(
+                    "UPDATE forge.auto_merge_instance SET allow_full_auto = $1, \
+                     allow_full_auto_by = $2, allow_full_auto_at = now(), updated_at = now() \
+                     WHERE id = 1 AND allow_full_auto <> $1 \
+                     RETURNING allow_full_auto, allow_full_auto_by, \
+                     to_char(allow_full_auto_at AT TIME ZONE 'UTC', {TS})"
+                ))
+                .bind(allowed)
+                .bind(caller.get())
+                .fetch_optional(c)
+                .await
+                .map_err(|e| query_error("auto_merge.set_full_auto", e))
+            })
+            .await?;
+        match changed {
+            Some(row) => Ok(Settle::Commit(
+                record(AutoMergeChange::FullAutoAllowed { allowed }),
+                (ChangeOutcome::Changed, full_auto_setting(row), decided),
+            )),
+            None => {
+                let row: FullAutoRow = tx
+                    .step(|c| async move {
+                        sqlx::query_as(&format!(
+                            "SELECT allow_full_auto, allow_full_auto_by, \
+                             to_char(allow_full_auto_at AT TIME ZONE 'UTC', {TS}) \
+                             FROM forge.auto_merge_instance WHERE id = 1"
+                        ))
+                        .fetch_one(c)
+                        .await
+                        .map_err(|e| query_error("auto_merge.full_auto_read", e))
+                    })
+                    .await?;
+                Ok(Settle::Discard((
+                    ChangeOutcome::Unchanged,
+                    full_auto_setting(row),
+                    decided,
+                )))
+            }
+        }
+    }
+    .await;
+    tx.settle(ACTION, outcome).await
+}
+
+/// The facts of the doctor's `review.auto_merge` line: the instance's
+/// `merge.allow_full_auto`, and how many live projects are set to `full`
+/// (a project without a row is `full`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FullAutoHealth {
+    pub allowed: bool,
+    pub full_projects: i64,
+}
+
+/// [`FullAutoHealth`].
+pub async fn full_auto_health(db: &Db) -> Result<FullAutoHealth, ForgeError> {
+    const QUERY: &str = "auto_merge.full_auto_health";
+    db.within(QUERY, async {
+        let (allowed, full_projects): (Option<bool>, i64) = sqlx::query_as(
+            "SELECT (SELECT allow_full_auto FROM forge.auto_merge_instance WHERE id = 1), \
+             (SELECT count(*) FROM forge.projects p \
+              LEFT JOIN forge.project_auto_merge a ON a.project_id = p.id \
+              WHERE p.deleted_at IS NULL AND coalesce(a.mode, 'full') = 'full')",
+        )
+        .fetch_one(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
+        Ok(FullAutoHealth {
+            allowed: allowed.ok_or_else(|| unreadable("auto_merge_instance_row_missing"))?,
+            full_projects,
+        })
+    })
+    .await
 }
 
 /// What auto-merge did with one merge request last, as stored.

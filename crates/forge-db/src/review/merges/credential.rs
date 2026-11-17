@@ -34,6 +34,8 @@ pub enum CredentialState {
     AutoMerge {
         mode: forge_core::auto_merge::AutoMergeMode,
         stop: Option<forge_core::auto_merge::StopScope>,
+        /// The instance's `merge.allow_full_auto` (M4 close).
+        full_allowed: bool,
     },
 }
 
@@ -88,8 +90,13 @@ pub(crate) async fn credential_on(
             }
         }
         CredentialRef::AutoMerge(project) => {
-            let (mode, stop) = crate::review::auto_merge::state_on(&mut *conn, project).await?;
-            CredentialState::AutoMerge { mode, stop }
+            let (mode, stop, full_allowed) =
+                crate::review::auto_merge::state_on(&mut *conn, project).await?;
+            CredentialState::AutoMerge {
+                mode,
+                stop,
+                full_allowed,
+            }
         }
         CredentialRef::Session(id) => {
             let usable: Option<bool> = sqlx::query_scalar(

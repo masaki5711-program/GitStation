@@ -902,6 +902,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/admin/auto-merge/resume",
         Coverage::Command("auto-merge instance-resume"),
     ),
+    // M4 close: the instance's merge.allow_full_auto.
+    (
+        "PUT",
+        "/api/v1/admin/auto-merge/allow-full-auto",
+        Coverage::BrowserOnly("sessions only: an administrator allows full auto-merge in the browser (FG-AUTH-0002 session_required for a token); runbook auto-merge"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/merge-requests/{iid}/auto-merge",

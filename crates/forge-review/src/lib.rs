@@ -84,7 +84,8 @@ pub use forge_db::autofix::{
     AutofixSettings, DetailPath as AutofixDetailPath, StoredAttempt as StoredAutofixAttempt,
 };
 pub use forge_db::review::auto_merge::{
-    AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, StopMark, StoredState as AutoMergeState,
+    AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, FullAutoSetting, StopMark,
+    StoredState as AutoMergeState,
 };
 pub use forge_db::review::merge_queue::{
     PauseOutcome, QueueView, StoredBatch as StoredQueueBatch, StoredEntry as StoredQueueEntry,
@@ -99,9 +100,10 @@ pub use forge_db::review::{StoredPrediction, StoredScan};
 pub use merge_conditions::MergeStatus;
 pub use mergeability::{check, prune_merge_results, CheckReport, Mergeability, PruneReport};
 pub use merges::{
-    evaluate_merge, AutoMergeLimits, AutoMergeReport, AutoMerger, BlockReason, CredentialRef,
-    MergeAsk, MergeClearance, MergeQueue, MergeReport, MergeSettings, MergeTimeouts, Merger,
-    QueueAsk, QueueLimits, ReconcileReport, StoredMerge, TickReport,
+    evaluate_merge, AfterFence, AutoMergeLimits, AutoMergeReport, AutoMerger, BlockReason,
+    CredentialRef, MergeAsk, MergeClearance, MergeQueue, MergeReport, MergeSettings, MergeTimeouts,
+    Merger, QueueAsk, QueueLimits, ReconcileReport, StoredMerge, TickReport, MERGE_RESULT_BUDGET,
+    MERGE_RESULT_MAX_FAILURES,
 };
 pub use revert::{revert_branch, revert_ctx, DraftReport, RevertOpened, RevertTimeouts, Reverter};
 pub use user_lists::{

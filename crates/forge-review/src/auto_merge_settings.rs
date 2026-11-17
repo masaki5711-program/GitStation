@@ -2,7 +2,9 @@
 //! 2026-11-13): the project's `merge.auto` (`AutoMergeSettingsManage`,
 //! the Owner in a session), the project's emergency stop
 //! (`AutoMergeStopToggle`, Maintainer) and the instance's
-//! (`AutoMergeInstanceStopToggle`, administrators). Each is decided again
+//! (`AutoMergeInstanceStopToggle`, administrators), and the instance's
+//! `merge.allow_full_auto` (`AutoMergeFullAutoManage`, administrators in a
+//! session; M4 close). Each is decided again
 //! under the locks (`reconfirm`) and audited in the same transaction; an
 //! emergency stop turned on is logged once (`FG-REVIEW-0027`, warn).
 
@@ -10,7 +12,7 @@ use forge_auth::{Action, Authorized, InstanceCtx, ProjectCtx};
 use forge_core::auto_merge::{AutoMergeMode, StopScope};
 use forge_core::{MergeRequestId, ProjectId};
 use forge_db::review::auto_merge::{
-    self as db, AutoMergeSettings, ChangeOutcome, StopMark, StoredState,
+    self as db, AutoMergeSettings, ChangeOutcome, FullAutoSetting, StopMark, StoredState,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -127,6 +129,47 @@ impl Review {
             log_stop(request, StopScope::Project, Some(project), stopped, user);
         }
         Ok((outcome, settings))
+    }
+
+    /// `PUT /api/v1/admin/auto-merge/allow-full-auto`
+    /// (`AutoMergeFullAutoManage`, M4 close): allow `full` on the instance
+    /// or take the allowance away. Taking it away holds every project set
+    /// to `full` at once (the auto-merge principal is refused there; their
+    /// queue entries leave the queue); it is logged at warn.
+    pub async fn set_full_auto_allowed(
+        &self,
+        request: &ReviewRequest,
+        proof: &Authorized<InstanceCtx>,
+        allowed: bool,
+    ) -> Result<(ChangeOutcome, FullAutoSetting), ForgeError> {
+        require(proof.action(), Action::AutoMergeFullAutoManage)?;
+        let user = caller_of(proof)?;
+        let ctx = change_context(request, proof.principal(), user)?;
+        let (outcome, setting, ()) =
+            db::set_full_auto_decided(&self.db, &ctx, user, allowed, |facts| {
+                proof.reconfirm(account(*facts), InstanceCtx).map(drop)
+            })
+            .await?;
+        if outcome == ChangeOutcome::Changed {
+            if allowed {
+                tracing::info!(
+                    target: "forge_review",
+                    event = "forge.auto_merge.full_auto_allowed",
+                    request_id = %request.request_id,
+                    user_id = user.get(),
+                    "full auto-merge allowed on the instance"
+                );
+            } else {
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.auto_merge.full_auto_disallowed",
+                    request_id = %request.request_id,
+                    user_id = user.get(),
+                    "full auto-merge no longer allowed: projects set to full merge only by a person (runbook auto-merge)"
+                );
+            }
+        }
+        Ok((outcome, setting))
     }
 
     /// `POST /api/v1/admin/auto-merge/stop` / `…/resume`

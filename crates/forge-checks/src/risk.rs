@@ -19,6 +19,15 @@
 //! read once per run: any other project's `evals/` or `skills/` is never
 //! matched, and its runs are exactly what they were.
 //!
+//! The merge result (M4 close, [`MergeResultAssessor`]): the merge queue
+//! asks for the same rules on the combined tree it will write to a target —
+//! the diff from the target tip a train was built on to a step of the train
+//! — before an auto-merge entry lands. [`Risk::assess_merge_result`] runs
+//! the very same per-target evaluation with that tip as the base, turns it
+//! into the run with [`assess`] and reads it with
+//! [`forge_core::auto_merge::deterministic_layer`], as the auto-merge reads
+//! a head's run. Nothing is recorded (the queue logs what it decides).
+//!
 //! Conclusions: `success` — nothing found; `neutral` — only `warn` findings,
 //! or part of the head could not be assessed (`FG-REVIEW-0024` /
 //! `FG-REVIEW-0025`: never a `success`); `failure` — a `stop` rule
@@ -29,6 +38,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use forge_core::auto_merge::{
+    deterministic_layer, MergeResultAssessor, MergeResultFuture, MergeResultRange, RiskVerdict,
+};
+use forge_core::checks::CheckRun;
 use forge_core::checks::{
     CheckAnnotationLevel, CheckConclusion, CheckStatus, MAX_CHECK_ANNOTATIONS,
     MAX_CHECK_SUMMARY_BYTES, RISK_CHECK,
@@ -506,29 +519,44 @@ impl Risk {
         head: &ObjectId,
         ai_assets: bool,
     ) -> Result<TargetFindings, ForgeError> {
-        let short = target
-            .as_str()
-            .strip_prefix("refs/heads/")
-            .unwrap_or_else(|| target.as_str())
-            .to_owned();
-        let mut found = TargetFindings {
-            target: short,
-            files: 0,
-            findings: Vec::new(),
-        };
         // The cached ref list may be older than the target's tip.
         self.browse.invalidate(repo);
         let tip = match self.browse.find_ref(repo, target).await? {
             RefLookup::Commit(rev) => ObjectId::parse(&rev.commit)
                 .map_err(|_| internal("invalid_commit_id").with_context("repo_id", repo.get()))?,
             RefLookup::Missing | RefLookup::NotACommit => {
+                let mut found = TargetFindings {
+                    target: short_name(target),
+                    files: 0,
+                    findings: Vec::new(),
+                };
                 found.findings.push(rule("target_missing")?);
                 return Ok(found);
             }
         };
+        self.target_at(repo, target, &tip, head, ai_assets).await
+    }
+
+    /// One target branch at `tip`: the diff from the merge base of `tip`
+    /// and `head` to `head`, every rule (the head's run, and the merge
+    /// result's, where `tip` is the train's base and `head` a step of it —
+    /// the merge base is then `tip` itself).
+    async fn target_at(
+        &self,
+        repo: RepoId,
+        target: &RefName,
+        tip: &ObjectId,
+        head: &ObjectId,
+        ai_assets: bool,
+    ) -> Result<TargetFindings, ForgeError> {
+        let mut found = TargetFindings {
+            target: short_name(target),
+            files: 0,
+            findings: Vec::new(),
+        };
         let Some(base) = self
             .git
-            .merge_base(&self.storage, repo, &tip, head, GIT_TIMEOUT)
+            .merge_base(&self.storage, repo, tip, head, GIT_TIMEOUT)
             .await?
         else {
             found.findings.push(rule("no_common_history")?);
@@ -769,6 +797,80 @@ impl Risk {
         Ok(found)
     }
 
+    /// `forge/risk`'s rules on a merge result (module docs): the combined
+    /// tree `range.result` against `range.base` on `range.target`, within
+    /// the evaluation budget (`FG-WEB-0002 operation=risk_merge_result`
+    /// past it). Errors as [`Self::run`]'s evaluation (the repository is
+    /// the caller's: its state is not looked up again). Nothing is written.
+    pub async fn assess_merge_result(
+        &self,
+        range: MergeResultRange<'_>,
+    ) -> Result<RiskVerdict, ForgeError> {
+        let evaluated = tokio::time::timeout(self.budget, async {
+            let ai_assets = match tokio::time::timeout(
+                LOOKUP_TIMEOUT,
+                forge_db::ai_assets::setting(&self.db, range.project),
+            )
+            .await
+            {
+                Ok(setting) => setting?.enabled,
+                Err(_) => {
+                    return Err(ForgeError::new(ErrorCode::RequestTimeout)
+                        .with_context("operation", "ai_assets_setting")
+                        .with_context("timeout_ms", LOOKUP_TIMEOUT.as_millis()))
+                }
+            };
+            self.target_at(
+                range.repo,
+                range.target,
+                range.base,
+                range.result,
+                ai_assets,
+            )
+            .await
+        })
+        .await;
+        let found = match evaluated {
+            Ok(found) => found?,
+            Err(_) => {
+                return Err(ForgeError::new(ErrorCode::RequestTimeout)
+                    .with_context("operation", "risk_merge_result")
+                    .with_context("timeout_ms", self.budget.as_millis()))
+            }
+        };
+        let evaluation = Evaluation {
+            targets: vec![found],
+            general: Vec::new(),
+        };
+        let new = assess(&evaluation)?;
+        let run = CheckRun::new(new.status, new.conclusion);
+        let verdict = deterministic_layer(run, Some(&new.summary));
+        let all: Vec<&Finding> = evaluation
+            .targets
+            .iter()
+            .flat_map(|t| t.findings.iter())
+            .collect();
+        let stops: Vec<&str> = all
+            .iter()
+            .filter(|f| f.level == RiskLevel::Stop)
+            .map(|f| f.rule)
+            .collect();
+        tracing::info!(
+            target: "forge_checks",
+            event = "forge.risk.merge_result_assessed",
+            project_id = range.project.get(),
+            repo_id = range.repo.get(),
+            base_sha = range.base.as_str(),
+            result_sha = range.result.as_str(),
+            level = level_of(&all).as_str(),
+            findings = all.len(),
+            stop_rules = %stops.join(","),
+            conclusion = new.conclusion.map(CheckConclusion::as_str),
+            "risk evaluated on a merge result"
+        );
+        Ok(verdict)
+    }
+
     /// The job failed for good (its last attempt, or a failure that can
     /// never succeed): record `error` on the head so the check is never
     /// left without an answer. A failure to record it is logged here (the
@@ -776,6 +878,21 @@ impl Risk {
     pub async fn fail(&self, request: &RiskRequest, request_id: &RequestId, error: &ForgeError) {
         record_error(&self.db, request, request_id, error.code().id()).await;
     }
+}
+
+impl MergeResultAssessor for Risk {
+    fn assess<'a>(&'a self, range: MergeResultRange<'a>) -> MergeResultFuture<'a> {
+        Box::pin(self.assess_merge_result(range))
+    }
+}
+
+/// A target ref's short name (`refs/heads/` dropped).
+fn short_name(target: &RefName) -> String {
+    target
+        .as_str()
+        .strip_prefix("refs/heads/")
+        .unwrap_or_else(|| target.as_str())
+        .to_owned()
 }
 
 fn level_of(findings: &[&Finding]) -> RiskLevel {

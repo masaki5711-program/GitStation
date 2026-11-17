@@ -96,7 +96,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 41] = [
+const DB_CHECKS: [&str; 42] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -128,6 +128,8 @@ const DB_CHECKS: [&str; 41] = [
     "review.merges",
     // M4 C8: FG-CI-0024 (the merge queue's worker keeps up).
     "review.merge_queue",
+    // M4 close: the instance's merge.allow_full_auto (FG-REVIEW-0032).
+    review::AUTO_MERGE,
     // M3 S0: FG-AUTH-0019 (rotate before expiry), FG-AUTH-0010 (an owner).
     "service_accounts.tokens_expiring",
     "service_accounts.ownerless",
@@ -305,6 +307,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let mergeability = review::mergeability_check(db).await;
     let merges = review::merges_check(db).await;
     let merge_queue = review::merge_queue_check(db).await;
+    let auto_merge = review::auto_merge_check(db).await;
     let [sa_expiring, sa_ownerless] = service_accounts::service_account_checks(db).await;
     let reporters = checks::reporters_check(db).await;
     let check_retention = checks::retention_check(db, cfg.review.check_run_retention_days).await;
@@ -339,6 +342,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         mergeability,
         merges,
         merge_queue,
+        auto_merge,
         sa_expiring,
         sa_ownerless,
         reporters,

@@ -6,7 +6,9 @@
 //! record), a target moved by someone else, the pause, the entries that
 //! run alone (a migration, a `forge/risk` stop), two workers and a worker
 //! that died mid-landing. The train's pipeline is the test's: it writes the
-//! `merge_queue` pipeline row the runner would have finished.
+//! `merge_queue` pipeline row the runner would have finished. The merge
+//! result of auto-merge entries is judged by forge-checks' real
+//! `forge/risk` rules (M4 close), as `forge serve` wires them.
 
 mod common;
 
@@ -192,10 +194,21 @@ async fn world() -> World {
 impl World {
     /// The queue's worker; `poll` zero so a waiting queue is due at once.
     fn worker(&self, name: &str) -> MergeQueue {
-        MergeQueue::new(self.merger.clone(), name).with_limits(QueueLimits {
+        MergeQueue::new(self.merger.clone(), name, self.rules()).with_limits(QueueLimits {
             poll: Duration::ZERO,
             ..QueueLimits::default()
         })
+    }
+
+    /// forge-checks' `forge/risk` rules, as `forge serve` gives the queue.
+    fn rules(&self) -> Arc<forge_checks::risk::Risk> {
+        Arc::new(forge_checks::risk::Risk::new(
+            self.t.db.clone(),
+            self.git.clone(),
+            self.storage.clone(),
+            self.browser.clone(),
+            Arc::new(self.t.db.clone()),
+        ))
     }
 
     fn tip(&self, branch: &str) -> String {
@@ -1485,4 +1498,427 @@ async fn a_partly_assessed_head_is_stopped_not_queued() {
         )
     );
     assert!(w.live_entry(&a).await.is_none());
+}
+
+// ── M4 close: the merge result and merge.allow_full_auto ──
+
+/// `n` distinct lines tagged `tag`.
+fn lines(n: usize, tag: &str) -> String {
+    (0..n).map(|i| format!("{tag} line {i}\n")).collect()
+}
+
+impl World {
+    /// `main` moved to a commit holding `files` besides `README.md`; the
+    /// merge requests of [`World::mr`] are built on it from now on (a merge
+    /// request's tree is `README.md` and its own files: what it leaves out
+    /// of `files` it deletes).
+    fn rebase_main(&mut self, files: &[(&str, &str)]) {
+        let mut all = vec![("README.md", "base\n")];
+        all.extend_from_slice(files);
+        let next = commit(&self.path, &all, Some(&self.base));
+        plumb(&self.path, &["update-ref", "refs/heads/main", &next], None);
+        self.base = next;
+        self.browser.invalidate(self.repo);
+    }
+
+    /// The real rules on the diff from `main`'s base to `result`.
+    async fn judged(&self, result: &str) -> forge_core::auto_merge::RiskVerdict {
+        let main = branch("main");
+        let base = oid(&self.base);
+        let result = oid(result);
+        self.rules()
+            .assess_merge_result(forge_core::auto_merge::MergeResultRange {
+                project: self.project,
+                repo: self.repo,
+                target: &main,
+                base: &base,
+                result: &result,
+            })
+            .await
+            .expect("assessed")
+    }
+}
+
+/// Two merge requests that each delete 300 of `main`'s 601 lines: each is
+/// clean under forge/risk's rules (under 500 lines), together they are a
+/// mass deletion (600 lines, more than 30 %). Queued by auto-merge, they are
+/// tested as one batch; the merge result of the second step is judged with
+/// the same rules before the train lands, so the second one stops
+/// (program breakage, `FG-REVIEW-0026 reason=merge_result_program_breakage`)
+/// and the first lands alone.
+#[tokio::test]
+async fn two_clean_auto_merges_that_delete_too_much_together_stop_the_second() {
+    let mut w = world().await;
+    let a_txt = lines(300, "a");
+    let b_txt = lines(300, "b");
+    w.rebase_main(&[("a.txt", &a_txt), ("b.txt", &b_txt)]);
+    let a = w.mr("fa", &[("b.txt", &b_txt)]).await; // deletes a.txt
+    let b = w.mr("fb", &[("a.txt", &a_txt)]).await; // deletes b.txt
+    for mr in [&a, &b] {
+        assert_eq!(
+            w.judged(mr.head_sha.as_deref().expect("head")).await,
+            forge_core::auto_merge::RiskVerdict::Clear { warned: false },
+            "each alone is clean"
+        );
+        w.risk(mr, CheckConclusion::Success, "No risk found").await;
+    }
+    let auto = w.auto();
+    auto.tick().await.expect("tick");
+    assert!(w.live_entry(&a).await.is_some(), "a queued by auto-merge");
+    assert!(w.live_entry(&b).await.is_some(), "b queued by auto-merge");
+    let sizes = w.drive(&w.worker("w1"), &BTreeSet::new()).await;
+    assert_eq!(
+        sizes.first(),
+        Some(&2),
+        "one batch of both first: {sizes:?}"
+    );
+    assert_eq!(w.state_of(&a).await, forge_core::MergeRequestState::Merged);
+    assert_eq!(w.state_of(&b).await, forge_core::MergeRequestState::Open);
+    assert!(!w.main_has("a.txt"), "a landed");
+    assert!(w.main_has("b.txt"), "b never landed");
+    let entry = w.entry_of(&b).await;
+    assert_eq!(entry.state, EntryState::Removed);
+    assert_eq!(
+        entry.reason.as_deref(),
+        Some("merge_result_program_breakage")
+    );
+    assert_eq!(
+        entry.error_code.as_deref(),
+        Some(ErrorCode::AutoMergeStopped.id())
+    );
+    assert_eq!(
+        count(
+            &w.t,
+            "SELECT count(*) AS n FROM forge.merge_queue_batches WHERE reason = 'merge_result_risk'",
+        )
+        .await,
+        1
+    );
+    // The merge request's line names the class; the same head stays out.
+    auto.tick().await.expect("tick");
+    assert_eq!(
+        w.auto_state(&b).await,
+        Some((
+            "stopped".to_owned(),
+            Some("program_breakage".to_owned()),
+            "merge_result_risk".to_owned(),
+            None
+        ))
+    );
+    assert!(w.live_entry(&b).await.is_none());
+}
+
+/// The same two changes queued by a person both land: auto-merge's stop
+/// classes never stop a person's merge (the merge result is judged for
+/// auto-merge entries only).
+#[tokio::test]
+async fn a_persons_batch_is_not_stopped_by_its_merge_result() {
+    let mut w = world().await;
+    let a_txt = lines(300, "a");
+    let b_txt = lines(300, "b");
+    w.rebase_main(&[("a.txt", &a_txt), ("b.txt", &b_txt)]);
+    // A project whose auto-merge does not act: dave queues both himself.
+    let a = w.mr("fa", &[("b.txt", &b_txt)]).await;
+    let b = w.mr("fb", &[("a.txt", &a_txt)]).await;
+    w.enqueue(&a).await.expect("a queued");
+    w.enqueue(&b).await.expect("b queued");
+    let sizes = w.drive(&w.worker("w1"), &BTreeSet::new()).await;
+    assert_eq!(sizes, vec![2], "one batch");
+    assert_eq!(w.state_of(&a).await, forge_core::MergeRequestState::Merged);
+    assert_eq!(w.state_of(&b).await, forge_core::MergeRequestState::Merged);
+    assert!(!w.main_has("a.txt") && !w.main_has("b.txt"));
+    // The real rules do see the combination as a stop.
+    let tip = w.tip("main");
+    assert!(matches!(
+        w.judged(&tip).await,
+        forge_core::auto_merge::RiskVerdict::Stop {
+            class: forge_core::auto_merge::StopClass::ProgramBreakage,
+            rule: Some("mass_deletion_lines"),
+        }
+    ));
+}
+
+/// FG-REVIEW-0032: while an administrator does not allow full auto-merge,
+/// an Owner cannot choose `full`; a project already `full` merges only by a
+/// person — its merge requests are `held reason=full_auto_not_allowed`, its
+/// queued auto-merge entries leave the queue — and `conditional` still
+/// acts. The change is audited; only an administrator makes it.
+#[tokio::test]
+async fn full_cannot_be_chosen_while_the_instance_does_not_allow_it() {
+    use forge_auth::InstanceCtx;
+    use forge_core::auto_merge::AutoMergeMode;
+    let mut w = world().await;
+    let mut ada = forge_db::users::NewUser::human("ada", "Ada", "ada@example.test");
+    ada.is_admin = true;
+    let admin = forge_db::users::create(&w.t.db, &system("req-user-ada"), &ada)
+        .await
+        .expect("ada")
+        .user_id;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    w.risk(&a, CheckConclusion::Success, "No risk found").await;
+    let auto = w.auto();
+    auto.tick().await.expect("tick");
+    assert!(w.live_entry(&a).await.is_some(), "queued while allowed");
+    // Only an administrator changes it.
+    let denied = prove(
+        &session(w.owner),
+        Action::AutoMergeFullAutoManage,
+        InstanceCtx,
+    )
+    .expect_err("an Owner is no administrator");
+    assert_eq!(denied.code(), ErrorCode::Forbidden);
+    let admin_session = Principal::authenticated(
+        admin,
+        true,
+        true,
+        forge_auth::Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
+    let proof =
+        prove(&admin_session, Action::AutoMergeFullAutoManage, InstanceCtx).expect("allowed");
+    let (outcome, setting) = w
+        .review
+        .set_full_auto_allowed(&request("req-full-off"), &proof, false)
+        .await
+        .expect("disallow");
+    assert_eq!(outcome, forge_review::AutoMergeOutcome::Changed);
+    assert!(!setting.allowed);
+    assert_eq!(setting.changed.as_ref().and_then(|m| m.by), Some(admin));
+    assert_eq!(
+        count(
+            &w.t,
+            "SELECT count(*) AS n FROM forge.audit_log \
+             WHERE action = 'auto_merge.allow_full_auto_changed' AND resource_type = 'instance'",
+        )
+        .await,
+        1
+    );
+    // Held, with the reason on the merge request's line.
+    auto.tick().await.expect("tick");
+    assert_eq!(
+        w.auto_state(&a).await,
+        Some((
+            "held".to_owned(),
+            None,
+            "full_auto_not_allowed".to_owned(),
+            None
+        ))
+    );
+    let settings = w.review.auto_merge_settings(w.project).await.expect("read");
+    assert_eq!(settings.mode, AutoMergeMode::Full);
+    assert_eq!(settings.effective_mode(), AutoMergeMode::Reserve);
+    // The queued auto-merge entry leaves the queue; nothing lands.
+    w.drive(&w.worker("w1"), &BTreeSet::new()).await;
+    assert_eq!(w.state_of(&a).await, forge_core::MergeRequestState::Open);
+    let entry = w.entry_of(&a).await;
+    assert_eq!(entry.state, EntryState::Removed);
+    assert_eq!(entry.reason.as_deref(), Some("full_auto_not_allowed"));
+    // The Owner cannot choose full; conditional is fine.
+    let owner = project_proof(&w, &session(w.owner), Action::AutoMergeSettingsManage).await;
+    let refused = w
+        .review
+        .set_auto_merge_mode(&request("req-mode-full"), &owner, AutoMergeMode::Full)
+        .await
+        .expect_err("full is not allowed");
+    assert_eq!(refused.code(), ErrorCode::AutoMergeFullNotAllowed);
+    let (_, conditional) = w
+        .review
+        .set_auto_merge_mode(
+            &request("req-mode-cond"),
+            &owner,
+            AutoMergeMode::Conditional,
+        )
+        .await
+        .expect("conditional");
+    assert_eq!(conditional.effective_mode(), AutoMergeMode::Conditional);
+    // Allowed again, full can be chosen.
+    let (_, setting) = w
+        .review
+        .set_full_auto_allowed(&request("req-full-on"), &proof, true)
+        .await
+        .expect("allow");
+    assert!(setting.allowed);
+    let (_, full) = w
+        .review
+        .set_auto_merge_mode(&request("req-mode-full-2"), &owner, AutoMergeMode::Full)
+        .await
+        .expect("full");
+    assert_eq!(full.effective_mode(), AutoMergeMode::Full);
+}
+
+/// Review MEDIUM (toggle race): an administrator takes `full` away after
+/// the landing decided the batch and fenced its attempts, before the target
+/// moves. The auto-merge entry never lands (it leaves the queue with
+/// `full_auto_not_allowed`); the person's entry goes back and lands alone.
+#[tokio::test]
+async fn a_toggle_after_the_fence_keeps_the_auto_entry_from_landing() {
+    let mut w = world().await;
+    let mut ada = forge_db::users::NewUser::human("ada", "Ada", "ada@example.test");
+    ada.is_admin = true;
+    let admin = forge_db::users::create(&w.t.db, &system("req-user-ada"), &ada)
+        .await
+        .expect("ada")
+        .user_id;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    let b = w.mr("fb", &[("fb.txt", "x\n")]).await;
+    w.risk(&a, CheckConclusion::Success, "No risk found").await;
+    w.auto().tick().await.expect("tick");
+    assert!(w.live_entry(&a).await.is_some(), "a queued by auto-merge");
+    w.enqueue(&b).await.expect("b queued by dave");
+    let db = w.t.db.clone();
+    let hook: forge_review::AfterFence = Arc::new(move || {
+        let db = db.clone();
+        Box::pin(async move {
+            let (_changed, _setting, ()) = forge_db::review::auto_merge::set_full_auto_decided(
+                &db,
+                &system("req-race"),
+                admin,
+                false,
+                |_| Ok::<(), forge_errors::ForgeError>(()),
+            )
+            .await
+            .expect("toggle");
+        })
+    });
+    let worker = w.worker("w1").with_after_fence(hook);
+    let sizes = w.drive(&worker, &BTreeSet::new()).await;
+    assert_eq!(
+        sizes.first(),
+        Some(&2),
+        "both tested together first: {sizes:?}"
+    );
+    assert_eq!(w.state_of(&a).await, forge_core::MergeRequestState::Open);
+    assert!(!w.main_has("fa.txt"), "no auto entry landed");
+    let entry = w.entry_of(&a).await;
+    assert_eq!(entry.state, EntryState::Removed);
+    assert_eq!(entry.reason.as_deref(), Some("full_auto_not_allowed"));
+    assert_eq!(w.state_of(&b).await, forge_core::MergeRequestState::Merged);
+    assert!(w.main_has("fb.txt"), "the person's entry landed");
+    // The fenced attempt of the first batch never applied.
+    assert_eq!(
+        count(
+            &w.t,
+            "SELECT count(*) AS n FROM forge.merge_request_merges WHERE state = 'applied' \
+             AND credential_kind = 'auto_merge'",
+        )
+        .await,
+        0
+    );
+}
+
+/// An assessor that never answers (a git or database failure each time).
+struct Failing;
+
+impl forge_core::auto_merge::MergeResultAssessor for Failing {
+    fn assess<'a>(
+        &'a self,
+        _: forge_core::auto_merge::MergeResultRange<'a>,
+    ) -> forge_core::auto_merge::MergeResultFuture<'a> {
+        Box::pin(async {
+            Err(forge_errors::ForgeError::new(ErrorCode::RequestTimeout)
+                .with_context("operation", "risk_merge_result"))
+        })
+    }
+}
+
+/// Review MEDIUM (stall): a merge result that cannot be judged three times
+/// in a row removes the batch's auto-merge entries (`FG-REVIEW-0026
+/// reason=merge_result_unavailable`, `not_assessed` on the line); the
+/// person's entry lands without them.
+#[tokio::test]
+async fn a_merge_result_that_cannot_be_judged_releases_the_peoples_entries() {
+    let mut w = world().await;
+    let a = w.mr("fa", &[("fa.txt", "x\n")]).await;
+    let b = w.mr("fb", &[("fb.txt", "x\n")]).await;
+    w.risk(&a, CheckConclusion::Success, "No risk found").await;
+    let auto = w.auto();
+    auto.tick().await.expect("tick");
+    w.enqueue(&b).await.expect("b queued by dave");
+    let worker =
+        MergeQueue::new(w.merger.clone(), "w1", Arc::new(Failing)).with_limits(QueueLimits {
+            poll: Duration::ZERO,
+            ..QueueLimits::default()
+        });
+    let queue = w.queue_id().await;
+    let mut failed = 0;
+    for _ in 0..40 {
+        match worker.tick().await {
+            Ok(None) => break,
+            Ok(Some(_)) => {}
+            Err(e) => {
+                assert_eq!(e.code(), ErrorCode::RequestTimeout);
+                failed += 1;
+            }
+        }
+        w.finish_pipeline(queue, &BTreeSet::new()).await;
+    }
+    assert_eq!(
+        failed,
+        i32::try_from(forge_review::MERGE_RESULT_MAX_FAILURES - 1).expect("small"),
+        "the first failures are returned, the last one decides"
+    );
+    let entry = w.entry_of(&a).await;
+    assert_eq!(entry.state, EntryState::Removed);
+    assert_eq!(entry.reason.as_deref(), Some("merge_result_unavailable"));
+    assert_eq!(
+        entry.error_code.as_deref(),
+        Some(ErrorCode::AutoMergeStopped.id())
+    );
+    assert!(!w.main_has("fa.txt"));
+    assert_eq!(w.state_of(&b).await, forge_core::MergeRequestState::Merged);
+    auto.tick().await.expect("tick");
+    let (state, class, reason, _) = w.auto_state(&a).await.expect("state");
+    assert_eq!(
+        (state.as_str(), class.as_deref(), reason.as_str()),
+        ("stopped", Some("not_assessed"), "merge_result_unavailable")
+    );
+}
+
+/// Review LOW: a person's entry that makes the merge result a stop cuts the
+/// batch before the auto-merge entry behind it; the entries go back in
+/// their order (the person's first), the person's lands, then the
+/// auto-merge entry is judged alone on the new target and lands.
+#[tokio::test]
+async fn a_persons_stop_cuts_the_batch_before_the_auto_entry_in_order() {
+    let mut w = world().await;
+    let a_txt = lines(600, "a");
+    w.rebase_main(&[("a.txt", &a_txt)]);
+    let h = w.mr("fh", &[("h.txt", "x\n")]).await; // deletes a.txt: 600 lines
+    let x = w.mr("fx", &[("a.txt", &a_txt), ("x.txt", "x\n")]).await;
+    w.enqueue(&h).await.expect("h queued by dave");
+    w.risk(&x, CheckConclusion::Success, "No risk found").await;
+    w.auto().tick().await.expect("tick");
+    assert!(w.live_entry(&x).await.is_some(), "x queued by auto-merge");
+    let worker = w.worker("w1");
+    let queue = w.queue_id().await;
+    let built = worker.tick().await.expect("tick").expect("a step");
+    assert_eq!(built.outcome, "built");
+    w.finish_pipeline(queue, &BTreeSet::new()).await;
+    let cut = worker.tick().await.expect("tick").expect("a step");
+    assert_eq!(cut.outcome, "abandoned", "{cut:?}");
+    let batch = qdb::batch(&w.t.db, cut.batch_id.expect("id"))
+        .await
+        .expect("read")
+        .expect("batch");
+    assert_eq!(batch.reason.as_deref(), Some("merge_result_cut"));
+    let queued = qdb::entries(&w.t.db, queue, &[EntryState::Queued])
+        .await
+        .expect("entries");
+    let order: Vec<i64> = queued.iter().map(|e| e.iid).collect();
+    assert_eq!(order, vec![h.iid, x.iid], "the original order");
+    let view = w
+        .review
+        .merge_queue(w.project, &branch("main"), 50)
+        .await
+        .expect("view");
+    assert_eq!(view.queue.expect("queue").batch_limit, 1);
+    let sizes = w.drive(&worker, &BTreeSet::new()).await;
+    assert_eq!(
+        sizes,
+        vec![1, 1],
+        "the person's alone, then the auto entry alone"
+    );
+    assert_eq!(w.state_of(&h).await, forge_core::MergeRequestState::Merged);
+    assert_eq!(w.state_of(&x).await, forge_core::MergeRequestState::Merged);
+    assert!(w.main_has("x.txt") && !w.main_has("a.txt"));
 }

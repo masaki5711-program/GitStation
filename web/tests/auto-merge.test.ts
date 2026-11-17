@@ -25,7 +25,7 @@ function state(over: Partial<AutoMergeState>): AutoMergeState {
 }
 
 function mr(over: Partial<MergeRequestAutoMerge>): MergeRequestAutoMerge {
-  return { iid: 1, mode: 'full', acts: true, stop: null, auto_merge: null, ...over };
+  return { iid: 1, mode: 'full', acts: true, allow_full_auto: true, stop: null, auto_merge: null, ...over };
 }
 
 describe('stateKind', () => {
@@ -47,6 +47,10 @@ describe('stateKind', () => {
     );
     expect(stateKind(state({ reason: 'protected_path' }))).toBe('protected_path');
     expect(stateKind(state({ state: 'held', reason: 'dequeued_by_person' }))).toBe('held');
+    // M4 close: the merge result in the queue, and full not allowed.
+    expect(stopped('program_breakage', 'merge_result_risk')).toBe('merge_result');
+    expect(stopped('leak', 'merge_result_risk')).toBe('merge_result');
+    expect(stateKind(state({ state: 'held', reason: 'full_auto_not_allowed' }))).toBe('full_not_allowed');
   });
 
   it('shows nothing when the mode does not act, and the emergency stop first', () => {
@@ -67,6 +71,8 @@ describe('the line in every language', () => {
     'breakage_queue',
     'breakage_risk',
     'not_assessed',
+    'merge_result',
+    'full_not_allowed',
     'draft',
     'risk_pending',
     'approvals',
