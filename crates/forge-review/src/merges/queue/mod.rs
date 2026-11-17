@@ -35,7 +35,9 @@ use crate::{
 
 mod worker;
 
-pub use worker::{MergeQueue, QueueLimits, TickReport};
+pub use worker::{
+    AfterFence, MergeQueue, QueueLimits, TickReport, MERGE_RESULT_BUDGET, MERGE_RESULT_MAX_FAILURES,
+};
 
 /// The runs a queued merge is decided on: `ci/pipeline` (the name forge
 /// reports on merge results) from the train — `None` is "no run" — and
@@ -144,7 +146,12 @@ pub(crate) fn decide_queued(
 /// emergency stop as read in the gate's transaction. The merge request's
 /// author (on whose behalf it lands) must still be active.
 pub(crate) fn prove_auto(gate: &MergeGate, action: Action) -> Result<(), ForgeError> {
-    let CredentialState::AutoMerge { mode, stop } = gate.credential.credential else {
+    let CredentialState::AutoMerge {
+        mode,
+        stop,
+        full_allowed,
+    } = gate.credential.credential
+    else {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "auto_merge_credential_missing")
             .with_context("action", action.name()));
@@ -169,6 +176,7 @@ pub(crate) fn prove_auto(gate: &MergeGate, action: Action) -> Result<(), ForgeEr
         &crate::loaded_merge_request(stored),
         mode,
         stop,
+        full_allowed,
     );
     forge_auth::prove(&Principal::auto_merge(), action, ctx).map(drop)
 }
@@ -212,6 +220,7 @@ pub(crate) async fn auto_proof(
         &crate::loaded_merge_request(mr),
         settings.mode,
         settings.stop(),
+        settings.allow_full_auto,
     );
     let proof = forge_auth::prove(&Principal::auto_merge(), action, ctx)?;
     author_may(access.role).map_err(|e| e.with_context("merge_request_id", mr.id.get()))?;
@@ -247,8 +256,10 @@ pub(crate) fn auto_risk(gate: &MergeGate, head: &ObjectId) -> Result<(), ForgeEr
     }
 }
 
-/// Whether `e` is the auto-merge principal's refusal for an emergency stop
-/// or a mode that no longer acts (the entry waits or leaves; nothing broke).
+/// Whether `e` is the auto-merge principal's refusal for an emergency stop,
+/// a mode that no longer acts, or `full` the instance no longer allows (M4
+/// close): the entry waits (`auto_merge_stopped`) or leaves with the
+/// returned reason; nothing broke.
 pub(crate) fn auto_merge_paused(e: &ForgeError) -> Option<&'static str> {
     if e.code() != ErrorCode::Forbidden {
         return None;
@@ -261,6 +272,7 @@ pub(crate) fn auto_merge_paused(e: &ForgeError) -> Option<&'static str> {
     match reason {
         Some("auto_merge_emergency_stop") => Some("auto_merge_stopped"),
         Some("auto_merge_mode") => Some("auto_merge_off"),
+        Some("full_auto_not_allowed") => Some("full_auto_not_allowed"),
         _ => None,
     }
 }

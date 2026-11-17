@@ -153,6 +153,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::AutoMergeStopped
         | ErrorCode::AutoMergeEmergencyStopped
         | ErrorCode::AutoMergeScanFailed
+        // M4 close: `full` not allowed on the instance (never a merge's).
+        | ErrorCode::AutoMergeFullNotAllowed
         // M4 C14: the autofix's own outcomes (never a merge's).
         | ErrorCode::AutofixCandidateInvalid
         | ErrorCode::AutofixLandingRaced

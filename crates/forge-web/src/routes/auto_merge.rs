@@ -13,6 +13,10 @@
 //!   people still merge.
 //! - `POST /api/v1/admin/auto-merge/stop` and `…/resume`
 //!   (`AutoMergeInstanceStopToggle`: people only, administrators) → `200`.
+//! - `PUT /api/v1/admin/auto-merge/allow-full-auto` (`AutoMergeFullAutoManage`:
+//!   people only, administrators, a web session; M4 close): `{"allowed":
+//!   bool}` → `200`. While not allowed, `full` cannot be chosen
+//!   (`FG-REVIEW-0032`) and a project set to `full` merges only by a person.
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -40,6 +44,8 @@ pub const RESUME: &str = "/api/v1/projects/{id}/auto-merge/resume";
 pub const ADMIN_STOP: &str = "/api/v1/admin/auto-merge/stop";
 /// `POST` resume it.
 pub const ADMIN_RESUME: &str = "/api/v1/admin/auto-merge/resume";
+/// `PUT` the instance's `merge.allow_full_auto`.
+pub const ADMIN_FULL_AUTO: &str = "/api/v1/admin/auto-merge/allow-full-auto";
 /// The body cap (one word).
 pub const MAX_BODY: usize = 256;
 
@@ -49,6 +55,24 @@ pub const MAX_BODY: usize = 256;
 pub struct PutAutoMerge {
     /// `off`, `reserve`, `conditional` or `full`.
     pub mode: String,
+}
+
+/// `PUT /api/v1/admin/auto-merge/allow-full-auto`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PutFullAuto {
+    /// Whether projects may select `full` and whether `full` acts.
+    pub allowed: bool,
+}
+
+/// The instance's `merge.allow_full_auto`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FullAutoBody {
+    pub allow_full_auto: bool,
+    /// Who changed it last, and when (`null`: never changed).
+    #[schema(required = true)]
+    pub changed: Option<AutoMergeStopBody>,
 }
 
 /// Who turned an emergency stop on, and when.
@@ -80,6 +104,9 @@ pub struct AutoMergeBody {
     pub mode: String,
     /// The auto-merge principal acts in this mode (`conditional` / `full`).
     pub acts: bool,
+    /// The instance's `merge.allow_full_auto` (M4 close): while `false`,
+    /// `full` cannot be chosen and a `full` project merges only by a person.
+    pub allow_full_auto: bool,
     #[schema(required = true, minimum = 1)]
     pub mode_by: Option<i64>,
     #[schema(required = true)]
@@ -206,6 +233,7 @@ fn body(s: forge_review::AutoMergeSettings, viewer: AutoMergeViewerBody) -> Auto
         project_id: s.project.get(),
         mode: s.mode.as_str().to_owned(),
         acts: s.mode.acts(),
+        allow_full_auto: s.allow_full_auto,
         mode_by: s.mode_by.map(UserId::get),
         mode_at: s.mode_at,
         project_stop: stop_body(s.project_stop),
@@ -301,4 +329,23 @@ pub async fn instance_stop(state: AppState, request: Dispatched<InstanceCtx>) ->
 /// `POST /api/v1/admin/auto-merge/resume` → `200`.
 pub async fn instance_resume(state: AppState, request: Dispatched<InstanceCtx>) -> Response {
     set_instance_stop(state, request, false).await
+}
+
+/// `PUT /api/v1/admin/auto-merge/allow-full-auto` → `200`.
+pub async fn put_full_auto(
+    state: AppState,
+    request: Dispatched<InstanceCtx, PutFullAuto>,
+) -> Response {
+    let w = request.into_write();
+    let built = async {
+        let (_, setting) = review(&state)?
+            .set_full_auto_allowed(&request_of(&w), &w.proof, w.input.allowed)
+            .await?;
+        json(FullAutoBody {
+            allow_full_auto: setting.allowed,
+            changed: stop_body(setting.changed),
+        })
+    }
+    .await;
+    respond(&w.ctx, built)
 }

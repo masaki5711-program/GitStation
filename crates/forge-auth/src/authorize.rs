@@ -1558,6 +1558,12 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             people_only()?;
             admin_only()
         }
+        // M4 close: the instance's `merge.allow_full_auto` — administrators,
+        // people only, a web session only (`is_session_only`).
+        (Action::AutoMergeFullAutoManage, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
         // Plan 17 P17-3: `ai_assets.enabled`, a Maintainer's in a session
         // (`is_session_only`; people only: never an agent, a bot or a
         // service account; the auto-merge principal never reaches here).
@@ -1695,6 +1701,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::AutoMergeSettingsManage
             | Action::AutoMergeStopToggle
             | Action::AutoMergeInstanceStopToggle
+            | Action::AutoMergeFullAutoManage
             | Action::AutofixSettingsManage
             | Action::AiAssetsSettingManage
             | Action::CiVariableManage

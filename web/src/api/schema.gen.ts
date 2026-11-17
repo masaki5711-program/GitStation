@@ -250,6 +250,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/auto-merge/allow-full-auto": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** The instance's merge.allow_full_auto ({"allowed": bool}): while not allowed, no project can choose full (FG-REVIEW-0032) and projects set to full merge only by a person (people only; an administrator's web session); audited */
+        put: operations["put_api_v1_admin_auto_merge_allow_full_auto"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/auto-merge/resume": {
         parameters: {
             query?: never;
@@ -3305,6 +3322,11 @@ export interface components {
         AutoMergeBody: {
             /** @description The auto-merge principal acts in this mode (`conditional` / `full`). */
             acts: boolean;
+            /**
+             * @description The instance's `merge.allow_full_auto` (M4 close): while `false`,
+             *     `full` cannot be chosen and a `full` project merges only by a person.
+             */
+            allow_full_auto: boolean;
             instance_stop: null | components["schemas"]["AutoMergeStopBody"];
             /**
              * @description `off`, `reserve`, `conditional` or `full` (`full`: a new project's
@@ -5038,6 +5060,11 @@ export interface components {
             ends_at: string;
             starts_at: string;
         };
+        /** @description The instance's `merge.allow_full_auto`. */
+        FullAutoBody: {
+            allow_full_auto: boolean;
+            changed: null | components["schemas"]["AutoMergeStopBody"];
+        };
         /** @description One grant: a namespace a service account reports on one project. */
         GrantBody: {
             /** @description `ci` or `kanflow`. */
@@ -5514,6 +5541,12 @@ export interface components {
         MergeRequestAutoMergeBody: {
             /** @description The auto-merge principal acts in this mode. */
             acts: boolean;
+            /**
+             * @description The instance's `merge.allow_full_auto` (M4 close): while `false`, a
+             *     `full` project merges only by a person (the state is `held`,
+             *     `full_auto_not_allowed`).
+             */
+            allow_full_auto: boolean;
             auto_merge: null | components["schemas"]["AutoMergeStateBody"];
             /** Format: int64 */
             iid: number;
@@ -6281,6 +6314,11 @@ export interface components {
             freeze_windows?: components["schemas"]["FreezeWindow"][];
             /** @description A Maintainer approves each deployment (always true for prod). */
             requires_approval: boolean;
+        };
+        /** @description `PUT /api/v1/admin/auto-merge/allow-full-auto`. */
+        PutFullAuto: {
+            /** @description Whether projects may select `full` and whether `full` acts. */
+            allowed: boolean;
         };
         /**
          * @description `PUT …/merge-rule` (absent fields: off / 0, except
@@ -8325,6 +8363,39 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_admin_auto_merge_allow_full_auto: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutFullAuto"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FullAutoBody"];
+                };
+            };
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {

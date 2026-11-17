@@ -657,7 +657,8 @@
       "stopped": "Auto-merge is stopped. Queued auto-merge requests wait. People can still merge.",
       "resumed": "Auto-merge is running again.",
       "projectStopped": "Auto-merge of this project is under an emergency stop (since {{at}}).",
-      "instanceStopped": "An administrator stopped auto-merge for everyone (since {{at}})."
+      "instanceStopped": "An administrator stopped auto-merge for everyone (since {{at}}).",
+      "fullNotAllowed": "An administrator does not allow full auto-merge on this server. Projects set to \"Fully automatic\" are merged by people."
     },
     "aiAssets": {
       "title": "AI assets",
@@ -1671,6 +1672,8 @@
       "breakage_queue": "stopped: this merge request alone was red in the merge queue.",
       "breakage_risk": "stopped: the change may delete a large part of the code ({{detail}}).",
       "not_assessed": "stopped: the risk of the change could not be checked (forge/risk).",
+      "merge_result": "stopped: merged together with the merge requests ahead of it in the merge queue, the result may break the program, destroy database data, leak a secret or change code that runs on developers' PCs.",
+      "full_not_allowed": "an administrator does not allow full auto-merge on this server, so it is not merged automatically.",
       "draft": "waiting: this is a draft.",
       "risk_pending": "waiting for the risk check (forge/risk).",
       "approvals": "waiting for approvals.",

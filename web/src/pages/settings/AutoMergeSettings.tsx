@@ -2,8 +2,10 @@
 // its merge.auto (off / reserve / conditional / full) and the emergency stop.
 // The Owner changes the mode (in a web session); a Maintainer turns the
 // emergency stop on or off; everyone who reads the project sees both, and
-// the instance's emergency stop when an administrator turned it on. Controls
-// come from `viewer` only; the server decides again.
+// the instance's emergency stop when an administrator turned it on. M4 close:
+// while an administrator does not allow full auto-merge, `full` cannot be
+// chosen and a `full` project merges only by a person (said once, here).
+// Controls come from `viewer` only; the server decides again.
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -81,6 +83,11 @@ function AutoMergeBody({ projectId, a }: { projectId: number; a: AutoMerge }) {
           {t('settings.autoMerge.projectStopped', { at: when(a.project_stop.at) })}
         </p>
       )}
+      {!a.allow_full_auto && (
+        <p className={styles.warning} role="status">
+          {t('settings.autoMerge.fullNotAllowed')}
+        </p>
+      )}
       {a.viewer.can_change_mode ? (
         <form
           noValidate
@@ -104,7 +111,7 @@ function AutoMergeBody({ projectId, a }: { projectId: number; a: AutoMerge }) {
             }}
           >
             {AUTO_MERGE_MODES.map((m) => (
-              <option key={m} value={m}>
+              <option key={m} value={m} disabled={m === 'full' && !a.allow_full_auto}>
                 {modeLabel(t, m)}
               </option>
             ))}

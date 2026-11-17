@@ -8,6 +8,7 @@ fn run(conclusion: CheckConclusion) -> Option<CheckRun> {
 fn clear_facts() -> Facts {
     Facts {
         mode: AutoMergeMode::Full,
+        full_allowed: true,
         stop: None,
         draft: false,
         queue: QueueFacts::None,
@@ -422,4 +423,210 @@ fn ai_case_raw_data_is_a_leak_stop_and_ai_asset_only_warns() {
     };
     assert_eq!(decide(&facts), Verdict::Enqueue { warned: true });
     assert!(!NOT_ASSESSED_RULES.contains(&"ai_asset"));
+}
+
+/// M4 close: without the instance's `merge.allow_full_auto`, `full` is
+/// `reserve` in effect and its merge requests are held with the reason;
+/// `conditional` still acts; an emergency stop is still shown first.
+#[test]
+fn full_without_the_instance_allowance_is_held_and_conditional_acts() {
+    assert_eq!(AutoMergeMode::Full.effective(false), AutoMergeMode::Reserve);
+    assert_eq!(AutoMergeMode::Full.effective(true), AutoMergeMode::Full);
+    for mode in [
+        AutoMergeMode::Off,
+        AutoMergeMode::Reserve,
+        AutoMergeMode::Conditional,
+    ] {
+        assert_eq!(mode.effective(false), mode);
+    }
+    let held = Facts {
+        full_allowed: false,
+        queue: QueueFacts::Live { auto: true },
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&held),
+        Verdict::Held {
+            reason: "full_auto_not_allowed"
+        }
+    );
+    let conditional = Facts {
+        mode: AutoMergeMode::Conditional,
+        full_allowed: false,
+        ..clear_facts()
+    };
+    assert_eq!(decide(&conditional), Verdict::Enqueue { warned: false });
+    let stopped = Facts {
+        full_allowed: false,
+        stop: Some(StopScope::Project),
+        ..clear_facts()
+    };
+    assert!(matches!(
+        decide(&stopped),
+        Verdict::Stopped(Stop {
+            class: StopClass::EmergencyStop,
+            ..
+        })
+    ));
+    let change = AutoMergeChange::FullAutoAllowed { allowed: false };
+    assert_eq!(change.action(), "auto_merge.allow_full_auto_changed");
+    assert_eq!(change.project(), None);
+    assert_eq!(change.to_value()["allow_full_auto"], false);
+}
+
+fn step(auto: bool, risk: RiskVerdict) -> ResultStep {
+    ResultStep { auto, risk }
+}
+
+const CLEAR: RiskVerdict = RiskVerdict::Clear { warned: false };
+
+fn stop_of(class: StopClass, rule: &'static str) -> RiskVerdict {
+    RiskVerdict::Stop {
+        class,
+        rule: Some(rule),
+    }
+}
+
+/// M4 close: the merge result decides an auto-merge entry; the stop that
+/// appears first at its step is its own, one already there before it cuts
+/// the batch (a person's entry brought it in).
+#[test]
+fn the_merge_result_stops_the_auto_entry_that_brings_the_stop_in() {
+    assert_eq!(merge_result_decision(&[]), MergeResultDecision::Land);
+    // People only: never stopped by auto-merge.
+    let people = [
+        step(false, stop_of(StopClass::DataLoss, "sql_drop")),
+        step(false, CLEAR),
+    ];
+    assert_eq!(merge_result_decision(&people), MergeResultDecision::Land);
+    // Two clean ones, risky together: the second one stops.
+    let combined = [
+        step(true, CLEAR),
+        step(
+            true,
+            stop_of(StopClass::ProgramBreakage, "mass_deletion_files"),
+        ),
+    ];
+    assert_eq!(
+        merge_result_decision(&combined),
+        MergeResultDecision::Stop {
+            index: 1,
+            class: StopClass::ProgramBreakage,
+            rule: Some("mass_deletion_files"),
+        }
+    );
+    // Alone (a batch of one): its own merge result.
+    assert_eq!(
+        merge_result_decision(&[step(true, stop_of(StopClass::Leak, "secret_in_content"))]),
+        MergeResultDecision::Stop {
+            index: 0,
+            class: StopClass::Leak,
+            rule: Some("secret_in_content"),
+        }
+    );
+    // A person's entry made it a stop: cut before the auto-merge entry.
+    let after_person = [
+        step(true, CLEAR),
+        step(false, stop_of(StopClass::DataLoss, "sql_drop")),
+        step(true, stop_of(StopClass::DataLoss, "sql_drop")),
+    ];
+    assert_eq!(
+        merge_result_decision(&after_person),
+        MergeResultDecision::Cut { limit: 2 }
+    );
+    // Too large to assess only combined: cut, judged again smaller;
+    // alone it stops.
+    let large = [
+        step(true, CLEAR),
+        step(true, stop_of(StopClass::NotAssessed, "content_not_scanned")),
+    ];
+    assert_eq!(
+        merge_result_decision(&large),
+        MergeResultDecision::Cut { limit: 1 }
+    );
+    assert_eq!(
+        merge_result_decision(&[step(
+            true,
+            stop_of(StopClass::ProgramBreakage, "too_many_changes")
+        )]),
+        MergeResultDecision::Stop {
+            index: 0,
+            class: StopClass::ProgramBreakage,
+            rule: Some("too_many_changes"),
+        }
+    );
+    for rule in SIZE_LIMITED_RULES {
+        assert!(
+            RULES.iter().any(|r| r.id == *rule),
+            "{rule} is a forge/risk rule"
+        );
+    }
+    // Review LOW: people's entries after the last auto-merge entry make
+    // the final tree a stop: cut before the first auto-merge entry.
+    let tail = [
+        step(false, CLEAR),
+        step(true, CLEAR),
+        step(false, stop_of(StopClass::Leak, "secret_in_content")),
+    ];
+    assert_eq!(
+        merge_result_decision(&tail),
+        MergeResultDecision::Cut { limit: 1 }
+    );
+    let tail_first = [
+        step(true, CLEAR),
+        step(false, stop_of(StopClass::Leak, "secret_in_content")),
+    ];
+    assert_eq!(
+        merge_result_decision(&tail_first),
+        MergeResultDecision::Cut { limit: 1 }
+    );
+    // An answer that is not one is never clear.
+    assert_eq!(
+        merge_result_decision(&[step(true, RiskVerdict::Pending)]),
+        MergeResultDecision::Stop {
+            index: 0,
+            class: StopClass::NotAssessed,
+            rule: None,
+        }
+    );
+}
+
+/// The queue's removal of a stopped merge result holds the same head, with
+/// the class in the reason word.
+#[test]
+fn a_merge_result_removal_stops_the_same_head_with_its_class() {
+    for class in StopClass::ALL {
+        let reason = merge_result_reason(class);
+        assert!(reason.len() <= 64, "{reason}");
+        assert_eq!(merge_result_class(&reason), Some(class));
+        let facts = Facts {
+            queue: QueueFacts::Removed { reason },
+            ..clear_facts()
+        };
+        assert_eq!(
+            decide(&facts),
+            Verdict::Stopped(Stop {
+                class,
+                reason: "merge_result_risk",
+                detail: None,
+            })
+        );
+    }
+    assert_eq!(merge_result_class("merge_result_nonsense"), None);
+    assert_eq!(merge_result_class(MERGE_RESULT_UNAVAILABLE), None);
+    let unavailable = Facts {
+        queue: QueueFacts::Removed {
+            reason: MERGE_RESULT_UNAVAILABLE.to_owned(),
+        },
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&unavailable),
+        Verdict::Stopped(Stop {
+            class: StopClass::NotAssessed,
+            reason: MERGE_RESULT_UNAVAILABLE,
+            detail: None,
+        })
+    );
+    assert_eq!(merge_result_class("conflict"), None);
 }

@@ -12,7 +12,9 @@
 //! - `AutoMergeSettingsManage` (the mode): people only, a session only,
 //!   Owner. `AutoMergeStopToggle` (the project's emergency stop): people
 //!   only, Maintainer; `api`. `AutoMergeInstanceStopToggle`: people only,
-//!   administrators.
+//!   administrators. `AutoMergeFullAutoManage` (the instance's
+//!   `merge.allow_full_auto`, M4 close): people only, administrators, a
+//!   session only; without it `full` does not act.
 //!
 //! Service account and bot rows of the people-only actions are in
 //! `matrix_rows_people.rs`; CI and act-as denies are generated there.
@@ -42,6 +44,17 @@ const fn target(mode: M, stop: Option<S>) -> F {
         mode,
         stop,
         deleted: false,
+        full_allowed: true,
+    }
+}
+
+/// The instance's `merge.allow_full_auto` taken away (M4 close).
+const fn not_allowed(mode: M) -> F {
+    F::AutoMerge {
+        mode,
+        stop: None,
+        deleted: false,
+        full_allowed: false,
     }
 }
 
@@ -71,6 +84,15 @@ macro_rules! principal_rows {
                 target(M::Full, Some(S::Project)),
                 deny(E::Forbidden),
             ),
+            // M4 close: `full` without the instance's allowance does not
+            // act; `conditional` is not touched by it.
+            row(
+                $action,
+                W::AutoMerge,
+                not_allowed(M::Full),
+                deny(E::Forbidden),
+            ),
+            row($action, W::AutoMerge, not_allowed(M::Conditional), Allow),
             row(
                 $action,
                 W::AutoMerge,
@@ -84,6 +106,7 @@ macro_rules! principal_rows {
                     mode: M::Full,
                     stop: None,
                     deleted: true,
+                    full_allowed: true,
                 },
                 deny(E::PendingDeletion),
             ),
@@ -102,8 +125,8 @@ macro_rules! principal_rows {
     };
 }
 
-const ENQUEUE: [Row; 11] = principal_rows!(A::MergeQueueEnqueue);
-const MERGE: [Row; 11] = principal_rows!(A::MergeRequestMerge);
+const ENQUEUE: [Row; 13] = principal_rows!(A::MergeQueueEnqueue);
+const MERGE: [Row; 13] = principal_rows!(A::MergeRequestMerge);
 
 #[rustfmt::skip]
 const SETTINGS: [Row; 12] = [
@@ -150,9 +173,31 @@ const INSTANCE_STOP: [Row; 9] = [
     row(A::AutoMergeInstanceStopToggle, W::Maintainer, F::Instance, deny(E::Forbidden)),
 ];
 
+/// M4 close: the instance's `merge.allow_full_auto` — administrators, in a
+/// web session, people only.
+#[rustfmt::skip]
+const FULL_AUTO: [Row; 8] = [
+    row(A::AutoMergeFullAutoManage, W::Admin, F::Instance, Allow),
+    row(A::AutoMergeFullAutoManage, W::AdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
+    row(A::AutoMergeFullAutoManage, W::AgentAdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
+    row(A::AutoMergeFullAutoManage, W::Owner, F::Instance, deny(E::Forbidden)),
+    row(A::AutoMergeFullAutoManage, W::Maintainer, F::Instance, deny(E::Forbidden)),
+    row(A::AutoMergeFullAutoManage, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    row(A::AutoMergeFullAutoManage, W::DisabledAdmin, F::Instance, deny(E::AccountDisabled)),
+    row(A::AutoMergeFullAutoManage, W::AutoMerge, F::Instance, deny(E::Forbidden)),
+];
+
 /// Every explicit row of auto-merge (`matrix::ROWS` appends them).
 pub(crate) static AUTO_MERGE_ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new(|| {
-    [ENQUEUE.as_slice(), &MERGE, &SETTINGS, &STOP, &INSTANCE_STOP].concat()
+    [
+        ENQUEUE.as_slice(),
+        &MERGE,
+        &SETTINGS,
+        &STOP,
+        &INSTANCE_STOP,
+        &FULL_AUTO,
+    ]
+    .concat()
 });
 
 /// The auto-merge principal is refused every action it may not perform,
@@ -179,7 +224,12 @@ pub(crate) fn generated_denies() -> Vec<Row> {
 
 /// The resource of a [`F::AutoMerge`] row.
 #[cfg(test)]
-pub(crate) fn target_resource(mode: M, stop: Option<S>, deleted: bool) -> crate::model::Resource {
+pub(crate) fn target_resource(
+    mode: M,
+    stop: Option<S>,
+    deleted: bool,
+    full_allowed: bool,
+) -> crate::model::Resource {
     let name = |s: &str| forge_core::RefName::parse(s).expect("fixture ref names are valid");
     crate::model::Resource::AutoMerge(crate::model::AutoMergeTarget {
         project: crate::model::ProjectView {
@@ -191,5 +241,6 @@ pub(crate) fn target_resource(mode: M, stop: Option<S>, deleted: bool) -> crate:
         target_branch: name("refs/heads/main"),
         mode,
         stop,
+        full_allowed,
     })
 }

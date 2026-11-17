@@ -225,6 +225,7 @@ impl AutoMerger {
         };
         let mut facts = Facts {
             mode: settings.mode,
+            full_allowed: settings.allow_full_auto,
             stop: settings.stop(),
             draft: mr.draft,
             queue: self.queue_facts(&mr, &head).await?,
@@ -512,6 +513,7 @@ fn waiting_reason(e: &ForgeError) -> &'static str {
         (ErrorCode::MergeBlocked, "mergeability_unknown") => "mergeability_unknown",
         (ErrorCode::MergeBlocked, _) => "merge_blocked",
         (ErrorCode::Forbidden, "auto_merge_emergency_stop") => "emergency_stop",
+        (ErrorCode::Forbidden, "full_auto_not_allowed") => "full_auto_not_allowed",
         (ErrorCode::Forbidden, "author_role") => "author_role",
         (ErrorCode::AccountDisabled, _) => "author_disabled",
         (ErrorCode::AutoMergeStopped, _) => "risk_changed",

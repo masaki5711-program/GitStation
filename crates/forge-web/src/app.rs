@@ -742,6 +742,16 @@ fn auto_merge_routes(registry: Registry<AppState>) -> Registry<AppState> {
             a::instance_resume,
         )
         .responds::<a::InstanceAutoMergeBody>(Verb::Post, a::ADMIN_RESUME)
+        .route_with_body(
+            Verb::Put,
+            a::ADMIN_FULL_AUTO,
+            Action::AutoMergeFullAutoManage,
+            "The instance's merge.allow_full_auto ({\"allowed\": bool}): while not allowed, no project can choose full (FG-REVIEW-0032) and projects set to full merge only by a person (people only; an administrator's web session); audited",
+            a::MAX_BODY,
+            crate::routes::runners::OnInstance,
+            a::put_full_auto,
+        )
+        .responds::<a::FullAutoBody>(Verb::Put, a::ADMIN_FULL_AUTO)
 }
 
 /// M4 C12: a project's pipeline schedules and the start of a manual job.

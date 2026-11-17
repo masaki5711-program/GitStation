@@ -4,7 +4,7 @@
 use forge_db::review::mergeability_health;
 use forge_db::Db;
 
-use super::{fail, ok, skip, Check};
+use super::{fail, ok, skip, warn, Check};
 
 const NAME: &str = "review.mergeability";
 
@@ -89,6 +89,69 @@ pub(super) async fn merge_queue_check(db: &Db) -> Check {
     match forge_db::review::merge_queue::health(db, LEASE_GRACE).await {
         Ok(h) => queue_line(&h),
         Err(e) => fail(QUEUE, e),
+    }
+}
+
+/// The doctor line of the instance's `merge.allow_full_auto` (M4 close).
+pub(super) const AUTO_MERGE: &str = "review.auto_merge";
+
+/// The line of `review.auto_merge` from its facts: allowed is `ok`; not
+/// allowed is a `warn` while projects are set to `full` (they merge only by
+/// a person, `FG-REVIEW-0032`), `ok` otherwise.
+fn auto_merge_line(h: &forge_db::review::auto_merge::FullAutoHealth) -> Check {
+    if h.allowed {
+        return ok(
+            AUTO_MERGE,
+            &format!(
+                "merge.allow_full_auto on; {} project(s) set to full",
+                h.full_projects
+            ),
+        );
+    }
+    if h.full_projects > 0 {
+        return warn(
+            AUTO_MERGE,
+            &format!(
+                "merge.allow_full_auto off: {} project(s) set to full merge only by a person [FG-REVIEW-0032] (runbook auto-merge)",
+                h.full_projects
+            ),
+        );
+    }
+    ok(
+        AUTO_MERGE,
+        "merge.allow_full_auto off; no project set to full",
+    )
+}
+
+/// `review.auto_merge` (M4 close, FG-REVIEW-0032, runbook auto-merge).
+pub(super) async fn auto_merge_check(db: &Db) -> Check {
+    match forge_db::review::auto_merge::full_auto_health(db).await {
+        Ok(h) => auto_merge_line(&h),
+        Err(e) => fail(AUTO_MERGE, e),
+    }
+}
+
+#[cfg(test)]
+mod auto_merge_tests {
+    use super::super::Outcome;
+    use super::*;
+    use forge_db::review::auto_merge::FullAutoHealth;
+
+    #[test]
+    fn full_auto_off_with_full_projects_warns() {
+        let line = |allowed, full_projects| {
+            auto_merge_line(&FullAutoHealth {
+                allowed,
+                full_projects,
+            })
+            .outcome
+        };
+        assert!(matches!(line(true, 3), Outcome::Ok(_)));
+        assert!(matches!(line(false, 0), Outcome::Ok(_)));
+        let Outcome::Warn(detail) = line(false, 2) else {
+            panic!("not a warning");
+        };
+        assert!(detail.contains("FG-REVIEW-0032"), "{detail}");
     }
 }
 

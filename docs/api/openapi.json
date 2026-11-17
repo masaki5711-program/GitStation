@@ -687,6 +687,10 @@
             "description": "The auto-merge principal acts in this mode (`conditional` / `full`).",
             "type": "boolean"
           },
+          "allow_full_auto": {
+            "description": "The instance's `merge.allow_full_auto` (M4 close): while `false`,\n`full` cannot be chosen and a `full` project merges only by a person.",
+            "type": "boolean"
+          },
           "instance_stop": {
             "oneOf": [
               {
@@ -740,6 +744,7 @@
           "project_id",
           "mode",
           "acts",
+          "allow_full_auto",
           "mode_by",
           "mode_at",
           "project_stop",
@@ -5518,6 +5523,31 @@
         ],
         "type": "object"
       },
+      "FullAutoBody": {
+        "additionalProperties": false,
+        "description": "The instance's `merge.allow_full_auto`.",
+        "properties": {
+          "allow_full_auto": {
+            "type": "boolean"
+          },
+          "changed": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AutoMergeStopBody",
+                "description": "Who changed it last, and when (`null`: never changed)."
+              }
+            ]
+          }
+        },
+        "required": [
+          "allow_full_auto",
+          "changed"
+        ],
+        "type": "object"
+      },
       "GrantBody": {
         "additionalProperties": false,
         "description": "One grant: a namespace a service account reports on one project.",
@@ -6727,6 +6757,10 @@
             "description": "The auto-merge principal acts in this mode.",
             "type": "boolean"
           },
+          "allow_full_auto": {
+            "description": "The instance's `merge.allow_full_auto` (M4 close): while `false`, a\n`full` project merges only by a person (the state is `held`,\n`full_auto_not_allowed`).",
+            "type": "boolean"
+          },
           "auto_merge": {
             "oneOf": [
               {
@@ -6758,6 +6792,7 @@
           "iid",
           "mode",
           "acts",
+          "allow_full_auto",
           "stop",
           "auto_merge"
         ],
@@ -8576,6 +8611,20 @@
         "required": [
           "requires_approval",
           "auto_rollback"
+        ],
+        "type": "object"
+      },
+      "PutFullAuto": {
+        "additionalProperties": false,
+        "description": "`PUT /api/v1/admin/auto-merge/allow-full-auto`.",
+        "properties": {
+          "allowed": {
+            "description": "Whether projects may select `full` and whether `full` acts.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allowed"
         ],
         "type": "object"
       },
@@ -13364,6 +13413,46 @@
         "security": [],
         "summary": "SPA shell: the caller's projects",
         "x-forge-action": "WebShell"
+      }
+    },
+    "/api/v1/admin/auto-merge/allow-full-auto": {
+      "put": {
+        "operationId": "put_api_v1_admin_auto_merge_allow_full_auto",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutFullAuto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FullAutoBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The instance's merge.allow_full_auto ({\"allowed\": bool}): while not allowed, no project can choose full (FG-REVIEW-0032) and projects set to full merge only by a person (people only; an administrator's web session); audited",
+        "x-forge-action": "AutoMergeFullAutoManage",
+        "x-forge-max-body-bytes": 256
       }
     },
     "/api/v1/admin/auto-merge/resume": {
