@@ -662,6 +662,16 @@ actions! {
     // --- operations ---
     Health,
     Metrics,
+    // --- the PFS portal (ADR-0036) ---
+    /// `GET /api/portal-widgets/v1/**`: the portal's home widgets read for
+    /// the person whose portal access token the portal forwards. Only a
+    /// portal credential (`Credential::Portal`) performs it, decided in its
+    /// own arm (`portal.rs`): on the instance (the widget route itself: the
+    /// token's party is the portal, it holds the access role, the person is
+    /// active) and on each project a widget shows (read like the project by
+    /// the person, without administrator rights). Read-only; nothing else
+    /// is ever allowed to that credential.
+    PortalWidgetRead,
 }
 
 impl Action {
@@ -835,6 +845,8 @@ impl Action {
             | Action::DeployApprove
             // Plan 15 MR 3: a session only (see `is_session_only`).
             | Action::GroupVisibilityChange
+            // ADR-0036: a portal credential only (no token reaches it).
+            | Action::PortalWidgetRead
             | Action::OidcBackchannelLogout => None,
             // M3 S2: the claim needs the act-as scope itself.
             Action::ActAsAssertionClaim => Some(Scope::ActAs),
@@ -1122,7 +1134,9 @@ impl Action {
             | Action::PathResolve
             | Action::WebShell
             | Action::Health
-            | Action::Metrics => ActAsRule::Denied,
+            | Action::Metrics
+            // ADR-0036: the portal's widgets are no act-as action.
+            | Action::PortalWidgetRead => ActAsRule::Denied,
         }
     }
 
@@ -1285,7 +1299,9 @@ impl Action {
             | Action::MergeRequestUnapprove
             | Action::IntegrationBindingManage
             | Action::IntegrationBindingRemove
-            | Action::RepositorySearch => CiRule::Denied,
+            | Action::RepositorySearch
+            // ADR-0036: nor the portal's widgets.
+            | Action::PortalWidgetRead => CiRule::Denied,
         }
     }
 }

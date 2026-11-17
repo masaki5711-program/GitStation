@@ -232,6 +232,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::LoginStateInvalid
         | ErrorCode::IdTokenInvalid
         | ErrorCode::AccessTokenInvalid
+        | ErrorCode::PortalTokenInvalid
+        | ErrorCode::PortalUserNotLinked
+        | ErrorCode::PortalWidgetSettingInvalid
         | ErrorCode::LoginNotPermitted
         | ErrorCode::IdentityLinkConflict
         | ErrorCode::IdentityProviderUnavailable
@@ -329,6 +332,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::PushMirrorTargetInvalid
         | ErrorCode::WebhookDisabled
         | ErrorCode::WebhookAttemptFailed
+        | ErrorCode::PortalNewsAttemptFailed
+        | ErrorCode::PortalNewsUndeliverable
+        | ErrorCode::PortalServiceTokenUnavailable
         | ErrorCode::ApprovalRuleChanged
         | ErrorCode::MergeRuleChanged
         // M3 C1: a stored run this build cannot read stays unreadable;

@@ -553,6 +553,14 @@ async fn finish_steps(
         "projects.purge.finish.merge_settings",
     )
     .await?;
+    // ADR-0036: the portal's news of the project.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.portal_news WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.portal_news",
+    )
+    .await?;
     // M4 C14: autofix's rows (the attempts point at the merge requests,
     // the pipelines and the jobs).
     delete_rows(

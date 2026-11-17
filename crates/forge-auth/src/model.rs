@@ -54,6 +54,22 @@ pub enum Credential {
     /// `Resource::Autofix`, nothing else — never an approval, a merge, a
     /// protected branch or path, a setting, a deploy or an act-as.
     Autofix,
+    /// The PFS portal forwarding a person's access token to a widget route
+    /// (ADR-0036): read-only widget data of that person. Built by forge-web's
+    /// authentication only, on the widget routes only
+    /// ([`Principal::portal`]); decided in its own arm (`portal.rs`):
+    /// `PortalWidgetRead`, nothing else, never an administrator right.
+    Portal(PortalCredential),
+}
+
+/// What a portal request authenticated with (ADR-0036 §2): the verified
+/// token's facts `authorize()` decides on. The token itself is never kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortalCredential {
+    /// The token's `azp` is the portal's client (`portal.client_id`).
+    pub portal_party: bool,
+    /// `resource_access.<auth.oidc.client_id>.roles` holds the access role.
+    pub access_role: bool,
 }
 
 /// The scopes an SSH key carries (M4 C13, ADR-0033 §2).
@@ -213,7 +229,8 @@ impl Principal {
             | Credential::Runner(_)
             | Credential::Job(_)
             | Credential::AutoMerge
-            | Credential::Autofix => PersonalDisclosure::default(),
+            | Credential::Autofix
+            | Credential::Portal(_) => PersonalDisclosure::default(),
         }
     }
 
@@ -350,7 +367,8 @@ impl Principal {
             | Credential::Runner(_)
             | Credential::Job(_)
             | Credential::AutoMerge
-            | Credential::Autofix => None,
+            | Credential::Autofix
+            | Credential::Portal(_) => None,
         }
     }
 
@@ -423,7 +441,8 @@ impl Principal {
                 | Credential::Runner(_)
                 | Credential::Job(_)
                 | Credential::AutoMerge
-                | Credential::Autofix => false,
+                | Credential::Autofix
+                | Credential::Portal(_) => false,
             }
     }
 
@@ -440,7 +459,43 @@ impl Principal {
             Credential::Runner(_)
             | Credential::Job(_)
             | Credential::AutoMerge
-            | Credential::Autofix => Vec::new(),
+            | Credential::Autofix
+            | Credential::Portal(_) => Vec::new(),
+        }
+    }
+
+    /// The PFS portal forwarding `user`'s access token (ADR-0036): forge-web's
+    /// authentication builds it on the widget routes only, from a token
+    /// forge-oidc verified and a user the sign-in's link rules found (test
+    /// `only_forge_web_builds_portal_principals`). Never administrator
+    /// rights, never an agent's credential.
+    pub fn portal(
+        user: UserId,
+        active: bool,
+        kind: AccountKind,
+        credential: PortalCredential,
+    ) -> Self {
+        Self {
+            user: Some(user),
+            is_admin: false,
+            active,
+            credential: Credential::Portal(credential),
+            agent: false,
+            kind,
+        }
+    }
+
+    /// The portal credential, when the request came from the portal.
+    pub fn portal_credential(&self) -> Option<PortalCredential> {
+        match &self.credential {
+            Credential::Portal(c) => Some(*c),
+            Credential::Session
+            | Credential::Token(_)
+            | Credential::ActAs(_)
+            | Credential::Runner(_)
+            | Credential::Job(_)
+            | Credential::AutoMerge
+            | Credential::Autofix => None,
         }
     }
 }

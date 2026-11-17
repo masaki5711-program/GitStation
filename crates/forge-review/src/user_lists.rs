@@ -356,3 +356,96 @@ impl Review {
         })
     }
 }
+
+// ── ADR-0036: the PFS portal's `my-reviews` and `stopped-count` widgets ──
+
+pub use forge_db::review::user_lists::WidgetList;
+
+/// What a portal list widget shows: the first visible rows and the count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WidgetPage {
+    pub items: Vec<UserListItem>,
+    pub total: UserListCount,
+}
+
+impl Review {
+    /// The portal's list `list` for the person of `proof` (`PortalWidgetRead`
+    /// on the widget route), in `project` when given: the first `limit`
+    /// visible rows and the visible count (capped at [`COUNT_CAP`] over at
+    /// most [`COUNT_SCAN_PAGES`] pages, as the counts of "My work"). Each
+    /// row is decided for the person as a session without administrator
+    /// rights would see it (`forge_auth::portal_reader`): `MergeRequestRead`,
+    /// and for `Review` / `Spec` the approval trial — the same decisions as
+    /// the person's own lists, so a merge request of a project they cannot
+    /// read is never shown or counted.
+    pub async fn portal_merge_requests(
+        &self,
+        proof: &Authorized<forge_auth::PortalWidgetCtx>,
+        list: WidgetList,
+        project: Option<ProjectId>,
+        limit: usize,
+    ) -> Result<WidgetPage, ForgeError> {
+        require(proof.action(), Action::PortalWidgetRead)?;
+        let reader = forge_auth::portal_reader(proof)?;
+        let user = *proof.id();
+        let scope = match list {
+            WidgetList::Review | WidgetList::Spec => UserListScope::Approvable,
+            WidgetList::Mine | WidgetList::StoppedMine | WidgetList::StoppedInvolved => {
+                UserListScope::Authored
+            }
+        };
+        let shared = Shared::default();
+        let decider = Decider {
+            review: self,
+            principal: &reader,
+            user,
+            scope,
+            shared: &shared,
+        };
+        let mut items = Vec::new();
+        let mut count: i64 = 0;
+        let mut before = None;
+        for _ in 0..COUNT_SCAN_PAGES {
+            let rows = user_lists::widget_merge_requests(
+                &self.db, user, list, project, before, COUNT_PAGE,
+            )
+            .await?;
+            let full = rows.len() >= COUNT_PAGE;
+            before = rows.last().map(|r| r.merge_request.id.get());
+            for item in decider.visible(rows).await? {
+                count = count.saturating_add(1);
+                if items.len() < limit {
+                    items.push(item);
+                }
+                if count >= COUNT_CAP {
+                    return Ok(WidgetPage {
+                        items,
+                        total: UserListCount {
+                            count: COUNT_CAP,
+                            capped: true,
+                            truncated: false,
+                        },
+                    });
+                }
+            }
+            if !full {
+                return Ok(WidgetPage {
+                    items,
+                    total: UserListCount {
+                        count,
+                        capped: false,
+                        truncated: false,
+                    },
+                });
+            }
+        }
+        Ok(WidgetPage {
+            items,
+            total: UserListCount {
+                count,
+                capped: false,
+                truncated: true,
+            },
+        })
+    }
+}

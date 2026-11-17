@@ -35,6 +35,8 @@ mod explain;
 // M3 X8: the push checks' pre-receive hook.
 mod hook;
 mod oidc;
+// ADR-0036: the PFS portal's widgets and news.
+mod portal;
 mod restore;
 mod runtime;
 mod serve;

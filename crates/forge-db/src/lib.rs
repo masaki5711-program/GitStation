@@ -150,6 +150,8 @@ pub mod notify;
 pub mod restore;
 // ── M4 C2: CI pipelines and jobs (plan 14 §4.1) ──
 pub mod pipelines;
+// ADR-0036: the PFS portal's news outbox and widget reads.
+pub mod portal;
 // M4 C14: the deterministic autofix (ADR-0017 Amendment C14).
 pub mod autofix;
 // ── M4 C3: CI runners, job tokens and logs (plan 14 §4.1) ──

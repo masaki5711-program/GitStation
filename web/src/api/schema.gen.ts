@@ -250,6 +250,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/portal-widgets/v1/my-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget my-reviews (list): merge requests waiting for the person's review, their own, stopped auto-merges or specs awaiting their approval (PFS portal contract v1) */
+        get: operations["get_api_portal_widgets_v1_my_reviews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/my-reviews/options/project": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget my-reviews: the project options (projects the person holds a role on and may read, at most 200) */
+        get: operations["get_api_portal_widgets_v1_my_reviews_options_project"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/pipelines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget pipelines (status): the main pipeline or the last deploy of each chosen project, at most 24 */
+        get: operations["get_api_portal_widgets_v1_pipelines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/pipelines/options/project": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget pipelines: the project options (projects the person holds a role on and may read, at most 200) */
+        get: operations["get_api_portal_widgets_v1_pipelines_options_project"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/portal-widgets/v1/stopped-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Portal widget stopped-count (kpi): the person's merge requests whose auto-merge stopped (the standard is 0) */
+        get: operations["get_api_portal_widgets_v1_stopped_count"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/auto-merge/allow-full-auto": {
         parameters: {
             query?: never;
@@ -8357,6 +8442,133 @@ export interface operations {
     head_projects: {
         parameters: {
             query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_my_reviews: {
+        parameters: {
+            query?: {
+                /** @description review (waiting for my review, default), mine (my open changes), stopped (stopped auto-merges I wrote or approved) or spec (specs awaiting my approval) */
+                kind?: string;
+                /** @description One project id (an option of options/project); none: every project the person may see */
+                project?: number;
+                /** @description Items, 3..=10 (default 5) */
+                limit?: number;
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_my_reviews_options_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_pipelines: {
+        parameters: {
+            query?: {
+                /** @description Project ids, repeated (at most 24); none: the projects the person holds a role on */
+                project?: number;
+                /** @description pipeline (the newest pipeline of main, default) or deploy (the newest deployment) */
+                show?: string;
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_pipelines_options_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_portal_widgets_v1_stopped_count: {
+        parameters: {
+            query?: {
+                /** @description mine (my changes, default) or reviews (also those I approved) */
+                scope?: string;
+                /** @description ja, en or id (default en): the language of every text */
+                locale?: string;
+                /** @description An IANA zone name (checked; times are answered in UTC) */
+                tz?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

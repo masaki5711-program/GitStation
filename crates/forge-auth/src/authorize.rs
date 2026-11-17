@@ -187,6 +187,10 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
     if let Credential::Autofix = principal.credential() {
         return crate::autofix::decide(action, resource);
     }
+    // The PFS portal (ADR-0036): its own arm, closed by default.
+    if let Credential::Portal(credential) = principal.credential() {
+        return crate::portal::decide(principal, *credential, action, resource);
+    }
     // A source branch as the autofix bot reaches it is no resource for
     // anyone else.
     if let Resource::Autofix(_) = resource {
@@ -405,6 +409,13 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
         (Action::PathResolve, Resource::Resolved { .. }) => Ok(()),
         // Returned above for every non-public action; kept for exhaustiveness.
         (_, Resource::Unresolved(reason)) => unresolved(*reason),
+
+        // The portal's widgets are read with the portal's credential only
+        // (ADR-0036): a session or a token of the person is no portal call.
+        // A project the caller may not see was the 404 above.
+        (Action::PortalWidgetRead, Resource::Instance | Resource::Project(_)) => {
+            Err(deny(ErrorCode::Forbidden).with_context("reason", "portal_credential_required"))
+        }
 
         // `SpecRefRead` (M3 X1) and `SpecRead` (M3 X4): the project by the
         // route, and every referenced project again by `prove_spec_ref`.
@@ -1721,6 +1732,7 @@ fn decide(principal: &Principal, action: Action, resource: &Resource) -> Result<
             | Action::RunnerJobHeartbeat
             | Action::RunnerLogAppend
             | Action::RunnerJobComplete
+            | Action::PortalWidgetRead
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
