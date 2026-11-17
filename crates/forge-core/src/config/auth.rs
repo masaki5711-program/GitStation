@@ -13,12 +13,21 @@
 //!   `auth.oidc.access_role` (default `access`), `auth.oidc.signing_algs`
 //!   (default `RS256`; a comma list of `RS256` and `ES256` only),
 //!   `auth.oidc.auto_link` (default `true`, ADR-0021 §13).
+//! - `auth.oidc.claims_source` (default `id_token`; `access_token` for a
+//!   provider that puts the identity claims and the client roles in the
+//!   access token only, the PFS Keycloak — ADR-0021 amendment 2026-11-17).
+//! - `auth.oidc.link_auth_sources` (default `local,ldap`): with
+//!   `claims_source = access_token`, the `forge.users.auth_source` values
+//!   an existing user may have to be linked by the employee number alone.
+//! - `auth.oidc.allow_insecure_issuer` (default `false`): an `http` issuer
+//!   on a host other than the loopback, for a trial provider only.
 //!
 //! The section is all or nothing: without any `auth.oidc.*` value browser
 //! sign-in is off (`FG-AUTH-0018` at `/-/auth/login`, doctor warns); with
 //! some values the required ones must all be there. Every problem is
 //! `FG-SYS-0002` with `config_key` and `reason` (`missing`, `invalid`,
-//! `scheme`, `insecure_http`, `has_query`, `has_user_info`, `ca_required`,
+//! `scheme`, `insecure_http` (an `http` issuer off the loopback without
+//! `auth.oidc.allow_insecure_issuer = true`), `has_query`, `has_user_info`, `ca_required`,
 //! `ca_not_allowed`, `alg_not_allowed`, `not_absolute`, `empty`, …).
 
 use std::path::{Path, PathBuf};
@@ -36,6 +45,9 @@ const EMPLOYEE_NUMBER_CLAIM: &str = "auth.oidc.employee_number_claim";
 const ACCESS_ROLE: &str = "auth.oidc.access_role";
 const SIGNING_ALGS: &str = "auth.oidc.signing_algs";
 const AUTO_LINK: &str = "auth.oidc.auto_link";
+const CLAIMS_SOURCE: &str = "auth.oidc.claims_source";
+const ALLOW_INSECURE_ISSUER: &str = "auth.oidc.allow_insecure_issuer";
+const LINK_AUTH_SOURCES: &str = "auth.oidc.link_auth_sources";
 
 /// Every `auth.oidc.*` key (for the all-or-nothing rule).
 const ALL: &[&str] = &[
@@ -47,7 +59,44 @@ const ALL: &[&str] = &[
     ACCESS_ROLE,
     SIGNING_ALGS,
     AUTO_LINK,
+    CLAIMS_SOURCE,
+    ALLOW_INSECURE_ISSUER,
+    LINK_AUTH_SOURCES,
 ];
+
+/// The `forge.users.auth_source` values `auth.oidc.link_auth_sources`
+/// accepts.
+pub const LINK_AUTH_SOURCE_NAMES: &[&str] = &["local", "ldap"];
+
+/// Where the person's identity claims and client roles are read
+/// (`auth.oidc.claims_source`, ADR-0021 amendment 2026-11-17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OidcClaimsSource {
+    /// The verified ID token (ADR-0021 §4, the default).
+    #[default]
+    IdToken,
+    /// The verified access token (a Keycloak JWT whose `azp` is the
+    /// client); the ID token is still verified for `sub`, `nonce` and
+    /// `sid`, and both must name the same `sub`.
+    AccessToken,
+}
+
+impl OidcClaimsSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::IdToken => "id_token",
+            Self::AccessToken => "access_token",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "id_token" => Some(Self::IdToken),
+            "access_token" => Some(Self::AccessToken),
+            _ => None,
+        }
+    }
+}
 
 /// A JWS algorithm the ID token may be signed with (ADR-0021 §9): only
 /// these two; `none`, HS*, PS* and EdDSA are refused at load.
@@ -88,6 +137,14 @@ pub struct OidcConfig {
     pub access_role: String,
     pub signing_algs: Vec<OidcSigningAlg>,
     pub auto_link: bool,
+    /// `auth.oidc.claims_source`.
+    pub claims_source: OidcClaimsSource,
+    /// `auth.oidc.allow_insecure_issuer`: an `http` issuer was accepted
+    /// off the loopback (trials only; `forge doctor` should say so).
+    pub allow_insecure_issuer: bool,
+    /// `auth.oidc.link_auth_sources`: non-empty, each one of
+    /// [`LINK_AUTH_SOURCE_NAMES`], no repeats.
+    pub link_auth_sources: Vec<String>,
 }
 
 /// `[auth]`.
@@ -156,8 +213,14 @@ impl AuthConfig {
             });
         }
         let required = |key: &'static str| text(key)?.ok_or_else(|| invalid(key, "missing"));
+        let flag = |key: &'static str| match text(key)? {
+            None | Some("false") => Ok(false),
+            Some("true") => Ok(true),
+            Some(_) => Err(invalid(key, "invalid")),
+        };
+        let allow_insecure_issuer = flag(ALLOW_INSECURE_ISSUER)?;
         let issuer = required(ISSUER)?;
-        let https = check_issuer(issuer)?;
+        let https = check_issuer(issuer, allow_insecure_issuer)?;
         let client_id = required(CLIENT_ID)?;
         if client_id.chars().count() > 255 || client_id.chars().any(char::is_control) {
             return Err(invalid(CLIENT_ID, "invalid"));
@@ -204,6 +267,30 @@ impl AuthConfig {
             Some("false") => false,
             Some(_) => return Err(invalid(AUTO_LINK, "invalid")),
         };
+        let link_auth_sources = match text(LINK_AUTH_SOURCES)? {
+            None => LINK_AUTH_SOURCE_NAMES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+            Some(list) => {
+                let mut sources: Vec<String> = Vec::new();
+                for name in list.split(',').map(str::trim) {
+                    if !LINK_AUTH_SOURCE_NAMES.contains(&name) {
+                        return Err(invalid(LINK_AUTH_SOURCES, "invalid"));
+                    }
+                    if !sources.iter().any(|s| s == name) {
+                        sources.push(name.to_owned());
+                    }
+                }
+                sources
+            }
+        };
+        let claims_source = match text(CLAIMS_SOURCE)? {
+            None => OidcClaimsSource::IdToken,
+            Some(v) => {
+                OidcClaimsSource::parse(v).ok_or_else(|| invalid(CLAIMS_SOURCE, "invalid"))?
+            }
+        };
         Ok(Self {
             act_as_keys_file: None,
             oidc: Some(OidcConfig {
@@ -215,19 +302,23 @@ impl AuthConfig {
                 access_role: claim(ACCESS_ROLE, "access")?,
                 signing_algs,
                 auto_link,
+                claims_source,
+                allow_insecure_issuer,
+                link_auth_sources,
             }),
         })
     }
 }
 
-/// The issuer's rules; `true` for `https`.
-fn check_issuer(raw: &str) -> Result<bool, ForgeError> {
+/// The issuer's rules; `true` for `https`. `http` is accepted on the
+/// loopback, elsewhere only with `allow_insecure` (a trial provider).
+fn check_issuer(raw: &str, allow_insecure: bool) -> Result<bool, ForgeError> {
     let bad = |reason| invalid(ISSUER, reason);
     let url = url::Url::parse(raw).map_err(|_| bad("invalid"))?;
     let host = url.host_str().ok_or_else(|| bad("invalid"))?;
     let https = match url.scheme() {
         "https" => true,
-        "http" if matches!(host, "localhost" | "127.0.0.1" | "[::1]") => false,
+        "http" if allow_insecure || matches!(host, "localhost" | "127.0.0.1" | "[::1]") => false,
         "http" => return Err(bad("insecure_http")),
         _ => return Err(bad("scheme")),
     };

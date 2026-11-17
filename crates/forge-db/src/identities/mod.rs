@@ -47,10 +47,81 @@ pub struct LoginIdentity<'a> {
 }
 
 /// `auth.oidc.auto_link` (ADR-0021 §13): `false` links no existing user
-/// automatically; the operator links them all.
+/// automatically; the operator links them all. `rules`: how the claims are
+/// trusted (ADR-0021 amendment 2026-11-17).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkPolicy {
     pub auto_link: bool,
+    pub rules: LinkRules,
+}
+
+/// The `forge.users.auth_source` values an existing user may have to be
+/// linked under [`LinkRules::EmployeeNumberOnly`]
+/// (`auth.oidc.link_auth_sources`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkAuthSources {
+    pub local: bool,
+    pub ldap: bool,
+}
+
+impl LinkAuthSources {
+    /// Both (the default of `auth.oidc.link_auth_sources`).
+    pub const ALL: Self = Self {
+        local: true,
+        ldap: true,
+    };
+
+    /// From the configured names (`local`, `ldap`; others are ignored —
+    /// forge-core refuses them at load).
+    pub fn from_names<S: AsRef<str>>(names: &[S]) -> Self {
+        let has = |n: &str| names.iter().any(|s| s.as_ref() == n);
+        Self {
+            local: has("local"),
+            ldap: has("ldap"),
+        }
+    }
+
+    fn allows(self, auth_source: &str) -> bool {
+        match auth_source {
+            "local" => self.local,
+            "ldap" => self.ldap,
+            _ => false,
+        }
+    }
+}
+
+/// The longest employee number [`LinkRules::EmployeeNumberOnly`] takes
+/// (`[A-Za-z0-9_-]{1,32}`: the case is folded in ASCII only).
+pub const MAX_STAFF_ID_CHARS: usize = 32;
+
+fn staff_id_ok(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_STAFF_ID_CHARS
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// How a first sign-in finds or creates its user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkRules {
+    /// ADR-0021 §4 (`claims_source = id_token`): the employee number is
+    /// compared exactly and links only with a verified, matching e-mail;
+    /// a new user needs a verified e-mail and takes `preferred_username`.
+    #[default]
+    VerifiedEmail,
+    /// The PFS Keycloak (`claims_source = access_token`; it sends no
+    /// `email_verified`): the employee number (`staff_id`) alone links,
+    /// compared case-insensitively (`upper()` on both sides; more than one
+    /// match is `employee_number_ambiguous`); the e-mail is never verified or
+    /// compared (a new user still needs one: `email_missing`); a new user's username is the employee number in
+    /// lowercase (`preferred_username` is not used) and its display name
+    /// is `name`. The employee number must be `[A-Za-z0-9_-]{1,32}`
+    /// (`claim_invalid detail=employee_number_format`) and is stored as
+    /// sent. An existing user is linked only when it has no OIDC identity
+    /// of any issuer (`employee_number_linked`), is no administrator and
+    /// its `auth_source` is in `auth_sources` (`auth_source_not_linkable`).
+    EmployeeNumberOnly { auth_sources: LinkAuthSources },
 }
 
 /// The account a sign-in found (or will create), as the admission decision
@@ -204,6 +275,10 @@ async fn insert_identity(
 ///    tombstone check, personal namespace; `auth_source = 'local'`, never
 ///    an administrator) and linked (`via=first_login`).
 ///
+/// With [`LinkRules::EmployeeNumberOnly`] steps 3 and 4 skip every e-mail
+/// check, step 3 compares the number without the case (two matches:
+/// `employee_number_ambiguous`) and step 4 names the user by the number.
+///
 /// A race with another sign-in of the same identity is `subject_linked` /
 /// `already_linked` / `employee_number_taken` (nothing written).
 pub async fn login_decided(
@@ -249,28 +324,54 @@ async fn login_steps(
         }));
     }
 
+    let (employee_only, auth_sources) = match policy.rules {
+        LinkRules::VerifiedEmail => (false, LinkAuthSources::ALL),
+        LinkRules::EmployeeNumberOnly { auth_sources } => (true, auth_sources),
+    };
     let Some(employee_number) = identity.employee_number.filter(|e| !e.is_empty()) else {
         return Err(conflict("employee_number_missing"));
     };
+    if employee_only && !staff_id_ok(employee_number) {
+        return Err(conflict("claim_invalid").with_context("detail", "employee_number_format"));
+    }
     let email = identity.email.filter(|e| !e.is_empty());
-    let holder: Option<(i64, String, String, bool, Option<bool>, bool)> = tx
+    // Under EmployeeNumberOnly the comparison ignores the case, so two
+    // stored numbers differing only in case would both match (the unique
+    // index is exact): two rows are read and that is refused, never a guess.
+    // Under EmployeeNumberOnly an identity of ANY issuer counts as linked:
+    // the employee number alone never moves an account that another
+    // provider (or the operator) already bound.
+    let sql = if employee_only {
+        "SELECT u.id, u.kind, u.state, u.is_admin, lower(u.email) = lower($3), \
+         EXISTS (SELECT 1 FROM forge.user_identities i WHERE i.user_id = u.id), \
+         u.auth_source \
+         FROM forge.users u WHERE upper(u.employee_number) = upper($1) \
+         ORDER BY u.id LIMIT 2 FOR UPDATE"
+    } else {
+        "SELECT u.id, u.kind, u.state, u.is_admin, lower(u.email) = lower($3), \
+         EXISTS (SELECT 1 FROM forge.user_identities i \
+                 WHERE i.user_id = u.id AND i.issuer = $2), \
+         u.auth_source \
+         FROM forge.users u WHERE u.employee_number = $1 FOR UPDATE"
+    };
+    type Holder = (i64, String, String, bool, Option<bool>, bool, String);
+    let mut holders: Vec<Holder> = tx
         .step(|c| async move {
-            sqlx::query_as(
-                "SELECT u.id, u.kind, u.state, u.is_admin, lower(u.email) = lower($3), \
-                 EXISTS (SELECT 1 FROM forge.user_identities i \
-                         WHERE i.user_id = u.id AND i.issuer = $2) \
-                 FROM forge.users u WHERE u.employee_number = $1 FOR UPDATE",
-            )
-            .bind(employee_number)
-            .bind(issuer)
-            .bind(email)
-            .fetch_optional(c)
-            .await
-            .map_err(|e| query_error("identities.login.employee_number", e))
+            sqlx::query_as(sql)
+                .bind(employee_number)
+                .bind(issuer)
+                .bind(email)
+                .fetch_all(c)
+                .await
+                .map_err(|e| query_error("identities.login.employee_number", e))
         })
         .await?;
+    if holders.len() > 1 {
+        return Err(conflict("employee_number_ambiguous"));
+    }
+    let holder = holders.pop();
 
-    if let Some((user, kind, state, is_admin, same_email, has_identity)) = holder {
+    if let Some((user, kind, state, is_admin, same_email, has_identity, auth_source)) = holder {
         let user = UserId::new(user);
         decide(account_of(&kind, &state))?;
         if !policy.auto_link {
@@ -282,9 +383,14 @@ async fn login_steps(
         if is_admin {
             return Err(conflict("privileged_account"));
         }
-        check_email(email, identity.email_verified)?;
-        if same_email != Some(true) {
-            return Err(conflict("email_mismatch"));
+        if employee_only && !auth_sources.allows(&auth_source) {
+            return Err(conflict("auth_source_not_linkable"));
+        }
+        if !employee_only {
+            check_email(email, identity.email_verified)?;
+            if same_email != Some(true) {
+                return Err(conflict("email_mismatch"));
+            }
         }
         insert_identity(tx, user, issuer, subject).await?;
         let record = ChangeRecord {
@@ -296,11 +402,17 @@ async fn login_steps(
     }
 
     decide(LoginAccount::New)?;
-    let email = check_email(email, identity.email_verified)?;
-    let username = identity
-        .preferred_username
-        .map(str::to_ascii_lowercase)
-        .ok_or_else(|| conflict("username_unavailable"))?;
+    let (email, username) = if employee_only {
+        let email = email.ok_or_else(|| conflict("email_missing"))?;
+        (Some(email), employee_number.to_ascii_lowercase())
+    } else {
+        let email = check_email(email, identity.email_verified)?;
+        let username = identity
+            .preferred_username
+            .map(str::to_ascii_lowercase)
+            .ok_or_else(|| conflict("username_unavailable"))?;
+        (Some(email), username)
+    };
     let segment =
         PathSegment::parse_top_level(&username).map_err(|_| conflict("username_unavailable"))?;
     let display_name: String = identity
@@ -316,7 +428,7 @@ async fn login_steps(
         kind: UserKind::Human,
         username: segment.as_str().to_owned(),
         display_name,
-        email: Some(email.to_owned()),
+        email: email.map(str::to_owned),
         employee_number: Some(employee_number.to_owned()),
         external_id: None,
         auth_source: AuthSource::Local,

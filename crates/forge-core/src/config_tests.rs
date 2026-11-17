@@ -1284,6 +1284,87 @@ fn auth_oidc_is_all_or_nothing_and_validated() {
     );
 }
 
+/// `auth.oidc.claims_source` and `auth.oidc.allow_insecure_issuer` (the
+/// PFS Keycloak, ADR-0021 amendment 2026-11-17): the default keeps the ID
+/// token; an `http` issuer off the loopback needs the explicit flag.
+#[test]
+fn auth_oidc_claims_source_and_insecure_issuer_flag() {
+    let secret = file("synthetic-client-secret\n");
+    let secret_path = secret.path().to_string_lossy().into_owned();
+    let base = [
+        (
+            "FORGE_AUTH_OIDC_ISSUER",
+            "http://localhost:18180/realms/iotpf",
+        ),
+        ("FORGE_AUTH_OIDC_CLIENT_ID", "gitstation"),
+        ("FORGE_AUTH_OIDC_CLIENT_SECRET_FILE", secret_path.as_str()),
+    ];
+    let with = |extra: &[(&'static str, &str)]| {
+        let mut pairs: Vec<(&str, &str)> = base.to_vec();
+        pairs.extend_from_slice(extra);
+        load(None, &env(&pairs))
+    };
+    let cfg = with(&[]).expect("defaults");
+    let oidc = cfg.auth.oidc.expect("configured");
+    assert_eq!(oidc.claims_source, OidcClaimsSource::IdToken);
+    assert!(!oidc.allow_insecure_issuer);
+    let pfs = with(&[
+        ("FORGE_AUTH_OIDC_CLAIMS_SOURCE", "access_token"),
+        ("FORGE_AUTH_OIDC_EMPLOYEE_NUMBER_CLAIM", "staff_id"),
+    ])
+    .expect("pfs");
+    let oidc = pfs.auth.oidc.expect("configured");
+    assert_eq!(oidc.claims_source, OidcClaimsSource::AccessToken);
+    assert_eq!(oidc.employee_number_claim, "staff_id");
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_CLAIMS_SOURCE", "userinfo")]).expect_err("source"),
+        "auth.oidc.claims_source",
+        "invalid",
+    );
+    let lan = (
+        "FORGE_AUTH_OIDC_ISSUER",
+        "http://pfs-server.example.invalid:18180/realms/iotpf",
+    );
+    assert_invalid(
+        &with(&[lan]).expect_err("http off the loopback"),
+        "auth.oidc.issuer",
+        "insecure_http",
+    );
+    assert_eq!(
+        with(&[])
+            .expect("defaults")
+            .auth
+            .oidc
+            .expect("configured")
+            .link_auth_sources,
+        ["local", "ldap"]
+    );
+    let narrow = with(&[("FORGE_AUTH_OIDC_LINK_AUTH_SOURCES", "ldap, ldap")]).expect("narrow");
+    assert_eq!(
+        narrow.auth.oidc.expect("configured").link_auth_sources,
+        ["ldap"]
+    );
+    for bad in ["oidc", "local,", " "] {
+        let err = with(&[("FORGE_AUTH_OIDC_LINK_AUTH_SOURCES", bad)]).expect_err(bad);
+        let key = "auth.oidc.link_auth_sources";
+        let reason = if bad.trim().is_empty() {
+            "empty"
+        } else {
+            "invalid"
+        };
+        assert_invalid(&err, key, reason);
+    }
+    let trial = with(&[lan, ("FORGE_AUTH_OIDC_ALLOW_INSECURE_ISSUER", "true")]).expect("trial");
+    assert!(trial.auth.oidc.expect("configured").allow_insecure_issuer);
+    // The flag alone (without the rest) is a partial section.
+    let err = load(
+        None,
+        &env(&[("FORGE_AUTH_OIDC_CLAIMS_SOURCE", "access_token")]),
+    )
+    .expect_err("partial");
+    assert_invalid(&err, "auth.oidc.issuer", "missing");
+}
+
 /// `web.session_purge_interval_secs` (M2 MR6): default 1 h, env, and the
 /// 60..=86400 range (FG-SYS-0002 naming the key).
 #[test]

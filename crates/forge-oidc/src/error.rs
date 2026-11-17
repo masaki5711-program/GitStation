@@ -13,6 +13,12 @@ pub(crate) fn id_token(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::IdTokenInvalid).with_context("reason", reason)
 }
 
+/// `FG-AUTH-0025 AccessTokenInvalid` (`auth.oidc.claims_source =
+/// access_token`, ADR-0021 amendment 2026-11-17).
+pub(crate) fn access_token(reason: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::AccessTokenInvalid).with_context("reason", reason)
+}
+
 /// `FG-AUTH-0017 LogoutTokenInvalid` (the back-channel logout, MR5).
 pub(crate) fn logout_token(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::LogoutTokenInvalid).with_context("reason", reason)

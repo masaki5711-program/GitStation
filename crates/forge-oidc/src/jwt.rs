@@ -29,7 +29,7 @@ use jsonwebtoken::signature;
 use jsonwebtoken::{Algorithm, DecodingKey, DecodingKeyKind, EncodingKey, Validation};
 use serde_json::Value;
 
-use crate::error::{id_token, internal, loggable, logout_token};
+use crate::error::{access_token, id_token, internal, loggable, logout_token};
 use crate::keys::{KeySet, VerifyKey};
 
 /// The longest token accepted (a Keycloak ID token is a few KiB).
@@ -209,6 +209,11 @@ impl JwtVerifier {
         self.header(token, id_token).map(|(_, kid)| kid)
     }
 
+    /// [`Self::kid`] for an access token (`FG-AUTH-0025`).
+    pub fn access_kid(&self, token: &str) -> Result<String, ForgeError> {
+        self.header(token, access_token).map(|(_, kid)| kid)
+    }
+
     /// [`Self::kid`] for a back-channel logout token (`FG-AUTH-0017`).
     pub fn logout_kid(&self, token: &str) -> Result<String, ForgeError> {
         self.header(token, logout_token).map(|(_, kid)| kid)
@@ -221,8 +226,26 @@ impl JwtVerifier {
         keys: &KeySet,
         expected: &Expected<'_>,
     ) -> Result<IdClaims, ForgeError> {
-        let claims = self.verified_payload(token, keys, expected, id_token, true)?;
+        let claims = self.verified_payload(token, keys, expected, id_token, Kind::Id)?;
         check_claims(claims, expected)
+    }
+
+    /// Verify a Keycloak access token (`auth.oidc.claims_source =
+    /// access_token`, ADR-0021 amendment 2026-11-17): the ID token's
+    /// signature, key, `iss`, `exp` and `nbf` rules, then
+    /// [`check_access_claims`] — `azp` is the client (the audience is
+    /// Keycloak's: absent, a string or a list, never required to hold the
+    /// client), `typ` is `Bearer` (required), `sub` is required. Every
+    /// refusal is `FG-AUTH-0025` with the reason. `expected.nonce` is
+    /// ignored (an access token carries none to compare).
+    pub fn verify_access_token(
+        &self,
+        token: &str,
+        keys: &KeySet,
+        expected: &Expected<'_>,
+    ) -> Result<AccessClaims, ForgeError> {
+        let claims = self.verified_payload(token, keys, expected, access_token, Kind::Access)?;
+        check_access_claims(claims, expected)
     }
 
     /// Verify a back-channel logout token (ADR-0021 §8, §9): the ID
@@ -236,20 +259,23 @@ impl JwtVerifier {
         keys: &KeySet,
         expected: &Expected<'_>,
     ) -> Result<LogoutClaims, ForgeError> {
-        let claims = self.verified_payload(token, keys, expected, logout_token, false)?;
+        let claims = self.verified_payload(token, keys, expected, logout_token, Kind::Logout)?;
         check_logout_claims(&claims, expected)
     }
 
     /// The signature, the key and the library's claim checks. `exp` (and
-    /// `sub`) are required of an ID token (`id`); a logout token's `exp`
-    /// is optional and checked by [`check_logout_claims`] when present.
+    /// `sub`) are required of an ID token and an access token; a logout
+    /// token's `exp` is optional and checked by [`check_logout_claims`]
+    /// when present. The library checks `aud` for an ID or logout token
+    /// only: an access token's audience is Keycloak's own (`azp` decides,
+    /// [`check_access_claims`]).
     fn verified_payload(
         &self,
         token: &str,
         keys: &KeySet,
         expected: &Expected<'_>,
         fail: Fail,
-        id: bool,
+        kind: Kind,
     ) -> Result<Value, ForgeError> {
         let (alg, kid) = self.header(token, fail)?;
         let entry = keys.get(&kid).ok_or_else(|| fail("unknown_kid"))?;
@@ -274,15 +300,20 @@ impl JwtVerifier {
         let mut validation = Validation::new(algorithm);
         validation.algorithms = vec![algorithm];
         validation.leeway = expected.leeway;
-        validation.validate_exp = id;
+        validation.validate_exp = kind != Kind::Logout;
         validation.validate_nbf = true;
-        validation.validate_aud = true;
-        validation.aud = Some(HashSet::from([expected.client_id.to_owned()]));
-        validation.iss = Some(HashSet::from([expected.issuer.to_owned()]));
-        let required: &[&str] = if id {
-            &["exp", "iss", "aud", "sub"]
+        if kind == Kind::Access {
+            validation.validate_aud = false;
+            validation.aud = None;
         } else {
-            &["iss", "aud"]
+            validation.validate_aud = true;
+            validation.aud = Some(HashSet::from([expected.client_id.to_owned()]));
+        }
+        validation.iss = Some(HashSet::from([expected.issuer.to_owned()]));
+        let required: &[&str] = match kind {
+            Kind::Id => &["exp", "iss", "aud", "sub"],
+            Kind::Access => &["exp", "iss", "sub"],
+            Kind::Logout => &["iss", "aud"],
         };
         validation.required_spec_claims = required.iter().map(|c| (*c).to_owned()).collect();
         let data = jsonwebtoken::decode::<Value>(token, &decoding, &validation)
@@ -292,8 +323,68 @@ impl JwtVerifier {
 }
 
 /// The error constructor of the token being verified: `FG-AUTH-0012` for
-/// an ID token, `FG-AUTH-0017` for a logout token.
+/// an ID token, `FG-AUTH-0017` for a logout token, `FG-AUTH-0025` for an
+/// access token.
 type Fail = fn(&'static str) -> ForgeError;
+
+/// Which token [`JwtVerifier::verified_payload`] checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Id,
+    Logout,
+    Access,
+}
+
+/// The verified claims of an access token (`claims` keeps the whole
+/// payload: the identity claims and the roles are read from it by name).
+#[derive(Debug, Clone)]
+pub struct AccessClaims {
+    pub subject: String,
+    pub claims: Value,
+}
+
+/// The access token's own rules (ADR-0021 amendment 2026-11-17), after the
+/// library's `iss` / `exp` / `nbf`: `iat`, when present, not in the future
+/// beyond the skew; `typ` required and `Bearer` (Keycloak always sets it and
+/// marks its ID tokens `ID`, signed with the same key: review MEDIUM); `azp` required and equal to the
+/// client; `aud`, when present, a string or a list of strings (Keycloak
+/// puts `account` or other clients there, or nothing); `sub` 1..=255
+/// characters without NUL.
+fn check_access_claims(claims: Value, expected: &Expected<'_>) -> Result<AccessClaims, ForgeError> {
+    match claims.get("iat") {
+        None => {}
+        Some(iat) => {
+            let iat = iat
+                .as_u64()
+                .ok_or_else(|| access_token("malformed").with_context("claim", "iat"))?;
+            if iat > expected.now.saturating_add(expected.leeway) {
+                return Err(access_token("not_yet_valid").with_context("claim", "iat"));
+            }
+        }
+    }
+    match claims.get("typ") {
+        None => return Err(access_token("missing_claim").with_context("claim", "typ")),
+        Some(Value::String(typ)) if typ == "Bearer" => {}
+        Some(typ) => {
+            return Err(
+                access_token("typ").with_context("typ", loggable(typ.as_str().unwrap_or("")))
+            );
+        }
+    }
+    let azp = claims
+        .get("azp")
+        .ok_or_else(|| access_token("missing_claim").with_context("claim", "azp"))?;
+    if azp.as_str() != Some(expected.client_id) {
+        return Err(access_token("azp"));
+    }
+    match claims.get("aud") {
+        None | Some(Value::String(_)) => {}
+        Some(Value::Array(list)) if list.iter().all(Value::is_string) => {}
+        Some(_) => return Err(access_token("audience")),
+    }
+    let subject = short_claim(&claims, "sub").ok_or_else(|| access_token("subject"))?;
+    Ok(AccessClaims { subject, claims })
+}
 
 fn mismatch(alg: OidcSigningAlg, key: &VerifyKey, fail: Fail) -> ForgeError {
     fail("key_alg_mismatch")

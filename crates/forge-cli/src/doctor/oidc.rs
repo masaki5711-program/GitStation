@@ -7,12 +7,21 @@
 
 use std::time::SystemTime;
 
-use forge_core::config::Config;
+use forge_core::config::{Config, OidcClaimsSource};
 
 use super::{fail, ok, warn, Check};
 use crate::oidc::{clock_skew, settings, MAX_CLOCK_SKEW};
 
 const NAME: &str = "auth.oidc";
+
+/// With `claims_source = access_token` the employee number links accounts
+/// by itself (ADR-0021 amendment 2026-11-17): a reminder that only the
+/// realm's administrators may edit it.
+const STAFF_ID_REMINDER: &str = concat!(
+    "; claims_source=access_token: the employee number claim must be admin-only ",
+    "in the Keycloak user profile (Realm settings > User profile > staff_id > ",
+    "permissions: edit = admin only; runbook oidc-login, PFS Keycloak)"
+);
 
 pub(super) async fn oidc_check(cfg: &Config) -> Check {
     let settings = match settings(cfg) {
@@ -28,7 +37,10 @@ pub(super) async fn oidc_check(cfg: &Config) -> Check {
     match forge_oidc::check_provider(&settings).await {
         Err(e) => fail(NAME, e),
         Ok((doc, keys)) => {
-            let reached = format!("{} reachable, {keys} signing key(s)", doc.issuer);
+            let mut reached = format!("{} reachable, {keys} signing key(s)", doc.issuer);
+            if settings.claims_source == OidcClaimsSource::AccessToken {
+                reached.push_str(STAFF_ID_REMINDER);
+            }
             match clock_skew(doc.date.as_deref(), SystemTime::now()) {
                 Some(skew) if skew > MAX_CLOCK_SKEW => warn(
                     NAME,

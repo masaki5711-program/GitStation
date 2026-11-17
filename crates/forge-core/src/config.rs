@@ -53,7 +53,7 @@ mod webhook;
 pub use api::ApiConfig;
 pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
-pub use auth::{AuthConfig, OidcConfig, OidcSigningAlg};
+pub use auth::{AuthConfig, OidcClaimsSource, OidcConfig, OidcSigningAlg};
 pub use backup::{BackupConfig, BackupKey};
 pub use ci::{CiConfig, GpuEvalPolicy};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};

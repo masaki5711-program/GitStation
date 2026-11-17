@@ -5,22 +5,24 @@ use std::net::IpAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use forge_auth::{authorize, Action, AdmissionAccount, Principal, Resource};
-use forge_core::config::{OidcConfig, OidcSigningAlg};
+use forge_core::config::{OidcClaimsSource, OidcConfig, OidcSigningAlg};
 use forge_core::session_token::SessionToken;
 use forge_core::web_keys::{KeyPurpose, PurposeKeys, WebKeys};
 use forge_core::{RequestId, SessionRevokeReason, UserId};
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::identities::{self, LinkPolicy, LoginAccount, LoginIdentity, LoginOutcome};
+use forge_db::identities::{
+    self, LinkAuthSources, LinkPolicy, LinkRules, LoginAccount, LoginIdentity, LoginOutcome,
+};
 use forge_db::sessions::{self, NewSession, OidcSession};
 use forge_db::Db;
 use forge_errors::ForgeError;
 use serde_json::Value;
 
 use crate::discovery::{self, Discovery, DiscoveryCache};
-use crate::error::{internal, loggable, state, unavailable};
+use crate::error::{access_token, internal, loggable, state, unavailable};
 use crate::http::IdpClient;
 use crate::jwks::{JwksCache, JwksTiming};
-use crate::jwt::{Expected, IdClaims, JwtVerifier};
+use crate::jwt::{AccessClaims, Expected, IdClaims, JwtVerifier};
 use crate::state::{safe_next, LoginState};
 use crate::{CALLBACK_PATH, STATE_MAX_AGE_SECS};
 
@@ -67,6 +69,11 @@ pub struct OidcSettings {
     pub access_role: String,
     pub signing_algs: Vec<OidcSigningAlg>,
     pub auto_link: bool,
+    /// `auth.oidc.claims_source`: where the identity claims and the client
+    /// roles are read (ADR-0021 amendment 2026-11-17).
+    pub claims_source: OidcClaimsSource,
+    /// `auth.oidc.link_auth_sources` (`claims_source = access_token` only).
+    pub link_auth_sources: Vec<String>,
     /// `web.base_url`'s origin (`redirect_uri` = it + `/-/auth/callback`).
     pub base_origin: String,
     /// `web.session_idle_secs` / `web.session_absolute_secs`.
@@ -84,6 +91,7 @@ impl std::fmt::Debug for OidcSettings {
             .field("ca_pem", &self.ca_pem.is_some())
             .field("signing_algs", &self.signing_algs)
             .field("auto_link", &self.auto_link)
+            .field("claims_source", &self.claims_source)
             .field("base_origin", &self.base_origin)
             .finish_non_exhaustive()
     }
@@ -120,6 +128,8 @@ impl OidcSettings {
             access_role: cfg.access_role.clone(),
             signing_algs: cfg.signing_algs.clone(),
             auto_link: cfg.auto_link,
+            claims_source: cfg.claims_source,
+            link_auth_sources: cfg.link_auth_sources.clone(), // clone: the settings own their copy
             base_origin: base_origin.to_owned(),
             session_idle,
             session_absolute,
@@ -359,8 +369,25 @@ impl Oidc {
         let doc = self.discovered().await?;
         let tokens = self.redeem(&doc, code, &login.verifier).await?;
         let claims = self.verify(&doc, &tokens.id_token, &login.nonce).await?;
-        let access_role = self.has_access_role(&claims.claims);
-        let identity = self.identity(&claims);
+        // ADR-0021 amendment 2026-11-17: with `claims_source =
+        // access_token` the ID token still gives `sub`, `nonce` and `sid`;
+        // the identity and the roles come from the verified access token,
+        // which must name the same `sub`.
+        let access = match self.settings.claims_source {
+            OidcClaimsSource::IdToken => None,
+            OidcClaimsSource::AccessToken => {
+                let token = tokens.access_token.as_deref().ok_or_else(|| {
+                    unavailable("token", "invalid_json").with_context("detail", "access_token")
+                })?;
+                Some(
+                    self.verify_access(&doc, token, &self.settings.issuer, &claims.subject)
+                        .await?,
+                )
+            }
+        };
+        let source = access.as_ref().map_or(&claims.claims, |a| &a.claims);
+        let access_role = self.has_access_role(source);
+        let identity = self.identity(&claims.subject, source);
         let mut ctx = ChangeContext::new(Actor::Anonymous, input.request_id.clone());
         ctx.source_ip = input.source_ip;
         ctx.user_agent = input.user_agent.map(|u| u.chars().take(512).collect());
@@ -370,6 +397,12 @@ impl Oidc {
             &identity,
             LinkPolicy {
                 auto_link: self.settings.auto_link,
+                rules: match self.settings.claims_source {
+                    OidcClaimsSource::IdToken => LinkRules::VerifiedEmail,
+                    OidcClaimsSource::AccessToken => LinkRules::EmployeeNumberOnly {
+                        auth_sources: LinkAuthSources::from_names(&self.settings.link_auth_sources),
+                    },
+                },
             },
             |account| {
                 let account = match account {
@@ -518,14 +551,16 @@ impl Oidc {
             .filter(|t| !t.is_empty())
             .ok_or_else(|| unavailable("token", "invalid_json").with_context("detail", "id_token"))?
             .to_owned();
-        let refresh_token = body
-            .get("refresh_token")
-            .and_then(Value::as_str)
-            .filter(|t| !t.is_empty())
-            .map(str::to_owned);
+        let text = |name: &str| {
+            body.get(name)
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty())
+                .map(str::to_owned)
+        };
         Ok(Tokens {
             id_token,
-            refresh_token,
+            refresh_token: text("refresh_token"),
+            access_token: text("access_token"),
         })
     }
 
@@ -555,6 +590,40 @@ impl Oidc {
         self.verifier.verify_id_token(token, &keys, &expected)
     }
 
+    /// Verify an access token (`claims_source = access_token`) and that
+    /// it names the session's issuer and `subject` (the ID token's `sub`,
+    /// or the session's at a refresh): `FG-AUTH-0025`.
+    pub(crate) async fn verify_access(
+        &self,
+        doc: &Discovery,
+        token: &str,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<AccessClaims, ForgeError> {
+        let kid = self.verifier.access_kid(token)?;
+        let keys = self
+            .jwks
+            .for_kid(
+                &self.http,
+                &doc.jwks_uri,
+                &kid,
+                self.settings.timeouts.fetch,
+            )
+            .await?;
+        let expected = Expected {
+            issuer: &self.settings.issuer,
+            client_id: &self.settings.client_id,
+            nonce: None,
+            now: now_secs()?,
+            leeway: 60,
+        };
+        let claims = self.verifier.verify_access_token(token, &keys, &expected)?;
+        if claims.subject != subject || issuer != self.settings.issuer {
+            return Err(access_token("subject_mismatch"));
+        }
+        Ok(claims)
+    }
+
     /// `resource_access.<client_id>.roles` holds `auth.oidc.access_role`.
     pub(crate) fn has_access_role(&self, claims: &Value) -> bool {
         claims
@@ -569,15 +638,15 @@ impl Oidc {
             })
     }
 
-    fn identity<'a>(&'a self, claims: &'a IdClaims) -> LoginIdentity<'a> {
-        let text = |name: &str| claims.claims.get(name).and_then(Value::as_str);
+    /// The person as `claims` (the ID token's or the access token's) say.
+    fn identity<'a>(&'a self, subject: &'a str, claims: &'a Value) -> LoginIdentity<'a> {
+        let text = |name: &str| claims.get(name).and_then(Value::as_str);
         LoginIdentity {
             issuer: &self.settings.issuer,
-            subject: &claims.subject,
+            subject,
             employee_number: text(&self.settings.employee_number_claim),
             email: text("email"),
-            email_verified: claims.claims.get("email_verified").and_then(Value::as_bool)
-                == Some(true),
+            email_verified: claims.get("email_verified").and_then(Value::as_bool) == Some(true),
             preferred_username: text("preferred_username"),
             name: text("name"),
         }
@@ -597,6 +666,8 @@ fn with_query(endpoint: &str, pairs: &[(&str, &str)]) -> Result<String, ForgeErr
 struct Tokens {
     id_token: String,
     refresh_token: Option<String>,
+    /// Verified only with `claims_source = access_token`; never stored.
+    access_token: Option<String>,
 }
 
 #[cfg(test)]

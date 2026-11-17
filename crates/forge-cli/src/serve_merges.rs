@@ -231,6 +231,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::AdministrationOrphaned
         | ErrorCode::LoginStateInvalid
         | ErrorCode::IdTokenInvalid
+        | ErrorCode::AccessTokenInvalid
         | ErrorCode::LoginNotPermitted
         | ErrorCode::IdentityLinkConflict
         | ErrorCode::IdentityProviderUnavailable

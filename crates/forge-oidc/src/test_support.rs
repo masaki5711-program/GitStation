@@ -8,7 +8,10 @@
 //! authorization URL forge built and issues a code for chosen claims.
 //! The refresh grant rotates refresh tokens and can answer without an ID
 //! token ([`RefreshMode`]); [`MockOp::logout_token`] signs back-channel
-//! logout tokens (M2 MR5). Everything here is synthetic.
+//! logout tokens (M2 MR5). [`MockOp::authorize_pfs`] answers like the
+//! PFS Keycloak (ADR-0021 amendment 2026-11-17): a bare ID token and a
+//! signed access token carrying the identity claims and the roles, also at
+//! every refresh. Everything here is synthetic.
 #![allow(clippy::expect_used, clippy::panic)] // test helpers: failing loudly is the point
 
 use std::collections::HashMap;
@@ -77,6 +80,8 @@ pub enum RefreshMode {
 
 struct Pending {
     claims: Value,
+    /// `Some`: the access token is a JWT with these claims (PFS style).
+    access: Option<Value>,
     challenge: String,
     redirect_uri: String,
 }
@@ -96,10 +101,15 @@ struct Inner {
     signing_kid: String,
     signers: Vec<(String, Signer)>,
     next_code: u64,
-    /// Live refresh tokens → the claims of their sign-in (no nonce).
-    refresh_tokens: HashMap<String, Value>,
+    /// Live refresh tokens → the claims of their sign-in (no nonce) and
+    /// the access token's claims (PFS style).
+    refresh_tokens: HashMap<String, (Value, Option<Value>)>,
     refresh_mode: RefreshMode,
     refresh_overrides: Value,
+    /// Merged into a refreshed access token's claims (`null` removes).
+    refresh_access_overrides: Value,
+    /// Answer the code with the ID token in the access token's place.
+    access_is_id_token: bool,
     next_refresh: u64,
     next_jti: u64,
 }
@@ -166,6 +176,8 @@ impl MockOp {
             refresh_tokens: HashMap::new(),
             refresh_mode: RefreshMode::WithIdToken,
             refresh_overrides: json!({}),
+            refresh_access_overrides: json!({}),
+            access_is_id_token: false,
             next_refresh: 0,
             next_jti: 1,
         }));
@@ -202,6 +214,8 @@ impl MockOp {
             access_role: "access".to_owned(),
             signing_algs: vec![OidcSigningAlg::Rs256, OidcSigningAlg::Es256],
             auto_link: true,
+            claims_source: forge_core::config::OidcClaimsSource::IdToken,
+            link_auth_sources: vec!["local".to_owned(), "ldap".to_owned()],
             base_origin: base_origin.to_owned(),
             session_idle: Duration::from_secs(4 * 3600),
             session_absolute: Duration::from_secs(12 * 3600),
@@ -249,6 +263,18 @@ impl MockOp {
         let mut inner = self.inner();
         inner.refresh_mode = mode;
         inner.refresh_overrides = overrides;
+    }
+
+    /// Merge `overrides` into later refreshed access tokens (PFS style;
+    /// a `null` removes a claim).
+    pub fn set_refresh_access(&self, overrides: Value) {
+        self.inner().refresh_access_overrides = overrides;
+    }
+
+    /// Answer later codes with the ID token as the access token too (an ID
+    /// token presented where the access token belongs).
+    pub fn access_is_id_token(&self, on: bool) {
+        self.inner().access_is_id_token = on;
     }
 
     /// End every refresh token (an administrator ended the sessions in
@@ -311,11 +337,71 @@ impl MockOp {
         })
     }
 
-    /// The browser at the authorization endpoint: read forge's
-    /// authorization URL and issue a code whose ID token has the default
-    /// claims with `overrides` merged in (a `null` removes a claim).
-    /// Returns `(code, state)`.
-    pub fn authorize(&self, location: &str, overrides: Value) -> (String, String) {
+    /// A bare ID token like the PFS Keycloak's (realm `iotpf`, scopes
+    /// `basic` + `iotpf-identity`): no identity claim, no roles.
+    pub fn pfs_id_claims(&self, nonce: &str) -> Value {
+        let now = now_secs().expect("clock after 1970");
+        json!({
+            "iss": self.issuer,
+            "aud": CLIENT_ID,
+            "azp": CLIENT_ID,
+            "typ": "ID",
+            "sub": "synthetic-sub-pfs-1",
+            "sid": "synthetic-sid-1",
+            "exp": now + 300,
+            "iat": now,
+            "nonce": nonce,
+        })
+    }
+
+    /// The PFS access token's claims (synthetic): `staff_id` in upper
+    /// case, no `email_verified`, no `aud` (fullScopeAllowed false), the
+    /// access role on the client.
+    pub fn pfs_access_claims(&self) -> Value {
+        let now = now_secs().expect("clock after 1970");
+        json!({
+            "iss": self.issuer,
+            "azp": CLIENT_ID,
+            "typ": "Bearer",
+            "sub": "synthetic-sub-pfs-1",
+            "sid": "synthetic-sid-1",
+            "exp": now + 300,
+            "iat": now,
+            "scope": "openid basic iotpf-identity",
+            "preferred_username": "pfs.person",
+            "name": "PFS Synthetic",
+            "email": "pfs.person@example.test",
+            "locale": "ja",
+            "staff_id": "SYN9001",
+            "plant_code": "P001",
+            "plants": ["P001"],
+            "org_units": [{"code": "SYN-ORG", "name": "Synthetic"}],
+            "positions": ["member"],
+            "position_rank": 3,
+            "resource_access": { CLIENT_ID: { "roles": ["access"] } },
+        })
+    }
+
+    /// The browser at the authorization endpoint of a PFS-style provider:
+    /// the code's ID token is [`Self::pfs_id_claims`] with `id_overrides`,
+    /// its access token a JWT of [`Self::pfs_access_claims`] with
+    /// `access_overrides` (a `null` removes a claim). Returns `(code, state)`.
+    pub fn authorize_pfs(
+        &self,
+        location: &str,
+        id_overrides: Value,
+        access_overrides: Value,
+    ) -> (String, String) {
+        let q = Self::authorization_query(location);
+        let nonce = q.get("nonce").expect("nonce").clone();
+        let mut claims = self.pfs_id_claims(&nonce);
+        merge(&mut claims, id_overrides);
+        let mut access = self.pfs_access_claims();
+        merge(&mut access, access_overrides);
+        self.issue_code(&q, claims, Some(access))
+    }
+
+    fn authorization_query(location: &str) -> HashMap<String, String> {
         let url = url::Url::parse(location).expect("authorization url");
         let q: HashMap<String, String> = url.query_pairs().into_owned().collect();
         assert_eq!(q.get("response_type").map(String::as_str), Some("code"));
@@ -324,9 +410,15 @@ impl MockOp {
             Some("S256")
         );
         assert_eq!(q.get("client_id").map(String::as_str), Some(CLIENT_ID));
-        let nonce = q.get("nonce").expect("nonce").clone();
-        let mut claims = self.claims(&nonce);
-        merge(&mut claims, overrides);
+        q
+    }
+
+    fn issue_code(
+        &self,
+        q: &HashMap<String, String>,
+        claims: Value,
+        access: Option<Value>,
+    ) -> (String, String) {
         let mut inner = self.inner();
         let code = format!("synthetic-code-{}", inner.next_code);
         inner.next_code += 1;
@@ -334,11 +426,24 @@ impl MockOp {
             code.clone(),
             Pending {
                 claims,
+                access,
                 challenge: q.get("code_challenge").expect("challenge").clone(),
                 redirect_uri: q.get("redirect_uri").expect("redirect_uri").clone(),
             },
         );
         (code, q.get("state").expect("state").clone())
+    }
+
+    /// The browser at the authorization endpoint: read forge's
+    /// authorization URL and issue a code whose ID token has the default
+    /// claims with `overrides` merged in (a `null` removes a claim).
+    /// Returns `(code, state)`.
+    pub fn authorize(&self, location: &str, overrides: Value) -> (String, String) {
+        let q = Self::authorization_query(location);
+        let nonce = q.get("nonce").expect("nonce").clone();
+        let mut claims = self.claims(&nonce);
+        merge(&mut claims, overrides);
+        self.issue_code(&q, claims, None)
     }
 }
 
@@ -521,9 +626,14 @@ async fn token(
     }
     let kid = inner.signing_kid.clone();
     let id_token = sign_with(&inner, &kid, json!({}), &pending.claims);
-    let refresh_token = new_refresh_token(&mut inner, &pending.claims);
+    let access_token = match &pending.access {
+        _ if inner.access_is_id_token => id_token.clone(),
+        Some(claims) => sign_with(&inner, &kid, json!({}), claims),
+        None => "synthetic-access-token".to_owned(),
+    };
+    let refresh_token = new_refresh_token(&mut inner, &pending.claims, pending.access);
     axum::Json(json!({
-        "access_token": "synthetic-access-token",
+        "access_token": access_token,
         "token_type": "Bearer",
         "expires_in": 300,
         "id_token": id_token,
@@ -534,7 +644,7 @@ async fn token(
 
 /// A new live refresh token for `claims` (the first one of the process is
 /// `synthetic-refresh-token`).
-fn new_refresh_token(inner: &mut Inner, claims: &Value) -> String {
+fn new_refresh_token(inner: &mut Inner, claims: &Value, access: Option<Value>) -> String {
     let token = match inner.next_refresh {
         0 => "synthetic-refresh-token".to_owned(),
         n => format!("synthetic-refresh-token-{n}"),
@@ -544,14 +654,14 @@ fn new_refresh_token(inner: &mut Inner, claims: &Value) -> String {
     if let Some(c) = claims.as_object_mut() {
         c.remove("nonce");
     }
-    inner.refresh_tokens.insert(token.clone(), claims);
+    inner.refresh_tokens.insert(token.clone(), (claims, access));
     token
 }
 
 /// `grant_type=refresh_token`: a live token is rotated; an unknown or
 /// ended one is `invalid_grant`.
 fn refresh(inner: &mut Inner, form: &HashMap<String, String>) -> Response {
-    let Some(mut claims) = form
+    let Some((mut claims, mut access)) = form
         .get("refresh_token")
         .and_then(|t| inner.refresh_tokens.remove(t))
     else {
@@ -560,16 +670,27 @@ fn refresh(inner: &mut Inner, form: &HashMap<String, String>) -> Response {
     let now = now_secs().expect("clock after 1970");
     claims["iat"] = json!(now);
     claims["exp"] = json!(now + 300);
-    let rotated = new_refresh_token(inner, &claims);
+    if let Some(a) = access.as_mut() {
+        a["iat"] = json!(now);
+        a["exp"] = json!(now + 300);
+    }
+    let rotated = new_refresh_token(inner, &claims, access.clone());
+    let kid = inner.signing_kid.clone();
+    let access_token = match access {
+        Some(mut a) => {
+            merge(&mut a, inner.refresh_access_overrides.clone());
+            sign_with(inner, &kid, json!({}), &a)
+        }
+        None => "synthetic-access-token".to_owned(),
+    };
     let mut body = json!({
-        "access_token": "synthetic-access-token",
+        "access_token": access_token,
         "token_type": "Bearer",
         "expires_in": 300,
         "refresh_token": rotated,
     });
     if inner.refresh_mode == RefreshMode::WithIdToken {
         merge(&mut claims, inner.refresh_overrides.clone());
-        let kid = inner.signing_kid.clone();
         body["id_token"] = json!(sign_with(inner, &kid, json!({}), &claims));
     }
     axum::Json(body).into_response()
