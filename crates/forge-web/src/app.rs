@@ -613,19 +613,21 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    autofix_routes(ai_assets_routes(schedule_routes(auto_merge_routes(deploy_routes(
-        user_activity_routes(user_merge_request_routes(runner_routes(pipeline_routes(
-            merge_queue_routes(doc_lint_routes(binding_routes(act_as_routes(
-                mirror_routes(webhook_routes(notification_routes(check_routes(
-                    dev_status_routes(feed_routes(integration_routes(service_account_routes(
-                        account_routes(history_routes(browse_routes(git_routes(shell_routes(
-                            merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
-                        ))))),
+    autofix_routes(ai_assets_routes(schedule_routes(auto_merge_routes(
+        deploy_routes(user_activity_routes(user_merge_request_routes(
+            runner_routes(pipeline_routes(merge_queue_routes(doc_lint_routes(
+                binding_routes(act_as_routes(mirror_routes(webhook_routes(
+                    notification_routes(check_routes(dev_status_routes(feed_routes(
+                        integration_routes(service_account_routes(account_routes(history_routes(
+                            browse_routes(git_routes(shell_routes(merge_request_routes(
+                                member_routes(move_routes(hosting_routes(fixed))),
+                            )))),
+                        )))),
                     )))),
                 )))),
             )))),
-        )))),
-    )))))
+        ))),
+    ))))
 }
 
 /// The deterministic autofix (M4 C14, ADR-0017 Amendment C14): a

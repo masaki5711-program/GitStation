@@ -79,10 +79,10 @@ pub use activity::{
 };
 pub use autofix::{AutofixLimits, Autofixer, BundleFile, TickReport as AutofixTickReport};
 pub use conflicts::{scan, ConflictPredictor, ScanLimits, ScanReport};
+pub use forge_db::ai_assets::AiAssetsSetting;
 pub use forge_db::autofix::{
     AutofixSettings, DetailPath as AutofixDetailPath, StoredAttempt as StoredAutofixAttempt,
 };
-pub use forge_db::ai_assets::AiAssetsSetting;
 pub use forge_db::review::auto_merge::{
     AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, StopMark, StoredState as AutoMergeState,
 };

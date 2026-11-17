@@ -941,7 +941,7 @@
             ]
           },
           "changed_by": {
-            "description": "Who changed it last: the enabler (`null`: never set).",
+            "description": "Who changed it last: the enabler (`null`: never set, or the caller\nis no Maintainer — only one who may change it sees who did).",
             "format": "int64",
             "minimum": 1,
             "type": [

@@ -408,15 +408,19 @@ impl World {
         };
         let job = a.job_id.expect("job");
         let pipeline = a.pipeline_id.expect("pipeline");
+        self.t
+            .exec_superuser(&format!(
+                "INSERT INTO forge.ci_artifacts (project_id, pipeline_id, job_id, attempt, path, \
+                   size_bytes, sha256, expires_at) VALUES ({}, {pipeline}, {job}, 1, \
+                   'autofix.bundle', {}, decode('{digest}', 'hex'), now() + interval '1 day')",
+                self.project.get(),
+                bytes.len()
+            ))
+            .await;
         let rows = self
             .t
             .json_rows(&format!(
-                "INSERT INTO forge.ci_artifacts (project_id, pipeline_id, job_id, attempt, path, \
-                   size_bytes, sha256, expires_at) VALUES ({}, {pipeline}, {job}, 1, \
-                   'autofix.bundle', {}, decode('{digest}', 'hex'), now() + interval '1 day') \
-                 RETURNING id",
-                self.project.get(),
-                bytes.len()
+                "SELECT id FROM forge.ci_artifacts WHERE job_id = {job} AND path = 'autofix.bundle'"
             ))
             .await;
         let id = rows[0]["id"].as_i64().expect("id");

@@ -52,7 +52,12 @@ describe('the line in every language', () => {
     ['id', id],
   ])('%s has a text for every kind with its names', async (lng, resources) => {
     const i = i18next.createInstance();
-    await i.init({ lng, resources: { [lng]: { translation: resources } } });
+    await i.init({
+      lng,
+      resources: { [lng]: { translation: resources } },
+      // As the app (React escapes): paths keep their slashes.
+      interpolation: { escapeValue: false },
+    });
     for (const k of kinds) {
       const text = autofixText(
         i.t,
