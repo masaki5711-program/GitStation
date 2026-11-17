@@ -7,6 +7,9 @@
 //! push record (audit row and event) — on a new branch with a merge request
 //! or directly on the branch. Synthetic data only.
 
+// The refused commit's private-key header is a synthetic fixture (not a
+// real secret): forge:allow-secret (the push secret check, FG-GIT-0022).
+
 use std::sync::Arc;
 use std::time::Duration;
 
