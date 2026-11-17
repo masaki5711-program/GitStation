@@ -571,6 +571,17 @@ async fn an_aged_bulk_job_passes_the_default_tier_but_not_tiers_zero_and_one() {
     t.drop_now().await;
 }
 
+/// Seconds from now until job `id`'s `run_after` (negative: ready since).
+async fn wait_of(t: &FreshDb, id: JobId) -> f64 {
+    sqlx::query_scalar(
+        "SELECT EXTRACT(epoch FROM run_after - now())::float8 FROM forge.jobs WHERE id = $1",
+    )
+    .bind(id.get())
+    .fetch_one(&mut t.superuser().await)
+    .await
+    .expect("run_after")
+}
+
 /// A superseding enqueue never postpones the work: it inherits an older
 /// job's earlier `run_after`, and a replaced job waiting out a retry
 /// backoff (run_after in the future) gives a job ready now.
@@ -584,19 +595,6 @@ async fn a_superseding_enqueue_never_postpones() {
             json!({ "merge_request_id": 8, "scan_seq": seq }),
             Some(&format!("mr_conflict_scan:8:{seq}")),
         )
-    };
-    let wait_of = |t: &FreshDb, id: JobId| {
-        let id = id.get();
-        let sql = format!(
-            "SELECT EXTRACT(epoch FROM run_after - now())::float8 FROM forge.jobs WHERE id = {id}"
-        );
-        async move {
-            let secs: f64 = sqlx::query_scalar(&sql)
-                .fetch_one(&mut t.superuser().await)
-                .await
-                .expect("run_after");
-            secs
-        }
     };
     let Enqueued::Queued(first) = superseding(&t, &one(1), 8).await.enqueued else {
         panic!("queued");
