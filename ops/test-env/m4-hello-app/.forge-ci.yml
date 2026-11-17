@@ -1,0 +1,25 @@
+# hello-app (synthetic, M4 completion on the test environment).
+# build -> test here; the deploy to stg is forge's own (environment stg,
+# auto_deploy_ref refs/heads/main): CI jobs have no network and never deploy.
+version: 1
+stages: [build, test]
+jobs:
+  build:
+    stage: build
+    image: registry:5000/ci/alpine@sha256:26ba97bef0be0407a46e30df34e515e86116fa7b59efbe0265446ec43ef68138
+    timeout: 5m
+    tags: [linux, m4]
+    script:
+      - mkdir -p dist
+      - cp -R public/. dist/
+      - ls -la dist
+    artifacts:
+      paths: [dist]
+  test:
+    stage: test
+    needs: [build]
+    image: registry:5000/ci/alpine@sha256:26ba97bef0be0407a46e30df34e515e86116fa7b59efbe0265446ec43ef68138
+    timeout: 5m
+    tags: [linux, m4]
+    script:
+      - sh tests/check.sh dist

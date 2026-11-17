@@ -1,0 +1,61 @@
+#!/bin/sh
+# Synthetic internal app `hello-app` (test environment only).
+#   deploy <sha>    fetch the commit from GitStation, unpack it as a release, switch to it
+#   health <sha>    0 when <sha> is the live release and GET /health answers "ok"
+#   rollback <sha>  switch back to the release of <sha> (the previous version)
+# deploy and rollback hold one exclusive lock (runbook deploy, lock contract).
+# Output goes to the host log only (forge keeps none of it).
+set -eu
+verb=$1 sha=$2
+APP=/srv/hello-app
+REL=$APP/releases
+MIRROR=$APP/mirror.git
+LOG=$APP/deploy.log
+. /etc/forge-deploy/hello-app.env   # FORGE_REPO_URL (no secret)
+log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $verb $sha $*" >> "$LOG"; }
+fail() { log "FAILED: $*"; echo "hello-app: $*" >&2; exit 1; }
+
+fetch() {
+  [ -d "$REL/$sha" ] && return 0
+  [ -d "$MIRROR" ] || git init -q --bare "$MIRROR"
+  # The token goes to git through the environment, never argv.
+  tok=$(cat /etc/forge-deploy/read-token)
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: Bearer $tok" \
+    GIT_TERMINAL_PROMPT=0 timeout 120 git -C "$MIRROR" fetch -q --prune "$FORGE_REPO_URL" '+refs/heads/*:refs/heads/*' \
+    || fail "fetch failed"
+  git -C "$MIRROR" cat-file -e "$sha^{commit}" 2>/dev/null || fail "commit not on any branch"
+  tmp="$REL/.tmp-$sha"; rm -rf "$tmp"; mkdir -p "$tmp"
+  git -C "$MIRROR" archive "$sha" | tar -x -C "$tmp" || fail "unpack failed"
+  [ -f "$tmp/public/index.html" ] || fail "release has no public/index.html"
+  echo "$sha" > "$tmp/public/version"
+  mv "$tmp" "$REL/$sha"
+}
+
+switch() {
+  ln -sfn "$REL/$sha" "$APP/current"
+  # app-supervisor starts httpd again on the new release.
+  [ -f "$APP/httpd.pid" ] && kill "$(cat "$APP/httpd.pid")" 2>/dev/null || true
+}
+
+case "$verb" in
+  deploy|rollback)
+    mkdir -p "$REL"
+    exec 9>"$APP/.lock"
+    flock -x 9 || fail "lock failed"
+    log "start"
+    fetch
+    switch
+    log "switched"
+    ;;
+  health)
+    live=$(readlink "$APP/current" 2>/dev/null || true)
+    [ "$live" = "$REL/$sha" ] || fail "live release is ${live##*/}, not $sha"
+    i=0; body=""
+    while [ $i -lt 20 ]; do
+      body=$(wget -q -T 2 -O - http://127.0.0.1:8080/health 2>/dev/null || true)
+      [ "$body" = "ok" ] && { log "healthy"; exit 0; }
+      i=$((i + 1)); sleep 1
+    done
+    fail "unhealthy: /health answered '$(printf '%s' "$body" | head -c 40)'"
+    ;;
+esac

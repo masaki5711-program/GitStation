@@ -1,0 +1,13 @@
+#!/bin/sh
+# Runs hello-app (busybox httpd, 127.0.0.1:8080 inside the container only) on
+# the live release, and starts it again whenever a deploy stops it.
+set -u
+APP=/srv/hello-app
+while :; do
+  if [ -d "$APP/current/public" ]; then
+    busybox-extras httpd -f -p 127.0.0.1:8080 -h "$APP/current/public" &
+    echo $! > "$APP/httpd.pid"
+    wait $!
+  fi
+  sleep 1
+done
