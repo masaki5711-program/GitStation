@@ -1362,6 +1362,72 @@ pub enum SyncTrigger { Schedule, KanflowNotification }
 - **残すこと（M4 の締めで扱う）**: `forge/risk` は head とマージ基点の差分で判定し、キューで前に並ぶ MR を含めたマージ結果の差分では判定しない
   （前に並ぶ MR もそれぞれ判定され、組み合わせはキューのパイプラインが試す）。インスタンスの許可 `merge.allow_full_auto` も M4 の締めの項目。
 
+## Amendment（2026-11-17、M4 の締め）: インスタンスの `merge.allow_full_auto` とマージ結果の危険の判定
+
+**出どころ**: 2026-11-13 の Amendment（C9）F の「残すこと（M4 の締めで扱う）」の 2 項目。2026-10-30 B、2026-11-03 B の
+`merge.allow_full_auto`。計画 14 の C8 / C9 と M4 の締め。
+
+### A. インスタンスの `merge.allow_full_auto`
+
+- 表 `forge.auto_merge_instance` に列 `allow_full_auto`（既定 `true`）・`allow_full_auto_by`・`allow_full_auto_at`
+  （マイグレーション `20261224100000`、追記だけ）。既定を許可にしたのは、今の動き（新しいプロジェクトは `full`）を変えないため。
+- 変えるのは **インスタンスの管理者だけ、人だけ、Web のセッションだけ**（Action `AutoMergeFullAutoManage`、
+  `PUT /api/v1/admin/auto-merge/allow-full-auto`、`{"allowed": bool}`）。方式そのもの（`AutoMergeSettingsManage`）と同じく
+  セッションだけにした（方針の変更で、緊急停止ではないため。全体をすぐ止めたいときは従来の緊急停止 `…/admin/auto-merge/stop`、
+  トークンでも可）。権限の表に allow と deny の行（管理者のセッション allow。管理者のトークン・エージェント・Owner・Maintainer・
+  無効な管理者・匿名・自動マージの主体は deny、サービスアカウントと bot は people-only の生成行）。監査
+  `auto_merge.allow_full_auto_changed`（resource は instance）。
+- 許可が無い間:
+  - `full` を選ぶ `PUT …/projects/{id}/auto-merge` は **FG-REVIEW-0032** AutoMergeFullNotAllowed（409、info）。許可はインスタンスの
+    行を共有ロックで読む同じトランザクションで確かめる。
+  - 既に `full` のプロジェクトは実効 `reserve`（`AutoMergeMode::effective`。2026-11-03 B の「`reserve` に戻る」を、保存した値を
+    書き換えずに実効の段で行う。許可を戻せば、`full` のまま残したプロジェクトはそのまま動き出す）。自動マージの主体の判定
+    （`authorize()` の自動マージの腕）は `FG-AUTH-0003 reason=full_auto_not_allowed` で断る。キューにある自動マージのエントリーは
+    バッチの組み立てと着地の判定で `reason=full_auto_not_allowed` で外れる（`off` / `reserve` に変えたときの `auto_merge_off` と同じ扱い）。
+  - MR の 1 行は `held reason=full_auto_not_allowed`（止めではなく保留。画面は「管理者がこのサーバーで完全自動マージを許可して
+    いないので、自動ではマージしません」と「準備ができたらマージ」）。`conditional` は影響を受けない。
+- doctor の行 `review.auto_merge`: 許可しているときは ok（`full` のプロジェクトの数）、外していて `full` のプロジェクトがあれば warn。
+- **Owner への通知**（2026-10-30 B の「Owner に通知する」）はこの段では作らない。MR の 1 行・プロジェクトの設定の画面の警告・
+  doctor の行で代える（通知の種類の追加はマイグレーションが要る。後の MR）。
+
+### B. マージ結果の危険の判定（着地の前）
+
+- 2026-11-13 F の「`forge/risk` は head とマージ基点の差分で判定し、キューで前に並ぶ MR を含めたマージ結果の差分では判定しない」を
+  閉じる。**緑になった列車が着地する前に**、バッチに自動マージのエントリーがあれば、`forge/risk` の **同じ規則** を列車の各段の
+  マージ結果に当てる: 差分は **バッチの土台（target の先端）から、その段（その MR までを土台の上にマージしたコミット）まで**。
+  これは target に書かれる木そのもの（最後の段は列車の先端）。1 件のバッチなら、その MR のマージ結果。
+- 規則を写さない: forge-checks の `Risk` の 1 つのターゲットの評価（`target_at`。head の判定と同じ関数で、土台を明示しただけ）、
+  `assess()`、`forge_core::auto_merge::deterministic_layer` をそのまま使う。forge-review（キュー）と forge-checks（規則）は
+  機能クレートどうしなので、forge-core の trait `MergeResultAssessor` で会う（`forge serve` が forge-checks の `Risk` を渡す）。
+  結果は記録しない（チェックの実行は head のもの。マージ結果の判定はキューのログ `forge.merge_queue.merge_result_assessed` と
+  `forge.risk.merge_result_assessed`）。
+- 決め方（`merge_result_decision`、純粋な関数）: 段を順に見て、
+  - 自動マージのエントリーの段が `stop` で、その前の段が `stop` でない → **そのエントリーを止める**（その MR が加わって初めて
+    危険になった。単独でも、前の MR と合わせてでも）。`FG-REVIEW-0026`、列からの理由 `merge_result_<class>`（例
+    `merge_result_program_breakage`）、MR の 1 行は `stopped reason=merge_result_risk` と分類。同じ版は入れ直さない（`checks_failed`
+    と同じく固定）。他のエントリーは順のまま列に戻り、作り直した列車で試す。
+  - 前の段が既に `stop`（人のエントリーが持ち込んだ。人のマージは自動マージの分類では止めない） → バッチをそのエントリーの前で
+    切る（`batch_limit` = その位置、`merge_result_cut`）。人の分が入った後の target で、自動マージのエントリーを判定し直す。
+  - その段の `stop` が大きさの上限だけ（`too_many_changes`・`content_not_scanned`・`critical_content_unread`、
+    `SIZE_LIMITED_RULES`）で、先頭の段でない → 切る（合わせたせいで読み切れないだけかもしれない。小さなバッチで判定し直し、
+    単独でも当たれば止める）。
+  - 判定できない答え（`Pending`）は `not_assessed` の `stop`。
+  - 自動マージのエントリーの無いバッチは判定しない（人のマージは止めない）。
+- 判定の失敗（git・DB・時間切れ）は手番の失敗として返し、次の手番でやり直す（着地しない方へ倒れる）。期限を過ぎれば従来どおり
+  FG-CI-0024 でバッチを捨てる。
+- 試験（本物の git と DB）: 2 つの MR がそれぞれ 300 行を消し（単独では 500 行に届かない）、合わせると大量の削除になる。自動マージで
+  同じバッチに入ると 2 本目が `merge_result_program_breakage` で止まり、1 本目だけが入る。同じ 2 本を人が入れれば両方入る。
+
+### 採らなかった案
+
+- **マージ結果の判定を `forge/risk` のチェックの実行として記録する**: 採らない。チェックの実行は (project, head) ごとで、列車の段は
+  MR の head ではない。記録すると MR の画面の forge/risk が列車の結果で上書きされる。
+- **段ごとの差分（前の段からその段まで）だけで判定する**: 採らない。大量の削除のように、合わせた量で決まる規則が当たらない。
+- **合わせると危険なら赤と同じく二分する**: 採らない。二分すると 1 本ずつ別々に入り、合わせた危険（大量の削除など）が止まらずに
+  target に入る。合わせた結果に `stop` の分類が出たら止める、が求められたこと。
+- **許可が無いとき `full` を `off` に書き換える**: 採らない。許可を戻したときに Owner が選び直す必要があり、誰がいつ選んだかの記録
+  （`mode_by`・`mode_at`）も失う。実効の段で `reserve` として扱う。
+
 ## Amendment（2026-11-16、M4 C14）: 自動修正の土台と決定的な修正
 
 **出どころ**: 計画 14 §5 の C14（`feat/ci-autofix-deterministic`、§6 の M4 の段の「計画の抜け」として 2026-11-14 に追加）、計画 04 C-5。
