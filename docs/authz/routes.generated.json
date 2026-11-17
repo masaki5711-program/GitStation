@@ -234,6 +234,15 @@
     "word": "project_permalink"
   },
   {
+    "action": "AutoMergeFullAutoManage",
+    "method": "PUT",
+    "path": "/api/v1/admin/auto-merge/allow-full-auto",
+    "people_only": true,
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "AutoMergeInstanceStopToggle",
     "method": "POST",
     "path": "/api/v1/admin/auto-merge/resume",

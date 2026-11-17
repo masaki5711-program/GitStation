@@ -33,6 +33,12 @@ fn project_text(a: &Value) -> String {
             " (nothing merges by itself)"
         }
     )];
+    if a.get("allow_full_auto").and_then(Value::as_bool) == Some(false) && text(a, "mode") == "full"
+    {
+        lines.push(
+            "full auto-merge is not allowed on this instance: merges only by a person".to_owned(),
+        );
+    }
     lines.extend(stop_line("instance", a.get("instance_stop")));
     lines.extend(stop_line("project", a.get("project_stop")));
     lines.join("\n")

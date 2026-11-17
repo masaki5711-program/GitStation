@@ -657,7 +657,8 @@
       "stopped": "Merge otomatis dihentikan. Merge request otomatis di antrean menunggu. Orang tetap dapat menggabungkan.",
       "resumed": "Merge otomatis berjalan lagi.",
       "projectStopped": "Merge otomatis proyek ini sedang dihentikan darurat (sejak {{at}}).",
-      "instanceStopped": "Administrator menghentikan merge otomatis untuk semua (sejak {{at}})."
+      "instanceStopped": "Administrator menghentikan merge otomatis untuk semua (sejak {{at}}).",
+      "fullNotAllowed": "Administrator tidak mengizinkan merge otomatis penuh di server ini. Proyek dengan \"Sepenuhnya otomatis\" digabung oleh orang."
     },
     "aiAssets": {
       "title": "Aset AI",
@@ -1671,6 +1672,8 @@
       "breakage_queue": "dihentikan: merge request ini sendiri merah di antrean merge.",
       "breakage_risk": "dihentikan: perubahan berpotensi menghapus sebagian besar kode ({{detail}}).",
       "not_assessed": "dihentikan: risiko perubahan tidak dapat diperiksa (forge/risk).",
+      "merge_result": "dihentikan: digabung bersama merge request di depannya dalam antrean merge, hasilnya berpotensi merusak program, menghapus data basis data, membocorkan rahasia, atau mengubah kode yang berjalan di PC pengembang.",
+      "full_not_allowed": "administrator tidak mengizinkan merge otomatis penuh di server ini, jadi tidak digabung otomatis.",
       "draft": "menunggu: ini masih draf.",
       "risk_pending": "menunggu pemeriksaan risiko (forge/risk).",
       "approvals": "menunggu persetujuan.",

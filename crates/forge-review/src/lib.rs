@@ -84,7 +84,8 @@ pub use forge_db::autofix::{
     AutofixSettings, DetailPath as AutofixDetailPath, StoredAttempt as StoredAutofixAttempt,
 };
 pub use forge_db::review::auto_merge::{
-    AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, StopMark, StoredState as AutoMergeState,
+    AutoMergeSettings, ChangeOutcome as AutoMergeOutcome, FullAutoSetting, StopMark,
+    StoredState as AutoMergeState,
 };
 pub use forge_db::review::merge_queue::{
     PauseOutcome, QueueView, StoredBatch as StoredQueueBatch, StoredEntry as StoredQueueEntry,

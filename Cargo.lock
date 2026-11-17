@@ -1389,6 +1389,7 @@ name = "forge-review"
 version = "0.1.0"
 dependencies = [
  "forge-auth",
+ "forge-checks",
  "forge-ci",
  "forge-core",
  "forge-db",

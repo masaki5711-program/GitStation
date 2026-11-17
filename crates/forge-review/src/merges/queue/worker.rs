@@ -19,12 +19,27 @@
 //!   of one removes its entry, `FG-CI-0023`); green lands unless paused.
 //! - **landing** (a worker stopped mid-landing): settled by asking git.
 //!
+//! M4 close: before a green batch that holds an auto-merge entry lands,
+//! `forge/risk`'s rules judge the merge result — the diff from the batch's
+//! base to each step of the train (the combined tree the target will
+//! hold), through forge-core's [`MergeResultAssessor`] (forge-checks'
+//! rules, never a copy). An auto-merge entry whose step turns a clear
+//! result into a stop leaves the queue stopped (`FG-REVIEW-0026
+//! reason=merge_result_<class>`); a stop a person's entry brought in before
+//! it cuts the batch before the auto-merge entry
+//! ([`forge_core::auto_merge::merge_result_decision`]).
+//!
 //! The landing holds the repository's merge lock (the normal merges' too)
 //! from the first decision to the record; every git call is bounded.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use forge_auth::Action;
+use forge_core::auto_merge::{
+    merge_result_decision, merge_result_reason, MergeResultAssessor, MergeResultDecision,
+    MergeResultRange, ResultStep,
+};
 use forge_core::merge_queue::{bisected_limit, BatchState, EntryState, Isolation, MAX_REAPS};
 use forge_core::{
     telemetry, CheckConclusion, CheckName, CheckRun, MergeMethod, MergeRequestState, MergeState,
@@ -82,14 +97,25 @@ pub struct TickReport {
 }
 
 /// The merge queue's worker (module docs).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MergeQueue {
     merger: Merger,
     limits: QueueLimits,
     worker: String,
+    /// `forge/risk`'s rules on a merge result (M4 close).
+    risk: Arc<dyn MergeResultAssessor>,
     /// Tests only: stop a landing right after the target moved, as a
     /// worker that died there would (the recovery's test).
     crash_after_cas: bool,
+}
+
+impl std::fmt::Debug for MergeQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MergeQueue")
+            .field("worker", &self.worker)
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The one-line `reason` of a refusal (its own when it is a plain word).
@@ -116,12 +142,18 @@ enum StepRefused {
 
 impl MergeQueue {
     /// A worker named `worker` (its lease owner) on `merger`'s database,
-    /// git and storage.
-    pub fn new(merger: Merger, worker: impl Into<String>) -> Self {
+    /// git and storage; `risk` judges the merge results of auto-merge
+    /// entries (forge-checks' `Risk`).
+    pub fn new(
+        merger: Merger,
+        worker: impl Into<String>,
+        risk: Arc<dyn MergeResultAssessor>,
+    ) -> Self {
         Self {
             merger,
             limits: QueueLimits::default(),
             worker: worker.into(),
+            risk,
             crash_after_cas: false,
         }
     }
@@ -304,13 +336,9 @@ impl MergeQueue {
                     match super::auto_merge_paused(&e) {
                         // The emergency stop holds it: it stays queued.
                         Some("auto_merge_stopped") => continue,
-                        Some(_) => {
-                            self.drop_queued(
-                                entry,
-                                "auto_merge_off",
-                                ErrorCode::MergeQueueEntryRefused,
-                            )
-                            .await?;
+                        Some(reason) => {
+                            self.drop_queued(entry, reason, ErrorCode::MergeQueueEntryRefused)
+                                .await?;
                             removed = true;
                             continue;
                         }
@@ -688,11 +716,143 @@ impl MergeQueue {
                 if paused {
                     return Ok("paused");
                 }
+                // M4 close: the merge result of the auto-merge entries.
+                let decision = self
+                    .merge_result(batch, &testing, repo, &claimed.queue.target_branch)
+                    .await?;
+                if decision != MergeResultDecision::Land {
+                    return self
+                        .merge_result_held(batch, &testing, repo, &decision)
+                        .await;
+                }
                 // No pipeline row at all (no `.forge-ci.yml`): the landing's
                 // decision finds `ci/pipeline` missing if it is required.
                 let run = train_run(id.map(|_| green));
                 self.land(claimed, batch, &testing, repo, run).await
             }
+        }
+    }
+
+    /// `forge/risk`'s rules on the train's steps up to its last auto-merge
+    /// entry (module docs), in order; none when it holds no auto-merge
+    /// entry (a person's merge is not stopped by auto-merge).
+    async fn merge_result(
+        &self,
+        batch: &StoredBatch,
+        testing: &[StoredEntry],
+        repo: RepoId,
+        target: &RefName,
+    ) -> Result<MergeResultDecision, ForgeError> {
+        let Some(last_auto) = testing.iter().rposition(|e| e.credential.is_auto_merge()) else {
+            return Ok(MergeResultDecision::Land);
+        };
+        let mut steps = Vec::with_capacity(last_auto + 1);
+        for entry in testing.iter().take(last_auto + 1) {
+            let Some(result) = entry.train_sha.as_ref() else {
+                return Err(ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "merge_queue_entry_without_train")
+                    .with_context("entry_id", entry.id));
+            };
+            let risk = self
+                .risk
+                .assess(MergeResultRange {
+                    project: batch.project_id,
+                    repo,
+                    target,
+                    base: &batch.base_sha,
+                    result,
+                })
+                .await?;
+            steps.push(ResultStep {
+                auto: entry.credential.is_auto_merge(),
+                risk,
+            });
+        }
+        let decision = merge_result_decision(&steps);
+        tracing::info!(
+            target: "forge_review",
+            event = "forge.merge_queue.merge_result_assessed",
+            request_id = %batch.request_id,
+            queue_id = batch.queue_id,
+            batch_id = batch.id,
+            base_sha = batch.base_sha.as_str(),
+            train_sha = batch.train_sha.as_str(),
+            steps = steps.len(),
+            decision = match decision {
+                MergeResultDecision::Land => "land",
+                MergeResultDecision::Stop { .. } => "stop",
+                MergeResultDecision::Cut { .. } => "cut",
+            },
+        );
+        Ok(decision)
+    }
+
+    /// A merge result that does not land (module docs): the auto-merge
+    /// entry that brings the stop in leaves the queue (`FG-REVIEW-0026`,
+    /// logged once at warn with its rule), or the batch is cut before it;
+    /// the other entries go back in order.
+    async fn merge_result_held(
+        &self,
+        batch: &StoredBatch,
+        testing: &[StoredEntry],
+        repo: RepoId,
+        decision: &MergeResultDecision,
+    ) -> Result<&'static str, ForgeError> {
+        match *decision {
+            MergeResultDecision::Stop { index, class, rule } => {
+                let entry = testing.get(index).ok_or_else(|| {
+                    ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "merge_result_index_out_of_batch")
+                        .with_context("queue_batch_id", batch.id)
+                })?;
+                let removed = vec![(
+                    entry.id,
+                    merge_result_reason(class),
+                    ErrorCode::AutoMergeStopped,
+                )];
+                let detail = format!(
+                    "class={} rule={} step={}",
+                    class.as_str(),
+                    rule.unwrap_or("none"),
+                    index + 1
+                );
+                self.abandon(
+                    batch,
+                    BatchState::Testing,
+                    "merge_result_risk",
+                    removed,
+                    Some((entry, detail)),
+                    Some(repo),
+                )
+                .await
+            }
+            MergeResultDecision::Cut { limit } => {
+                let end = BatchEnd {
+                    from: BatchState::Testing,
+                    state: BatchState::Abandoned,
+                    reason: "merge_result_cut",
+                    error_code: None,
+                    removed: Vec::new(),
+                    reaped: false,
+                    batch_limit: Some(limit),
+                };
+                if !db::end_batch(&self.merger.db, batch.id, &end).await? {
+                    return Ok("raced");
+                }
+                self.retire_train(repo, batch).await;
+                tracing::info!(
+                    target: "forge_review",
+                    event = "forge.merge_queue.batch_abandoned",
+                    request_id = %batch.request_id,
+                    queue_id = batch.queue_id,
+                    batch_id = batch.id,
+                    reason = "merge_result_cut",
+                    next_batch_limit = limit,
+                    train_sha = batch.train_sha.as_str(),
+                );
+                Ok("abandoned")
+            }
+            MergeResultDecision::Land => Ok("waiting"),
         }
     }
 
@@ -1005,10 +1165,10 @@ impl MergeQueue {
                                 )
                                 .await;
                         }
-                        Some(_) => {
+                        Some(reason) => {
                             let removed = vec![(
                                 entry.id,
-                                "auto_merge_off".to_owned(),
+                                reason.to_owned(),
                                 ErrorCode::MergeQueueEntryRefused,
                             )];
                             return self

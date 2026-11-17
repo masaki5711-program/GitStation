@@ -68,6 +68,10 @@ pub struct MergeRequestAutoMergeBody {
     pub mode: String,
     /// The auto-merge principal acts in this mode.
     pub acts: bool,
+    /// The instance's `merge.allow_full_auto` (M4 close): while `false`, a
+    /// `full` project merges only by a person (the state is `held`,
+    /// `full_auto_not_allowed`).
+    pub allow_full_auto: bool,
     /// The emergency stop in effect: `instance`, `project` (`null`: none).
     #[schema(required = true)]
     pub stop: Option<String>,
@@ -129,6 +133,7 @@ pub async fn auto_merge_state(state: AppState, request: Dispatched<MergeRequestC
             iid,
             mode: settings.mode.as_str().to_owned(),
             acts: settings.mode.acts(),
+            allow_full_auto: settings.allow_full_auto,
             stop: settings.stop().map(|s| s.as_str().to_owned()),
             // A state of another head is history: the worker looks again.
             auto_merge: found
