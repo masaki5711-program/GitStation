@@ -108,7 +108,7 @@ pub use merges::{
 pub use revert::{revert_branch, revert_ctx, DraftReport, RevertOpened, RevertTimeouts, Reverter};
 pub use user_lists::{
     AttentionReason, UserListCount, UserListCounts, UserListItem, UserListPage, UserListQuery,
-    UserListScope,
+    UserListScope, WidgetList, WidgetPage,
 };
 pub use versions::{refresh, RefreshReport, SyncReport, VersionRefs};
 
@@ -289,6 +289,11 @@ fn change_context(
         (Credential::Autofix, _) => {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "autofix_principal_in_review"))
+        }
+        // The portal reads widgets only (ADR-0036), never a command.
+        (Credential::Portal(_), _) => {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "portal_principal_in_review"))
         }
     };
     let mut ctx = ChangeContext::new(actor, request.request_id.clone());

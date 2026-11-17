@@ -248,6 +248,119 @@ pub async fn user_merge_requests(
         .collect()
 }
 
+/// The PFS portal's `my-reviews` and `stopped-count` widgets (ADR-0036):
+/// which candidates, with an optional project. Candidates only, as above:
+/// forge-review decides every row with `authorize()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WidgetList {
+    /// `approvable`: waiting for the person's review.
+    Review,
+    /// `approvable` in projects that release a specification (a
+    /// `spec.released` in their audit trail; ADR-0023: a repository has a
+    /// specification by its content, not by a kind): the specifications
+    /// awaiting the person's approval.
+    Spec,
+    /// `authored`.
+    Mine,
+    /// Open merge requests of the person whose auto-merge stopped on the
+    /// current head.
+    StoppedMine,
+    /// The same, plus those the person approved (a live approval of any
+    /// head): the person as author or reviewer.
+    StoppedInvolved,
+}
+
+impl WidgetList {
+    fn query(self) -> &'static str {
+        match self {
+            Self::Review => "review.widget.review",
+            Self::Spec => "review.widget.spec",
+            Self::Mine => "review.widget.mine",
+            Self::StoppedMine => "review.widget.stopped_mine",
+            Self::StoppedInvolved => "review.widget.stopped_involved",
+        }
+    }
+}
+
+/// The statement of `list`: `$1` the person, `$2` before, `$3` the page,
+/// `$4` the failed check names per row, `$5` the project (or NULL), then
+/// `$6` the chain cap (`Review` / `Spec`) or whether approvals count
+/// (`Stopped*`).
+pub(crate) fn widget_sql(list: WidgetList) -> String {
+    match list {
+        WidgetList::Mine => page_sql(
+            "",
+            &own_page("AND ($5::bigint IS NULL OR m.project_id = $5)"),
+        ),
+        WidgetList::Review | WidgetList::Spec => page_sql(
+            &related_ctes("$1", "$6"),
+            &approvable_page(if list == WidgetList::Spec {
+                "AND EXISTS (SELECT 1 FROM forge.audit_log al                  WHERE al.project_id = r.project_id AND al.action = 'spec.released')"
+            } else {
+                ""
+            }),
+        ),
+        WidgetList::StoppedMine | WidgetList::StoppedInvolved => page_sql("", STOPPED_PAGE),
+    }
+}
+
+/// The stopped auto-merges of `$1` (and, with `$6`, those `$1` approved).
+const STOPPED_PAGE: &str = "SELECT m.id FROM forge.auto_merge_states s      JOIN forge.merge_requests m ON m.id = s.merge_request_id AND m.head_sha = s.head_sha      WHERE s.state = 'stopped' AND m.state = 'open'        AND (m.author_id = $1 OR ($6 AND EXISTS (SELECT 1 FROM forge.merge_request_approvals a          WHERE a.merge_request_id = m.id AND a.approver_id = $1 AND a.revoked_at IS NULL)))        AND ($2::bigint IS NULL OR m.id < $2)        AND ($5::bigint IS NULL OR m.project_id = $5)      ORDER BY m.id DESC LIMIT $3";
+
+/// `approvable`'s page over `related`, in project `$5` when given, `extra`
+/// narrowing the projects.
+fn approvable_page(extra: &str) -> String {
+    format!(
+        "SELECT c.id FROM related r CROSS JOIN LATERAL (            SELECT m.id FROM forge.merge_requests m            WHERE m.project_id = r.project_id AND m.state = 'open' AND NOT m.draft              AND m.head_sha IS NOT NULL AND m.author_id <> $1              AND ($2::bigint IS NULL OR m.id < $2)              AND NOT EXISTS (SELECT 1 FROM forge.merge_request_approvals a                WHERE a.merge_request_id = m.id AND a.approver_id = $1                  AND a.revoked_at IS NULL AND a.head_sha = m.head_sha                  AND a.target_branch = m.target_branch)            ORDER BY m.id DESC LIMIT $3) c          WHERE ($5::bigint IS NULL OR r.project_id = $5) {extra}          ORDER BY c.id DESC LIMIT $3"
+    )
+}
+
+/// One page of `list`'s candidates for `user`, in `project` when given:
+/// ids below `before`, newest first, at most `limit` (capped at
+/// [`MAX_PAGE`]).
+pub async fn widget_merge_requests(
+    db: &Db,
+    user: UserId,
+    list: WidgetList,
+    project: Option<forge_core::ProjectId>,
+    before: Option<i64>,
+    limit: usize,
+) -> Result<Vec<UserListRow>, ForgeError> {
+    let query = list.query();
+    let sql = widget_sql(list);
+    let limit = i64::try_from(limit.clamp(1, MAX_PAGE)).unwrap_or(1);
+    let rows: Vec<FactsRow> = db
+        .within(query, async {
+            let statement = sqlx::query_as(&sql)
+                .bind(user.get())
+                .bind(before)
+                .bind(limit)
+                .bind(MAX_FAILED_CHECKS)
+                .bind(project.map(forge_core::ProjectId::get));
+            let statement = match list {
+                WidgetList::Mine => statement,
+                WidgetList::Review | WidgetList::Spec => statement.bind(CAP),
+                WidgetList::StoppedMine => statement.bind(false),
+                WidgetList::StoppedInvolved => statement.bind(true),
+            };
+            statement
+                .fetch_all(db.pool().executor())
+                .await
+                .map_err(|e| read_query_error(query, e))
+        })
+        .await?;
+    rows.into_iter()
+        .map(|r| {
+            Ok(UserListRow {
+                merge_request: r.row.parse()?,
+                conflict: r.conflict,
+                conflict_predicted: r.conflict_predicted,
+                failed_checks: r.failed_checks,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "user_lists_tests.rs"]
 mod tests;

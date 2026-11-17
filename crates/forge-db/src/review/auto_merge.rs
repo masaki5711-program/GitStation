@@ -680,6 +680,13 @@ pub async fn record_state(db: &Db, new: &NewState<'_>) -> Result<bool, ForgeErro
         .map(|d| d.chars().take(255).collect::<String>())
         .filter(|d| !d.is_empty() && d.len() <= 255);
     db.within(QUERY, async {
+        // One transaction: the state and, for a new stop, the portal's news
+        // of it (ADR-0036; nothing when news is off).
+        let mut tx = db
+            .write_pool()
+            .begin()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
         let changed: bool = sqlx::query_scalar(
             "WITH old AS (SELECT state, class, reason, head_sha FROM forge.auto_merge_states \
              WHERE merge_request_id = $1) \
@@ -713,9 +720,39 @@ pub async fn record_state(db: &Db, new: &NewState<'_>) -> Result<bool, ForgeErro
         .bind(detail)
         .bind(new.error_code.map(|c| c.id()))
         .bind(new.request_id.as_str())
-        .fetch_one(db.write_pool())
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| query_error(QUERY, e))?;
+        if changed && new.state == "stopped" && db.portal_news().is_some() {
+            let author: Option<i64> =
+                sqlx::query_scalar("SELECT author_id FROM forge.merge_requests WHERE id = $1")
+                    .bind(new.merge_request.get())
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| query_error(QUERY, e))?;
+            let iid: Option<i64> =
+                sqlx::query_scalar("SELECT iid FROM forge.merge_requests WHERE id = $1")
+                    .bind(new.merge_request.get())
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| query_error(QUERY, e))?;
+            let draft = crate::portal::NewsDraft {
+                source_id: forge_core::portal::auto_merge_source_id(
+                    new.merge_request.get(),
+                    new.head_sha.as_str(),
+                ),
+                topic: forge_core::portal::NewsTopic::AutoMergeStopped,
+                project: new.project,
+                facts: serde_json::json!({
+                    "iid": iid,
+                    "class": new.class.map(StopClass::as_str),
+                }),
+                audience: author.into_iter().map(UserId::new).collect(),
+                request_id: new.request_id.clone(), // clone: the draft owns its request id
+            };
+            crate::portal::stage(db, &mut tx, &draft).await?;
+        }
+        tx.commit().await.map_err(|e| query_error(QUERY, e))?;
         Ok(changed)
     })
     .await

@@ -50,6 +50,8 @@ mod act_as;
 mod dev_status;
 // ── M3 I2: webhooks (ADR-0016 §8) ──
 pub mod webhooks;
+// ADR-0036: news to the PFS portal.
+pub mod portal_news;
 // ── end M3 I2 ──
 // ── M3 O2: the push mirror's administration ──
 pub mod mirror;
