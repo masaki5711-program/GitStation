@@ -117,3 +117,15 @@
 - 判定は貸し出しの中、マージのロックの外で行う（列車のコミットは変わらない。着地の判定と CAS は従来どおりロックの下）。
 - §2・§6.2 の自動マージの主体の判定に、インスタンスの `merge.allow_full_auto`（`full` は許可のあるときだけ動く）を足した。外れたら
   自動マージのエントリーは `reason=full_auto_not_allowed` で外れる（`auto_merge_off` と同じ扱い）。
+- レビュー（2026-11-17、WARN、CRITICAL / HIGH なし）で足したこと:
+  - **最後の段も判定する**: 判定は列車の全段（土台から各段まで）。最後の自動マージのエントリーの後ろに並ぶ人のエントリーが、
+    target に書かれる木（最後の段）を `stop` にするなら、自動マージの分を載せたまま入らないよう、最初の自動マージのエントリーの前で
+    切る（それが先頭ならそのエントリー 1 件のバッチ）。
+  - **判定の時間の上限**: 1 回の手番の判定は全段まとめて `MERGE_RESULT_BUDGET`（90 秒。段の数 × 規則の予算ではない）。超えたら
+    FG-WEB-0002 `operation=merge_result`。判定の失敗が同じバッチで 3 回続いたら（`MERGE_RESULT_MAX_FAILURES`、worker ごとの数）、
+    自動マージのエントリーを `FG-REVIEW-0026 reason=merge_result_unavailable`（MR の 1 行は `stopped not_assessed`）で外し、人の
+    エントリーは順のまま列に戻って着地する（`forge.merge_queue.merge_result_unavailable`、warn、`cause_code`）。
+  - **切替との競合**: 着地は試行のフェンスの後、`update-ref` の前（マージのロックの下）に自動マージの設定をもう一度読む。緊急停止なら
+    バッチを捨てて全件を列に戻し（自動マージの分は待つ）、方式が動かない・`full` の許可が外れたなら自動マージのエントリーを外して
+    （`full_auto_not_allowed` / `auto_merge_off`）人の分は次のバッチで着地する。読んだ後、`update-ref` までの間に切り替わったものは
+    この着地には間に合わない（切替はマージのロックを取らない。残る窓は git の 1 回の CAS の間だけ）。

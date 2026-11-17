@@ -561,6 +561,25 @@ fn the_merge_result_stops_the_auto_entry_that_brings_the_stop_in() {
             "{rule} is a forge/risk rule"
         );
     }
+    // Review LOW: people's entries after the last auto-merge entry make
+    // the final tree a stop: cut before the first auto-merge entry.
+    let tail = [
+        step(false, CLEAR),
+        step(true, CLEAR),
+        step(false, stop_of(StopClass::Leak, "secret_in_content")),
+    ];
+    assert_eq!(
+        merge_result_decision(&tail),
+        MergeResultDecision::Cut { limit: 1 }
+    );
+    let tail_first = [
+        step(true, CLEAR),
+        step(false, stop_of(StopClass::Leak, "secret_in_content")),
+    ];
+    assert_eq!(
+        merge_result_decision(&tail_first),
+        MergeResultDecision::Cut { limit: 1 }
+    );
     // An answer that is not one is never clear.
     assert_eq!(
         merge_result_decision(&[step(true, RiskVerdict::Pending)]),
@@ -594,5 +613,20 @@ fn a_merge_result_removal_stops_the_same_head_with_its_class() {
         );
     }
     assert_eq!(merge_result_class("merge_result_nonsense"), None);
+    assert_eq!(merge_result_class(MERGE_RESULT_UNAVAILABLE), None);
+    let unavailable = Facts {
+        queue: QueueFacts::Removed {
+            reason: MERGE_RESULT_UNAVAILABLE.to_owned(),
+        },
+        ..clear_facts()
+    };
+    assert_eq!(
+        decide(&unavailable),
+        Verdict::Stopped(Stop {
+            class: StopClass::NotAssessed,
+            reason: MERGE_RESULT_UNAVAILABLE,
+            detail: None,
+        })
+    );
     assert_eq!(merge_result_class("conflict"), None);
 }

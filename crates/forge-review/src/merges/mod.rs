@@ -62,7 +62,10 @@ pub use evaluate::{
 pub(crate) use execute::account_commit_identity;
 pub use execute::{MergeReport, RECONCILE_BATCH};
 pub use forge_db::review::merges::{CredentialRef, StoredMerge};
-pub use queue::{MergeQueue, QueueAsk, QueueLimits, TickReport};
+pub use queue::{
+    AfterFence, MergeQueue, QueueAsk, QueueLimits, TickReport, MERGE_RESULT_BUDGET,
+    MERGE_RESULT_MAX_FAILURES,
+};
 pub use reconcile::ReconcileReport;
 pub use request::MergeAsk;
 pub(crate) use request::{head_changed as request_head_changed, is_ref_not_found};

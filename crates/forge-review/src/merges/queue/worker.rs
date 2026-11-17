@@ -32,14 +32,30 @@
 //! The landing holds the repository's merge lock (the normal merges' too)
 //! from the first decision to the record; every git call is bounded.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use forge_auth::Action;
 use forge_core::auto_merge::{
     merge_result_decision, merge_result_reason, MergeResultAssessor, MergeResultDecision,
-    MergeResultRange, ResultStep,
+    MergeResultRange, ResultStep, MERGE_RESULT_UNAVAILABLE,
 };
+
+/// The whole judgement of one batch's merge result in one step (every
+/// train step together, not steps × the assessor's own budget).
+pub const MERGE_RESULT_BUDGET: Duration = Duration::from_secs(90);
+
+/// Consecutive failed judgements of one batch's merge result before its
+/// auto-merge entries leave the queue (`FG-REVIEW-0026
+/// reason=merge_result_unavailable`) and the people's entries go on.
+pub const MERGE_RESULT_MAX_FAILURES: u32 = 3;
+
+/// Tests only: run right after a landing's fence, before the auto-merge
+/// settings are read again (the toggle race's test).
+pub type AfterFence = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 use forge_core::merge_queue::{bisected_limit, BatchState, EntryState, Isolation, MAX_REAPS};
 use forge_core::{
     telemetry, CheckConclusion, CheckName, CheckRun, MergeMethod, MergeRequestState, MergeState,
@@ -104,9 +120,14 @@ pub struct MergeQueue {
     worker: String,
     /// `forge/risk`'s rules on a merge result (M4 close).
     risk: Arc<dyn MergeResultAssessor>,
+    /// Consecutive failed merge result judgements per batch (this worker's;
+    /// a worker that takes the queue over counts again from zero).
+    failures: Arc<Mutex<HashMap<i64, u32>>>,
     /// Tests only: stop a landing right after the target moved, as a
     /// worker that died there would (the recovery's test).
     crash_after_cas: bool,
+    /// Tests only: see [`AfterFence`].
+    after_fence: Option<AfterFence>,
 }
 
 impl std::fmt::Debug for MergeQueue {
@@ -154,8 +175,38 @@ impl MergeQueue {
             limits: QueueLimits::default(),
             worker: worker.into(),
             risk,
+            failures: Arc::new(Mutex::new(HashMap::new())),
             crash_after_cas: false,
+            after_fence: None,
         }
+    }
+
+    /// Tests only: see [`AfterFence`].
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_after_fence(mut self, hook: AfterFence) -> Self {
+        self.after_fence = Some(hook);
+        self
+    }
+
+    /// Count one more failed judgement of `batch` (the count now).
+    fn failed_once(&self, batch: i64) -> u32 {
+        let mut map = match self.failures.lock() {
+            Ok(map) => map,
+            // A panic while counting: the counts start over.
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let n = map.entry(batch).or_insert(0);
+        *n += 1;
+        *n
+    }
+
+    fn judged(&self, batch: i64) {
+        let mut map = match self.failures.lock() {
+            Ok(map) => map,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.remove(&batch);
     }
 
     /// Tests only: every landing stops right after its compare-and-swap
@@ -717,9 +768,25 @@ impl MergeQueue {
                     return Ok("paused");
                 }
                 // M4 close: the merge result of the auto-merge entries.
-                let decision = self
+                let judged = self
                     .merge_result(batch, &testing, repo, &claimed.queue.target_branch)
-                    .await?;
+                    .await;
+                let decision = match judged {
+                    Ok(decision) => {
+                        self.judged(batch.id);
+                        decision
+                    }
+                    Err(e) => {
+                        let failures = self.failed_once(batch.id);
+                        if failures < MERGE_RESULT_MAX_FAILURES {
+                            return Err(e.with_context("merge_result_failures", failures));
+                        }
+                        self.judged(batch.id);
+                        return self
+                            .merge_result_unavailable(batch, &testing, repo, &e)
+                            .await;
+                    }
+                };
                 if decision != MergeResultDecision::Land {
                     return self
                         .merge_result_held(batch, &testing, repo, &decision)
@@ -733,8 +800,9 @@ impl MergeQueue {
         }
     }
 
-    /// `forge/risk`'s rules on the train's steps up to its last auto-merge
-    /// entry (module docs), in order; none when it holds no auto-merge
+    /// `forge/risk`'s rules on every step of the train (module docs), in
+    /// order, within [`MERGE_RESULT_BUDGET`] in all (`FG-WEB-0002
+    /// operation=merge_result` past it); none when it holds no auto-merge
     /// entry (a person's merge is not stopped by auto-merge).
     async fn merge_result(
         &self,
@@ -743,11 +811,32 @@ impl MergeQueue {
         repo: RepoId,
         target: &RefName,
     ) -> Result<MergeResultDecision, ForgeError> {
-        let Some(last_auto) = testing.iter().rposition(|e| e.credential.is_auto_merge()) else {
+        if !testing.iter().any(|e| e.credential.is_auto_merge()) {
             return Ok(MergeResultDecision::Land);
-        };
-        let mut steps = Vec::with_capacity(last_auto + 1);
-        for entry in testing.iter().take(last_auto + 1) {
+        }
+        let judged = tokio::time::timeout(
+            MERGE_RESULT_BUDGET,
+            self.merge_result_steps(batch, testing, repo, target),
+        )
+        .await;
+        match judged {
+            Ok(decision) => decision,
+            Err(_) => Err(ForgeError::new(ErrorCode::RequestTimeout)
+                .with_context("operation", "merge_result")
+                .with_context("timeout_ms", MERGE_RESULT_BUDGET.as_millis())
+                .with_context("queue_batch_id", batch.id)),
+        }
+    }
+
+    async fn merge_result_steps(
+        &self,
+        batch: &StoredBatch,
+        testing: &[StoredEntry],
+        repo: RepoId,
+        target: &RefName,
+    ) -> Result<MergeResultDecision, ForgeError> {
+        let mut steps = Vec::with_capacity(testing.len());
+        for entry in testing {
             let Some(result) = entry.train_sha.as_ref() else {
                 return Err(ForgeError::new(ErrorCode::Internal)
                     .with_context("reason", "merge_queue_entry_without_train")
@@ -785,6 +874,83 @@ impl MergeQueue {
             },
         );
         Ok(decision)
+    }
+
+    /// The merge result could not be judged [`MERGE_RESULT_MAX_FAILURES`]
+    /// times in a row (review MEDIUM): the auto-merge entries leave the
+    /// queue (`FG-REVIEW-0026 reason=merge_result_unavailable`, logged once
+    /// each with the last cause's code), the people's entries go back in
+    /// order and land without them.
+    async fn merge_result_unavailable(
+        &self,
+        batch: &StoredBatch,
+        testing: &[StoredEntry],
+        repo: RepoId,
+        cause: &ForgeError,
+    ) -> Result<&'static str, ForgeError> {
+        let removed: Vec<(i64, String, ErrorCode)> = testing
+            .iter()
+            .filter(|e| e.credential.is_auto_merge())
+            .map(|e| {
+                (
+                    e.id,
+                    MERGE_RESULT_UNAVAILABLE.to_owned(),
+                    ErrorCode::AutoMergeStopped,
+                )
+            })
+            .collect();
+        tracing::warn!(
+            target: "forge_review",
+            event = "forge.merge_queue.merge_result_unavailable",
+            error_code = ErrorCode::AutoMergeStopped.id(),
+            cause_code = cause.code().id(),
+            error = %cause,
+            request_id = %batch.request_id,
+            queue_id = batch.queue_id,
+            batch_id = batch.id,
+            failures = MERGE_RESULT_MAX_FAILURES,
+            removed = removed.len(),
+            "the merge result could not be judged; its auto-merge entries leave the queue"
+        );
+        let detail = format!("cause={}", cause.code().id());
+        let first_auto = testing.iter().find(|e| e.credential.is_auto_merge());
+        self.abandon(
+            batch,
+            BatchState::Testing,
+            MERGE_RESULT_UNAVAILABLE,
+            removed,
+            first_auto.map(|e| (e, detail)),
+            Some(repo),
+        )
+        .await
+    }
+
+    /// The auto-merge settings read again after the fence, just before the
+    /// target moves (review MEDIUM: a toggle committed while the batch was
+    /// decided). `None`: the batch holds no auto-merge entry, or they may
+    /// still land. `Some(None)`: an emergency stop (they wait, queued);
+    /// `Some(Some(reason))`: the mode no longer acts or `full` is no longer
+    /// allowed (they leave with `reason`).
+    async fn auto_held_now(
+        &self,
+        batch: &StoredBatch,
+        testing: &[StoredEntry],
+    ) -> Result<Option<Option<&'static str>>, ForgeError> {
+        if !testing.iter().any(|e| e.credential.is_auto_merge()) {
+            return Ok(None);
+        }
+        let now = forge_db::review::auto_merge::settings(&self.merger.db, batch.project_id).await?;
+        if now.stop().is_some() {
+            return Ok(Some(None));
+        }
+        if !now.effective_mode().acts() {
+            return Ok(Some(Some(if now.mode.acts() {
+                "full_auto_not_allowed"
+            } else {
+                "auto_merge_off"
+            })));
+        }
+        Ok(None)
     }
 
     /// A merge result that does not land (module docs): the auto-merge
@@ -1258,6 +1424,53 @@ impl MergeQueue {
             )
             .await?;
             return Err(e);
+        }
+        if let Some(hook) = &self.after_fence {
+            hook().await;
+        }
+        // Review MEDIUM: the auto-merge settings again, after the fence and
+        // before the target moves. Auto-merge entries never land past an
+        // emergency stop or an allowance taken away; people's go back in
+        // order and land in the next batch.
+        let held = match self.auto_held_now(batch, testing).await {
+            Ok(held) => held,
+            Err(e) => {
+                self.end_attempts(&decided, "queue_rebuild").await;
+                self.abandon(
+                    batch,
+                    BatchState::Landing,
+                    "landing_failed",
+                    Vec::new(),
+                    None,
+                    Some(repo),
+                )
+                .await?;
+                return Err(e);
+            }
+        };
+        if let Some(why) = held {
+            self.end_attempts(&decided, "queue_rebuild").await;
+            let (reason, removed) = match why {
+                None => ("auto_merge_stopped", Vec::new()),
+                Some(reason) => (
+                    "entry_refused",
+                    testing
+                        .iter()
+                        .filter(|e| e.credential.is_auto_merge())
+                        .map(|e| (e.id, reason.to_owned(), ErrorCode::MergeQueueEntryRefused))
+                        .collect(),
+                ),
+            };
+            return self
+                .abandon(
+                    batch,
+                    BatchState::Landing,
+                    reason,
+                    removed,
+                    None,
+                    Some(repo),
+                )
+                .await;
         }
         let change = RefChange::Update {
             name: target.clone(),         // clone: the change owns its name

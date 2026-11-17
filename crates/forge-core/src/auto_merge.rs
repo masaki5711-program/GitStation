@@ -496,6 +496,13 @@ fn sticky_removal(reason: &str) -> Option<Verdict> {
         "dequeued" => Some(Verdict::Held {
             reason: "dequeued_by_person",
         }),
+        // The merge result could not be judged, again and again: the head
+        // cannot be shown safe (review MEDIUM).
+        MERGE_RESULT_UNAVAILABLE => Some(Verdict::Stopped(Stop {
+            class: StopClass::NotAssessed,
+            reason: MERGE_RESULT_UNAVAILABLE,
+            detail: None,
+        })),
         other => merge_result_class(other).map(|class| {
             Verdict::Stopped(Stop {
                 class,
@@ -505,6 +512,11 @@ fn sticky_removal(reason: &str) -> Option<Verdict> {
         }),
     }
 }
+
+/// The queue removal reason of an auto-merge entry whose batch's merge
+/// result could not be judged after repeated attempts (`FG-REVIEW-0026`,
+/// `not_assessed`).
+pub const MERGE_RESULT_UNAVAILABLE: &str = "merge_result_unavailable";
 
 /// The queue removal reason of an auto-merge entry stopped on the merge
 /// result (`merge_result_<class>`, a plain word the entry row holds).
@@ -667,13 +679,16 @@ pub const SIZE_LIMITED_RULES: &[&str] = &[
 ];
 
 /// The decision on a train's steps in order (`steps[k]`: the merge result
-/// of entries `0..=k`; steps after the last auto-merge entry may be left
-/// out). An auto-merge entry stops when its step is a stop and the step
-/// before was not; when the step before was already a stop, or its own
-/// stop is only a size bound ([`SIZE_LIMITED_RULES`]) on a step after the
-/// first, the batch is cut before it. `Pending` cannot be shown safe and
-/// counts as a stop (`not_assessed`). No auto-merge entry:
-/// [`MergeResultDecision::Land`].
+/// of entries `0..=k`, every step of the train). An auto-merge entry stops
+/// when its step is a stop and the step before was not; when the step
+/// before was already a stop, or its own stop is only a size bound
+/// ([`SIZE_LIMITED_RULES`]) on a step after the first, the batch is cut
+/// before it. The final step (the tree the target would hold) is judged
+/// too: a stop there that people's entries after the last auto-merge entry
+/// bring in would carry the auto-merge content through, so the batch is cut
+/// before the first auto-merge entry (at least one entry: that entry alone).
+/// `Pending` cannot be shown safe and counts as a stop (`not_assessed`).
+/// No auto-merge entry: [`MergeResultDecision::Land`].
 pub fn merge_result_decision(steps: &[ResultStep]) -> MergeResultDecision {
     let mut before_stopped = false;
     for (index, step) in steps.iter().enumerate() {
@@ -695,6 +710,13 @@ pub fn merge_result_decision(steps: &[ResultStep]) -> MergeResultDecision {
             }
         }
         before_stopped = stop.is_some();
+    }
+    if let Some(first_auto) = steps.iter().position(|s| s.auto) {
+        if before_stopped {
+            return MergeResultDecision::Cut {
+                limit: first_auto.max(1),
+            };
+        }
     }
     MergeResultDecision::Land
 }

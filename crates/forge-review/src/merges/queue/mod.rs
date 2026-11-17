@@ -35,7 +35,9 @@ use crate::{
 
 mod worker;
 
-pub use worker::{MergeQueue, QueueLimits, TickReport};
+pub use worker::{
+    AfterFence, MergeQueue, QueueLimits, TickReport, MERGE_RESULT_BUDGET, MERGE_RESULT_MAX_FAILURES,
+};
 
 /// The runs a queued merge is decided on: `ci/pipeline` (the name forge
 /// reports on merge results) from the train — `None` is "no run" — and
