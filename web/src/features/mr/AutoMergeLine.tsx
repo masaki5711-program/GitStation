@@ -3,7 +3,9 @@
 // request — queued, waiting for what, or why it stopped — and what to press
 // next. It stops only for program breakage, database destruction, a leak,
 // code that runs on developers' PCs, a head whose risk cannot be shown, or an
-// emergency stop; a warning never stops it. The error code is never shown
+// emergency stop; a warning never stops it. M4 close: a stop found only on the
+// merge result (with the merge requests ahead of it in the queue) is named as
+// such, and a `full` project the instance does not allow is held. The error code is never shown
 // (the request id of the decision is, for a support question).
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -22,6 +24,8 @@ export type LineKind =
   | 'breakage_queue'
   | 'breakage_risk'
   | 'not_assessed'
+  | 'merge_result'
+  | 'full_not_allowed'
   | 'draft'
   | 'risk_pending'
   | 'approvals'
@@ -46,6 +50,8 @@ export function lineKind(m: MergeRequestAutoMerge): LineKind | null {
 export function stateKind(s: AutoMergeState): LineKind {
   switch (s.state) {
     case 'stopped':
+      // M4 close: the combined merge result in the queue stopped it.
+      if (s.reason === 'merge_result_risk') return 'merge_result';
       switch (s.class) {
         case 'emergency_stop':
           return s.reason === 'instance_stopped' ? 'instance_stopped' : 'project_stopped';
@@ -63,7 +69,7 @@ export function stateKind(s: AutoMergeState): LineKind {
           return 'not_assessed';
       }
     case 'held':
-      return 'held';
+      return s.reason === 'full_auto_not_allowed' ? 'full_not_allowed' : 'held';
     case 'queued':
       if (s.reason === 'queued_by_person') return 'queued_by_person';
       if (s.reason !== 'queued_with_warning') return 'queued';
@@ -110,6 +116,10 @@ export function whyText(t: TFunction, kind: LineKind, detail: string): string {
       return t('autoMerge.why.breakage_risk', { detail });
     case 'not_assessed':
       return t('autoMerge.why.not_assessed');
+    case 'merge_result':
+      return t('autoMerge.why.merge_result');
+    case 'full_not_allowed':
+      return t('autoMerge.why.full_not_allowed');
     case 'draft':
       return t('autoMerge.why.draft');
     case 'risk_pending':
@@ -147,6 +157,7 @@ export function nextText(t: TFunction, kind: LineKind): string {
     case 'developer_pc':
     case 'breakage_risk':
     case 'not_assessed':
+    case 'merge_result':
       return t('autoMerge.next.person_decides');
     case 'breakage_check':
     case 'breakage_queue':
@@ -163,6 +174,7 @@ export function nextText(t: TFunction, kind: LineKind): string {
       return t('autoMerge.next.approvals');
     case 'protected_path':
     case 'held':
+    case 'full_not_allowed':
       return t('autoMerge.next.merge_when_ready');
     case 'conflict':
       return t('autoMerge.next.conflict');
@@ -182,6 +194,7 @@ const STOPS: readonly LineKind[] = [
   'breakage_queue',
   'breakage_risk',
   'not_assessed',
+  'merge_result',
 ];
 
 export function AutoMergeLine({ projectId, iid, open }: { projectId: number; iid: number; open: boolean }) {

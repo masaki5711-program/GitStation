@@ -111,16 +111,34 @@ claims_source = "access_token"
 **文字どおり**同じにする。https なら `ca_file`（社内 CA）が要る。loopback 以外の http は `FG-SYS-0002 reason=insecure_http` で
 起動しない。試験の間だけ `auth.oidc.allow_insecure_issuer = true` で通せる（トークンが平文で流れる。本番では使わない）。
 
+### 前提: `staff_id` は管理者だけが書ける（必ず確かめる）
+
+`claims_source = access_token` では `staff_id` だけで既存の利用者に結び付ける。利用者が自分の `staff_id` を書き換えられると、
+他人の GitStation のアカウントを乗っ取れる。PFS の realm で次を確かめる（読み取りだけ）:
+
+- Keycloak の管理画面 → realm `iotpf` → **Realm settings → User profile → `staff_id` → Permissions**:
+  **Who can edit = admin だけ**（`user` が入っていない）。Who can view は admin（と必要なら user）。
+- realm の定義（PFS のリポジトリの `keycloak/realm/10-iotpf-realm.yaml`）では `staff_id` の `permissions: { view: [admin], edit: [admin] }`。
+- 違っていたら GitStation の `claims_source = access_token` を使わず、PFS の管理者に直してもらう（GitStation からは変えない）。
+- `forge doctor` の `auth.oidc` は `claims_source=access_token` のとき、このことを行の末尾で思い出させる。
+- 結び付ける既存の利用者の種類は `auth.oidc.link_auth_sources`（`local` / `ldap`、既定は両方）で絞れる。
+
 ### 何がどう読まれるか
 
 - ID トークン: 署名、`iss`、`aud`、`azp`、`exp`、`nonce` を確かめ、`sub` と `sid` を取る（セッションの `oidc_sub` / `oidc_sid`）。
 - アクセストークン: 同じ JWKS と署名方式、`iss` = issuer、`exp` / `nbf` / `iat`（60 秒のずれ）、`azp` = `gitstation`、`typ` が
   あれば `Bearer`、`sub` が ID トークンと同じ。`aud` は Keycloak の流儀（なし・`account`・ほかのクライアント）のどれでもよい。
   ここから `staff_id`、`name`、`email`、`resource_access.gitstation.roles` を読む。トークンも claim もログに出ない。
-- 結び付け: `staff_id` が社員番号。大文字と小文字を区別せずに `forge.users.employee_number` と比べる。e-mail の一致も
-  `email_verified` も見ない。新しい利用者の username は `staff_id` の小文字、表示名は `name`、社員番号は送られたとおり（大文字）。新しい利用者には `email` が要る（確認済みでなくてよい。ないと FG-AUTH-0014 `email_missing`）。
+- 結び付け: `staff_id` が社員番号。大文字と小文字を区別せずに `forge.users.employee_number` と比べる（`staff_id` は
+  `[A-Za-z0-9_-]{1,32}` だけ。外れると FG-AUTH-0014 `claim_invalid detail=employee_number_format`）。e-mail の一致も
+  `email_verified` も見ない。既にどこかの issuer の OIDC の結び付けを持つ利用者・管理者・`auth.oidc.link_auth_sources`
+  （既定 `local,ldap`）にない `auth_source` の利用者には結び付けない（`employee_number_linked` / `privileged_account` /
+  `auth_source_not_linkable`）。新しい利用者の username は `staff_id` の小文字、表示名は `name`、社員番号は送られたとおり（大文字）。新しい利用者には `email` が要る（確認済みでなくてよい。ないと FG-AUTH-0014 `email_missing`）。
+- アクセストークンの `typ` は必須で `Bearer`（Keycloak は必ず付ける。ID トークンは `ID`）。
 - 5 分ごとのリフレッシュの確認でも、ロールはリフレッシュで来たアクセストークンから読む。ロールが外れた・`sub` が変わった・
   アクセストークンが確かめられない（`why=access_token_invalid`）・来ない（`why=access_token_missing`）はセッションを失効させる。
+- Keycloak に届かない間もセッションは続くが、ロールの最後の確認から **30 分**を過ぎると次の確認で失効する
+  （FG-AUTH-0015 `call=refresh reason=unconfirmed_too_long`、`why=idp_unreachable_too_long`）。Keycloak が戻ったら入り直す。
 - バックチャネルのログアウトがないので、Keycloak で切った人はリフレッシュの確認（最長 5 分とその人の次の操作）で切れる。
   無操作（`web.session_idle_secs`）と絶対（`web.session_absolute_secs`）の寿命はそのまま効く。
 
@@ -131,14 +149,17 @@ claims_source = "access_token"
 3. FG-AUTH-0025:
    - `azp`: 別の PFS アプリのトークン。`auth.oidc.client_id` が `gitstation` か、PFS 側のクライアント名と同じか。
    - `missing_claim claim=sub`: クライアントの既定のスコープに `basic` がない（Keycloak 25 以降、`sub` は `basic` が入れる）。
-   - `typ`: アクセストークンの代わりに別のトークン。Keycloak の設定の誤りか、間に入った何か。
+   - `typ` / `missing_claim claim=typ`: アクセストークンの代わりに別のトークン（ID トークンなど）。Keycloak の設定の誤りか、間に入った何か。
    - `subject_mismatch`: ID トークンとアクセストークンの `sub` が違う。正しい Keycloak なら起きない。続くなら中間者を疑う。
    - `malformed`: アクセストークンが JWT でない（不透明なトークン）。その IdP は `claims_source = access_token` に向かない。
      claim が ID トークンにある IdP なら `claims_source = id_token`（既定）にする。
 4. FG-AUTH-0013 `no_access_role`: アクセストークンの `resource_access.gitstation.roles` に `access` がない。PFS の管理者に
    ロールの付与を頼む（`fullScopeAllowed: false` なので、`gitstation` のロールしか入らない）。
 5. FG-AUTH-0014 `employee_number_missing`: アクセストークンに `staff_id` がない（PFS の利用者の属性が空か、スコープ
-   `iotpf-identity` が外れた）。`employee_number_ambiguous`: 大文字と小文字だけが違う社員番号の利用者が 2 人いる。データを直す
+   `iotpf-identity` が外れた）。`claim_invalid detail=employee_number_format`: `staff_id` に許されない文字か 32 文字超。
+   `auth_source_not_linkable`: その利用者の `auth_source` が `auth.oidc.link_auth_sources` にない。
+   `employee_number_linked`: その利用者は既にどこかの issuer に結び付いている（運用者の `forge admin user link-identity` で決める）。
+   `employee_number_ambiguous`: 大文字と小文字だけが違う社員番号の利用者が 2 人いる。データを直す
    （承認の要る手順。runbook oidc-identity-link）。
 
 ### Verify

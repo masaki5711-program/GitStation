@@ -1,0 +1,72 @@
+# M4 completion on the test environment (runbook m4-test-environment): one deploy
+# target and one runner, both in the `gs-m3-test` project. SYNTHETIC only.
+#
+#   docker compose -p gs-m3-test -f ops/test-env/compose.m4.yml up -d --build deploy-target runner-m4
+#
+# Secrets and per-host files live in GS_M4_LOCAL (default ./.local/m4,
+# gitignored with the rest of .local): forge-deploy.pub (forge's deploy key,
+# public half), hello-app-read.token (a read_repository token), runner/
+# (config.toml, token). Never commit them.
+#
+# Network: forge's deploy policy refuses loopback targets (FG-DEPLOY-0013
+# denied_address), so sshd is published on 127.0.0.1 and a forwarder
+# (deploy-forwarder.mjs) exposes it on the Hyper-V internal address of this
+# PC (WSL vEthernet), which the LAN cannot reach. The app inside the target
+# is never published.
+services:
+  deploy-target:
+    build:
+      context: ./deploy-target
+    image: gitstation/m4-deploy-target:test
+    environment:
+      # GitStation as the target sees it (Rancher Desktop resolves the name).
+      FORGE_REPO_URL: ${GS_M4_REPO_URL:?set GS_M4_REPO_URL}
+    ports:
+      - "127.0.0.1:22022:22"
+    volumes:
+      - ${GS_M4_LOCAL:-./.local/m4}/forge-deploy.pub:/run/forge-deploy/forge-deploy.pub:ro
+      - ${GS_M4_LOCAL:-./.local/m4}/hello-app-read.token:/run/forge-deploy/read-token:ro
+      - deploy-target-hostkey:/etc/ssh/keys
+      - deploy-target-srv:/srv/hello-app
+    mem_limit: 256m
+    restart: unless-stopped
+
+  # forge-runner from this branch's source (ops/runner/Dockerfile). Joins the
+  # existing test registry's network (gs-runner-test, registry:5000) for the
+  # pinned job images; it publishes no port.
+  runner-m4:
+    build:
+      context: ../..
+      dockerfile: ops/runner/Dockerfile
+    image: gitstation/forge-runner:m4
+    user: podman
+    # TEST ONLY - never copy to production: seccomp=unconfined and /dev/fuse are
+    # what nested rootless Podman needs inside a container (ops/runner/README.md).
+    # Production runners run on their own Linux host (runbook ci-runner).
+    security_opt:
+      - seccomp=unconfined
+    devices:
+      - /dev/fuse
+    volumes:
+      - ${GS_M4_LOCAL:-./.local/m4}/runner/config.toml:/etc/forge-runner/config.toml:ro
+      - ${GS_M4_LOCAL:-./.local/m4}/runner/token:/etc/forge-runner/token:ro
+      - ../runner/registries.conf:/etc/containers/registries.conf.d/50-test-registry.conf:ro
+      - ../runner/containers.conf:/home/podman/.config/containers/containers.conf.d/50-forge-job.conf:ro
+      - runner-m4-podman-store:/home/podman/.local/share/containers
+      - runner-m4-work:/var/lib/forge-runner
+    networks: [default, runner-registry]
+    mem_limit: 8g
+    pids_limit: 4096
+    stop_grace_period: 120s
+    restart: unless-stopped
+
+networks:
+  runner-registry:
+    external: true
+    name: gs-runner-test_runner
+
+volumes:
+  deploy-target-hostkey:
+  deploy-target-srv:
+  runner-m4-podman-store:
+  runner-m4-work:

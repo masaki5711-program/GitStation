@@ -141,10 +141,20 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
         );
         // M4 C8 (ADR-0030 §13): the merge queue's worker, next to the merges
-        // (its landing writes the target branches under the same lock).
+        // (its landing writes the target branches under the same lock). M4
+        // close: forge/risk's rules (forge-checks) judge the merge result of
+        // its auto-merge entries before a train lands.
+        let merge_result_risk = Arc::new(forge_checks::risk::Risk::new(
+            db.clone(),                 // clone: the pool handle is shared
+            smart_http.git.clone(),     // clone: Arc handles
+            smart_http.storage.clone(), // clone: the root path
+            smart_http.browse.clone(),  // clone: shares the ref cache
+            Arc::new(db.clone()),       // clone: the same Db loads projects
+        ));
         let queue_tasks = crate::serve_merge_queue::spawn(Arc::new(forge_review::MergeQueue::new(
             forge_review::Merger::clone(&merger),
             format!("serve-{}", forge_core::RequestId::generate()),
+            merge_result_risk,
         )));
         // M4 C10 (plan 04 M-4): the system's revert drafts after a failed
         // target pipeline write a branch: here, next to the browse cache.

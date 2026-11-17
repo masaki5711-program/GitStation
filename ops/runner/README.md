@@ -27,11 +27,12 @@
 
    ```sh
    mkdir -p .local
-   forge --config <試験環境の設定> admin runner register --name docker-test-1 --tags linux,podman --admin <管理者> > .local/token
+   forge --config <試験環境の設定> admin runner register --name docker-test-1 --tags linux,podman --admin <管理者> \
+     | grep -oE 'fgr_[A-Za-z0-9_]+' > .local/token
    cp config.example.toml .local/config.toml
    ```
 
-   `.local/token` はトークンの 1 行だけにする。
+   `.local/token` はトークンの 1 行だけにする（コマンドの出力は表の形。そのまま入れると Runner は FG-SYS-0002 で拒む）。
 
 2. ビルドして起動する。
 

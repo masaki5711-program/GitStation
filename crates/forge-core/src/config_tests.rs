@@ -1330,6 +1330,30 @@ fn auth_oidc_claims_source_and_insecure_issuer_flag() {
         "auth.oidc.issuer",
         "insecure_http",
     );
+    assert_eq!(
+        with(&[])
+            .expect("defaults")
+            .auth
+            .oidc
+            .expect("configured")
+            .link_auth_sources,
+        ["local", "ldap"]
+    );
+    let narrow = with(&[("FORGE_AUTH_OIDC_LINK_AUTH_SOURCES", "ldap, ldap")]).expect("narrow");
+    assert_eq!(
+        narrow.auth.oidc.expect("configured").link_auth_sources,
+        ["ldap"]
+    );
+    for bad in ["oidc", "local,", " "] {
+        let err = with(&[("FORGE_AUTH_OIDC_LINK_AUTH_SOURCES", bad)]).expect_err(bad);
+        let key = "auth.oidc.link_auth_sources";
+        let reason = if bad.trim().is_empty() {
+            "empty"
+        } else {
+            "invalid"
+        };
+        assert_invalid(&err, key, reason);
+    }
     let trial = with(&[lan, ("FORGE_AUTH_OIDC_ALLOW_INSECURE_ISSUER", "true")]).expect("trial");
     assert!(trial.auth.oidc.expect("configured").allow_insecure_issuer);
     // The flag alone (without the rest) is a partial section.

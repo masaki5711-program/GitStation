@@ -25,6 +25,10 @@ tokio.workspace = true
 unicode-properties.workspace = true
 
 [dev-dependencies]
+# M4 close: the merge queue's tests judge merge results with forge/risk's
+# real rules, as `forge serve` wires them (a test-only edge; the normal
+# dependency graph keeps feature crates apart).
+forge-checks.workspace = true
 # M4 C14: the autofix test stores its bundle artifact with its sha256.
 sha2.workspace = true
 forge-db = { workspace = true, features = ["test-support"] }

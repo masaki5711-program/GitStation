@@ -245,6 +245,17 @@ worker のタスク `ci_schedules`（30 秒）が期限の来たものを取り�
 上にあり自身の仕様のディレクトリを持つとき、イベント `spec.released`（連携の分類、`docs/api/integration-feed.md`）を 1 回出す。
 **分けたもの**: `gstn pipeline play` / `schedule …`（C12b、それまでは `gstn api`）、`spec.released` の未決定の項目の数（07 W12 のゲートと一緒に）。
 
+**M4 の締めの注記（2026-11-17、C8 / C9 の残り）**: ブランチ `feat/ci-automerge-m4-close`。
+**`merge.allow_full_auto`**: インスタンスの設定（表 `forge.auto_merge_instance` の列、マイグレーション `20261224100000`、既定 `true`）。
+変えるのは管理者の Web のセッションだけ（Action `AutoMergeFullAutoManage`、`PUT /api/v1/admin/auto-merge/allow-full-auto`、監査
+`auto_merge.allow_full_auto_changed`、権限の表の allow / deny の行）。外すと `full` は選べず（FG-REVIEW-0032、409）、既存の `full` は実効
+`reserve`（MR の 1 行 `held reason=full_auto_not_allowed`、自動マージのエントリーは列から外れる）。doctor `review.auto_merge`。
+**マージ結果の危険**: 着地の前に、自動マージのエントリーのあるバッチの各段のマージ結果（土台からその段まで）に `forge/risk` の同じ規則を
+当てる（forge-core の `MergeResultAssessor`、forge-checks の `Risk::assess_merge_result`）。その MR が加わって初めて `stop` になる段で
+止める（`FG-REVIEW-0026 reason=merge_result_<class>`）。人の分が持ち込んだ `stop`・大きさの上限だけの `stop` はバッチを切る。
+詳細は ADR-0017 Amendment（2026-11-17）、ADR-0030 Amendment（2026-11-17）。**分けたもの**: 許可を外したときの Owner への通知、
+管理者の画面（今は API だけ）。
+
 ## 6. 運用で足すもの
 
 - **`forge doctor`**: `ci.runners`（有効な Runner の数・最後の連絡）、`ci.secret_key`（鍵のファイルの有無・権限）、`deploy.known_hosts`（ターゲットごとの固定の指紋）。

@@ -226,7 +226,7 @@ export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Han
     [`GET ${MR_API}/3/merge-queue`]: () => json(200, { iid: 3, entry: null }),
     // M4 C9: a project that does not use auto-merge (no line).
     [`GET ${MR_API}/3/auto-merge`]: () =>
-      json(200, { iid: 3, mode: 'off', acts: false, stop: null, auto_merge: null }),
+      json(200, { iid: 3, mode: 'off', acts: false, allow_full_auto: true, stop: null, auto_merge: null }),
     // M4 C14: autofix off, no attempt (no line).
     [`GET ${MR_API}/3/autofix`]: () => json(200, { iid: 3, enabled: false, attempt: null }),
     // The detail under the status: the head's check runs and the predicted conflicts.

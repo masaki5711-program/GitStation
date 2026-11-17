@@ -64,7 +64,7 @@ pub use keys::{KeyEntry, KeySet, VerifyKey};
 pub use operator::operator_link_identity;
 pub use session::{
     LogoutRequest, RefreshVerdict, RefreshingSessions, JTI_MEMORY_SECS, MAX_JTIS,
-    MAX_REFRESH_WITHOUT_ID_TOKEN,
+    MAX_REFRESH_WITHOUT_ID_TOKEN, MAX_UNCONFIRMED_SECS,
 };
 
 /// `POST /-/auth/logout` (M2 MR5, ADR-0021 §8).

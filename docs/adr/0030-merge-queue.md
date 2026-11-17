@@ -104,3 +104,28 @@
   `entry_merged` / `batch_landed` が行を動かせなかったときは FG-SYS-0001 で残す（MR は既にマージ済み）。
 - **マイグレーションのロック**: `ci_pipelines` の CHECK は `NOT VALID` で足して `VALIDATE` してから古いものを消し、一意の索引は新しいものを
   作ってから古いものを消す（同じトランザクションの中で、重複を防ぐ索引が無い瞬間は無い）。表の大きさに比例するのは検証と索引の作成。
+
+## Amendment（2026-11-17、M4 の締め）: 着地の前のマージ結果の危険の判定
+
+- §6（緑なら着地）の前に 1 段を足す: バッチに **自動マージのエントリー** があれば、`forge/risk` の同じ規則を列車の各段の
+  マージ結果（バッチの土台からその段までの差分。最後の段は target に書かれる木）に当てる（forge-core の `MergeResultAssessor`、
+  `forge serve` が forge-checks の `Risk` を渡す）。人だけのバッチは判定しない。
+- 結果（ADR-0017 Amendment 2026-11-17 B）: その自動マージのエントリーが加わって初めて `stop` になる段 → そのエントリーを外す
+  （`FG-REVIEW-0026`、`reason=merge_result_<class>`、バッチは `abandoned reason=merge_result_risk`、他は順のまま列に戻る）。前の段が
+  既に `stop`、または大きさの上限だけの `stop`（先頭以外の段）→ バッチをその前で切る（`batch_limit` = その位置、
+  `abandoned reason=merge_result_cut`）。どちらも試行は書く前なので、試行の後始末は要らない。
+- 判定は貸し出しの中、マージのロックの外で行う（列車のコミットは変わらない。着地の判定と CAS は従来どおりロックの下）。
+- §2・§6.2 の自動マージの主体の判定に、インスタンスの `merge.allow_full_auto`（`full` は許可のあるときだけ動く）を足した。外れたら
+  自動マージのエントリーは `reason=full_auto_not_allowed` で外れる（`auto_merge_off` と同じ扱い）。
+- レビュー（2026-11-17、WARN、CRITICAL / HIGH なし）で足したこと:
+  - **最後の段も判定する**: 判定は列車の全段（土台から各段まで）。最後の自動マージのエントリーの後ろに並ぶ人のエントリーが、
+    target に書かれる木（最後の段）を `stop` にするなら、自動マージの分を載せたまま入らないよう、最初の自動マージのエントリーの前で
+    切る（それが先頭ならそのエントリー 1 件のバッチ）。
+  - **判定の時間の上限**: 1 回の手番の判定は全段まとめて `MERGE_RESULT_BUDGET`（90 秒。段の数 × 規則の予算ではない）。超えたら
+    FG-WEB-0002 `operation=merge_result`。判定の失敗が同じバッチで 3 回続いたら（`MERGE_RESULT_MAX_FAILURES`、worker ごとの数）、
+    自動マージのエントリーを `FG-REVIEW-0026 reason=merge_result_unavailable`（MR の 1 行は `stopped not_assessed`）で外し、人の
+    エントリーは順のまま列に戻って着地する（`forge.merge_queue.merge_result_unavailable`、warn、`cause_code`）。
+  - **切替との競合**: 着地は試行のフェンスの後、`update-ref` の前（マージのロックの下）に自動マージの設定をもう一度読む。緊急停止なら
+    バッチを捨てて全件を列に戻し（自動マージの分は待つ）、方式が動かない・`full` の許可が外れたなら自動マージのエントリーを外して
+    （`full_auto_not_allowed` / `auto_merge_off`）人の分は次のバッチで着地する。読んだ後、`update-ref` までの間に切り替わったものは
+    この着地には間に合わない（切替はマージのロックを取らない。残る窓は git の 1 回の CAS の間だけ）。

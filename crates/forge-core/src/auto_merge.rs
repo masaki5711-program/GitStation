@@ -14,9 +14,27 @@
 //!   (M5) can only raise what the deterministic layer found, never lower it,
 //!   and an AI that does not answer is a stop.
 //! - [`decide`]: the verdict for one merge request.
+//! - The instance's `merge.allow_full_auto` (M4 close): while an
+//!   administrator does not allow it, `full` cannot be selected and a project
+//!   set to `full` is effectively `reserve` ([`AutoMergeMode::effective`]):
+//!   its merge requests show `held reason=full_auto_not_allowed`.
+//! - The merge result ([`MergeResultAssessor`], [`merge_result_decision`]):
+//!   the merge queue judges `forge/risk`'s rules again on the combined tree
+//!   it will write to the target, so a stop that only the combination shows
+//!   stops the auto-merge entry that brings it in.
+
+use std::future::Future;
+use std::pin::Pin;
+
+use forge_errors::ForgeError;
 
 use crate::checks::{CheckConclusion, CheckRun, CheckStatus};
 use crate::risk::{RiskLevel, RULES};
+use crate::{ObjectId, ProjectId, RefName, RepoId};
+
+/// The instance's `merge.allow_full_auto` before an administrator changes
+/// it: allowed (the 2026-11-03 user decision, new projects are `full`).
+pub const ALLOW_FULL_AUTO_DEFAULT: bool = true;
 
 /// A project's `merge.auto` (plan 04 M-5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,6 +76,18 @@ impl AutoMergeMode {
     /// Whether the auto-merge principal acts in this mode.
     pub fn acts(self) -> bool {
         matches!(self, Self::Conditional | Self::Full)
+    }
+
+    /// The mode in effect under the instance's `merge.allow_full_auto`:
+    /// `full` while it is not allowed is `reserve` (the safest mode that
+    /// still lets a person press "merge when ready"; ADR-0017 Amendment
+    /// 2026-11-03 B). Every other mode is itself.
+    pub fn effective(self, full_allowed: bool) -> Self {
+        if self == Self::Full && !full_allowed {
+            Self::Reserve
+        } else {
+            self
+        }
     }
 }
 
@@ -400,6 +430,8 @@ pub enum QueueFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Facts {
     pub mode: AutoMergeMode,
+    /// The instance's `merge.allow_full_auto`.
+    pub full_allowed: bool,
     /// The emergency stop in effect (the instance's first).
     pub stop: Option<StopScope>,
     pub draft: bool,
@@ -464,14 +496,45 @@ fn sticky_removal(reason: &str) -> Option<Verdict> {
         "dequeued" => Some(Verdict::Held {
             reason: "dequeued_by_person",
         }),
-        _ => None,
+        // The merge result could not be judged, again and again: the head
+        // cannot be shown safe (review MEDIUM).
+        MERGE_RESULT_UNAVAILABLE => Some(Verdict::Stopped(Stop {
+            class: StopClass::NotAssessed,
+            reason: MERGE_RESULT_UNAVAILABLE,
+            detail: None,
+        })),
+        other => merge_result_class(other).map(|class| {
+            Verdict::Stopped(Stop {
+                class,
+                reason: "merge_result_risk",
+                detail: None,
+            })
+        }),
     }
 }
 
+/// The queue removal reason of an auto-merge entry whose batch's merge
+/// result could not be judged after repeated attempts (`FG-REVIEW-0026`,
+/// `not_assessed`).
+pub const MERGE_RESULT_UNAVAILABLE: &str = "merge_result_unavailable";
+
+/// The queue removal reason of an auto-merge entry stopped on the merge
+/// result (`merge_result_<class>`, a plain word the entry row holds).
+pub fn merge_result_reason(class: StopClass) -> String {
+    format!("merge_result_{}", class.as_str())
+}
+
+/// The class of a [`merge_result_reason`] (`None`: another reason).
+pub fn merge_result_class(reason: &str) -> Option<StopClass> {
+    reason
+        .strip_prefix("merge_result_")
+        .and_then(StopClass::parse)
+}
+
 /// The verdict for one open merge request (module docs). Order: the mode,
-/// the emergency stop, the queue, a draft, the risk layers, red checks,
-/// then what it waits for; `conditional` keeps protected paths for a
-/// person.
+/// the emergency stop, `full` not allowed by the instance, the queue, a
+/// draft, the risk layers, red checks, then what it waits for;
+/// `conditional` keeps protected paths for a person.
 pub fn decide(facts: &Facts) -> Verdict {
     if !facts.mode.acts() {
         return Verdict::Inactive;
@@ -485,6 +548,13 @@ pub fn decide(facts: &Facts) -> Verdict {
             },
             detail: None,
         });
+    }
+    // M4 close: `full` without the instance's allowance is `reserve` in
+    // effect; the line says why nothing merges by itself.
+    if !facts.mode.effective(facts.full_allowed).acts() {
+        return Verdict::Held {
+            reason: "full_auto_not_allowed",
+        };
     }
     match &facts.queue {
         QueueFacts::Live { auto } => return Verdict::Queued { auto: *auto },
@@ -540,6 +610,117 @@ pub fn decide(facts: &Facts) -> Verdict {
     Verdict::Enqueue { warned }
 }
 
+/// What the merge result ([`MergeResultAssessor`]) is judged on: the
+/// combined tree the queue will write to `target`, as the diff from `base`
+/// (the target's tip the train was built on) to `result` (a step of the
+/// train: every merge request up to one, merged on `base`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeResultRange<'a> {
+    pub project: ProjectId,
+    pub repo: RepoId,
+    pub target: &'a RefName,
+    pub base: &'a ObjectId,
+    pub result: &'a ObjectId,
+}
+
+/// The answer of a [`MergeResultAssessor`].
+pub type MergeResultFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<RiskVerdict, ForgeError>> + Send + 'a>>;
+
+/// `forge/risk`'s deterministic rules on a merge result (M4 close): the
+/// same rules, the same run and the same [`deterministic_layer`] as on a
+/// head, applied to a [`MergeResultRange`] (forge-checks implements it; the
+/// merge queue in forge-review calls it — two feature crates meet here).
+/// The implementation bounds its own work and fails with its code.
+pub trait MergeResultAssessor: Send + Sync {
+    fn assess<'a>(&'a self, range: MergeResultRange<'a>) -> MergeResultFuture<'a>;
+}
+
+/// One step of a train as the merge result's decision reads it: whether
+/// the entry is the auto-merge principal's, and the verdict on the merge
+/// result up to and including it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultStep {
+    pub auto: bool,
+    pub risk: RiskVerdict,
+}
+
+/// What the merge queue does with a green train before it lands (M4
+/// close).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeResultDecision {
+    /// Nothing an auto-merge entry brings in stops: land.
+    Land,
+    /// The auto-merge entry at `index` turns a clear merge result into a
+    /// stop (alone, or only combined with the entries before it): it
+    /// leaves the queue stopped with `class`; the rest go back in order.
+    Stop {
+        index: usize,
+        class: StopClass,
+        rule: Option<&'static str>,
+    },
+    /// The merge result was already a stop before the auto-merge entry at
+    /// `limit` (a person's entry brought it in; a person's merge is not
+    /// stopped by auto-merge), or the combined result is only too large to
+    /// assess ([`SIZE_LIMITED_RULES`]): the next batch ends before it, so
+    /// the auto-merge entry is judged on a smaller merge result afterwards.
+    Cut { limit: usize },
+}
+
+/// The `forge/risk` rules a merge result can hit only because the combined
+/// change is large (the files counted or read are bounded): on a step after
+/// the first they cut the batch instead of stopping the entry — the entry
+/// is judged again on a smaller merge result, and stops there if it still
+/// hits them.
+pub const SIZE_LIMITED_RULES: &[&str] = &[
+    "too_many_changes",
+    "content_not_scanned",
+    "critical_content_unread",
+];
+
+/// The decision on a train's steps in order (`steps[k]`: the merge result
+/// of entries `0..=k`, every step of the train). An auto-merge entry stops
+/// when its step is a stop and the step before was not; when the step
+/// before was already a stop, or its own stop is only a size bound
+/// ([`SIZE_LIMITED_RULES`]) on a step after the first, the batch is cut
+/// before it. The final step (the tree the target would hold) is judged
+/// too: a stop there that people's entries after the last auto-merge entry
+/// bring in would carry the auto-merge content through, so the batch is cut
+/// before the first auto-merge entry (at least one entry: that entry alone).
+/// `Pending` cannot be shown safe and counts as a stop (`not_assessed`).
+/// No auto-merge entry: [`MergeResultDecision::Land`].
+pub fn merge_result_decision(steps: &[ResultStep]) -> MergeResultDecision {
+    let mut before_stopped = false;
+    for (index, step) in steps.iter().enumerate() {
+        let stop = match step.risk {
+            RiskVerdict::Clear { .. } => None,
+            RiskVerdict::Stop { class, rule } => Some((class, rule)),
+            RiskVerdict::Pending => Some((StopClass::NotAssessed, None)),
+        };
+        if step.auto {
+            if before_stopped {
+                return MergeResultDecision::Cut { limit: index };
+            }
+            if let Some((class, rule)) = stop {
+                let size_only = rule.is_some_and(|r| SIZE_LIMITED_RULES.contains(&r));
+                if index > 0 && size_only {
+                    return MergeResultDecision::Cut { limit: index };
+                }
+                return MergeResultDecision::Stop { index, class, rule };
+            }
+        }
+        before_stopped = stop.is_some();
+    }
+    if let Some(first_auto) = steps.iter().position(|s| s.auto) {
+        if before_stopped {
+            return MergeResultDecision::Cut {
+                limit: first_auto.max(1),
+            };
+        }
+    }
+    MergeResultDecision::Land
+}
+
 /// A person's change of auto-merge (audited, no event; plan 04 M-5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AutoMergeChange {
@@ -558,6 +739,9 @@ pub enum AutoMergeChange {
     Resumed {
         project: Option<crate::ids::ProjectId>,
     },
+    /// `auto_merge.allow_full_auto_changed` (resource the instance): an
+    /// administrator allowed `full` (`allowed`) or took the allowance away.
+    FullAutoAllowed { allowed: bool },
 }
 
 impl AutoMergeChange {
@@ -566,6 +750,7 @@ impl AutoMergeChange {
             Self::ModeChanged { .. } => "auto_merge.mode_changed",
             Self::Stopped { .. } => "auto_merge.stopped",
             Self::Resumed { .. } => "auto_merge.resumed",
+            Self::FullAutoAllowed { .. } => "auto_merge.allow_full_auto_changed",
         }
     }
 
@@ -573,6 +758,7 @@ impl AutoMergeChange {
         match self {
             Self::ModeChanged { project, .. } => Some(*project),
             Self::Stopped { project } | Self::Resumed { project } => *project,
+            Self::FullAutoAllowed { .. } => None,
         }
     }
 
@@ -586,6 +772,10 @@ impl AutoMergeChange {
             Self::Stopped { project } | Self::Resumed { project } => serde_json::json!({
                 "scope": if project.is_some() { "project" } else { "instance" },
                 "project_id": project.map(|p| p.get()),
+            }),
+            Self::FullAutoAllowed { allowed } => serde_json::json!({
+                "scope": "instance",
+                "allow_full_auto": allowed,
             }),
         }
     }

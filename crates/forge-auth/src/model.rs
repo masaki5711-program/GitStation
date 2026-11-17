@@ -468,6 +468,9 @@ pub struct AutoMergeTarget {
     pub mode: forge_core::auto_merge::AutoMergeMode,
     /// The emergency stop in effect now (the instance's first).
     pub stop: Option<forge_core::auto_merge::StopScope>,
+    /// The instance's `merge.allow_full_auto` now (M4 close): `full`
+    /// without it does not act.
+    pub full_allowed: bool,
 }
 
 /// What the autofix bot is decided on (M4 C14, ADR-0017 §2.5): every

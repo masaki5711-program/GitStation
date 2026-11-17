@@ -279,7 +279,9 @@ async fn identity_link_conflicts_name_their_reason() {
 
 const PFS: LinkPolicy = LinkPolicy {
     auto_link: true,
-    rules: LinkRules::EmployeeNumberOnly,
+    rules: LinkRules::EmployeeNumberOnly {
+        auth_sources: LinkAuthSources::ALL,
+    },
 };
 
 /// The PFS Keycloak's rules (ADR-0021 amendment 2026-11-17): the
@@ -312,7 +314,7 @@ async fn employee_number_only_links_without_the_case_or_a_verified_email() {
     let new = LoginIdentity {
         email_verified: false,
         preferred_username: Some("ignored-name"),
-        ..identity("pfs-new", Some(" SYN0500 "), Some("pfs.new@example.test"))
+        ..identity("pfs-new", Some("SYN0500"), Some("pfs.new@example.test"))
     };
     let (created, _) = login(&t, &new, PFS).await;
     let LoginOutcome::Created { user, .. } = created.expect("created") else {
@@ -327,16 +329,16 @@ async fn employee_number_only_links_without_the_case_or_a_verified_email() {
     assert_eq!(rows[0]["username"], "syn0500");
     assert_eq!(rows[0]["display_name"], "New Person");
     assert_eq!(rows[0]["email"], "pfs.new@example.test");
-    assert_eq!(
-        rows[0]["employee_number"], "SYN0500",
-        "stored as sent, trimmed"
-    );
+    assert_eq!(rows[0]["employee_number"], "SYN0500", "stored as sent");
 
     let users_before = scalar(&t, "SELECT count(*) FROM forge.users").await;
     let ids_before = identities(&t).await;
     for (who, expected) in [
         (identity("s1", None, None), "employee_number_missing"),
-        (identity("s1", Some("   "), None), "employee_number_missing"),
+        (identity("s1", Some("   "), None), "claim_invalid"),
+        (identity("s1", Some(" SYN0001"), None), "claim_invalid"),
+        (identity("s1", Some("SYN\u{130}"), None), "claim_invalid"),
+        (identity("s1", Some(&"A".repeat(33)), None), "claim_invalid"),
         (identity("s1", Some("syn0002"), None), "privileged_account"),
         // a new person still needs an e-mail (forge.users: a human has one).
         (identity("s1", Some("SYN0600"), None), "email_missing"),
@@ -368,6 +370,77 @@ async fn employee_number_only_links_without_the_case_or_a_verified_email() {
         users_before
     );
     assert_eq!(identities(&t).await, ids_before);
+    t.drop_now().await;
+}
+
+/// Review of the PFS rules (MEDIUM, takeover by `staff_id`): a user with
+/// an identity of ANY issuer is never linked by the employee number, and
+/// `auth.oidc.link_auth_sources` narrows which accounts may be linked.
+#[tokio::test]
+async fn employee_number_only_never_moves_a_bound_account_and_honours_auth_sources() {
+    let t = FreshDb::migrated().await;
+    let bound = person(&t, "bound", "SYN0700", false, UserKind::Human).await;
+    let _ = link_by_operator(
+        &t.db,
+        &system("req-op-other"),
+        bound,
+        "https://other-idp.example.test/realms/x",
+        "sub-bound",
+    )
+    .await
+    .expect("operator link to another issuer");
+    let mut ldap = NewUser::human("dirk", "dirk", "dirk@example.test");
+    ldap.employee_number = Some("SYN0701".to_owned());
+    ldap.auth_source = AuthSource::Ldap;
+    let dirk = users::create(&t.db, &system("req-user-dirk"), &ldap)
+        .await
+        .expect("ldap user")
+        .user_id;
+    let _local = person(&t, "lena", "SYN0702", false, UserKind::Human).await;
+
+    let ids_before = identities(&t).await;
+    let only_local = LinkPolicy {
+        auto_link: true,
+        rules: LinkRules::EmployeeNumberOnly {
+            auth_sources: LinkAuthSources::from_names(&["local"]),
+        },
+    };
+    let only_ldap = LinkPolicy {
+        auto_link: true,
+        rules: LinkRules::EmployeeNumberOnly {
+            auth_sources: LinkAuthSources::from_names(&["ldap"]),
+        },
+    };
+    for (who, policy, expected) in [
+        // (a) bound to another issuer: never linked, whatever the sources.
+        (
+            identity("p1", Some("syn0700"), None),
+            PFS,
+            "employee_number_linked",
+        ),
+        // (c) the source is not in the list.
+        (
+            identity("p2", Some("SYN0701"), None),
+            only_local,
+            "auth_source_not_linkable",
+        ),
+        (
+            identity("p3", Some("SYN0702"), None),
+            only_ldap,
+            "auth_source_not_linkable",
+        ),
+    ] {
+        let err = login(&t, &who, policy).await.0.expect_err(expected);
+        assert_eq!(err.code(), ErrorCode::IdentityLinkConflict, "{err}");
+        assert_eq!(reason(&err), expected, "{err}");
+    }
+    assert_eq!(identities(&t).await, ids_before, "nothing written");
+    // The listed source links.
+    let (linked, _) = login(&t, &identity("p2", Some("SYN0701"), None), only_ldap).await;
+    assert_eq!(
+        linked.expect("ldap linked"),
+        LoginOutcome::Linked { user: dirk }
+    );
     t.drop_now().await;
 }
 

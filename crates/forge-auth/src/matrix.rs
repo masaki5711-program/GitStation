@@ -219,6 +219,8 @@ pub(crate) enum Fixture {
         mode: forge_core::auto_merge::AutoMergeMode,
         stop: Option<forge_core::auto_merge::StopScope>,
         deleted: bool,
+        /// The instance's `merge.allow_full_auto` (M4 close).
+        full_allowed: bool,
     },
     /// A branch update on a private project whose Maintainer-level
     /// protection forbids direct pushes (M3 R6).
@@ -902,7 +904,8 @@ impl Fixture {
                 mode,
                 stop,
                 deleted,
-            } => crate::matrix_rows_auto_merge::target_resource(mode, stop, deleted),
+                full_allowed,
+            } => crate::matrix_rows_auto_merge::target_resource(mode, stop, deleted, full_allowed),
             Fixture::Autofix(case) => crate::matrix_rows_autofix::target_resource(case),
             Fixture::Ref {
                 kind,

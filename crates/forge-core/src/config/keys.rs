@@ -319,6 +319,10 @@ pub const KEYS: &[Key] = &[
         "auth.oidc.allow_insecure_issuer",
         "FORGE_AUTH_OIDC_ALLOW_INSECURE_ISSUER",
     ),
+    text(
+        "auth.oidc.link_auth_sources",
+        "FORGE_AUTH_OIDC_LINK_AUTH_SOURCES",
+    ),
     // M3 S2: the HMAC keys of acting for a person (ADR-0025 §5.2).
     text(
         "auth.act_as_hmac_keys_file",

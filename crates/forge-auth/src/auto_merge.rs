@@ -7,8 +7,9 @@
 //! Closed by default: the principal adds a merge request to the merge
 //! queue (`MergeQueueEnqueue`) and the queue's landing merges its entry
 //! (`MergeRequestMerge`), both on `Resource::AutoMerge` only, and only
-//! while the project's `merge.auto` acts (`conditional` / `full`) and no
-//! emergency stop is on. Every other action — approving, deploying,
+//! while the project's `merge.auto` acts (`conditional` / `full`; `full`
+//! only while the instance's `merge.allow_full_auto` allows it, M4 close)
+//! and no emergency stop is on. Every other action — approving, deploying,
 //! protected-branch rules, the emergency stop itself, any read — is
 //! `FG-AUTH-0003 reason=auto_merge_not_allowed`. Whether the merge request
 //! is ready is `evaluate_merge()`'s, never decided here.
@@ -66,6 +67,10 @@ fn decide_target(t: &AutoMergeTarget) -> Result<(), (ErrorCode, &'static str)> {
     if !t.mode.acts() {
         return Err((ErrorCode::Forbidden, "auto_merge_mode"));
     }
+    // M4 close: `full` acts only while the instance allows it.
+    if !t.mode.effective(t.full_allowed).acts() {
+        return Err((ErrorCode::Forbidden, "full_auto_not_allowed"));
+    }
     Ok(())
 }
 
@@ -82,13 +87,15 @@ pub struct AutoMergeCtx {
 
 impl AutoMergeCtx {
     /// The context of merge request `iid` (`mr`) of `project`, with
-    /// `mode` and `stop` as read in the same transaction.
+    /// `mode`, `stop` and the instance's `merge.allow_full_auto`
+    /// (`full_allowed`) as read in the same transaction.
     pub fn new(
         project: crate::LoadedProject,
         iid: i64,
         mr: &crate::LoadedMergeRequest,
         mode: forge_core::auto_merge::AutoMergeMode,
         stop: Option<forge_core::auto_merge::StopScope>,
+        full_allowed: bool,
     ) -> Self {
         let target = AutoMergeTarget {
             project: crate::model::ProjectView {
@@ -100,6 +107,7 @@ impl AutoMergeCtx {
             target_branch: mr.target_branch.clone(), // clone: as above
             mode,
             stop,
+            full_allowed,
         };
         Self {
             project,

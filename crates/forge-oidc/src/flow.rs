@@ -11,7 +11,7 @@ use forge_core::web_keys::{KeyPurpose, PurposeKeys, WebKeys};
 use forge_core::{RequestId, SessionRevokeReason, UserId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::identities::{
-    self, LinkPolicy, LinkRules, LoginAccount, LoginIdentity, LoginOutcome,
+    self, LinkAuthSources, LinkPolicy, LinkRules, LoginAccount, LoginIdentity, LoginOutcome,
 };
 use forge_db::sessions::{self, NewSession, OidcSession};
 use forge_db::Db;
@@ -72,6 +72,8 @@ pub struct OidcSettings {
     /// `auth.oidc.claims_source`: where the identity claims and the client
     /// roles are read (ADR-0021 amendment 2026-11-17).
     pub claims_source: OidcClaimsSource,
+    /// `auth.oidc.link_auth_sources` (`claims_source = access_token` only).
+    pub link_auth_sources: Vec<String>,
     /// `web.base_url`'s origin (`redirect_uri` = it + `/-/auth/callback`).
     pub base_origin: String,
     /// `web.session_idle_secs` / `web.session_absolute_secs`.
@@ -127,6 +129,7 @@ impl OidcSettings {
             signing_algs: cfg.signing_algs.clone(),
             auto_link: cfg.auto_link,
             claims_source: cfg.claims_source,
+            link_auth_sources: cfg.link_auth_sources.clone(), // clone: the settings own their copy
             base_origin: base_origin.to_owned(),
             session_idle,
             session_absolute,
@@ -396,7 +399,9 @@ impl Oidc {
                 auto_link: self.settings.auto_link,
                 rules: match self.settings.claims_source {
                     OidcClaimsSource::IdToken => LinkRules::VerifiedEmail,
-                    OidcClaimsSource::AccessToken => LinkRules::EmployeeNumberOnly,
+                    OidcClaimsSource::AccessToken => LinkRules::EmployeeNumberOnly {
+                        auth_sources: LinkAuthSources::from_names(&self.settings.link_auth_sources),
+                    },
                 },
             },
             |account| {
