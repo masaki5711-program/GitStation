@@ -93,14 +93,46 @@ MR !4「hello-app v5」は `public/health` を `maintenance` にする（CI の�
 ### 4.4 GitStation 自身のパイプライン
 
 - 前回（11-11）の Runner `docker-test-1` で、試験環境のプロジェクト `gitstation/gitstation` のパイプライン 4〜7（lint・test・generated）が成功している。
-- 今回（main 9ca82c01、新しい Runner `docker-test-m4`）は**まだ動かしていない**。用意はできている: 9ca82c01 に「`tags: [linux, m4]`」
-  だけを足した試験環境だけのコミットを branch `chore/ci-m4-dogfood-runner` で `gitstation/gitstation` に push する（`main` は直接の push 禁止。
-  古い Runner は `m4` を持たないので取らない）。Rust のビルドは重い（ジョブ 4g・30 分ほど）ため cargo の枠のロックを取って動かす決まりだが、
-  別のセッション（`oidcfull`）が 07:13 UTC から 1 時間以上ロックを持ち続けたため、待ちを止めた。枠が空いたら同じ手順で 1 回動かす。
+- 今回（main 3300cc30、新しい Runner `docker-test-m4`）: **履歴の取り込みは成功、パイプラインは 1 回動いて failed**（原因は CI の
+  イメージが古いこと。Runner とジョブの仕組みは動いた）。時刻は UTC。
+  - **入れ先**: `gitstation/gitstation`（project 4）は 11-11 の履歴の無い写し（別の履歴、ref あり）なので、取り込みの許可は使えない。
+    空のプロジェクト `gitstation/gitstation-history`（project 14、repository 14）を作った（request_id `fc9498acd3bc4b168a8857d3389824f5`）。
+    リポジトリが `ready` になるまで 6 分 6 秒かかった（`repository.provision` のジョブが、同じ時間に走っていた負荷試験の worker の
+    キューの後ろに並んだ。普段は 1〜4 秒）。
+  - **許可**: `forge admin repo allow-import 14 --ttl-hours 2`（request_id `56fcccbbc90f4b4aa552909a263e6ce8`、監査
+    `repository.history_import_allowed`）。
+  - **最初の push**（12:26:33〜12:26:40、request_id `7365b2cc64704843b4f6a822112d6709`）: 3300cc30 に「`tags: [linux, m4]`」だけを足した
+    試験環境だけのコミット 9b01c587（branch `chore/ci-m4-self-runner`、1252 コミットの履歴ごと）。受け入れられた。履歴にだけある
+    秘密の候補は 8 件（すべて `private_key`、合成の鍵のテスト用ファイル: `crates/forge-db/src/ci_outputs/tests.rs` 4、
+    `crates/forge-pipelines/src/fingerprint_tests.rs` 2、`crates/forge-oidc/tests/fixtures/synthetic-rs256-key.pem` 1、
+    `crates/forge-web/tests/single_file_commit_routes.rs` 1）。利用者には `remote: FG-GIT-0022 warning` の行、監査に
+    `repository.history_imported` 1 件と `repository.history_secret_imported` 8 件。先端のツリーの検査は通った（3300cc30 の修正のとおり）。
+    許可は使い切られた（`consumed_at` 12:26:38）。
+  - **パイプライン 489**（`refs/heads/chore/ci-m4-self-runner`、sha 9b01c587、request_id は push と同じ）: **failed、36 秒**
+    （12:26:41〜12:27:16）。3 つのジョブはすべて Runner `docker-test-m4` が取り（Runner のログ `forge.runner.job_started` /
+    `job_finished`、job 516〜518）、`generated` 15 秒・`lint` 9 秒・`test` 11 秒で終了コード 101 / 101 / 102。ログの抜き出しは
+    どれも `error: no matching package named `russh` found`（cargo はオフライン）。
+  - **原因**: `.forge-ci.yml` が指すジョブのイメージ `registry:5000/ci/rust@sha256:e96601af…` は 11-11 のビルドで、その後に
+    `Cargo.lock` に入ったクレート（`russh` は 11-14 の 9033307e、M4 C13）を持たない。`.forge-ci.yml` の先頭の注意
+    （`Cargo.lock` が変わったら `node ops/ci-image/build-and-push.mjs` で作り直して digest を書き直す）が守られていない。
+    これを確かめるゲートは無い。Runner・レジストリ・タグの選び方・サービスのコンテナ（`db` は起動した）は動いている。
+  - **`main` の push**（12:27:23、新しいオブジェクトは無い）: 3300cc30 を `main` に置いた。そのパイプライン 490（`tags: [linux]`、
+    request_id `ca68c080f9754022a23adf07bafd3fd9`）は重いジョブを 2 つ同時に走らせないため、すぐ取り消した（`canceled`、2 秒。
+    取り消しの前に `docker-test-m4` と `docker-test-1` が 1 つずつ取り、どちらも終了コード 101 で 12:27:34 までに終わった。
+    ロックを離した 12:27:27 の 7 秒後だが、cargo が依存の解決で止まるのでビルドは走っていない。取り消しの後のログの送信は
+    FG-CI-0004 で断られる。仕様）。
+  - cargo の枠のロック（`m4done-gitstation-ci`）は 12:26:33〜12:27:27 に持ち、trap で離した。その前の 1 回目（11:06:31〜11:06:33）は
+    スクリプトのパスの形の誤り（Git Bash の `/tmp/…` を Windows の git に渡した）で push の前に終わり、何も送っていない。
 
 ## 5. 残り
 
-1. GitStation 自身のパイプラインを新しい Runner で 1 回（4.4）。
+1. GitStation 自身のパイプラインを新しい Runner で**緑に**する（4.4。1 回動いて failed）。要るもの:
+   - CI のイメージを今の `Cargo.lock` で作り直し（`node ops/ci-image/build-and-push.mjs`。compose `gs-runner-test` の Runner の
+     コンテナの Podman を通してレジストリに入れるので、その compose に触れる承認が要る）、`.forge-ci.yml` の digest を書き直す
+     （製品の変更。別の branch）。その後、`gitstation/gitstation-history` に push してもう 1 回動かす（取り込みの許可は要らない。
+     2 回目からは新しいオブジェクトだけを検査する）。
+   - ゲート: `Cargo.lock`・`rust-toolchain.toml` が変わったのに `.forge-ci.yml` の digest が変わっていない変更を止める
+     （今は注意書きだけ。`validate-*` か CI の確かめにする）。
 2. 製品の修正: D1（Windows で `UserKnownHostsFile` の引用符）、D2（`ProgramData`）。修正の後は `sshwrap.exe` を外して確かめる。
    ssh の stderr の分類の結果（stderr そのものではなく、例えば `invalid quotes` のような種類）をログに残すと、今回のような
    `connection_lost` の誤った見え方を防げる。
