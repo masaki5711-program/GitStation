@@ -578,7 +578,7 @@ ADR-0028 §3（proposed）: 承認のフェーズのあるリポジトリの文�
    トークンのエンドポイントの `access_token` を JWT として確かめる: discovery の JWKS、`auth.oidc.signing_algs` と同じ方式と
    kty の組、`iss` = `auth.oidc.issuer`、`exp` 必須・`nbf`・`iat`（60 秒のずれ）、`azp` 必須で `client_id` と同じ、`aud` は
    Keycloak の流儀で確かめない（ない・`account`・ほかのクライアントの並びのどれでもよい。文字列か文字列の並びでなければ拒否）、
-   `typ` があれば `Bearer`（Keycloak の ID トークンは同じ鍵で `typ: ID`）、`sub` 必須で ID トークンの `sub` と同じ。人の claim と
+   `typ` は必須で `Bearer`（Keycloak の ID トークンは同じ鍵で `typ: ID`。レビューで必須に）、`sub` 必須で ID トークンの `sub` と同じ。人の claim と
    ロールはそこから読む。失敗はすべて新しい **FG-AUTH-0025 AccessTokenInvalid**（warn、401、`reason` つき。ID トークンの失敗は
    先に確かめるので FG-AUTH-0012 のまま）。応答に `access_token` がないのは FG-AUTH-0015 `reason=invalid_json detail=access_token`。
    トークンも claim もログに出さず、アクセストークンは保存しない。
@@ -592,8 +592,8 @@ ADR-0028 §3（proposed）: 承認のフェーズのあるリポジトリの文�
      見ない（§4 の「確認済みで一致する e-mail と一緒のときだけ」はこのモードでは外す。社員番号は PFS の管理者だけが書ける属性で、
      共通のキー）。e-mail だけで結ぶことは今までどおりない。管理者・無効・bot・`auto_link = false`・別の subject に結び付け済みの
      拒否は今までどおり。
-   - **大文字と小文字を区別せずに比べる**（PFS の `staff_id` は大文字）: `upper(employee_number) = upper($1)`。値は前後の空白を
-     除いて**送られたとおりに**保存し、正規化はしない（既存の行を書き換えないため）。一意の索引は大小を区別するので、大小だけ違う
+   - **大文字と小文字を区別せずに比べる**（PFS の `staff_id` は大文字）: `upper(employee_number) = upper($1)`。値は
+     **送られたとおりに**保存し（下のレビューの表: `[A-Za-z0-9_-]{1,32}` だけ）、正規化はしない（既存の行を書き換えないため）。一意の索引は大小を区別するので、大小だけ違う
      2 行が当たれば FG-AUTH-0014 `employee_number_ambiguous` で拒否し、推測しない。この比較は索引を使わないが、結び付け済みの
      ログインは `(issuer, subject)` で先に決まり、比較は最初のログインだけで起きる（利用者の数は社内の人数）。
    - 新しい利用者の username は **`staff_id` の小文字**（`preferred_username` には頼らない。あってもなくてもよい）、表示名は
@@ -603,6 +603,15 @@ ADR-0028 §3（proposed）: 承認のフェーズのあるリポジトリの文�
    （既定 false。本番では使わない。トークンが平文で流れる）。Linux のサーバーの issuer はそのサーバーの PFS の `.env` から取る。
 6. バックチャネルのログアウトがなくてもログインは動く（§8 のルートは呼ばれないだけ）。切った人は §7 の確認で最長 5 分で切れる。
    無操作・絶対の寿命（`web.session_idle_secs` / `web.session_absolute_secs`）は変えない。
+
+**レビューで変えた点（2026-11-17、セキュリティのレビュー WARN: MEDIUM 2、LOW 2）。**
+
+| 重さ | 指摘 | 決定 |
+|---|---|---|
+| MEDIUM | `staff_id` だけの結び付けで乗っ取り | `EmployeeNumberOnly` では、**どの issuer であれ** OIDC の結び付けを持つ利用者には結び付けない（`employee_number_linked`）。管理者には結び付けない（今までどおり）。`auth.oidc.link_auth_sources`（既定 `local,ldap`）にない `auth_source` は `auth_source_not_linkable`。PFS の realm で `staff_id` は admin だけが書けることが前提（runbook oidc-login の「PFS Keycloak」に確かめ方。`forge doctor` の `auth.oidc` の行に注意書き） |
+| MEDIUM | `typ` が任意 | アクセストークンの `typ` は**必須**で `Bearer`（Keycloak は必ず付ける）。ない・違うは FG-AUTH-0025（`missing_claim claim=typ` / `typ`） |
+| LOW | 大小の比較が ASCII 以外に及ぶ | `staff_id` は `[A-Za-z0-9_-]{1,32}` だけ（FG-AUTH-0014 `claim_invalid detail=employee_number_format`）。前後の空白も拒否（もう除かない） |
+| LOW | 「Keycloak に届かない、続ける」に上限がない | ロールの最後の確認（`access_role_seen_at`。アクセストークンのモードでは確かめたリフレッシュのたびに更新）から **30 分**を過ぎたら、届かない確認で失効（FG-AUTH-0015 `call=refresh reason=unconfirmed_too_long`、`why=idp_unreachable_too_long`）。両方のモードに効く |
 
 **結果。** `id_token` の振る舞いは変わらない（既存のテストのまま）。PFS の形は forge-oidc の `tests/pfs.rs`（モックの
 `authorize_pfs`: 素の ID トークンと署名したアクセストークン）と forge-db の

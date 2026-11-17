@@ -16,6 +16,9 @@
 //! - `auth.oidc.claims_source` (default `id_token`; `access_token` for a
 //!   provider that puts the identity claims and the client roles in the
 //!   access token only, the PFS Keycloak — ADR-0021 amendment 2026-11-17).
+//! - `auth.oidc.link_auth_sources` (default `local,ldap`): with
+//!   `claims_source = access_token`, the `forge.users.auth_source` values
+//!   an existing user may have to be linked by the employee number alone.
 //! - `auth.oidc.allow_insecure_issuer` (default `false`): an `http` issuer
 //!   on a host other than the loopback, for a trial provider only.
 //!
@@ -44,6 +47,7 @@ const SIGNING_ALGS: &str = "auth.oidc.signing_algs";
 const AUTO_LINK: &str = "auth.oidc.auto_link";
 const CLAIMS_SOURCE: &str = "auth.oidc.claims_source";
 const ALLOW_INSECURE_ISSUER: &str = "auth.oidc.allow_insecure_issuer";
+const LINK_AUTH_SOURCES: &str = "auth.oidc.link_auth_sources";
 
 /// Every `auth.oidc.*` key (for the all-or-nothing rule).
 const ALL: &[&str] = &[
@@ -57,7 +61,12 @@ const ALL: &[&str] = &[
     AUTO_LINK,
     CLAIMS_SOURCE,
     ALLOW_INSECURE_ISSUER,
+    LINK_AUTH_SOURCES,
 ];
+
+/// The `forge.users.auth_source` values `auth.oidc.link_auth_sources`
+/// accepts.
+pub const LINK_AUTH_SOURCE_NAMES: &[&str] = &["local", "ldap"];
 
 /// Where the person's identity claims and client roles are read
 /// (`auth.oidc.claims_source`, ADR-0021 amendment 2026-11-17).
@@ -133,6 +142,9 @@ pub struct OidcConfig {
     /// `auth.oidc.allow_insecure_issuer`: an `http` issuer was accepted
     /// off the loopback (trials only; `forge doctor` should say so).
     pub allow_insecure_issuer: bool,
+    /// `auth.oidc.link_auth_sources`: non-empty, each one of
+    /// [`LINK_AUTH_SOURCE_NAMES`], no repeats.
+    pub link_auth_sources: Vec<String>,
 }
 
 /// `[auth]`.
@@ -255,6 +267,24 @@ impl AuthConfig {
             Some("false") => false,
             Some(_) => return Err(invalid(AUTO_LINK, "invalid")),
         };
+        let link_auth_sources = match text(LINK_AUTH_SOURCES)? {
+            None => LINK_AUTH_SOURCE_NAMES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+            Some(list) => {
+                let mut sources: Vec<String> = Vec::new();
+                for name in list.split(',').map(str::trim) {
+                    if !LINK_AUTH_SOURCE_NAMES.contains(&name) {
+                        return Err(invalid(LINK_AUTH_SOURCES, "invalid"));
+                    }
+                    if !sources.iter().any(|s| s == name) {
+                        sources.push(name.to_owned());
+                    }
+                }
+                sources
+            }
+        };
         let claims_source = match text(CLAIMS_SOURCE)? {
             None => OidcClaimsSource::IdToken,
             Some(v) => {
@@ -274,6 +304,7 @@ impl AuthConfig {
                 auto_link,
                 claims_source,
                 allow_insecure_issuer,
+                link_auth_sources,
             }),
         })
     }

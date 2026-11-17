@@ -28,6 +28,12 @@ pub struct RefreshClaim {
     pub refresh_token_enc: Vec<u8>,
     /// Refreshes in a row whose answer had no ID token (0 after one with).
     pub without_id_token: i16,
+    /// Seconds since the provider last confirmed the access role
+    /// (`access_role_seen_at`; the sign-in, or a refresh stored with
+    /// `role_confirmed`). A row without that time counts as `i64::MAX`
+    /// (fail closed). The refresh check stops "unreachable, go on" past
+    /// 30 minutes (ADR-0021 amendment 2026-11-17).
+    pub unconfirmed_secs: i64,
 }
 
 impl std::fmt::Debug for RefreshClaim {
@@ -49,6 +55,7 @@ struct ClaimRow {
     oidc_sub: Option<String>,
     refresh_token_enc: Option<Vec<u8>>,
     refresh_without_id_token: i16,
+    unconfirmed_secs: Option<i64>,
 }
 
 /// Take the right to refresh `session_id` (ADR-0021 §7, "once per session
@@ -75,7 +82,9 @@ pub async fn claim_refresh(db: &Db, session_id: i64) -> Result<Option<RefreshCla
                  AND (refresh_checked_at IS NULL \
                       OR refresh_checked_at < now() - interval '300 seconds') \
                  RETURNING public_id, user_id, oidc_issuer, oidc_sub, refresh_token_enc, \
-                 refresh_without_id_token",
+                 refresh_without_id_token, \
+                 floor(extract(epoch FROM now() - access_role_seen_at))::bigint \
+                 AS unconfirmed_secs",
             )
             .bind(session_id)
             .fetch_optional(&mut *conn)
@@ -95,6 +104,7 @@ pub async fn claim_refresh(db: &Db, session_id: i64) -> Result<Option<RefreshCla
             subject,
             refresh_token_enc,
             without_id_token: row.refresh_without_id_token,
+            unconfirmed_secs: row.unconfirmed_secs.unwrap_or(i64::MAX),
         })),
         _ => Err(
             ForgeError::new(forge_errors::ErrorCode::CredentialDataInvalid)
@@ -143,12 +153,16 @@ pub struct Refreshed<'a> {
     /// The sealed new ID token (`None`: the answer had none; the stored
     /// one stays for the RP logout's `id_token_hint`).
     pub id_token_enc: Option<&'a [u8]>,
+    /// The refresh confirmed the access role (an ID token with the role,
+    /// or with `claims_source = access_token` a verified access token):
+    /// `access_role_seen_at = now()`.
+    pub role_confirmed: bool,
 }
 
-/// Store a refresh the check allowed: the new sealed tokens, and either
-/// `access_role_seen_at = now()` with the count of refreshes without an ID
-/// token reset to 0 (an ID token confirmed the role), or that count raised
-/// by one. `false`: the session was revoked meanwhile (nothing written).
+/// Store a refresh the check allowed: the new sealed tokens;
+/// `access_role_seen_at = now()` when `role_confirmed`; the count of
+/// refreshes without an ID token reset to 0 with one, raised by one
+/// without. `false`: the session was revoked meanwhile (nothing written).
 /// Unaudited columns only.
 pub async fn store_refreshed(
     db: &Db,
@@ -167,7 +181,7 @@ pub async fn store_refreshed(
                 "UPDATE forge.web_sessions SET \
                  refresh_token_enc = COALESCE($2, refresh_token_enc), \
                  id_token_enc = COALESCE($3, id_token_enc), \
-                 access_role_seen_at = CASE WHEN $4 THEN now() ELSE access_role_seen_at END, \
+                 access_role_seen_at = CASE WHEN $5 THEN now() ELSE access_role_seen_at END, \
                  refresh_without_id_token = CASE WHEN $4 THEN 0 \
                      ELSE LEAST(refresh_without_id_token + 1, 1000) END \
                  WHERE id = $1 AND revoked_at IS NULL",
@@ -176,6 +190,7 @@ pub async fn store_refreshed(
             .bind(refreshed.refresh_token_enc)
             .bind(refreshed.id_token_enc)
             .bind(with_id_token)
+            .bind(refreshed.role_confirmed)
             .execute(&mut *conn)
             .await
             .map_err(|e| query_error("sessions.store_refreshed.update", e))

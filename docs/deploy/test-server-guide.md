@@ -340,6 +340,7 @@ tls_root_cert = "<INTERNAL_CA_PEM>"
 | `auth.oidc.ca_file` | `FORGE_AUTH_OIDC_CA_FILE` | 社内 CA の PEM。**https の issuer には必須、http には指定不可** | 条件付き | — |
 | `auth.oidc.employee_number_claim` / `access_role` / `signing_algs` / `auto_link` | `FORGE_AUTH_OIDC_…` | 社員番号の claim 名・入場のロール名・署名方式・自動の結び付け | 任意 | `employee_number` / `access` / `RS256` / true |
 | `auth.oidc.claims_source` | `FORGE_AUTH_OIDC_CLAIMS_SOURCE` | 人の claim とクライアントロールを読むトークン。`id_token` か `access_token`（PFS の Keycloak。ADR-0021 の 2026-11-17 の追記、Runbook `oidc-login` の「PFS Keycloak」） | 任意 | `id_token` |
+| `auth.oidc.link_auth_sources` | `FORGE_AUTH_OIDC_LINK_AUTH_SOURCES` | `claims_source = access_token` のとき、社員番号だけで結び付けてよい既存の利用者の `auth_source`（`local`、`ldap` のカンマ区切り） | 任意 | `local,ldap` |
 | `auth.oidc.allow_insecure_issuer` | `FORGE_AUTH_OIDC_ALLOW_INSECURE_ISSUER` | loopback 以外の `http` の issuer を許す（**試験の IdP だけ**。本番では使わない） | 任意 | false |
 
 - 設定の誤りは `FG-SYS-0002`（`config_key` と `reason` がログに出る）。意味は `ops/runbooks/config-invalid.md`。

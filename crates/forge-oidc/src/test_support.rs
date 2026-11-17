@@ -108,6 +108,8 @@ struct Inner {
     refresh_overrides: Value,
     /// Merged into a refreshed access token's claims (`null` removes).
     refresh_access_overrides: Value,
+    /// Answer the code with the ID token in the access token's place.
+    access_is_id_token: bool,
     next_refresh: u64,
     next_jti: u64,
 }
@@ -175,6 +177,7 @@ impl MockOp {
             refresh_mode: RefreshMode::WithIdToken,
             refresh_overrides: json!({}),
             refresh_access_overrides: json!({}),
+            access_is_id_token: false,
             next_refresh: 0,
             next_jti: 1,
         }));
@@ -212,6 +215,7 @@ impl MockOp {
             signing_algs: vec![OidcSigningAlg::Rs256, OidcSigningAlg::Es256],
             auto_link: true,
             claims_source: forge_core::config::OidcClaimsSource::IdToken,
+            link_auth_sources: vec!["local".to_owned(), "ldap".to_owned()],
             base_origin: base_origin.to_owned(),
             session_idle: Duration::from_secs(4 * 3600),
             session_absolute: Duration::from_secs(12 * 3600),
@@ -265,6 +269,12 @@ impl MockOp {
     /// a `null` removes a claim).
     pub fn set_refresh_access(&self, overrides: Value) {
         self.inner().refresh_access_overrides = overrides;
+    }
+
+    /// Answer later codes with the ID token as the access token too (an ID
+    /// token presented where the access token belongs).
+    pub fn access_is_id_token(&self, on: bool) {
+        self.inner().access_is_id_token = on;
     }
 
     /// End every refresh token (an administrator ended the sessions in
@@ -617,6 +627,7 @@ async fn token(
     let kid = inner.signing_kid.clone();
     let id_token = sign_with(&inner, &kid, json!({}), &pending.claims);
     let access_token = match &pending.access {
+        _ if inner.access_is_id_token => id_token.clone(),
         Some(claims) => sign_with(&inner, &kid, json!({}), claims),
         None => "synthetic-access-token".to_owned(),
     };

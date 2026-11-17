@@ -235,7 +235,7 @@ impl JwtVerifier {
     /// signature, key, `iss`, `exp` and `nbf` rules, then
     /// [`check_access_claims`] — `azp` is the client (the audience is
     /// Keycloak's: absent, a string or a list, never required to hold the
-    /// client), `typ` is `Bearer` when present, `sub` is required. Every
+    /// client), `typ` is `Bearer` (required), `sub` is required. Every
     /// refusal is `FG-AUTH-0025` with the reason. `expected.nonce` is
     /// ignored (an access token carries none to compare).
     pub fn verify_access_token(
@@ -345,8 +345,8 @@ pub struct AccessClaims {
 
 /// The access token's own rules (ADR-0021 amendment 2026-11-17), after the
 /// library's `iss` / `exp` / `nbf`: `iat`, when present, not in the future
-/// beyond the skew; `typ`, when present, `Bearer` (Keycloak marks its ID
-/// tokens `ID`, signed with the same key); `azp` required and equal to the
+/// beyond the skew; `typ` required and `Bearer` (Keycloak always sets it and
+/// marks its ID tokens `ID`, signed with the same key: review MEDIUM); `azp` required and equal to the
 /// client; `aud`, when present, a string or a list of strings (Keycloak
 /// puts `account` or other clients there, or nothing); `sub` 1..=255
 /// characters without NUL.
@@ -363,7 +363,7 @@ fn check_access_claims(claims: Value, expected: &Expected<'_>) -> Result<AccessC
         }
     }
     match claims.get("typ") {
-        None => {}
+        None => return Err(access_token("missing_claim").with_context("claim", "typ")),
         Some(Value::String(typ)) if typ == "Bearer" => {}
         Some(typ) => {
             return Err(

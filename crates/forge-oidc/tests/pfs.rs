@@ -15,7 +15,7 @@ use forge_core::{RequestId, SessionRevokeReason};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::test_support::FreshDb;
 use forge_errors::{ErrorCode, ForgeError};
-use forge_oidc::test_support::{web_keys, MockOp};
+use forge_oidc::test_support::{web_keys, Endpoint, Fault, MockOp};
 use forge_oidc::{CallbackInput, LoginDone, Oidc, RefreshVerdict};
 use serde_json::{json, Value};
 
@@ -202,6 +202,9 @@ async fn access_token_failures_are_access_token_invalid() {
         (json!({}), json!({"iat": now() + 600}), "not_yet_valid"),
         (json!({}), json!({"typ": "ID"}), "typ"),
         (json!({}), json!({"typ": "Refresh"}), "typ"),
+        // Review MEDIUM: Keycloak always sets typ; a token without one is
+        // refused.
+        (json!({}), json!({"typ": null}), "missing_claim"),
         (
             json!({}),
             json!({"iss": "http://127.0.0.1:1/realms/other"}),
@@ -237,6 +240,25 @@ async fn access_token_failures_are_access_token_invalid() {
         .await
         .expect_err("id token audience");
     assert_eq!(err.code(), ErrorCode::IdTokenInvalid);
+    t.drop_now().await;
+}
+
+/// Review MEDIUM: the ID token itself presented as the access token (same
+/// key, same client, same `sub`) is refused by its `typ` — `ID`, or none.
+#[tokio::test]
+async fn an_id_token_presented_as_the_access_token_is_refused() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = pfs(&t, &op);
+    op.access_is_id_token(true);
+    for (id_overrides, want) in [(json!({}), "typ"), (json!({"typ": null}), "missing_claim")] {
+        let err = sign_in(&oidc, &op, id_overrides.clone(), json!({}))
+            .await
+            .expect_err("an ID token is not an access token");
+        assert_eq!(err.code(), ErrorCode::AccessTokenInvalid, "{err}");
+        assert_eq!(reason(&err), want, "{id_overrides}: {err}");
+    }
+    nothing_written(&t).await;
     t.drop_now().await;
 }
 
@@ -314,5 +336,55 @@ async fn a_pfs_refresh_confirms_the_role_from_the_access_token() {
             "{overrides}"
         );
     }
+    t.drop_now().await;
+}
+
+/// Review LOW: "the provider cannot be reached, go on" lasts at most 30
+/// minutes since the role was last confirmed; then the check revokes the
+/// session (FG-AUTH-0015 `reason=unconfirmed_too_long`). A good refresh
+/// confirms the role again.
+#[tokio::test]
+async fn an_unreachable_provider_keeps_a_session_at_most_thirty_minutes() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = pfs(&t, &op);
+    let done = sign_in(&oidc, &op, json!({}), json!({}))
+        .await
+        .expect("signed in");
+    let age = |minutes: i64| {
+        format!(
+            "UPDATE forge.web_sessions SET access_role_seen_at = now() - interval '{minutes} minutes' \
+             WHERE public_id = '{}'",
+            done.public_id
+        )
+    };
+    // A good refresh after 20 minutes confirms the role again.
+    t.exec_superuser(&age(20)).await;
+    assert_eq!(due_check(&t, &oidc, &done).await, RefreshVerdict::Continue);
+    let fresh = t
+        .json_rows(&format!(
+            "SELECT access_role_seen_at > now() - interval '1 minute' AS fresh \
+             FROM forge.web_sessions WHERE public_id = '{}'",
+            done.public_id
+        ))
+        .await;
+    assert_eq!(
+        fresh[0]["fresh"], true,
+        "the access token confirmed the role"
+    );
+
+    op.set_fault(Endpoint::Token, Some(Fault::Status(503)));
+    t.exec_superuser(&age(29)).await;
+    assert_eq!(
+        due_check(&t, &oidc, &done).await,
+        RefreshVerdict::Continue,
+        "within 30 minutes the session goes on"
+    );
+    t.exec_superuser(&age(31)).await;
+    assert_eq!(
+        due_check(&t, &oidc, &done).await,
+        RefreshVerdict::Revoked(SessionRevokeReason::IdpRevoked)
+    );
+    assert_eq!(forge_oidc::MAX_UNCONFIRMED_SECS, 1800);
     t.drop_now().await;
 }

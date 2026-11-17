@@ -51,6 +51,13 @@ use crate::jwt::{Expected, IdClaims};
 /// (`id_token_missing`, fail closed; ADR-0021 §7, MR5 decision 29).
 pub const MAX_REFRESH_WITHOUT_ID_TOKEN: i16 = 3;
 
+/// How long a session may go on while the provider cannot be reached at
+/// its refresh checks (ADR-0021 amendment 2026-11-17, review LOW): past 30
+/// minutes since the access role was last confirmed, the next unreachable
+/// check revokes it (`FG-AUTH-0015 call=refresh reason=unconfirmed_too_long`,
+/// `why=idp_unreachable_too_long`).
+pub const MAX_UNCONFIRMED_SECS: i64 = 30 * 60;
+
 /// How long a back-channel logout's `jti` is remembered (ADR-0021 §8).
 pub const JTI_MEMORY_SECS: u64 = 600;
 /// The most `jti`s remembered at once (`replay_table_full` beyond).
@@ -211,8 +218,7 @@ impl Oidc {
         let doc = match self.discovered().await {
             Ok(doc) => doc,
             Err(e) => {
-                warn_and_go_on(&e, request_id, &claim.public_id);
-                return Ok(RefreshVerdict::Continue);
+                return self.unreachable(&e, request_id, &claim).await;
             }
         };
         let (id_token, new_refresh, access) = match self.refresh_grant(&doc, &refresh_token).await {
@@ -232,8 +238,7 @@ impl Oidc {
                     .await;
             }
             Err(e) => {
-                warn_and_go_on(&e, request_id, &claim.public_id);
-                return Ok(RefreshVerdict::Continue);
+                return self.unreachable(&e, request_id, &claim).await;
             }
         };
         let access_role = match self.settings.claims_source {
@@ -242,8 +247,7 @@ impl Oidc {
                     Ok(claims) => self.has_access_role(&claims.claims),
                     Err(e) if e.code() == ErrorCode::IdentityProviderUnavailable => {
                         // The JWKS could not be fetched: nothing was learned.
-                        warn_and_go_on(&e, request_id, &claim.public_id);
-                        return Ok(RefreshVerdict::Continue);
+                        return self.unreachable(&e, request_id, &claim).await;
                     }
                     Err(e) => {
                         forge_core::telemetry::log_failure(
@@ -293,8 +297,7 @@ impl Oidc {
                 if let Some(token) = id_token.as_deref() {
                     if let Err(e) = self.verify_refreshed(&doc, token, &claim).await {
                         if e.code() == ErrorCode::IdentityProviderUnavailable {
-                            warn_and_go_on(&e, request_id, &claim.public_id);
-                            return Ok(RefreshVerdict::Continue);
+                            return self.unreachable(&e, request_id, &claim).await;
                         }
                         forge_core::telemetry::log_failure(
                             &e.with_context("public_id", &claim.public_id),
@@ -328,8 +331,7 @@ impl Oidc {
                 {
                     Ok(claims) => self.has_access_role(&claims.claims),
                     Err(e) if e.code() == ErrorCode::IdentityProviderUnavailable => {
-                        warn_and_go_on(&e, request_id, &claim.public_id);
-                        return Ok(RefreshVerdict::Continue);
+                        return self.unreachable(&e, request_id, &claim).await;
                     }
                     Err(e) => {
                         forge_core::telemetry::log_failure(
@@ -390,10 +392,50 @@ impl Oidc {
             Refreshed {
                 refresh_token_enc: sealed_refresh.as_deref(),
                 id_token_enc: sealed_id.as_deref(),
+                // The role was read from a verified token: the ID token's
+                // (id_token mode), or the access token's (always there in
+                // access_token mode, or the check ended above).
+                role_confirmed: match self.settings.claims_source {
+                    OidcClaimsSource::IdToken => sealed_id.is_some(),
+                    OidcClaimsSource::AccessToken => true,
+                },
             },
         )
         .await?;
         Ok(RefreshVerdict::Continue)
+    }
+
+    /// The provider could not be reached (`e`, FG-AUTH-0015): the session
+    /// goes on (warn) unless its role was last confirmed more than
+    /// [`MAX_UNCONFIRMED_SECS`] ago — then it is revoked (logged once with
+    /// `reason=unconfirmed_too_long` and the cause's reason).
+    async fn unreachable(
+        &self,
+        e: &ForgeError,
+        request_id: &RequestId,
+        claim: &RefreshClaim,
+    ) -> Result<RefreshVerdict, ForgeError> {
+        if claim.unconfirmed_secs <= MAX_UNCONFIRMED_SECS {
+            warn_and_go_on(e, request_id, &claim.public_id);
+            return Ok(RefreshVerdict::Continue);
+        }
+        let cause = e
+            .context()
+            .iter()
+            .find(|(k, _)| *k == "reason")
+            .map_or_else(|| "unknown".to_owned(), |(_, v)| v.clone());
+        let stop = unavailable("refresh", "unconfirmed_too_long")
+            .with_context("cause_reason", cause)
+            .with_context("unconfirmed_secs", claim.unconfirmed_secs)
+            .with_context("public_id", &claim.public_id);
+        forge_core::telemetry::log_failure(&stop, request_id);
+        self.end(
+            request_id,
+            claim,
+            SessionRevokeReason::IdpRevoked,
+            "idp_unreachable_too_long",
+        )
+        .await
     }
 
     /// Revoke the claimed session (`why` is logged with the reason).

@@ -1141,6 +1141,7 @@ async fn a_stored_refresh_counts_the_answers_without_an_id_token() {
     let without = Refreshed {
         refresh_token_enc: Some(&[1]),
         id_token_enc: None,
+        role_confirmed: false,
     };
     assert!(store_refreshed(&t.db, issued.session_id, without)
         .await
@@ -1172,6 +1173,7 @@ async fn a_stored_refresh_counts_the_answers_without_an_id_token() {
     let with = Refreshed {
         refresh_token_enc: None,
         id_token_enc: Some(&[2, 2]),
+        role_confirmed: true,
     };
     assert!(store_refreshed(&t.db, issued.session_id, with)
         .await
