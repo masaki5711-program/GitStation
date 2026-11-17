@@ -9,6 +9,7 @@
 //! before the host. [`classify`] turns ssh's exit status and its own
 //! diagnostics into an [`Outcome`]; the remote output is never kept.
 
+use std::ffi::OsString;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -83,7 +84,10 @@ pub fn ssh_argv(
         "BatchMode=yes".to_owned(),
         format!("ConnectTimeout={}", connect_timeout.as_secs().max(1)),
         "StrictHostKeyChecking=yes".to_owned(),
-        format!("UserKnownHostsFile=\"{}\"", known_hosts.display()),
+        // No quotes: on Windows the argv becomes one command line and an
+        // embedded `"` reaches ssh as `\"` (`invalid quotes`). The caller
+        // checked the path with [`option_safe_path`].
+        format!("UserKnownHostsFile={}", known_hosts.display()),
         "GlobalKnownHostsFile=none".to_owned(),
         format!("HostKeyAlgorithms={}", call.host_key.key_type()),
         format!("HostKeyAlias={}", call.host),
@@ -131,6 +135,20 @@ const MISMATCH_MARKERS: &[&str] = &[
     "No matching host key type found",
 ];
 
+/// How the first line of ssh's stderr starts when ssh refused its own
+/// command line or options (it exits 255 before connecting). Only ssh's
+/// own warnings of [`PRE_CONNECT_WARNINGS`] may come before it.
+const CONFIG_PREFIXES: &[&str] = &[
+    "command-line line ",
+    "command-line: line ",
+    "usage: ssh",
+    "unknown option -- ",
+];
+
+/// ssh's own warnings printed while it reads its options, before any
+/// configuration error (e.g. a missing key file, seen with Git's MSYS ssh).
+const PRE_CONNECT_WARNINGS: &[&str] = &["Warning: Identity file "];
+
 /// ssh messages that prove the session never opened, with their class.
 const NEVER_OPENED: &[(&str, &str)] = &[
     ("Connection refused", "refused"),
@@ -147,8 +165,11 @@ const NEVER_OPENED: &[(&str, &str)] = &[
 ];
 
 /// ssh's exit status and its stderr into an [`Outcome`]: 0 is the
-/// script's success; 255 is ssh's own failure — a host key mismatch or a
-/// session that provably never opened when ssh says so, otherwise
+/// script's success; 255 is ssh's own failure — its own arguments refused
+/// (`ssh_config`: only the first line counts after ssh's own
+/// [`PRE_CONNECT_WARNINGS`], as ssh prints it before anything of the remote
+/// side), a host key mismatch or a session that
+/// provably never opened when ssh says so, otherwise
 /// [`Outcome::Lost`] (the script may have run); any other status is the
 /// script's.
 pub fn classify(code: Option<i32>, stderr: &[u8]) -> Outcome {
@@ -156,6 +177,13 @@ pub fn classify(code: Option<i32>, stderr: &[u8]) -> Outcome {
         Some(0) => Outcome::Ok,
         Some(255) => {
             let text = String::from_utf8_lossy(stderr);
+            let first = text
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !PRE_CONNECT_WARNINGS.iter().any(|w| l.starts_with(w)));
+            if first.is_some_and(|l| CONFIG_PREFIXES.iter().any(|p| l.starts_with(p))) {
+                return Outcome::Unreachable("ssh_config");
+            }
             if MISMATCH_MARKERS.iter().any(|m| text.contains(m)) {
                 return Outcome::HostKeyMismatch;
             }
@@ -166,6 +194,62 @@ pub fn classify(code: Option<i32>, stderr: &[u8]) -> Outcome {
         }
         other => Outcome::Exit(other),
     }
+}
+
+/// Whether ssh's option parser reads `path` back unchanged as the value of
+/// `-o Name=<path>` (no quotes around it): no whitespace or control
+/// character (a value list separator), no quote, no `%` / `$` token or
+/// `#` comment, no leading `~` (home expansion) and no two backslashes in
+/// a row (an escape; also a UNC path).
+/// Single backslashes of a Windows path stay as they are.
+pub fn option_safe_path(path: &Path) -> bool {
+    let Some(text) = path.to_str() else {
+        return false;
+    };
+    !text.is_empty()
+        && !text.starts_with('~')
+        && !text.contains("\\\\")
+        && !text.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '%' | '$' | '#')
+        })
+}
+
+/// The variables a ssh child may see, out of the parent's.
+#[cfg(windows)]
+const PASSED_VARS: &[&str] = &[
+    "PATH",
+    "SystemRoot",
+    // Windows OpenSSH exits 255 without a word when it is unset.
+    "ProgramData",
+];
+/// The variables a ssh child may see, out of the parent's.
+#[cfg(not(windows))]
+const PASSED_VARS: &[&str] = &["PATH"];
+
+/// The ssh child's whole environment: [`PASSED_VARS`] of `parent` (on
+/// Windows matched without case, as Windows does), then HOME and
+/// USERPROFILE set to the scratch `home`. Never the parent's
+/// SSH_AUTH_SOCK, home or anything else.
+pub fn ssh_env(
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+    home: &Path,
+) -> Vec<(OsString, OsString)> {
+    let passed = |k: &str| {
+        PASSED_VARS.iter().any(|p| {
+            if cfg!(windows) {
+                p.eq_ignore_ascii_case(k)
+            } else {
+                *p == k
+            }
+        })
+    };
+    let mut env: Vec<(OsString, OsString)> = parent
+        .into_iter()
+        .filter(|(k, _)| k.to_str().is_some_and(passed))
+        .collect();
+    env.push(("HOME".into(), home.as_os_str().to_owned()));
+    env.push(("USERPROFILE".into(), home.as_os_str().to_owned()));
+    env
 }
 
 /// The address ssh connects to: the target name resolved now, every
@@ -224,6 +308,11 @@ impl SshTransport {
             Ok(ip) => ip.to_string(),
             Err(outcome) => return outcome,
         };
+        self.run_at(call, &address).await
+    }
+
+    /// The call against `address`, already checked by [`resolve`].
+    async fn run_at(&self, call: &RemoteCall, address: &str) -> Outcome {
         // A scratch HOME: ssh reads no user configuration or keys of the
         // forge account (the files go with the directory).
         let Ok(home) = tempfile::Builder::new().prefix("forge-ssh-home-").tempdir() else {
@@ -238,8 +327,8 @@ impl SshTransport {
             Ok(f) => f,
             Err(_) => return Outcome::Unreachable("spawn"),
         };
-        if known.path().display().to_string().contains('"') {
-            return Outcome::Unreachable("spawn");
+        if !option_safe_path(known.path()) {
+            return Outcome::Unreachable("temp_path");
         }
         // The pin under the target name, with and without the port
         // brackets (ssh looks up the HostKeyAlias either way).
@@ -256,7 +345,7 @@ impl SshTransport {
             known.path(),
             self.connect_timeout,
             call,
-            &address,
+            address,
         );
         let mut cmd = tokio::process::Command::new(&self.program);
         cmd.args(&argv)
@@ -265,16 +354,8 @@ impl SshTransport {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        // Only what the ssh client needs to start; never the parent's
-        // SSH_AUTH_SOCK or anything else.
-        for (k, v) in std::env::vars_os() {
-            if k.to_str()
-                .is_some_and(|k| matches!(k, "PATH" | "SystemRoot" | "SYSTEMROOT"))
-            {
-                cmd.env(k, v);
-            }
-        }
-        cmd.env("HOME", home.path()).env("USERPROFILE", home.path());
+        // Only what the ssh client needs to start (`ssh_env`).
+        cmd.envs(ssh_env(std::env::vars_os(), home.path()));
         let Ok(mut child) = cmd.spawn() else {
             return Outcome::Unreachable("spawn");
         };
