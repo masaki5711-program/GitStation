@@ -313,6 +313,12 @@ pub const KEYS: &[Key] = &[
     text("auth.oidc.access_role", "FORGE_AUTH_OIDC_ACCESS_ROLE"),
     text("auth.oidc.signing_algs", "FORGE_AUTH_OIDC_SIGNING_ALGS"),
     boolean("auth.oidc.auto_link", "FORGE_AUTH_OIDC_AUTO_LINK"),
+    // PFS Keycloak (ADR-0021 amendment 2026-11-17).
+    text("auth.oidc.claims_source", "FORGE_AUTH_OIDC_CLAIMS_SOURCE"),
+    boolean(
+        "auth.oidc.allow_insecure_issuer",
+        "FORGE_AUTH_OIDC_ALLOW_INSECURE_ISSUER",
+    ),
     // M3 S2: the HMAC keys of acting for a person (ADR-0025 §5.2).
     text(
         "auth.act_as_hmac_keys_file",

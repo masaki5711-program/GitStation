@@ -15,6 +15,14 @@
 //!   (`authorize(anonymous, SessionCreate, Admission)` inside forge-db's
 //!   link-or-create change, ADR-0021 §4), the previous session revoked, and
 //!   a new session whose IdP tokens are sealed with its public id.
+//! - `auth.oidc.claims_source = access_token` (the PFS Keycloak, ADR-0021
+//!   amendment 2026-11-17): the ID token still gives `sub`, `nonce` and
+//!   `sid`; the access token is verified as a JWT too ([`jwt`]: the same
+//!   JWKS and algorithms, `iss`, `exp` / `nbf`, `azp` = the client, `typ`
+//!   `Bearer` when present, the same `sub`) and the identity claims and
+//!   the client roles are read from it — at the callback and at every
+//!   refresh check. The link is then by the employee number alone
+//!   (`forge_db::identities::LinkRules::EmployeeNumberOnly`).
 //! - The identity provider is reached only through [`http`]: no
 //!   environment proxy, no redirects, the configured CA only, 2 s connect,
 //!   5 s per call, 1 MiB per body, the issuer's origin only
@@ -28,7 +36,8 @@
 //!   refresh check decided with `SessionContinue`, the RP logout and the
 //!   back-channel logout (module `session`).
 //!
-//! Failures: `FG-AUTH-0011` (state), `0012` (ID token), `0013`
+//! Failures: `FG-AUTH-0011` (state), `0012` (ID token), `0025` (access
+//! token), `0013`
 //! (admission), `0014` (link), `0015` (identity provider), `0017` (logout
 //! token), with the log `reason`; never a token, a claim value or the
 //! IdP's response body.

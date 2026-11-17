@@ -49,7 +49,10 @@ fn identity<'a>(
     }
 }
 
-const ON: LinkPolicy = LinkPolicy { auto_link: true };
+const ON: LinkPolicy = LinkPolicy {
+    auto_link: true,
+    rules: LinkRules::VerifiedEmail,
+};
 
 async fn login(
     t: &FreshDb,
@@ -227,7 +230,10 @@ async fn identity_link_conflicts_name_their_reason() {
         ),
         (
             identity("s1", Some("SYN0001"), Some("alice@example.test")),
-            LinkPolicy { auto_link: false },
+            LinkPolicy {
+                auto_link: false,
+                ..ON
+            },
             "auto_link_disabled",
         ),
         (no_username, ON, "username_unavailable"),
@@ -263,6 +269,100 @@ async fn identity_link_conflicts_name_their_reason() {
         .expect_err("email taken");
     assert_eq!(reason(&err), "email_taken", "{err}");
 
+    assert_eq!(
+        scalar(&t, "SELECT count(*) FROM forge.users").await,
+        users_before
+    );
+    assert_eq!(identities(&t).await, ids_before);
+    t.drop_now().await;
+}
+
+const PFS: LinkPolicy = LinkPolicy {
+    auto_link: true,
+    rules: LinkRules::EmployeeNumberOnly,
+};
+
+/// The PFS Keycloak's rules (ADR-0021 amendment 2026-11-17): the
+/// employee number (`staff_id`, upper case) alone links, compared without
+/// the case and without `email_verified`; a new user is named by the
+/// employee number in lower case (not `preferred_username`) and may have
+/// no e-mail; two numbers differing only in case are refused.
+#[tokio::test]
+async fn employee_number_only_links_without_the_case_or_a_verified_email() {
+    let t = FreshDb::migrated().await;
+    let alice = person(&t, "alice", "syn0001", false, UserKind::Human).await;
+    let _root = person(&t, "root", "SYN0002", true, UserKind::Human).await;
+    let _lower = person(&t, "twin1", "syn0400", false, UserKind::Human).await;
+    let _upper = person(&t, "twin2", "SYN0400", false, UserKind::Human).await;
+
+    // Linked: another e-mail, not verified, the number in upper case.
+    let who = LoginIdentity {
+        email_verified: false,
+        preferred_username: None,
+        ..identity("pfs-alice", Some("SYN0001"), Some("other@example.test"))
+    };
+    let (linked, seen) = login(&t, &who, PFS).await;
+    assert_eq!(
+        linked.expect("linked"),
+        LoginOutcome::Linked { user: alice }
+    );
+    assert_eq!(seen, Some(LoginAccount::Active));
+
+    // Created: an unverified e-mail, preferred_username not used.
+    let new = LoginIdentity {
+        email_verified: false,
+        preferred_username: Some("ignored-name"),
+        ..identity("pfs-new", Some(" SYN0500 "), Some("pfs.new@example.test"))
+    };
+    let (created, _) = login(&t, &new, PFS).await;
+    let LoginOutcome::Created { user, .. } = created.expect("created") else {
+        panic!("not created");
+    };
+    let rows = t
+        .json_rows(&format!(
+            "SELECT username, display_name, email, employee_number FROM forge.users WHERE id = {}",
+            user.get()
+        ))
+        .await;
+    assert_eq!(rows[0]["username"], "syn0500");
+    assert_eq!(rows[0]["display_name"], "New Person");
+    assert_eq!(rows[0]["email"], "pfs.new@example.test");
+    assert_eq!(
+        rows[0]["employee_number"], "SYN0500",
+        "stored as sent, trimmed"
+    );
+
+    let users_before = scalar(&t, "SELECT count(*) FROM forge.users").await;
+    let ids_before = identities(&t).await;
+    for (who, expected) in [
+        (identity("s1", None, None), "employee_number_missing"),
+        (identity("s1", Some("   "), None), "employee_number_missing"),
+        (identity("s1", Some("syn0002"), None), "privileged_account"),
+        // a new person still needs an e-mail (forge.users: a human has one).
+        (identity("s1", Some("SYN0600"), None), "email_missing"),
+        (
+            identity("s1", Some("Syn0400"), None),
+            "employee_number_ambiguous",
+        ),
+        // alice is linked to pfs-alice already.
+        (
+            identity("s1", Some("SYN0001"), None),
+            "employee_number_linked",
+        ),
+    ] {
+        let err = login(&t, &who, PFS).await.0.expect_err(expected);
+        assert_eq!(err.code(), ErrorCode::IdentityLinkConflict, "{err}");
+        assert_eq!(reason(&err), expected, "{err}");
+    }
+    let off = LinkPolicy {
+        auto_link: false,
+        ..PFS
+    };
+    let err = login(&t, &identity("s2", Some("syn0400"), None), off)
+        .await
+        .0
+        .expect_err("ambiguous before the policy");
+    assert_eq!(reason(&err), "employee_number_ambiguous");
     assert_eq!(
         scalar(&t, "SELECT count(*) FROM forge.users").await,
         users_before

@@ -297,7 +297,10 @@ async fn service_account_cannot_sign_in_via_oidc() {
             RequestId::parse("req-login").expect("request id"),
         ),
         &who,
-        LinkPolicy { auto_link: true },
+        LinkPolicy {
+            auto_link: true,
+            rules: crate::identities::LinkRules::VerifiedEmail,
+        },
         |_| Ok(()),
     )
     .await

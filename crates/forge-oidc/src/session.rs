@@ -8,7 +8,11 @@
 //!   refreshes at the provider (3 s) and decides again with
 //!   `authorize(anonymous, SessionContinue, Admission)`. `invalid_grant`, a
 //!   refusal, a changed `sub` / `iss`, an unverifiable ID token or a fourth
-//!   answer in a row without an ID token revoke the session and make this
+//!   answer in a row without an ID token revoke the session (with
+//!   `auth.oidc.claims_source = access_token` the role is read from the
+//!   refreshed access token instead: an unverifiable or missing one, or
+//!   one of another `sub`, revokes it, `FG-AUTH-0025`; answers without an
+//!   ID token are then not counted) and make this
 //!   request `FG-AUTH-0001 reason=session_revoked`. A provider that cannot
 //!   be reached (`FG-AUTH-0015`, logged as warn once per claim, so once per
 //!   session per 5 minutes) leaves the session as it is: signed-in people
@@ -29,6 +33,7 @@ use std::sync::{Arc, Mutex};
 
 use forge_auth::{authorize, Action, AdmissionAccount, Principal, Resource};
 use forge_core::authenticator::{SessionAuthFuture, SessionIdentity};
+use forge_core::config::OidcClaimsSource;
 use forge_core::{RequestId, SessionAuthenticator, SessionRevokeReason};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::identities::LoginAccount;
@@ -117,6 +122,8 @@ enum Grant {
     Tokens {
         id_token: Option<String>,
         refresh_token: Option<String>,
+        /// Verified with `claims_source = access_token` only; never stored.
+        access_token: Option<String>,
     },
     /// `invalid_grant`: the provider ended the session or the person.
     Rejected,
@@ -208,11 +215,12 @@ impl Oidc {
                 return Ok(RefreshVerdict::Continue);
             }
         };
-        let (id_token, new_refresh) = match self.refresh_grant(&doc, &refresh_token).await {
+        let (id_token, new_refresh, access) = match self.refresh_grant(&doc, &refresh_token).await {
             Ok(Grant::Tokens {
                 id_token,
                 refresh_token,
-            }) => (id_token, refresh_token),
+                access_token,
+            }) => (id_token, refresh_token, access_token),
             Ok(Grant::Rejected) => {
                 return self
                     .end(
@@ -228,53 +236,116 @@ impl Oidc {
                 return Ok(RefreshVerdict::Continue);
             }
         };
-        let access_role = match id_token.as_deref() {
-            Some(token) => match self.verify_refreshed(&doc, token, &claim).await {
-                Ok(claims) => self.has_access_role(&claims.claims),
-                Err(e) if e.code() == ErrorCode::IdentityProviderUnavailable => {
-                    // The JWKS could not be fetched: nothing was learned.
-                    warn_and_go_on(&e, request_id, &claim.public_id);
-                    return Ok(RefreshVerdict::Continue);
-                }
-                Err(e) => {
-                    forge_core::telemetry::log_failure(
-                        &e.with_context("public_id", &claim.public_id),
-                        request_id,
-                    );
+        let access_role = match self.settings.claims_source {
+            OidcClaimsSource::IdToken => match id_token.as_deref() {
+                Some(token) => match self.verify_refreshed(&doc, token, &claim).await {
+                    Ok(claims) => self.has_access_role(&claims.claims),
+                    Err(e) if e.code() == ErrorCode::IdentityProviderUnavailable => {
+                        // The JWKS could not be fetched: nothing was learned.
+                        warn_and_go_on(&e, request_id, &claim.public_id);
+                        return Ok(RefreshVerdict::Continue);
+                    }
+                    Err(e) => {
+                        forge_core::telemetry::log_failure(
+                            &e.with_context("public_id", &claim.public_id),
+                            request_id,
+                        );
+                        return self
+                            .end(
+                                request_id,
+                                &claim,
+                                SessionRevokeReason::IdpRevoked,
+                                "id_token_invalid",
+                            )
+                            .await;
+                    }
+                },
+                None if claim.without_id_token >= MAX_REFRESH_WITHOUT_ID_TOKEN => {
                     return self
                         .end(
                             request_id,
                             &claim,
                             SessionRevokeReason::IdpRevoked,
-                            "id_token_invalid",
+                            "id_token_missing",
                         )
                         .await;
                 }
+                None => {
+                    tracing::info!(
+                        target: "forge_oidc",
+                        request_id = %request_id,
+                        public_id = %claim.public_id,
+                        in_a_row = claim.without_id_token + 1,
+                        "forge.auth.session_refresh_without_id_token"
+                    );
+                    // The last confirmed role stands (ADR-0021 §7, row 32): a
+                    // live session's last confirmed role is always "present" —
+                    // the session was issued only with it (SessionCreate), and
+                    // every refresh whose ID token lacked it revoked the
+                    // session. The account is still read again below.
+                    true
+                }
             },
-            None if claim.without_id_token >= MAX_REFRESH_WITHOUT_ID_TOKEN => {
-                return self
-                    .end(
-                        request_id,
-                        &claim,
-                        SessionRevokeReason::IdpRevoked,
-                        "id_token_missing",
-                    )
-                    .await;
-            }
-            None => {
-                tracing::info!(
-                    target: "forge_oidc",
-                    request_id = %request_id,
-                    public_id = %claim.public_id,
-                    in_a_row = claim.without_id_token + 1,
-                    "forge.auth.session_refresh_without_id_token"
-                );
-                // The last confirmed role stands (ADR-0021 §7, row 32): a
-                // live session's last confirmed role is always "present" —
-                // the session was issued only with it (SessionCreate), and
-                // every refresh whose ID token lacked it revoked the
-                // session. The account is still read again below.
-                true
+            OidcClaimsSource::AccessToken => {
+                // ADR-0021 amendment 2026-11-17: the roles are in the
+                // access token; a refreshed ID token (kept for the logout's
+                // `id_token_hint`) is still verified when one comes.
+                if let Some(token) = id_token.as_deref() {
+                    if let Err(e) = self.verify_refreshed(&doc, token, &claim).await {
+                        if e.code() == ErrorCode::IdentityProviderUnavailable {
+                            warn_and_go_on(&e, request_id, &claim.public_id);
+                            return Ok(RefreshVerdict::Continue);
+                        }
+                        forge_core::telemetry::log_failure(
+                            &e.with_context("public_id", &claim.public_id),
+                            request_id,
+                        );
+                        return self
+                            .end(
+                                request_id,
+                                &claim,
+                                SessionRevokeReason::IdpRevoked,
+                                "id_token_invalid",
+                            )
+                            .await;
+                    }
+                }
+                let Some(token) = access.as_deref() else {
+                    // A 200 without an access token (RFC 6749 §5.1 requires
+                    // one): the role cannot be confirmed, fail closed.
+                    return self
+                        .end(
+                            request_id,
+                            &claim,
+                            SessionRevokeReason::IdpRevoked,
+                            "access_token_missing",
+                        )
+                        .await;
+                };
+                match self
+                    .verify_access(&doc, token, &claim.issuer, &claim.subject)
+                    .await
+                {
+                    Ok(claims) => self.has_access_role(&claims.claims),
+                    Err(e) if e.code() == ErrorCode::IdentityProviderUnavailable => {
+                        warn_and_go_on(&e, request_id, &claim.public_id);
+                        return Ok(RefreshVerdict::Continue);
+                    }
+                    Err(e) => {
+                        forge_core::telemetry::log_failure(
+                            &e.with_context("public_id", &claim.public_id),
+                            request_id,
+                        );
+                        return self
+                            .end(
+                                request_id,
+                                &claim,
+                                SessionRevokeReason::IdpRevoked,
+                                "access_token_invalid",
+                            )
+                            .await;
+                    }
+                }
             }
         };
         let account = match sessions::account_of(&self.db, claim.user).await? {
@@ -398,6 +469,7 @@ impl Oidc {
         Ok(Grant::Tokens {
             id_token: text("id_token"),
             refresh_token: text("refresh_token"),
+            access_token: text("access_token"),
         })
     }
 
