@@ -89,3 +89,22 @@ MR !4「hello-app v5」は `public/health` を `maintenance` にする（CI の�
   `deploy-testenv.sh` で再デプロイすると、デプロイは止まる。testenv の branch の `writeForgeToml` に `.local/forge.extra.toml` を足す仕組みが要る。
 - **D4（runbook の誤り）**: `ops/runner/README.md` の手順 1 は `admin runner register … > .local/token` で、出力の表の全体がファイルに入る。
   `grep -oE 'fgr_…'` で 1 行にするよう直した。
+
+### 4.4 GitStation 自身のパイプライン
+
+- 前回（11-11）の Runner `docker-test-1` で、試験環境のプロジェクト `gitstation/gitstation` のパイプライン 4〜7（lint・test・generated）が成功している。
+- 今回（main 9ca82c01、新しい Runner `docker-test-m4`）は**まだ動かしていない**。用意はできている: 9ca82c01 に「`tags: [linux, m4]`」
+  だけを足した試験環境だけのコミットを branch `chore/ci-m4-dogfood-runner` で `gitstation/gitstation` に push する（`main` は直接の push 禁止。
+  古い Runner は `m4` を持たないので取らない）。Rust のビルドは重い（ジョブ 4g・30 分ほど）ため cargo の枠のロックを取って動かす決まりだが、
+  別のセッション（`oidcfull`）が 07:13 UTC から 1 時間以上ロックを持ち続けたため、待ちを止めた。枠が空いたら同じ手順で 1 回動かす。
+
+## 5. 残り
+
+1. GitStation 自身のパイプラインを新しい Runner で 1 回（4.4）。
+2. 製品の修正: D1（Windows で `UserKnownHostsFile` の引用符）、D2（`ProgramData`）。修正の後は `sshwrap.exe` を外して確かめる。
+   ssh の stderr の分類の結果（stderr そのものではなく、例えば `invalid quotes` のような種類）をログに残すと、今回のような
+   `connection_lost` の誤った見え方を防げる。
+3. D3: testenv の branch の `test-env.mjs` に `.local/forge.extra.toml` の仕組み。今は `deploy-testenv.sh` の後に runbook
+   `m4-test-environment` の手順 5 をやり直す必要がある。
+4. 計画 14 §8 の 2 の残り: prod の環境（人の承認、要求者・MR の作成者以外の Maintainer の Web のセッション）は今回は作っていない。
+5. 最終の配置は PFS の Linux サーバー（利用者の決定）。そこでは D1・D2・forwarder は不要。
