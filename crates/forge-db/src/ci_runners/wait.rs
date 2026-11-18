@@ -2,18 +2,27 @@
 //! ADR-0037 (a)): `NOTIFY forge_jobs, 'ci.job'` — sent by every statement
 //! that makes a CI job claimable (a planned pipeline, a retry, a played
 //! manual job, a job whose needs succeeded, a lease given back by the
-//! reaper) and by the end of a job or a cancel (a GPU place may be free) —
-//! or, at the latest, the safety-net period `jobs.safety_poll_ms`.
+//! reaper, a runner re-tagged or resumed), by the end of a running
+//! `gpu-eval` job (its GPU place is free) and by a cancel — or, at the
+//! latest, the safety-net period `jobs.safety_poll_ms`.
 //!
 //! The wake is a hint: the caller claims again and the claim reads
 //! `forge.ci_jobs`. Without a hub on the [`Db`], or while its LISTEN
 //! connection is down, the wait is the plain poll of before plan 18.
+//!
+//! **A missed wake** (`FG-DB-0024`) is a job found by a safety-net look
+//! that had been claimable by this runner for the whole safety period
+//! (`Claimed::claimable_for`, the database's clock) — the rule of the job
+//! queue (`jobs::idle`). A job that became claimable later than that was
+//! simply found early. Limit: for a `gpu-eval` job the age is how long it
+//! was pending, not how long a GPU place has been free.
 
 use std::time::Duration;
 
 use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError};
 
+use super::lease::Claimed;
 use crate::wake::{Channel, WakeHub, WakeRx, Woken, CI_JOB};
 use crate::Db;
 
@@ -73,18 +82,22 @@ impl JobWait {
             woken == Woken::SafetyNet && live && wait >= l.safety && l.hub.is_live(Channel::Jobs);
     }
 
-    /// A claim took `job`: one found by a safety-net look that no wake
-    /// announced is reported (`FG-DB-0024`, at most once a minute).
-    pub fn claimed(&mut self, runner: i64, job: i64, request_id: &RequestId) {
+    /// A claim of `runner` took a job: one found by a safety-net look
+    /// that had been claimable for the whole safety period — no wake
+    /// announced it — is reported (`FG-DB-0024`, at most once a minute).
+    pub fn claimed(&mut self, runner: i64, claimed: &Claimed, request_id: &RequestId) {
         let after_safety_net = std::mem::take(&mut self.after_safety_net);
         let Some(l) = &self.listening else {
             return;
         };
-        if after_safety_net && l.hub.is_live(Channel::Jobs) {
+        let missed =
+            after_safety_net && claimed.claimable_for >= l.safety && l.hub.is_live(Channel::Jobs);
+        if missed {
             let error = ForgeError::new(ErrorCode::WakeupMissed)
+                .with_context("oldest_ready_ms", claimed.claimable_for.as_millis())
                 .with_context("safety_poll_ms", l.safety.as_millis())
                 .with_context("kind", CI_JOB)
-                .with_context("job_id", job)
+                .with_context("job_id", claimed.job_id)
                 .with_context("runner_id", runner);
             l.hub.missed(Channel::Jobs, error, request_id);
         }

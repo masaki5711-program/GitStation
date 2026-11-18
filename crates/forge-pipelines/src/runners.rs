@@ -174,7 +174,7 @@ impl Pipelines {
         let mut idle = db::JobWait::new(&self.db, POLL_INTERVAL);
         loop {
             if let Some(claimed) = lease::claim_with(&self.db, runner, &self.gpu_eval).await? {
-                idle.claimed(runner, claimed.job_id, request_id);
+                idle.claimed(runner, &claimed, request_id);
                 let secrets = match self.release_secrets(&claimed).await {
                     Ok(secrets) => secrets,
                     // Cancelled between the claim and the release: nothing
