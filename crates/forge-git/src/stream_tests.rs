@@ -474,6 +474,83 @@ async fn a_per_principal_wait_that_runs_out_is_git_busy_with_a_retry_hint() {
     let _ = first.abort_client_disconnected().await;
 }
 
+/// Plan 18 S8, load test 2026-11-17 scenario D (20 pushes of one user at
+/// once; 4 of 20 succeeded): with the default caps the fifth push of one
+/// principal is not refused. Its pre-push ref snapshot is forge's own read
+/// (a per-principal cap apart from the transfers) and is served while four
+/// pushes run; its receive-pack waits in the principal's queue and starts
+/// when one of them ends.
+#[tokio::test]
+async fn the_fifth_push_of_one_principal_waits_instead_of_503() {
+    use std::num::NonZeroU64;
+
+    use super::StreamKey;
+    use crate::smart_http::Phase;
+    use crate::StorageRoot;
+
+    let (_h, g) = git_with(|_| {});
+    assert_eq!(g.config().max_streams_per_principal, 4, "the default cap");
+    let root = tempfile::tempdir().expect("root");
+    let storage = StorageRoot::open(root.path()).expect("storage");
+    let id = forge_core::RepoId::new(31);
+    storage
+        .init_bare(&g, id, uuid::Uuid::new_v4(), None)
+        .await
+        .expect("init");
+    let max_input = NonZeroU64::new(1024 * 1024).expect("non-zero");
+    // A push as the route starts it: receive-pack, reading its request.
+    let push = |g: &Git| {
+        g.receive_pack(&storage, id, Phase::Rpc, None, max_input)
+            .expect("receive-pack")
+    };
+    let principal = "user:7";
+    let key = StreamKey::Transfer(principal.to_owned());
+
+    let mut running = Vec::new();
+    for _ in 0..4 {
+        running.push(push(&g).spawn_stream(principal).await.expect("in flight"));
+    }
+    assert_eq!(g.streams.per_principal.held(&key), 4);
+
+    // The fifth push, in the route's order: the ref snapshot, then
+    // receive-pack.
+    g.ref_snapshot(&storage, id, principal, Duration::from_secs(20))
+        .await
+        .expect("the pre-push snapshot is served while four pushes run");
+    let fifth = {
+        let cmd = push(&g);
+        tokio::spawn(async move { cmd.spawn_stream(principal).await })
+    };
+    // Four holders and one waiter: it is queued, not refused.
+    let mut queued = false;
+    for _ in 0..500 {
+        if fifth.is_finished() || g.streams.per_principal.users(&key) == 5 {
+            queued = !fifth.is_finished();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(queued, "the fifth push waits in the principal's queue");
+    assert_eq!(g.streams.per_principal.held(&key), 4);
+
+    let first = running.remove(0);
+    let _ = first.abort_client_disconnected().await;
+    let fifth = tokio::time::timeout(Duration::from_secs(15), fifth)
+        .await
+        .expect("served once a push ended")
+        .expect("join")
+        .expect("the fifth push runs");
+    running.push(fifth);
+    for stream in running {
+        let _ = stream.abort_client_disconnected().await;
+    }
+    assert_eq!(
+        g.streams.per_principal.users(&key),
+        0,
+        "every place given back"
+    );
+}
+
 #[tokio::test]
 async fn spawn_failure_is_git_unavailable() {
     let (_h, g) = git_with(|c| c.bin = PathBuf::from("/nonexistent/forge-test-git"));
