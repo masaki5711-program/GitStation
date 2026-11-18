@@ -4,9 +4,10 @@
 //! | [`Channel`] | NOTIFY channel | payload | sent by |
 //! |---|---|---|---|
 //! | `Jobs` | `forge_jobs` | the job kind (`ci.job` for a CI job a runner may take) | `jobs::enqueue*` / `release` / `fail` / `reap`, the CI job state changes |
-//! | `MergeQueue` | `forge_merge_queue` | the queue id | nobody yet (plan 18 S3) |
+//! | `MergeQueue` | `forge_merge_queue` | the queue id | an entry enqueued, dequeued or resumed; the end of a train's pipeline or of its create job (`review::merge_queue`, plan 18 S3) |
 //! | `Refs` | `forge_refs` | the repository id | nobody yet (see `forge_git::browse::Browser::invalidate`) |
 //! | `Events` | `forge_events_sequenced` | the last event seq | the sequencer |
+//! | `AutoMerge` | `forge_auto_merge` | the merge request id | a mergeability result that says "can be merged" (`review::mergeability`, plan 18 S3: that result publishes no event unless it is a flip) |
 //!
 //! **A wake is a hint, never the truth.** Every waiter reads the database
 //! again when it wakes and looks by itself after its safety-net period at
@@ -116,10 +117,19 @@ pub enum Channel {
     Refs,
     /// `forge_events_sequenced`: the sequencer numbered events.
     Events,
+    /// `forge_auto_merge`: a merge request may have become mergeable
+    /// without an event saying so (payload: the merge request id).
+    AutoMerge,
 }
 
 impl Channel {
-    pub const ALL: [Self; 4] = [Self::Jobs, Self::MergeQueue, Self::Refs, Self::Events];
+    pub const ALL: [Self; 5] = [
+        Self::Jobs,
+        Self::MergeQueue,
+        Self::Refs,
+        Self::Events,
+        Self::AutoMerge,
+    ];
 
     /// The NOTIFY channel (a plain lowercase identifier under 63 bytes).
     pub const fn name(self) -> &'static str {
@@ -128,6 +138,7 @@ impl Channel {
             Self::MergeQueue => "forge_merge_queue",
             Self::Refs => "forge_refs",
             Self::Events => crate::sequencer::CHANNEL,
+            Self::AutoMerge => "forge_auto_merge",
         }
     }
 
@@ -137,6 +148,7 @@ impl Channel {
             Self::MergeQueue => 1,
             Self::Refs => 2,
             Self::Events => 3,
+            Self::AutoMerge => 4,
         }
     }
 
@@ -226,11 +238,11 @@ struct Slot {
 /// What the hub's task and every [`WakeRx`] share.
 #[derive(Debug)]
 struct Shared {
-    slots: [Slot; 4],
+    slots: [Slot; 5],
     /// The server process of the LISTEN connection (0: not connected).
     backend_pid: AtomicI32,
     /// The `FG-DB-0024` limiter of each channel.
-    missed: Mutex<[Missed; 4]>,
+    missed: Mutex<[Missed; 5]>,
 }
 
 /// The `FG-DB-0024` limiter of one channel: when it was last logged, and
@@ -269,7 +281,7 @@ impl Shared {
         Self {
             slots: Channel::ALL.map(slot),
             backend_pid: AtomicI32::new(0),
-            missed: Mutex::new([Missed::default(); 4]),
+            missed: Mutex::new([Missed::default(); 5]),
         }
     }
 

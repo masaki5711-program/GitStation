@@ -249,10 +249,16 @@ pub async fn record_check(
             .bind(&result.conflicts)
             .bind(result.conflicts_truncated)
             .bind(decided.map(MergeabilityStatus::as_str))
-            .execute(c)
+            .execute(&mut *c)
             .await
-            .map(drop)
-            .map_err(|e| query_error("review.mergeability_store", e))
+            .map_err(|e| query_error("review.mergeability_store", e))?;
+            // Plan 18 S3: no event says "can be merged" unless a conflict
+            // went away, and auto-merge waits for exactly this answer.
+            if result.status == MergeabilityStatus::CanBeMerged {
+                let named = mr.get().to_string();
+                crate::wake::notify_on(c, crate::wake::Channel::AutoMerge, &named).await?;
+            }
+            Ok(())
         })
         .await?;
         let project = ProjectId::new(project);

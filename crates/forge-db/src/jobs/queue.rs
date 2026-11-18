@@ -431,26 +431,76 @@ fn fenced(lease: &Lease, kind: &JobKind, operation: &'static str) -> ForgeError 
         .with_context("attempt", lease.attempt)
 }
 
+/// Plan 18 S3 (ADR-0037 (a)): the CTE `poked` of [`complete`] and [`fail`]
+/// — the job that creates a train's pipeline (`ci.pipeline_create`,
+/// `source = merge_queue`) ended and left no pipeline (the train has no CI
+/// definition after all, or the job is dead): the queue whose batch tests
+/// that train is due now. The statement's last SELECT sends its id on
+/// `forge_merge_queue`, so the queue's turn does not wait out its long
+/// "pipeline running" period for a pipeline that will never come.
+///
+/// `$ended` is the CTE of the job that ended (it returns `kind` and
+/// `payload`), `$kind` the parameter bound to the create job's kind and
+/// `$and` one more condition on the ended row. A payload forge did not
+/// write (no numeric `project_id`) matches nothing.
+macro_rules! train_without_pipeline {
+    ($ended:literal, $kind:literal, $and:literal) => {
+        concat!(
+            "poked AS ( \
+             UPDATE forge.merge_queues AS q SET next_run_at = pg_catalog.now() \
+               FROM ",
+            $ended,
+            " AS d \
+              WHERE d.kind = ",
+            $kind,
+            " AND d.payload ->> 'source' = 'merge_queue'",
+            $and,
+            " AND q.id IN (SELECT b.queue_id FROM forge.merge_queue_batches AS b \
+                             WHERE b.state = 'testing' \
+                               AND b.train_sha = d.payload ->> 'sha' \
+                               AND b.project_id = CASE \
+                                     WHEN d.payload ->> 'project_id' ~ '^[0-9]{1,18}$' \
+                                     THEN (d.payload ->> 'project_id')::bigint END) \
+                AND NOT EXISTS (SELECT 1 FROM forge.ci_pipelines AS p \
+                                 WHERE p.source = 'merge_queue' \
+                                   AND p.sha = d.payload ->> 'sha' \
+                                   AND p.project_id = CASE \
+                                         WHEN d.payload ->> 'project_id' ~ '^[0-9]{1,18}$' \
+                                         THEN (d.payload ->> 'project_id')::bigint END) \
+             RETURNING q.id)"
+        )
+    };
+}
+
 /// Mark a claimed job succeeded — only while this worker still holds the
 /// lease of this attempt.
 pub async fn complete(db: &Db, job: &ClaimedJob) -> Result<Completed, ForgeError> {
     let lease = &job.lease;
-    let done = db
+    let (done, _queues_told): (i64, i64) = db
         .within("jobs.complete", async {
-            sqlx::query(
-                "UPDATE ONLY forge.jobs SET state = 'succeeded', finished_at = pg_catalog.now(), \
-                        lease_until = NULL \
-                  WHERE id = $1 AND state = 'running' AND worker_id = $2 AND attempts = $3",
-            )
+            sqlx::query_as(concat!(
+                "WITH done AS ( \
+                 UPDATE ONLY forge.jobs AS j SET state = 'succeeded', \
+                        finished_at = pg_catalog.now(), lease_until = NULL \
+                  WHERE j.id = $1 AND j.state = 'running' AND j.worker_id = $2 \
+                    AND j.attempts = $3 \
+                 RETURNING j.kind, j.payload), ",
+                train_without_pipeline!("done", "$4", ""),
+                " SELECT (SELECT pg_catalog.count(*) FROM done), \
+                         (SELECT pg_catalog.count(pg_catalog.pg_notify($5, p.id::text)) \
+                            FROM poked AS p)"
+            ))
             .bind(lease.job_id.get())
             .bind(lease.worker_id.as_str())
             .bind(lease.attempt)
-            .execute(db.write_pool())
+            .bind(crate::pipelines::PIPELINE_CREATE_JOB)
+            .bind(Channel::MergeQueue.name())
+            .fetch_one(db.write_pool())
             .await
             .map_err(|e| query_error("jobs.complete", e))
         })
         .await?;
-    Ok(if done.rows_affected() == 1 {
+    Ok(if done == 1 {
         Completed::Applied
     } else {
         Completed::Fenced(fenced(lease, &job.kind, "jobs.complete"))
@@ -496,11 +546,15 @@ pub async fn fail(db: &Db, job: &ClaimedJob, failure: &JobFailure) -> Result<Fai
                     lease_until = NULL, last_error_code = $5, last_error = $6::jsonb \
                   WHERE j.id = $1 AND j.state = 'running' AND j.worker_id = $2 \
                     AND j.attempts = $3 \
-                 RETURNING j.kind, j.state = 'dead' AS dead, \
+                 RETURNING j.kind, j.payload, j.state = 'dead' AS dead, \
                     (EXTRACT(epoch FROM j.run_after - pg_catalog.now()) * 1000)::bigint \
-                        AS retry_ms) \
-                 SELECT f.dead, f.retry_ms, \
-                        (SELECT pg_catalog.pg_notify($7, f.kind) WHERE NOT f.dead) \
+                        AS retry_ms), ",
+                // A dead create job of a train: no pipeline will come.
+                train_without_pipeline!("failed", "$8", " AND d.dead"),
+                " SELECT f.dead, f.retry_ms, \
+                        (SELECT pg_catalog.pg_notify($7, f.kind) WHERE NOT f.dead), \
+                        (SELECT pg_catalog.count(pg_catalog.pg_notify($9, p.id::text)) \
+                           FROM poked AS p) \
                    FROM failed AS f"
             ))
             .bind(lease.job_id.get())
@@ -511,6 +565,8 @@ pub async fn fail(db: &Db, job: &ClaimedJob, failure: &JobFailure) -> Result<Fai
             .bind(last_error(&failure.error))
             // A retry is scheduled: idle runners read the due time again.
             .bind(Channel::Jobs.name())
+            .bind(crate::pipelines::PIPELINE_CREATE_JOB)
+            .bind(Channel::MergeQueue.name())
             .fetch_optional(db.write_pool())
             .await
             .map_err(|e| query_error("jobs.fail", e))

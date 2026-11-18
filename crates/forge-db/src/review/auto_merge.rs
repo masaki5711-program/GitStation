@@ -11,7 +11,9 @@
 //!   [`set_full_auto_decided`].
 //! - **Reads**: [`settings`], [`state_of`]; [`state_on`] inside a
 //!   transaction (the merge gate's credential).
-//! - **The worker**: [`candidates`], [`record`], [`forget_inactive`].
+//! - **The worker**: [`candidates`], [`record`], [`forget_inactive`];
+//!   since plan 18 S3 the merge requests it is told about
+//!   ([`named_by_events`], [`named`], [`events_high`] — `told.rs`).
 
 use std::time::Duration;
 
@@ -25,6 +27,11 @@ use crate::access::{lock_account, Account};
 use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, Settle};
 use crate::projects::{lock_shared, locked_access_facts, ProjectUpdateFacts};
 use crate::{query_error, read_query_error, Db};
+
+// Plan 18 S3 (ADR-0037 (a)): the merge requests an event or a
+// mergeability answer names.
+mod told;
+pub use told::{events_high, named, named_by_events, Named};
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
 
